@@ -25,6 +25,8 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).toContain("sendDaemonCommand(daemonId, 'mesh_status', { meshId })")
     expect(dialogSource).toContain('const nextGraph = buildMeshGraph(status)')
     expect(dialogSource).toContain('<MeshObservabilitySurface')
+    expect(dialogSource).toContain('daemonId={daemonId}')
+    expect(dialogSource).toContain('sendDaemonCommand={sendDaemonCommand}')
     expect(dialogSource).not.toContain('mockMeshGraph')
     expect(dialogSource).not.toContain('mockNodes')
   })
@@ -45,10 +47,23 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(panelSource).toContain('bg-white/[0.04]')
     expect(panelSource).toContain('text-slate-100')
     expect(panelSource).toContain('text-slate-200')
+    expect(panelSource).toContain('Field label="HEAD" value={headSummary}')
     expect(panelSource).not.toContain('bg-bg-panel')
     expect(panelSource).not.toContain('text-text-primary')
     expect(panelSource).not.toContain('text-text-secondary')
     expect(panelSource).not.toContain('text-text-muted')
+  })
+
+  it('adds direct session/chat affordances and on-demand git history to the observability detail flow', () => {
+    const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
+
+    expect(surfaceSource).toContain("sendDaemonCommand(daemonId, 'git_log', { workspace: selectedGitWorkspace, limit: 5 })")
+    expect(surfaceSource).toContain('Open chat')
+    expect(surfaceSource).toContain('View session')
+    expect(surfaceSource).toContain('View node')
+    expect(surfaceSource).toContain('Recent commits')
+    expect(surfaceSource).toContain('Git context')
+    expect(surfaceSource).toContain('Select the submodule node in the graph for its own HEAD and recent history.')
   })
 
   it('keeps submodule details and queue/session drill-down on the shared graph surface', () => {

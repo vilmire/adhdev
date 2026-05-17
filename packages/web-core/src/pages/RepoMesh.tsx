@@ -8,6 +8,7 @@
  * just like clicking "+" on the dashboard.
  */
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { useTransport } from '../context/TransportContext'
 import { useBaseDaemons } from '../context/BaseDaemonContext'
@@ -29,6 +30,7 @@ import {
     buildManualCoordinatorSetup,
     type MeshCoordinatorMetadata,
 } from '../utils/mesh-coordinator-setup'
+import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import { MeshGraphView, MeshGraphPanel } from '../components/MeshGraph'
 import { buildMeshGraph, type MeshGraph, type MeshGraphNode } from '../utils/mesh-visualization'
 
@@ -191,6 +193,7 @@ export function RepoMeshHermesMcpConfig({
 export default function RepoMesh() {
     const { sendCommand } = useTransport()
     const { ides } = useBaseDaemons()
+    const navigate = useNavigate()
 
 
     // Find the daemon ID (standalone = single daemon)
@@ -242,6 +245,11 @@ export default function RepoMesh() {
     const [nodeProviderPriority, setNodeProviderPriority] = useState<string[]>([])
 
     const selectedMesh = meshes.find(m => m.id === selectedMeshId) || null
+
+    const openDashboardSession = useCallback((sessionId?: string | null) => {
+        if (!sessionId) return
+        navigate(getDashboardActiveTabHref(sessionId), { state: { openRemoteForTabKey: sessionId } })
+    }, [navigate])
 
     useEffect(() => {
         setNodeProviderPriorityDrafts(Object.fromEntries(
@@ -688,8 +696,66 @@ export default function RepoMesh() {
                             />
                         </div>
                         {selectedGraphNode && (
-                            <div className="w-80 shrink-0">
+                            <div className="w-80 shrink-0 flex flex-col gap-3">
                                 <MeshGraphPanel node={selectedGraphNode} onClose={() => setSelectedGraphNode(null)} />
+                                {selectedGraphNode.type !== 'submoduleNode' && (
+                                    <>
+                                        <div className="rounded-xl border border-border-subtle bg-bg-secondary/70 p-3 text-[12px] text-text-muted">
+                                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">Active sessions</div>
+                                            {selectedGraphNode.activeSessions.length === 0 ? (
+                                                <div>No active session ids on this node.</div>
+                                            ) : (
+                                                <div className="flex flex-col gap-2">
+                                                    {selectedGraphNode.activeSessions.map(sessionId => (
+                                                        <div key={sessionId} className="rounded-lg border border-border-subtle bg-bg-primary/60 px-3 py-2">
+                                                            <div className="font-mono text-[11px] text-text-primary break-all">{sessionId}</div>
+                                                            <div className="mt-2 flex flex-wrap gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    className="text-[11px] text-accent hover:underline"
+                                                                    onClick={() => openDashboardSession(sessionId)}
+                                                                >
+                                                                    Open chat
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="rounded-xl border border-border-subtle bg-bg-secondary/70 p-3 text-[12px] text-text-muted">
+                                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">Related active queue</div>
+                                            {meshQueue.filter(task => (task.status === 'pending' || task.status === 'assigned') && (task.assignedNodeId === selectedGraphNode.id || task.targetNodeId === selectedGraphNode.id)).length === 0 ? (
+                                                <div>No pending/assigned queue items targeting this node.</div>
+                                            ) : (
+                                                <div className="flex flex-col gap-2">
+                                                    {meshQueue
+                                                        .filter(task => (task.status === 'pending' || task.status === 'assigned') && (task.assignedNodeId === selectedGraphNode.id || task.targetNodeId === selectedGraphNode.id))
+                                                        .map(task => {
+                                                            const targetSessionId = task.assignedSessionId || task.targetSessionId || task.sessionId || null
+                                                            return (
+                                                                <div key={task.id} className="rounded-lg border border-border-subtle bg-bg-primary/60 px-3 py-2">
+                                                                    <div className="text-text-primary text-[11px] break-words">{task.message}</div>
+                                                                    <div className="mt-1 font-mono text-[10px] text-text-muted">{task.id} · {task.status}</div>
+                                                                    {targetSessionId && (
+                                                                        <div className="mt-2 flex flex-wrap gap-2">
+                                                                            <button
+                                                                                type="button"
+                                                                                className="text-[11px] text-accent hover:underline"
+                                                                                onClick={() => openDashboardSession(targetSessionId)}
+                                                                            >
+                                                                                Open chat
+                                                                            </button>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )
+                                                        })}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         )}
                     </div>

@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type {
+    GitLogEntry,
     RepoMeshLedgerEntryStatus,
     RepoMeshNodeStatus,
     RepoMeshQueueTask,
     RepoMeshSessionStatus,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
+import { useNavigate } from 'react-router-dom'
+import { getDashboardActiveTabHref } from '../../utils/dashboard-route-paths'
 import MeshGraphPanel from './MeshGraphPanel'
 import MeshGraphView from './MeshGraphView'
 import type { MeshGraphData } from './types'
@@ -19,6 +22,8 @@ interface MeshObservabilitySurfaceProps {
     graph: MeshGraphData
     status: RepoMeshStatus
     emptyMessage?: string
+    daemonId?: string | null
+    sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
 }
 
 type SessionListEntry = {
@@ -28,6 +33,12 @@ type SessionListEntry = {
     branch: string | null
     nodeHealth: string
     session: RepoMeshSessionStatus
+}
+
+type GitHistoryState = {
+    loading: boolean
+    error: string | null
+    entries: GitLogEntry[]
 }
 
 const ACTIVE_QUEUE_STATUSES = new Set(['pending', 'assigned'])
@@ -64,10 +75,42 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
     )
 }
 
+function ActionButton({
+    label,
+    onClick,
+    tone = 'default',
+}: {
+    label: string
+    onClick: () => void
+    tone?: 'default' | 'info' | 'success'
+}) {
+    const tones: Record<string, string> = {
+        default: 'border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]',
+        info: 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:bg-sky-500/16',
+        success: 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/16',
+    }
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className={`rounded-full border px-2.5 py-1 text-[11px] transition ${tones[tone] || tones.default}`}
+        >
+            {label}
+        </button>
+    )
+}
+
 function formatTimestamp(value: string | null | undefined): string | null {
     if (!value) return null
     const date = new Date(value)
     if (Number.isNaN(date.getTime())) return value
+    return date.toLocaleString()
+}
+
+function formatCommitTimestamp(value: number | null | undefined): string | null {
+    if (!value) return null
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return null
     return date.toLocaleString()
 }
 
@@ -165,17 +208,53 @@ function describeQueueTask(task: RepoMeshQueueTask): string {
     return `${target} · ${session}`
 }
 
+export function getQueueTaskNodeTarget(task: RepoMeshQueueTask): string | null {
+    return task.assignedNodeId || task.targetNodeId || null
+}
+
+export function getQueueTaskSessionTarget(task: RepoMeshQueueTask): string | null {
+    return task.assignedSessionId || task.targetSessionId || task.autoLaunch?.sessionId || null
+}
+
 function pickInitialNodeId(graph: MeshGraphData): string | null {
     return graph.nodes.find(node => node.type !== 'submoduleNode')?.id ?? graph.nodes[0]?.id ?? null
 }
 
-export default function MeshObservabilitySurface({ graph, status, emptyMessage = 'No live mesh graph is available for this coordinator yet.' }: MeshObservabilitySurfaceProps) {
+function shortCommit(commit: string | null | undefined): string | null {
+    if (!commit) return null
+    return commit.slice(0, 7)
+}
+
+function summarizeHead(statusNode: RepoMeshNodeStatus | null, historyEntries: GitLogEntry[]): string | null {
+    const headCommit = shortCommit(statusNode?.git?.headCommit)
+    const headMessage = statusNode?.git?.headMessage?.trim() || ''
+    if (headCommit || headMessage) return [headCommit, headMessage].filter(Boolean).join(' · ')
+    const latestEntry = historyEntries[0]
+    if (!latestEntry) return null
+    return [shortCommit(latestEntry.commit), latestEntry.message].filter(Boolean).join(' · ')
+}
+
+function extractGitLogEntries(response: any): GitLogEntry[] {
+    const body = response?.result ?? response
+    const log = body?.log ?? response?.log ?? body
+    return Array.isArray(log?.entries) ? log.entries : []
+}
+
+export default function MeshObservabilitySurface({
+    graph,
+    status,
+    emptyMessage = 'No live mesh graph is available for this coordinator yet.',
+    daemonId = null,
+    sendDaemonCommand = null,
+}: MeshObservabilitySurfaceProps) {
+    const navigate = useNavigate()
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(() => pickInitialNodeId(graph))
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(() => {
         const nodeId = pickInitialNodeId(graph)
         return nodeId ? { kind: 'node', nodeId } : null
     })
     const [queueFilter, setQueueFilter] = useState<'active' | 'history' | 'all'>('active')
+    const [gitHistoryByWorkspace, setGitHistoryByWorkspace] = useState<Record<string, GitHistoryState>>({})
 
     const nodeStatusById = useMemo(() => new Map(status.nodes.map(node => [node.nodeId, node])), [status.nodes])
     const graphNodeById = useMemo(() => new Map(graph.nodes.map(node => [node.id, node])), [graph.nodes])
@@ -212,6 +291,82 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
     const selectedSessionEntry = detailSelection?.kind === 'session'
         ? sessionEntries.find(entry => entry.nodeId === detailSelection.nodeId && entry.session.sessionId === detailSelection.sessionId) ?? null
         : null
+    const selectedNodeSessionEntries = useMemo(
+        () => sessionEntries.filter(entry => entry.nodeId === selectedNodeId),
+        [selectedNodeId, sessionEntries],
+    )
+    const selectedNodeQueueTasks = useMemo(
+        () => queueTasks.filter(task => getQueueTaskNodeTarget(task) === selectedNodeId),
+        [queueTasks, selectedNodeId],
+    )
+
+    const selectedGitWorkspace = selectedSessionEntry?.session.workspace
+        || selectedSessionEntry?.workspace
+        || selectedGraphNode?.workspace
+        || null
+    const selectedGitHistory = selectedGitWorkspace ? gitHistoryByWorkspace[selectedGitWorkspace] ?? null : null
+    const selectedHeadSummary = summarizeHead(selectedNodeStatus, selectedGitHistory?.entries ?? [])
+
+    const openSessionChat = useCallback((sessionId: string | null | undefined) => {
+        if (!sessionId) return
+        navigate(getDashboardActiveTabHref(sessionId), {
+            state: { openRemoteForTabKey: sessionId },
+        })
+    }, [navigate])
+
+    const selectSessionDetail = useCallback((nodeId: string, sessionId: string) => {
+        setSelectedNodeId(nodeId)
+        setDetailSelection({ kind: 'session', nodeId, sessionId })
+    }, [])
+
+    const focusNodeDetail = useCallback((nodeId: string) => {
+        setSelectedNodeId(nodeId)
+        setDetailSelection({ kind: 'node', nodeId })
+    }, [])
+
+    useEffect(() => {
+        if (!selectedGitWorkspace || !daemonId || !sendDaemonCommand) return
+        const existing = gitHistoryByWorkspace[selectedGitWorkspace]
+        if (existing?.loading || (existing && (existing.entries.length > 0 || existing.error))) return
+
+        let cancelled = false
+        setGitHistoryByWorkspace(current => ({
+            ...current,
+            [selectedGitWorkspace]: {
+                loading: true,
+                error: null,
+                entries: current[selectedGitWorkspace]?.entries ?? [],
+            },
+        }))
+
+        void sendDaemonCommand(daemonId, 'git_log', { workspace: selectedGitWorkspace, limit: 5 })
+            .then(response => {
+                if (cancelled) return
+                setGitHistoryByWorkspace(current => ({
+                    ...current,
+                    [selectedGitWorkspace]: {
+                        loading: false,
+                        error: null,
+                        entries: extractGitLogEntries(response),
+                    },
+                }))
+            })
+            .catch(error => {
+                if (cancelled) return
+                setGitHistoryByWorkspace(current => ({
+                    ...current,
+                    [selectedGitWorkspace]: {
+                        loading: false,
+                        error: error instanceof Error ? error.message : 'git_log failed',
+                        entries: [],
+                    },
+                }))
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [daemonId, gitHistoryByWorkspace, selectedGitWorkspace, sendDaemonCommand])
 
     const statusWarnings = [
         ...(graph.warnings ?? []),
@@ -299,6 +454,27 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                     <Badge label={selectedQueueTask.status} tone={queueTone(selectedQueueTask.status)} />
                                     <Badge label={selectedQueueTask.id.slice(0, 8)} tone="default" />
                                 </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {getQueueTaskNodeTarget(selectedQueueTask) && (
+                                        <ActionButton label="View node" onClick={() => focusNodeDetail(getQueueTaskNodeTarget(selectedQueueTask) || '')} />
+                                    )}
+                                    {(() => {
+                                        const sessionId = getQueueTaskSessionTarget(selectedQueueTask)
+                                        if (!sessionId) return null
+                                        const linkedEntry = sessionEntries.find(entry => entry.session.sessionId === sessionId) ?? null
+                                        return (
+                                            <>
+                                                {linkedEntry && (
+                                                    <ActionButton
+                                                        label="View session"
+                                                        onClick={() => selectSessionDetail(linkedEntry.nodeId, linkedEntry.session.sessionId)}
+                                                    />
+                                                )}
+                                                <ActionButton label="Open chat" tone="info" onClick={() => openSessionChat(sessionId)} />
+                                            </>
+                                        )
+                                    })()}
+                                </div>
                                 <Row label="Message" value={selectedQueueTask.message} />
                                 <Row label="Routing" value={describeQueueTask(selectedQueueTask)} />
                                 <Row label="Created" value={formatTimestamp(selectedQueueTask.createdAt) ?? 'unknown'} />
@@ -315,6 +491,10 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                     {selectedSessionEntry.session.providerType && <Badge label={selectedSessionEntry.session.providerType} tone="info" />}
                                     {selectedSessionEntry.session.isCached && <Badge label="cached" tone="default" />}
                                 </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <ActionButton label="View node" onClick={() => focusNodeDetail(selectedSessionEntry.nodeId)} />
+                                    <ActionButton label="Open chat" tone="info" onClick={() => openSessionChat(selectedSessionEntry.session.sessionId)} />
+                                </div>
                                 <Row label="Session id" value={selectedSessionEntry.session.sessionId} />
                                 <Row label="Node" value={selectedSessionEntry.machineLabel} />
                                 <Row label="Workspace" value={selectedSessionEntry.workspace} />
@@ -324,6 +504,23 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                 {selectedSessionEntry.session.surfaceKind && <Row label="Surface" value={selectedSessionEntry.session.surfaceKind} />}
                                 {selectedSessionEntry.session.recoveryState && <Row label="Recovery" value={selectedSessionEntry.session.recoveryState} />}
                                 {selectedSessionEntry.session.lastActivityAt && <Row label="Last activity" value={formatTimestamp(selectedSessionEntry.session.lastActivityAt) ?? selectedSessionEntry.session.lastActivityAt} />}
+                                <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Git context</div>
+                                    <div className="flex flex-col gap-2 text-xs text-slate-300">
+                                        <div>{selectedHeadSummary || 'HEAD subject not present in cached mesh_status.'}</div>
+                                        {selectedGitHistory?.loading && <div className="text-slate-500">Loading recent commits…</div>}
+                                        {selectedGitHistory?.error && <div className="text-amber-200">Recent history unavailable: {selectedGitHistory.error}</div>}
+                                        {(selectedGitHistory?.entries ?? []).slice(0, 5).map(entry => (
+                                            <div key={entry.commit} className="rounded-lg border border-white/5 bg-white/[0.03] px-2.5 py-2">
+                                                <div className="font-medium text-slate-100">{shortCommit(entry.commit)} · {entry.message}</div>
+                                                <div className="mt-1 text-[11px] text-slate-500">
+                                                    {entry.authorName || 'unknown author'}
+                                                    {formatCommitTimestamp(entry.committedAt) ? ` · ${formatCommitTimestamp(entry.committedAt)}` : ''}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
                             </>
                         ) : selectedGraphNode ? (
                             <>
@@ -339,10 +536,84 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                             <Row label="Repo root" value={selectedNodeStatus.repoRoot ?? selectedNodeStatus.workspace} />
                                             <Row label="Provider(s)" value={(selectedNodeStatus.providers ?? []).join(', ') || 'none'} />
                                             <Row label="Drift" value={summarizeNodeDrift(selectedNodeStatus)} />
+                                            <Row label="HEAD" value={selectedHeadSummary ?? 'Not available'} />
                                             <Row label="Daemon" value={selectedNodeStatus.daemonId ?? 'unknown'} />
                                             <Row label="Machine" value={selectedNodeStatus.machineId ?? selectedNodeStatus.machineLabel} />
                                             <Row label="Sessions" value={selectedNodeStatus.activeSessions.length} />
                                             {selectedNodeStatus.error && <Row label="Error" value={selectedNodeStatus.error} />}
+                                        </div>
+                                        {selectedNodeSessionEntries.length > 0 && (
+                                            <div className="mt-3">
+                                                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Active sessions</div>
+                                                <div className="flex flex-col gap-2">
+                                                    {selectedNodeSessionEntries.map(entry => {
+                                                        const state = entry.session.state || entry.session.lifecycle || 'unknown'
+                                                        return (
+                                                            <div key={`${entry.nodeId}:${entry.session.sessionId}`} className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
+                                                                <div className="flex items-start justify-between gap-2">
+                                                                    <div className="min-w-0 flex-1">
+                                                                        <div className="truncate font-medium text-slate-100">{entry.session.title || entry.session.sessionId}</div>
+                                                                        <div className="mt-1 truncate text-[11px] text-slate-400">{entry.session.providerType || 'unknown provider'} · {state}</div>
+                                                                    </div>
+                                                                    <Badge label={state} tone={sessionTone(state)} />
+                                                                </div>
+                                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                                    <ActionButton label="View session" onClick={() => selectSessionDetail(entry.nodeId, entry.session.sessionId)} />
+                                                                    <ActionButton label="Open chat" tone="info" onClick={() => openSessionChat(entry.session.sessionId)} />
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {selectedNodeQueueTasks.length > 0 && (
+                                            <div className="mt-3">
+                                                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Related queue items</div>
+                                                <div className="flex flex-col gap-2">
+                                                    {selectedNodeQueueTasks.map(task => {
+                                                        const sessionId = getQueueTaskSessionTarget(task)
+                                                        const linkedEntry = sessionId ? sessionEntries.find(entry => entry.session.sessionId === sessionId) ?? null : null
+                                                        return (
+                                                            <div key={task.id} className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
+                                                                <div className="flex items-start justify-between gap-2">
+                                                                    <div className="min-w-0 flex-1">
+                                                                        <div className="truncate font-medium text-slate-100">{task.message}</div>
+                                                                        <div className="mt-1 truncate text-[11px] text-slate-400">{describeQueueTask(task)}</div>
+                                                                    </div>
+                                                                    <Badge label={task.status} tone={queueTone(task.status)} />
+                                                                </div>
+                                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                                    <ActionButton label="View queue detail" onClick={() => setDetailSelection({ kind: 'queue', taskId: task.id })} />
+                                                                    {linkedEntry && (
+                                                                        <ActionButton label="View session" onClick={() => selectSessionDetail(linkedEntry.nodeId, linkedEntry.session.sessionId)} />
+                                                                    )}
+                                                                    {sessionId && <ActionButton label="Open chat" tone="info" onClick={() => openSessionChat(sessionId)} />}
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div className="mt-3">
+                                            <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Recent commits</div>
+                                            <div className="flex flex-col gap-2">
+                                                {selectedGitHistory?.loading && <div className="text-xs text-slate-500">Loading recent commits…</div>}
+                                                {selectedGitHistory?.error && <div className="text-xs text-amber-200">Recent history unavailable: {selectedGitHistory.error}</div>}
+                                                {!selectedGitHistory?.loading && !selectedGitHistory?.error && (selectedGitHistory?.entries ?? []).length === 0 && (
+                                                    <div className="text-xs text-slate-500">Recent commit history not available from the current mesh snapshot yet.</div>
+                                                )}
+                                                {(selectedGitHistory?.entries ?? []).slice(0, 5).map(entry => (
+                                                    <div key={entry.commit} className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
+                                                        <div className="font-medium text-slate-100">{shortCommit(entry.commit)} · {entry.message}</div>
+                                                        <div className="mt-1 text-[11px] text-slate-500">
+                                                            {entry.authorName || 'unknown author'}
+                                                            {formatCommitTimestamp(entry.committedAt) ? ` · ${formatCommitTimestamp(entry.committedAt)}` : ''}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
                                         {(selectedNodeStatus.git?.submodules?.length ?? 0) > 0 && (
                                             <div className="mt-3">
@@ -356,12 +627,38 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                                                 {(submodule.outOfSync || submodule.error) && <Badge label="drift" tone="danger" />}
                                                             </div>
                                                             <div className="mt-1 break-all text-[11px] text-slate-400">{submodule.repoPath}</div>
+                                                            <div className="mt-1 text-[11px] text-slate-500">Select the submodule node in the graph for its own HEAD and recent history.</div>
                                                             {submodule.error && <div className="mt-1 text-[11px] text-rose-200">{submodule.error}</div>}
                                                         </div>
                                                     ))}
                                                 </div>
                                             </div>
                                         )}
+                                    </div>
+                                )}
+                                {!selectedNodeStatus && (
+                                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                                        <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Git context</div>
+                                        <div className="text-xs text-slate-300">{selectedHeadSummary ?? 'No daemon-owned node status is attached to this graph node.'}</div>
+                                        <div className="mt-3">
+                                            <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Recent commits</div>
+                                            <div className="flex flex-col gap-2">
+                                                {selectedGitHistory?.loading && <div className="text-xs text-slate-500">Loading recent commits…</div>}
+                                                {selectedGitHistory?.error && <div className="text-xs text-amber-200">Recent history unavailable: {selectedGitHistory.error}</div>}
+                                                {!selectedGitHistory?.loading && !selectedGitHistory?.error && (selectedGitHistory?.entries ?? []).length === 0 && (
+                                                    <div className="text-xs text-slate-500">Recent commit history not available for this detached graph node yet.</div>
+                                                )}
+                                                {(selectedGitHistory?.entries ?? []).slice(0, 5).map(entry => (
+                                                    <div key={entry.commit} className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
+                                                        <div className="font-medium text-slate-100">{shortCommit(entry.commit)} · {entry.message}</div>
+                                                        <div className="mt-1 text-[11px] text-slate-500">
+                                                            {entry.authorName || 'unknown author'}
+                                                            {formatCommitTimestamp(entry.committedAt) ? ` · ${formatCommitTimestamp(entry.committedAt)}` : ''}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
                             </>
@@ -395,22 +692,67 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                             <div className="text-xs text-slate-400">No queue items for this filter.</div>
                         ) : (
                             <div className="flex flex-col gap-2">
-                                {visibleQueueTasks.map(task => (
-                                    <button
-                                        key={task.id}
-                                        type="button"
-                                        onClick={() => setDetailSelection({ kind: 'queue', taskId: task.id })}
-                                        className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'queue' && detailSelection.taskId === task.id ? 'border-sky-400/30 bg-sky-500/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}
-                                    >
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className="min-w-0 flex-1">
-                                                <div className="truncate text-xs font-medium text-white">{task.message}</div>
-                                                <div className="mt-1 truncate text-[11px] text-slate-400">{describeQueueTask(task)}</div>
+                                {visibleQueueTasks.map(task => {
+                                    const sessionId = getQueueTaskSessionTarget(task)
+                                    const linkedEntry = sessionId ? sessionEntries.find(entry => entry.session.sessionId === sessionId) ?? null : null
+                                    const nodeId = getQueueTaskNodeTarget(task)
+                                    return (
+                                        <button
+                                            key={task.id}
+                                            type="button"
+                                            onClick={() => setDetailSelection({ kind: 'queue', taskId: task.id })}
+                                            className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'queue' && detailSelection.taskId === task.id ? 'border-sky-400/30 bg-sky-500/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}
+                                        >
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="truncate text-xs font-medium text-white">{task.message}</div>
+                                                    <div className="mt-1 truncate text-[11px] text-slate-400">{describeQueueTask(task)}</div>
+                                                </div>
+                                                <Badge label={task.status} tone={queueTone(task.status)} />
                                             </div>
-                                            <Badge label={task.status} tone={queueTone(task.status)} />
-                                        </div>
-                                    </button>
-                                ))}
+                                            {(nodeId || linkedEntry || sessionId) && (
+                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                    {nodeId && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={event => {
+                                                                event.stopPropagation()
+                                                                focusNodeDetail(nodeId)
+                                                            }}
+                                                            className="text-[11px] text-slate-300 underline underline-offset-2 transition hover:text-white"
+                                                        >
+                                                            View node
+                                                        </button>
+                                                    )}
+                                                    {linkedEntry && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={event => {
+                                                                event.stopPropagation()
+                                                                selectSessionDetail(linkedEntry.nodeId, linkedEntry.session.sessionId)
+                                                            }}
+                                                            className="text-[11px] text-slate-300 underline underline-offset-2 transition hover:text-white"
+                                                        >
+                                                            View session
+                                                        </button>
+                                                    )}
+                                                    {sessionId && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={event => {
+                                                                event.stopPropagation()
+                                                                openSessionChat(sessionId)
+                                                            }}
+                                                            className="text-[11px] text-sky-200 underline underline-offset-2 transition hover:text-white"
+                                                        >
+                                                            Open chat
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </button>
+                                    )
+                                })}
                             </div>
                         )}
                     </div>
@@ -437,9 +779,21 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="min-w-0 flex-1">
                                                     <div className="truncate text-xs font-medium text-white">{entry.machineLabel}</div>
-                                                    <div className="mt-1 truncate text-[11px] text-slate-400">{entry.session.providerType || 'unknown provider'} · {entry.branch || 'no branch'}</div>
+                                                    <div className="mt-1 truncate text-[11px] text-slate-400">{entry.session.title || entry.session.providerType || 'unknown provider'} · {entry.branch || 'no branch'}</div>
                                                 </div>
-                                                <Badge label={state} tone={sessionTone(state)} />
+                                                <div className="flex flex-col items-end gap-1">
+                                                    <Badge label={state} tone={sessionTone(state)} />
+                                                    <button
+                                                        type="button"
+                                                        onClick={event => {
+                                                            event.stopPropagation()
+                                                            openSessionChat(entry.session.sessionId)
+                                                        }}
+                                                        className="text-[11px] text-sky-200 underline underline-offset-2 transition hover:text-white"
+                                                    >
+                                                        Open chat
+                                                    </button>
+                                                </div>
                                             </div>
                                         </button>
                                     )

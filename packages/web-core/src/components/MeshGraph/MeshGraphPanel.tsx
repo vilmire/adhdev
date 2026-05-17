@@ -35,6 +35,18 @@ function HealthBadge({ health }: { health: string }) {
     )
 }
 
+function summarizeHead(node: MeshGraphNode): string | null {
+    if (node.type === 'submoduleNode') {
+        return node.submoduleCommit ? node.submoduleCommit.slice(0, 7) : null
+    }
+    const source = node.source
+    if ('kind' in source) return null
+    const headCommit = source.git?.headCommit ? source.git.headCommit.slice(0, 7) : null
+    const headMessage = source.git?.headMessage?.trim() || null
+    if (!headCommit && !headMessage) return null
+    return [headCommit, headMessage].filter(Boolean).join(' · ')
+}
+
 export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
     if (!node) {
         return (
@@ -45,6 +57,7 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
     }
 
     const isSubmoduleNode = node.type === 'submoduleNode'
+    const headSummary = summarizeHead(node)
 
     return (
         <div className="flex w-full max-w-full flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.04] p-4 shadow-lg md:w-64">
@@ -67,6 +80,7 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
             <div className="flex flex-col gap-0.5 mt-1">
                 <Field label="Workspace" value={node.workspace} />
                 <Field label="Branch" value={node.branch} />
+                <Field label="HEAD" value={headSummary} />
                 <Field label="Submodule path" value={node.submodulePath ?? null} />
                 <Field label="Submodule commit" value={node.submoduleCommit ?? null} />
                 <Field label="Parent node" value={isSubmoduleNode ? (node.machineLabel || node.parentNodeId || null) : null} />

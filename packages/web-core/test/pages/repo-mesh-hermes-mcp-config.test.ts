@@ -1,7 +1,13 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { RepoMeshHermesMcpConfig, getNodeActiveAssignments, describeNodeActiveAssignmentLabel } from '../../src/pages/RepoMesh'
+
+function readSource(relativePath: string): string {
+  return fs.readFileSync(path.join(import.meta.dirname, '../../src', relativePath), 'utf8')
+}
 
 describe('RepoMeshHermesMcpConfig', () => {
   it('shows Hermes YAML setup without advertising Claude auto-import config', () => {
@@ -66,5 +72,16 @@ describe('RepoMesh node active assignment helpers', () => {
     expect(assignments[0].id).toBe('task-1')
     expect(describeNodeActiveAssignmentLabel(assignments[0])).toContain('session-a')
     expect(describeNodeActiveAssignmentLabel(assignments[0])).toContain('Fix queue lifecycle')
+  })
+})
+
+describe('RepoMesh graph detail affordances', () => {
+  it('keeps graph-side session and queue drill-down actionable from the standalone mesh page', () => {
+    const source = readSource('pages/RepoMesh.tsx')
+
+    expect(source).toContain('navigate(getDashboardActiveTabHref(sessionId), { state: { openRemoteForTabKey: sessionId } })')
+    expect(source).toContain('Related active queue')
+    expect(source).toContain('Active sessions')
+    expect(source).toContain('Open chat')
   })
 })
