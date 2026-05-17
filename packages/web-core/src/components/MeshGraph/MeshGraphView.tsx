@@ -98,6 +98,14 @@ function formatHealth(health: MeshGraphNode['health']): string {
     return health.replace(/_/g, ' ')
 }
 
+function isUpstreamVerified(node: MeshGraphNode): boolean {
+    return !node.upstream || node.upstreamStatus === 'fresh'
+}
+
+function getGitDriftLabel(node: MeshGraphNode): string {
+    return isUpstreamVerified(node) ? `+${node.ahead} / -${node.behind}` : 'upstream unverified'
+}
+
 function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const node = data.graphNode
     const isDefaultBranchNode = node.type === 'defaultBranchNode'
@@ -165,6 +173,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         conflicts
                     </span>
                 )}
+                {!isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' && (
+                    <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('orphan')}`}>
+                        upstream unverified
+                    </span>
+                )}
                 {node.isOrphan && (
                     <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('orphan')}`}>
                         needs attention
@@ -192,7 +205,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     <div className="rounded-xl border border-white/8 bg-slate-950/58 px-2.5 py-2">
                         <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Git drift</div>
                         <div className="mt-1 font-medium text-slate-100">
-                            +{node.ahead} / -{node.behind}
+                            {getGitDriftLabel(node)}
                         </div>
                     </div>
                 </div>
@@ -339,6 +352,8 @@ function buildLayout(data: MeshGraphData): { nodes: FlowNode[]; edges: FlowEdge[
                         label: 'No active worktrees',
                         workspace: data.repoIdentity,
                         branch: defaultAnchor.branch,
+                        upstream: null,
+                        upstreamStatus: null,
                         machineLabel: null,
                         health: 'unknown',
                         ahead: 0,

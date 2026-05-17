@@ -185,6 +185,47 @@ describe('buildMeshGraph', () => {
         ]))
     })
 
+    it('surfaces unverified upstream freshness in mesh graph node metadata instead of implying 0/0 certainty', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_freshness',
+            meshName: 'Freshness Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-05-16T18:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_main',
+                    machineLabel: 'Coordinator',
+                    workspace: '/repo/main',
+                    health: 'online',
+                    providers: ['hermes-cli'],
+                    activeSessions: [],
+                    git: {
+                        isGitRepo: true,
+                        branch: 'main',
+                        upstream: 'origin/main',
+                        upstreamStatus: 'stale',
+                        ahead: 0,
+                        behind: 0,
+                        staged: 0,
+                        modified: 0,
+                        untracked: 0,
+                        deleted: 0,
+                        renamed: 0,
+                        hasConflicts: false,
+                    },
+                },
+            ],
+        } as any)
+
+        const node = graph.nodes.find(entry => entry.id === 'node_main')
+        expect(node).toEqual(expect.objectContaining({
+            upstream: 'origin/main',
+            upstreamStatus: 'stale',
+            isOrphan: true,
+        }))
+        expect(node?.orphanReasons).toContain('Upstream freshness unverified for main')
+    })
+
     it('surfaces submodules as child graph nodes with explicit links and warnings', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_submodule',
@@ -203,6 +244,7 @@ describe('buildMeshGraph', () => {
                         isGitRepo: true,
                         branch: 'main',
                         upstream: 'origin/main',
+                        upstreamStatus: 'fresh',
                         ahead: 0,
                         behind: 0,
                         staged: 0,

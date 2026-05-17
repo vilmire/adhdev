@@ -28,6 +28,8 @@ export interface MeshGraphNode {
     label: string
     workspace: string
     branch: string | null
+    upstream: string | null
+    upstreamStatus: GitRepoStatus['upstreamStatus'] | null
     machineLabel: string | null
     health: RepoMeshNodeHealth
     ahead: number
@@ -182,6 +184,10 @@ function detectOrphanReasons(node: RepoMeshNodeStatus, defaultBranch: string | n
         reasons.push(`No upstream tracking for ${git.branch}`)
     }
 
+    if (git.upstream && git.upstreamStatus && git.upstreamStatus !== 'fresh') {
+        reasons.push(`Upstream freshness unverified for ${git.branch ?? 'workspace'}`)
+    }
+
     if (node.error) {
         reasons.push(node.error)
     }
@@ -214,6 +220,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             label: nodeStatus.machineLabel || nodeStatus.nodeId.slice(0, 8),
             workspace: nodeStatus.workspace,
             branch,
+            upstream: git?.upstream ?? null,
+            upstreamStatus: git?.upstreamStatus ?? null,
             machineLabel: nodeStatus.machineLabel || null,
             health: pickDominantHealth([nodeStatus.health, submoduleHealth]),
             ahead: git?.ahead ?? 0,
@@ -250,6 +258,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 label: submoduleLabel,
                 workspace: submodule.repoPath,
                 branch: null,
+                upstream: null,
+                upstreamStatus: null,
                 machineLabel: graphNode.machineLabel,
                 health: getSubmoduleHealth(submodule),
                 ahead: 0,
@@ -304,6 +314,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             label: inferredDefaultBranch,
             workspace: status.repoIdentity,
             branch: inferredDefaultBranch,
+            upstream: null,
+            upstreamStatus: null,
             machineLabel: 'default branch',
             health: pickDominantHealth(branchNodes.map(node => node.health)),
             ahead: 0,

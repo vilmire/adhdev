@@ -141,4 +141,75 @@ describe('git repo status parser', () => {
       outOfSync: false,
     });
   });
+
+  it('marks tracked upstream state as unchecked until refreshed and updates behind counts after a bounded fetch', async () => {
+    const repo = tempRepo('status-upstream-refresh');
+    writeFileSync(join(repo, 'tracked.txt'), 'base\n');
+    commit(repo, 'initial');
+
+    const bare = mkdtempSync(join(tmpdir(), 'adhdev-status-refresh-remote-'));
+    roots.push(bare);
+    git(bare, ['init', '--bare']);
+    git(repo, ['remote', 'add', 'origin', bare]);
+    git(repo, ['push', '-u', 'origin', 'HEAD']);
+
+    const peerParent = mkdtempSync(join(tmpdir(), 'adhdev-status-refresh-peer-'));
+    roots.push(peerParent);
+    git(peerParent, ['clone', bare, 'peer']);
+    const peer = join(peerParent, 'peer');
+    git(peer, ['config', 'user.email', 'test@example.com']);
+    git(peer, ['config', 'user.name', 'ADHDev Test']);
+    writeFileSync(join(peer, 'remote.txt'), 'remote advance\n');
+    git(peer, ['add', '.']);
+    git(peer, ['commit', '-m', 'remote advance']);
+    git(peer, ['push', 'origin', 'HEAD']);
+
+    const unchecked = await getGitRepoStatus(repo);
+    expect(unchecked.upstreamStatus).toBe('unchecked');
+    expect(unchecked.behind).toBe(0);
+
+    const refreshed = await getGitRepoStatus(repo, { refreshUpstream: true });
+    expect(refreshed.upstreamStatus).toBe('fresh');
+    expect(refreshed.behind).toBe(1);
+    expect(refreshed.upstreamFetchedAt).toBeGreaterThan(0);
+    expect(refreshed.upstreamFetchError).toBeUndefined();
+  });
+
+  it('refreshes tracked upstream state for submodule workspaces like oss without relying on the parent repo fetch', async () => {
+    const submoduleRepo = tempRepo('status-submodule-refresh-source');
+    writeFileSync(join(submoduleRepo, 'child.txt'), 'child\n');
+    commit(submoduleRepo, 'child init');
+
+    const submoduleBare = mkdtempSync(join(tmpdir(), 'adhdev-status-submodule-remote-'));
+    roots.push(submoduleBare);
+    git(submoduleBare, ['init', '--bare']);
+    git(submoduleRepo, ['remote', 'add', 'origin', submoduleBare]);
+    git(submoduleRepo, ['push', '-u', 'origin', 'HEAD']);
+
+    const repo = tempRepo('status-submodule-refresh-parent');
+    writeFileSync(join(repo, 'README.md'), 'parent\n');
+    commit(repo, 'parent init');
+    git(repo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', submoduleBare, 'oss']);
+    commit(repo, 'add oss submodule');
+
+    const peerParent = mkdtempSync(join(tmpdir(), 'adhdev-status-submodule-peer-'));
+    roots.push(peerParent);
+    git(peerParent, ['clone', submoduleBare, 'peer']);
+    const peer = join(peerParent, 'peer');
+    git(peer, ['config', 'user.email', 'test@example.com']);
+    git(peer, ['config', 'user.name', 'ADHDev Test']);
+    writeFileSync(join(peer, 'child.txt'), 'child\nremote advance\n');
+    git(peer, ['add', 'child.txt']);
+    git(peer, ['commit', '-m', 'remote submodule advance']);
+    git(peer, ['push', 'origin', 'HEAD']);
+
+    const submoduleWorkspace = join(repo, 'oss');
+    const unchecked = await getGitRepoStatus(submoduleWorkspace);
+    expect(unchecked.upstreamStatus).toBe('unchecked');
+    expect(unchecked.behind).toBe(0);
+
+    const refreshed = await getGitRepoStatus(submoduleWorkspace, { refreshUpstream: true });
+    expect(refreshed.upstreamStatus).toBe('fresh');
+    expect(refreshed.behind).toBe(1);
+  });
 });

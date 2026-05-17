@@ -40,11 +40,19 @@ export interface GitSubmoduleStatus {
   error?: string;
 }
 
+export type GitUpstreamFreshness = 'fresh' | 'unchecked' | 'stale' | 'no_upstream' | 'unavailable';
+
 export interface GitRepoStatus extends GitRepoIdentity {
   branch: string | null;
   headCommit: string | null;
   headMessage: string | null;
   upstream: string | null;
+  /** Whether ahead/behind was verified against a freshly fetched upstream ref. */
+  upstreamStatus: GitUpstreamFreshness;
+  /** Timestamp for the fetch that refreshed upstream refs when upstreamStatus === 'fresh'. */
+  upstreamFetchedAt?: number;
+  /** Error from the last refresh attempt when upstreamStatus === 'stale'. */
+  upstreamFetchError?: string;
   ahead: number;
   behind: number;
   staged: number;
@@ -134,6 +142,9 @@ export interface GitCompactSummary {
   isGitRepo: boolean;
   repoRoot: string | null;
   branch: string | null;
+  upstreamStatus: GitUpstreamFreshness;
+  upstreamFetchedAt?: number;
+  upstreamFetchError?: string;
   dirty: boolean;
   changedFiles: number;
   ahead: number;

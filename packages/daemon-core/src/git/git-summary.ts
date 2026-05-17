@@ -22,6 +22,9 @@ export function createGitCompactSummary(status: GitRepoStatus, diffSummary?: Git
     isGitRepo: status.isGitRepo,
     repoRoot: status.repoRoot,
     branch: status.branch,
+    upstreamStatus: status.upstreamStatus,
+    upstreamFetchedAt: status.upstreamFetchedAt,
+    upstreamFetchError: status.upstreamFetchError,
     dirty:
       status.staged > 0 ||
       status.modified > 0 ||

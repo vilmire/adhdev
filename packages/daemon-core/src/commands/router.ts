@@ -3117,7 +3117,7 @@ export class DaemonCommandRouter {
                                 continue;
                             }
                             try {
-                                const gitStatus = await getGitRepoStatus(node.workspace as string, { timeoutMs: 10_000 });
+                                const gitStatus = await getGitRepoStatus(node.workspace as string, { timeoutMs: 10_000, refreshUpstream: true });
                                 status.git = gitStatus;
                                 if (gitStatus.isGitRepo) {
                                     status.health = deriveMeshNodeHealthFromGit(gitStatus as unknown as Record<string, unknown>);

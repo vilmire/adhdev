@@ -62,7 +62,7 @@ export interface GitPushResult extends GitRepoIdentity {
 }
 
 export interface GitCommandServices {
-  getStatus?: (params: { workspace: string }) => Promise<GitRepoStatus> | GitRepoStatus;
+  getStatus?: (params: { workspace: string; refreshUpstream?: boolean }) => Promise<GitRepoStatus> | GitRepoStatus;
   getDiffSummary?: (params: { workspace: string; staged?: boolean }) => Promise<GitDiffSummary> | GitDiffSummary;
   getDiffFile?: (params: { workspace: string; path: string; staged?: boolean }) => Promise<GitFileDiff> | GitFileDiff;
   createSnapshot?: (params: {
@@ -171,7 +171,7 @@ const defaultSnapshotStore = createGitSnapshotStore({
 
 export function createDefaultGitCommandServices(): GitCommandServices {
   return {
-    getStatus: ({ workspace }) => getGitRepoStatus(workspace),
+    getStatus: ({ workspace, refreshUpstream }) => getGitRepoStatus(workspace, { refreshUpstream }),
     getDiffSummary: ({ workspace }) => getGitDiffSummary(workspace),
     getDiffFile: ({ workspace, path: filePath }) => getGitFileDiff(workspace, filePath),
     createSnapshot: ({ workspace, reason, sessionId, turnId }) => defaultSnapshotStore.create({
@@ -290,7 +290,7 @@ export async function handleGitCommand(
   switch (command) {
     case 'git_status': {
       if (!services.getStatus) return serviceNotImplemented(command);
-      const status = await runService(() => services.getStatus!({ workspace }));
+      const status = await runService(() => services.getStatus!({ workspace, refreshUpstream: optionalBoolean(args?.refreshUpstream) }));
       return 'success' in status ? status : { success: true, status };
     }
 
