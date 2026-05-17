@@ -422,52 +422,32 @@ export default function MeshObservabilitySurface({
     return (
         <div className="flex min-h-0 flex-col gap-4 xl:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <Card title={`${graph.stats.totalNodes} nodes`} subtitle="Mesh topology">
-                        <div className="flex flex-wrap gap-2">
-                            <Badge label={`${graph.stats.totalActiveSessions} active sessions`} tone={graph.stats.totalActiveSessions > 0 ? 'info' : 'default'} />
-                            <Badge label={`${graph.stats.dirtyNodes} dirty`} tone={graph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
-                            <Badge label={`${graph.stats.offlineNodes} offline`} tone={graph.stats.offlineNodes > 0 ? 'danger' : 'good'} />
-                        </div>
-                    </Card>
-                    <Card title={`${queueSummary?.active ?? 0} active queue`} subtitle="Pending + assigned tasks">
-                        <div className="flex flex-wrap gap-2">
-                            <Badge label={`${queueActiveCounts.pending} pending`} tone="warn" />
-                            <Badge label={`${queueActiveCounts.assigned} assigned`} tone="info" />
-                            <Badge label={`${queueSummary?.historical ?? 0} recent history`} tone="default" />
-                        </div>
-                    </Card>
-                    <Card title={`${sessionEntries.length} sessions`} subtitle="Live and cached session view">
-                        <div className="flex flex-wrap gap-2">
-                            {stateCounts.length === 0 ? (
-                                <Badge label="no session metadata" />
-                            ) : stateCounts.slice(0, 3).map(([label, count]) => (
-                                <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
-                            ))}
-                        </div>
-                    </Card>
-                    <Card title={`${ledgerSummary.recentFailures} recent failures`} subtitle="Ledger evidence">
-                        <div className="flex flex-wrap gap-2">
-                            <Badge label={`${ledgerSummary.taskCompleted} completed`} tone="good" />
-                            <Badge label={`${ledgerSummary.taskFailed} failed`} tone={ledgerSummary.taskFailed > 0 ? 'danger' : 'good'} />
-                            <Badge label={`${ledgerSummary.sessionLaunched} launched`} tone="info" />
-                        </div>
-                    </Card>
-                </div>
-
-                <Card title="Mesh meaning" subtitle="Read the graph without hidden rules.">
-                    <div className="flex flex-wrap gap-2 text-xs text-slate-300">
-                        <Badge label="Anchor = inferred default branch" tone="info" />
-                        <Badge label="Peer link = same-branch worktree" tone="default" />
-                        <Badge label="Submodule link = child checkout under a parent node" tone="warn" />
-                        <Badge label="Node badges = health + drift + session activity" tone="default" />
-                        <Badge label="Mesh transport = selected-coordinator view only" tone="info" />
-                        <Badge label="Unknown / not reported = no live daemon↔daemon telemetry yet" tone="warn" />
+                <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-4">
+                    <div className="flex flex-wrap gap-2">
+                        <Badge label={`${graph.stats.totalNodes} nodes`} tone="info" />
+                        <Badge label={`${graph.stats.totalActiveSessions} active sessions`} tone={graph.stats.totalActiveSessions > 0 ? 'info' : 'default'} />
+                        <Badge label={`${graph.stats.dirtyNodes} dirty`} tone={graph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
+                        <Badge label={`${graph.stats.offlineNodes} offline`} tone={graph.stats.offlineNodes > 0 ? 'danger' : 'good'} />
+                        <Badge label={`${queueSummary?.active ?? 0} active queue`} tone={(queueSummary?.active ?? 0) > 0 ? 'info' : 'default'} />
+                        <Badge label={`${queueSummary?.historical ?? 0} recent history`} tone="default" />
+                        <Badge label={`${sessionEntries.length} sessions`} tone={sessionEntries.length > 0 ? 'info' : 'default'} />
+                        <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
+                        {stateCounts.length === 0 ? (
+                            <Badge label="no session metadata" />
+                        ) : stateCounts.slice(0, 3).map(([label, count]) => (
+                            <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
+                        ))}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
+                        <Badge label="Anchor = default branch" tone="info" />
+                        <Badge label="Peer = same-branch worktree" tone="default" />
+                        <Badge label="Submodule = child checkout" tone="warn" />
+                        <Badge label="Unknown = no live daemon↔daemon telemetry yet" tone="warn" />
                     </div>
                     <div className="mt-3 text-xs text-slate-400">
-                        Tap a node to inspect workspace, session, and git details. Launch readiness and mesh transport details stay in the same drill-down. Queue rows and session rows are also selectable for drill-down.
+                        Tap a node to inspect workspace, session, and git details. Queue rows and session rows are also selectable for drill-down.
                     </div>
-                </Card>
+                </div>
 
                 {statusWarnings.length > 0 && (
                     <div className="flex flex-wrap gap-2">
