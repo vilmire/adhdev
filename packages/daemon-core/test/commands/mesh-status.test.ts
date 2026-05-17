@@ -45,9 +45,10 @@ async function createTempGitRepoWithSubmodule(prefix: string) {
 }
 
 function createRouter(overrides: Record<string, unknown> = {}) {
+  const { getMeshPeerConnectionStatus, ...sessionHostOverrides } = overrides as Record<string, unknown>
   const sessionHostControl = {
     listSessions: vi.fn(async () => []),
-    ...overrides,
+    ...sessionHostOverrides,
   }
 
   const router = new DaemonCommandRouter({
@@ -63,6 +64,9 @@ function createRouter(overrides: Record<string, unknown> = {}) {
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
     sessionHostControl: sessionHostControl as any,
+    getMeshPeerConnectionStatus: typeof getMeshPeerConnectionStatus === 'function'
+      ? getMeshPeerConnectionStatus as (daemonId: string) => Record<string, unknown> | null
+      : undefined,
   })
 
   return { router, sessionHostControl }
@@ -89,16 +93,23 @@ describe('mesh_status', () => {
           nodes: [
             {
               id: 'node-local',
+              daemonId: 'machine-local',
               machineLabel: 'Local',
               workspace: repoRoot,
               providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
             },
             {
               id: 'node-remote',
+              daemonId: 'machine-remote',
               machineLabel: 'Remote',
               workspace: '/missing/remote',
               providers: ['codex-cli'],
+              policy: { providerPriority: ['codex-cli'] },
               cachedStatus: {
+                machineStatus: 'online',
+                lastSeenAt: '2026-05-17T05:00:00.000Z',
+                updatedAt: '2026-05-17T05:01:00.000Z',
                 activeSession: { id: 'sess-remote', provider: 'codex-cli', status: 'running' },
                 git: {
                   workspace: '/missing/remote',
@@ -137,10 +148,112 @@ describe('mesh_status', () => {
       expect(result.nodes.find((node: any) => node.nodeId === 'node-local')).toEqual(expect.objectContaining({
         activeSessions: ['sess-live'],
         health: 'online',
+        launchReady: true,
+        providerPriority: ['hermes-cli'],
+        connection: expect.objectContaining({
+          state: 'self',
+          transport: 'local',
+        }),
       }))
       expect(result.nodes.find((node: any) => node.nodeId === 'node-remote')).toEqual(expect.objectContaining({
         activeSessions: ['sess-remote'],
         health: 'degraded',
+        launchReady: true,
+        providerPriority: ['codex-cli'],
+        lastSeenAt: '2026-05-17T05:00:00.000Z',
+        updatedAt: '2026-05-17T05:01:00.000Z',
+        connection: expect.objectContaining({
+          source: 'not_reported',
+          state: 'unknown',
+          transport: 'unknown',
+          reported: false,
+        }),
+      }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('surfaces selected-coordinator mesh connection telemetry when reported', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-telemetry-')
+    try {
+      const { router } = createRouter({
+        getMeshPeerConnectionStatus: vi.fn((daemonId: string) => daemonId === 'machine-remote'
+          ? {
+              perspective: 'selected_coordinator',
+              source: 'mesh_peer_status',
+              state: 'connected',
+              transport: 'relay',
+              reported: true,
+              reason: 'Connected over TURN relay.',
+              lastStateChangeAt: '2026-05-17T06:00:00.000Z',
+              lastConnectedAt: '2026-05-17T06:00:00.000Z',
+              lastCommandAt: '2026-05-17T06:00:30.000Z',
+            }
+          : null),
+      })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-telemetry',
+        inlineMesh: {
+          id: 'mesh-telemetry',
+          name: 'Mesh Telemetry',
+          repoIdentity: 'repo',
+          policy: {},
+          nodes: [
+            {
+              id: 'node-local',
+              daemonId: 'machine-local',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+            {
+              id: 'node-remote',
+              daemonId: 'machine-remote',
+              machineLabel: 'Remote',
+              workspace: '/missing/remote',
+              providers: ['codex-cli'],
+              policy: { providerPriority: ['codex-cli'] },
+              cachedStatus: {
+                machineStatus: 'online',
+                health: 'online',
+                git: {
+                  workspace: '/missing/remote',
+                  repoRoot: '/missing/remote',
+                  isGitRepo: true,
+                  branch: 'main',
+                  ahead: 0,
+                  behind: 0,
+                  staged: 0,
+                  modified: 0,
+                  untracked: 0,
+                  deleted: 0,
+                  renamed: 0,
+                  hasConflicts: false,
+                  conflictFiles: [],
+                  stashCount: 0,
+                },
+              },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.nodes.find((node: any) => node.nodeId === 'node-remote')).toEqual(expect.objectContaining({
+        health: 'online',
+        launchReady: true,
+        connection: expect.objectContaining({
+          source: 'mesh_peer_status',
+          state: 'connected',
+          transport: 'relay',
+          reported: true,
+          reason: 'Connected over TURN relay.',
+          lastConnectedAt: '2026-05-17T06:00:00.000Z',
+          lastCommandAt: '2026-05-17T06:00:30.000Z',
+        }),
       }))
     } finally {
       await rm(dir, { recursive: true, force: true })

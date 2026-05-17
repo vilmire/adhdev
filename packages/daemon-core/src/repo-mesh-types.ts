@@ -278,6 +278,21 @@ export interface RepoMeshSessionStatus {
     isCached?: boolean;
 }
 
+export type RepoMeshPeerConnectionState = 'self' | 'connected' | 'connecting' | 'disconnected' | 'failed' | 'closed' | 'unknown';
+export type RepoMeshPeerConnectionTransport = 'local' | 'direct' | 'relay' | 'unknown';
+
+export interface RepoMeshPeerConnectionStatus {
+    perspective: 'selected_coordinator';
+    source: 'mesh_peer_status' | 'not_reported';
+    state: RepoMeshPeerConnectionState;
+    transport: RepoMeshPeerConnectionTransport;
+    reported: boolean;
+    reason?: string;
+    lastStateChangeAt?: string;
+    lastConnectedAt?: string;
+    lastCommandAt?: string;
+}
+
 export interface RepoMeshNodeStatus {
     nodeId: string;
     machineLabel: string;
@@ -293,6 +308,11 @@ export interface RepoMeshNodeStatus {
     providers: string[];
     activeSessions: string[];
     activeSessionDetails?: RepoMeshSessionStatus[];
+    providerPriority?: string[];
+    launchReady?: boolean;
+    lastSeenAt?: string;
+    updatedAt?: string;
+    connection?: RepoMeshPeerConnectionStatus;
     error?: string;
 }
 
