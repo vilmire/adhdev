@@ -201,6 +201,7 @@ export { MeshGraphView, MeshGraphPanel, MeshObservabilitySurface } from './compo
 export type { MeshGraphData, MeshGraphNode, MeshGraphEdge } from './components/MeshGraph'
 export { buildMeshGraph } from './utils/mesh-visualization'
 export type { MeshGraph, MeshGraphNode as MeshGraphNodeType, MeshGraphEdge as MeshGraphEdgeType } from './utils/mesh-visualization'
+export { extractRepoMeshStatus } from './utils/repo-mesh-status'
 
 export { default as OnboardingModal } from './components/OnboardingModal'
 

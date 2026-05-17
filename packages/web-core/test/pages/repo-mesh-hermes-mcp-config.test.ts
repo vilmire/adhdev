@@ -76,12 +76,13 @@ describe('RepoMesh node active assignment helpers', () => {
 })
 
 describe('RepoMesh graph detail affordances', () => {
-  it('keeps graph-side session and queue drill-down actionable from the standalone mesh page', () => {
+  it('routes standalone Repo Mesh through the shared observability surface with live daemon wiring', () => {
     const source = readSource('pages/RepoMesh.tsx')
 
-    expect(source).toContain('navigate(getDashboardActiveTabHref(sessionId), { state: { openRemoteForTabKey: sessionId } })')
-    expect(source).toContain('Related active queue')
-    expect(source).toContain('Active sessions')
-    expect(source).toContain('Open chat')
+    expect(source).toContain('extractRepoMeshStatus(res)')
+    expect(source).toContain('<MeshObservabilitySurface')
+    expect(source).toContain('daemonId={daemonId}')
+    expect(source).toContain('sendDaemonCommand={sendCommand}')
+    expect(source).toContain('queue activity, sessions, node drift, and mesh topology from this standalone daemon')
   })
 })

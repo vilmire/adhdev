@@ -7,22 +7,12 @@ import { IconMesh, IconX } from '../Icons'
 import { MeshObservabilitySurface } from '../MeshGraph'
 import type { MeshGraphData } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
+import { extractRepoMeshStatus } from '../../utils/repo-mesh-status'
 
 interface DashboardMeshGraphDialogProps {
     activeConv: ActiveConversation
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     onClose: () => void
-}
-
-function extractMeshStatus(response: any): RepoMeshStatus | null {
-    const body = response?.result ?? response
-    const candidates = [response?.status, body?.status, body, response]
-    for (const candidate of candidates) {
-        if (candidate && Array.isArray(candidate.nodes) && typeof candidate.meshId === 'string') {
-            return candidate as RepoMeshStatus
-        }
-    }
-    return null
 }
 
 export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand, onClose }: DashboardMeshGraphDialogProps) {
@@ -51,7 +41,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             const response = meshOverrides?.loadMeshStatus
                 ? await meshOverrides.loadMeshStatus(daemonId, meshId)
                 : await sendDaemonCommand(daemonId, 'mesh_status', { meshId })
-            const status = extractMeshStatus(response)
+            const status = extractRepoMeshStatus(response)
             if (!status) {
                 setGraph(null)
                 setMeshStatus(null)
