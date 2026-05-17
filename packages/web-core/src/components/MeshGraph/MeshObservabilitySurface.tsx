@@ -261,10 +261,6 @@ export function getQueueTaskSessionTarget(task: RepoMeshQueueTask): string | nul
     return task.assignedSessionId || task.targetSessionId || task.autoLaunch?.sessionId || null
 }
 
-function pickInitialNodeId(graph: MeshGraphData): string | null {
-    return graph.nodes.find(node => node.type !== 'submoduleNode')?.id ?? graph.nodes[0]?.id ?? null
-}
-
 function shortCommit(commit: string | null | undefined): string | null {
     if (!commit) return null
     return commit.slice(0, 7)
@@ -293,11 +289,8 @@ export default function MeshObservabilitySurface({
     sendDaemonCommand = null,
 }: MeshObservabilitySurfaceProps) {
     const navigate = useNavigate()
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(() => pickInitialNodeId(graph))
-    const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(() => {
-        const nodeId = pickInitialNodeId(graph)
-        return nodeId ? { kind: 'node', nodeId } : null
-    })
+    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+    const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
     const [queueFilter, setQueueFilter] = useState<'active' | 'history' | 'all'>('active')
     const [gitHistoryByWorkspace, setGitHistoryByWorkspace] = useState<Record<string, GitHistoryState>>({})
 
@@ -323,12 +316,15 @@ export default function MeshObservabilitySurface({
     }, [queueFilter, queueTasks])
 
     useEffect(() => {
-        if (!selectedNodeId || !graphNodeById.has(selectedNodeId)) {
-            const fallback = pickInitialNodeId(graph)
-            setSelectedNodeId(fallback)
-            setDetailSelection(fallback ? { kind: 'node', nodeId: fallback } : null)
-        }
-    }, [graph, graphNodeById, selectedNodeId])
+        if (!selectedNodeId) return
+        if (graphNodeById.has(selectedNodeId)) return
+        setSelectedNodeId(null)
+        setDetailSelection(current => {
+            if (!current) return null
+            if ('nodeId' in current && current.nodeId === selectedNodeId) return null
+            return current
+        })
+    }, [graphNodeById, selectedNodeId])
 
     const selectedGraphNode = selectedNodeId ? graphNodeById.get(selectedNodeId) ?? null : null
     const selectedNodeStatus = selectedNodeId ? nodeStatusById.get(selectedNodeId) ?? null : null
@@ -419,46 +415,85 @@ export default function MeshObservabilitySurface({
         ...(graph.warnings ?? []),
         ...(status.nodes.filter(node => node.machineStatus && node.machineStatus !== 'online').map(node => `${node.machineLabel}: ${node.machineStatus}`)),
     ]
+    const hasDetailPane = Boolean(selectedQueueTask || selectedSessionEntry || selectedGraphNode)
 
     return (
         <div className="flex min-h-0 flex-col gap-4 xl:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
                 <div className="min-h-0 flex-1 rounded-[28px] border border-white/10 bg-white/[0.03] p-3 sm:p-4" style={{ minHeight: 420 }}>
-                    <div className="mb-3 rounded-2xl border border-white/10 bg-slate-950/45 px-3.5 py-3">
-                        <div className="flex flex-wrap gap-2 text-xs text-slate-200">
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/45 px-3.5 py-3">
+                        <div className="flex min-w-0 flex-1 flex-wrap gap-2 text-xs text-slate-200">
+                            <Badge
+                                label={graph.stats.followUpNodes > 0 ? `${graph.stats.followUpNodes} need follow-up` : 'mesh converged'}
+                                tone={graph.stats.followUpNodes > 0 ? 'danger' : 'good'}
+                            />
+                            {graph.stats.blockedReviewNodes > 0 && (
+                                <Badge label={`${graph.stats.blockedReviewNodes} blocked review`} tone="danger" />
+                            )}
+                            {graph.stats.notMergeableNodes > 0 && (
+                                <Badge label={`${graph.stats.notMergeableNodes} not mergeable`} tone="danger" />
+                            )}
+                            {graph.stats.mergeReadyNodes > 0 && (
+                                <Badge label={`${graph.stats.mergeReadyNodes} need merge`} tone="warn" />
+                            )}
+                            {graph.stats.cleanupCandidateNodes > 0 && (
+                                <Badge label={`${graph.stats.cleanupCandidateNodes} refine/cleanup`} tone="info" />
+                            )}
+                            {graph.stats.offlineNodes > 0 && (
+                                <Badge label={`${graph.stats.offlineNodes} offline`} tone="danger" />
+                            )}
+                            {(queueSummary?.active ?? 0) > 0 && (
+                                <Badge label={`${queueSummary?.active ?? 0} active queue`} tone="info" />
+                            )}
                             <Badge label={`${graph.stats.totalNodes} nodes`} tone="default" />
-                            <Badge label={`${graph.stats.totalActiveSessions} active sessions`} tone={graph.stats.totalActiveSessions > 0 ? 'info' : 'default'} />
-                            <Badge label={`${graph.stats.dirtyNodes} dirty`} tone={graph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
-                            <Badge label={`${graph.stats.offlineNodes} offline`} tone={graph.stats.offlineNodes > 0 ? 'danger' : 'good'} />
-                            <Badge label={`${queueSummary?.active ?? 0} active queue`} tone={(queueSummary?.active ?? 0) > 0 ? 'info' : 'default'} />
-                            <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
-                            {stateCounts.length === 0 ? (
-                                <Badge label="no session metadata" />
-                            ) : stateCounts.slice(0, 2).map(([label, count]) => (
-                                <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
-                            ))}
+                            {graph.stats.totalActiveSessions > 0 && (
+                                <Badge label={`${graph.stats.totalActiveSessions} active sessions`} tone="info" />
+                            )}
                         </div>
-                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
-                            <Badge label="Anchor = inferred default branch" tone="info" />
-                            <Badge label="Peer link = same-branch worktree" tone="default" />
-                            <Badge label="Submodule link = child checkout under a parent node" tone="warn" />
-                        </div>
-                        <div className="mt-3 text-xs text-slate-400">
-                            Tap a node to inspect workspace, session, and git details. Launch readiness and mesh transport details stay in the same drill-down. Queue rows and session rows are also selectable for drill-down. First open now focuses on the default-branch path; drag or scroll only when you want the wider topology.
-                        </div>
-                        {statusWarnings.length > 0 && (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                {statusWarnings.map(warning => (
-                                    <span key={warning} className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100">{warning}</span>
-                                ))}
+                        <details className="max-w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-300">
+                            <summary className="cursor-pointer list-none font-medium text-slate-200 [&::-webkit-details-marker]:hidden">
+                                Legend & secondary details
+                            </summary>
+                            <div className="mt-3 flex flex-col gap-3">
+                                <div className="flex flex-wrap gap-2">
+                                    <Badge label={`${graph.stats.dirtyNodes} dirty`} tone={graph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
+                                    <Badge label={`${graph.stats.orphanNodes} orphan`} tone={graph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
+                                    <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
+                                    {stateCounts.length === 0 ? (
+                                        <Badge label="no session metadata" />
+                                    ) : stateCounts.slice(0, 2).map(([label, count]) => (
+                                        <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
+                                    ))}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <Badge label="Anchor = default branch" tone="info" />
+                                    <Badge label="Peer link = same-branch worktree" tone="default" />
+                                    <Badge label="Submodule link = child checkout" tone="warn" />
+                                </div>
+                                {statusWarnings.length > 0 && (
+                                    <div className="flex flex-wrap gap-2">
+                                        {statusWarnings.map(warning => (
+                                            <span key={warning} className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100">{warning}</span>
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="text-xs text-slate-400">
+                                    Click a node only when you want drill-down details. The graph itself now carries the convergence state.
+                                </div>
                             </div>
-                        )}
+                        </details>
                     </div>
                     {graph.nodes.length > 0 ? (
                         <MeshGraphView
                             data={graph}
                             selectedNodeId={selectedNodeId}
                             onNodeClick={node => {
+                                const shouldCollapse = detailSelection?.kind === 'node' && selectedNodeId === node.id
+                                if (shouldCollapse) {
+                                    setSelectedNodeId(null)
+                                    setDetailSelection(null)
+                                    return
+                                }
                                 setSelectedNodeId(node.id)
                                 setDetailSelection({ kind: 'node', nodeId: node.id })
                             }}
@@ -469,7 +504,8 @@ export default function MeshObservabilitySurface({
                 </div>
             </div>
 
-            <div className="flex w-full shrink-0 flex-col gap-4 xl:w-[420px]">
+            {hasDetailPane && (
+                <div className="flex w-full shrink-0 flex-col gap-4 xl:w-[420px]">
                 <Card title="Selected detail" subtitle="Node, session, or queue item drill-down.">
                     <div className="flex flex-col gap-3">
                         {detailSelection?.kind === 'queue' && selectedQueueTask ? (
@@ -575,7 +611,10 @@ export default function MeshObservabilitySurface({
                             </>
                         ) : selectedGraphNode ? (
                             <>
-                                <MeshGraphPanel node={selectedGraphNode} />
+                                <MeshGraphPanel node={selectedGraphNode} onClose={() => {
+                                    setSelectedNodeId(null)
+                                    setDetailSelection(null)
+                                }} />
                                 {selectedNodeStatus && (
                                     <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
                                         <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -920,7 +959,8 @@ export default function MeshObservabilitySurface({
                         )}
                     </div>
                 </Card>
-            </div>
+                </div>
+            )}
         </div>
     )
 }

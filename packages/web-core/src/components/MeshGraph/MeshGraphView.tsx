@@ -20,7 +20,12 @@ import {
     type NodeTypes,
 } from '@xyflow/react'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
-import { shouldShowMeshGraphCallout } from './meshGraphViewModel'
+import {
+    formatMeshGraphAheadBehind,
+    getMeshGraphAttentionBadge,
+    getMeshGraphCalloutText,
+    shouldShowMeshGraphCallout,
+} from './meshGraphViewModel'
 import {
     getMeshGraphInitialFocusNodeIds,
     getMeshGraphLayoutKey,
@@ -40,19 +45,24 @@ type FlowNodeData = Record<string, unknown> & {
 type FlowNode = Node<FlowNodeData, 'meshNode'>
 type FlowEdge = Edge
 
-const COLUMN_GAP = 430
-const WORKTREE_ROW_GAP = 208
-const SUBMODULE_ROW_GAP = 136
-const SUBMODULE_OFFSET_X = 42
-const SUBMODULE_OFFSET_Y = 164
-const STACK_SECTION_GAP = 30
+const COLUMN_GAP = 390
+const WORKTREE_ROW_GAP = 192
+const SUBMODULE_ROW_GAP = 120
+const SUBMODULE_OFFSET_X = 36
+const SUBMODULE_OFFSET_Y = 148
+const STACK_SECTION_GAP = 24
 
-function getHealthClasses(health: MeshGraphNode['health'], selected: boolean): string {
+function getHealthClasses(node: MeshGraphNode, selected: boolean): string {
     const base = selected
         ? 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_24px_60px_rgba(8,145,178,0.18)]'
         : 'border-white/10 shadow-[0_18px_48px_rgba(3,7,18,0.22)]'
+    const attention = getMeshGraphAttentionBadge(node)
 
-    switch (health) {
+    if (attention?.tone === 'danger') return `${base} bg-rose-500/12`
+    if (attention?.tone === 'warn') return `${base} bg-amber-500/10`
+    if (attention?.tone === 'info') return `${base} bg-violet-500/10`
+
+    switch (node.health) {
         case 'online':
             return `${base} bg-emerald-500/8`
         case 'dirty':
@@ -86,6 +96,20 @@ function getBadgeClasses(kind: 'health' | 'dirty' | 'conflict' | 'orphan' | 'met
     }
 }
 
+function getAttentionBadgeClasses(tone: 'good' | 'warn' | 'danger' | 'info'): string {
+    switch (tone) {
+        case 'danger':
+            return 'border-rose-400/35 bg-rose-500/14 text-rose-50'
+        case 'warn':
+            return 'border-amber-400/35 bg-amber-500/14 text-amber-50'
+        case 'info':
+            return 'border-violet-400/35 bg-violet-500/14 text-violet-50'
+        case 'good':
+        default:
+            return 'border-emerald-400/35 bg-emerald-500/12 text-emerald-50'
+    }
+}
+
 function getHealthDot(health: MeshGraphNode['health']): string {
     switch (health) {
         case 'online':
@@ -111,8 +135,32 @@ function isUpstreamVerified(node: MeshGraphNode): boolean {
     return !node.upstream || node.upstreamStatus === 'fresh'
 }
 
-function getGitDriftLabel(node: MeshGraphNode): string {
-    return isUpstreamVerified(node) ? `+${node.ahead} / -${node.behind}` : 'upstream unverified'
+function getNodeSummary(node: MeshGraphNode): string {
+    if (node.type === 'defaultBranchNode') {
+        return node.nextStepHint || 'Default branch anchor'
+    }
+
+    if (node.type === 'submoduleNode') {
+        const parts = [node.machineLabel ? `parent ${node.machineLabel}` : null]
+        if (node.outOfSync) parts.push('out of sync')
+        else if (node.dirty) parts.push('local changes')
+        else parts.push('synced')
+        return parts.filter(Boolean).join(' · ')
+    }
+
+    const parts: string[] = []
+    if (node.upstream) parts.push(node.upstream)
+    if (!isUpstreamVerified(node)) {
+        parts.push('upstream unverified')
+    } else {
+        const drift = formatMeshGraphAheadBehind(node)
+        if (drift) parts.push(drift)
+    }
+    if (node.activeSessionCount > 0) parts.push(`${node.activeSessionCount} session${node.activeSessionCount === 1 ? '' : 's'}`)
+    if (node.dirtyFiles > 0) parts.push(`${node.dirtyFiles} dirty`)
+    if (node.hasConflicts) parts.push('conflicts')
+    if (parts.length === 0) return node.branchConvergence?.needsConvergence ? 'Needs follow-up' : 'Clean and even with upstream'
+    return parts.join(' · ')
 }
 
 function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
@@ -126,10 +174,13 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             ? node.submodulePath || 'submodule checkout'
             : node.machineLabel || node.workspace
     const shortCommit = node.submoduleCommit ? node.submoduleCommit.slice(0, 7) : null
+    const attentionBadge = getMeshGraphAttentionBadge(node)
+    const nodeSummary = getNodeSummary(node)
+    const calloutText = getMeshGraphCalloutText(node)
 
     return (
         <div
-            className={`${isSubmoduleNode ? 'w-[216px]' : 'w-[232px]'} rounded-2xl border px-3.5 py-3 backdrop-blur-sm transition-all ${getHealthClasses(node.health, selected)}`}
+            className={`${isSubmoduleNode ? 'w-[204px]' : 'w-[220px]'} rounded-2xl border px-3.5 py-3 backdrop-blur-sm transition-all ${getHealthClasses(node, selected)}`}
         >
             <Handle
                 type="target"
@@ -148,6 +199,12 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     aria-hidden
                 />
             </div>
+
+            {attentionBadge && (
+                <div className={`mt-3 inline-flex max-w-full items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${getAttentionBadgeClasses(attentionBadge.tone)}`}>
+                    <span className="truncate">{attentionBadge.label}</span>
+                </div>
+            )}
 
             <div className="mt-3 flex flex-wrap gap-1.5 text-[10px]">
                 <span className={`rounded-full border px-2 py-0.5 capitalize ${getBadgeClasses('health')}`}>
@@ -190,40 +247,18 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 )}
                 {node.isOrphan && (
                     <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('orphan')}`}>
-                        needs attention
+                        needs follow-up
                     </span>
                 )}
             </div>
 
-            <div className="mt-3 space-y-1.5 text-[11px] text-slate-300">
-                {isSubmoduleNode ? (
-                    <>
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="text-slate-500">Parent</span>
-                            <span className="truncate text-right font-medium text-slate-100">{node.machineLabel || 'mesh node'}</span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="text-slate-500">State</span>
-                            <span className="font-medium text-slate-100">{node.outOfSync ? 'Out of sync' : node.dirty ? 'Dirty' : 'Synced'}</span>
-                        </div>
-                    </>
-                ) : (
-                    <>
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="text-slate-500">Sessions</span>
-                            <span className="font-medium text-slate-100">{node.activeSessionCount}</span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="text-slate-500">Git drift</span>
-                            <span className="font-medium text-slate-100">{getGitDriftLabel(node)}</span>
-                        </div>
-                    </>
-                )}
+            <div className="mt-3 text-[11px] leading-5 text-slate-300">
+                {nodeSummary}
             </div>
 
-            {shouldShowCallout && (
+            {shouldShowCallout && calloutText && (
                 <div className="mt-3 rounded-xl border border-cyan-400/15 bg-cyan-500/8 px-3 py-2 text-[10px] leading-4 text-cyan-50/90">
-                    {node.nextStepHint}
+                    {calloutText}
                 </div>
             )}
             <Handle
@@ -382,6 +417,7 @@ function buildLayout(data: MeshGraphData): { nodes: FlowNode[]; edges: FlowEdge[
                         submodulePath: null,
                         submoduleCommit: null,
                         outOfSync: false,
+                        branchConvergence: null,
                         source: {
                             nodeId: `${defaultAnchor.id}__placeholder`,
                             machineLabel: null,

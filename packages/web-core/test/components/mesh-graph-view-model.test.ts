@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { MeshGraphData, MeshGraphNode } from '../../src/components/MeshGraph/types'
 import {
+  formatMeshGraphAheadBehind,
+  getMeshGraphAttentionBadge,
   getMeshGraphViewportFocusNodeIds,
   shouldShowMeshGraphCallout,
   shouldShowMeshGraphMiniMap,
@@ -13,6 +15,8 @@ function graphNode(overrides: Partial<MeshGraphNode>): MeshGraphNode {
     label: overrides.label || 'Node 1',
     workspace: overrides.workspace || '/repo',
     branch: overrides.branch ?? 'main',
+    upstream: overrides.upstream ?? 'origin/main',
+    upstreamStatus: overrides.upstreamStatus ?? 'fresh',
     machineLabel: overrides.machineLabel ?? 'Mac Studio',
     health: overrides.health || 'online',
     ahead: overrides.ahead ?? 0,
@@ -31,6 +35,7 @@ function graphNode(overrides: Partial<MeshGraphNode>): MeshGraphNode {
     submodulePath: overrides.submodulePath ?? null,
     submoduleCommit: overrides.submoduleCommit ?? null,
     outOfSync: overrides.outOfSync ?? false,
+    branchConvergence: overrides.branchConvergence ?? null,
     source: overrides.source || {
       nodeId: overrides.id || 'node-1',
       machineLabel: overrides.machineLabel ?? 'Mac Studio',
@@ -57,6 +62,11 @@ function graphData(nodes: MeshGraphNode[]): MeshGraphData {
       orphanNodes: nodes.filter(node => node.isOrphan).length,
       errorNodes: nodes.filter(node => node.health === 'degraded').length,
       offlineNodes: nodes.filter(node => node.health === 'offline').length,
+      followUpNodes: nodes.filter(node => node.type !== 'submoduleNode' && node.branchConvergence?.needsConvergence).length,
+      blockedReviewNodes: nodes.filter(node => node.branchConvergence?.status === 'blocked_review').length,
+      mergeReadyNodes: nodes.filter(node => node.branchConvergence?.status === 'pushed_feature_branch_needs_merge').length,
+      cleanupCandidateNodes: nodes.filter(node => node.branchConvergence?.status === 'cleanup_candidate').length,
+      notMergeableNodes: nodes.filter(node => node.branchConvergence?.status === 'not_mergeable').length,
       totalActiveSessions: nodes.reduce((sum, node) => sum + node.activeSessionCount, 0),
     },
     warnings: [],
@@ -89,6 +99,8 @@ describe('meshGraphViewModel', () => {
       id: 'sub-ok',
       type: 'submoduleNode',
       branch: null,
+      upstream: null,
+      upstreamStatus: null,
       nextStepHint: 'oss is in sync with the parent checkout',
       submodulePath: 'oss',
       machineLabel: 'M1',
@@ -98,12 +110,41 @@ describe('meshGraphViewModel', () => {
       id: 'sub-bad',
       type: 'submoduleNode',
       branch: null,
+      upstream: null,
+      upstreamStatus: null,
       outOfSync: true,
       health: 'degraded',
       nextStepHint: 'oss is out of sync with the parent checkout',
       submodulePath: 'oss',
       machineLabel: 'M1',
     }))).toBe(true)
+  })
+
+  it('turns behind/ahead drift and blocked convergence into graph-visible attention badges', () => {
+    const node = graphNode({
+      id: 'node-behind',
+      branch: 'main',
+      ahead: 0,
+      behind: 3,
+      branchConvergence: {
+        status: 'blocked_review',
+        needsConvergence: true,
+        reason: 'default_branch_not_even_with_upstream',
+        nextStep: 'Bring main even with origin/main before declaring convergence complete.',
+        branch: 'main',
+        defaultBranch: 'main',
+        upstream: 'origin/main',
+        upstreamStatus: 'fresh',
+        ahead: 0,
+        behind: 3,
+        dirty: false,
+        hasConflicts: false,
+      },
+    })
+
+    expect(formatMeshGraphAheadBehind(node)).toBe('behind 3')
+    expect(getMeshGraphAttentionBadge(node)).toEqual({ label: 'behind 3', tone: 'danger' })
+    expect(shouldShowMeshGraphCallout(node)).toBe(true)
   })
 
   it('only shows the minimap once the graph is large enough to need a secondary locator', () => {

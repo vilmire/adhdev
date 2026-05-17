@@ -22,6 +22,28 @@ type MeshGraphNodeSource = RepoMeshNodeStatus | {
     submodule: MeshGraphSubmoduleStatus
 }
 
+export type MeshGraphBranchConvergenceStatus =
+    | 'merged_to_main'
+    | 'pushed_feature_branch_needs_merge'
+    | 'blocked_review'
+    | 'cleanup_candidate'
+    | 'not_mergeable'
+
+export interface MeshGraphBranchConvergence {
+    status: MeshGraphBranchConvergenceStatus
+    needsConvergence: boolean
+    reason: string
+    nextStep: string | null
+    branch: string | null
+    defaultBranch: string | null
+    upstream: string | null
+    upstreamStatus: GitRepoStatus['upstreamStatus'] | null
+    ahead: number
+    behind: number
+    dirty: boolean
+    hasConflicts: boolean
+}
+
 export interface MeshGraphNode {
     id: string
     type: MeshGraphNodeType
@@ -48,6 +70,7 @@ export interface MeshGraphNode {
     submodulePath?: string | null
     submoduleCommit?: string | null
     outOfSync?: boolean
+    branchConvergence: MeshGraphBranchConvergence | null
     source: MeshGraphNodeSource
 }
 
@@ -73,6 +96,11 @@ export interface MeshGraph {
         orphanNodes: number
         errorNodes: number
         offlineNodes: number
+        followUpNodes: number
+        blockedReviewNodes: number
+        mergeReadyNodes: number
+        cleanupCandidateNodes: number
+        notMergeableNodes: number
         totalActiveSessions: number
     }
     warnings: string[]
@@ -195,6 +223,138 @@ function detectOrphanReasons(node: RepoMeshNodeStatus, defaultBranch: string | n
     return reasons
 }
 
+function branchConvergencePriority(status: MeshGraphBranchConvergenceStatus): number {
+    switch (status) {
+        case 'merged_to_main':
+            return 0
+        case 'pushed_feature_branch_needs_merge':
+            return 1
+        case 'cleanup_candidate':
+            return 2
+        case 'blocked_review':
+            return 3
+        case 'not_mergeable':
+        default:
+            return 4
+    }
+}
+
+function pickDominantBranchConvergence(convergences: MeshGraphBranchConvergence[]): MeshGraphBranchConvergence {
+    return convergences.reduce((best, current) => (
+        branchConvergencePriority(current.status) > branchConvergencePriority(best.status) ? current : best
+    ))
+}
+
+function evaluateBranchConvergence(node: RepoMeshNodeStatus, defaultBranch: string | null): MeshGraphBranchConvergence | null {
+    if (!defaultBranch) return null
+
+    const git = node.git
+    const branch = git?.branch ?? null
+    const upstream = git?.upstream ?? null
+    const upstreamStatus = git?.upstreamStatus ?? null
+    const ahead = git?.ahead ?? 0
+    const behind = git?.behind ?? 0
+    const dirty = isDirty(git) || hasDirtySubmodules(git)
+    const hasConflicts = Boolean(git?.hasConflicts) || hasOutOfSyncSubmodules(git)
+    const base = {
+        branch,
+        defaultBranch,
+        upstream,
+        upstreamStatus,
+        ahead,
+        behind,
+        dirty,
+        hasConflicts,
+    }
+
+    if (git?.isGitRepo !== true) {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: 'git_status_unavailable',
+            nextStep: `Resolve git status for '${node.machineLabel || node.nodeId}' before declaring the mesh converged.`,
+        }
+    }
+
+    if (!branch) {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: 'branch_unknown',
+            nextStep: `Inspect '${node.machineLabel || node.nodeId}' and confirm which branch should converge into ${defaultBranch}.`,
+        }
+    }
+
+    if (hasConflicts || dirty) {
+        return {
+            ...base,
+            status: 'not_mergeable',
+            needsConvergence: true,
+            reason: git?.hasConflicts ? 'conflicts_present' : hasOutOfSyncSubmodules(git) ? 'submodule_out_of_sync' : 'dirty_workspace',
+            nextStep: `Commit, checkpoint, or resolve '${branch}' before any convergence step into ${defaultBranch}.`,
+        }
+    }
+
+    if (upstream && upstreamStatus && upstreamStatus !== 'fresh') {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: 'upstream_unverified',
+            nextStep: `Refresh '${branch}' against ${upstream} before claiming the mesh is converged.`,
+        }
+    }
+
+    if (branch === defaultBranch) {
+        if (ahead > 0 || behind > 0) {
+            return {
+                ...base,
+                status: 'blocked_review',
+                needsConvergence: true,
+                reason: 'default_branch_not_even_with_upstream',
+                nextStep: `Bring ${defaultBranch} even with ${upstream ?? 'its upstream'} before declaring convergence complete.`,
+            }
+        }
+        return {
+            ...base,
+            status: 'merged_to_main',
+            needsConvergence: false,
+            reason: 'clean_default_branch',
+            nextStep: null,
+        }
+    }
+
+    if (node.isLocalWorktree) {
+        return {
+            ...base,
+            status: 'cleanup_candidate',
+            needsConvergence: true,
+            reason: 'clean_non_default_worktree_branch',
+            nextStep: `Run refine / cleanup for '${branch}' or explicitly classify the worktree before ending the task.`,
+        }
+    }
+
+    if (!upstream || ahead > 0 || behind > 0) {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: !upstream ? 'feature_branch_missing_upstream' : 'feature_branch_not_even_with_upstream',
+            nextStep: `Push or reconcile '${branch}', then merge it into ${defaultBranch} or mark it blocked with a reason.`,
+        }
+    }
+
+    return {
+        ...base,
+        status: 'pushed_feature_branch_needs_merge',
+        needsConvergence: true,
+        reason: 'clean_non_default_branch',
+        nextStep: `Review and merge '${branch}' into ${defaultBranch}; do not treat it as fully complete while it remains off ${defaultBranch}.`,
+    }
+}
+
 function getSubmoduleHealth(submodule: MeshGraphSubmoduleStatus): RepoMeshNodeHealth {
     if (submodule.error || submodule.outOfSync) return 'degraded'
     if (submodule.dirty) return 'dirty'
@@ -202,7 +362,10 @@ function getSubmoduleHealth(submodule: MeshGraphSubmoduleStatus): RepoMeshNodeHe
 }
 
 export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
-    const inferredDefaultBranch = inferDefaultBranch(status.nodes)
+    const meshDefaultBranch = typeof (status as any).defaultBranch === 'string' && (status as any).defaultBranch.trim().length > 0
+        ? (status as any).defaultBranch.trim()
+        : null
+    const inferredDefaultBranch = meshDefaultBranch ?? inferDefaultBranch(status.nodes)
     const nodes: MeshGraphNode[] = []
     const edges: MeshGraphEdge[] = []
     const warnings: string[] = []
@@ -214,6 +377,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const submoduleHealth = getParentSubmoduleHealth(git)
         const dirty = isDirty(git) || submoduleHealth === 'dirty'
         const orphanReasons = detectOrphanReasons(nodeStatus, inferredDefaultBranch)
+        const branchConvergence = evaluateBranchConvergence(nodeStatus, inferredDefaultBranch)
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
@@ -235,11 +399,12 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             isOrphan: orphanReasons.length > 0,
             orphanReasons,
             error: nodeStatus.error,
-            nextStepHint: orphanReasons[0],
+            nextStepHint: orphanReasons[0] ?? branchConvergence?.nextStep ?? undefined,
             parentNodeId: null,
             submodulePath: null,
             submoduleCommit: git?.headCommit ?? null,
             outOfSync: hasOutOfSyncSubmodules(git),
+            branchConvergence,
             source: nodeStatus,
         }
         nodes.push(graphNode)
@@ -283,6 +448,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 submodulePath: submodule.path,
                 submoduleCommit: submodule.commit,
                 outOfSync: submodule.outOfSync,
+                branchConvergence: null,
                 source: {
                     kind: 'synthetic-submodule',
                     parentNodeId: graphNode.id,
@@ -307,6 +473,13 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const branchNodes = branchNodeIds
             .map(id => nodes.find(node => node.id === id))
             .filter(Boolean) as MeshGraphNode[]
+        const branchConvergences = branchNodes
+            .map(node => node.branchConvergence)
+            .filter(Boolean) as MeshGraphBranchConvergence[]
+        const dominantBranchConvergence = branchConvergences.length > 0
+            ? pickDominantBranchConvergence(branchConvergences)
+            : null
+        const unresolvedBranchConvergenceCount = branchConvergences.filter(convergence => convergence.needsConvergence).length
 
         const syntheticDefaultNode: MeshGraphNode = {
             id: defaultBranchNodeId,
@@ -328,12 +501,17 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             providers: [...new Set(branchNodes.flatMap(node => node.providers))],
             isOrphan: false,
             orphanReasons: [],
-            nextStepHint: branchNodes.length > 0 ? `${branchNodes.length} workspace(s) currently on ${inferredDefaultBranch}` : 'No workspaces currently checked out to the default branch',
+            nextStepHint: unresolvedBranchConvergenceCount > 0
+                ? `${unresolvedBranchConvergenceCount} workspace(s) on ${inferredDefaultBranch} still need follow-up`
+                : branchNodes.length > 0
+                    ? `${branchNodes.length} workspace(s) currently on ${inferredDefaultBranch}`
+                    : 'No workspaces currently checked out to the default branch',
             error: undefined,
             parentNodeId: null,
             submodulePath: null,
             submoduleCommit: null,
             outOfSync: false,
+            branchConvergence: dominantBranchConvergence,
             source: {
                 nodeId: defaultBranchNodeId,
                 machineLabel: inferredDefaultBranch,
@@ -401,8 +579,18 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const conflictCount = visibleGraphNodes.filter(node => node.hasConflicts).length
     const offlineCount = visibleGraphNodes.filter(node => node.health === 'offline').length
     const outOfSyncSubmoduleCount = visibleGraphNodes.filter(node => node.type === 'submoduleNode' && node.outOfSync).length
+    const followUpNodes = visibleGraphNodes.filter(node => node.type !== 'submoduleNode' && node.branchConvergence?.needsConvergence).length
+    const blockedReviewNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'blocked_review').length
+    const mergeReadyNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'pushed_feature_branch_needs_merge').length
+    const cleanupCandidateNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'cleanup_candidate').length
+    const notMergeableNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'not_mergeable').length
 
+    if (followUpNodes > 0) warnings.push(`${followUpNodes} workspace(s) still need follow-up before the mesh is converged`)
     if (orphanCount > 0) warnings.push(`${orphanCount} workspace(s) need attention before safe coordination`)
+    if (blockedReviewNodes > 0) warnings.push(`${blockedReviewNodes} workspace(s) are blocked on branch convergence or upstream sync`)
+    if (mergeReadyNodes > 0) warnings.push(`${mergeReadyNodes} clean feature branch workspace(s) still need merge follow-up`)
+    if (cleanupCandidateNodes > 0) warnings.push(`${cleanupCandidateNodes} worktree workspace(s) are ready for refine / cleanup`)
+    if (notMergeableNodes > 0) warnings.push(`${notMergeableNodes} workspace(s) have local changes or conflicts blocking convergence`)
     if (conflictCount > 0) warnings.push(`${conflictCount} workspace(s) report merge conflicts`)
     if (offlineCount > 0) warnings.push(`${offlineCount} node(s) are currently offline`)
     if (outOfSyncSubmoduleCount > 0) warnings.push(`${outOfSyncSubmoduleCount} submodule(s) are out of sync with their parent checkout`)
@@ -422,6 +610,11 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             orphanNodes: orphanCount,
             errorNodes: visibleGraphNodes.filter(node => Boolean(node.error) || node.outOfSync).length,
             offlineNodes: offlineCount,
+            followUpNodes,
+            blockedReviewNodes,
+            mergeReadyNodes,
+            cleanupCandidateNodes,
+            notMergeableNodes,
             totalActiveSessions: visibleGraphNodes.reduce((total, node) => total + node.activeSessionCount, 0),
         },
         warnings,

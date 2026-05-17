@@ -259,6 +259,7 @@ export interface RepoMeshStatus {
     meshId: string;
     meshName: string;
     repoIdentity: string;
+    defaultBranch?: string;
     refreshedAt: string;
     nodes: RepoMeshNodeStatus[];
     queue?: RepoMeshQueueStatus;

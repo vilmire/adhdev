@@ -226,6 +226,51 @@ describe('buildMeshGraph', () => {
         expect(node?.orphanReasons).toContain('Upstream freshness unverified for main')
     })
 
+    it('maps branch convergence next steps into ordinary node callout hints when no orphan reason already exists', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_convergence',
+            meshName: 'Convergence Mesh',
+            repoIdentity: 'repo',
+            defaultBranch: 'main',
+            refreshedAt: '2026-05-16T18:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_main',
+                    machineLabel: 'Coordinator',
+                    workspace: '/repo/main',
+                    health: 'online',
+                    providers: ['hermes-cli'],
+                    activeSessions: [],
+                    git: {
+                        isGitRepo: true,
+                        branch: 'main',
+                        upstream: 'origin/main',
+                        upstreamStatus: 'fresh',
+                        ahead: 0,
+                        behind: 3,
+                        staged: 0,
+                        modified: 0,
+                        untracked: 0,
+                        deleted: 0,
+                        renamed: 0,
+                        hasConflicts: false,
+                    },
+                },
+            ],
+        } as any)
+
+        const node = graph.nodes.find(entry => entry.id === 'node_main')
+        expect(node).toEqual(expect.objectContaining({
+            nextStepHint: 'Bring main even with origin/main before declaring convergence complete.',
+            branchConvergence: expect.objectContaining({
+                status: 'blocked_review',
+                needsConvergence: true,
+                reason: 'default_branch_not_even_with_upstream',
+                nextStep: 'Bring main even with origin/main before declaring convergence complete.',
+            }),
+        }))
+    })
+
     it('surfaces submodules as child graph nodes with explicit links and warnings', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_submodule',

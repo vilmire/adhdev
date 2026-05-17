@@ -32,7 +32,7 @@ describe('MeshObservabilitySurface', () => {
 
     expect(() => renderSurface(status)).not.toThrow()
     const html = renderSurface(status)
-    expect(html).toContain('0 active queue')
+    expect(html).toContain('mesh converged')
     expect(html).toContain('0 recent failures')
   })
 
@@ -80,6 +80,7 @@ describe('MeshObservabilitySurface', () => {
       'utf8',
     )
     expect(source).toContain("upstream unverified")
-    expect(source).toContain("getGitDriftLabel(node)")
+    expect(source).toContain("getMeshGraphCalloutText(node)")
+    expect(source).toContain("needs follow-up")
   })
 })
