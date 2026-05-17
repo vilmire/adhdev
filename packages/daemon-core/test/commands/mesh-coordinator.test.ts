@@ -358,6 +358,70 @@ describe('resolveMeshCoordinatorSetup', () => {
     }
   })
 
+  it('prefers a newer cached inline mesh snapshot for get_mesh when persisted membership is stale', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-inline-mesh-refresh-'))
+    const repo = join(root, 'repo')
+    const configDir = join(root, 'config')
+    initGitRepo(repo)
+
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    process.env.ADHDEV_CONFIG_DIR = configDir
+
+    try {
+      const { createMesh, addNode } = await import('../../src/config/mesh-config.js')
+      const localMesh = createMesh({
+        name: 'Persisted Mesh',
+        repoIdentity: 'example/repo',
+      })
+      const sourceNode = addNode(localMesh.id, {
+        workspace: repo,
+        repoRoot: repo,
+        daemonId: 'daemon-source',
+        machineId: 'mreg-source',
+        policy: { canPush: true },
+      })
+      expect(sourceNode).toBeTruthy()
+      if (!sourceNode) throw new Error('expected persisted source node')
+
+      const router = createAutoImportRouter(baseProvider, {
+        handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+      })
+
+      const cachedInlineMesh = {
+        ...localMesh,
+        nodes: [
+          sourceNode,
+          {
+            id: 'node_worktree_cached',
+            workspace: join(root, 'worktree'),
+            repoRoot: join(root, 'worktree'),
+            daemonId: 'daemon-source',
+            machineId: 'mreg-source',
+            userOverrides: {},
+            policy: { canPush: true },
+            isLocalWorktree: true,
+            worktreeBranch: 'feat/cached',
+            clonedFromNodeId: sourceNode!.id,
+          },
+        ],
+        updatedAt: new Date().toISOString(),
+      }
+
+      router.getCachedInlineMesh(localMesh.id, cachedInlineMesh)
+
+      const result: any = await router.execute('get_mesh', { meshId: localMesh.id })
+      expect(result).toMatchObject({ success: true })
+      expect(result.mesh.nodes.map((node: any) => node.id)).toEqual([
+        sourceNode!.id,
+        'node_worktree_cached',
+      ])
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('writes Claude MCP config with a Node-launched absolute MCP server entrypoint instead of adhdev-mcp on PATH', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-coordinator-'))
     const mcpEntry = join(workspace, 'mcp-server.js')

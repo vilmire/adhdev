@@ -2081,14 +2081,8 @@ export class DaemonCommandRouter {
             case 'get_mesh': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
-                try {
-                    const { getMesh } = await import('../config/mesh-config.js');
-                    const mesh = getMesh(meshId);
-                    if (mesh) return { success: true, mesh };
-                } catch { /* fall through to inline cache */ }
-                // Fallback: check in-memory cache for cloud-originating meshes
-                const cached = this.inlineMeshCache.get(meshId);
-                if (cached) return { success: true, mesh: cached };
+                const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                if (meshRecord?.mesh) return { success: true, mesh: meshRecord.mesh };
                 return { success: false, error: 'Mesh not found' };
             }
 
