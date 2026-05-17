@@ -34,10 +34,11 @@ describe('dashboard mesh graph dialog wiring', () => {
     it('keeps the dialog responsive on the shared mobile/desktop observability path', () => {
         const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
         const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
+        const graphViewSource = readSource('components/MeshGraph/MeshGraphView.tsx')
 
         expect(dialogSource).toContain('overflow-y-auto bg-[linear-gradient')
-        expect(surfaceSource).toContain('Tap a node to inspect workspace, session, and git details.')
-        expect(surfaceSource).toContain('First open now focuses on the default-branch path')
+        expect(surfaceSource).toContain('Click a node only when you want drill-down details. The graph itself now carries the convergence state.')
+        expect(graphViewSource).toContain('Focused on the main path first · drag or scroll to pan')
         expect(surfaceSource).toContain('max-h-[24vh] overflow-y-auto')
         expect(surfaceSource).toContain('max-h-[22vh] overflow-y-auto')
     })
@@ -76,7 +77,7 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(modeSource).toContain('onOpenMeshGraph={onOpenMeshGraph}')
     expect(mainViewSource).toContain('setMeshGraphConversation(conversation)')
     expect(mainViewSource).toContain('activeConv={meshGraphConversation}')
-    expect(surfaceSource).toContain('Queue rows and session rows are also selectable for drill-down.')
+    expect(surfaceSource).toContain('Selected detail')
     expect(surfaceSource).toContain('selectedNodeStatus.git?.submodules')
     expect(panelSource).toContain('Field label="Submodule path" value={node.submodulePath ?? null}')
     expect(panelSource).toContain('Field label="Submodule commit" value={node.submoduleCommit ?? null}')
