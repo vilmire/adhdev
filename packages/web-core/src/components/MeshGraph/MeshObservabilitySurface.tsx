@@ -42,6 +42,8 @@ type GitHistoryState = {
 }
 
 const ACTIVE_QUEUE_STATUSES = new Set(['pending', 'assigned'])
+const EMPTY_QUEUE_ACTIVE_COUNTS = { pending: 0, assigned: 0 }
+const EMPTY_LEDGER_SUMMARY = { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 }
 
 function Badge({ label, tone = 'default' }: { label: string; tone?: 'default' | 'good' | 'warn' | 'danger' | 'info' }) {
     const tones: Record<string, string> = {
@@ -302,6 +304,8 @@ export default function MeshObservabilitySurface({
     const graphNodeById = useMemo(() => new Map(graph.nodes.map(node => [node.id, node])), [graph.nodes])
     const queueTasks = status.queue?.tasks ?? []
     const queueSummary = status.queue?.summary ?? null
+    const queueActiveCounts = queueSummary?.activeCounts ?? EMPTY_QUEUE_ACTIVE_COUNTS
+    const ledgerSummary = status.ledger?.summary ?? EMPTY_LEDGER_SUMMARY
     const sessionEntries = useMemo(() => collectSessionEntries(status), [status])
     const stateCounts = useMemo(() => {
         const counts = new Map<string, number>()
@@ -428,8 +432,8 @@ export default function MeshObservabilitySurface({
                     </Card>
                     <Card title={`${queueSummary?.active ?? 0} active queue`} subtitle="Pending + assigned tasks">
                         <div className="flex flex-wrap gap-2">
-                            <Badge label={`${queueSummary?.activeCounts.pending ?? 0} pending`} tone="warn" />
-                            <Badge label={`${queueSummary?.activeCounts.assigned ?? 0} assigned`} tone="info" />
+                            <Badge label={`${queueActiveCounts.pending} pending`} tone="warn" />
+                            <Badge label={`${queueActiveCounts.assigned} assigned`} tone="info" />
                             <Badge label={`${queueSummary?.historical ?? 0} recent history`} tone="default" />
                         </div>
                     </Card>
@@ -442,11 +446,11 @@ export default function MeshObservabilitySurface({
                             ))}
                         </div>
                     </Card>
-                    <Card title={`${status.ledger?.summary.recentFailures ?? 0} recent failures`} subtitle="Ledger evidence">
+                    <Card title={`${ledgerSummary.recentFailures} recent failures`} subtitle="Ledger evidence">
                         <div className="flex flex-wrap gap-2">
-                            <Badge label={`${status.ledger?.summary.taskCompleted ?? 0} completed`} tone="good" />
-                            <Badge label={`${status.ledger?.summary.taskFailed ?? 0} failed`} tone={(status.ledger?.summary.taskFailed ?? 0) > 0 ? 'danger' : 'good'} />
-                            <Badge label={`${status.ledger?.summary.sessionLaunched ?? 0} launched`} tone="info" />
+                            <Badge label={`${ledgerSummary.taskCompleted} completed`} tone="good" />
+                            <Badge label={`${ledgerSummary.taskFailed} failed`} tone={ledgerSummary.taskFailed > 0 ? 'danger' : 'good'} />
+                            <Badge label={`${ledgerSummary.sessionLaunched} launched`} tone="info" />
                         </div>
                     </Card>
                 </div>
@@ -766,8 +770,8 @@ export default function MeshObservabilitySurface({
                     </div>
                     <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 xl:grid-cols-2">
                         <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">Active <span className="ml-1 text-white">{queueSummary?.active ?? 0}</span></div>
-                        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">Pending <span className="ml-1 text-white">{queueSummary?.activeCounts.pending ?? 0}</span></div>
-                        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">Assigned <span className="ml-1 text-white">{queueSummary?.activeCounts.assigned ?? 0}</span></div>
+                        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">Pending <span className="ml-1 text-white">{queueActiveCounts.pending}</span></div>
+                        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">Assigned <span className="ml-1 text-white">{queueActiveCounts.assigned}</span></div>
                         <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">History <span className="ml-1 text-white">{queueSummary?.historical ?? 0}</span></div>
                     </div>
                     <div className="max-h-[24vh] overflow-y-auto pr-1">
