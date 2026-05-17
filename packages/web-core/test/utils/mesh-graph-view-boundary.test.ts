@@ -7,16 +7,19 @@ function readSource(relativePath: string): string {
 }
 
 describe('mesh graph view interaction boundaries', () => {
-    it('keeps node dragging disabled while allowing viewport drag panning and preserving click-to-inspect behavior', () => {
+    it('keeps node dragging disabled while allowing drag/scroll panning and explicit viewport focus control', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 
         expect(source).toContain('nodesDraggable={false}')
         expect(source).toContain('panOnDrag')
-        expect(source).toContain('panOnScroll={false}')
+        expect(source).toContain('panOnScroll')
         expect(source).toContain('zoomOnScroll={false}')
         expect(source).toContain('zoomOnPinch={false}')
         expect(source).toContain('zoomOnDoubleClick={false}')
         expect(source).toContain('selectionOnDrag={false}')
+        expect(source).toContain('useNodesInitialized()')
+        expect(source).toContain('useReactFlow<FlowNode, FlowEdge>()')
+        expect(source).toContain('void reactFlow.fitView({')
         expect(source).toContain('onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}')
     })
 
