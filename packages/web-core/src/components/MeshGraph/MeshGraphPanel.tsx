@@ -47,6 +47,23 @@ function summarizeHead(node: MeshGraphNode): string | null {
     return [headCommit, headMessage].filter(Boolean).join(' · ')
 }
 
+function formatUpstreamState(node: MeshGraphNode): string | null {
+    if (!node.upstream) return null
+    switch (node.upstreamStatus) {
+        case 'fresh':
+            return 'verified'
+        case 'stale':
+            return 'unverified (fetch failed)'
+        case 'unchecked':
+            return 'unverified'
+        case 'unavailable':
+            return 'unavailable'
+        case 'no_upstream':
+        default:
+            return null
+    }
+}
+
 export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
     if (!node) {
         return (
@@ -80,12 +97,14 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
             <div className="flex flex-col gap-0.5 mt-1">
                 <Field label="Workspace" value={node.workspace} />
                 <Field label="Branch" value={node.branch} />
+                <Field label="Upstream" value={!isSubmoduleNode ? (node.upstream ?? null) : null} />
+                <Field label="Upstream state" value={!isSubmoduleNode ? formatUpstreamState(node) : null} />
                 <Field label="HEAD" value={headSummary} />
                 <Field label="Submodule path" value={node.submodulePath ?? null} />
                 <Field label="Submodule commit" value={node.submoduleCommit ?? null} />
                 <Field label="Parent node" value={isSubmoduleNode ? (node.machineLabel || node.parentNodeId || null) : null} />
-                <Field label="Ahead" value={!isSubmoduleNode && node.ahead > 0 ? `+${node.ahead}` : null} />
-                <Field label="Behind" value={!isSubmoduleNode && node.behind > 0 ? `-${node.behind}` : null} />
+                <Field label="Ahead" value={!isSubmoduleNode && (!node.upstream || node.upstreamStatus === 'fresh') && node.ahead > 0 ? `+${node.ahead}` : null} />
+                <Field label="Behind" value={!isSubmoduleNode && (!node.upstream || node.upstreamStatus === 'fresh') && node.behind > 0 ? `-${node.behind}` : null} />
                 <Field label="Dirty files" value={node.dirtyFiles > 0 ? node.dirtyFiles : null} />
                 <Field label="Active sessions" value={node.activeSessionCount > 0 ? node.activeSessionCount : null} />
                 <Field label="Providers" value={!isSubmoduleNode ? (node.providers.join(', ') || null) : null} />

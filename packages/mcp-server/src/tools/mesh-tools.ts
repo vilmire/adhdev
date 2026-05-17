@@ -878,6 +878,10 @@ function summarizeRelatedRepoStatus(repo: RepoMeshRelatedRepo, status: any): Rec
         workspace: repo.workspace,
         isGitRepo: status?.isGitRepo === true,
         branch: status?.branch ?? null,
+        upstream: status?.upstream ?? null,
+        upstreamStatus: typeof status?.upstreamStatus === 'string' ? status.upstreamStatus : (status?.upstream ? 'unchecked' : 'no_upstream'),
+        upstreamFetchedAt: Number.isFinite(Number(status?.upstreamFetchedAt)) ? Number(status.upstreamFetchedAt) : null,
+        upstreamFetchError: typeof status?.upstreamFetchError === 'string' ? status.upstreamFetchError : null,
         ahead: Number.isFinite(Number(status?.ahead)) ? Number(status.ahead) : 0,
         behind: Number.isFinite(Number(status?.behind)) ? Number(status.behind) : 0,
         dirty,
@@ -897,8 +901,8 @@ async function collectRelatedRepoStatuses(ctx: MeshContext, node: LocalMeshNodeE
     for (const repo of relatedRepos) {
         try {
             const statusResult = !isLocalTransport(ctx.transport) && node.daemonId
-                ? await (ctx.transport as CloudTransport).gitStatus(node.daemonId, repo.workspace, false)
-                : await commandForNode(ctx, node, 'git_status', { workspace: repo.workspace });
+                ? await (ctx.transport as CloudTransport).gitStatus(node.daemonId, repo.workspace, false, true)
+                : await commandForNode(ctx, node, 'git_status', { workspace: repo.workspace, refreshUpstream: true });
             const status = extractGitStatus(statusResult);
             results.push(summarizeRelatedRepoStatus(repo, status));
         } catch (e: any) {
@@ -967,11 +971,13 @@ function buildBranchConvergence(
     const ahead = readNumeric(status?.ahead);
     const behind = readNumeric(status?.behind);
     const upstream = readString(status?.upstream) ?? null;
+    const upstreamStatus = readString(status?.upstreamStatus) ?? (upstream ? 'unchecked' : 'no_upstream');
     const hasConflicts = status?.hasConflicts === true || (Array.isArray(status?.conflictFiles) && status.conflictFiles.length > 0);
     const base = {
         defaultBranch,
         branch,
         upstream,
+        upstreamStatus,
         ahead,
         behind,
         isWorktree: node.isLocalWorktree === true,
@@ -1009,6 +1015,15 @@ function buildBranchConvergence(
     }
 
     if (branch === defaultBranch) {
+        if (upstream && upstreamStatus !== 'fresh') {
+            return {
+                ...base,
+                status: 'blocked_review',
+                needsConvergence: true,
+                reason: 'default_branch_upstream_unverified',
+                nextStep: `Refresh ${defaultBranch}'s upstream refs or resolve the fetch failure before declaring convergence complete for node '${node.id}'.`,
+            };
+        }
         if (ahead > 0 || behind > 0) {
             return {
                 ...base,
@@ -1034,6 +1049,16 @@ function buildBranchConvergence(
             needsConvergence: true,
             reason: 'clean_non_default_worktree_branch',
             nextStep: `Run mesh_refine_node(node_id: "${node.id}") or explicitly classify this worktree as blocked_review/not_mergeable before ending the task.`,
+        };
+    }
+
+    if (upstream && upstreamStatus !== 'fresh') {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: 'feature_branch_upstream_unverified',
+            nextStep: `Refresh branch '${branch}' upstream refs or resolve the fetch failure before deciding whether it is ready to merge into ${defaultBranch}.`,
         };
     }
 
@@ -1424,7 +1449,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
 
         try {
             if (!isLocalTransport(transport) && node.daemonId) {
-                const result = await (transport as CloudTransport).gitStatus(node.daemonId, node.workspace, false);
+                const result = await (transport as CloudTransport).gitStatus(node.daemonId, node.workspace, false, true);
                 const status = extractGitStatus(result);
                 const uncommittedChanges = countUncommittedChanges(status);
                 const dirty = isGitStatusDirty(status);
@@ -1443,6 +1468,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 const autoDiscover = (node.policy as any)?.autoDiscoverSubmodules !== false;
                 const statusResult = await commandForNode(ctx, node, 'git_status', {
                     workspace: node.workspace,
+                    refreshUpstream: true,
                     includeSubmodules: autoDiscover,
                     submoduleIgnorePaths: (node.policy as any)?.submoduleIgnorePaths || undefined,
                 });
@@ -2257,7 +2283,7 @@ export async function meshGitStatus(
 
     try {
         if (!isLocalTransport(ctx.transport) && node.daemonId) {
-            const result = await (ctx.transport as CloudTransport).gitStatus(node.daemonId, node.workspace, true);
+            const result = await (ctx.transport as CloudTransport).gitStatus(node.daemonId, node.workspace, true, true);
             return JSON.stringify({
                 nodeId: args.node_id,
                 workspace: node.workspace,
@@ -2269,6 +2295,7 @@ export async function meshGitStatus(
         } else if (isLocalTransport(ctx.transport)) {
             const statusResult = await commandForNode(ctx, node, 'git_status', {
                 workspace: node.workspace,
+                refreshUpstream: true,
                 includeSubmodules: autoDiscoverSubmodules,
                 submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : undefined,
             });

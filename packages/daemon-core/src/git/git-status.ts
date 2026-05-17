@@ -1,5 +1,7 @@
-import type { GitRepoStatus, GitSubmoduleStatus } from './git-types.js';
+import type { GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './git-types.js';
 import { GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
+
+type ResolvedGitRepo = { workspace: string; repoRoot: string | null; isGitRepo: boolean };
 
 export interface GitStatusOptions {
   timeoutMs?: number;
@@ -7,6 +9,17 @@ export interface GitStatusOptions {
   includeSubmodules?: boolean;
   /** Optional filter to exclude specific submodule paths from status */
   submoduleIgnorePaths?: string[];
+  /**
+   * When true, refresh the tracked remote before trusting ahead/behind.
+   * Callers should opt into this only for convergence-critical surfaces.
+   */
+  refreshUpstream?: boolean;
+}
+
+interface GitUpstreamProbe {
+  upstreamStatus: GitUpstreamFreshness;
+  upstreamFetchedAt?: number;
+  upstreamFetchError?: string;
 }
 
 export async function getGitRepoStatus(
@@ -18,8 +31,16 @@ export async function getGitRepoStatus(
 
   try {
     const repo = await resolveGitRepository(workspace, options);
-    const statusOutput = await runGit(repo, ['status', '--porcelain=v2', '--branch'], options);
-    const parsed = parsePorcelainV2Status(statusOutput.stdout);
+    let parsed = await readPorcelainStatus(repo, options);
+    let upstreamProbe: GitUpstreamProbe = getInitialUpstreamProbe(parsed);
+
+    if (options.refreshUpstream) {
+      upstreamProbe = await refreshTrackedUpstream(repo, parsed, options);
+      if (upstreamProbe.upstreamStatus === 'fresh') {
+        parsed = await readPorcelainStatus(repo, options);
+      }
+    }
+
     const head = await readHead(repo, options);
     const stashCount = await readStashCount(repo, options);
 
@@ -36,6 +57,9 @@ export async function getGitRepoStatus(
       headCommit: head.commit,
       headMessage: head.message,
       upstream: parsed.upstream,
+      upstreamStatus: parsed.upstream ? upstreamProbe.upstreamStatus : 'no_upstream',
+      upstreamFetchedAt: upstreamProbe.upstreamFetchedAt,
+      upstreamFetchError: upstreamProbe.upstreamFetchError,
       ahead: parsed.ahead,
       behind: parsed.behind,
       staged: parsed.staged,
@@ -72,6 +96,72 @@ interface ParsedPorcelainStatus {
   deleted: number;
   renamed: number;
   conflictFiles: string[];
+}
+
+async function readPorcelainStatus(repo: ResolvedGitRepo, options: GitStatusOptions): Promise<ParsedPorcelainStatus> {
+  const statusOutput = await runGit(repo, ['status', '--porcelain=v2', '--branch'], options);
+  return parsePorcelainV2Status(statusOutput.stdout);
+}
+
+function getInitialUpstreamProbe(parsed: ParsedPorcelainStatus): GitUpstreamProbe {
+  return {
+    upstreamStatus: parsed.upstream ? 'unchecked' : 'no_upstream',
+  };
+}
+
+async function refreshTrackedUpstream(
+  repo: ResolvedGitRepo,
+  parsed: ParsedPorcelainStatus,
+  options: GitStatusOptions,
+): Promise<GitUpstreamProbe> {
+  if (!parsed.upstream || !parsed.branch) {
+    return { upstreamStatus: 'no_upstream' };
+  }
+
+  const remoteName = (await readBranchRemote(repo, parsed.branch, options)) ?? inferRemoteName(parsed.upstream);
+  if (!remoteName) {
+    return {
+      upstreamStatus: 'stale',
+      upstreamFetchError: `Unable to resolve remote for upstream '${parsed.upstream}'`,
+    };
+  }
+
+  try {
+    await runGit(repo, ['fetch', '--quiet', '--prune', '--no-tags', remoteName], options);
+    return {
+      upstreamStatus: 'fresh',
+      upstreamFetchedAt: Date.now(),
+    };
+  } catch (error) {
+    return {
+      upstreamStatus: 'stale',
+      upstreamFetchError: formatGitError(error),
+    };
+  }
+}
+
+async function readBranchRemote(repo: ResolvedGitRepo, branch: string, options: GitStatusOptions): Promise<string | null> {
+  try {
+    const result = await runGit(repo, ['config', '--get', `branch.${branch}.remote`], options);
+    return result.stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function inferRemoteName(upstream: string): string | null {
+  const [remoteName] = upstream.split('/');
+  return remoteName?.trim() || null;
+}
+
+function formatGitError(error: unknown): string {
+  if (error instanceof GitCommandError) {
+    return error.stderr || error.message;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
 }
 
 export function parsePorcelainV2Status(output: string): ParsedPorcelainStatus {
@@ -145,7 +235,7 @@ export function parsePorcelainV2Status(output: string): ParsedPorcelainStatus {
 }
 
 async function readHead(
-  repo: { workspace: string; repoRoot: string | null; isGitRepo: boolean },
+  repo: ResolvedGitRepo,
   options: GitStatusOptions,
 ): Promise<{ commit: string | null; message: string | null }> {
   try {
@@ -163,7 +253,7 @@ async function readHead(
 }
 
 async function readStashCount(
-  repo: { workspace: string; repoRoot: string | null; isGitRepo: boolean },
+  repo: ResolvedGitRepo,
   options: GitStatusOptions,
 ): Promise<number> {
   try {
@@ -187,6 +277,7 @@ function emptyStatus(workspace: string, lastCheckedAt: number, error: GitCommand
     headCommit: null,
     headMessage: null,
     upstream: null,
+    upstreamStatus: 'unavailable',
     ahead: 0,
     behind: 0,
     staged: 0,
@@ -206,7 +297,7 @@ function emptyStatus(workspace: string, lastCheckedAt: number, error: GitCommand
 // ─── Submodule Status ───────────────────────────
 
 async function getSubmoduleStatuses(
-  repo: { workspace: string; repoRoot: string | null; isGitRepo: boolean },
+  repo: ResolvedGitRepo,
   options: GitStatusOptions,
 ): Promise<GitSubmoduleStatus[]> {
   if (!repo.repoRoot) return [];

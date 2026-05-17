@@ -31,6 +31,12 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain("return '#c084fc'")
     })
 
+    it('shows upstream unverified instead of a misleading +0 / -0 drift label when remote-tracking refs were not refreshed', () => {
+        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+
+        expect(source).toContain("return isUpstreamVerified(node) ? `+${node.ahead} / -${node.behind}` : 'upstream unverified'")
+    })
+
     it('keeps graph node cards on the observability dark surface instead of mixing in page-theme text/background tokens', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 

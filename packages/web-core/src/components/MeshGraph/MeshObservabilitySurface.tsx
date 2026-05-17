@@ -216,7 +216,8 @@ function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
     const changes = (git.staged ?? 0) + (git.modified ?? 0) + (git.untracked ?? 0) + (git.deleted ?? 0) + (git.renamed ?? 0)
     const parts: string[] = []
     if (git.branch) parts.push(git.branch)
-    if ((git.ahead ?? 0) > 0 || (git.behind ?? 0) > 0) parts.push(`↑${git.ahead ?? 0}/↓${git.behind ?? 0}`)
+    if (git.upstream && git.upstreamStatus !== 'fresh') parts.push('upstream unverified')
+    if (git.upstreamStatus === 'fresh' && ((git.ahead ?? 0) > 0 || (git.behind ?? 0) > 0)) parts.push(`↑${git.ahead ?? 0}/↓${git.behind ?? 0}`)
     if (changes > 0) parts.push(`${changes} dirty`)
     const dirtySubmodules = (git.submodules ?? []).filter(submodule => submodule.dirty)
     const driftedSubmodules = (git.submodules ?? []).filter(submodule => submodule.outOfSync || submodule.error)

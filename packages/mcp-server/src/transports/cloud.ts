@@ -143,8 +143,8 @@ export class CloudTransport {
     return res.json() as any;
   }
 
-  async gitStatus(daemonId: string, workspace: string, includeDiff = true): Promise<any> {
-    const params = new URLSearchParams({ workspace, includeDiff: String(includeDiff) });
+  async gitStatus(daemonId: string, workspace: string, includeDiff = true, refreshUpstream = false): Promise<any> {
+    const params = new URLSearchParams({ workspace, includeDiff: String(includeDiff), refreshUpstream: String(refreshUpstream) });
     const res = await fetch(
       `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-status?${params}`,
       { headers: this.headers() },

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
@@ -1034,10 +1034,10 @@ test('mesh_status surfaces branch convergence follow-up for clean non-main branc
     if (command !== 'git_status') throw new Error(`unexpected mesh command: ${command}`);
     const workspace = String((args as any).workspace || '');
     if (workspace.endsWith('/main')) {
-      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, modified: 0 } } } };
+      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'main', upstream: 'origin/main', upstreamStatus: 'fresh', ahead: 0, behind: 0, modified: 0 } } } };
     }
     if (workspace.endsWith('/feature')) {
-      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'fix/feature', upstream: 'origin/fix/feature', ahead: 0, behind: 0, modified: 0 } } } };
+      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'fix/feature', upstream: 'origin/fix/feature', upstreamStatus: 'fresh', ahead: 0, behind: 0, modified: 0 } } } };
     }
     if (workspace.endsWith('/worktree')) {
       return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'fix/worktree', modified: 0 } } } };
@@ -1090,6 +1090,64 @@ test('mesh_status surfaces branch convergence follow-up for clean non-main branc
   );
   assert.ok(feature.nextStepHints.some((hint: string) => hint.includes('merge branch')));
   assert.ok(worktree.nextStepHints.some((hint: string) => hint.includes('mesh_refine_node')));
+});
+
+test('mesh_status and mesh_git_status request refreshed upstream truth and block convergence when freshness is unverified', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command !== 'git_status') throw new Error(`unexpected mesh command: ${command}`);
+    const workspace = String((args as any).workspace || '');
+    if (workspace.endsWith('/main')) {
+      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'main', upstream: 'origin/main', upstreamStatus: 'stale', ahead: 0, behind: 0, upstreamFetchError: 'timeout', modified: 0 } } } };
+    }
+    if (workspace.endsWith('/feature')) {
+      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'fix/feature', upstream: 'origin/fix/feature', upstreamStatus: 'stale', ahead: 0, behind: 0, upstreamFetchError: 'timeout', modified: 0 } } } };
+    }
+    throw new Error(`unexpected workspace: ${workspace}`);
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-upstream-freshness',
+      name: 'Freshness Mesh',
+      repoIdentity: 'example/repo',
+      defaultBranch: 'main',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [
+        { id: 'node-main', workspace: '/repo/main', repoRoot: '/repo/main', daemonId: 'daemon-main', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
+        { id: 'node-feature', workspace: '/repo/feature', repoRoot: '/repo/feature', daemonId: 'daemon-feature', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
+      ],
+    },
+    transport,
+  };
+
+  const statusText = await meshStatus(ctx as any);
+  const status = JSON.parse(statusText);
+  const main = status.nodes.find((node: any) => node.nodeId === 'node-main');
+  const feature = status.nodes.find((node: any) => node.nodeId === 'node-feature');
+
+  assert.equal(main.branchConvergence.reason, 'default_branch_upstream_unverified');
+  assert.equal(main.branchConvergence.status, 'blocked_review');
+  assert.equal(feature.branchConvergence.reason, 'feature_branch_upstream_unverified');
+  assert.equal(feature.branchConvergence.status, 'blocked_review');
+  assert.ok(calls.every(call => call.args.refreshUpstream === true));
+});
+
+test('mesh_git_status source requests refreshed upstream truth for cloud and local transport paths', () => {
+  const source = readFileSync(join(process.cwd(), 'src/tools/mesh-tools.ts'), 'utf8');
+  assert.match(source, /gitStatus\(node\.daemonId, node\.workspace, true, true\)/);
+  assert.match(source, /refreshUpstream: true,/);
 });
 
 
