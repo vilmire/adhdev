@@ -70,6 +70,8 @@ export interface MeshGraphNode {
     submodulePath?: string | null
     submoduleCommit?: string | null
     outOfSync?: boolean
+    snapshotCompleteness: 'complete' | 'missing_git' | 'missing_submodule_report' | 'stale'
+    snapshotWarnings: string[]
     branchConvergence: MeshGraphBranchConvergence | null
     source: MeshGraphNodeSource
 }
@@ -101,9 +103,22 @@ export interface MeshGraph {
         mergeReadyNodes: number
         cleanupCandidateNodes: number
         notMergeableNodes: number
+        incompleteSnapshotNodes: number
+        missingGitSnapshotNodes: number
+        missingSubmoduleSnapshotNodes: number
+        staleGitSnapshotNodes: number
         totalActiveSessions: number
     }
     warnings: string[]
+    snapshotWarnings: string[]
+}
+
+const STALE_SNAPSHOT_MS = 5 * 60 * 1000
+
+function parseTimestampMs(value: string | null | undefined): number | null {
+    if (!value) return null
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? null : parsed
 }
 
 function isDirty(git?: GitRepoStatus): boolean {
@@ -361,11 +376,79 @@ function getSubmoduleHealth(submodule: MeshGraphSubmoduleStatus): RepoMeshNodeHe
     return 'online'
 }
 
+function assessSnapshotCompleteness(args: {
+    nodeStatus: RepoMeshNodeStatus
+    expectedSubmodulePaths: Set<string>
+    refreshedAtMs: number | null
+}): {
+    snapshotCompleteness: MeshGraphNode['snapshotCompleteness']
+    snapshotWarnings: string[]
+} {
+    const { nodeStatus, expectedSubmodulePaths, refreshedAtMs } = args
+    const snapshotWarnings: string[] = []
+    const label = nodeStatus.machineLabel || nodeStatus.nodeId
+    const git = nodeStatus.git
+
+    if (!git) {
+        const looksOnline = nodeStatus.health === 'online'
+            || nodeStatus.machineStatus === 'online'
+            || nodeStatus.connection?.state === 'connected'
+            || nodeStatus.connection?.state === 'self'
+        snapshotWarnings.push(
+            looksOnline
+                ? `${label} is online but no peer git snapshot is visible yet.`
+                : `${label} has no peer git snapshot visible yet.`,
+        )
+        return {
+            snapshotCompleteness: 'missing_git',
+            snapshotWarnings,
+        }
+    }
+
+    const reportedSubmodulePaths = new Set((git.submodules ?? []).map(submodule => submodule.path))
+    if (expectedSubmodulePaths.size > 0) {
+        const missingPaths = [...expectedSubmodulePaths].filter(path => !reportedSubmodulePaths.has(path))
+        if (missingPaths.length > 0) {
+            snapshotWarnings.push(
+                `${label} is missing submodule visibility for ${missingPaths.join(', ')} even though another peer reported it.`,
+            )
+        }
+    }
+
+    if (nodeStatus.connection?.state !== 'self' && refreshedAtMs !== null && typeof git.lastCheckedAt === 'number') {
+        const ageMs = refreshedAtMs - git.lastCheckedAt
+        if (ageMs > STALE_SNAPSHOT_MS) {
+            snapshotWarnings.push(`${label} is relying on a peer git snapshot older than 5m; re-probe before trusting convergence.`)
+        }
+    }
+
+    if (snapshotWarnings.some(warning => warning.includes('submodule visibility'))) {
+        return {
+            snapshotCompleteness: 'missing_submodule_report',
+            snapshotWarnings,
+        }
+    }
+    if (snapshotWarnings.some(warning => warning.includes('older than 5m'))) {
+        return {
+            snapshotCompleteness: 'stale',
+            snapshotWarnings,
+        }
+    }
+    return {
+        snapshotCompleteness: 'complete',
+        snapshotWarnings,
+    }
+}
+
 export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const meshDefaultBranch = typeof (status as any).defaultBranch === 'string' && (status as any).defaultBranch.trim().length > 0
         ? (status as any).defaultBranch.trim()
         : null
     const inferredDefaultBranch = meshDefaultBranch ?? inferDefaultBranch(status.nodes)
+    const refreshedAtMs = parseTimestampMs(status.refreshedAt)
+    const expectedSubmodulePaths = new Set(
+        status.nodes.flatMap(node => (node.git?.submodules ?? []).map(submodule => submodule.path)),
+    )
     const nodes: MeshGraphNode[] = []
     const edges: MeshGraphEdge[] = []
     const warnings: string[] = []
@@ -378,6 +461,11 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const dirty = isDirty(git) || submoduleHealth === 'dirty'
         const orphanReasons = detectOrphanReasons(nodeStatus, inferredDefaultBranch)
         const branchConvergence = evaluateBranchConvergence(nodeStatus, inferredDefaultBranch)
+        const snapshotAssessment = assessSnapshotCompleteness({
+            nodeStatus,
+            expectedSubmodulePaths,
+            refreshedAtMs,
+        })
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
@@ -399,11 +487,13 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             isOrphan: orphanReasons.length > 0,
             orphanReasons,
             error: nodeStatus.error,
-            nextStepHint: orphanReasons[0] ?? branchConvergence?.nextStep ?? undefined,
+            nextStepHint: snapshotAssessment.snapshotWarnings[0] ?? orphanReasons[0] ?? branchConvergence?.nextStep ?? undefined,
             parentNodeId: null,
             submodulePath: null,
             submoduleCommit: git?.headCommit ?? null,
             outOfSync: hasOutOfSyncSubmodules(git),
+            snapshotCompleteness: snapshotAssessment.snapshotCompleteness,
+            snapshotWarnings: snapshotAssessment.snapshotWarnings,
             branchConvergence,
             source: nodeStatus,
         }
@@ -448,6 +538,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 submodulePath: submodule.path,
                 submoduleCommit: submodule.commit,
                 outOfSync: submodule.outOfSync,
+                snapshotCompleteness: 'complete',
+                snapshotWarnings: [],
                 branchConvergence: null,
                 source: {
                     kind: 'synthetic-submodule',
@@ -511,6 +603,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             submodulePath: null,
             submoduleCommit: null,
             outOfSync: false,
+            snapshotCompleteness: 'complete',
+            snapshotWarnings: [],
             branchConvergence: dominantBranchConvergence,
             source: {
                 nodeId: defaultBranchNodeId,
@@ -584,6 +678,15 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const mergeReadyNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'pushed_feature_branch_needs_merge').length
     const cleanupCandidateNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'cleanup_candidate').length
     const notMergeableNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'not_mergeable').length
+    const incompleteSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotWarnings.length > 0).length
+    const missingGitSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'missing_git').length
+    const missingSubmoduleSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'missing_submodule_report').length
+    const staleGitSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'stale').length
+    const snapshotWarnings = [
+        missingGitSnapshotNodes > 0 ? `${missingGitSnapshotNodes} node(s) have no visible peer git snapshot` : null,
+        missingSubmoduleSnapshotNodes > 0 ? `${missingSubmoduleSnapshotNodes} node(s) are missing peer submodule visibility reported elsewhere in the mesh` : null,
+        staleGitSnapshotNodes > 0 ? `${staleGitSnapshotNodes} node(s) rely on peer git snapshots older than 5m` : null,
+    ].filter(Boolean) as string[]
 
     if (followUpNodes > 0) warnings.push(`${followUpNodes} workspace(s) still need follow-up before the mesh is converged`)
     if (orphanCount > 0) warnings.push(`${orphanCount} workspace(s) need attention before safe coordination`)
@@ -594,6 +697,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     if (conflictCount > 0) warnings.push(`${conflictCount} workspace(s) report merge conflicts`)
     if (offlineCount > 0) warnings.push(`${offlineCount} node(s) are currently offline`)
     if (outOfSyncSubmoduleCount > 0) warnings.push(`${outOfSyncSubmoduleCount} submodule(s) are out of sync with their parent checkout`)
+    warnings.push(...snapshotWarnings)
     if (!inferredDefaultBranch) warnings.push('Could not infer a default branch from live mesh status')
 
     return {
@@ -615,8 +719,13 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             mergeReadyNodes,
             cleanupCandidateNodes,
             notMergeableNodes,
+            incompleteSnapshotNodes,
+            missingGitSnapshotNodes,
+            missingSubmoduleSnapshotNodes,
+            staleGitSnapshotNodes,
             totalActiveSessions: visibleGraphNodes.reduce((total, node) => total + node.activeSessionCount, 0),
         },
         warnings,
+        snapshotWarnings,
     }
 }

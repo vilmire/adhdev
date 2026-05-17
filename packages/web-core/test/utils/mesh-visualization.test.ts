@@ -271,6 +271,149 @@ describe('buildMeshGraph', () => {
         }))
     })
 
+    it('surfaces incomplete peer git and submodule snapshots explicitly in graph warnings and node metadata', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_snapshot_gaps',
+            meshName: 'Snapshot Gap Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-05-16T18:10:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_self',
+                    machineLabel: 'M4',
+                    workspace: '/repo/main',
+                    health: 'online',
+                    machineStatus: 'online',
+                    providers: ['hermes-cli'],
+                    activeSessions: [],
+                    connection: { state: 'self', reported: true, source: 'reported' },
+                    git: {
+                        isGitRepo: true,
+                        branch: 'main',
+                        upstream: 'origin/main',
+                        upstreamStatus: 'fresh',
+                        ahead: 0,
+                        behind: 0,
+                        staged: 0,
+                        modified: 0,
+                        untracked: 0,
+                        deleted: 0,
+                        renamed: 0,
+                        hasConflicts: false,
+                        lastCheckedAt: Date.parse('2026-05-16T18:10:00.000Z'),
+                        submodules: [
+                            {
+                                path: 'oss',
+                                commit: '1111111',
+                                repoPath: '/repo/main/oss',
+                                dirty: false,
+                                outOfSync: false,
+                                lastCheckedAt: Date.parse('2026-05-16T18:10:00.000Z'),
+                            },
+                        ],
+                    },
+                },
+                {
+                    nodeId: 'node_missing_submodule',
+                    machineLabel: 'M1',
+                    workspace: '/repo/m1',
+                    health: 'online',
+                    machineStatus: 'online',
+                    providers: ['hermes-cli'],
+                    activeSessions: [],
+                    connection: { state: 'connected', transport: 'relay', reported: true, source: 'reported' },
+                    git: {
+                        isGitRepo: true,
+                        branch: 'main',
+                        upstream: 'origin/main',
+                        upstreamStatus: 'fresh',
+                        ahead: 0,
+                        behind: 0,
+                        staged: 0,
+                        modified: 0,
+                        untracked: 0,
+                        deleted: 0,
+                        renamed: 0,
+                        hasConflicts: false,
+                        lastCheckedAt: Date.parse('2026-05-16T18:09:30.000Z'),
+                        submodules: [],
+                    },
+                },
+                {
+                    nodeId: 'node_missing_git',
+                    machineLabel: 'M2',
+                    workspace: '/repo/m2',
+                    health: 'online',
+                    machineStatus: 'online',
+                    providers: ['codex-cli'],
+                    activeSessions: [],
+                    connection: { state: 'connected', transport: 'relay', reported: true, source: 'reported' },
+                },
+                {
+                    nodeId: 'node_stale_git',
+                    machineLabel: 'M3',
+                    workspace: '/repo/m3',
+                    health: 'online',
+                    machineStatus: 'online',
+                    providers: ['claude-cli'],
+                    activeSessions: [],
+                    connection: { state: 'connected', transport: 'relay', reported: true, source: 'reported' },
+                    git: {
+                        isGitRepo: true,
+                        branch: 'main',
+                        upstream: 'origin/main',
+                        upstreamStatus: 'fresh',
+                        ahead: 0,
+                        behind: 0,
+                        staged: 0,
+                        modified: 0,
+                        untracked: 0,
+                        deleted: 0,
+                        renamed: 0,
+                        hasConflicts: false,
+                        lastCheckedAt: Date.parse('2026-05-16T18:00:00.000Z'),
+                        submodules: [
+                            {
+                                path: 'oss',
+                                commit: '2222222',
+                                repoPath: '/repo/m3/oss',
+                                dirty: false,
+                                outOfSync: false,
+                                lastCheckedAt: Date.parse('2026-05-16T18:00:00.000Z'),
+                            },
+                        ],
+                    },
+                },
+            ],
+        } as any)
+
+        expect(graph.stats).toEqual(expect.objectContaining({
+            incompleteSnapshotNodes: 3,
+            missingGitSnapshotNodes: 1,
+            missingSubmoduleSnapshotNodes: 1,
+            staleGitSnapshotNodes: 1,
+        }))
+        expect(graph.snapshotWarnings).toEqual(expect.arrayContaining([
+            '1 node(s) have no visible peer git snapshot',
+            '1 node(s) are missing peer submodule visibility reported elsewhere in the mesh',
+            '1 node(s) rely on peer git snapshots older than 5m',
+        ]))
+        expect(graph.warnings).toEqual(expect.arrayContaining(graph.snapshotWarnings))
+        expect(graph.nodes.find(node => node.id === 'node_missing_git')).toEqual(expect.objectContaining({
+            snapshotCompleteness: 'missing_git',
+            nextStepHint: 'M2 is online but no peer git snapshot is visible yet.',
+            snapshotWarnings: expect.arrayContaining(['M2 is online but no peer git snapshot is visible yet.']),
+        }))
+        expect(graph.nodes.find(node => node.id === 'node_missing_submodule')).toEqual(expect.objectContaining({
+            snapshotCompleteness: 'missing_submodule_report',
+            snapshotWarnings: expect.arrayContaining(['M1 is missing submodule visibility for oss even though another peer reported it.']),
+        }))
+        expect(graph.nodes.find(node => node.id === 'node_stale_git')).toEqual(expect.objectContaining({
+            snapshotCompleteness: 'stale',
+            snapshotWarnings: expect.arrayContaining(['M3 is relying on a peer git snapshot older than 5m; re-probe before trusting convergence.']),
+        }))
+    })
+
     it('surfaces submodules as child graph nodes with explicit links and warnings', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_submodule',

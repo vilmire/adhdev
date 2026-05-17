@@ -83,4 +83,85 @@ describe('MeshObservabilitySurface', () => {
     expect(source).toContain("getMeshGraphCalloutText(node)")
     expect(source).toContain("needs follow-up")
   })
+
+  it('replaces a silent converged headline with explicit peer snapshot warnings when peer git visibility is incomplete', () => {
+    const status = {
+      meshId: 'mesh_incomplete_peer_snapshot',
+      meshName: 'Incomplete Peer Snapshot Mesh',
+      repoIdentity: 'repo',
+      refreshedAt: '2026-05-17T00:00:00.000Z',
+      nodes: [
+        {
+          nodeId: 'node-main',
+          machineLabel: 'M4',
+          workspace: '/repo/main',
+          health: 'online',
+          machineStatus: 'online',
+          providers: ['hermes-cli'],
+          activeSessions: [],
+          connection: { state: 'self', reported: true, source: 'reported' },
+          git: {
+            isGitRepo: true,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            lastCheckedAt: Date.parse('2026-05-17T00:00:00.000Z'),
+            submodules: [
+              {
+                path: 'oss',
+                commit: '1234567',
+                repoPath: '/repo/main/oss',
+                dirty: false,
+                outOfSync: false,
+                lastCheckedAt: Date.parse('2026-05-17T00:00:00.000Z'),
+              },
+            ],
+          },
+        },
+        {
+          nodeId: 'node-peer',
+          machineLabel: 'M1',
+          workspace: '/repo/m1',
+          health: 'online',
+          machineStatus: 'online',
+          providers: ['claude-cli'],
+          activeSessions: [],
+          connection: { state: 'connected', transport: 'relay', reported: true, source: 'reported' },
+          git: {
+            isGitRepo: true,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            lastCheckedAt: Date.parse('2026-05-16T23:59:30.000Z'),
+            submodules: [],
+          },
+        },
+      ],
+      queue: { tasks: [] },
+      ledger: { entries: [] },
+    }
+
+    const html = renderSurface(status)
+    expect(html).toContain('mesh visibility incomplete')
+    expect(html).toContain('1 incomplete peer snapshot')
+    expect(html).toContain('1 missing submodule visibility')
+    expect(html).toContain('1 node(s) are missing peer submodule visibility reported elsewhere in the mesh')
+    expect(html).not.toContain('mesh converged')
+  })
 })

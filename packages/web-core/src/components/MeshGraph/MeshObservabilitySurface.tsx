@@ -415,6 +415,13 @@ export default function MeshObservabilitySurface({
         ...(graph.warnings ?? []),
         ...(status.nodes.filter(node => node.machineStatus && node.machineStatus !== 'online').map(node => `${node.machineLabel}: ${node.machineStatus}`)),
     ]
+    const hasSnapshotGaps = graph.stats.incompleteSnapshotNodes > 0
+    const headlineLabel = graph.stats.followUpNodes > 0
+        ? `${graph.stats.followUpNodes} need follow-up`
+        : hasSnapshotGaps
+            ? 'mesh visibility incomplete'
+            : 'mesh converged'
+    const headlineTone = graph.stats.followUpNodes > 0 ? 'danger' : hasSnapshotGaps ? 'warn' : 'good'
     const hasDetailPane = Boolean(selectedQueueTask || selectedSessionEntry || selectedGraphNode)
 
     return (
@@ -424,8 +431,8 @@ export default function MeshObservabilitySurface({
                     <div className="mb-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/45 px-3.5 py-3">
                         <div className="flex min-w-0 flex-1 flex-wrap gap-2 text-xs text-slate-200">
                             <Badge
-                                label={graph.stats.followUpNodes > 0 ? `${graph.stats.followUpNodes} need follow-up` : 'mesh converged'}
-                                tone={graph.stats.followUpNodes > 0 ? 'danger' : 'good'}
+                                label={headlineLabel}
+                                tone={headlineTone}
                             />
                             {graph.stats.blockedReviewNodes > 0 && (
                                 <Badge label={`${graph.stats.blockedReviewNodes} blocked review`} tone="danger" />
@@ -441,6 +448,18 @@ export default function MeshObservabilitySurface({
                             )}
                             {graph.stats.offlineNodes > 0 && (
                                 <Badge label={`${graph.stats.offlineNodes} offline`} tone="danger" />
+                            )}
+                            {graph.stats.incompleteSnapshotNodes > 0 && (
+                                <Badge label={`${graph.stats.incompleteSnapshotNodes} incomplete peer snapshot`} tone="warn" />
+                            )}
+                            {graph.stats.missingGitSnapshotNodes > 0 && (
+                                <Badge label={`${graph.stats.missingGitSnapshotNodes} no git snapshot`} tone="warn" />
+                            )}
+                            {graph.stats.missingSubmoduleSnapshotNodes > 0 && (
+                                <Badge label={`${graph.stats.missingSubmoduleSnapshotNodes} missing submodule visibility`} tone="warn" />
+                            )}
+                            {graph.stats.staleGitSnapshotNodes > 0 && (
+                                <Badge label={`${graph.stats.staleGitSnapshotNodes} stale peer snapshot`} tone="warn" />
                             )}
                             {(queueSummary?.active ?? 0) > 0 && (
                                 <Badge label={`${queueSummary?.active ?? 0} active queue`} tone="info" />

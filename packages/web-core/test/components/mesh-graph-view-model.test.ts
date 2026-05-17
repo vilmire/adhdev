@@ -35,6 +35,8 @@ function graphNode(overrides: Partial<MeshGraphNode>): MeshGraphNode {
     submodulePath: overrides.submodulePath ?? null,
     submoduleCommit: overrides.submoduleCommit ?? null,
     outOfSync: overrides.outOfSync ?? false,
+    snapshotCompleteness: overrides.snapshotCompleteness ?? 'complete',
+    snapshotWarnings: overrides.snapshotWarnings ?? [],
     branchConvergence: overrides.branchConvergence ?? null,
     source: overrides.source || {
       nodeId: overrides.id || 'node-1',
@@ -67,9 +69,14 @@ function graphData(nodes: MeshGraphNode[]): MeshGraphData {
       mergeReadyNodes: nodes.filter(node => node.branchConvergence?.status === 'pushed_feature_branch_needs_merge').length,
       cleanupCandidateNodes: nodes.filter(node => node.branchConvergence?.status === 'cleanup_candidate').length,
       notMergeableNodes: nodes.filter(node => node.branchConvergence?.status === 'not_mergeable').length,
+      incompleteSnapshotNodes: nodes.filter(node => node.snapshotWarnings.length > 0).length,
+      missingGitSnapshotNodes: nodes.filter(node => node.snapshotCompleteness === 'missing_git').length,
+      missingSubmoduleSnapshotNodes: nodes.filter(node => node.snapshotCompleteness === 'missing_submodule_report').length,
+      staleGitSnapshotNodes: nodes.filter(node => node.snapshotCompleteness === 'stale').length,
       totalActiveSessions: nodes.reduce((sum, node) => sum + node.activeSessionCount, 0),
     },
     warnings: [],
+    snapshotWarnings: [],
   }
 }
 

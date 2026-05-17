@@ -417,6 +417,8 @@ function buildLayout(data: MeshGraphData): { nodes: FlowNode[]; edges: FlowEdge[
                         submodulePath: null,
                         submoduleCommit: null,
                         outOfSync: false,
+                        snapshotCompleteness: 'complete',
+                        snapshotWarnings: [],
                         branchConvergence: null,
                         source: {
                             nodeId: `${defaultAnchor.id}__placeholder`,
