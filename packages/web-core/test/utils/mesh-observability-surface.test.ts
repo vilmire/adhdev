@@ -1,3 +1,5 @@
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
 import { StaticRouter } from 'react-router-dom/server'
@@ -70,7 +72,14 @@ describe('MeshObservabilitySurface', () => {
       ledger: { entries: [] },
     }
 
-    const html = renderSurface(status)
-    expect(html).toContain('upstream unverified')
+    const graph = buildMeshGraph(status as any)
+    expect(graph.nodes.some(node => node.upstreamStatus === 'stale')).toBe(true)
+
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/components/MeshGraph/MeshGraphView.tsx'),
+      'utf8',
+    )
+    expect(source).toContain("upstream unverified")
+    expect(source).toContain("getGitDriftLabel(node)")
   })
 })
