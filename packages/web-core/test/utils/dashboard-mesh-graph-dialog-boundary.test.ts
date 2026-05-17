@@ -31,15 +31,16 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).not.toContain('mockNodes')
   })
 
-  it('keeps the dialog responsive on the shared mobile/desktop observability path', () => {
-    const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
-    const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
+    it('keeps the dialog responsive on the shared mobile/desktop observability path', () => {
+        const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
+        const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
 
-    expect(dialogSource).toContain('overflow-y-auto bg-[linear-gradient')
-    expect(surfaceSource).toContain('Tap a node to inspect workspace, session, and git details.')
-    expect(surfaceSource).toContain('max-h-[24vh] overflow-y-auto')
-    expect(surfaceSource).toContain('max-h-[22vh] overflow-y-auto')
-  })
+        expect(dialogSource).toContain('overflow-y-auto bg-[linear-gradient')
+        expect(surfaceSource).toContain('Tap a node to inspect workspace, session, and git details.')
+        expect(surfaceSource).toContain('First open now focuses on the default-branch path')
+        expect(surfaceSource).toContain('max-h-[24vh] overflow-y-auto')
+        expect(surfaceSource).toContain('max-h-[22vh] overflow-y-auto')
+    })
 
   it('keeps node drill-down panels on the same dark contrast system as the observability shell', () => {
     const panelSource = readSource('components/MeshGraph/MeshGraphPanel.tsx')

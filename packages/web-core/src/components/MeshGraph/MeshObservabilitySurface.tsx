@@ -422,42 +422,37 @@ export default function MeshObservabilitySurface({
     return (
         <div className="flex min-h-0 flex-col gap-4 xl:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
-                <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-4">
-                    <div className="flex flex-wrap gap-2">
-                        <Badge label={`${graph.stats.totalNodes} nodes`} tone="info" />
-                        <Badge label={`${graph.stats.totalActiveSessions} active sessions`} tone={graph.stats.totalActiveSessions > 0 ? 'info' : 'default'} />
-                        <Badge label={`${graph.stats.dirtyNodes} dirty`} tone={graph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
-                        <Badge label={`${graph.stats.offlineNodes} offline`} tone={graph.stats.offlineNodes > 0 ? 'danger' : 'good'} />
-                        <Badge label={`${queueSummary?.active ?? 0} active queue`} tone={(queueSummary?.active ?? 0) > 0 ? 'info' : 'default'} />
-                        <Badge label={`${queueSummary?.historical ?? 0} recent history`} tone="default" />
-                        <Badge label={`${sessionEntries.length} sessions`} tone={sessionEntries.length > 0 ? 'info' : 'default'} />
-                        <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
-                        {stateCounts.length === 0 ? (
-                            <Badge label="no session metadata" />
-                        ) : stateCounts.slice(0, 3).map(([label, count]) => (
-                            <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
-                        ))}
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
-                        <Badge label="Anchor = default branch" tone="info" />
-                        <Badge label="Peer = same-branch worktree" tone="default" />
-                        <Badge label="Submodule = child checkout" tone="warn" />
-                        <Badge label="Unknown = no live daemon↔daemon telemetry yet" tone="warn" />
-                    </div>
-                    <div className="mt-3 text-xs text-slate-400">
-                        Tap a node to inspect workspace, session, and git details. Queue rows and session rows are also selectable for drill-down.
-                    </div>
-                </div>
-
-                {statusWarnings.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                        {statusWarnings.map(warning => (
-                            <span key={warning} className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100">{warning}</span>
-                        ))}
-                    </div>
-                )}
-
                 <div className="min-h-0 flex-1 rounded-[28px] border border-white/10 bg-white/[0.03] p-3 sm:p-4" style={{ minHeight: 420 }}>
+                    <div className="mb-3 rounded-2xl border border-white/10 bg-slate-950/45 px-3.5 py-3">
+                        <div className="flex flex-wrap gap-2 text-xs text-slate-200">
+                            <Badge label={`${graph.stats.totalNodes} nodes`} tone="default" />
+                            <Badge label={`${graph.stats.totalActiveSessions} active sessions`} tone={graph.stats.totalActiveSessions > 0 ? 'info' : 'default'} />
+                            <Badge label={`${graph.stats.dirtyNodes} dirty`} tone={graph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
+                            <Badge label={`${graph.stats.offlineNodes} offline`} tone={graph.stats.offlineNodes > 0 ? 'danger' : 'good'} />
+                            <Badge label={`${queueSummary?.active ?? 0} active queue`} tone={(queueSummary?.active ?? 0) > 0 ? 'info' : 'default'} />
+                            <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
+                            {stateCounts.length === 0 ? (
+                                <Badge label="no session metadata" />
+                            ) : stateCounts.slice(0, 2).map(([label, count]) => (
+                                <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
+                            ))}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
+                            <Badge label="Anchor = inferred default branch" tone="info" />
+                            <Badge label="Peer link = same-branch worktree" tone="default" />
+                            <Badge label="Submodule link = child checkout under a parent node" tone="warn" />
+                        </div>
+                        <div className="mt-3 text-xs text-slate-400">
+                            Tap a node to inspect workspace, session, and git details. Launch readiness and mesh transport details stay in the same drill-down. Queue rows and session rows are also selectable for drill-down. First open now focuses on the default-branch path; drag or scroll only when you want the wider topology.
+                        </div>
+                        {statusWarnings.length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                {statusWarnings.map(warning => (
+                                    <span key={warning} className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100">{warning}</span>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                     {graph.nodes.length > 0 ? (
                         <MeshGraphView
                             data={graph}

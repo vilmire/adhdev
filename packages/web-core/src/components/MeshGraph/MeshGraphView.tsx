@@ -19,12 +19,13 @@ import {
     type NodeProps,
     type NodeTypes,
 } from '@xyflow/react'
-import {
-    getMeshGraphViewportFocusNodeIds,
-    shouldShowMeshGraphCallout,
-    shouldShowMeshGraphMiniMap,
-} from './meshGraphViewModel'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
+import { shouldShowMeshGraphCallout } from './meshGraphViewModel'
+import {
+    getMeshGraphInitialFocusNodeIds,
+    getMeshGraphLayoutKey,
+    shouldShowMeshGraphMiniMap,
+} from '../../utils/mesh-graph-viewport'
 
 interface MeshGraphViewProps {
     data: MeshGraphData
@@ -39,11 +40,12 @@ type FlowNodeData = Record<string, unknown> & {
 type FlowNode = Node<FlowNodeData, 'meshNode'>
 type FlowEdge = Edge
 
-const COLUMN_GAP = 420
-const WORKTREE_ROW_GAP = 212
-const SUBMODULE_ROW_GAP = 150
+const COLUMN_GAP = 430
+const WORKTREE_ROW_GAP = 208
+const SUBMODULE_ROW_GAP = 136
+const SUBMODULE_OFFSET_X = 42
 const SUBMODULE_OFFSET_Y = 164
-const STACK_SECTION_GAP = 32
+const STACK_SECTION_GAP = 30
 
 function getHealthClasses(health: MeshGraphNode['health'], selected: boolean): string {
     const base = selected
@@ -119,7 +121,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
 
     return (
         <div
-            className={`${isSubmoduleNode ? 'w-[220px]' : 'w-[244px]'} rounded-2xl border px-4 py-3 backdrop-blur-sm transition-all ${getHealthClasses(node.health, selected)}`}
+            className={`${isSubmoduleNode ? 'w-[216px]' : 'w-[232px]'} rounded-2xl border px-3.5 py-3 backdrop-blur-sm transition-all ${getHealthClasses(node.health, selected)}`}
         >
             <Handle
                 type="target"
@@ -180,28 +182,31 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 )}
             </div>
 
-            {isSubmoduleNode ? (
-                <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-slate-300">
-                    <span className="text-slate-500">Parent</span>
-                    <span className="truncate font-medium text-slate-100">{node.machineLabel || 'mesh node'}</span>
-                    <span className="text-slate-600">•</span>
-                    <span className="font-medium text-slate-100">{node.outOfSync ? 'Out of sync' : node.dirty ? 'Local changes' : 'Synced'}</span>
-                </div>
-            ) : (
-                <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-slate-300">
-                    <span className="text-slate-500">Sessions</span>
-                    <span className="font-medium text-slate-100">{node.activeSessionCount}</span>
-                    <span className="text-slate-600">•</span>
-                    <span className="text-slate-500">Drift</span>
-                    <span className="font-medium text-slate-100">+{node.ahead} / -{node.behind}</span>
-                    {node.dirtyFiles > 0 && (
-                        <>
-                            <span className="text-slate-600">•</span>
-                            <span className="font-medium text-slate-100">{node.dirtyFiles} dirty</span>
-                        </>
-                    )}
-                </div>
-            )}
+            <div className="mt-3 space-y-1.5 text-[11px] text-slate-300">
+                {isSubmoduleNode ? (
+                    <>
+                        <div className="flex items-center justify-between gap-3">
+                            <span className="text-slate-500">Parent</span>
+                            <span className="truncate text-right font-medium text-slate-100">{node.machineLabel || 'mesh node'}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                            <span className="text-slate-500">State</span>
+                            <span className="font-medium text-slate-100">{node.outOfSync ? 'Out of sync' : node.dirty ? 'Dirty' : 'Synced'}</span>
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div className="flex items-center justify-between gap-3">
+                            <span className="text-slate-500">Sessions</span>
+                            <span className="font-medium text-slate-100">{node.activeSessionCount}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                            <span className="text-slate-500">Git drift</span>
+                            <span className="font-medium text-slate-100">+{node.ahead} / -{node.behind}</span>
+                        </div>
+                    </>
+                )}
+            </div>
 
             {shouldShowCallout && (
                 <div className="mt-3 rounded-xl border border-cyan-400/15 bg-cyan-500/8 px-3 py-2 text-[10px] leading-4 text-cyan-50/90">
@@ -318,7 +323,7 @@ function buildLayout(data: MeshGraphData): { nodes: FlowNode[]; edges: FlowEdge[
                     flowNodes.push({
                         id: submoduleNode.id,
                         type: 'meshNode',
-                        position: { x, y: cursorY + SUBMODULE_OFFSET_Y + submoduleIndex * SUBMODULE_ROW_GAP },
+                        position: { x: x + SUBMODULE_OFFSET_X, y: cursorY + SUBMODULE_OFFSET_Y + submoduleIndex * SUBMODULE_ROW_GAP },
                         data: { graphNode: submoduleNode },
                         selected: false,
                         draggable: false,
@@ -431,53 +436,42 @@ function edgeColor(edge: MeshGraphEdge): string {
     }
 }
 
-function MeshGraphViewportController({
-    layoutKey,
-    focusNodeIds,
-}: {
-    layoutKey: string
-    focusNodeIds: string[]
-}) {
+function MeshViewportController({ data }: { data: MeshGraphData }) {
     const nodesInitialized = useNodesInitialized()
-    const { fitView, getNodes } = useReactFlow<FlowNode, FlowEdge>()
-    const appliedLayoutKeyRef = useRef<string | null>(null)
+    const reactFlow = useReactFlow<FlowNode, FlowEdge>()
+    const lastLayoutKeyRef = useRef<string | null>(null)
+    const layoutKey = useMemo(() => getMeshGraphLayoutKey(data), [data])
+    const initialFocusNodeIds = useMemo(() => getMeshGraphInitialFocusNodeIds(data), [data])
 
     useEffect(() => {
-        if (!nodesInitialized) return
-        if (appliedLayoutKeyRef.current === layoutKey) return
+        if (!nodesInitialized || data.nodes.length === 0) return
+        if (lastLayoutKeyRef.current === layoutKey) return
 
-        const allNodes = getNodes()
-        if (allNodes.length === 0) return
-        const focusNodeIdSet = new Set(focusNodeIds)
-        const primaryNodes = focusNodeIdSet.size > 0
-            ? allNodes.filter(node => focusNodeIdSet.has(node.id))
-            : []
-        const targetNodes = primaryNodes.length > 0 ? primaryNodes : allNodes
-
+        let cancelled = false
         const frame = requestAnimationFrame(() => {
-            void fitView({
-                nodes: targetNodes,
-                padding: primaryNodes.length > 0 ? 0.2 : 0.24,
-                maxZoom: 1.08,
-                duration: 0,
+            if (cancelled) return
+            const shouldFocusSubset = initialFocusNodeIds.length > 0 && initialFocusNodeIds.length < data.nodes.length
+            void reactFlow.fitView({
+                nodes: shouldFocusSubset ? initialFocusNodeIds.map(id => ({ id })) : undefined,
+                padding: shouldFocusSubset ? 0.2 : 0.16,
+                maxZoom: shouldFocusSubset ? 1.04 : 0.96,
+                duration: 260,
             })
+            lastLayoutKeyRef.current = layoutKey
         })
 
-        appliedLayoutKeyRef.current = layoutKey
-        return () => cancelAnimationFrame(frame)
-    }, [fitView, focusNodeIds, getNodes, layoutKey, nodesInitialized])
+        return () => {
+            cancelled = true
+            cancelAnimationFrame(frame)
+        }
+    }, [data.nodes.length, initialFocusNodeIds, layoutKey, nodesInitialized, reactFlow])
 
     return null
 }
 
 export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick }: MeshGraphViewProps) {
     const layout = useMemo(() => buildLayout(data), [data])
-    const focusNodeIds = useMemo(() => getMeshGraphViewportFocusNodeIds(data), [data])
     const showMiniMap = useMemo(() => shouldShowMeshGraphMiniMap(data), [data])
-    const layoutKey = useMemo(
-        () => `${data.refreshedAt}:${data.nodes.map(node => node.id).join('|')}:${data.edges.map(edge => edge.id).join('|')}`,
-        [data],
-    )
 
     const nodes = useMemo(
         () => layout.nodes.map(node => ({ ...node, selected: node.id === selectedNodeId })),
@@ -485,36 +479,38 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
     )
 
     return (
-        <div className="relative h-full min-h-[500px] overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_rgba(15,23,42,0.98)_42%,_rgba(2,6,23,1))]">
-            <div className="absolute left-4 top-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 text-[11px] text-slate-200">
-                <span className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1">
-                    {data.stats.totalNodes} node{data.stats.totalNodes === 1 ? '' : 's'}
-                </span>
-                <span className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1">
-                    {data.stats.totalActiveSessions} active session{data.stats.totalActiveSessions === 1 ? '' : 's'}
-                </span>
-                <span className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-slate-300">
-                    drag or scroll to pan
-                </span>
-                {data.stats.orphanNodes > 0 && (
-                    <span className="rounded-full border border-orange-400/25 bg-orange-500/12 px-3 py-1 text-orange-100">
-                        {data.stats.orphanNodes} need attention
+        <div className="relative h-full min-h-[520px] overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_rgba(15,23,42,0.98)_42%,_rgba(2,6,23,1))]">
+            <div className="absolute inset-x-3 top-3 z-10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-200">
+                <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1">
+                        {data.stats.totalNodes} node{data.stats.totalNodes === 1 ? '' : 's'}
                     </span>
-                )}
+                    <span className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1">
+                        {data.stats.totalActiveSessions} active session{data.stats.totalActiveSessions === 1 ? '' : 's'}
+                    </span>
+                    {data.stats.orphanNodes > 0 && (
+                        <span className="rounded-full border border-orange-400/25 bg-orange-500/12 px-3 py-1 text-orange-100">
+                            {data.stats.orphanNodes} need attention
+                        </span>
+                    )}
+                </div>
+                <div className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-[10px] text-slate-300">
+                    Focused on the main path first · drag or scroll to pan
+                </div>
             </div>
             <ReactFlow<FlowNode, FlowEdge>
                 nodes={nodes}
                 edges={layout.edges}
                 nodeTypes={nodeTypes}
-                minZoom={0.35}
-                maxZoom={1.4}
+                minZoom={0.25}
+                maxZoom={1.35}
                 nodesDraggable={false}
                 nodesConnectable={false}
                 elementsSelectable
                 panOnDrag
                 panOnScroll
                 zoomOnScroll={false}
-                zoomOnPinch
+                zoomOnPinch={false}
                 zoomOnDoubleClick={false}
                 selectionOnDrag={false}
                 onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}
@@ -522,7 +518,7 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                 colorMode="dark"
                 proOptions={{ hideAttribution: true }}
             >
-                <MeshGraphViewportController layoutKey={layoutKey} focusNodeIds={focusNodeIds} />
+                <MeshViewportController data={data} />
                 {showMiniMap && (
                     <MiniMap
                         className="!bottom-4 !right-4 !bg-slate-950/85 !border !border-white/10 !rounded-xl"
