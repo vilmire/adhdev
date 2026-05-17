@@ -4,9 +4,9 @@ import { buildMeshGraph } from '../../utils/mesh-visualization'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
 import { IconMesh, IconX } from '../Icons'
-import MeshGraphPanel from '../MeshGraph/MeshGraphPanel'
-import MeshGraphView from '../MeshGraph/MeshGraphView'
-import type { MeshGraphData, MeshGraphNode } from '../MeshGraph'
+import { MeshObservabilitySurface } from '../MeshGraph'
+import type { MeshGraphData } from '../MeshGraph'
+import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 
 interface DashboardMeshGraphDialogProps {
     activeConv: ActiveConversation
@@ -30,8 +30,9 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         ? activeConv.settings.meshCoordinatorFor
         : null
     const daemonId = activeConv.daemonId ?? null
+    const meshOverrides = useDashboardMeshOverrides()
     const [graph, setGraph] = useState<MeshGraphData | null>(null)
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+    const [meshStatus, setMeshStatus] = useState<RepoMeshStatus | null>(null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null)
@@ -40,33 +41,35 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         if (!daemonId || !meshId) {
             setError('This coordinator does not expose a live mesh id.')
             setGraph(null)
+            setMeshStatus(null)
             return
         }
 
         setLoading(true)
         setError(null)
         try {
-            const response = await sendDaemonCommand(daemonId, 'mesh_status', { meshId })
+            const response = meshOverrides?.loadMeshStatus
+                ? await meshOverrides.loadMeshStatus(daemonId, meshId)
+                : await sendDaemonCommand(daemonId, 'mesh_status', { meshId })
             const status = extractMeshStatus(response)
             if (!status) {
                 setGraph(null)
+                setMeshStatus(null)
                 setError('mesh_status returned an unexpected payload.')
                 return
             }
             const nextGraph = buildMeshGraph(status)
+            setMeshStatus(status)
             setGraph(nextGraph)
-            setSelectedNodeId(current => {
-                if (!current) return nextGraph.nodes[0]?.id ?? null
-                return nextGraph.nodes.some(node => node.id === current) ? current : nextGraph.nodes[0]?.id ?? null
-            })
-            setLastLoadedAt(new Date().toISOString())
+            setLastLoadedAt(status.refreshedAt || new Date().toISOString())
         } catch (err) {
             setGraph(null)
+            setMeshStatus(null)
             setError(err instanceof Error ? err.message : 'Failed to load live mesh status')
         } finally {
             setLoading(false)
         }
-    }, [daemonId, meshId, sendDaemonCommand])
+    }, [daemonId, meshId, meshOverrides, sendDaemonCommand])
 
     useEffect(() => {
         loadGraph()
@@ -80,20 +83,19 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [onClose])
 
-    const selectedNode = useMemo<MeshGraphNode | null>(() => {
-        if (!graph || !selectedNodeId) return null
-        return graph.nodes.find(node => node.id === selectedNodeId) ?? null
-    }, [graph, selectedNodeId])
-
-    const detailLabel = graph?.meshName || meshId || 'Repo Mesh'
+    const detailLabel = graph?.meshName || meshStatus?.meshName || meshId || 'Repo Mesh'
     const lastLoadedLabel = lastLoadedAt ? new Date(lastLoadedAt).toLocaleTimeString() : null
+    const emptyMessage = useMemo(
+        () => (loading ? 'Loading live mesh status…' : 'No live mesh graph is available for this coordinator yet.'),
+        [loading],
+    )
 
     return (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-[#030617]/[0.58] p-0 md:p-4 backdrop-blur-md" onClick={onClose}>
             <div
                 role="dialog"
                 aria-modal="true"
-                className="flex h-[100dvh] w-full flex-col overflow-hidden bg-slate-950 md:h-[min(88vh,920px)] md:max-w-[min(1280px,calc(100vw-32px))] md:rounded-[24px] md:border md:border-white/10 md:bg-slate-950/96 md:shadow-[0_28px_120px_rgba(2,6,23,0.46)]"
+                className="flex h-[100dvh] w-full flex-col overflow-hidden bg-slate-950 md:h-[min(90vh,960px)] md:max-w-[min(1480px,calc(100vw-32px))] md:rounded-[24px] md:border md:border-white/10 md:bg-slate-950/96 md:shadow-[0_28px_120px_rgba(2,6,23,0.46)]"
                 onClick={event => event.stopPropagation()}
             >
                 <div className="flex shrink-0 flex-col gap-3 border-b border-white/10 bg-slate-950/92 px-4 pb-4 pt-[calc(16px+env(safe-area-inset-top,0px))] backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
@@ -106,7 +108,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                 <div className="flex flex-wrap items-center gap-2">
                                     <h2 className="truncate text-lg font-semibold text-white md:text-xl">{detailLabel}</h2>
                                     <span className="rounded-full border border-white/10 bg-white/6 px-2.5 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">
-                                        Coordinator graph
+                                        Mesh observability
                                     </span>
                                 </div>
                                 <p className="mt-1 truncate text-sm text-slate-400">
@@ -149,48 +151,14 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                     </div>
                 )}
 
-                <div className="flex min-h-0 flex-1 flex-col bg-[linear-gradient(180deg,rgba(2,6,23,0.95),rgba(15,23,42,0.98))] md:flex-row">
-                    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden px-4 py-4 md:px-5 md:py-5">
-                        {graph?.warnings && graph.warnings.length > 0 && (
-                            <div className="flex flex-wrap gap-2">
-                                {graph.warnings.map(warning => (
-                                    <span key={warning} className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-100">
-                                        {warning}
-                                    </span>
-                                ))}
-                            </div>
-                        )}
-                        <div className="min-h-0 flex-1">
-                            {graph ? (
-                                <MeshGraphView
-                                    data={graph}
-                                    selectedNodeId={selectedNodeId}
-                                    onNodeClick={node => setSelectedNodeId(node.id)}
-                                />
-                            ) : (
-                                <div className="flex h-full min-h-[320px] items-center justify-center rounded-[28px] border border-dashed border-white/10 bg-white/[0.03] px-6 text-center text-sm text-slate-400">
-                                    {loading ? 'Loading live mesh status…' : 'No live mesh graph is available for this coordinator yet.'}
-                                </div>
-                            )}
-                        </div>
-                        {!selectedNode && (
-                            <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300 md:hidden">
-                                Tap a node to inspect workspace, session, and git details.
-                            </div>
-                        )}
-                    </div>
-
-                    {selectedNode && (
-                        <div className="border-t border-white/10 px-4 py-4 md:hidden">
-                            <div className="max-h-[38vh] overflow-y-auto">
-                                <MeshGraphPanel node={selectedNode} onClose={() => setSelectedNodeId(null)} />
-                            </div>
+                <div className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,rgba(2,6,23,0.95),rgba(15,23,42,0.98))] px-4 py-4 md:px-5 md:py-5">
+                    {graph && meshStatus ? (
+                        <MeshObservabilitySurface graph={graph} status={meshStatus} emptyMessage={emptyMessage} />
+                    ) : (
+                        <div className="flex h-full min-h-[320px] items-center justify-center rounded-[28px] border border-dashed border-white/10 bg-white/[0.03] px-6 text-center text-sm text-slate-400">
+                            {emptyMessage}
                         </div>
                     )}
-
-                    <div className="hidden w-full shrink-0 border-t border-white/10 px-4 py-4 md:block md:w-[320px] md:border-l md:border-t-0 md:px-5 md:py-5">
-                        <MeshGraphPanel node={selectedNode} onClose={selectedNode ? () => setSelectedNodeId(null) : undefined} />
-                    </div>
                 </div>
             </div>
         </div>

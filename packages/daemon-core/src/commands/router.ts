@@ -259,6 +259,75 @@ function readCachedInlineMeshActiveSessions(node: any): string[] {
     return sessionId ? [sessionId] : [];
 }
 
+function readCachedInlineMeshActiveSessionDetails(node: any): Array<Record<string, unknown>> {
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    const activeSession = readObjectRecord(cachedStatus.activeSession);
+    const fallbackSession = Object.keys(activeSession).length
+        ? activeSession
+        : readObjectRecord(node?.activeSession ?? node?.active_session);
+    const sessionId = readStringValue(
+        fallbackSession.id,
+        fallbackSession.sessionId,
+        fallbackSession.session_id,
+        node?.activeSessionId,
+        node?.active_session_id,
+        node?.sessionId,
+        node?.session_id,
+    );
+    if (!sessionId) return [];
+    return [{
+        sessionId,
+        providerType: readStringValue(
+            fallbackSession.providerType,
+            fallbackSession.provider_type,
+            fallbackSession.cliType,
+            fallbackSession.cli_type,
+            fallbackSession.provider,
+            node?.providerType,
+            node?.provider_type,
+        ),
+        state: readStringValue(fallbackSession.status, fallbackSession.state, fallbackSession.lifecycle),
+        lifecycle: readStringValue(fallbackSession.lifecycle),
+        title: readStringValue(fallbackSession.title, fallbackSession.displayName, fallbackSession.display_name) ?? null,
+        workspace: readStringValue(fallbackSession.workspace, node?.workspace) ?? null,
+        lastActivityAt: readStringValue(fallbackSession.lastActivityAt, fallbackSession.last_activity_at) ?? null,
+        recoveryState: readStringValue(fallbackSession.recoveryState, fallbackSession.recovery_state) ?? null,
+        isCached: true,
+    }];
+}
+
+function readLiveMeshSessionState(record: any): string | undefined {
+    return readStringValue(
+        record?.meta?.sessionStatus,
+        record?.meta?.status,
+        record?.meta?.providerStatus,
+        record?.status,
+        record?.state,
+        record?.lifecycle,
+    );
+}
+
+function toIsoTimestamp(value: unknown): string | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
+    const stringValue = readStringValue(value);
+    return stringValue || null;
+}
+
+function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
+    return {
+        sessionId: readStringValue(record?.sessionId) || 'unknown',
+        providerType: readStringValue(record?.providerType),
+        state: readLiveMeshSessionState(record),
+        lifecycle: readStringValue(record?.lifecycle),
+        surfaceKind: getSessionHostSurfaceKind(record as any),
+        recoveryState: readStringValue(record?.meta?.runtimeRecoveryState) ?? null,
+        workspace: readStringValue(record?.workspace) ?? null,
+        title: readStringValue(record?.displayName, record?.workspaceLabel) ?? null,
+        lastActivityAt: toIsoTimestamp(record?.updatedAt ?? record?.lastActivityAt ?? record?.last_activity_at),
+        isCached: false,
+    };
+}
+
 function applyCachedInlineMeshNodeStatus(status: Record<string, unknown>, node: any): boolean {
     const cachedStatus = readObjectRecord(node?.cachedStatus);
     const git = buildCachedInlineMeshGitStatus(node);
@@ -266,10 +335,13 @@ function applyCachedInlineMeshNodeStatus(status: Record<string, unknown>, node: 
     const health = readStringValue(cachedStatus.health, node?.health);
     const machineStatus = readStringValue(cachedStatus.machineStatus, node?.machineStatus);
     const activeSessions = readCachedInlineMeshActiveSessions(node);
+    const activeSessionDetails = readCachedInlineMeshActiveSessionDetails(node);
     if (!git && !error && !health && !machineStatus && activeSessions.length === 0) return false;
     if (git) status.git = git;
     if (error) status.error = error;
+    if (machineStatus) status.machineStatus = machineStatus;
     if (activeSessions.length > 0) status.activeSessions = activeSessions;
+    if (activeSessionDetails.length > 0) status.activeSessionDetails = activeSessionDetails;
     if (health) {
         status.health = health;
         return true;
@@ -2966,17 +3038,27 @@ export class DaemonCommandRouter {
                             worktreeBranch: node.worktreeBranch,
                             daemonId: node.daemonId,
                             machineId: node.machineId,
+                            machineStatus: node.machineStatus,
                             health: 'unknown',
                             providers: node.providers || [],
                             activeSessions: [],
+                            activeSessionDetails: [],
                         };
                         const nodeId = String(node.id || node.nodeId || '');
-                        const matchedLiveSessions = liveMeshSessions
-                            .filter((record) => this.sessionMatchesMeshNode(record, node, nodeId))
-                            .map((record: any) => typeof record?.sessionId === 'string' ? record.sessionId : '')
-                            .filter(Boolean);
-                        if (matchedLiveSessions.length > 0) {
-                            status.activeSessions = matchedLiveSessions;
+                        const matchedLiveSessionRecords = liveMeshSessions
+                            .filter((record) => this.sessionMatchesMeshNode(record, node, nodeId));
+                        if (matchedLiveSessionRecords.length > 0) {
+                            const sessionIds = matchedLiveSessionRecords
+                                .map((record: any) => typeof record?.sessionId === 'string' ? record.sessionId : '')
+                                .filter(Boolean);
+                            const providerTypes = matchedLiveSessionRecords
+                                .map((record: any) => readStringValue(record?.providerType))
+                                .filter(Boolean) as string[];
+                            status.activeSessions = sessionIds;
+                            status.activeSessionDetails = matchedLiveSessionRecords.map(summarizeMeshSessionRecord);
+                            if (providerTypes.length > 0) {
+                                status.providers = Array.from(new Set([...(Array.isArray(status.providers) ? status.providers as string[] : []), ...providerTypes]));
+                            }
                         }
                         if (node.workspace && typeof node.workspace === 'string') {
                             if (!fs.existsSync(node.workspace as string) && applyCachedInlineMeshNodeStatus(status, node)) {
@@ -3009,6 +3091,7 @@ export class DaemonCommandRouter {
                         meshName: mesh.name,
                         repoIdentity: mesh.repoIdentity,
                         defaultBranch: mesh.defaultBranch,
+                        refreshedAt: new Date().toISOString(),
                         nodes: nodeStatuses,
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },

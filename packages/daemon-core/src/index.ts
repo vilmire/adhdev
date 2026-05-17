@@ -103,6 +103,14 @@ export type {
   LocalMeshNodeEntry,
   RepoMeshStatus,
   RepoMeshNodeStatus,
+  RepoMeshSessionStatus,
+  RepoMeshQueueTask,
+  RepoMeshQueueTaskStatus,
+  RepoMeshQueueSummary,
+  RepoMeshQueueStatus,
+  RepoMeshLedgerEntryStatus,
+  RepoMeshLedgerSummaryStatus,
+  RepoMeshLedgerStatus,
 } from './repo-mesh-types.js';
 export { DEFAULT_MESH_POLICY } from './repo-mesh-types.js';
 

@@ -22,6 +22,15 @@ export interface DashboardMeshOverrides {
     listMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
 
     /**
+     * Load live mesh status for graph / observability surfaces.
+     * Cloud: can refresh inline mesh snapshots from REST before probing a daemon.
+     */
+    loadMeshStatus?: (
+        machineId: string,
+        meshId: string,
+    ) => Promise<any>
+
+    /**
      * Launch a mesh coordinator session.
      * Cloud: may differ from standalone in how it routes the command.
      */

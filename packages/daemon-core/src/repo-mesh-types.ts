@@ -261,15 +261,126 @@ export interface RepoMeshStatus {
     repoIdentity: string;
     refreshedAt: string;
     nodes: RepoMeshNodeStatus[];
+    queue?: RepoMeshQueueStatus;
+    ledger?: RepoMeshLedgerStatus;
+}
+
+export interface RepoMeshSessionStatus {
+    sessionId: string;
+    providerType?: string;
+    state?: string;
+    lifecycle?: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed' | 'interrupted';
+    surfaceKind?: 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
+    recoveryState?: string | null;
+    workspace?: string | null;
+    title?: string | null;
+    lastActivityAt?: string | null;
+    isCached?: boolean;
 }
 
 export interface RepoMeshNodeStatus {
     nodeId: string;
     machineLabel: string;
     workspace: string;
+    repoRoot?: string;
+    daemonId?: string;
+    machineId?: string;
+    machineStatus?: string;
+    isLocalWorktree?: boolean;
+    worktreeBranch?: string;
     health: RepoMeshNodeHealth;
     git?: GitRepoStatus;
     providers: string[];
     activeSessions: string[];
+    activeSessionDetails?: RepoMeshSessionStatus[];
     error?: string;
+}
+
+export type RepoMeshQueueTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
+
+export interface RepoMeshQueueTask {
+    id: string;
+    meshId: string;
+    message: string;
+    status: RepoMeshQueueTaskStatus;
+    targetNodeId?: string;
+    targetSessionId?: string;
+    assignedNodeId?: string;
+    assignedSessionId?: string;
+    cancelReason?: string;
+    cancelledAt?: string;
+    requeueReason?: string;
+    requeuedAt?: string;
+    requeueCount?: number;
+    autoLaunch?: {
+        status: 'skipped' | 'started' | 'failed' | 'completed';
+        reason?: string;
+        nodeId?: string;
+        providerType?: string;
+        sessionId?: string;
+        updatedAt: string;
+    };
+    dispatchTimestamp?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface RepoMeshQueueSummary {
+    total: number;
+    active: number;
+    historical: number;
+    pending: number;
+    assigned: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    activeCounts: {
+        pending: number;
+        assigned: number;
+    };
+    historicalCounts: {
+        completed: number;
+        failed: number;
+        cancelled: number;
+    };
+    activeAssignments: Array<{
+        id: string;
+        nodeId?: string;
+        sessionId?: string;
+        message: string;
+    }>;
+}
+
+export interface RepoMeshQueueStatus {
+    tasks: RepoMeshQueueTask[];
+    summary: RepoMeshQueueSummary;
+}
+
+export interface RepoMeshLedgerEntryStatus {
+    id: string;
+    meshId: string;
+    timestamp: string;
+    kind: string;
+    nodeId?: string;
+    sessionId?: string;
+    providerType?: string;
+    payload: Record<string, unknown>;
+}
+
+export interface RepoMeshLedgerSummaryStatus {
+    meshId: string;
+    totalEntries: number;
+    taskDispatched: number;
+    taskCompleted: number;
+    taskFailed: number;
+    taskStalled: number;
+    sessionLaunched: number;
+    checkpointCreated: number;
+    lastActivityAt: string | null;
+    recentFailures: number;
+}
+
+export interface RepoMeshLedgerStatus {
+    entries: RepoMeshLedgerEntryStatus[];
+    summary: RepoMeshLedgerSummaryStatus;
 }
