@@ -3,7 +3,12 @@ import * as path from 'node:path'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
 import { StaticRouter } from 'react-router-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('../../src/components/MeshGraph/MeshGraphView', () => ({
+  default: () => null,
+}))
+
 import MeshObservabilitySurface from '../../src/components/MeshGraph/MeshObservabilitySurface'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
 
