@@ -109,6 +109,81 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.equal(calls[3].command, 'remove_mesh_node');
 });
 
+test('mesh_clone_node keeps cloned worktrees visible after list/status refresh by syncing the coordinator daemon cache', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const clonedNode = {
+    id: 'node-worktree',
+    workspace: '/repo-parent/.adhdev-worktrees/mesh/feat-x',
+    repoRoot: '/repo-parent/.adhdev-worktrees/mesh/feat-x',
+    daemonId: 'daemon-source',
+    userOverrides: {},
+    policy: { canPush: true },
+    isLocalWorktree: true,
+    worktreeBranch: 'feat/x',
+    clonedFromNodeId: 'node-source',
+  };
+  const mesh = {
+    id: 'mesh-worktree-refresh',
+    name: 'Worktree Refresh',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [{
+      id: 'node-source',
+      workspace: '/repo',
+      repoRoot: '/repo',
+      daemonId: 'daemon-source',
+      userOverrides: {},
+      policy: { canPush: true },
+    }],
+  };
+  const ctx = { mesh, transport };
+  const localGetMeshCalls: Array<Record<string, unknown> | undefined> = [];
+  let localDaemonMesh = structuredClone(mesh);
+
+  transport.command = async (command, args = {}) => {
+    if (command !== 'get_mesh') {
+      throw new Error(`unexpected direct command: ${command}`);
+    }
+    localGetMeshCalls.push(args);
+    if (args.inlineMesh && typeof args.inlineMesh === 'object') {
+      localDaemonMesh = structuredClone(args.inlineMesh as typeof mesh);
+    }
+    return { success: true, mesh: structuredClone(localDaemonMesh) };
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command !== 'clone_mesh_node') {
+      throw new Error(`unexpected mesh command: ${command}`);
+    }
+    return {
+      success: true,
+      result: {
+        success: true,
+        result: {
+          success: true,
+          result: {
+            success: true,
+            node: clonedNode,
+          },
+        },
+      },
+    };
+  };
+
+  const cloneText = await meshCloneNode(ctx, { source_node_id: 'node-source', branch: 'feat/x' });
+  assert.equal(JSON.parse(cloneText).success, true);
+  assert.ok(ctx.mesh.nodes.some(node => node.id === 'node-worktree'));
+
+  const listed = JSON.parse(await meshListNodes(ctx));
+  assert.ok(listed.nodes.some((node: { nodeId: string }) => node.nodeId === 'node-worktree'));
+  assert.ok(localGetMeshCalls.some(call => call && typeof call === 'object' && 'inlineMesh' in call));
+});
+
 test('mesh_launch_session stamps delegated sessions hidden when mesh policy requests hidden spawned session visibility', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;

@@ -92,6 +92,18 @@ async function refreshMeshFromDaemon(ctx: MeshContext): Promise<void> {
     } catch { /* refresh is best-effort; callers still report their original status/errors */ }
 }
 
+async function syncCoordinatorDaemonMeshCache(ctx: MeshContext): Promise<void> {
+    if (!(ctx.transport instanceof IpcTransport)) return;
+    try {
+        await (ctx.transport as IpcTransport).command('get_mesh', {
+            meshId: ctx.mesh.id,
+            inlineMesh: ctx.mesh,
+        });
+    } catch {
+        /* cache sync is best-effort; the MCP process still keeps its local ctx.mesh copy */
+    }
+}
+
 async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry> {
     const hit = ctx.mesh.nodes.find(n => n.id === nodeId);
     if (hit) return hit;
@@ -2531,6 +2543,7 @@ export async function meshCloneNode(
             if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
             else ctx.mesh.nodes.push(clonePayload.node);
             ctx.mesh.updatedAt = new Date().toISOString();
+            await syncCoordinatorDaemonMeshCache(ctx);
         }
         return JSON.stringify(result, null, 2);
     } else if (!isLocalTransport(ctx.transport) && sourceNode.daemonId) {
@@ -2548,6 +2561,7 @@ export async function meshCloneNode(
                 if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
                 else ctx.mesh.nodes.push(clonePayload.node);
                 ctx.mesh.updatedAt = new Date().toISOString();
+                await syncCoordinatorDaemonMeshCache(ctx);
             }
             return JSON.stringify(res, null, 2);
         } catch (e: any) {
