@@ -198,6 +198,49 @@ describe('mesh session cleanup', () => {
     expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
   })
 
+  it('protects coordinator sessions from broad remove-node cleanup even when they are no longer live runtimes', async () => {
+    const { router, sessionHostControl } = createRouter({
+      listSessions: vi.fn(async () => [
+        {
+          sessionId: 'coordinator-inactive',
+          workspace: '/repo/worktree-a',
+          lifecycle: 'stopped',
+          surfaceKind: 'inactive_record',
+          meta: { meshCoordinatorFor: 'mesh-1' },
+        },
+        {
+          sessionId: 'worker-stopped',
+          workspace: '/repo/worktree-a',
+          lifecycle: 'stopped',
+        },
+      ]),
+    })
+
+    const result = await router.execute('remove_mesh_node', {
+      meshId: 'mesh-1',
+      nodeId: 'node-a',
+      sessionCleanupMode: 'stop_and_delete',
+      inlineMesh: {
+        id: 'mesh-1',
+        name: 'Mesh',
+        policy: {},
+        nodes: [{ id: 'node-a', workspace: '/repo/worktree-a' }],
+      },
+    })
+
+    expect(result).toMatchObject({
+      success: true,
+      removed: true,
+      sessionCleanup: {
+        deletedSessionIds: ['worker-stopped'],
+        skippedSessionIds: ['coordinator-inactive'],
+        skippedCoordinatorSessionIds: ['coordinator-inactive'],
+      },
+    })
+    expect(sessionHostControl.deleteSession).toHaveBeenCalledTimes(1)
+    expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('worker-stopped', { force: true })
+  })
+
   it('allows explicit session IDs to target live runtimes during manual cleanup', async () => {
     const { router, sessionHostControl } = createRouter({
       listSessions: vi.fn(async () => [

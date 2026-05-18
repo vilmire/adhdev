@@ -1283,6 +1283,7 @@ export class DaemonCommandRouter {
         const deletedSessionIds: string[] = [];
         const skippedSessionIds: string[] = [];
         const skippedLiveSessionIds: string[] = [];
+        const skippedCoordinatorSessionIds: string[] = [];
         const deleteUnsupportedSessionIds: string[] = [];
         const recordsRemainSessionIds: string[] = [];
         const errors: Array<{ sessionId: string; error: string }> = [];
@@ -1317,6 +1318,12 @@ export class DaemonCommandRouter {
             const completed = this.isCompletedHostedSession(record);
             const surfaceKind = getSessionHostSurfaceKind(record);
             const liveRuntime = surfaceKind === 'live_runtime';
+            const coordinatorSession = readStringValue(record?.meta?.meshCoordinatorFor) === args.meshId;
+            if (!hasExplicitSessionIds && coordinatorSession) {
+                skippedSessionIds.push(sessionId);
+                skippedCoordinatorSessionIds.push(sessionId);
+                continue;
+            }
             if (!hasExplicitSessionIds && liveRuntime) {
                 skippedSessionIds.push(sessionId);
                 skippedLiveSessionIds.push(sessionId);
@@ -1386,6 +1393,7 @@ export class DaemonCommandRouter {
             deletedSessionIds,
             skippedSessionIds,
             skippedLiveSessionIds,
+            skippedCoordinatorSessionIds,
             ...(deleteUnsupported ? {
                 deleteUnsupported: true,
                 effectiveCleanup: args.mode === 'stop_and_delete'
