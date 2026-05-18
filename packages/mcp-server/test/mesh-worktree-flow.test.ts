@@ -2319,7 +2319,7 @@ test('mesh status and git status include explicitly configured related repo fres
   assert.ok(calls.some(call => call.command === 'git_status' && call.workspace === '/provider/repo'));
 });
 
-test('local IPC mesh_send_task with explicit session pushes directly instead of stranding a targeted queue item', async () => {
+test('local IPC mesh_send_task with explicit session resolves providerType from live status before direct dispatch when cache is cold', async () => {
   const meshId = `mesh-ipc-send-${Date.now()}`;
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -2328,7 +2328,20 @@ test('local IPC mesh_send_task with explicit session pushes directly instead of 
   const directCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
     directCalls.push({ command, args });
-    if (command === 'agent_command') return { success: true };
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        status: {
+          sessions: [{ id: 'session-hermes', providerType: 'hermes-cli', providerSessionId: 'provider-1' }],
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      if (!args.agentType || !args.action) {
+        throw new Error('agentType and action required');
+      }
+      return { success: true };
+    }
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async () => {
@@ -2362,11 +2375,14 @@ test('local IPC mesh_send_task with explicit session pushes directly instead of 
   const result = JSON.parse(text);
   assert.equal(result.success, true);
   assert.equal(result.dispatched, true);
-  assert.equal(directCalls.length, 1);
-  assert.equal(directCalls[0].command, 'agent_command');
-  assert.equal(directCalls[0].args.targetSessionId, 'session-hermes');
-  assert.equal(directCalls[0].args.action, 'send_chat');
-  assert.equal(directCalls[0].args.message, 'run targeted task');
+  assert.equal(directCalls.length, 2);
+  assert.equal(directCalls[0].command, 'get_status_metadata');
+  assert.equal(directCalls[1].command, 'agent_command');
+  assert.equal(directCalls[1].args.targetSessionId, 'session-hermes');
+  assert.equal(directCalls[1].args.agentType, 'hermes-cli');
+  assert.equal(directCalls[1].args.cliType, 'hermes-cli');
+  assert.equal(directCalls[1].args.action, 'send_chat');
+  assert.equal(directCalls[1].args.message, 'run targeted task');
 
   const queued = getQueue(meshId);
   assert.equal(queued.length, 0);

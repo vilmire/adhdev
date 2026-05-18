@@ -267,6 +267,21 @@ function readSessionRecordId(session: any): string | undefined {
         || readString(session?.instance_id);
 }
 
+function extractStatusMetadataSessions(value: any): any[] {
+    const payload = unwrapCommandPayload(value);
+    const status = payload?.status && typeof payload.status === 'object'
+        ? payload.status
+        : payload;
+    return Array.isArray(status?.sessions) ? status.sessions : [];
+}
+
+function resolveSessionProviderType(session: any): string {
+    return readString(session?.providerType)
+        || readString(session?.cliType)
+        || readString(session?.agentType)
+        || '';
+}
+
 function addSessionRecord(target: Set<string>, session: any): void {
     if (!session || typeof session !== 'object' || isTerminalSessionRecord(session)) return;
     const sessionId = readSessionRecordId(session);
@@ -787,10 +802,7 @@ async function ipcDispatchToRemoteAgent(
     if (!sessionId || args.session_id) {
         try {
             const relayResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
-            // Unwrap relay envelope: relayResult.result.status.sessions
-            const innerResult = relayResult?.result ?? relayResult;
-            const statusObj = innerResult?.status ?? innerResult;
-            const sessions: any[] = Array.isArray(statusObj?.sessions) ? statusObj.sessions : [];
+            const sessions = extractStatusMetadataSessions(relayResult);
 
             if (sessionId) {
                 const explicitSession = sessions.find(session => readSessionRecordId(session) === sessionId);
@@ -817,11 +829,11 @@ async function ipcDispatchToRemoteAgent(
                         ctx,
                         node,
                         sessionId,
-                        resolvedProviderType || explicitSession.providerType || explicitSession.cliType || undefined,
+                        resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
                     );
                 }
                 if (!resolvedProviderType) {
-                    resolvedProviderType = explicitSession.providerType || explicitSession.cliType || '';
+                    resolvedProviderType = resolveSessionProviderType(explicitSession);
                 }
             } else {
                 // Prefer live idle sessions launched for this mesh node. Never route
@@ -832,7 +844,7 @@ async function ipcDispatchToRemoteAgent(
                 if (targetSession?.id || targetSession?.sessionId) {
                     sessionId = targetSession.id || targetSession.sessionId;
                     if (!resolvedProviderType) {
-                        resolvedProviderType = targetSession.providerType || targetSession.cliType || '';
+                        resolvedProviderType = resolveSessionProviderType(targetSession);
                     }
                 }
             }
@@ -2175,9 +2187,52 @@ export async function meshSendTask(
         // that can remain pending forever when the session was already stopped.
         if (args.session_id && isLocalTransport(ctx.transport)) {
             const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+            let resolvedProviderType = cached?.providerType || '';
+            if (!resolvedProviderType) {
+                const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
+                const sessions = extractStatusMetadataSessions(statusResult);
+                const explicitSession = sessions.find(session => readSessionRecordId(session) === args.session_id);
+                if (!explicitSession) {
+                    return JSON.stringify({
+                        success: false,
+                        recoverable: true,
+                        code: 'mesh_target_session_not_found',
+                        reason: 'mesh_target_session_not_found',
+                        transport: 'local_ipc',
+                        retryRecommended: true,
+                        nodeId: args.node_id,
+                        sessionId: args.session_id,
+                        error: `Local session '${args.session_id}' is not present in live status for node '${args.node_id}'.`,
+                        nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${args.node_id}') or retry without session_id so Repo Mesh can target a live delegate session.`,
+                    });
+                }
+                resolvedProviderType = resolveSessionProviderType(explicitSession);
+                if (resolvedProviderType) {
+                    meshSessionProviderMetadata.set(meshSessionCacheKey(args.node_id, args.session_id), {
+                        providerType: resolvedProviderType,
+                        providerSessionId: readString(explicitSession?.providerSessionId) || undefined,
+                    });
+                }
+            }
+            if (!resolvedProviderType) {
+                return JSON.stringify({
+                    success: false,
+                    recoverable: true,
+                    code: 'mesh_target_session_provider_unknown',
+                    reason: 'mesh_target_session_provider_unknown',
+                    transport: 'local_ipc',
+                    retryRecommended: false,
+                    nodeId: args.node_id,
+                    sessionId: args.session_id,
+                    error: `Local session '${args.session_id}' is live but does not expose providerType/cliType, so agent_command cannot be routed safely.`,
+                    nextAction: `Relaunch the target session on node '${args.node_id}' or retry without session_id so Repo Mesh can pick a session with provider metadata.`,
+                });
+            }
             const dispatchResult = await commandForNode(ctx, node, 'agent_command', {
                 targetSessionId: args.session_id,
-                ...(cached?.providerType ? { agentType: cached.providerType, cliType: cached.providerType, providerType: cached.providerType } : {}),
+                agentType: resolvedProviderType,
+                cliType: resolvedProviderType,
+                providerType: resolvedProviderType,
                 action: 'send_chat',
                 message: args.message,
             });
@@ -2195,7 +2250,7 @@ export async function meshSendTask(
                     kind: 'task_dispatched',
                     nodeId: args.node_id,
                     sessionId: args.session_id,
-                    providerType: cached?.providerType,
+                    providerType: resolvedProviderType,
                     payload: { message: args.message, via: 'local_direct' },
                 });
             } catch { /* best-effort */ }
