@@ -1226,4 +1226,82 @@ describe('resolveMeshCoordinatorSetup', () => {
       rmSync(workspace, { recursive: true, force: true })
     }
   })
+
+  it('strips stale transited git/orphan snapshot fields from cached inline mesh membership before mesh_status reuses it', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-stale-inline-fields-'))
+    initGitRepo(workspace)
+    const router = createAutoImportRouter(baseProvider, {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+    })
+    const staleInlineMesh: any = {
+      id: 'mesh_status_stale_inline_fields',
+      name: 'Stale Inline Fields Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [
+        { id: 'node-local', workspace, policy: {} },
+        {
+          id: 'node-remote',
+          workspace: '/Users/remote/.worktrees/adhdev',
+          daemonId: 'daemon_remote',
+          machineId: 'machine_remote',
+          cachedStatus: {
+            machineStatus: 'online',
+            health: 'degraded',
+            error: 'Workspace must be an existing directory',
+            git: {
+              workspace: '/Users/remote/.worktrees/adhdev',
+              repoRoot: '/Users/remote/.worktrees/adhdev',
+              isGitRepo: false,
+              branch: null,
+              headCommit: null,
+            },
+          },
+          policy: {},
+        },
+      ],
+      policy: {},
+      coordinator: {},
+    }
+    const refreshedInlineMesh: any = {
+      id: 'mesh_status_stale_inline_fields',
+      name: 'Stale Inline Fields Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [
+        { id: 'node-local', workspace, policy: {} },
+        {
+          id: 'node-remote',
+          workspace: '/Users/remote/.worktrees/adhdev',
+          daemonId: 'daemon_remote',
+          machineId: 'machine_remote',
+          policy: {},
+        },
+      ],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      const cached: any = router.getCachedInlineMesh(staleInlineMesh.id, staleInlineMesh)
+      expect(cached.nodes[1]).not.toHaveProperty('cachedStatus')
+
+      const result = await router.execute('mesh_status', {
+        meshId: refreshedInlineMesh.id,
+        inlineMesh: refreshedInlineMesh,
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        sourceOfTruth: {
+          membership: 'coordinator_inline_mesh_cache',
+          coordinatorOwnsLiveTruth: true,
+        },
+      })
+      const remote = ((result as any).nodes as any[]).find(node => node.nodeId === 'node-remote')
+      expect(remote).toBeTruthy()
+      expect(remote.error).toBeUndefined()
+      expect(remote.git).toBeUndefined()
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
 })

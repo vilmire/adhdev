@@ -222,6 +222,125 @@ function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | un
     };
 }
 
+function shouldDiscardCachedInlineMeshStatus(node: any): boolean {
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    if (!Object.keys(cachedStatus).length) return false;
+    const cachedGit = readObjectRecord(cachedStatus.git);
+    const workspaceError = readStringValue(cachedStatus.error, node?.error);
+    if (workspaceError && /workspace must be an existing directory/i.test(workspaceError)) return true;
+    const isGitRepo = readBooleanValue(cachedGit.isGitRepo);
+    const branch = readStringValue(cachedGit.branch);
+    const headCommit = readStringValue(cachedGit.headCommit);
+    return isGitRepo === false && !branch && !headCommit;
+}
+
+function stripInlineMeshTransientNodeState(node: any): any {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return node;
+    const {
+        cachedStatus,
+        lastGit: _lastGit,
+        last_git: _lastGitLegacy,
+        lastProbe: _lastProbe,
+        last_probe: _lastProbeLegacy,
+        error: _error,
+        health: _health,
+        machineStatus: _machineStatus,
+        lastSeenAt: _lastSeenAt,
+        last_seen_at: _lastSeenAtLegacy,
+        updatedAt: _updatedAt,
+        updated_at: _updatedAtLegacy,
+        activeSession: _activeSession,
+        active_session: _activeSessionLegacy,
+        activeSessionId: _activeSessionId,
+        active_session_id: _activeSessionIdLegacy,
+        sessionId: _sessionId,
+        session_id: _sessionIdLegacy,
+        providerType: _providerType,
+        provider_type: _providerTypeLegacy,
+        providers: _providers,
+        ...rest
+    } = node as Record<string, unknown>;
+    if (cachedStatus && !shouldDiscardCachedInlineMeshStatus(node)) {
+        return { ...rest, cachedStatus };
+    }
+    return rest;
+}
+
+function hasInlineMeshTransientNodeState(node: any): boolean {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return false;
+    return 'cachedStatus' in node
+        || 'lastGit' in node
+        || 'last_git' in node
+        || 'lastProbe' in node
+        || 'last_probe' in node
+        || 'error' in node
+        || 'health' in node
+        || 'machineStatus' in node
+        || 'lastSeenAt' in node
+        || 'last_seen_at' in node
+        || 'updatedAt' in node
+        || 'updated_at' in node
+        || 'activeSession' in node
+        || 'active_session' in node
+        || 'activeSessionId' in node
+        || 'active_session_id' in node
+        || 'sessionId' in node
+        || 'session_id' in node
+        || 'providerType' in node
+        || 'provider_type' in node
+        || 'providers' in node;
+}
+
+function readInlineMeshNodeId(node: any): string {
+    return readStringValue(node?.id, node?.nodeId) || '';
+}
+
+function sanitizeInlineMesh(inlineMesh: any): any {
+    if (!inlineMesh || typeof inlineMesh !== 'object' || Array.isArray(inlineMesh)) return inlineMesh;
+    if (!Array.isArray(inlineMesh.nodes)) return inlineMesh;
+    let changed = false;
+    const nodes = inlineMesh.nodes.map((node: any) => {
+        if (!hasInlineMeshTransientNodeState(node)) return node;
+        changed = true;
+        return stripInlineMeshTransientNodeState(node);
+    });
+    if (!changed) return inlineMesh;
+    return {
+        ...inlineMesh,
+        nodes,
+    };
+}
+
+function reconcileInlineMeshCache(cached: any, incoming: any): any {
+    if (!cached || typeof cached !== 'object' || Array.isArray(cached)) return incoming;
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return cached;
+    const cachedNodes = Array.isArray(cached.nodes) ? cached.nodes : [];
+    const incomingNodes = Array.isArray(incoming.nodes) ? incoming.nodes : [];
+    if (!cachedNodes.length || !incomingNodes.length) return { ...cached, ...incoming };
+
+    const incomingById = new Map<string, any>();
+    for (const node of incomingNodes) {
+        const nodeId = readInlineMeshNodeId(node);
+        if (nodeId) incomingById.set(nodeId, node);
+    }
+
+    const nodes = cachedNodes.map((cachedNode: any) => {
+        const nodeId = readInlineMeshNodeId(cachedNode);
+        const incomingNode = nodeId ? incomingById.get(nodeId) : undefined;
+        if (!incomingNode) return cachedNode;
+        if (hasInlineMeshTransientNodeState(incomingNode)) {
+            return { ...cachedNode, ...incomingNode };
+        }
+        return { ...stripInlineMeshTransientNodeState(cachedNode), ...incomingNode };
+    });
+
+    return {
+        ...cached,
+        ...incoming,
+        nodes,
+    };
+}
+
 function hasGitWorktreeChanges(git: Record<string, unknown> | null | undefined): boolean {
     if (!git) return false;
     return Number(git.staged || 0) + Number(git.modified || 0) + Number(git.untracked || 0) + Number(git.deleted || 0) + Number(git.renamed || 0) > 0;
@@ -960,10 +1079,15 @@ export class DaemonCommandRouter {
 
     private warmInlineMeshCache(meshId: string, inlineMesh?: unknown): any | undefined {
         if (!inlineMesh || typeof inlineMesh !== 'object') return undefined;
+        const sanitizedInlineMesh = sanitizeInlineMesh(inlineMesh as any);
         const cached = this.inlineMeshCache.get(meshId);
-        if (cached) return cached;
-        this.inlineMeshCache.set(meshId, inlineMesh as any);
-        return inlineMesh as any;
+        if (cached) {
+            const merged = reconcileInlineMeshCache(cached, sanitizedInlineMesh);
+            this.inlineMeshCache.set(meshId, merged);
+            return merged;
+        }
+        this.inlineMeshCache.set(meshId, sanitizedInlineMesh as any);
+        return sanitizedInlineMesh as any;
     }
 
     private async getMeshForCommand(
@@ -3203,10 +3327,17 @@ export class DaemonCommandRouter {
                             }
                         }
                         if (workspace) {
-                            if (!fs.existsSync(workspace) && applyCachedInlineMeshNodeStatus(status, node)) {
-                                status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
-                                nodeStatuses.push(status);
-                                continue;
+                            if (!fs.existsSync(workspace)) {
+                                if (applyCachedInlineMeshNodeStatus(status, node)) {
+                                    status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
+                                    nodeStatuses.push(status);
+                                    continue;
+                                }
+                                if (meshRecord?.source === 'inline_cache' && !isSelfNode) {
+                                    status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
+                                    nodeStatuses.push(status);
+                                    continue;
+                                }
                             }
                             try {
                                 const gitStatus = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
