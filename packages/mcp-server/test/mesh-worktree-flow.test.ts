@@ -78,7 +78,7 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
       policy: { canPush: true },
     }],
   };
-  const ctx = { mesh, transport };
+  const ctx = { mesh, transport, localDaemonId: 'daemon-coordinator' };
 
   const cloneText = await meshCloneNode(ctx, { source_node_id: 'node-source', branch: 'feat/x' });
   assert.equal(JSON.parse(cloneText).success, true);
@@ -99,6 +99,7 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
     meshNodeFor: 'mesh-worktree-flow',
     meshNodeId: 'node-worktree',
     spawnedSessionVisibility: 'visible',
+    meshCoordinatorDaemonId: 'daemon-coordinator',
     launchedByCoordinator: true,
   });
 
@@ -200,6 +201,7 @@ test('mesh_launch_session stamps delegated sessions hidden when mesh policy requ
   };
 
   const ctx = {
+    localDaemonId: 'daemon-coordinator',
     mesh: {
       id: 'mesh-hidden-visibility',
       name: 'Hidden Visibility Mesh',
@@ -274,6 +276,49 @@ test('mesh_launch_session stamps coordinator daemon id for remote worker nodes e
   assert.equal(calls[0].args.settings?.meshNodeFor, 'mesh-remote-worker');
   assert.equal(calls[0].args.settings?.meshNodeId, 'node-remote-worker');
   assert.equal(calls[0].args.settings?.launchedByCoordinator, true);
+});
+
+test('mesh_launch_session fails closed for remote worker nodes when coordinator daemon id is unavailable', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  let meshCalls = 0;
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    meshCalls += 1;
+    throw new Error('remote launch must be blocked before relay');
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-remote-worker-no-coordinator',
+      name: 'Remote Worker Mesh No Coordinator',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-worker',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-worker',
+        userOverrides: {},
+        policy: { canPush: true },
+      }],
+    },
+    transport,
+  };
+
+  const launch = JSON.parse(await meshLaunchSession(ctx as any, { node_id: 'node-remote-worker', type: 'hermes-cli' }));
+  assert.equal(launch.success, false);
+  assert.equal(launch.code, 'mesh_coordinator_daemon_unknown');
+  assert.equal(launch.nodeId, 'node-remote-worker');
+  assert.equal(launch.daemonId, 'daemon-worker');
+  assert.equal(meshCalls, 0);
 });
 
 test('mesh_launch_session reports recoverable worktree launch failure when daemon mesh transport is unavailable', async () => {
@@ -566,7 +611,24 @@ test('mesh_send_task preserves P2P relay recovery payload for coordinator feedba
   };
   transport.meshCommand = async (_daemonId, command) => {
     if (command === 'get_status_metadata') {
-      return { success: true, result: { success: true, status: { sessions: [{ id: 'session-remote', providerType: 'hermes-cli', status: 'idle' }] } } };
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{
+              id: 'session-remote',
+              providerType: 'hermes-cli',
+              status: 'idle',
+              settings: {
+                meshNodeFor: ctx.mesh.id,
+                meshNodeId: 'node-remote-worker',
+                meshCoordinatorDaemonId: 'daemon-coordinator',
+              },
+            }],
+          },
+        },
+      };
     }
     if (command === 'agent_command') {
       throw new Error("P2P DataChannel command 'agent_command' to daemon-remote timed out after 30s");
@@ -654,6 +716,76 @@ test('mesh_send_task does not reuse a remote live session that lacks mesh delega
   assert.equal(relayCalls[1].args.agentType, 'hermes-cli');
   assert.equal(relayCalls[1].args.cliType, 'hermes-cli');
   assert.equal(relayCalls[1].args.message, 'do work');
+});
+
+test('mesh_send_task fails closed when explicitly targeting a remote live session that lacks relay metadata', async () => {
+  const meshId = `mesh-remote-explicit-session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const relayCalls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  const ctx = {
+    mesh: {
+      id: meshId,
+      name: 'Remote Explicit Session Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-worker',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    relayCalls.push({ daemonId, command, args });
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{
+              id: 'session-legacy-live',
+              providerType: 'hermes-cli',
+              status: 'idle',
+              settings: {},
+            }],
+          },
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      throw new Error('agent_command must not be sent to a non-relay-safe explicit session');
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const send = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-remote-worker',
+    session_id: 'session-legacy-live',
+    message: 'do work',
+  }));
+
+  assert.equal(send.success, false);
+  assert.equal(send.code, 'mesh_delegate_session_missing_relay_metadata');
+  assert.equal(send.nodeId, 'node-remote-worker');
+  assert.equal(send.sessionId, 'session-legacy-live');
+  assert.equal(relayCalls.length, 1);
+  assert.equal(relayCalls[0].command, 'get_status_metadata');
 });
 
 test('mesh_remove_node falls back to local control-plane cleanup for degraded local worktree nodes when P2P relay is unavailable', async () => {
@@ -1003,6 +1135,7 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
   };
 
   const ctx = {
+    localDaemonId: 'daemon-coordinator',
     mesh: {
       id: 'mesh-provider-explicit',
       name: 'Provider Explicit',
@@ -1094,6 +1227,7 @@ test('mesh_launch_session omitted type uses providerPriority detection and fails
     policy: { providerPriority: ['codex-cli', 'hermes-cli'] },
   };
   const ctx = {
+    localDaemonId: 'daemon-coordinator',
     mesh: {
       id: 'mesh-provider-auto',
       name: 'Provider Auto',
@@ -1301,7 +1435,7 @@ test('mesh_status and mesh_git_status request refreshed upstream truth and block
   assert.equal(main.branchConvergence.status, 'blocked_review');
   assert.equal(feature.branchConvergence.reason, 'feature_branch_upstream_unverified');
   assert.equal(feature.branchConvergence.status, 'blocked_review');
-  assert.ok(calls.filter(call => call.command !== 'get_mesh').every(call => call.args.refreshUpstream === true));
+  assert.ok(calls.filter(call => call.command === 'git_status').every(call => call.args.refreshUpstream === true));
 });
 
 test('mesh_git_status source requests refreshed upstream truth for cloud and local transport paths', () => {
@@ -1346,6 +1480,7 @@ test('mesh_read_chat forwards cached provider metadata after launch', async () =
   };
 
   const ctx = {
+    localDaemonId: 'daemon-coordinator',
     mesh: {
       id: 'mesh-provider-cache',
       name: 'Provider Cache',
@@ -1567,6 +1702,26 @@ test('mesh_send_task dedupes rapid identical node/session/message dispatch retri
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{
+              id: 'session-a',
+              providerType: 'hermes-cli',
+              status: 'idle',
+              settings: {
+                meshNodeFor: meshId,
+                meshNodeId: 'node-remote',
+                meshCoordinatorDaemonId: 'daemon-local',
+              },
+            }],
+          },
+        },
+      };
+    }
     if (command === 'agent_command') {
       agentCommandCalls += 1;
       return { success: true };

@@ -503,23 +503,63 @@ function isIdleSessionRecord(session: any): boolean {
     return status === 'idle' || chatStatus === 'waiting_input';
 }
 
+function isMeshOwnedDelegateSession(session: any, meshId: string, nodeId: string): boolean {
+    const settings = session?.settings;
+    const sessionMeshId = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
+    const coordinatorDaemonId = typeof settings?.meshCoordinatorDaemonId === 'string' ? settings.meshCoordinatorDaemonId.trim() : '';
+    const sessionNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
+    if (sessionMeshId !== meshId || !coordinatorDaemonId) return false;
+    return !sessionNodeId || sessionNodeId === nodeId;
+}
+
 function chooseDispatchableSession(sessions: any[], providerType: string, meshId: string, nodeId: string): any | undefined {
     const live = sessions.filter(session => !isTerminalSessionRecord(session));
     const matchingProvider = (session: any) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
-    const isMeshOwnedDelegateSession = (session: any) => {
-        const settings = session?.settings;
-        const sessionMeshId = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
-        const coordinatorDaemonId = typeof settings?.meshCoordinatorDaemonId === 'string' ? settings.meshCoordinatorDaemonId.trim() : '';
-        const sessionNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
-        if (sessionMeshId !== meshId || !coordinatorDaemonId) return false;
-        return !sessionNodeId || sessionNodeId === nodeId;
-    };
     const meshSessions = live.filter((session: any) =>
-        isMeshOwnedDelegateSession(session)
+        isMeshOwnedDelegateSession(session, meshId, nodeId)
     );
     return meshSessions.find(session => isIdleSessionRecord(session) && matchingProvider(session))
         || meshSessions.find(matchingProvider)
         || undefined;
+}
+
+function buildRelayUnsafeRemoteSessionFailure(ctx: MeshContext, node: LocalMeshNodeEntry, sessionId: string, providerType?: string): ({ success: false; error: string } & Record<string, unknown>) {
+    return {
+        success: false,
+        recoverable: true,
+        code: 'mesh_delegate_session_missing_relay_metadata',
+        reason: 'mesh_delegate_session_missing_relay_metadata',
+        transport: 'mesh_transport',
+        retryRecommended: true,
+        meshId: ctx.mesh.id,
+        nodeId: node.id,
+        daemonId: node.daemonId,
+        workspace: node.workspace,
+        sessionId,
+        ...(providerType ? { resolvedProviderType: providerType } : {}),
+        error: `Remote session '${sessionId}' is not relay-safe for mesh '${ctx.mesh.id}': missing meshNodeFor/meshCoordinatorDaemonId metadata, so completion events would not reach the coordinator ledger.`,
+        nextAction: `Launch a fresh relay-safe session with mesh_launch_session(node_id: '${node.id}'${providerType ? `, type: '${providerType}'` : ''}) or dispatch without session_id so Repo Mesh can choose a valid delegate session.`,
+        noFallbackReason: 'Blindly reusing a remote session without mesh relay metadata would silently drop task_completed / generating_completed events.',
+    };
+}
+
+function buildMissingCoordinatorDaemonIdFailure(ctx: MeshContext, node: LocalMeshNodeEntry, providerType?: string): ({ success: false; error: string } & Record<string, unknown>) {
+    return {
+        success: false,
+        recoverable: true,
+        code: 'mesh_coordinator_daemon_unknown',
+        reason: 'mesh_coordinator_daemon_unknown',
+        transport: 'mesh_transport',
+        retryRecommended: true,
+        meshId: ctx.mesh.id,
+        nodeId: node.id,
+        daemonId: node.daemonId,
+        workspace: node.workspace,
+        ...(providerType ? { resolvedProviderType: providerType } : {}),
+        error: `Cannot launch a remote mesh delegate for node '${node.id}': coordinator daemon identity is unavailable, so the worker would be unable to relay completion events back to the coordinator.`,
+        nextAction: 'Retry after the coordinator daemon identity is available (for example from an attached daemon-backed MCP session) so meshCoordinatorDaemonId can be stamped on the worker session.',
+        noFallbackReason: 'Launching without meshCoordinatorDaemonId would create a worker session that can finish work but cannot emit task_completed / generating_completed back to the coordinator.',
+    };
 }
 
 function findNestedPayload(value: any, predicate: (payload: any) => boolean): any {
@@ -741,29 +781,75 @@ async function ipcDispatchToRemoteAgent(
         : [];
     let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || '';
 
-    // If no session_id given, ask the remote daemon via get_status_metadata.
-    // mesh_relay_command wraps the response: { success, result: { success, status: { sessions[] } } }
-    if (!sessionId) {
+    // Ask the remote daemon for live session truth when we need to auto-pick a
+    // delegate session, or when an explicit session_id must be verified as a
+    // relay-safe mesh-owned worker before we dispatch into it.
+    if (!sessionId || args.session_id) {
         try {
-                const relayResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
+            const relayResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
             // Unwrap relay envelope: relayResult.result.status.sessions
             const innerResult = relayResult?.result ?? relayResult;
             const statusObj = innerResult?.status ?? innerResult;
             const sessions: any[] = Array.isArray(statusObj?.sessions) ? statusObj.sessions : [];
-    
-            // Prefer live idle sessions launched for this mesh node. Never route
-            // a new task into restored/stopped session records; that produces the
-            // coordinator-visible "pending only, chat never received it" failure.
-            const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id);
 
-            if (targetSession?.id || targetSession?.sessionId) {
-                sessionId = targetSession.id || targetSession.sessionId;
+            if (sessionId) {
+                const explicitSession = sessions.find(session => readSessionRecordId(session) === sessionId);
+                if (!explicitSession) {
+                    return {
+                        success: false,
+                        recoverable: true,
+                        code: 'mesh_target_session_not_found',
+                        reason: 'mesh_target_session_not_found',
+                        transport: 'mesh_transport',
+                        retryRecommended: true,
+                        meshId: ctx.mesh.id,
+                        nodeId: node.id,
+                        daemonId,
+                        workspace: node.workspace,
+                        sessionId,
+                        ...(resolvedProviderType ? { resolvedProviderType } : {}),
+                        error: `Remote session '${sessionId}' is not present in the live status for node '${node.id}'.`,
+                        nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ''}) or retry without session_id so Repo Mesh can target a live delegate session.`,
+                    };
+                }
+                if (!isMeshOwnedDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
+                    return buildRelayUnsafeRemoteSessionFailure(
+                        ctx,
+                        node,
+                        sessionId,
+                        resolvedProviderType || explicitSession.providerType || explicitSession.cliType || undefined,
+                    );
+                }
                 if (!resolvedProviderType) {
-                    resolvedProviderType = targetSession.providerType || targetSession.cliType || '';
+                    resolvedProviderType = explicitSession.providerType || explicitSession.cliType || '';
+                }
+            } else {
+                // Prefer live idle sessions launched for this mesh node. Never route
+                // a new task into restored/stopped session records; that produces the
+                // coordinator-visible "pending only, chat never received it" failure.
+                const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id);
+
+                if (targetSession?.id || targetSession?.sessionId) {
+                    sessionId = targetSession.id || targetSession.sessionId;
+                    if (!resolvedProviderType) {
+                        resolvedProviderType = targetSession.providerType || targetSession.cliType || '';
+                    }
                 }
             }
         } catch (e: any) {
-                // fall through — will attempt dispatch with just providerType (fuzzy)
+            if (sessionId) {
+                return {
+                    ...buildCoordinatorP2pRelayFailure(e, {
+                        command: 'get_status_metadata',
+                        targetDaemonId: daemonId,
+                        nodeId: node.id,
+                        sessionId,
+                    }),
+                    success: false,
+                    error: `Cannot verify remote session '${sessionId}' before dispatch: ${e?.message || String(e)}`,
+                };
+            }
+            // fall through — will attempt dispatch with just providerType (fuzzy)
         }
     }
 
@@ -2279,6 +2365,10 @@ export async function meshLaunchSession(
         const coordinatorNode = resolveCoordinatorNode(ctx);
         const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
         const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
+        const isLocalNode = isLocalControlPlaneNode(ctx, node);
+        if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
+            return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
+        }
         let result: any;
         try {
             result = await commandForNode(ctx, node, 'launch_cli', {
@@ -2329,8 +2419,6 @@ export async function meshLaunchSession(
         } catch { /* ledger append is best-effort */ }
 
         // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks
-        const isLocalNode = isLocalControlPlaneNode(ctx, node);
-
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
             ctx.transport.meshCommand(node.daemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         } else if (isLocalTransport(ctx.transport)) {
@@ -2355,6 +2443,9 @@ export async function meshLaunchSession(
         const coordinatorNode = resolveCoordinatorNode(ctx);
         const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
         const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
+        if (!coordinatorDaemonId) {
+            return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
+        }
 
         try {
             const res = await (ctx.transport as CloudTransport).launch(node.daemonId, {
