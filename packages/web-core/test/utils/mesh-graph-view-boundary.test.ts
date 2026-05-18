@@ -23,6 +23,14 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain('onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}')
     })
 
+    it('keeps an explicit responsive viewport height so React Flow cannot collapse to 0px on narrow screens', () => {
+        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+
+        expect(source).toContain('min-w-0 overflow-hidden')
+        expect(source).toContain('h-[420px] w-full min-w-0 min-h-[420px] sm:h-[520px] xl:h-[640px]')
+        expect(source).toContain('className="h-full w-full"')
+    })
+
     it('renders submodule links as dedicated graph edges instead of leaving submodule status hidden in node data only', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 

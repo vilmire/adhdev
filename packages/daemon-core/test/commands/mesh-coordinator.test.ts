@@ -1071,7 +1071,15 @@ describe('resolveMeshCoordinatorSetup', () => {
         inlineMesh,
       })
 
-      expect(result).toMatchObject({ success: true, meshId: inlineMesh.id, meshName: 'Inline Preferred Mesh' })
+      expect(result).toMatchObject({
+        success: true,
+        meshId: inlineMesh.id,
+        meshName: 'Inline Preferred Mesh',
+        sourceOfTruth: {
+          membership: 'inline_bootstrap_snapshot',
+          coordinatorOwnsLiveTruth: false,
+        },
+      })
       expect(((result as any).nodes as any[]).map(node => node.nodeId)).toContain('node-remote')
       expect(((result as any).nodes as any[]).map(node => node.nodeId)).not.toContain('node-local-stale')
       const remote = ((result as any).nodes as any[]).find(node => node.nodeId === 'node-remote')
@@ -1148,6 +1156,73 @@ describe('resolveMeshCoordinatorSetup', () => {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(configDir, { recursive: true, force: true })
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('does not resurrect removed live nodes when the same stale cloud bootstrap inline mesh is sent again', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-inline-live-cache-'))
+    const router = createAutoImportRouter(baseProvider, {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+    })
+    const inlineMesh: any = {
+      id: 'mesh_status_inline_live_cache',
+      name: 'Inline Live Cache Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [
+        { id: 'node-local', workspace, policy: {} },
+        {
+          id: 'node-remote',
+          workspace: '/Users/remote/.worktrees/adhdev',
+          daemonId: 'daemon_remote',
+          machineId: 'machine_remote',
+          cachedStatus: {
+            machineStatus: 'online',
+            health: 'online',
+            git: {
+              workspace: '/Users/remote/.worktrees/adhdev',
+              repoRoot: '/Users/remote/.worktrees/adhdev',
+              isGitRepo: true,
+              branch: 'main',
+              headCommit: 'abc1234',
+            },
+          },
+          policy: {},
+        },
+      ],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      await expect(router.execute('mesh_status', {
+        meshId: inlineMesh.id,
+        inlineMesh,
+      })).resolves.toMatchObject({
+        success: true,
+        sourceOfTruth: { membership: 'inline_bootstrap_snapshot' },
+      })
+
+      await expect(router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-remote',
+      })).resolves.toMatchObject({ success: true, removed: true })
+
+      const result = await router.execute('mesh_status', {
+        meshId: inlineMesh.id,
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        sourceOfTruth: {
+          membership: 'coordinator_inline_mesh_cache',
+          coordinatorOwnsLiveTruth: true,
+        },
+      })
+      expect(((result as any).nodes as any[]).map(node => node.nodeId)).toContain('node-local')
+      expect(((result as any).nodes as any[]).map(node => node.nodeId)).not.toContain('node-remote')
+    } finally {
       rmSync(workspace, { recursive: true, force: true })
     }
   })

@@ -2,7 +2,7 @@
  * MeshGraphView — React Flow-based visualization for live Repo Mesh status.
  */
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
     Background,
     BackgroundVariant,
@@ -29,6 +29,7 @@ import {
 import {
     getMeshGraphInitialFocusNodeIds,
     getMeshGraphLayoutKey,
+    getMeshGraphViewportKey,
     shouldShowMeshGraphMiniMap,
 } from '../../utils/mesh-graph-viewport'
 
@@ -422,7 +423,7 @@ function buildLayout(data: MeshGraphData): { nodes: FlowNode[]; edges: FlowEdge[
                         branchConvergence: null,
                         source: {
                             nodeId: `${defaultAnchor.id}__placeholder`,
-                            machineLabel: null,
+                            machineLabel: '',
                             workspace: data.repoIdentity,
                             health: 'unknown',
                             providers: [],
@@ -489,16 +490,16 @@ function edgeColor(edge: MeshGraphEdge): string {
     }
 }
 
-function MeshViewportController({ data }: { data: MeshGraphData }) {
+function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; viewportKey: string }) {
     const nodesInitialized = useNodesInitialized()
     const reactFlow = useReactFlow<FlowNode, FlowEdge>()
-    const lastLayoutKeyRef = useRef<string | null>(null)
+    const lastViewportKeyRef = useRef<string | null>(null)
     const layoutKey = useMemo(() => getMeshGraphLayoutKey(data), [data])
     const initialFocusNodeIds = useMemo(() => getMeshGraphInitialFocusNodeIds(data), [data])
 
     useEffect(() => {
         if (!nodesInitialized || data.nodes.length === 0) return
-        if (lastLayoutKeyRef.current === layoutKey) return
+        if (lastViewportKeyRef.current === viewportKey) return
 
         let cancelled = false
         const frame = requestAnimationFrame(() => {
@@ -510,14 +511,14 @@ function MeshViewportController({ data }: { data: MeshGraphData }) {
                 maxZoom: shouldFocusSubset ? 1.04 : 0.96,
                 duration: 260,
             })
-            lastLayoutKeyRef.current = layoutKey
+            lastViewportKeyRef.current = viewportKey
         })
 
         return () => {
             cancelled = true
             cancelAnimationFrame(frame)
         }
-    }, [data.nodes.length, initialFocusNodeIds, layoutKey, nodesInitialized, reactFlow])
+    }, [data.nodes.length, initialFocusNodeIds, layoutKey, nodesInitialized, reactFlow, viewportKey])
 
     return null
 }
@@ -525,14 +526,47 @@ function MeshViewportController({ data }: { data: MeshGraphData }) {
 export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick }: MeshGraphViewProps) {
     const layout = useMemo(() => buildLayout(data), [data])
     const showMiniMap = useMemo(() => shouldShowMeshGraphMiniMap(data), [data])
+    const surfaceRef = useRef<HTMLDivElement | null>(null)
+    const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 })
+    const viewportKey = useMemo(
+        () => getMeshGraphViewportKey(data, surfaceSize.width, surfaceSize.height),
+        [data, surfaceSize.height, surfaceSize.width],
+    )
 
     const nodes = useMemo(
         () => layout.nodes.map(node => ({ ...node, selected: node.id === selectedNodeId })),
         [layout.nodes, selectedNodeId],
     )
 
+    useEffect(() => {
+        const element = surfaceRef.current
+        if (!element) return
+
+        const updateSize = () => {
+            const nextWidth = Math.max(0, Math.round(element.clientWidth))
+            const nextHeight = Math.max(0, Math.round(element.clientHeight))
+            setSurfaceSize(prev => (
+                prev.width === nextWidth && prev.height === nextHeight
+                    ? prev
+                    : { width: nextWidth, height: nextHeight }
+            ))
+        }
+
+        updateSize()
+        const resizeObserver = typeof ResizeObserver === 'function'
+            ? new ResizeObserver(() => updateSize())
+            : null
+        resizeObserver?.observe(element)
+        window.addEventListener('resize', updateSize)
+
+        return () => {
+            resizeObserver?.disconnect()
+            window.removeEventListener('resize', updateSize)
+        }
+    }, [])
+
     return (
-        <div className="relative h-full min-h-[520px] overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_rgba(15,23,42,0.98)_42%,_rgba(2,6,23,1))]">
+        <div ref={surfaceRef} className="relative w-full min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_rgba(15,23,42,0.98)_42%,_rgba(2,6,23,1))]">
             <div className="absolute inset-x-3 top-3 z-10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-200">
                 <div className="flex flex-wrap gap-2">
                     <span className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1">
@@ -551,36 +585,38 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                     Focused on the main path first · drag or scroll to pan
                 </div>
             </div>
-            <ReactFlow<FlowNode, FlowEdge>
-                nodes={nodes}
-                edges={layout.edges}
-                nodeTypes={nodeTypes}
-                minZoom={0.25}
-                maxZoom={1.35}
-                nodesDraggable={false}
-                nodesConnectable={false}
-                elementsSelectable
-                panOnDrag
-                panOnScroll
-                zoomOnScroll={false}
-                zoomOnPinch={false}
-                zoomOnDoubleClick={false}
-                selectionOnDrag={false}
-                onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}
-                className="h-full w-full"
-                colorMode="dark"
-                proOptions={{ hideAttribution: true }}
-            >
-                <MeshViewportController data={data} />
-                {showMiniMap && (
-                    <MiniMap
-                        className="!bottom-4 !right-4 !bg-slate-950/85 !border !border-white/10 !rounded-xl"
-                        nodeColor={currentNode => getHealthDot((currentNode.data as FlowNodeData).graphNode.health)}
-                    />
-                )}
-                <Controls className="!bottom-4 !left-4 !shadow-lg" showInteractive={false} />
-                <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color="rgba(148, 163, 184, 0.22)" />
-            </ReactFlow>
+            <div className="h-[420px] w-full min-w-0 min-h-[420px] sm:h-[520px] xl:h-[640px]">
+                <ReactFlow<FlowNode, FlowEdge>
+                    nodes={nodes}
+                    edges={layout.edges}
+                    nodeTypes={nodeTypes}
+                    minZoom={0.25}
+                    maxZoom={1.35}
+                    nodesDraggable={false}
+                    nodesConnectable={false}
+                    elementsSelectable
+                    panOnDrag
+                    panOnScroll
+                    zoomOnScroll={false}
+                    zoomOnPinch={false}
+                    zoomOnDoubleClick={false}
+                    selectionOnDrag={false}
+                    onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}
+                    className="h-full w-full"
+                    colorMode="dark"
+                    proOptions={{ hideAttribution: true }}
+                >
+                    <MeshViewportController data={data} viewportKey={viewportKey} />
+                    {showMiniMap && (
+                        <MiniMap
+                            className="!bottom-4 !right-4 !bg-slate-950/85 !border !border-white/10 !rounded-xl"
+                            nodeColor={currentNode => getHealthDot((currentNode.data as FlowNodeData).graphNode.health)}
+                        />
+                    )}
+                    <Controls className="!bottom-4 !left-4 !shadow-lg" showInteractive={false} />
+                    <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color="rgba(148, 163, 184, 0.22)" />
+                </ReactFlow>
+            </div>
         </div>
     )
 }

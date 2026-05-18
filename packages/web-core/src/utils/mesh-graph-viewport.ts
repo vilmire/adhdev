@@ -59,3 +59,9 @@ export function getMeshGraphLayoutKey(data: MeshGraph): string {
 
     return `${data.meshId}::${nodeSignature}::${edgeSignature}`
 }
+
+export function getMeshGraphViewportKey(data: MeshGraph, width: number, height: number): string {
+    const safeWidth = Math.max(0, Math.round(width))
+    const safeHeight = Math.max(0, Math.round(height))
+    return `${getMeshGraphLayoutKey(data)}::${safeWidth}x${safeHeight}`
+}

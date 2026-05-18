@@ -953,29 +953,40 @@ export class DaemonCommandRouter {
 
     public getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
         if (inlineMesh && typeof inlineMesh === 'object') {
-            this.inlineMeshCache.set(meshId, inlineMesh as any);
-            return inlineMesh as any;
+            return this.warmInlineMeshCache(meshId, inlineMesh);
         }
         return this.inlineMeshCache.get(meshId);
+    }
+
+    private warmInlineMeshCache(meshId: string, inlineMesh?: unknown): any | undefined {
+        if (!inlineMesh || typeof inlineMesh !== 'object') return undefined;
+        const cached = this.inlineMeshCache.get(meshId);
+        if (cached) return cached;
+        this.inlineMeshCache.set(meshId, inlineMesh as any);
+        return inlineMesh as any;
     }
 
     private async getMeshForCommand(
         meshId: string,
         inlineMesh?: unknown,
         options?: { preferInline?: boolean },
-    ): Promise<{ mesh: any; inline: boolean } | null> {
+    ): Promise<{ mesh: any; inline: boolean; source: 'inline_cache' | 'inline_bootstrap' | 'local_config' } | null> {
         const preferInline = options?.preferInline === true;
         if (preferInline) {
-            const cached = this.getCachedInlineMesh(meshId, inlineMesh);
-            if (cached) return { mesh: cached, inline: true };
+            const cached = this.getCachedInlineMesh(meshId);
+            if (cached) return { mesh: cached, inline: true, source: 'inline_cache' };
+            const warmedInline = this.warmInlineMeshCache(meshId, inlineMesh);
+            if (warmedInline) return { mesh: warmedInline, inline: true, source: 'inline_bootstrap' };
         }
         try {
             const { getMesh } = await import('../config/mesh-config.js');
             const mesh = getMesh(meshId);
-            if (mesh) return { mesh, inline: false };
+            if (mesh) return { mesh, inline: false, source: 'local_config' };
         } catch { /* fall through to inline cache */ }
-        const cached = this.getCachedInlineMesh(meshId, inlineMesh);
-        return cached ? { mesh: cached, inline: true } : null;
+        const cached = this.getCachedInlineMesh(meshId);
+        if (cached) return { mesh: cached, inline: true, source: 'inline_cache' };
+        const warmedInline = this.warmInlineMeshCache(meshId, inlineMesh);
+        return warmedInline ? { mesh: warmedInline, inline: true, source: 'inline_bootstrap' } : null;
     }
 
     private updateInlineMeshNode(meshId: string, mesh: any, node: any): void {
@@ -3217,6 +3228,15 @@ export class DaemonCommandRouter {
                         repoIdentity: mesh.repoIdentity,
                         defaultBranch: mesh.defaultBranch,
                         refreshedAt: new Date().toISOString(),
+                        sourceOfTruth: {
+                            membership: meshRecord?.source === 'inline_cache'
+                                ? 'coordinator_inline_mesh_cache'
+                                : meshRecord?.source === 'local_config'
+                                    ? 'local_mesh_config'
+                                    : 'inline_bootstrap_snapshot',
+                            coordinatorOwnsLiveTruth: meshRecord?.source !== 'inline_bootstrap',
+                            historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary'],
+                        },
                         nodes: nodeStatuses,
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },

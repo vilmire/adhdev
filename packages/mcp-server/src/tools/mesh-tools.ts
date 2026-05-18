@@ -1689,6 +1689,11 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         repoIdentity: mesh.repoIdentity,
         policy: mesh.policy,
         refreshedAt: new Date().toISOString(),
+        sourceOfTruth: {
+            membership: 'coordinator_daemon_live_mesh',
+            currentStatus: 'live_git_and_session_probes',
+            historicalEvidenceOnly: ['recoveryHints', 'ledgerSummary'],
+        },
         nodes: results,
         branchConvergenceSummary: summarizeBranchConvergence(results),
     };
