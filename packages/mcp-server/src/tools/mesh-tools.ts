@@ -169,9 +169,26 @@ function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: { node_id: str
     };
 
     if (finalSummary) {
+        if (args.compact === true) {
+            return {
+                ...compactChatPayload({
+                    success: true,
+                    status: 'idle',
+                    providerSessionId,
+                    summary: finalSummary,
+                    messages: [{ role: 'assistant', content: finalSummary, isHistorical: true }],
+                }, {
+                    nodeId: args.node_id,
+                    sessionId: args.session_id,
+                    limit: args.tail ?? 10,
+                }),
+                recoveredFromLedger: true,
+                ledger,
+            };
+        }
         return {
             success: true,
-            compact: args.compact === true,
+            compact: false,
             recoveredFromLedger: true,
             nodeId: args.node_id,
             sessionId: args.session_id,

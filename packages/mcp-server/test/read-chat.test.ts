@@ -41,8 +41,31 @@ test('readChat compact json filters tool terminal and internal messages', async 
   assert.equal(parsed.summary, 'Final summary only');
   assert.deepEqual(
     parsed.messages.map((message: { content: string }) => message.content),
-    ['please summarize', 'Final summary only'],
+    ['please summarize'],
   );
+});
+
+test('readChat compact text shows summary separately without duplicating the final assistant bubble', async () => {
+  const localTransport = {
+    async command() {
+      return {
+        success: true,
+        messages: [
+          { role: 'user', content: 'visible user' },
+          { role: 'assistant', content: 'visible assistant summary' },
+        ],
+      };
+    },
+  } as any;
+
+  const output = await readChat(localTransport, {
+    compact: true,
+    format: 'text',
+  } as any);
+
+  assert.match(output, /\[User\] visible user/);
+  assert.match(output, /\[Summary\] visible assistant summary/);
+  assert.doesNotMatch(output, /\[Agent\] visible assistant summary/);
 });
 
 test('readChat compact text filters tool terminal and internal messages', async () => {
@@ -64,7 +87,7 @@ test('readChat compact text filters tool terminal and internal messages', async 
   } as any);
 
   assert.match(output, /visible user/);
-  assert.match(output, /visible assistant/);
+  assert.match(output, /\[Summary\] visible assistant/);
   assert.doesNotMatch(output, /hidden tool/);
 });
 

@@ -1,5 +1,10 @@
 export type CompactChatMessage = Record<string, any>;
 
+function isAssistantLike(message: any): boolean {
+  const role = String(message?.role ?? '').toLowerCase();
+  return role === 'assistant' || role === 'agent';
+}
+
 export function messageContent(message: any): string {
   const content = message?.content;
   if (typeof content === 'string') return content;
@@ -20,6 +25,21 @@ export function isCoordinatorVisibleMessage(message: any): boolean {
   return role === 'user' || role === 'assistant' || role === 'agent';
 }
 
+export function buildCompactMessageTail(
+  visibleMessages: CompactChatMessage[],
+  opts: { summary?: string; finalAssistant?: CompactChatMessage | undefined; limit: number },
+): CompactChatMessage[] {
+  const summary = typeof opts.summary === 'string' ? opts.summary.trim() : '';
+  const shouldOmitSummaryMessage = !!summary
+    && !!opts.finalAssistant
+    && isAssistantLike(opts.finalAssistant)
+    && messageContent(opts.finalAssistant).trim() === summary;
+  const sourceMessages = shouldOmitSummaryMessage
+    ? visibleMessages.filter((message) => message !== opts.finalAssistant)
+    : visibleMessages;
+  return sourceMessages.slice(-opts.limit);
+}
+
 export function compactChatPayload(
   payload: any,
   opts: { sessionId?: string | null; nodeId?: string; limit?: number } = {},
@@ -27,7 +47,6 @@ export function compactChatPayload(
   const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
   const visible = rawMessages.filter(isCoordinatorVisibleMessage);
   const limit = Math.max(1, Math.min(opts.limit ?? 10, 10));
-  const messages = visible.slice(-limit);
   const finalAssistant = [...visible].reverse().find((message: any) => {
     const role = String(message?.role ?? '').toLowerCase();
     return (role === 'assistant' || role === 'agent') && messageContent(message).trim();
@@ -35,6 +54,7 @@ export function compactChatPayload(
   const summary = typeof payload?.summary === 'string' && payload.summary.trim()
     ? payload.summary.trim()
     : messageContent(finalAssistant).trim();
+  const messages = buildCompactMessageTail(visible, { summary, finalAssistant, limit });
 
   return {
     success: payload?.success !== false,

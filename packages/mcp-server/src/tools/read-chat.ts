@@ -99,6 +99,25 @@ function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'js
     }, null, 2);
   }
 
+  if ((format === 'text' || format === undefined) && compact && compactPayload) {
+    const lines = outputMessages.slice(-limit).map((m: any) => {
+      const role = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Agent' : m.role;
+      const content = messageContent(m);
+      const truncated = content.length > 500 ? `${content.slice(0, 500)}…` : content;
+      return `[${role}] ${truncated}`;
+    });
+    if (compactPayload.summary) {
+      const truncatedSummary = compactPayload.summary.length > 500
+        ? `${compactPayload.summary.slice(0, 500)}…`
+        : compactPayload.summary;
+      lines.push(`[Summary] ${truncatedSummary}`);
+    }
+    if (result?.pollingAdvisory) {
+      lines.push(`Advisory: ${(result.pollingAdvisory as RapidReadChatAdvisory).message}`);
+    }
+    return lines.length > 0 ? lines.join('\n\n') : 'No messages in chat.';
+  }
+
   if (outputMessages.length === 0) {
     return result?.pollingAdvisory
       ? `No messages in chat.\n\nAdvisory: ${(result.pollingAdvisory as RapidReadChatAdvisory).message}`

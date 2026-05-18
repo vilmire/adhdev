@@ -1367,12 +1367,59 @@ test('mesh_read_chat compact mode filters tool/internal chatter and returns the 
 
   assert.equal(payload.compact, true);
   assert.equal(payload.totalMessages, 5);
-  assert.equal(payload.messages.length, 2);
+  assert.equal(payload.messages.length, 1);
   assert.deepEqual(payload.messages.map((m: any) => m.content), [
     'do the task',
-    'Final summary: implemented V1 and tests pass',
   ]);
   assert.equal(payload.summary, 'Final summary: implemented V1 and tests pass');
+});
+
+test('mesh_read_chat compact removed-node recovery returns ledger summary without duplicating it in messages', async () => {
+  const meshId = `mesh-removed-summary-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const longSummary = `Recovered summary ${'x'.repeat(900)}`;
+  appendLedgerEntry(meshId, {
+    kind: 'task_completed',
+    nodeId: 'node-removed',
+    sessionId: 'session-finished',
+    providerType: 'hermes-cli',
+    payload: { providerSessionId: 'provider-finished', finalSummary: longSummary },
+  });
+  appendLedgerEntry(meshId, {
+    kind: 'node_removed',
+    nodeId: 'node-removed',
+    payload: { sessionCleanupMode: 'stop_and_delete' },
+  });
+
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    if (command === 'get_mesh') {
+      return { success: true, mesh: { id: meshId, name: 'Removed Read', nodes: [], updatedAt: new Date().toISOString() } };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+
+  const text = await meshReadChat({
+    mesh: {
+      id: meshId,
+      name: 'Removed Read',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [],
+    },
+    transport,
+  } as any, { node_id: 'node-removed', session_id: 'session-finished', compact: true });
+  const payload = JSON.parse(text);
+
+  assert.equal(payload.success, true);
+  assert.equal(payload.recoveredFromLedger, true);
+  assert.equal(payload.summary, longSummary);
+  assert.deepEqual(payload.messages, []);
+  assert.equal(payload.providerSessionId, 'provider-finished');
 });
 
 test('mesh_read_chat returns recoverable completion context instead of throwing for removed node', async () => {

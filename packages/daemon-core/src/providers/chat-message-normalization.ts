@@ -1,9 +1,11 @@
 import type { ChatMessage } from '../types.js';
 import { flattenContent } from './contracts.js';
 
+export const DEFAULT_FINAL_SUMMARY_MAX_CHARS = 4_000;
+
 export function extractFinalSummaryFromMessages(
   messages: ChatMessage[] | null | undefined,
-  maxChars: number = 500,
+  maxChars: number = DEFAULT_FINAL_SUMMARY_MAX_CHARS,
 ): string {
   if (!Array.isArray(messages) || messages.length === 0) return '';
 

@@ -9,6 +9,7 @@ import {
   buildThoughtChatMessage,
   buildToolChatMessage,
   buildUserChatMessage,
+  DEFAULT_FINAL_SUMMARY_MAX_CHARS,
   extractFinalSummaryFromMessages,
   filterUserFacingChatMessages,
   isBuiltinChatMessageKind,
@@ -164,7 +165,16 @@ describe('chat message normalization', () => {
     expect(extractFinalSummaryFromMessages(messages)).toBe('follow-up');
   });
 
-  it('extractFinalSummaryFromMessages truncates to maxChars', () => {
+  it('extractFinalSummaryFromMessages keeps ordinary completion summaries under the default cap', () => {
+    const text = 'a'.repeat(900);
+    const messages = [
+      { role: 'assistant', content: text, meta: { userFacing: true } },
+    ] as any;
+    expect(DEFAULT_FINAL_SUMMARY_MAX_CHARS).toBe(4000);
+    expect(extractFinalSummaryFromMessages(messages)).toBe(text);
+  });
+
+  it('extractFinalSummaryFromMessages truncates to maxChars when an explicit limit is provided', () => {
     const messages = [
       { role: 'assistant', content: 'a'.repeat(1000), meta: { userFacing: true } },
     ] as any;
