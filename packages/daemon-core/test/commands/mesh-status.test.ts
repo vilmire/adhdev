@@ -293,4 +293,56 @@ describe('mesh_status', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  it('prefers the live coordinator runtime workspace over stale node.workspace', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-live-workspace-')
+    try {
+      const { router } = createRouter({
+        listSessions: vi.fn(async () => [
+          {
+            sessionId: 'coord-live',
+            workspace: repoRoot,
+            lifecycle: 'running',
+            providerType: 'hermes-cli',
+            meta: { meshCoordinatorFor: 'mesh-live-workspace' },
+          },
+        ]),
+      })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-live-workspace',
+        inlineMesh: {
+          id: 'mesh-live-workspace',
+          name: 'Mesh Live Workspace',
+          repoIdentity: 'repo',
+          policy: {},
+          coordinator: { preferredNodeId: 'node-local' },
+          nodes: [
+            {
+              id: 'node-local',
+              daemonId: 'machine-local',
+              machineLabel: 'Local',
+              workspace: '/missing/deleted-worktree',
+              repoRoot: '/missing/deleted-worktree',
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.nodes[0]).toEqual(expect.objectContaining({
+        nodeId: 'node-local',
+        workspace: repoRoot,
+        activeSessions: ['coord-live'],
+      }))
+      expect(result.nodes[0].git).toEqual(expect.objectContaining({
+        workspace: repoRoot,
+        isGitRepo: true,
+      }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

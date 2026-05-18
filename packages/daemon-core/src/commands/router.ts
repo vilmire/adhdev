@@ -328,6 +328,59 @@ function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
     };
 }
 
+function readLiveMeshNodeWorkspace(args: {
+    meshId: string;
+    nodeId: string;
+    liveSessionRecords: any[];
+    allowCoordinatorSession?: boolean;
+}): string {
+    const directNodeWorkspace = args.liveSessionRecords.find((record) => (
+        readStringValue(record?.meta?.meshNodeId) === args.nodeId
+        && readStringValue(record?.workspace)
+    ));
+    if (directNodeWorkspace) {
+        return readStringValue(directNodeWorkspace.workspace) || '';
+    }
+
+    if (args.allowCoordinatorSession) {
+        const coordinatorWorkspace = args.liveSessionRecords.find((record) => (
+            readStringValue(record?.meta?.meshCoordinatorFor) === args.meshId
+            && readStringValue(record?.workspace)
+        ));
+        if (coordinatorWorkspace) {
+            return readStringValue(coordinatorWorkspace.workspace) || '';
+        }
+    }
+
+    return '';
+}
+
+function collectLiveMeshSessionRecords(args: {
+    meshId: string;
+    node: any;
+    nodeId: string;
+    liveSessionRecords: any[];
+    allowCoordinatorSession?: boolean;
+}): any[] {
+    const matches = args.liveSessionRecords.filter((record) => {
+        if (readStringValue(record?.meta?.meshNodeId) === args.nodeId) return true;
+        const recordWorkspace = readStringValue(record?.workspace);
+        const nodeWorkspace = readStringValue(args.node?.workspace);
+        return !!recordWorkspace && !!nodeWorkspace && recordWorkspace === nodeWorkspace;
+    });
+
+    if (args.allowCoordinatorSession) {
+        for (const record of args.liveSessionRecords) {
+            if (readStringValue(record?.meta?.meshCoordinatorFor) !== args.meshId) continue;
+            const sessionId = readStringValue(record?.sessionId);
+            if (sessionId && matches.some((entry) => readStringValue(entry?.sessionId) === sessionId)) continue;
+            matches.push(record);
+        }
+    }
+
+    return matches;
+}
+
 function applyCachedInlineMeshNodeStatus(status: Record<string, unknown>, node: any): boolean {
     const cachedStatus = readObjectRecord(node?.cachedStatus);
     const git = buildCachedInlineMeshGitStatus(node);
@@ -2669,7 +2722,16 @@ export class DaemonCommandRouter {
                             cliType,
                         };
                     }
-                    const workspace = typeof coordinatorNode.workspace === 'string' ? coordinatorNode.workspace.trim() : '';
+                    const sessionHostRecords = this.deps.sessionHostControl?.listSessions
+                        ? await this.deps.sessionHostControl.listSessions().catch(() => [])
+                        : [];
+                    const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
+                    const workspace = readLiveMeshNodeWorkspace({
+                        meshId,
+                        nodeId: String(coordinatorNode.id || coordinatorNode.nodeId || preferredCoordinatorNodeId || ''),
+                        liveSessionRecords: liveMeshSessions,
+                        allowCoordinatorSession: true,
+                    }) || (typeof coordinatorNode.workspace === 'string' ? coordinatorNode.workspace.trim() : '');
                     if (!workspace) return { success: false, error: 'Coordinator node workspace required', meshId, cliType };
                     if (!cliType) {
                         const resolved = await resolveProviderTypeFromPriority({
@@ -3028,8 +3090,13 @@ export class DaemonCommandRouter {
                     const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
 
                     const localMachineId = loadConfig().machineId || '';
+                    const selectedCoordinatorNodeId = readStringValue(
+                        mesh.coordinator?.preferredNodeId,
+                        (mesh.nodes?.[0] as any)?.id,
+                        (mesh.nodes?.[0] as any)?.nodeId,
+                    );
                     const inlineCoordinatorNodeId = meshRecord?.inline && Array.isArray(mesh.nodes)
-                        ? readStringValue((mesh.nodes[0] as any)?.id, (mesh.nodes[0] as any)?.nodeId)
+                        ? selectedCoordinatorNodeId
                         : undefined;
                     const refreshedAt = new Date().toISOString();
                     const nodeStatuses = [];
@@ -3089,8 +3156,20 @@ export class DaemonCommandRouter {
                                 reason: 'Node has no daemon id, so mesh transport cannot be reported from the selected coordinator.',
                             };
                         }
-                        const matchedLiveSessionRecords = liveMeshSessions
-                            .filter((record) => this.sessionMatchesMeshNode(record, node, nodeId));
+                        const matchedLiveSessionRecords = collectLiveMeshSessionRecords({
+                            meshId,
+                            node,
+                            nodeId,
+                            liveSessionRecords: liveMeshSessions,
+                            allowCoordinatorSession: nodeId === selectedCoordinatorNodeId,
+                        });
+                        const workspace = readLiveMeshNodeWorkspace({
+                            meshId,
+                            nodeId,
+                            liveSessionRecords: matchedLiveSessionRecords,
+                            allowCoordinatorSession: nodeId === selectedCoordinatorNodeId,
+                        }) || (typeof node.workspace === 'string' ? node.workspace : '');
+                        status.workspace = workspace || node.workspace;
                         if (matchedLiveSessionRecords.length > 0) {
                             const sessionIds = matchedLiveSessionRecords
                                 .map((record: any) => typeof record?.sessionId === 'string' ? record.sessionId : '')
@@ -3104,14 +3183,14 @@ export class DaemonCommandRouter {
                                 status.providers = Array.from(new Set([...(Array.isArray(status.providers) ? status.providers as string[] : []), ...providerTypes]));
                             }
                         }
-                        if (node.workspace && typeof node.workspace === 'string') {
-                            if (!fs.existsSync(node.workspace as string) && applyCachedInlineMeshNodeStatus(status, node)) {
+                        if (workspace) {
+                            if (!fs.existsSync(workspace) && applyCachedInlineMeshNodeStatus(status, node)) {
                                 status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
                                 nodeStatuses.push(status);
                                 continue;
                             }
                             try {
-                                const gitStatus = await getGitRepoStatus(node.workspace as string, { timeoutMs: 10_000, refreshUpstream: true });
+                                const gitStatus = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
                                 status.git = gitStatus;
                                 if (gitStatus.isGitRepo) {
                                     status.health = deriveMeshNodeHealthFromGit(gitStatus as unknown as Record<string, unknown>);

@@ -249,7 +249,11 @@ describe('resolveMeshCoordinatorSetup', () => {
     })
   })
 
-  function createAutoImportRouter(provider: ProviderModule, cliManager: { handleCliCommand: ReturnType<typeof vi.fn> }) {
+  function createAutoImportRouter(
+    provider: ProviderModule,
+    cliManager: { handleCliCommand: ReturnType<typeof vi.fn> },
+    sessionHostControl?: { listSessions?: ReturnType<typeof vi.fn> },
+  ) {
     return new DaemonCommandRouter({
       commandHandler: { handle: vi.fn(async () => ({ success: false })) } as any,
       cliManager: cliManager as any,
@@ -265,10 +269,93 @@ describe('resolveMeshCoordinatorSetup', () => {
       } as any,
       detectedIdes: { value: [] },
       sessionRegistry: {} as any,
+      sessionHostControl: {
+        listSessions: vi.fn(async () => []),
+        ...(sessionHostControl || {}),
+      } as any,
       packageName: 'adhdev',
       statusVersion: '0.9.71',
     })
   }
+
+  it('launch_mesh_coordinator prefers live session-host workspace over stale node workspace', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-coordinator-live-workspace-'))
+    const liveRepo = join(root, 'repo')
+    const deletedWorktree = join(root, 'deleted-worktree')
+    initGitRepo(liveRepo)
+    const mcpEntry = join(root, 'mcp-server.js')
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
+    process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
+
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'claude-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'claude_mcp_json',
+          path: '.mcp.json',
+          serverName: 'adhdev-mesh',
+        },
+      },
+    }
+    const cliManager = {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'coordinator-live-session' })),
+    }
+    const router = createAutoImportRouter(provider, cliManager, {
+      listSessions: vi.fn(async () => [
+        {
+          sessionId: 'coord-runtime-live',
+          workspace: liveRepo,
+          lifecycle: 'running',
+          providerType: 'claude-cli',
+          meta: { meshCoordinatorFor: 'mesh-live-workspace' },
+        },
+      ]),
+    })
+
+    try {
+      const result = await router.execute('launch_mesh_coordinator', {
+        meshId: 'mesh-live-workspace',
+        cliType: 'claude-cli',
+        inlineMesh: {
+          id: 'mesh-live-workspace',
+          name: 'Live Workspace Mesh',
+          repoIdentity: 'example/repo',
+          policy: {},
+          coordinator: { preferredNodeId: 'node-local' },
+          nodes: [
+            {
+              id: 'node-local',
+              daemonId: 'daemon-local',
+              machineId: 'machine-local',
+              workspace: deletedWorktree,
+              repoRoot: deletedWorktree,
+              providers: ['claude-cli'],
+              policy: { providerPriority: ['claude-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result).toMatchObject({
+        success: true,
+        workspace: liveRepo,
+        sessionId: 'coordinator-live-session',
+      })
+      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
+        cliType: 'claude-cli',
+        dir: liveRepo,
+        settings: { meshCoordinatorFor: 'mesh-live-workspace' },
+      }))
+    } finally {
+      if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
+      else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 
   function initGitRepo(repo: string) {
     mkdirSync(repo, { recursive: true })
