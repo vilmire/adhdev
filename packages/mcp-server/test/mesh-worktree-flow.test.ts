@@ -695,6 +695,7 @@ test('mesh_remove_node falls back to local control-plane cleanup for degraded lo
   };
   transport.command = async (command, args = {}) => {
     directCalls.push({ command, args });
+    if (command === 'get_mesh') return ctx.mesh;
     if (command === 'remove_mesh_node') return { success: true, removed: true, worktreeCleanup: { skipped: true, reason: 'worktree_path_missing' } };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -708,10 +709,11 @@ test('mesh_remove_node falls back to local control-plane cleanup for degraded lo
   assert.equal(result.transportFallback.to, 'local_control_plane');
   assert.equal(relayCalls.length, 1);
   assert.equal(relayCalls[0].command, 'remove_mesh_node');
-  assert.equal(directCalls.length, 1);
-  assert.equal(directCalls[0].command, 'remove_mesh_node');
-  assert.equal((directCalls[0].args.inlineMesh as any).id, 'mesh-remove-fallback');
-  assert.equal(directCalls[0].args.sessionCleanupMode, 'preserve');
+  assert.equal(directCalls.length, 2);
+  assert.equal(directCalls[0].command, 'get_mesh');
+  assert.equal(directCalls[1].command, 'remove_mesh_node');
+  assert.equal((directCalls[1].args.inlineMesh as any).id, 'mesh-remove-fallback');
+  assert.equal(directCalls[1].args.sessionCleanupMode, 'preserve');
   assert.ok(!ctx.mesh.nodes.some(node => node.id === 'node-worktree-orphan'));
 });
 
@@ -1299,7 +1301,7 @@ test('mesh_status and mesh_git_status request refreshed upstream truth and block
   assert.equal(main.branchConvergence.status, 'blocked_review');
   assert.equal(feature.branchConvergence.reason, 'feature_branch_upstream_unverified');
   assert.equal(feature.branchConvergence.status, 'blocked_review');
-  assert.ok(calls.every(call => call.args.refreshUpstream === true));
+  assert.ok(calls.filter(call => call.command !== 'get_mesh').every(call => call.args.refreshUpstream === true));
 });
 
 test('mesh_git_status source requests refreshed upstream truth for cloud and local transport paths', () => {
@@ -1739,6 +1741,7 @@ test('mesh_clone_node upserts clone returned through payload-wrapped live relay 
     clonedFromNodeId: 'node-source',
   };
 
+  let daemonMeshNodes = [staleSourceNode];
   transport.command = async (command) => {
     if (command === 'get_mesh') {
       return {
@@ -1746,7 +1749,7 @@ test('mesh_clone_node upserts clone returned through payload-wrapped live relay 
         mesh: {
           id: 'mesh-live-payload-relay',
           name: 'Live Payload Relay',
-          nodes: [staleSourceNode],
+          nodes: daemonMeshNodes,
           updatedAt: new Date().toISOString(),
         },
       };
@@ -1756,6 +1759,7 @@ test('mesh_clone_node upserts clone returned through payload-wrapped live relay 
   transport.meshCommand = async (daemonId, command, args = {}) => {
     calls.push({ daemonId, command, args });
     if (command === 'clone_mesh_node') {
+      daemonMeshNodes = [staleSourceNode, cloneNode];
       return {
         success: true,
         result: {
@@ -1936,6 +1940,123 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   assert.equal(JSON.parse(removeText).success, true, 'remove_node should succeed after mesh refresh');
   assert.ok(!ctx.mesh.nodes.some(n => n.id === 'node-worktree-new'), 'node removed from ctx.mesh after remove');
   assert.ok(meshCommands.includes('remove_mesh_node'), 'remove_mesh_node relayed to daemon');
+});
+
+test('stale local worktree hits are revalidated against get_mesh before mesh_git_status uses them', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const directCommands: string[] = [];
+  transport.command = async (command) => {
+    directCommands.push(command);
+    if (command === 'get_mesh') {
+      return {
+        success: true,
+        mesh: {
+          id: 'mesh-stale-removed',
+          name: 'Stale Removed Mesh',
+          nodes: [
+            { id: 'node-source', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-source', userOverrides: {}, policy: {} },
+          ],
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('meshCommand should not run for a removed worktree node');
+  };
+
+  const mesh = {
+    id: 'mesh-stale-removed',
+    name: 'Stale Removed Mesh',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [
+      {
+        id: 'node-worktree-stale',
+        workspace: '/repo/.adhdev-worktrees/mesh/stale',
+        repoRoot: '/repo/.adhdev-worktrees/mesh/stale',
+        daemonId: 'daemon-source',
+        userOverrides: {},
+        policy: {},
+        isLocalWorktree: true,
+        worktreeBranch: 'stale',
+        clonedFromNodeId: 'node-source',
+      },
+      { id: 'node-source', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-source', userOverrides: {}, policy: {} },
+    ],
+  };
+  const ctx = { mesh, transport };
+
+  await assert.rejects(
+    () => meshGitStatus(ctx as any, { node_id: 'node-worktree-stale' }),
+    /not a member of mesh 'Stale Removed Mesh'/,
+  );
+  assert.deepEqual(directCommands, ['get_mesh']);
+  assert.deepEqual(ctx.mesh.nodes.map(node => node.id), ['node-source']);
+});
+
+test('stale local worktree hits are revalidated before mesh_read_chat falls back to missing-node recovery', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    if (command === 'get_mesh') {
+      return {
+        success: true,
+        mesh: {
+          id: 'mesh-stale-read-chat',
+          name: 'Stale Read Chat Mesh',
+          nodes: [
+            { id: 'node-source', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-source', userOverrides: {}, policy: {} },
+          ],
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('meshCommand should not run for a removed worktree node');
+  };
+
+  const mesh = {
+    id: 'mesh-stale-read-chat',
+    name: 'Stale Read Chat Mesh',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [
+      {
+        id: 'node-worktree-stale',
+        workspace: '/repo/.adhdev-worktrees/mesh/stale',
+        repoRoot: '/repo/.adhdev-worktrees/mesh/stale',
+        daemonId: 'daemon-source',
+        userOverrides: {},
+        policy: {},
+        isLocalWorktree: true,
+        worktreeBranch: 'stale',
+        clonedFromNodeId: 'node-source',
+      },
+      { id: 'node-source', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-source', userOverrides: {}, policy: {} },
+    ],
+  };
+  const ctx = { mesh, transport };
+
+  const chatText = await meshReadChat(ctx as any, { node_id: 'node-worktree-stale', session_id: 'sess-stale', compact: true });
+  const chat = JSON.parse(chatText);
+  assert.equal(chat.success, false);
+  assert.equal(chat.code, 'mesh_removed_node_transcript_unavailable');
+  assert.deepEqual(ctx.mesh.nodes.map(node => node.id), ['node-source']);
 });
 
 test('mesh status and git status include explicitly configured related repo freshness', async () => {

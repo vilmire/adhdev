@@ -86,7 +86,6 @@ async function refreshMeshFromDaemon(ctx: MeshContext): Promise<void> {
         const refreshedNodes = result.mesh.nodes
             .filter((n: any) => n?.id)
             .map((n: any) => n as LocalMeshNodeEntry);
-        if (!refreshedNodes.length) return;
         (ctx.mesh.nodes as LocalMeshNodeEntry[]).splice(0, ctx.mesh.nodes.length, ...refreshedNodes);
         ctx.mesh.updatedAt = result.mesh.updatedAt ?? ctx.mesh.updatedAt;
     } catch { /* refresh is best-effort; callers still report their original status/errors */ }
@@ -106,7 +105,7 @@ async function syncCoordinatorDaemonMeshCache(ctx: MeshContext): Promise<void> {
 
 async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry> {
     const hit = ctx.mesh.nodes.find(n => n.id === nodeId);
-    if (hit) return hit;
+    if (hit && !hit.isLocalWorktree) return hit;
 
     await refreshMeshFromDaemon(ctx);
 
@@ -117,7 +116,7 @@ async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<Lo
 
 async function findOptionalNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry | null> {
     const hit = ctx.mesh.nodes.find(n => n.id === nodeId);
-    if (hit) return hit;
+    if (hit && !hit.isLocalWorktree) return hit;
 
     await refreshMeshFromDaemon(ctx);
 
