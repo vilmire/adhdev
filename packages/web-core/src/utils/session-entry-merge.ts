@@ -23,7 +23,9 @@ function hasExplicitProviderName(value: string | null | undefined, providerType:
 }
 
 
-function cloneActiveChatMessages(messages: SessionEntry['activeChat'] extends { messages?: infer T } ? T : never) {
+type ActiveChatMessages = NonNullable<SessionEntry['activeChat']>['messages']
+
+function cloneActiveChatMessages(messages: ActiveChatMessages): NonNullable<ActiveChatMessages> {
   return Array.isArray(messages) ? [...messages] : []
 }
 
