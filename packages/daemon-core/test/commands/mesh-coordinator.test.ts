@@ -1304,4 +1304,84 @@ describe('resolveMeshCoordinatorSetup', () => {
       rmSync(workspace, { recursive: true, force: true })
     }
   })
+
+  it('prefers fresher live peer git telemetry over stale cached orphan snapshot state when mesh_status falls back to inline node truth', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-live-git-truth-'))
+    initGitRepo(workspace)
+    const router = createAutoImportRouter(baseProvider, {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+    })
+    const meshId = 'mesh_status_live_git_truth'
+    const remoteWorkspace = '/Users/remote/.worktrees/adhdev'
+
+    ;(router as any).inlineMeshCache.set(meshId, {
+      id: meshId,
+      name: 'Live Git Truth Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [
+        { id: 'node-local', workspace, policy: {} },
+        {
+          id: 'node-remote',
+          workspace: remoteWorkspace,
+          daemonId: 'daemon_remote',
+          machineId: 'machine_remote',
+          cachedStatus: {
+            machineStatus: 'online',
+            health: 'degraded',
+            error: 'Workspace must be an existing directory',
+            git: {
+              workspace: remoteWorkspace,
+              repoRoot: remoteWorkspace,
+              isGitRepo: false,
+              branch: null,
+              headCommit: null,
+            },
+          },
+          lastGit: {
+            status: {
+              workspace: remoteWorkspace,
+              repoRoot: remoteWorkspace,
+              isGitRepo: true,
+              branch: 'main',
+              headCommit: 'abc1234',
+              ahead: 0,
+              behind: 0,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+            },
+          },
+          policy: {},
+        },
+      ],
+      policy: {},
+      coordinator: {},
+    })
+
+    try {
+      const result = await router.execute('mesh_status', { meshId })
+
+      expect(result).toMatchObject({
+        success: true,
+        sourceOfTruth: {
+          membership: 'coordinator_inline_mesh_cache',
+          coordinatorOwnsLiveTruth: true,
+        },
+      })
+      const remote = ((result as any).nodes as any[]).find(node => node.nodeId === 'node-remote')
+      expect(remote).toBeTruthy()
+      expect(remote.git).toEqual(expect.objectContaining({
+        isGitRepo: true,
+        branch: 'main',
+        headCommit: 'abc1234',
+      }))
+      expect(remote.health).toBe('online')
+      expect(remote.error).toBeUndefined()
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
 })

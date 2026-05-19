@@ -137,60 +137,11 @@ function readGitSubmodules(value: unknown): GitSubmoduleStatus[] | undefined {
     return submodules.length > 0 ? submodules : undefined;
 }
 
-function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | undefined {
-    const cachedStatus = readObjectRecord(node?.cachedStatus);
-    const cachedGit = readObjectRecord(cachedStatus.git);
-    if (Object.keys(cachedGit).length) {
-        const conflictFiles = Array.isArray(cachedGit.conflictFiles)
-            ? cachedGit.conflictFiles.filter((value: unknown): value is string => typeof value === 'string')
-            : [];
-        const conflictCount = readNumberValue(cachedGit.conflicts) ?? conflictFiles.length;
-        const hasConflicts = readBooleanValue(cachedGit.hasConflicts) ?? conflictCount > 0;
-        const isGitRepo = readBooleanValue(cachedGit.isGitRepo);
-        if (isGitRepo !== undefined) {
-            const submodules = readGitSubmodules(cachedGit.submodules);
-            return {
-                workspace: readStringValue(cachedGit.workspace, node?.workspace) || '',
-                repoRoot: readStringValue(cachedGit.repoRoot, node?.repoRoot, node?.workspace) || null,
-                isGitRepo,
-                branch: readStringValue(cachedGit.branch) ?? null,
-                headCommit: readStringValue(cachedGit.headCommit) ?? null,
-                headMessage: readStringValue(cachedGit.headMessage) ?? null,
-                upstream: readStringValue(cachedGit.upstream) ?? null,
-                ahead: readNumberValue(cachedGit.ahead) ?? 0,
-                behind: readNumberValue(cachedGit.behind) ?? 0,
-                staged: readNumberValue(cachedGit.staged) ?? 0,
-                modified: readNumberValue(cachedGit.modified) ?? 0,
-                untracked: readNumberValue(cachedGit.untracked) ?? 0,
-                deleted: readNumberValue(cachedGit.deleted) ?? 0,
-                renamed: readNumberValue(cachedGit.renamed) ?? 0,
-                hasConflicts,
-                conflictFiles,
-                stashCount: readNumberValue(cachedGit.stashCount) ?? 0,
-                lastCheckedAt: readNumberValue(cachedGit.lastCheckedAt) ?? Date.now(),
-                ...(submodules ? { submodules } : {}),
-            };
-        }
-    }
-
-    const rawGit = readObjectRecord(node?.lastGit ?? node?.last_git);
-    const gitResult = readObjectRecord(rawGit.result);
-    const directStatus = readObjectRecord(rawGit.status);
-    const nestedStatus = readObjectRecord(gitResult.status);
-    const rawProbe = readObjectRecord(node?.lastProbe ?? node?.last_probe);
-    const probeGit = readObjectRecord(rawProbe.git);
-    const probeGitResult = readObjectRecord(probeGit.result);
-    const probeDirectStatus = readObjectRecord(probeGit.status);
-    const probeNestedStatus = readObjectRecord(probeGitResult.status);
-    const status = Object.keys(directStatus).length
-        ? directStatus
-        : Object.keys(nestedStatus).length
-            ? nestedStatus
-            : Object.keys(probeDirectStatus).length
-                ? probeDirectStatus
-                : Object.keys(probeNestedStatus).length
-                    ? probeNestedStatus
-                    : {};
+function normalizeInlineMeshGitStatus(
+    status: Record<string, unknown>,
+    node: any,
+    options?: { lastCheckedAt?: number },
+): Record<string, unknown> | undefined {
     const isGitRepo = readBooleanValue(status.isGitRepo);
     if (!Object.keys(status).length || isGitRepo === undefined) return undefined;
     const conflictFiles = Array.isArray(status.conflictFiles)
@@ -217,9 +168,41 @@ function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | un
         hasConflicts,
         conflictFiles,
         stashCount: readNumberValue(status.stashCount) ?? 0,
-        lastCheckedAt: Date.now(),
+        lastCheckedAt: options?.lastCheckedAt ?? readNumberValue(status.lastCheckedAt) ?? Date.now(),
         ...(submodules ? { submodules } : {}),
     };
+}
+
+function buildInlineMeshTransitGitStatus(node: any): Record<string, unknown> | undefined {
+    const rawGit = readObjectRecord(node?.lastGit ?? node?.last_git);
+    const gitResult = readObjectRecord(rawGit.result);
+    const directStatus = readObjectRecord(rawGit.status);
+    const nestedStatus = readObjectRecord(gitResult.status);
+    const rawProbe = readObjectRecord(node?.lastProbe ?? node?.last_probe);
+    const probeGit = readObjectRecord(rawProbe.git);
+    const probeGitResult = readObjectRecord(probeGit.result);
+    const probeDirectStatus = readObjectRecord(probeGit.status);
+    const probeNestedStatus = readObjectRecord(probeGitResult.status);
+    const status = Object.keys(directStatus).length
+        ? directStatus
+        : Object.keys(nestedStatus).length
+            ? nestedStatus
+            : Object.keys(probeDirectStatus).length
+                ? probeDirectStatus
+                : Object.keys(probeNestedStatus).length
+                    ? probeNestedStatus
+                    : {};
+    return normalizeInlineMeshGitStatus(status, node, { lastCheckedAt: Date.now() });
+}
+
+function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | undefined {
+    const liveGit = buildInlineMeshTransitGitStatus(node);
+    if (liveGit) return liveGit;
+
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    const cachedGit = readObjectRecord(cachedStatus.git);
+    if (!Object.keys(cachedGit).length) return undefined;
+    return normalizeInlineMeshGitStatus(cachedGit, node);
 }
 
 function shouldDiscardCachedInlineMeshStatus(node: any): boolean {
@@ -518,9 +501,10 @@ function collectLiveMeshSessionRecords(args: {
 
 function applyCachedInlineMeshNodeStatus(status: Record<string, unknown>, node: any): boolean {
     const cachedStatus = readObjectRecord(node?.cachedStatus);
-    const git = buildCachedInlineMeshGitStatus(node);
-    const error = readStringValue(cachedStatus.error, node?.error);
-    const health = readStringValue(cachedStatus.health, node?.health);
+    const liveGit = buildInlineMeshTransitGitStatus(node);
+    const git = liveGit ?? buildCachedInlineMeshGitStatus(node);
+    const error = liveGit ? undefined : readStringValue(cachedStatus.error, node?.error);
+    const health = liveGit ? undefined : readStringValue(cachedStatus.health, node?.health);
     const machineStatus = readStringValue(cachedStatus.machineStatus, node?.machineStatus);
     const lastSeenAt = toIsoTimestamp(cachedStatus.lastSeenAt ?? cachedStatus.last_seen_at ?? node?.lastSeenAt ?? node?.last_seen_at);
     const updatedAt = toIsoTimestamp(cachedStatus.updatedAt ?? cachedStatus.updated_at ?? node?.updatedAt ?? node?.updated_at);
