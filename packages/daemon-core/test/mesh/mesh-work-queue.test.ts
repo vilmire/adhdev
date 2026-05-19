@@ -213,6 +213,36 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(q.find((t: any) => t.id === t2.id)?.status).to.equal('completed');
     });
 
+    it('does not complete a newer continuation task when the completion happened before that task was dispatched', () => {
+        const olderTask = enqueueTask(meshId, 'older task');
+        const newerTask = enqueueTask(meshId, 'newer continuation task');
+
+        const queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
+        const now = Date.now();
+        const staleCompletionAt = new Date(now).toISOString();
+
+        queue[0].status = 'completed';
+        queue[0].assignedNodeId = 'node1';
+        queue[0].assignedSessionId = 'session1';
+        queue[0].dispatchTimestamp = new Date(now - 5000).toISOString();
+        queue[0].updatedAt = new Date(now - 4000).toISOString();
+
+        queue[1].status = 'assigned';
+        queue[1].assignedNodeId = 'node1';
+        queue[1].assignedSessionId = 'session1';
+        queue[1].dispatchTimestamp = new Date(now + 5000).toISOString();
+        queue[1].updatedAt = new Date(now + 5000).toISOString();
+
+        fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+
+        const completed = updateSessionTaskStatus(meshId, 'session1', 'completed', { occurredAt: staleCompletionAt });
+        expect(completed).to.be.null;
+
+        const q = getQueue(meshId);
+        expect(q.find((t: any) => t.id === olderTask.id)?.status).to.equal('completed');
+        expect(q.find((t: any) => t.id === newerTask.id)?.status).to.equal('assigned');
+    });
+
     it('exposes active assignment details in queue stats for status/UI surfaces', () => {
         const task = enqueueTask(meshId, 'visible active task');
         claimNextTask(meshId, 'node-active', 'session-active');

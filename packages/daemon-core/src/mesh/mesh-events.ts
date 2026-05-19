@@ -189,6 +189,62 @@ function shouldSuppressIntentionalCleanupStop(args: {
     return hasRecentIntentionalCleanupStop(args.meshId, args.sessionId, args.nodeId);
 }
 
+const RECENT_COMPLETION_FINGERPRINT_TTL_MS = 10 * 60 * 1000;
+const recentCompletionFingerprints = new Map<string, number>();
+
+function readEventTimestamp(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) return numeric;
+        const parsed = Date.parse(value);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+}
+
+function buildMeshCompletionFingerprint(args: {
+    meshId: string;
+    event: string;
+    sessionId: string;
+    providerType?: string;
+    providerSessionId?: string;
+    timestamp?: number | null;
+    finalSummary?: string;
+}): string {
+    const timestampPart = Number.isFinite(args.timestamp)
+        ? String(args.timestamp)
+        : readNonEmptyString(args.finalSummary).slice(0, 200);
+    return [
+        args.meshId,
+        args.event,
+        args.sessionId,
+        args.providerType || '',
+        args.providerSessionId || '',
+        timestampPart,
+    ].join('::');
+}
+
+function isDuplicateMeshCompletionEvent(args: {
+    meshId: string;
+    event: string;
+    sessionId: string;
+    providerType?: string;
+    providerSessionId?: string;
+    timestamp?: number | null;
+    finalSummary?: string;
+}): boolean {
+    const fingerprint = buildMeshCompletionFingerprint(args);
+    if (!fingerprint) return false;
+    const now = Date.now();
+    for (const [key, seenAt] of recentCompletionFingerprints.entries()) {
+        if (now - seenAt > RECENT_COMPLETION_FINGERPRINT_TTL_MS) recentCompletionFingerprints.delete(key);
+    }
+    if (recentCompletionFingerprints.has(fingerprint)) return true;
+    recentCompletionFingerprints.set(fingerprint, now);
+    return false;
+}
+
 
 export function tryAssignQueueTask(
     components: DaemonComponents,
@@ -651,6 +707,23 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return { success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true };
     }
 
+    const eventTimestamp = readEventTimestamp(args.metadataEvent.timestamp);
+    if (args.event === 'agent:generating_completed' && eventSessionId) {
+        const duplicateCompletion = isDuplicateMeshCompletionEvent({
+            meshId: args.meshId,
+            event: args.event,
+            sessionId: eventSessionId,
+            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+            providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
+            timestamp: eventTimestamp,
+            finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+        });
+        if (duplicateCompletion) {
+            LOG.info('MeshEvents', `Suppressed duplicate completion for mesh ${args.meshId} session ${eventSessionId}`);
+            return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true };
+        }
+    }
+
     // ── Task Queue & Ledger ──
     let completedTaskForLedger: { id?: string } | null = null;
     if (args.event === 'agent:generating_completed') {
@@ -659,7 +732,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
         
         if (sessionId) {
-            const completedTask = updateSessionTaskStatus(args.meshId, sessionId, 'completed');
+            const completedTask = updateSessionTaskStatus(args.meshId, sessionId, 'completed', {
+                occurredAt: eventTimestamp !== null ? new Date(eventTimestamp).toISOString() : undefined,
+            });
             completedTaskForLedger = completedTask ? { id: completedTask.id } : null;
             if (nodeId && providerType) {
                 // Queue state is already updated above; setImmediate avoids the
@@ -896,6 +971,7 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             providerType: readNonEmptyString(payload.providerType),
             providerSessionId: readNonEmptyString(payload.providerSessionId),
             finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
+            ...(payload.timestamp !== undefined ? { timestamp: payload.timestamp } : {}),
             intentional: payload.intentional === true,
             intentionalStop: payload.intentionalStop === true,
             operatorCleanup: payload.operatorCleanup === true,

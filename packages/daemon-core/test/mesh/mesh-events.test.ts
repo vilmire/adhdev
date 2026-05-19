@@ -346,6 +346,53 @@ describe('setupMeshEventForwarding', () => {
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('mesh_read_chat once')
   })
 
+  it('suppresses duplicate completion replays from relay/backfill paths for the same logical event', () => {
+    const meshId = `mesh_completion_dedupe_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued task')
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      const { components, emit, coordinator } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      const completionTimestamp = Date.now() + 60_000
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'provider-history-1',
+        timestamp: completionTimestamp,
+        finalSummary: 'done once',
+      })
+
+      const duplicate = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'provider-history-1',
+        timestamp: completionTimestamp,
+        finalSummary: 'done once',
+      })
+
+      const completedEntries = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')
+      expect(completedEntries).toHaveLength(1)
+      expect(completedEntries[0].payload.taskId).toBe(queued.id)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(duplicate).toMatchObject({ success: true, forwarded: 0, suppressed: true, duplicateCompletion: true })
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('suppresses cleanup-requested stop and stale long-generating events from failure/recovery ledgers', () => {
     const meshId = `mesh_cleanup_stop_${Date.now()}`
     try {

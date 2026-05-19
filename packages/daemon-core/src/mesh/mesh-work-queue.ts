@@ -263,16 +263,19 @@ export function updateSessionTaskStatus(
     meshId: string,
     sessionId: string,
     status: MeshTaskStatus,
+    opts?: { occurredAt?: string },
 ): MeshWorkQueueEntry | null {
     return withQueueLock(meshId, () => {
         const queue = readQueue(meshId);
+        const occurredAtTime = opts?.occurredAt ? new Date(opts.occurredAt).getTime() : Number.NaN;
+        const hasOccurredAt = Number.isFinite(occurredAtTime);
         let bestIdx = -1;
         let bestTime = 0;
         for (let i = queue.length - 1; i >= 0; i--) {
-            if (queue[i].assignedSessionId === sessionId && queue[i].status === 'assigned') {
-                const time = new Date(queue[i].dispatchTimestamp || queue[i].updatedAt).getTime();
-                if (time > bestTime) { bestTime = time; bestIdx = i; }
-            }
+            if (queue[i].assignedSessionId !== sessionId || queue[i].status !== 'assigned') continue;
+            const time = new Date(queue[i].dispatchTimestamp || queue[i].updatedAt).getTime();
+            if (hasOccurredAt && Number.isFinite(time) && time > occurredAtTime) continue;
+            if (time > bestTime) { bestTime = time; bestIdx = i; }
         }
         if (bestIdx === -1) return null;
         queue[bestIdx].status = status;
