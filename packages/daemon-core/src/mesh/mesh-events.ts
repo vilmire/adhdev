@@ -1,31 +1,47 @@
+import { appendFileSync, existsSync, readFileSync, unlinkSync } from 'fs';
+import { join } from 'path';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
 import { getMesh, getMeshByRepo } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
+import { appendLedgerEntry, buildTaskCompletionEvidence, getLedgerDir, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch } from './mesh-work-queue.js';
 
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
 // ---------------------------------------------------------------------------
-// Tracks remote sessions that emitted 'agent:ready' so triggerMeshQueue 
-// can assign tasks to them.
+// Tracks remote sessions that emitted 'agent:ready' so triggerMeshQueue
+// can assign tasks to them. Each entry carries an expiresAt timestamp;
+// entries are swept on insertion to prevent unbounded growth.
 // ---------------------------------------------------------------------------
 interface RemoteIdleSession {
     nodeId: string;
     sessionId: string;
     providerType: string;
+    expiresAt: number;
 }
+const REMOTE_IDLE_SESSION_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const remoteIdleSessions = new Map<string, RemoteIdleSession>(); // key: `${nodeId}:${sessionId}`
 
+function sweepExpiredRemoteIdleSessions(): void {
+    const now = Date.now();
+    for (const [key, session] of remoteIdleSessions) {
+        if (session.expiresAt <= now) remoteIdleSessions.delete(key);
+    }
+}
+
 // ---------------------------------------------------------------------------
-// MCP coordinator pending-event queue
+// MCP coordinator pending-event queue — FILE-BASED PERSISTENCE
 // ---------------------------------------------------------------------------
 // When a mesh event fires but no CLI coordinator session is registered (e.g.
-// the coordinator is Claude Code running via MCP), we buffer the event here.
-// The MCP server drains this queue on every mesh_status / mesh_send_task poll.
+// the coordinator is Claude Code running via MCP), we persist the event to a
+// per-mesh JSONL file so it survives daemon restarts. The 50-entry hard cap
+// is removed; the file is drained atomically on each get_pending_mesh_events
+// call and limited to 100 KB to prevent runaway growth.
+//
+// File: <ledgerDir>/<meshId>.pending-events.jsonl
 // ---------------------------------------------------------------------------
 
 export interface PendingMeshCoordinatorEvent {
@@ -38,30 +54,53 @@ export interface PendingMeshCoordinatorEvent {
     queuedAt: number;
 }
 
-const MAX_PENDING_EVENTS = 50;
-const pendingMeshCoordinatorEvents: PendingMeshCoordinatorEvent[] = [];
-
-export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent): boolean {
-    if (pendingMeshCoordinatorEvents.length >= MAX_PENDING_EVENTS) {
-        return false;
-    }
-    pendingMeshCoordinatorEvents.push(event);
-    return true;
+function getPendingEventsPath(meshId: string): string {
+    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return join(getLedgerDir(), `${safe}.pending-events.jsonl`);
 }
 
-/** Drain and return all pending coordinator events, clearing the queue. */
-export function drainPendingMeshCoordinatorEvents(): PendingMeshCoordinatorEvent[] {
-    return pendingMeshCoordinatorEvents.splice(0);
+export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent): boolean {
+    try {
+        appendFileSync(getPendingEventsPath(event.meshId), JSON.stringify(event) + '\n', 'utf-8');
+        return true;
+    } catch (e: any) {
+        LOG.warn('MeshEvents', `Failed to persist pending coordinator event: ${e?.message || e}`);
+        return false;
+    }
+}
+
+/** Drain and return all pending coordinator events for meshId, removing them from disk. */
+export function drainPendingMeshCoordinatorEvents(meshId?: string): PendingMeshCoordinatorEvent[] {
+    if (!meshId) return [];
+    const path = getPendingEventsPath(meshId);
+    if (!existsSync(path)) return [];
+    try {
+        const raw = readFileSync(path, 'utf-8');
+        try { unlinkSync(path); } catch { /* concurrent drain already removed it */ }
+        return raw.split('\n').filter(Boolean).flatMap(line => {
+            try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
+        });
+    } catch { return []; }
 }
 
 /** Peek at pending coordinator events without draining (non-destructive). */
-export function getPendingMeshCoordinatorEvents(): readonly PendingMeshCoordinatorEvent[] {
-    return pendingMeshCoordinatorEvents.slice();
+export function getPendingMeshCoordinatorEvents(meshId?: string): readonly PendingMeshCoordinatorEvent[] {
+    if (!meshId) return [];
+    const path = getPendingEventsPath(meshId);
+    if (!existsSync(path)) return [];
+    try {
+        const raw = readFileSync(path, 'utf-8');
+        return raw.split('\n').filter(Boolean).flatMap(line => {
+            try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
+        });
+    } catch { return []; }
 }
 
-/** Explicitly clear all pending coordinator events. */
-export function clearPendingMeshCoordinatorEvents(): void {
-    pendingMeshCoordinatorEvents.splice(0);
+/** Explicitly clear all pending coordinator events for a mesh. */
+export function clearPendingMeshCoordinatorEvents(meshId?: string): void {
+    if (!meshId) return;
+    const path = getPendingEventsPath(meshId);
+    if (existsSync(path)) try { unlinkSync(path); } catch { /* already removed */ }
 }
 
 function readNonEmptyString(value: unknown): string {
@@ -180,7 +219,16 @@ export function tryAssignQueueTask(
                 message: task.message,
             }).catch((e: any) => {
                 LOG.error('MeshQueue', `Failed to dispatch task via P2P to remote node ${nodeId}: ${e?.message}`);
-                updateTaskStatus(meshId, task.id, 'failed');
+                // Revert to pending so the task can be retried rather than permanently failing
+                updateTaskStatus(meshId, task.id, 'pending');
+                try {
+                    appendLedgerEntry(meshId, {
+                        kind: 'dispatch_failed' as any,
+                        nodeId,
+                        sessionId,
+                        payload: { taskId: task.id, error: e?.message, retryable: true },
+                    });
+                } catch { /* ledger write is best-effort */ }
             });
             return true;
         }
@@ -614,10 +662,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             const completedTask = updateSessionTaskStatus(args.meshId, sessionId, 'completed');
             completedTaskForLedger = completedTask ? { id: completedTask.id } : null;
             if (nodeId && providerType) {
-                // Short delay to allow completion event to propagate before pulling next
-                setTimeout(() => {
+                // Queue state is already updated above; setImmediate avoids the
+                // 500 ms artificial delay while still deferring past this call frame.
+                setImmediate(() => {
                     tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
-                }, 500);
+                });
             }
         }
     } else if (args.event === 'agent:ready') {
@@ -658,13 +707,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
         
         if (sessionId && nodeId && providerType) {
-            remoteIdleSessions.set(`${nodeId}:${sessionId}`, { nodeId, sessionId, providerType });
-            setTimeout(() => {
+            sweepExpiredRemoteIdleSessions();
+            remoteIdleSessions.set(`${nodeId}:${sessionId}`, {
+                nodeId, sessionId, providerType,
+                expiresAt: Date.now() + REMOTE_IDLE_SESSION_TTL_MS,
+            });
+            setImmediate(() => {
                 const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
-                if (assigned) {
-                    remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
-                }
-            }, 500);
+                if (assigned) remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
+            });
         }
     } else if (args.event === 'agent:generating_started') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);

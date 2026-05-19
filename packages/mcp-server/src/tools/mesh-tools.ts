@@ -1289,7 +1289,7 @@ async function drainCoordinatorPendingEvents(
 
         try {
             surfacedEvents.push(
-                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', {}) as any)
+                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', { meshId: ctx.mesh.id }) as any)
                     .filter(matchesCurrentMesh),
             );
         } catch {
@@ -1302,7 +1302,7 @@ async function drainCoordinatorPendingEvents(
 
             try {
                 const remoteEvents = normalizePendingMeshCoordinatorEvents(
-                    await ctx.transport.meshCommand(node.daemonId, 'get_pending_mesh_events', {}),
+                    await ctx.transport.meshCommand(node.daemonId, 'get_pending_mesh_events', { meshId: ctx.mesh.id }),
                 ).filter(matchesCurrentMesh);
                 if (remoteEvents.length === 0) continue;
 
@@ -1318,7 +1318,7 @@ async function drainCoordinatorPendingEvents(
 
         try {
             surfacedEvents.push(
-                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', {}) as any)
+                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', { meshId: ctx.mesh.id }) as any)
                     .filter(matchesCurrentMesh),
             );
         } catch {
@@ -1329,7 +1329,7 @@ async function drainCoordinatorPendingEvents(
     }
 
     if (isLocalTransport(ctx.transport)) {
-        return (drainPendingMeshCoordinatorEvents() as any[]).filter(matchesCurrentMesh);
+        return (drainPendingMeshCoordinatorEvents(ctx.mesh.id) as any[]).filter(matchesCurrentMesh);
     }
 
     return [];
@@ -2269,7 +2269,7 @@ export async function meshSendTask(
 
         // Also drain any pending coordinator events so the caller sees them inline
         const pendingEvents = isLocalTransport(ctx.transport)
-            ? drainPendingMeshCoordinatorEvents()
+            ? drainPendingMeshCoordinatorEvents(ctx.mesh.id)
             : [];
 
         const result: Record<string, unknown> = { success: true, nodeId: args.node_id, taskId: task.id, status: task.status };

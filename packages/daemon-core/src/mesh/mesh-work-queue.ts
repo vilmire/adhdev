@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, writeFileSync, readFileSync, openSync, closeSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getLedgerDir } from './mesh-ledger.js';
@@ -50,6 +50,31 @@ function getQueuePath(meshId: string): string {
     return join(getLedgerDir(), `${safe}.queue.json`);
 }
 
+function getLockPath(meshId: string): string {
+    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return join(getLedgerDir(), `${safe}.queue.lock`);
+}
+
+/**
+ * Simple advisory file lock using O_EXCL (atomic create) for queue mutations.
+ * Retries up to 10 times at 30 ms intervals; proceeds without lock on timeout
+ * to prevent deadlock (best-effort — far better than no locking at all).
+ */
+function withQueueLock<T>(meshId: string, fn: () => T): T {
+    const lockPath = getLockPath(meshId);
+    let fd = -1;
+    for (let i = 0; i < 10; i++) {
+        try { fd = openSync(lockPath, 'wx'); break; } catch {
+            const deadline = Date.now() + 30;
+            while (Date.now() < deadline) { /* spin */ }
+        }
+    }
+    try { return fn(); } finally {
+        if (fd !== -1) try { closeSync(fd); } catch { /* noop */ }
+        try { unlinkSync(lockPath); } catch { /* already removed */ }
+    }
+}
+
 function readQueue(meshId: string): MeshWorkQueueEntry[] {
     const path = getQueuePath(meshId);
     if (!existsSync(path)) return [];
@@ -74,20 +99,22 @@ export function enqueueTask(
     message: string,
     opts?: { targetNodeId?: string; targetSessionId?: string }
 ): MeshWorkQueueEntry {
-    const queue = readQueue(meshId);
-    const entry: MeshWorkQueueEntry = {
-        id: randomUUID(),
-        meshId,
-        message,
-        status: 'pending',
-        targetNodeId: opts?.targetNodeId,
-        targetSessionId: opts?.targetSessionId,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-    };
-    queue.push(entry);
-    writeQueue(meshId, queue);
-    return entry;
+    return withQueueLock(meshId, () => {
+        const queue = readQueue(meshId);
+        const entry: MeshWorkQueueEntry = {
+            id: randomUUID(),
+            meshId,
+            message,
+            status: 'pending',
+            targetNodeId: opts?.targetNodeId,
+            targetSessionId: opts?.targetSessionId,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        };
+        queue.push(entry);
+        writeQueue(meshId, queue);
+        return entry;
+    });
 }
 
 /**
@@ -106,39 +133,29 @@ export function getQueue(meshId: string, opts?: { status?: MeshTaskStatus[] }): 
  * Find the next pending task that this node is allowed to claim, and mark it as assigned.
  */
 export function claimNextTask(meshId: string, nodeId: string, sessionId: string): MeshWorkQueueEntry | null {
-    const queue = readQueue(meshId);
-
-    // A worker must finish or fail its current queued assignment before it can
-    // claim another one. maxParallelTasks limits total mesh concurrency; it is
-    // not permission for one node/session to accumulate multiple assigned items.
-    const hasActiveAssignment = queue.some(q => q.status === 'assigned' && (
-        q.assignedSessionId === sessionId || q.assignedNodeId === nodeId
-    ));
-    if (hasActiveAssignment) return null;
-    
-    // Find highest priority task:
-    // 1. Pending tasks explicitly targeted at this runtime session
-    // 2. Pending tasks explicitly targeted at this node (but not another session)
-    // 3. Pending tasks with no target node/session
-    let targetIdx = queue.findIndex(q => q.status === 'pending' && q.targetSessionId === sessionId);
-    if (targetIdx === -1) {
-        targetIdx = queue.findIndex(q => q.status === 'pending' && q.targetNodeId === nodeId && !q.targetSessionId);
-    }
-    if (targetIdx === -1) {
-        targetIdx = queue.findIndex(q => q.status === 'pending' && !q.targetNodeId && !q.targetSessionId);
-    }
-
-    if (targetIdx === -1) return null;
-
-    const entry = queue[targetIdx];
-    entry.status = 'assigned';
-    entry.assignedNodeId = nodeId;
-    entry.assignedSessionId = sessionId;
-    entry.dispatchTimestamp = new Date().toISOString();
-    entry.updatedAt = new Date().toISOString();
-
-    writeQueue(meshId, queue);
-    return entry;
+    return withQueueLock(meshId, () => {
+        const queue = readQueue(meshId);
+        const hasActiveAssignment = queue.some(q => q.status === 'assigned' && (
+            q.assignedSessionId === sessionId || q.assignedNodeId === nodeId
+        ));
+        if (hasActiveAssignment) return null;
+        let targetIdx = queue.findIndex(q => q.status === 'pending' && q.targetSessionId === sessionId);
+        if (targetIdx === -1) {
+            targetIdx = queue.findIndex(q => q.status === 'pending' && q.targetNodeId === nodeId && !q.targetSessionId);
+        }
+        if (targetIdx === -1) {
+            targetIdx = queue.findIndex(q => q.status === 'pending' && !q.targetNodeId && !q.targetSessionId);
+        }
+        if (targetIdx === -1) return null;
+        const entry = queue[targetIdx];
+        entry.status = 'assigned';
+        entry.assignedNodeId = nodeId;
+        entry.assignedSessionId = sessionId;
+        entry.dispatchTimestamp = new Date().toISOString();
+        entry.updatedAt = new Date().toISOString();
+        writeQueue(meshId, queue);
+        return entry;
+    });
 }
 
 /**
@@ -150,14 +167,15 @@ export function updateTaskStatus(
     taskId: string,
     status: MeshTaskStatus,
 ): MeshWorkQueueEntry | null {
-    const queue = readQueue(meshId);
-    const idx = queue.findIndex(q => q.id === taskId);
-    if (idx === -1) return null;
-
-    queue[idx].status = status;
-    queue[idx].updatedAt = new Date().toISOString();
-    writeQueue(meshId, queue);
-    return queue[idx];
+    return withQueueLock(meshId, () => {
+        const queue = readQueue(meshId);
+        const idx = queue.findIndex(q => q.id === taskId);
+        if (idx === -1) return null;
+        queue[idx].status = status;
+        queue[idx].updatedAt = new Date().toISOString();
+        writeQueue(meshId, queue);
+        return queue[idx];
+    });
 }
 
 export function recordTaskAutoLaunch(
@@ -165,17 +183,16 @@ export function recordTaskAutoLaunch(
     taskId: string,
     autoLaunch: Omit<NonNullable<MeshWorkQueueEntry['autoLaunch']>, 'updatedAt'>,
 ): MeshWorkQueueEntry | null {
-    const queue = readQueue(meshId);
-    const idx = queue.findIndex(q => q.id === taskId);
-    if (idx === -1) return null;
-    const now = new Date().toISOString();
-    queue[idx].autoLaunch = {
-        ...autoLaunch,
-        updatedAt: now,
-    };
-    queue[idx].updatedAt = now;
-    writeQueue(meshId, queue);
-    return queue[idx];
+    return withQueueLock(meshId, () => {
+        const queue = readQueue(meshId);
+        const idx = queue.findIndex(q => q.id === taskId);
+        if (idx === -1) return null;
+        const now = new Date().toISOString();
+        queue[idx].autoLaunch = { ...autoLaunch, updatedAt: now };
+        queue[idx].updatedAt = now;
+        writeQueue(meshId, queue);
+        return queue[idx];
+    });
 }
 
 /**
@@ -186,17 +203,18 @@ export function cancelTask(
     taskId: string,
     opts?: { reason?: string },
 ): MeshWorkQueueEntry | null {
-    const queue = readQueue(meshId);
-    const idx = queue.findIndex(q => q.id === taskId);
-    if (idx === -1) return null;
-
-    const now = new Date().toISOString();
-    queue[idx].status = 'cancelled';
-    queue[idx].updatedAt = now;
-    queue[idx].cancelledAt = now;
-    if (opts?.reason) queue[idx].cancelReason = opts.reason;
-    writeQueue(meshId, queue);
-    return queue[idx];
+    return withQueueLock(meshId, () => {
+        const queue = readQueue(meshId);
+        const idx = queue.findIndex(q => q.id === taskId);
+        if (idx === -1) return null;
+        const now = new Date().toISOString();
+        queue[idx].status = 'cancelled';
+        queue[idx].updatedAt = now;
+        queue[idx].cancelledAt = now;
+        if (opts?.reason) queue[idx].cancelReason = opts.reason;
+        writeQueue(meshId, queue);
+        return queue[idx];
+    });
 }
 
 /**
@@ -214,27 +232,28 @@ export function requeueTask(
         clearTargetSession?: boolean;
     },
 ): MeshWorkQueueEntry | null {
-    const queue = readQueue(meshId);
-    const idx = queue.findIndex(q => q.id === taskId);
-    if (idx === -1) return null;
-
-    const entry = queue[idx];
-    const now = new Date().toISOString();
-    entry.status = 'pending';
-    delete entry.assignedNodeId;
-    delete entry.assignedSessionId;
-    delete entry.cancelledAt;
-    delete entry.cancelReason;
-    if (opts?.clearTargetNode) delete entry.targetNodeId;
-    if (typeof opts?.targetNodeId === 'string') entry.targetNodeId = opts.targetNodeId;
-    if (opts?.clearTargetSession !== false) delete entry.targetSessionId;
-    if (typeof opts?.targetSessionId === 'string') entry.targetSessionId = opts.targetSessionId;
-    entry.updatedAt = now;
-    entry.requeuedAt = now;
-    entry.requeueCount = (entry.requeueCount || 0) + 1;
-    if (opts?.reason) entry.requeueReason = opts.reason;
-    writeQueue(meshId, queue);
-    return entry;
+    return withQueueLock(meshId, () => {
+        const queue = readQueue(meshId);
+        const idx = queue.findIndex(q => q.id === taskId);
+        if (idx === -1) return null;
+        const entry = queue[idx];
+        const now = new Date().toISOString();
+        entry.status = 'pending';
+        delete entry.assignedNodeId;
+        delete entry.assignedSessionId;
+        delete entry.cancelledAt;
+        delete entry.cancelReason;
+        if (opts?.clearTargetNode) delete entry.targetNodeId;
+        if (typeof opts?.targetNodeId === 'string') entry.targetNodeId = opts.targetNodeId;
+        if (opts?.clearTargetSession !== false) delete entry.targetSessionId;
+        if (typeof opts?.targetSessionId === 'string') entry.targetSessionId = opts.targetSessionId;
+        entry.updatedAt = now;
+        entry.requeuedAt = now;
+        entry.requeueCount = (entry.requeueCount || 0) + 1;
+        if (opts?.reason) entry.requeueReason = opts.reason;
+        writeQueue(meshId, queue);
+        return entry;
+    });
 }
 
 /**
@@ -245,28 +264,22 @@ export function updateSessionTaskStatus(
     sessionId: string,
     status: MeshTaskStatus,
 ): MeshWorkQueueEntry | null {
-    const queue = readQueue(meshId);
-    // Collect all assigned tasks for this session, then pick the one with the
-    // most recent dispatchTimestamp (or updatedAt fallback for legacy entries).
-    // This prevents completing the wrong task when multiple tasks were assigned
-    // to the same session in rapid succession.
-    let bestIdx = -1;
-    let bestTime = 0;
-    for (let i = queue.length - 1; i >= 0; i--) {
-        if (queue[i].assignedSessionId === sessionId && queue[i].status === 'assigned') {
-            const time = new Date(queue[i].dispatchTimestamp || queue[i].updatedAt).getTime();
-            if (time > bestTime) {
-                bestTime = time;
-                bestIdx = i;
+    return withQueueLock(meshId, () => {
+        const queue = readQueue(meshId);
+        let bestIdx = -1;
+        let bestTime = 0;
+        for (let i = queue.length - 1; i >= 0; i--) {
+            if (queue[i].assignedSessionId === sessionId && queue[i].status === 'assigned') {
+                const time = new Date(queue[i].dispatchTimestamp || queue[i].updatedAt).getTime();
+                if (time > bestTime) { bestTime = time; bestIdx = i; }
             }
         }
-    }
-    if (bestIdx === -1) return null;
-
-    queue[bestIdx].status = status;
-    queue[bestIdx].updatedAt = new Date().toISOString();
-    writeQueue(meshId, queue);
-    return queue[bestIdx];
+        if (bestIdx === -1) return null;
+        queue[bestIdx].status = status;
+        queue[bestIdx].updatedAt = new Date().toISOString();
+        writeQueue(meshId, queue);
+        return queue[bestIdx];
+    });
 }
 
 export interface MeshWorkQueueStats {

@@ -964,6 +964,8 @@ export interface CommandRouterDeps {
     sessionHostControl?: SessionHostControlPlane | null;
     /** Selected-coordinator mesh peer telemetry surface for target daemons, when supported by the runtime. */
     getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
+    /** Dispatch a command to a remote mesh node via P2P/relay. Injected by cloud runtime; absent in standalone. */
+    dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
 }
 
 export interface CommandRouterResult {
@@ -1688,7 +1690,8 @@ export class DaemonCommandRouter {
             }
 
             case 'get_pending_mesh_events': {
-                const events = drainPendingMeshCoordinatorEvents();
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const events = drainPendingMeshCoordinatorEvents(meshId || undefined);
                 return { success: true, events };
             }
 
@@ -3344,29 +3347,52 @@ export class DaemonCommandRouter {
                         }
                         if (workspace) {
                             if (!fs.existsSync(workspace)) {
-                                if (applyCachedInlineMeshNodeStatus(status, node)) {
-                                    status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
-                                    nodeStatuses.push(status);
-                                    continue;
+                                // Workspace not local — attempt a P2P git probe for remote nodes.
+                                let remoteProbeApplied = false;
+                                if (!isSelfNode && daemonId && this.deps.dispatchMeshCommand) {
+                                    try {
+                                        const remoteResult = await Promise.race([
+                                            this.deps.dispatchMeshCommand(daemonId, 'git_status', { workspace }),
+                                            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000)),
+                                        ]) as any;
+                                        const remoteGit = remoteResult?.status ?? remoteResult?.git ?? remoteResult;
+                                        if (remoteGit && typeof remoteGit === 'object' && typeof remoteGit.isGitRepo === 'boolean') {
+                                            status.git = remoteGit;
+                                            status.health = remoteGit.isGitRepo
+                                                ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
+                                                : 'degraded';
+                                            remoteProbeApplied = true;
+                                        }
+                                    } catch {
+                                        // Probe timed out or P2P unavailable — fall back to cached status
+                                    }
                                 }
-                                if (meshRecord?.source === 'inline_cache' && !isSelfNode) {
-                                    status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
-                                    nodeStatuses.push(status);
-                                    continue;
+                                if (!remoteProbeApplied) {
+                                    if (applyCachedInlineMeshNodeStatus(status, node)) {
+                                        status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
+                                        nodeStatuses.push(status);
+                                        continue;
+                                    }
+                                    if (meshRecord?.source === 'inline_cache' && !isSelfNode) {
+                                        status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
+                                        nodeStatuses.push(status);
+                                        continue;
+                                    }
                                 }
-                            }
-                            try {
-                                const gitStatus = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
-                                status.git = gitStatus;
-                                if (gitStatus.isGitRepo) {
-                                    status.health = deriveMeshNodeHealthFromGit(gitStatus as unknown as Record<string, unknown>);
-                                } else {
-                                    status.health = 'degraded';
-                                    if (gitStatus.error && !status.error) status.error = gitStatus.error;
-                                }
-                            } catch {
-                                if (!applyCachedInlineMeshNodeStatus(status, node)) {
-                                    status.health = 'degraded';
+                            } else {
+                                try {
+                                    const gitStatus = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
+                                    status.git = gitStatus;
+                                    if (gitStatus.isGitRepo) {
+                                        status.health = deriveMeshNodeHealthFromGit(gitStatus as unknown as Record<string, unknown>);
+                                    } else {
+                                        status.health = 'degraded';
+                                        if (gitStatus.error && !status.error) status.error = gitStatus.error;
+                                    }
+                                } catch {
+                                    if (!applyCachedInlineMeshNodeStatus(status, node)) {
+                                        status.health = 'degraded';
+                                    }
                                 }
                             }
                         } else {
