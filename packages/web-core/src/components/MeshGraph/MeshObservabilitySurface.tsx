@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type {
     GitLogEntry,
     RepoMeshLedgerEntryStatus,
@@ -8,9 +8,11 @@ import type {
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
 import { useNavigate } from 'react-router-dom'
+import { useTheme } from '../../hooks/useTheme'
 import { getDashboardActiveTabHref } from '../../utils/dashboard-route-paths'
 import MeshGraphPanel from './MeshGraphPanel'
 import MeshGraphView from './MeshGraphView'
+import { getMeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData } from './types'
 
 type DetailSelection =
@@ -45,23 +47,20 @@ const ACTIVE_QUEUE_STATUSES = new Set(['pending', 'assigned'])
 const EMPTY_QUEUE_ACTIVE_COUNTS = { pending: 0, assigned: 0 }
 const EMPTY_LEDGER_SUMMARY = { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 }
 
+const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
+
 function Badge({ label, tone = 'default' }: { label: string; tone?: 'default' | 'good' | 'warn' | 'danger' | 'info' }) {
-    const tones: Record<string, string> = {
-        default: 'border-white/10 bg-white/[0.04] text-slate-200',
-        good: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200',
-        warn: 'border-amber-400/20 bg-amber-500/10 text-amber-100',
-        danger: 'border-rose-400/20 bg-rose-500/10 text-rose-100',
-        info: 'border-sky-400/20 bg-sky-500/10 text-sky-100',
-    }
-    return <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] ${tones[tone] || tones.default}`}>{label}</span>
+    const meshTheme = useContext(MeshGraphThemeContext)
+    return <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] ${meshTheme.badge(tone)}`}>{label}</span>
 }
 
 function Card({ title, subtitle, children, className = '' }: { title: string; subtitle?: string; children: ReactNode; className?: string }) {
+    const meshTheme = useContext(MeshGraphThemeContext)
     return (
-        <section className={`rounded-2xl border border-white/10 bg-white/[0.04] ${className}`}>
-            <div className="border-b border-white/10 px-4 py-3">
-                <div className="text-sm font-semibold text-white">{title}</div>
-                {subtitle && <div className="mt-1 text-xs text-slate-400">{subtitle}</div>}
+        <section className={`${meshTheme.cardClass} ${className}`}>
+            <div className={meshTheme.cardHeaderClass}>
+                <div className={meshTheme.cardTitleClass}>{title}</div>
+                {subtitle && <div className={meshTheme.cardSubtitleClass}>{subtitle}</div>}
             </div>
             <div className="px-4 py-3">{children}</div>
         </section>
@@ -69,10 +68,11 @@ function Card({ title, subtitle, children, className = '' }: { title: string; su
 }
 
 function Row({ label, value }: { label: string; value: ReactNode }) {
+    const meshTheme = useContext(MeshGraphThemeContext)
     return (
-        <div className="flex items-start justify-between gap-3 border-b border-white/5 py-1.5 text-xs last:border-b-0 last:pb-0 first:pt-0">
-            <span className="text-slate-400">{label}</span>
-            <span className="max-w-[65%] break-all text-right text-slate-100">{value}</span>
+        <div className={meshTheme.rowClass}>
+            <span className={meshTheme.rowLabelClass}>{label}</span>
+            <span className={meshTheme.rowValueClass}>{value}</span>
         </div>
     )
 }
@@ -86,16 +86,12 @@ function ActionButton({
     onClick: () => void
     tone?: 'default' | 'info' | 'success'
 }) {
-    const tones: Record<string, string> = {
-        default: 'border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]',
-        info: 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:bg-sky-500/16',
-        success: 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/16',
-    }
+    const meshTheme = useContext(MeshGraphThemeContext)
     return (
         <button
             type="button"
             onClick={onClick}
-            className={`rounded-full border px-2.5 py-1 text-[11px] transition ${tones[tone] || tones.default}`}
+            className={`rounded-full border px-2.5 py-1 text-[11px] transition ${meshTheme.actionButton(tone)}`}
         >
             {label}
         </button>
@@ -288,6 +284,8 @@ export default function MeshObservabilitySurface({
     daemonId = null,
     sendDaemonCommand = null,
 }: MeshObservabilitySurfaceProps) {
+    const { theme } = useTheme()
+    const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const navigate = useNavigate()
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
@@ -425,11 +423,12 @@ export default function MeshObservabilitySurface({
     const hasDetailPane = Boolean(selectedQueueTask || selectedSessionEntry || selectedGraphNode)
 
     return (
+        <MeshGraphThemeContext.Provider value={meshTheme}>
         <div className="flex min-h-0 flex-col gap-4 xl:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
-                <div className="min-h-0 flex-1 rounded-[28px] border border-white/10 bg-white/[0.03] p-3 sm:p-4" style={{ minHeight: 420 }}>
-                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/45 px-3.5 py-3">
-                        <div className="flex min-w-0 flex-1 flex-wrap gap-2 text-xs text-slate-200">
+                <div className={`${meshTheme.cardClass} min-h-0 flex-1 rounded-[28px] p-3 sm:p-4`} style={{ minHeight: 420 }}>
+                    <div className={`mb-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl px-3.5 py-3 ${meshTheme.isDark ? 'border border-white/10 bg-slate-950/45' : 'border border-slate-200 bg-white/95 shadow-sm'}`}>
+                        <div className={`flex min-w-0 flex-1 flex-wrap gap-2 text-xs ${meshTheme.textSecondary}`}>
                             <Badge
                                 label={headlineLabel}
                                 tone={headlineTone}
@@ -469,8 +468,8 @@ export default function MeshObservabilitySurface({
                                 <Badge label={`${graph.stats.totalActiveSessions} active sessions`} tone="info" />
                             )}
                         </div>
-                        <details className="max-w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-300">
-                            <summary className="cursor-pointer list-none font-medium text-slate-200 [&::-webkit-details-marker]:hidden">
+                        <details className={`max-w-full rounded-xl px-3 py-2 text-xs ${meshTheme.isDark ? 'border border-white/10 bg-white/[0.03] text-slate-300' : 'border border-slate-200 bg-slate-50 text-slate-600'}`}>
+                            <summary className={`cursor-pointer list-none font-medium ${meshTheme.textSecondary} [&::-webkit-details-marker]:hidden`}>
                                 Legend & secondary details
                             </summary>
                             <div className="mt-3 flex flex-col gap-3">
@@ -492,11 +491,11 @@ export default function MeshObservabilitySurface({
                                 {statusWarnings.length > 0 && (
                                     <div className="flex flex-wrap gap-2">
                                         {statusWarnings.map(warning => (
-                                            <span key={warning} className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100">{warning}</span>
+                                            <span key={warning} className={meshTheme.isDark ? 'rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100' : 'rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-700'}>{warning}</span>
                                         ))}
                                     </div>
                                 )}
-                                <div className="text-xs text-slate-400">
+                                <div className={`text-xs ${meshTheme.textMuted}`}>
                                     Click a node only when you want drill-down details. The graph itself now carries the convergence state.
                                 </div>
                             </div>
@@ -567,7 +566,7 @@ export default function MeshObservabilitySurface({
                                     return dashboardHref ? (
                                         <a
                                             href={dashboardHref}
-                                            className="inline-flex w-fit items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-100 transition hover:bg-sky-500/20"
+                                            className={meshTheme.isDark ? 'inline-flex w-fit items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-100 transition hover:bg-sky-500/20' : 'inline-flex w-fit items-center rounded-full border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100'}
                                         >
                                             Open linked dashboard chat
                                         </a>
@@ -604,21 +603,21 @@ export default function MeshObservabilitySurface({
                                     return dashboardHref ? (
                                         <a
                                             href={dashboardHref}
-                                            className="inline-flex w-fit items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-100 transition hover:bg-sky-500/20"
+                                            className={meshTheme.isDark ? 'inline-flex w-fit items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-100 transition hover:bg-sky-500/20' : 'inline-flex w-fit items-center rounded-full border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100'}
                                         >
                                             Open dashboard chat
                                         </a>
                                     ) : null
                                 })()}
-                                <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Git context</div>
-                                    <div className="flex flex-col gap-2 text-xs text-slate-300">
+                                <div className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-slate-950/40 p-3' : 'rounded-xl border border-slate-200 bg-slate-50 p-3'}>
+                                    <div className={`mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Git context</div>
+                                    <div className={`flex flex-col gap-2 text-xs ${meshTheme.textSecondary}`}>
                                         <div>{selectedHeadSummary || 'HEAD subject not present in cached mesh_status.'}</div>
                                         {selectedGitHistory?.loading && <div className="text-slate-500">Loading recent commits…</div>}
                                         {selectedGitHistory?.error && <div className="text-amber-200">Recent history unavailable: {selectedGitHistory.error}</div>}
                                         {(selectedGitHistory?.entries ?? []).slice(0, 5).map(entry => (
-                                            <div key={entry.commit} className="rounded-lg border border-white/5 bg-white/[0.03] px-2.5 py-2">
-                                                <div className="font-medium text-slate-100">{shortCommit(entry.commit)} · {entry.message}</div>
+                                            <div key={entry.commit} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-2.5 py-2' : 'rounded-lg border border-slate-200 bg-white px-2.5 py-2'}>
+                                                <div className={`font-medium ${meshTheme.textPrimary}`}>{shortCommit(entry.commit)} · {entry.message}</div>
                                                 <div className="mt-1 text-[11px] text-slate-500">
                                                     {entry.authorName || 'unknown author'}
                                                     {formatCommitTimestamp(entry.committedAt) ? ` · ${formatCommitTimestamp(entry.committedAt)}` : ''}
@@ -635,7 +634,7 @@ export default function MeshObservabilitySurface({
                                     setDetailSelection(null)
                                 }} />
                                 {selectedNodeStatus && (
-                                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                                    <div className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-slate-950/40 p-3' : 'rounded-xl border border-slate-200 bg-slate-50 p-3'}>
                                         <div className="mb-2 flex flex-wrap items-center gap-2">
                                             <Badge label={selectedNodeStatus.health} tone={healthTone(selectedNodeStatus.health)} />
                                             {selectedNodeStatus.machineStatus && <Badge label={selectedNodeStatus.machineStatus} tone={selectedNodeStatus.machineStatus === 'online' ? 'good' : 'warn'} />}
@@ -665,16 +664,16 @@ export default function MeshObservabilitySurface({
                                         </div>
                                         {selectedNodeSessionEntries.length > 0 && (
                                             <div className="mt-3">
-                                                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Active sessions</div>
+                                                <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Active sessions</div>
                                                 <div className="flex flex-col gap-2">
                                                     {selectedNodeSessionEntries.map(entry => {
                                                         const state = entry.session.state || entry.session.lifecycle || 'unknown'
                                                         return (
-                                                            <div key={`${entry.nodeId}:${entry.session.sessionId}`} className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
+                                                            <div key={`${entry.nodeId}:${entry.session.sessionId}`} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
                                                                 <div className="flex items-start justify-between gap-2">
                                                                     <div className="min-w-0 flex-1">
-                                                                        <div className="truncate font-medium text-slate-100">{entry.session.title || entry.session.sessionId}</div>
-                                                                        <div className="mt-1 truncate text-[11px] text-slate-400">{entry.session.providerType || 'unknown provider'} · {state}</div>
+                                                                        <div className={`truncate font-medium ${meshTheme.textPrimary}`}>{entry.session.title || entry.session.sessionId}</div>
+                                                                        <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{entry.session.providerType || 'unknown provider'} · {state}</div>
                                                                     </div>
                                                                     <Badge label={state} tone={sessionTone(state)} />
                                                                 </div>
@@ -690,17 +689,17 @@ export default function MeshObservabilitySurface({
                                         )}
                                         {selectedNodeQueueTasks.length > 0 && (
                                             <div className="mt-3">
-                                                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Related queue items</div>
+                                                <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Related queue items</div>
                                                 <div className="flex flex-col gap-2">
                                                     {selectedNodeQueueTasks.map(task => {
                                                         const sessionId = getQueueTaskSessionTarget(task)
                                                         const linkedEntry = sessionId ? sessionEntries.find(entry => entry.session.sessionId === sessionId) ?? null : null
                                                         return (
-                                                            <div key={task.id} className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
+                                                            <div key={task.id} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
                                                                 <div className="flex items-start justify-between gap-2">
                                                                     <div className="min-w-0 flex-1">
-                                                                        <div className="truncate font-medium text-slate-100">{task.message}</div>
-                                                                        <div className="mt-1 truncate text-[11px] text-slate-400">{describeQueueTask(task)}</div>
+                                                                        <div className={`truncate font-medium ${meshTheme.textPrimary}`}>{task.message}</div>
+                                                                        <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{describeQueueTask(task)}</div>
                                                                     </div>
                                                                     <Badge label={task.status} tone={queueTone(task.status)} />
                                                                 </div>
@@ -718,16 +717,16 @@ export default function MeshObservabilitySurface({
                                             </div>
                                         )}
                                         <div className="mt-3">
-                                            <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Recent commits</div>
+                                            <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Recent commits</div>
                                             <div className="flex flex-col gap-2">
-                                                {selectedGitHistory?.loading && <div className="text-xs text-slate-500">Loading recent commits…</div>}
+                                                {selectedGitHistory?.loading && <div className={meshTheme.isDark ? 'text-xs text-slate-500' : 'text-xs text-slate-500'}>Loading recent commits…</div>}
                                                 {selectedGitHistory?.error && <div className="text-xs text-amber-200">Recent history unavailable: {selectedGitHistory.error}</div>}
                                                 {!selectedGitHistory?.loading && !selectedGitHistory?.error && (selectedGitHistory?.entries ?? []).length === 0 && (
-                                                    <div className="text-xs text-slate-500">Recent commit history not available from the current mesh snapshot yet.</div>
+                                                    <div className={meshTheme.isDark ? 'text-xs text-slate-500' : 'text-xs text-slate-500'}>Recent commit history not available from the current mesh snapshot yet.</div>
                                                 )}
                                                 {(selectedGitHistory?.entries ?? []).slice(0, 5).map(entry => (
-                                                    <div key={entry.commit} className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
-                                                        <div className="font-medium text-slate-100">{shortCommit(entry.commit)} · {entry.message}</div>
+                                                    <div key={entry.commit} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
+                                                        <div className={`font-medium ${meshTheme.textPrimary}`}>{shortCommit(entry.commit)} · {entry.message}</div>
                                                         <div className="mt-1 text-[11px] text-slate-500">
                                                             {entry.authorName || 'unknown author'}
                                                             {formatCommitTimestamp(entry.committedAt) ? ` · ${formatCommitTimestamp(entry.committedAt)}` : ''}
@@ -738,10 +737,10 @@ export default function MeshObservabilitySurface({
                                         </div>
                                         {(selectedNodeStatus.git?.submodules?.length ?? 0) > 0 && (
                                             <div className="mt-3">
-                                                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Submodules</div>
+                                                <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Submodules</div>
                                                 <div className="flex flex-col gap-2">
                                                     {(selectedNodeStatus.git?.submodules ?? []).map(submodule => (
-                                                        <div key={`${selectedNodeStatus.nodeId}:${submodule.path}`} className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
+                                                        <div key={`${selectedNodeStatus.nodeId}:${submodule.path}`} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
                                                             <div className="flex flex-wrap items-center gap-2">
                                                                 <span className="font-medium">{submodule.path}</span>
                                                                 {submodule.dirty && <Badge label="dirty" tone="warn" />}
@@ -758,20 +757,20 @@ export default function MeshObservabilitySurface({
                                     </div>
                                 )}
                                 {!selectedNodeStatus && (
-                                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                                        <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Git context</div>
+                                    <div className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-slate-950/40 p-3' : 'rounded-xl border border-slate-200 bg-slate-50 p-3'}>
+                                        <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Git context</div>
                                         <div className="text-xs text-slate-300">{selectedHeadSummary ?? 'No daemon-owned node status is attached to this graph node.'}</div>
                                         <div className="mt-3">
-                                            <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Recent commits</div>
+                                            <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Recent commits</div>
                                             <div className="flex flex-col gap-2">
-                                                {selectedGitHistory?.loading && <div className="text-xs text-slate-500">Loading recent commits…</div>}
+                                                {selectedGitHistory?.loading && <div className={meshTheme.isDark ? 'text-xs text-slate-500' : 'text-xs text-slate-500'}>Loading recent commits…</div>}
                                                 {selectedGitHistory?.error && <div className="text-xs text-amber-200">Recent history unavailable: {selectedGitHistory.error}</div>}
                                                 {!selectedGitHistory?.loading && !selectedGitHistory?.error && (selectedGitHistory?.entries ?? []).length === 0 && (
-                                                    <div className="text-xs text-slate-500">Recent commit history not available for this detached graph node yet.</div>
+                                                    <div className={meshTheme.isDark ? 'text-xs text-slate-500' : 'text-xs text-slate-500'}>Recent commit history not available for this detached graph node yet.</div>
                                                 )}
                                                 {(selectedGitHistory?.entries ?? []).slice(0, 5).map(entry => (
-                                                    <div key={entry.commit} className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
-                                                        <div className="font-medium text-slate-100">{shortCommit(entry.commit)} · {entry.message}</div>
+                                                    <div key={entry.commit} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
+                                                        <div className={`font-medium ${meshTheme.textPrimary}`}>{shortCommit(entry.commit)} · {entry.message}</div>
                                                         <div className="mt-1 text-[11px] text-slate-500">
                                                             {entry.authorName || 'unknown author'}
                                                             {formatCommitTimestamp(entry.committedAt) ? ` · ${formatCommitTimestamp(entry.committedAt)}` : ''}
@@ -784,7 +783,7 @@ export default function MeshObservabilitySurface({
                                 )}
                             </>
                         ) : (
-                            <div className="text-xs text-slate-400">Select a node, session, or queue item.</div>
+                            <div className={`text-xs ${meshTheme.textMuted}`}>Select a node, session, or queue item.</div>
                         )}
                     </div>
                 </Card>
@@ -796,21 +795,21 @@ export default function MeshObservabilitySurface({
                                 key={filter}
                                 type="button"
                                 onClick={() => setQueueFilter(filter)}
-                                className={`rounded-full border px-3 py-1 text-xs transition ${queueFilter === filter ? 'border-sky-400/30 bg-sky-500/10 text-sky-100' : 'border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.06]'}`}
+                                className={`rounded-full border px-3 py-1 text-xs transition ${queueFilter === filter ? (meshTheme.isDark ? 'border-sky-400/30 bg-sky-500/10 text-sky-100' : 'border-sky-300 bg-sky-50 text-sky-700') : (meshTheme.isDark ? 'border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.06]' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50')}`}
                             >
                                 {filter}
                             </button>
                         ))}
                     </div>
                     <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 xl:grid-cols-2">
-                        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">Active <span className="ml-1 text-white">{queueSummary?.active ?? 0}</span></div>
-                        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">Pending <span className="ml-1 text-white">{queueActiveCounts.pending}</span></div>
-                        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">Assigned <span className="ml-1 text-white">{queueActiveCounts.assigned}</span></div>
-                        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300">History <span className="ml-1 text-white">{queueSummary?.historical ?? 0}</span></div>
+                        <div className={meshTheme.isDark ? 'rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600'}>Active <span className={`ml-1 ${meshTheme.textPrimary}`}>{queueSummary?.active ?? 0}</span></div>
+                        <div className={meshTheme.isDark ? 'rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600'}>Pending <span className={`ml-1 ${meshTheme.textPrimary}`}>{queueActiveCounts.pending}</span></div>
+                        <div className={meshTheme.isDark ? 'rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600'}>Assigned <span className={`ml-1 ${meshTheme.textPrimary}`}>{queueActiveCounts.assigned}</span></div>
+                        <div className={meshTheme.isDark ? 'rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600'}>History <span className={`ml-1 ${meshTheme.textPrimary}`}>{queueSummary?.historical ?? 0}</span></div>
                     </div>
                     <div className="max-h-[24vh] overflow-y-auto pr-1">
                         {visibleQueueTasks.length === 0 ? (
-                            <div className="text-xs text-slate-400">No queue items for this filter.</div>
+                            <div className={`text-xs ${meshTheme.textMuted}`}>No queue items for this filter.</div>
                         ) : (
                             <div className="flex flex-col gap-2">
                                 {visibleQueueTasks.map(task => {
@@ -822,12 +821,12 @@ export default function MeshObservabilitySurface({
                                             key={task.id}
                                             type="button"
                                             onClick={() => setDetailSelection({ kind: 'queue', taskId: task.id })}
-                                            className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'queue' && detailSelection.taskId === task.id ? 'border-sky-400/30 bg-sky-500/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}
+                                            className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'queue' && detailSelection.taskId === task.id ? (meshTheme.isDark ? 'border-sky-400/30 bg-sky-500/10' : 'border-sky-300 bg-sky-50') : (meshTheme.isDark ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]' : 'border-slate-200 bg-white hover:bg-slate-50')}`}
                                         >
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="min-w-0 flex-1">
-                                                    <div className="truncate text-xs font-medium text-white">{task.message}</div>
-                                                    <div className="mt-1 truncate text-[11px] text-slate-400">{describeQueueTask(task)}</div>
+                                                    <div className={`truncate text-xs font-medium ${meshTheme.textPrimary}`}>{task.message}</div>
+                                                    <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{describeQueueTask(task)}</div>
                                                 </div>
                                                 <Badge label={task.status} tone={queueTone(task.status)} />
                                             </div>
@@ -840,7 +839,7 @@ export default function MeshObservabilitySurface({
                                                                 event.stopPropagation()
                                                                 focusNodeDetail(nodeId)
                                                             }}
-                                                            className="text-[11px] text-slate-300 underline underline-offset-2 transition hover:text-white"
+                                                            className={meshTheme.isDark ? 'text-[11px] text-slate-300 underline underline-offset-2 transition hover:text-white' : 'text-[11px] text-slate-600 underline underline-offset-2 transition hover:text-slate-900'}
                                                         >
                                                             View node
                                                         </button>
@@ -852,7 +851,7 @@ export default function MeshObservabilitySurface({
                                                                 event.stopPropagation()
                                                                 selectSessionDetail(linkedEntry.nodeId, linkedEntry.session.sessionId)
                                                             }}
-                                                            className="text-[11px] text-slate-300 underline underline-offset-2 transition hover:text-white"
+                                                            className={meshTheme.isDark ? 'text-[11px] text-slate-300 underline underline-offset-2 transition hover:text-white' : 'text-[11px] text-slate-600 underline underline-offset-2 transition hover:text-slate-900'}
                                                         >
                                                             View session
                                                         </button>
@@ -864,7 +863,7 @@ export default function MeshObservabilitySurface({
                                                                 event.stopPropagation()
                                                                 openSessionChat(sessionId)
                                                             }}
-                                                            className="text-[11px] text-sky-200 underline underline-offset-2 transition hover:text-white"
+                                                            className={meshTheme.isDark ? 'text-[11px] text-sky-200 underline underline-offset-2 transition hover:text-white' : 'text-[11px] text-sky-700 underline underline-offset-2 transition hover:text-sky-900'}
                                                         >
                                                             Open chat
                                                         </button>
@@ -882,7 +881,7 @@ export default function MeshObservabilitySurface({
                 <Card title="Sessions" subtitle="Node-level active session roster.">
                     <div className="max-h-[22vh] overflow-y-auto pr-1">
                         {sessionEntries.length === 0 ? (
-                            <div className="text-xs text-slate-400">No active session metadata in this mesh snapshot.</div>
+                            <div className={`text-xs ${meshTheme.textMuted}`}>No active session metadata in this mesh snapshot.</div>
                         ) : (
                             <div className="flex flex-col gap-2">
                                 {sessionEntries.map(entry => {
@@ -895,12 +894,12 @@ export default function MeshObservabilitySurface({
                                                 setSelectedNodeId(entry.nodeId)
                                                 setDetailSelection({ kind: 'session', nodeId: entry.nodeId, sessionId: entry.session.sessionId })
                                             }}
-                                            className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'session' && detailSelection.nodeId === entry.nodeId && detailSelection.sessionId === entry.session.sessionId ? 'border-sky-400/30 bg-sky-500/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}
+                                            className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'session' && detailSelection.nodeId === entry.nodeId && detailSelection.sessionId === entry.session.sessionId ? (meshTheme.isDark ? 'border-sky-400/30 bg-sky-500/10' : 'border-sky-300 bg-sky-50') : (meshTheme.isDark ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]' : 'border-slate-200 bg-white hover:bg-slate-50')}`}
                                         >
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="min-w-0 flex-1">
-                                                    <div className="truncate text-xs font-medium text-white">{entry.machineLabel}</div>
-                                                    <div className="mt-1 truncate text-[11px] text-slate-400">{entry.session.title || entry.session.providerType || 'unknown provider'} · {entry.branch || 'no branch'}</div>
+                                                    <div className={`truncate text-xs font-medium ${meshTheme.textPrimary}`}>{entry.machineLabel}</div>
+                                                    <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{entry.session.title || entry.session.providerType || 'unknown provider'} · {entry.branch || 'no branch'}</div>
                                                 </div>
                                                 <div className="flex flex-col items-end gap-1">
                                                     <Badge label={state} tone={sessionTone(state)} />
@@ -910,7 +909,7 @@ export default function MeshObservabilitySurface({
                                                             event.stopPropagation()
                                                             openSessionChat(entry.session.sessionId)
                                                         }}
-                                                        className="text-[11px] text-sky-200 underline underline-offset-2 transition hover:text-white"
+                                                        className={meshTheme.isDark ? 'text-[11px] text-sky-200 underline underline-offset-2 transition hover:text-white' : 'text-[11px] text-sky-700 underline underline-offset-2 transition hover:text-sky-900'}
                                                     >
                                                         Open chat
                                                     </button>
@@ -935,13 +934,13 @@ export default function MeshObservabilitySurface({
                                         setSelectedNodeId(node.nodeId)
                                         setDetailSelection({ kind: 'node', nodeId: node.nodeId })
                                     }}
-                                    className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'node' && detailSelection.nodeId === node.nodeId ? 'border-sky-400/30 bg-sky-500/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}
+                                    className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'node' && detailSelection.nodeId === node.nodeId ? (meshTheme.isDark ? 'border-sky-400/30 bg-sky-500/10' : 'border-sky-300 bg-sky-50') : (meshTheme.isDark ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]' : 'border-slate-200 bg-white hover:bg-slate-50')}`}
                                 >
                                     <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0 flex-1">
-                                            <div className="truncate text-xs font-medium text-white">{node.machineLabel}</div>
-                                            <div className="mt-1 truncate text-[11px] text-slate-400">{summarizeNodeDrift(node)}</div>
-                                            <div className="mt-1 truncate text-[11px] text-slate-500">{(node.providers ?? []).join(', ') || 'no provider metadata'}</div>
+                                            <div className={`truncate text-xs font-medium ${meshTheme.textPrimary}`}>{node.machineLabel}</div>
+                                            <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{summarizeNodeDrift(node)}</div>
+                                            <div className={meshTheme.isDark ? 'mt-1 truncate text-[11px] text-slate-500' : 'mt-1 truncate text-[11px] text-slate-500'}>{(node.providers ?? []).join(', ') || 'no provider metadata'}</div>
                                             <div className="mt-1 flex flex-wrap gap-1">
                                                 <Badge label={`launchReady ${formatYesNo(node.launchReady)}`} tone={node.launchReady ? 'good' : 'warn'} />
                                                 <Badge label={connectionLabel(node.connection)} tone={connectionTone(node.connection)} />
@@ -962,16 +961,16 @@ export default function MeshObservabilitySurface({
                 <Card title="Recent mesh events" subtitle="Read-only ledger tail from mesh_status.">
                     <div className="max-h-[18vh] overflow-y-auto pr-1">
                         {(status.ledger?.entries ?? []).length === 0 ? (
-                            <div className="text-xs text-slate-400">No recent ledger entries.</div>
+                            <div className={`text-xs ${meshTheme.textMuted}`}>No recent ledger entries.</div>
                         ) : (
                             <div className="flex flex-col gap-2">
                                 {(status.ledger?.entries ?? []).map((entry: RepoMeshLedgerEntryStatus) => (
-                                    <div key={entry.id} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-200">
+                                    <div key={entry.id} className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
                                         <div className="flex items-center justify-between gap-3">
-                                            <span className="font-medium text-white">{entry.kind}</span>
-                                            <span className="text-[11px] text-slate-500">{formatTimestamp(entry.timestamp) ?? entry.timestamp}</span>
+                                            <span className={`font-medium ${meshTheme.textPrimary}`}>{entry.kind}</span>
+                                            <span className={meshTheme.isDark ? 'text-[11px] text-slate-500' : 'text-[11px] text-slate-500'}>{formatTimestamp(entry.timestamp) ?? entry.timestamp}</span>
                                         </div>
-                                        <div className="mt-1 truncate text-[11px] text-slate-400">{entry.nodeId || entry.sessionId || entry.providerType || 'mesh-wide event'}</div>
+                                        <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{entry.nodeId || entry.sessionId || entry.providerType || 'mesh-wide event'}</div>
                                     </div>
                                 ))}
                             </div>
@@ -981,5 +980,6 @@ export default function MeshObservabilitySurface({
                 </div>
             )}
         </div>
+        </MeshGraphThemeContext.Provider>
     )
 }

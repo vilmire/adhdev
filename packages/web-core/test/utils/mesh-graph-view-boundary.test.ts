@@ -26,7 +26,7 @@ describe('mesh graph view interaction boundaries', () => {
     it('keeps an explicit responsive viewport height so React Flow cannot collapse to 0px on narrow screens', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 
-        expect(source).toContain('min-w-0 overflow-hidden')
+        expect(source).toContain('meshTheme.graphShellClass')
         expect(source).toContain('h-[420px] w-full min-w-0 min-h-[420px] sm:h-[520px] xl:h-[640px]')
         expect(source).toContain('className="h-full w-full"')
     })
@@ -47,13 +47,13 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain("needs follow-up")
     })
 
-    it('keeps graph node cards on the observability dark surface instead of mixing in page-theme text/background tokens', () => {
+    it('keeps graph node cards on the shared mesh-theme helper instead of hardcoding page-theme tokens', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 
-        expect(source).toContain('bg-slate-950/78')
-        expect(source).toContain('text-slate-100')
-        expect(source).toContain('text-slate-200')
-        expect(source).toContain('bg-slate-950/60')
+        expect(source).toContain('getMeshGraphTheme(theme)')
+        expect(source).toContain('meshTheme.graphShellClass')
+        expect(source).toContain('meshTheme.graphStatChipClass')
+        expect(source).toContain('colorMode={meshTheme.flowColorMode}')
         expect(source).not.toContain('bg-bg-panel')
         expect(source).not.toContain('text-text-primary')
         expect(source).not.toContain('text-text-secondary')

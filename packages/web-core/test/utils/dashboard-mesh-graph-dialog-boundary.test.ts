@@ -36,20 +36,20 @@ describe('dashboard mesh graph dialog wiring', () => {
         const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
         const graphViewSource = readSource('components/MeshGraph/MeshGraphView.tsx')
 
-        expect(dialogSource).toContain('overflow-y-auto bg-[linear-gradient')
+        expect(dialogSource).toContain('meshTheme.dialogBodyClass')
         expect(surfaceSource).toContain('Click a node only when you want drill-down details. The graph itself now carries the convergence state.')
         expect(graphViewSource).toContain('Focused on the main path first · drag or scroll to pan')
         expect(surfaceSource).toContain('max-h-[24vh] overflow-y-auto')
         expect(surfaceSource).toContain('max-h-[22vh] overflow-y-auto')
     })
 
-  it('keeps node drill-down panels on the same dark contrast system as the observability shell', () => {
+  it('keeps node drill-down panels on the shared mesh-theme helper', () => {
     const panelSource = readSource('components/MeshGraph/MeshGraphPanel.tsx')
 
-    expect(panelSource).toContain('bg-white/[0.04]')
-    expect(panelSource).toContain('text-slate-100')
-    expect(panelSource).toContain('text-slate-200')
-    expect(panelSource).toContain('Field label="HEAD" value={headSummary}')
+    expect(panelSource).toContain('getMeshGraphTheme(theme)')
+    expect(panelSource).toContain('meshTheme.panelShellClass')
+    expect(panelSource).toContain('meshTheme.panelFieldRowClass')
+    expect(panelSource).toContain('Field label="HEAD" value={headSummary} rowClass={meshTheme.panelFieldRowClass}')
     expect(panelSource).not.toContain('bg-bg-panel')
     expect(panelSource).not.toContain('text-text-primary')
     expect(panelSource).not.toContain('text-text-secondary')

@@ -447,6 +447,23 @@ function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
     };
 }
 
+function liveSessionRecordMatchesMeshNode(record: any, meshId: string, nodeId: string): boolean {
+    const recordNodeId = readStringValue(record?.meta?.meshNodeId);
+    if (!recordNodeId || recordNodeId !== nodeId) return false;
+    const recordMeshId = readStringValue(record?.meta?.meshNodeFor);
+    return !recordMeshId || recordMeshId === meshId;
+}
+
+function liveSessionRecordMatchesMeshWorkspace(record: any, meshId: string, workspace: string): boolean {
+    const recordWorkspace = readStringValue(record?.workspace);
+    if (!recordWorkspace || !workspace || recordWorkspace !== workspace) return false;
+
+    const recordMeshId = readStringValue(record?.meta?.meshNodeFor);
+    if (recordMeshId) return recordMeshId === meshId;
+
+    return record?.meta?.launchedByCoordinator === true || !!readStringValue(record?.meta?.meshNodeId);
+}
+
 function readLiveMeshNodeWorkspace(args: {
     meshId: string;
     nodeId: string;
@@ -454,7 +471,7 @@ function readLiveMeshNodeWorkspace(args: {
     allowCoordinatorSession?: boolean;
 }): string {
     const directNodeWorkspace = args.liveSessionRecords.find((record) => (
-        readStringValue(record?.meta?.meshNodeId) === args.nodeId
+        liveSessionRecordMatchesMeshNode(record, args.meshId, args.nodeId)
         && readStringValue(record?.workspace)
     ));
     if (directNodeWorkspace) {
@@ -482,10 +499,9 @@ function collectLiveMeshSessionRecords(args: {
     allowCoordinatorSession?: boolean;
 }): any[] {
     const matches = args.liveSessionRecords.filter((record) => {
-        if (readStringValue(record?.meta?.meshNodeId) === args.nodeId) return true;
-        const recordWorkspace = readStringValue(record?.workspace);
         const nodeWorkspace = readStringValue(args.node?.workspace);
-        return !!recordWorkspace && !!nodeWorkspace && recordWorkspace === nodeWorkspace;
+        if (liveSessionRecordMatchesMeshNode(record, args.meshId, args.nodeId)) return true;
+        return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record, args.meshId, nodeWorkspace);
     });
 
     if (args.allowCoordinatorSession) {

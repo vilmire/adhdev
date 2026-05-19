@@ -174,6 +174,64 @@ describe('mesh_status', () => {
     }
   })
 
+  it('ignores unrelated live sessions that only share a workspace with the mesh node', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-unrelated-workspace-')
+    try {
+      const { router } = createRouter({
+        listSessions: vi.fn(async () => [
+          {
+            sessionId: 'sess-mesh',
+            workspace: repoRoot,
+            lifecycle: 'running',
+            providerType: 'hermes-cli',
+            meta: { meshNodeId: 'node-local', meshNodeFor: 'mesh-1' },
+          },
+          {
+            sessionId: 'sess-unrelated',
+            workspace: repoRoot,
+            lifecycle: 'running',
+            providerType: 'codex-cli',
+            meta: {},
+          },
+        ]),
+      })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-1',
+        inlineMesh: {
+          id: 'mesh-1',
+          name: 'Mesh',
+          repoIdentity: 'repo',
+          policy: {},
+          nodes: [
+            {
+              id: 'node-local',
+              daemonId: 'machine-local',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.nodes[0]).toEqual(expect.objectContaining({
+        nodeId: 'node-local',
+        activeSessions: ['sess-mesh'],
+      }))
+      expect(result.nodes[0].activeSessionDetails).toEqual([
+        expect.objectContaining({
+          sessionId: 'sess-mesh',
+          providerType: 'hermes-cli',
+        }),
+      ])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('surfaces selected-coordinator mesh connection telemetry when reported', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-telemetry-')
     try {
