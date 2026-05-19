@@ -163,11 +163,11 @@ function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | u
             : null
     if (details) {
         const normalized = details
-            .map(entry => {
+            .map((entry): RepoMeshSessionStatus | null => {
                 const record = readRecord(entry)
                 const sessionId = readString(record.sessionId, record.session_id, record.id)
                 if (!sessionId) return null
-                return {
+                const normalizedEntry: RepoMeshSessionStatus = {
                     sessionId,
                     ...(readString(record.providerType, record.provider) ? { providerType: readString(record.providerType, record.provider) } : {}),
                     ...(readString(record.state, record.status) ? { state: readString(record.state, record.status) } : {}),
@@ -178,7 +178,8 @@ function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | u
                     ...(readString(record.title) ? { title: readString(record.title) } : {}),
                     ...(readString(record.lastActivityAt, record.last_activity_at) ? { lastActivityAt: readString(record.lastActivityAt, record.last_activity_at) } : {}),
                     ...(readBoolean(record.isCached, record.is_cached) !== undefined ? { isCached: readBoolean(record.isCached, record.is_cached) } : {}),
-                } satisfies RepoMeshSessionStatus
+                }
+                return normalizedEntry
             })
             .filter((entry): entry is RepoMeshSessionStatus => entry !== null)
         if (normalized.length > 0) return normalized
