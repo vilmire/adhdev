@@ -12,7 +12,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { getDashboardActiveTabHref } from '../../utils/dashboard-route-paths'
 import MeshGraphView from './MeshGraphView'
 import { getMeshGraphTheme } from './meshGraphTheme'
-import type { MeshGraphData } from './types'
+import type { MeshGraphData, MeshGraphNode } from './types'
 
 type DetailSelection =
     | { kind: 'node'; nodeId: string }
