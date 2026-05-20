@@ -9,7 +9,7 @@ vi.mock('../../src/components/MeshGraph/MeshGraphView', () => ({
   default: () => null,
 }))
 
-import MeshObservabilitySurface from '../../src/components/MeshGraph/MeshObservabilitySurface'
+import MeshObservabilitySurface, { resolveGitLogRequest } from '../../src/components/MeshGraph/MeshObservabilitySurface'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
 
 function renderSurface(status: any): string {
@@ -168,5 +168,35 @@ describe('MeshObservabilitySurface', () => {
     expect(html).toContain('1 missing submodule visibility')
     expect(html).toContain('1 node(s) are missing peer submodule visibility reported elsewhere in the mesh')
     expect(html).not.toContain('mesh converged')
+  })
+
+  it('routes git_log to the selected node daemon and skips detached graph-only workspaces', () => {
+    expect(resolveGitLogRequest({
+      coordinatorDaemonId: 'daemon-coordinator',
+      selectedNodeStatus: {
+        nodeId: 'node-peer',
+        machineLabel: 'Peer',
+        workspace: '/remote/repo',
+        daemonId: 'daemon-peer',
+        health: 'online',
+        providers: [],
+        activeSessions: [],
+      } as any,
+      selectedSessionEntry: null,
+      selectedGraphNode: {
+        id: 'node-peer',
+        workspace: '/remote/repo',
+      } as any,
+    })).toEqual({ daemonId: 'daemon-peer', workspace: '/remote/repo' })
+
+    expect(resolveGitLogRequest({
+      coordinatorDaemonId: 'daemon-coordinator',
+      selectedNodeStatus: null,
+      selectedSessionEntry: null,
+      selectedGraphNode: {
+        id: 'node_main::submodule::oss',
+        workspace: '/remote/repo/oss',
+      } as any,
+    })).toBeNull()
   })
 })

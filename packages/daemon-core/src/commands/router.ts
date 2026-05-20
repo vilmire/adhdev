@@ -499,12 +499,16 @@ function collectLiveMeshSessionRecords(args: {
     return matches;
 }
 
-function applyCachedInlineMeshNodeStatus(status: Record<string, unknown>, node: any): boolean {
+function applyCachedInlineMeshNodeStatus(
+    status: Record<string, unknown>,
+    node: any,
+    options?: { skipGit?: boolean; skipError?: boolean; skipHealth?: boolean },
+): boolean {
     const cachedStatus = readObjectRecord(node?.cachedStatus);
     const liveGit = buildInlineMeshTransitGitStatus(node);
-    const git = liveGit ?? buildCachedInlineMeshGitStatus(node);
-    const error = liveGit ? undefined : readStringValue(cachedStatus.error, node?.error);
-    const health = liveGit ? undefined : readStringValue(cachedStatus.health, node?.health);
+    const git = options?.skipGit ? undefined : (liveGit ?? buildCachedInlineMeshGitStatus(node));
+    const error = options?.skipError ? undefined : (liveGit ? undefined : readStringValue(cachedStatus.error, node?.error));
+    const health = options?.skipHealth ? undefined : (liveGit ? undefined : readStringValue(cachedStatus.health, node?.health));
     const machineStatus = readStringValue(cachedStatus.machineStatus, node?.machineStatus);
     const lastSeenAt = toIsoTimestamp(cachedStatus.lastSeenAt ?? cachedStatus.last_seen_at ?? node?.lastSeenAt ?? node?.last_seen_at);
     const updatedAt = toIsoTimestamp(cachedStatus.updatedAt ?? cachedStatus.updated_at ?? node?.updatedAt ?? node?.updated_at);
@@ -3352,7 +3356,25 @@ export class DaemonCommandRouter {
                                     }
                                 }
                                 if (!remoteProbeApplied) {
-                                    if (applyCachedInlineMeshNodeStatus(status, node)) {
+                                    const connectionState = readStringValue((status.connection as any)?.state);
+                                    const pendingPeerGitProbe = !isSelfNode
+                                        && !!daemonId
+                                        && (
+                                            readStringValue(status.machineStatus) === 'online'
+                                            || readStringValue(status.health) === 'online'
+                                            || connectionState === 'connecting'
+                                            || connectionState === 'connected'
+                                            || connectionState === 'unknown'
+                                        );
+                                    if (pendingPeerGitProbe) {
+                                        status.gitProbePending = true;
+                                        status.health = 'unknown';
+                                    }
+                                    if (applyCachedInlineMeshNodeStatus(
+                                        status,
+                                        node,
+                                        pendingPeerGitProbe ? { skipGit: true, skipError: true, skipHealth: true } : undefined,
+                                    )) {
                                         status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
                                         nodeStatuses.push(status);
                                         continue;

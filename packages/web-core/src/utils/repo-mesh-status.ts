@@ -249,6 +249,7 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
         ...(readString(record.worktreeBranch, record.worktree_branch) ? { worktreeBranch: readString(record.worktreeBranch, record.worktree_branch) } : {}),
         health: health as RepoMeshNodeStatus['health'],
         ...(git ? { git } : {}),
+        ...(readBoolean(record.gitProbePending, record.git_probe_pending) !== undefined ? { gitProbePending: readBoolean(record.gitProbePending, record.git_probe_pending) } : {}),
         providers: readStringArray(record.providers),
         activeSessions: activeSessions.length > 0 ? activeSessions : derivedActiveSessions,
         ...(activeSessionDetails && activeSessionDetails.length > 0 ? { activeSessionDetails } : {}),

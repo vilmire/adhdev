@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
 
+function baseGit(branch: string) {
+    return {
+        isGitRepo: true,
+        branch,
+        upstream: `origin/${branch}`,
+        upstreamStatus: 'fresh',
+        ahead: 0,
+        behind: 0,
+        staged: 0,
+        modified: 0,
+        untracked: 0,
+        deleted: 0,
+        renamed: 0,
+        hasConflicts: false,
+    }
+}
+
 describe('buildMeshGraph', () => {
     it('builds a live graph with a synthetic default branch anchor and orphan warnings', () => {
         const graph = buildMeshGraph({
@@ -488,5 +505,50 @@ describe('buildMeshGraph', () => {
             totalActiveSessions: 1,
         }))
         expect(graph.warnings).toContain('1 submodule(s) are out of sync with their parent checkout')
+    })
+
+    it('marks online nodes with pending peer git probes as pending instead of blocked review', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_pending_probe',
+            meshName: 'Pending Probe Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-05-20T05:25:23.442Z',
+            nodes: [
+                {
+                    nodeId: 'node_main',
+                    machineLabel: 'Coordinator',
+                    workspace: '/repo/main',
+                    health: 'online',
+                    providers: ['hermes-cli'],
+                    activeSessions: [],
+                    git: baseGit('main'),
+                },
+                {
+                    nodeId: 'node_peer',
+                    machineLabel: 'Peer',
+                    workspace: '/remote/repo',
+                    health: 'unknown',
+                    machineStatus: 'online',
+                    launchReady: true,
+                    gitProbePending: true,
+                    providers: [],
+                    activeSessions: [],
+                    connection: {
+                        state: 'unknown',
+                        source: 'not_reported',
+                        transport: 'unknown',
+                        reported: false,
+                    },
+                },
+            ],
+        } as any)
+
+        const peerNode = graph.nodes.find(node => node.id === 'node_peer')
+        expect(peerNode).toEqual(expect.objectContaining({
+            snapshotCompleteness: 'pending_git',
+            branchConvergence: null,
+        }))
+        expect(peerNode?.snapshotWarnings.join(' ')).toContain('waiting for a live peer git snapshot')
+        expect(graph.warnings.join(' ')).not.toContain('blocked on branch convergence')
     })
 })

@@ -206,6 +206,7 @@ function buildDashboardSessionHref(daemonId: string | null | undefined, sessionI
 }
 
 function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
+    if (node.gitProbePending) return 'Git probe pending'
     const git = node.git
     if (!git) return 'No git probe'
     const changes = (git.staged ?? 0) + (git.modified ?? 0) + (git.untracked ?? 0) + (git.deleted ?? 0) + (git.renamed ?? 0)
@@ -293,6 +294,43 @@ function extractGitLogEntries(response: any): GitLogEntry[] {
     return Array.isArray(log?.entries) ? log.entries : []
 }
 
+export function resolveGitLogRequest(args: {
+    coordinatorDaemonId: string | null
+    selectedNodeStatus: RepoMeshNodeStatus | null
+    selectedSessionEntry: SessionListEntry | null
+    selectedGraphNode: MeshGraphNode | null
+}): { daemonId: string; workspace: string } | null {
+    const workspace = args.selectedSessionEntry?.session.workspace
+        || args.selectedSessionEntry?.workspace
+        || args.selectedNodeStatus?.git?.workspace
+        || args.selectedNodeStatus?.workspace
+        || null
+    if (workspace && args.selectedSessionEntry) {
+        const daemonId = args.selectedNodeStatus?.daemonId || args.coordinatorDaemonId
+        return daemonId ? { daemonId, workspace } : null
+    }
+    if (workspace && args.selectedNodeStatus) {
+        const daemonId = args.selectedNodeStatus.daemonId || args.coordinatorDaemonId
+        return daemonId ? { daemonId, workspace } : null
+    }
+    return null
+}
+
+function describeProviders(node: RepoMeshNodeStatus): string {
+    if ((node.providers ?? []).length > 0) return node.providers.join(', ')
+    if ((node.providerPriority ?? []).length > 0) return 'not reported yet'
+    return 'not reported yet'
+}
+
+function describeConnection(node: RepoMeshNodeStatus): string {
+    if (node.gitProbePending && (!node.connection || node.connection.state === 'unknown')) return 'mesh pending'
+    return connectionLabel(node.connection)
+}
+
+function describeTimestamp(value: string | undefined, pending: boolean): string {
+    return formatTimestamp(value) ?? value ?? (pending ? 'pending live refresh' : 'not reported')
+}
+
 export default function MeshObservabilitySurface({
     graph,
     status,
@@ -357,12 +395,17 @@ export default function MeshObservabilitySurface({
         [queueTasks, selectedNodeId],
     )
 
-    const selectedGitWorkspace = selectedSessionEntry?.session.workspace
-        || selectedSessionEntry?.workspace
-        || selectedGraphNode?.workspace
-        || null
+    const selectedGitRequest = resolveGitLogRequest({
+        coordinatorDaemonId: daemonId,
+        selectedNodeStatus,
+        selectedSessionEntry,
+        selectedGraphNode,
+    })
+    const selectedGitWorkspace = selectedGitRequest?.workspace ?? null
     const selectedGitHistory = selectedGitWorkspace ? gitHistoryByWorkspace[selectedGitWorkspace] ?? null : null
-    const selectedHeadSummary = summarizeHead(selectedNodeStatus, selectedGitHistory?.entries ?? [])
+    const selectedHeadSummary = selectedNodeStatus?.gitProbePending && !selectedGitHistory?.entries?.length
+        ? 'Pending live git probe'
+        : summarizeHead(selectedNodeStatus, selectedGitHistory?.entries ?? [])
 
     const openSessionChat = useCallback((sessionId: string | null | undefined) => {
         if (!sessionId) return
@@ -382,26 +425,27 @@ export default function MeshObservabilitySurface({
     }, [])
 
     useEffect(() => {
-        if (!selectedGitWorkspace || !daemonId || !sendDaemonCommand) return
-        const existing = gitHistoryByWorkspace[selectedGitWorkspace]
+        if (!selectedGitRequest || !sendDaemonCommand) return
+        const { daemonId: targetDaemonId, workspace } = selectedGitRequest
+        const existing = gitHistoryByWorkspace[workspace]
         if (existing?.loading || (existing && (existing.entries.length > 0 || existing.error))) return
 
         let cancelled = false
         setGitHistoryByWorkspace(current => ({
             ...current,
-            [selectedGitWorkspace]: {
+            [workspace]: {
                 loading: true,
                 error: null,
-                entries: current[selectedGitWorkspace]?.entries ?? [],
+                entries: current[workspace]?.entries ?? [],
             },
         }))
 
-        void sendDaemonCommand(daemonId, 'git_log', { workspace: selectedGitWorkspace, limit: 5 })
+        void sendDaemonCommand(targetDaemonId, 'git_log', { workspace, limit: 5 })
             .then(response => {
                 if (cancelled) return
                 setGitHistoryByWorkspace(current => ({
                     ...current,
-                    [selectedGitWorkspace]: {
+                    [workspace]: {
                         loading: false,
                         error: null,
                         entries: extractGitLogEntries(response),
@@ -412,7 +456,7 @@ export default function MeshObservabilitySurface({
                 if (cancelled) return
                 setGitHistoryByWorkspace(current => ({
                     ...current,
-                    [selectedGitWorkspace]: {
+                    [workspace]: {
                         loading: false,
                         error: error instanceof Error ? error.message : 'git_log failed',
                         entries: [],
@@ -423,7 +467,7 @@ export default function MeshObservabilitySurface({
         return () => {
             cancelled = true
         }
-    }, [daemonId, gitHistoryByWorkspace, selectedGitWorkspace, sendDaemonCommand])
+    }, [gitHistoryByWorkspace, selectedGitRequest, sendDaemonCommand])
 
     const statusWarnings = [
         ...(graph.warnings ?? []),
@@ -698,23 +742,23 @@ export default function MeshObservabilitySurface({
                                             <Badge label={selectedNodeStatus.health} tone={healthTone(selectedNodeStatus.health)} />
                                             {selectedNodeStatus.machineStatus && <Badge label={selectedNodeStatus.machineStatus} tone={selectedNodeStatus.machineStatus === 'online' ? 'good' : 'warn'} />}
                                             <Badge label={`launchReady ${formatYesNo(selectedNodeStatus.launchReady)}`} tone={selectedNodeStatus.launchReady ? 'good' : 'warn'} />
-                                            <Badge label={connectionLabel(selectedNodeStatus.connection)} tone={connectionTone(selectedNodeStatus.connection)} />
+                                            <Badge label={describeConnection(selectedNodeStatus)} tone={connectionTone(selectedNodeStatus.connection)} />
                                             {selectedNodeStatus.worktreeBranch && <Badge label={selectedNodeStatus.worktreeBranch} tone="info" />}
                                         </div>
                                         <div className="flex flex-col gap-0.5">
                                             <Row label="Repo root" value={selectedNodeStatus.repoRoot ?? selectedNodeStatus.workspace} />
-                                            <Row label="Provider(s)" value={(selectedNodeStatus.providers ?? []).join(', ') || 'none'} />
+                                            <Row label="Provider(s)" value={describeProviders(selectedNodeStatus)} />
                                             <Row label="Provider priority" value={(selectedNodeStatus.providerPriority ?? []).join(', ') || 'not configured'} />
                                             <Row label="Drift" value={summarizeNodeDrift(selectedNodeStatus)} />
-                                            <Row label="HEAD" value={selectedHeadSummary ?? 'Not available'} />
+                                            <Row label="HEAD" value={selectedHeadSummary ?? (selectedNodeStatus.gitProbePending ? 'Pending live git probe' : 'Not available')} />
                                             <Row label="Daemon" value={selectedNodeStatus.daemonId ?? 'unknown'} />
                                             <Row label="Machine" value={selectedNodeStatus.machineId ?? selectedNodeStatus.machineLabel} />
                                             <Row label="Launch ready" value={formatYesNo(selectedNodeStatus.launchReady)} />
-                                            <Row label="Mesh connection" value={connectionLabel(selectedNodeStatus.connection)} />
+                                            <Row label="Mesh connection" value={describeConnection(selectedNodeStatus)} />
                                             <Row label="Transport" value={selectedNodeStatus.connection?.transport ?? 'unknown'} />
                                             <Row label="Connection source" value={selectedNodeStatus.connection?.source ?? 'unknown'} />
-                                            <Row label="Last seen" value={formatTimestamp(selectedNodeStatus.lastSeenAt) ?? selectedNodeStatus.lastSeenAt ?? 'not reported'} />
-                                            <Row label="Updated" value={formatTimestamp(selectedNodeStatus.updatedAt) ?? selectedNodeStatus.updatedAt ?? 'not reported'} />
+                                            <Row label="Last seen" value={describeTimestamp(selectedNodeStatus.lastSeenAt, Boolean(selectedNodeStatus.gitProbePending))} />
+                                            <Row label="Updated" value={describeTimestamp(selectedNodeStatus.updatedAt, Boolean(selectedNodeStatus.gitProbePending))} />
                                             {selectedNodeStatus.connection?.lastConnectedAt && <Row label="Last connected" value={formatTimestamp(selectedNodeStatus.connection.lastConnectedAt) ?? selectedNodeStatus.connection.lastConnectedAt} />}
                                             {selectedNodeStatus.connection?.lastCommandAt && <Row label="Last mesh command" value={formatTimestamp(selectedNodeStatus.connection.lastCommandAt) ?? selectedNodeStatus.connection.lastCommandAt} />}
                                             {selectedNodeStatus.connection?.reason && <Row label="Connection reason" value={selectedNodeStatus.connection.reason} />}

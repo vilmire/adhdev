@@ -306,6 +306,12 @@ export interface RepoMeshNodeStatus {
     worktreeBranch?: string;
     health: RepoMeshNodeHealth;
     git?: GitRepoStatus;
+    /**
+     * True when the selected coordinator has evidence that a peer git probe is still
+     * in flight or just timed out during initial mesh handshake, so callers should
+     * treat missing git data as pending instead of authoritative absence.
+     */
+    gitProbePending?: boolean;
     providers: string[];
     activeSessions: string[];
     activeSessionDetails?: RepoMeshSessionStatus[];

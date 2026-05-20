@@ -70,7 +70,7 @@ export interface MeshGraphNode {
     submodulePath?: string | null
     submoduleCommit?: string | null
     outOfSync?: boolean
-    snapshotCompleteness: 'complete' | 'missing_git' | 'missing_submodule_report' | 'stale'
+    snapshotCompleteness: 'complete' | 'pending_git' | 'missing_git' | 'missing_submodule_report' | 'stale'
     snapshotWarnings: string[]
     branchConvergence: MeshGraphBranchConvergence | null
     source: MeshGraphNodeSource
@@ -114,6 +114,13 @@ export interface MeshGraph {
 }
 
 const STALE_SNAPSHOT_MS = 5 * 60 * 1000
+
+function isPendingPeerGitSnapshot(node: RepoMeshNodeStatus): boolean {
+    if (node.git?.isGitRepo === true) return false
+    if (node.gitProbePending) return true
+    if (node.connection?.state === 'connecting') return true
+    return false
+}
 
 function parseTimestampMs(value: string | null | undefined): number | null {
     if (!value) return null
@@ -262,6 +269,7 @@ function pickDominantBranchConvergence(convergences: MeshGraphBranchConvergence[
 
 function evaluateBranchConvergence(node: RepoMeshNodeStatus, defaultBranch: string | null): MeshGraphBranchConvergence | null {
     if (!defaultBranch) return null
+    if (isPendingPeerGitSnapshot(node)) return null
 
     const git = node.git
     const branch = git?.branch ?? null
@@ -390,6 +398,13 @@ function assessSnapshotCompleteness(args: {
     const git = nodeStatus.git
 
     if (!git) {
+        if (isPendingPeerGitSnapshot(nodeStatus)) {
+            snapshotWarnings.push(`${label} is still waiting for a live peer git snapshot from the selected coordinator.`)
+            return {
+                snapshotCompleteness: 'pending_git',
+                snapshotWarnings,
+            }
+        }
         const looksOnline = nodeStatus.health === 'online'
             || nodeStatus.machineStatus === 'online'
             || nodeStatus.connection?.state === 'connected'
@@ -679,10 +694,12 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const cleanupCandidateNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'cleanup_candidate').length
     const notMergeableNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'not_mergeable').length
     const incompleteSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotWarnings.length > 0).length
+    const pendingGitSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'pending_git').length
     const missingGitSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'missing_git').length
     const missingSubmoduleSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'missing_submodule_report').length
     const staleGitSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'stale').length
     const snapshotWarnings = [
+        pendingGitSnapshotNodes > 0 ? `${pendingGitSnapshotNodes} node(s) are still waiting for a live peer git snapshot` : null,
         missingGitSnapshotNodes > 0 ? `${missingGitSnapshotNodes} node(s) have no visible peer git snapshot` : null,
         missingSubmoduleSnapshotNodes > 0 ? `${missingSubmoduleSnapshotNodes} node(s) are missing peer submodule visibility reported elsewhere in the mesh` : null,
         staleGitSnapshotNodes > 0 ? `${staleGitSnapshotNodes} node(s) rely on peer git snapshots older than 5m` : null,
