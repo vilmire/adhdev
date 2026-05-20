@@ -45,7 +45,7 @@ async function createTempGitRepoWithSubmodule(prefix: string) {
 }
 
 function createRouter(overrides: Record<string, unknown> = {}) {
-  const { getMeshPeerConnectionStatus, ...sessionHostOverrides } = overrides as Record<string, unknown>
+  const { getMeshPeerConnectionStatus, dispatchMeshCommand, ...sessionHostOverrides } = overrides as Record<string, unknown>
   const sessionHostControl = {
     listSessions: vi.fn(async () => []),
     ...sessionHostOverrides,
@@ -64,6 +64,9 @@ function createRouter(overrides: Record<string, unknown> = {}) {
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
     sessionHostControl: sessionHostControl as any,
+    dispatchMeshCommand: typeof dispatchMeshCommand === 'function'
+      ? dispatchMeshCommand as (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>
+      : undefined,
     getMeshPeerConnectionStatus: typeof getMeshPeerConnectionStatus === 'function'
       ? getMeshPeerConnectionStatus as (daemonId: string) => Record<string, unknown> | null
       : undefined,
@@ -302,19 +305,160 @@ describe('mesh_status', () => {
       }) as any
 
       expect(result.success).toBe(true)
-      expect(result.nodes.find((node: any) => node.nodeId === 'node-remote')).toEqual(expect.objectContaining({
+      const remoteNode = result.nodes.find((node: any) => node.nodeId === 'node-remote')
+      expect(remoteNode).toEqual(expect.objectContaining({
         health: 'unknown',
         gitProbePending: true,
         launchReady: true,
+        lastSeenAt: '2026-05-17T06:00:30.000Z',
+        updatedAt: '2026-05-17T06:00:30.000Z',
         machineStatus: 'online',
-        connection: expect.objectContaining({
-          source: 'mesh_peer_status',
-          state: 'connected',
-          transport: 'relay',
-          reported: true,
-          reason: 'Connected over TURN relay.',
-          lastConnectedAt: '2026-05-17T06:00:00.000Z',
-          lastCommandAt: '2026-05-17T06:00:30.000Z',
+      }))
+      expect(remoteNode?.connection).toEqual(expect.objectContaining({
+        source: 'mesh_peer_status',
+        state: 'connected',
+        transport: 'relay',
+        reported: true,
+        reason: 'Connected over TURN relay.',
+        lastConnectedAt: '2026-05-17T06:00:00.000Z',
+        lastCommandAt: '2026-05-17T06:00:30.000Z',
+      }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('retries remote git probe after peer telemetry flips to connected and surfaces live remote git truth', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-retry-')
+    try {
+      const dispatchMeshCommand = vi.fn(async () => {
+        if (dispatchMeshCommand.mock.calls.length === 1) {
+          throw new Error('timeout')
+        }
+        return {
+          status: {
+            workspace: '/missing/remote',
+            repoRoot: '/missing/remote',
+            isGitRepo: true,
+            branch: 'main',
+            head: '710e11de',
+            upstream: 'origin/main',
+            ahead: 0,
+            behind: 5,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            conflictFiles: [],
+            stashCount: 0,
+            branchConvergence: {
+              status: 'blocked_review',
+              reason: 'default_branch_not_even_with_upstream',
+            },
+            lastCheckedAt: Date.parse('2026-05-20T07:02:58.779Z'),
+            submodules: [
+              {
+                path: 'oss',
+                commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a',
+                repoPath: '/missing/remote/oss',
+                dirty: false,
+                outOfSync: false,
+                lastCheckedAt: Date.parse('2026-05-20T07:02:58.779Z'),
+              },
+            ],
+          },
+        }
+      })
+      const getMeshPeerConnectionStatus = vi.fn((daemonId: string) => daemonId === 'machine-remote'
+        ? {
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: getMeshPeerConnectionStatus.mock.calls.length >= 2 ? 'connected' : 'connecting',
+            transport: 'direct',
+            reported: true,
+            reason: getMeshPeerConnectionStatus.mock.calls.length >= 2
+              ? 'Connected directly peer-to-peer.'
+              : 'Waiting for mesh DataChannel to open.',
+            lastStateChangeAt: '2026-05-20T07:00:06.000Z',
+            lastConnectedAt: '2026-05-20T07:00:06.000Z',
+            lastCommandAt: '2026-05-20T07:00:23.000Z',
+          }
+        : null)
+
+      const { router } = createRouter({
+        dispatchMeshCommand,
+        getMeshPeerConnectionStatus,
+      })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-retry',
+        inlineMesh: {
+          id: 'mesh-retry',
+          name: 'Mesh Retry',
+          repoIdentity: 'repo',
+          policy: {},
+          nodes: [
+            {
+              id: 'node-local',
+              daemonId: 'machine-local',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+            {
+              id: 'node-remote',
+              daemonId: 'machine-remote',
+              machineLabel: 'Remote',
+              workspace: '/missing/remote',
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+              cachedStatus: {
+                machineStatus: 'online',
+                lastSeenAt: '2026-05-20T06:59:00.000Z',
+                updatedAt: '2026-05-20T06:59:00.000Z',
+              },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
+      expect(getMeshPeerConnectionStatus).toHaveBeenCalledTimes(2)
+      const remoteNode = result.nodes.find((node: any) => node.nodeId === 'node-remote')
+      expect(remoteNode?.gitProbePending).toBeUndefined()
+      expect(remoteNode).toEqual(expect.objectContaining({
+        health: 'online',
+        launchReady: true,
+        machineStatus: 'online',
+        providers: ['hermes-cli'],
+        lastSeenAt: '2026-05-20T07:00:23.000Z',
+        updatedAt: '2026-05-20T07:02:58.779Z',
+      }))
+      expect(remoteNode?.connection).toEqual(expect.objectContaining({
+        source: 'mesh_peer_status',
+        state: 'connected',
+        transport: 'direct',
+        reported: true,
+        reason: 'Connected directly peer-to-peer.',
+        lastConnectedAt: '2026-05-20T07:00:06.000Z',
+        lastCommandAt: '2026-05-20T07:00:23.000Z',
+      }))
+      expect(remoteNode?.git).toEqual(expect.objectContaining({
+        workspace: '/missing/remote',
+        repoRoot: '/missing/remote',
+        isGitRepo: true,
+        branch: 'main',
+        head: '710e11de',
+        upstream: 'origin/main',
+        ahead: 0,
+        behind: 5,
+        branchConvergence: expect.objectContaining({
+          status: 'blocked_review',
+          reason: 'default_branch_not_even_with_upstream',
         }),
       }))
     } finally {

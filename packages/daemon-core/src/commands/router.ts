@@ -240,7 +240,6 @@ function stripInlineMeshTransientNodeState(node: any): any {
         session_id: _sessionIdLegacy,
         providerType: _providerType,
         provider_type: _providerTypeLegacy,
-        providers: _providers,
         ...rest
     } = node as Record<string, unknown>;
     if (cachedStatus && !shouldDiscardCachedInlineMeshStatus(node)) {
@@ -270,8 +269,7 @@ function hasInlineMeshTransientNodeState(node: any): boolean {
         || 'sessionId' in node
         || 'session_id' in node
         || 'providerType' in node
-        || 'provider_type' in node
-        || 'providers' in node;
+        || 'provider_type' in node;
 }
 
 function readInlineMeshNodeId(node: any): string {
@@ -413,6 +411,55 @@ function toIsoTimestamp(value: unknown): string | null {
     if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
     const stringValue = readStringValue(value);
     return stringValue || null;
+}
+
+function synthesizeMeshNodeFreshnessFromConnection(status: Record<string, unknown>): void {
+    const connection = readObjectRecord(status.connection);
+    const connectionFreshAt = toIsoTimestamp(connection.lastCommandAt ?? connection.lastConnectedAt ?? connection.lastStateChangeAt);
+    const git = readObjectRecord(status.git);
+    const gitCheckedAt = toIsoTimestamp(git.lastCheckedAt);
+    if (!status.lastSeenAt && connectionFreshAt) status.lastSeenAt = connectionFreshAt;
+    if (!status.updatedAt && (gitCheckedAt || connectionFreshAt)) {
+        status.updatedAt = gitCheckedAt ?? connectionFreshAt;
+    }
+}
+
+function finalizeMeshNodeStatus(args: {
+    status: Record<string, unknown>;
+    node: any;
+    daemonId?: string;
+    isSelfNode: boolean;
+}): void {
+    const { status, node, daemonId, isSelfNode } = args;
+    if (!readStringValue(status.machineStatus)) {
+        const cachedStatus = readObjectRecord(node?.cachedStatus);
+        const machineStatus = readStringValue(cachedStatus.machineStatus, cachedStatus.machine_status, node?.machineStatus);
+        if (machineStatus) status.machineStatus = machineStatus;
+    }
+    synthesizeMeshNodeFreshnessFromConnection(status);
+    const connectionState = readStringValue(readObjectRecord(status.connection).state);
+    status.launchReady = !!daemonId && (
+        readStringValue(status.machineStatus) === 'online'
+        || connectionState === 'connected'
+        || isSelfNode
+    );
+}
+
+async function probeRemoteMeshGitStatus(args: {
+    dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    daemonId: string;
+    workspace: string;
+    timeoutMs: number;
+}): Promise<Record<string, unknown> | null> {
+    if (!args.dispatchMeshCommand) return null;
+    const remoteResult = await Promise.race([
+        args.dispatchMeshCommand(args.daemonId, 'git_status', { workspace: args.workspace }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), args.timeoutMs)),
+    ]) as any;
+    const remoteGit = remoteResult?.status ?? remoteResult?.git ?? remoteResult;
+    return remoteGit && typeof remoteGit === 'object' && typeof remoteGit.isGitRepo === 'boolean'
+        ? remoteGit as Record<string, unknown>
+        : null;
 }
 
 function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
@@ -3339,12 +3386,13 @@ export class DaemonCommandRouter {
                                 let remoteProbeApplied = false;
                                 if (!isSelfNode && daemonId && this.deps.dispatchMeshCommand) {
                                     try {
-                                        const remoteResult = await Promise.race([
-                                            this.deps.dispatchMeshCommand(daemonId, 'git_status', { workspace }),
-                                            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000)),
-                                        ]) as any;
-                                        const remoteGit = remoteResult?.status ?? remoteResult?.git ?? remoteResult;
-                                        if (remoteGit && typeof remoteGit === 'object' && typeof remoteGit.isGitRepo === 'boolean') {
+                                        const remoteGit = await probeRemoteMeshGitStatus({
+                                            dispatchMeshCommand: this.deps.dispatchMeshCommand,
+                                            daemonId,
+                                            workspace,
+                                            timeoutMs: 8000,
+                                        });
+                                        if (remoteGit) {
                                             status.git = remoteGit;
                                             status.health = remoteGit.isGitRepo
                                                 ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
@@ -3352,7 +3400,28 @@ export class DaemonCommandRouter {
                                             remoteProbeApplied = true;
                                         }
                                     } catch {
-                                        // Probe timed out or P2P unavailable — fall back to cached status
+                                        const refreshedConnection = this.deps.getMeshPeerConnectionStatus?.(daemonId);
+                                        const refreshedConnectionState = readStringValue(refreshedConnection?.state);
+                                        if (refreshedConnection && refreshedConnectionState === 'connected') {
+                                            status.connection = refreshedConnection;
+                                            try {
+                                                const remoteGit = await probeRemoteMeshGitStatus({
+                                                    dispatchMeshCommand: this.deps.dispatchMeshCommand,
+                                                    daemonId,
+                                                    workspace,
+                                                    timeoutMs: 12000,
+                                                });
+                                                if (remoteGit) {
+                                                    status.git = remoteGit;
+                                                    status.health = remoteGit.isGitRepo
+                                                        ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
+                                                        : 'degraded';
+                                                    remoteProbeApplied = true;
+                                                }
+                                            } catch {
+                                                // Probe timed out again or P2P unavailable — fall back to cached status
+                                            }
+                                        }
                                     }
                                 }
                                 if (!remoteProbeApplied) {
@@ -3377,12 +3446,12 @@ export class DaemonCommandRouter {
                                         node,
                                         pendingPeerGitProbe ? { skipGit: true, skipError: true, skipHealth: true } : undefined,
                                     )) {
-                                        status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
+                                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
                                         nodeStatuses.push(status);
                                         continue;
                                     }
                                     if (meshRecord?.source === 'inline_cache' && !isSelfNode) {
-                                        status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
+                                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
                                         nodeStatuses.push(status);
                                         continue;
                                     }
@@ -3406,7 +3475,7 @@ export class DaemonCommandRouter {
                         } else {
                             applyCachedInlineMeshNodeStatus(status, node);
                         }
-                        status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
+                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
                         nodeStatuses.push(status);
                     }
 
