@@ -157,9 +157,11 @@ describe('mesh_status', () => {
       }))
       expect(result.nodes.find((node: any) => node.nodeId === 'node-remote')).toEqual(expect.objectContaining({
         activeSessions: ['sess-remote'],
-        health: 'degraded',
+        health: 'unknown',
+        gitProbePending: true,
         launchReady: true,
         providerPriority: ['codex-cli'],
+        machineStatus: 'online',
         lastSeenAt: '2026-05-17T05:00:00.000Z',
         updatedAt: '2026-05-17T05:01:00.000Z',
         connection: expect.objectContaining({
@@ -301,8 +303,10 @@ describe('mesh_status', () => {
 
       expect(result.success).toBe(true)
       expect(result.nodes.find((node: any) => node.nodeId === 'node-remote')).toEqual(expect.objectContaining({
-        health: 'online',
+        health: 'unknown',
+        gitProbePending: true,
         launchReady: true,
+        machineStatus: 'online',
         connection: expect.objectContaining({
           source: 'mesh_peer_status',
           state: 'connected',

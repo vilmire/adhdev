@@ -68,7 +68,7 @@ describe('dashboard mesh graph dialog wiring', () => {
   it('adds direct session/chat affordances and on-demand git history to the observability detail flow', () => {
     const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
 
-    expect(surfaceSource).toContain("sendDaemonCommand(daemonId, 'git_log', { workspace: selectedGitWorkspace, limit: 5 })")
+    expect(surfaceSource).toContain("sendDaemonCommand(targetDaemonId, 'git_log', { workspace, limit: 5 })")
     expect(surfaceSource).toContain('Open chat')
     expect(surfaceSource).toContain('View session')
     expect(surfaceSource).toContain('View node')

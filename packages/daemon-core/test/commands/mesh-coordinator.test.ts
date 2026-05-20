@@ -928,25 +928,14 @@ describe('resolveMeshCoordinatorSetup', () => {
       expect(result).toMatchObject({ success: true, meshId: inlineMesh.id })
       const remote = ((result as any).nodes as any[]).find(node => node.nodeId === 'node-remote')
       expect(remote).toMatchObject({
-        health: 'online',
+        health: 'unknown',
+        gitProbePending: true,
         workspace: '/Users/remote/.worktrees/adhdev',
         daemonId: 'daemon_remote',
         machineId: 'machine_remote',
+        machineStatus: 'online',
       })
-      expect(remote.git).toMatchObject({
-        repoRoot: '/Users/remote/.worktrees/adhdev',
-        branch: 'main',
-        headCommit: 'abc1234',
-        isGitRepo: true,
-      })
-      expect(remote.git.submodules).toMatchObject([
-        {
-          path: 'oss',
-          commit: 'def5678',
-          repoPath: '/Users/remote/.worktrees/adhdev/oss',
-          outOfSync: true,
-        },
-      ])
+      expect(remote.git).toBeUndefined()
     } finally {
       rmSync(workspace, { recursive: true, force: true })
     }
@@ -1083,7 +1072,14 @@ describe('resolveMeshCoordinatorSetup', () => {
       expect(((result as any).nodes as any[]).map(node => node.nodeId)).toContain('node-remote')
       expect(((result as any).nodes as any[]).map(node => node.nodeId)).not.toContain('node-local-stale')
       const remote = ((result as any).nodes as any[]).find(node => node.nodeId === 'node-remote')
-      expect(remote).toMatchObject({ health: 'online', daemonId: 'daemon_remote', machineId: 'machine_remote' })
+      expect(remote).toMatchObject({
+        health: 'unknown',
+        gitProbePending: true,
+        daemonId: 'daemon_remote',
+        machineId: 'machine_remote',
+        machineStatus: 'online',
+      })
+      expect(remote.git).toBeUndefined()
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir

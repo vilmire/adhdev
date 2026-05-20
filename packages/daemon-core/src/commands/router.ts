@@ -3357,7 +3357,9 @@ export class DaemonCommandRouter {
                                 }
                                 if (!remoteProbeApplied) {
                                     const connectionState = readStringValue((status.connection as any)?.state);
-                                    const pendingPeerGitProbe = !isSelfNode
+                                    const inlineTransitGit = buildInlineMeshTransitGitStatus(node);
+                                    const pendingPeerGitProbe = !inlineTransitGit
+                                        && !isSelfNode
                                         && !!daemonId
                                         && (
                                             readStringValue(status.machineStatus) === 'online'
