@@ -43,6 +43,15 @@ describe('dashboard mesh graph dialog wiring', () => {
         expect(surfaceSource).toContain('max-h-[22vh] overflow-y-auto')
     })
 
+  it('keeps node drill-down on live status rows instead of reusing the orphan graph panel copy', () => {
+    const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
+
+    expect(surfaceSource).toContain('Peer snapshot warning')
+    expect(surfaceSource).toContain('Convergence follow-up')
+    expect(surfaceSource).not.toContain("import MeshGraphPanel from './MeshGraphPanel'")
+    expect(surfaceSource).not.toContain('<MeshGraphPanel')
+  })
+
   it('keeps node drill-down panels on the shared mesh-theme helper', () => {
     const panelSource = readSource('components/MeshGraph/MeshGraphPanel.tsx')
 

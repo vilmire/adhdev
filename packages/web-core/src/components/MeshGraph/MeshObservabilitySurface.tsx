@@ -10,7 +10,6 @@ import type {
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
 import { getDashboardActiveTabHref } from '../../utils/dashboard-route-paths'
-import MeshGraphPanel from './MeshGraphPanel'
 import MeshGraphView from './MeshGraphView'
 import { getMeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData } from './types'
@@ -221,6 +220,23 @@ function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
     if (driftedSubmodules.length > 0) parts.push(`${driftedSubmodules.length} submodule drift`)
     if (git.hasConflicts) parts.push('conflicts')
     return parts.join(' · ') || 'Clean'
+}
+
+function describeBranchConvergenceStatus(status: string | null | undefined): string | null {
+    switch (status) {
+        case 'merged_to_main':
+            return 'merged to default branch'
+        case 'pushed_feature_branch_needs_merge':
+            return 'feature branch still needs merge'
+        case 'cleanup_candidate':
+            return 'worktree still needs refine / cleanup'
+        case 'blocked_review':
+            return 'review blocked before convergence'
+        case 'not_mergeable':
+            return 'not mergeable yet'
+        default:
+            return null
+    }
 }
 
 function collectSessionEntries(status: RepoMeshStatus): SessionListEntry[] {
@@ -629,10 +645,53 @@ export default function MeshObservabilitySurface({
                             </>
                         ) : selectedGraphNode ? (
                             <>
-                                <MeshGraphPanel node={selectedGraphNode} onClose={() => {
-                                    setSelectedNodeId(null)
-                                    setDetailSelection(null)
-                                }} />
+                                <div className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-slate-950/40 p-3' : 'rounded-xl border border-slate-200 bg-slate-50 p-3'}>
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphNode.label}</div>
+                                            <div className={`mt-1 break-all text-xs ${meshTheme.textMuted}`}>{selectedNodeStatus?.workspace ?? selectedGraphNode.workspace}</div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setSelectedNodeId(null)
+                                                setDetailSelection(null)
+                                            }}
+                                            className={meshTheme.isDark ? 'rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-xs text-slate-300 transition hover:bg-white/[0.06] hover:text-white' : 'rounded-full border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 transition hover:bg-slate-50 hover:text-slate-900'}
+                                        >
+                                            Close
+                                        </button>
+                                    </div>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        {selectedGraphNode.branch && <Badge label={selectedGraphNode.branch} tone="default" />}
+                                        {selectedGraphNode.branchConvergence?.status && (
+                                            <Badge
+                                                label={selectedGraphNode.branchConvergence.status}
+                                                tone={selectedGraphNode.branchConvergence.needsConvergence ? 'warn' : 'good'}
+                                            />
+                                        )}
+                                        {selectedGraphNode.snapshotWarnings.length > 0 && (
+                                            <Badge label={`snapshot ${selectedGraphNode.snapshotCompleteness}`} tone="warn" />
+                                        )}
+                                    </div>
+                                    <div className="mt-3 flex flex-col gap-0.5">
+                                        <Row label="Graph branch" value={selectedGraphNode.branch ?? 'unknown'} />
+                                        <Row label="Graph upstream" value={selectedGraphNode.upstream ?? 'none'} />
+                                        <Row label="Convergence" value={describeBranchConvergenceStatus(selectedGraphNode.branchConvergence?.status) ?? 'not classified'} />
+                                    </div>
+                                    {selectedGraphNode.snapshotWarnings.length > 0 && (
+                                        <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-xs text-amber-100' : 'mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800'}>
+                                            <div className="font-medium">Peer snapshot warning</div>
+                                            <div className="mt-1">{selectedGraphNode.snapshotWarnings[0]}</div>
+                                        </div>
+                                    )}
+                                    {selectedGraphNode.branchConvergence?.nextStep && (
+                                        <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
+                                            <div className="font-medium">Convergence follow-up</div>
+                                            <div className="mt-1">{selectedGraphNode.branchConvergence.nextStep}</div>
+                                        </div>
+                                    )}
+                                </div>
                                 {selectedNodeStatus && (
                                     <div className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-slate-950/40 p-3' : 'rounded-xl border border-slate-200 bg-slate-50 p-3'}>
                                         <div className="mb-2 flex flex-wrap items-center gap-2">
