@@ -206,6 +206,31 @@ function buildInlineMeshTransitGitStatus(node: any): Record<string, unknown> | u
     return normalizeInlineMeshGitStatus(status, node, { lastCheckedAt: Date.now() });
 }
 
+function recordInlineMeshDirectGitTruth(
+    node: any,
+    git: Record<string, unknown>,
+    source: 'selected_coordinator_local_git' | 'selected_coordinator_mesh_p2p_git',
+): void {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    const checkedAt = readNumberValue(git.lastCheckedAt) ?? Date.now();
+    const updatedAt = new Date(checkedAt).toISOString();
+    const nextGit: Record<string, unknown> = {
+        ...git,
+        lastCheckedAt: checkedAt,
+    };
+    node.lastGit = {
+        source,
+        checkedAt,
+        status: nextGit,
+    };
+    node.last_git = node.lastGit;
+    node.machineStatus = 'online';
+    node.updatedAt = updatedAt;
+    node.lastSeenAt = updatedAt;
+    const repoRoot = readStringValue(nextGit.repoRoot);
+    if (repoRoot && !readStringValue(node.repoRoot)) node.repoRoot = repoRoot;
+}
+
 function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | undefined {
     const liveGit = buildInlineMeshTransitGitStatus(node);
     if (liveGit) return liveGit;
@@ -471,6 +496,103 @@ async function probeRemoteMeshGitStatus(args: {
     return remoteGit && typeof remoteGit === 'object' && typeof remoteGit.isGitRepo === 'boolean'
         ? remoteGit as Record<string, unknown>
         : null;
+}
+
+async function hydrateInlineMeshDirectTruth(args: {
+    mesh: any;
+    meshSource: 'inline_cache' | 'inline_bootstrap' | 'local_config';
+    dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    statusInstanceId?: string;
+    localMachineId?: string;
+}): Promise<{
+    directEvidenceCount: number;
+    localConfirmedCount: number;
+    peerAttemptedCount: number;
+    peerConfirmedCount: number;
+    unavailableNodeIds: string[];
+}> {
+    const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
+    if (!nodes.length) {
+        return {
+            directEvidenceCount: 0,
+            localConfirmedCount: 0,
+            peerAttemptedCount: 0,
+            peerConfirmedCount: 0,
+            unavailableNodeIds: [],
+        };
+    }
+
+    const selectedCoordinatorNodeId = readStringValue(
+        args.mesh?.coordinator?.preferredNodeId,
+        nodes[0]?.id,
+        nodes[0]?.nodeId,
+    );
+
+    let localConfirmedCount = 0;
+    let peerAttemptedCount = 0;
+    let peerConfirmedCount = 0;
+    const unavailableNodeIds: string[] = [];
+
+    for (const [nodeIndex, node] of nodes.entries()) {
+        const nodeId = readStringValue(node?.id, node?.nodeId) || `node_${nodeIndex}`;
+        const workspace = readStringValue(node?.workspace);
+        const daemonId = readStringValue(node?.daemonId);
+        const isSelfNode = Boolean(
+            nodeId && selectedCoordinatorNodeId && nodeId === selectedCoordinatorNodeId,
+        ) || Boolean(
+            daemonId && (daemonId === args.localMachineId || daemonId === args.statusInstanceId),
+        ) || Boolean(args.meshSource !== 'local_config' && nodeIndex === 0);
+
+        if (!workspace) {
+            if (!isSelfNode && daemonId) unavailableNodeIds.push(nodeId);
+            continue;
+        }
+
+        if (isSelfNode && fs.existsSync(workspace)) {
+            try {
+                const localGit = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
+                if (localGit?.isGitRepo) {
+                    recordInlineMeshDirectGitTruth(node, localGit as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
+                    localConfirmedCount += 1;
+                    continue;
+                }
+            } catch {
+                // Fall through to remote classification.
+            }
+        }
+
+        if (!daemonId || !args.dispatchMeshCommand) {
+            if (!isSelfNode) unavailableNodeIds.push(nodeId);
+            continue;
+        }
+
+        peerAttemptedCount += 1;
+        try {
+            const remoteGit = await probeRemoteMeshGitStatus({
+                dispatchMeshCommand: args.dispatchMeshCommand,
+                daemonId,
+                workspace,
+                timeoutMs: 8_000,
+            });
+            if (remoteGit) {
+                recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
+                peerConfirmedCount += 1;
+                continue;
+            }
+        } catch {
+            // Strict direct-only path: do not fall back to persisted cloud truth here.
+        }
+
+        unavailableNodeIds.push(nodeId);
+    }
+
+    return {
+        directEvidenceCount: localConfirmedCount + peerConfirmedCount,
+        localConfirmedCount,
+        peerAttemptedCount,
+        peerConfirmedCount,
+        unavailableNodeIds,
+    };
 }
 
 function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
@@ -2343,8 +2465,43 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
                 const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-                if (meshRecord?.mesh) return { success: true, mesh: meshRecord.mesh };
-                return { success: false, error: 'Mesh not found' };
+                if (!meshRecord?.mesh) return { success: false, error: 'Mesh not found' };
+
+                const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
+                const directTruth = await hydrateInlineMeshDirectTruth({
+                    mesh: meshRecord.mesh,
+                    meshSource: meshRecord.source,
+                    dispatchMeshCommand: this.deps.dispatchMeshCommand,
+                    statusInstanceId: this.deps.statusInstanceId,
+                    localMachineId: loadConfig().machineId || '',
+                });
+                const directTruthSatisfied = meshRecord.source !== 'inline_bootstrap' || directTruth.directEvidenceCount > 0;
+                const sourceOfTruth = {
+                    membership: meshRecord.source === 'inline_cache'
+                        ? 'coordinator_inline_mesh_cache'
+                        : meshRecord.source === 'local_config'
+                            ? 'local_mesh_config'
+                            : 'inline_bootstrap_snapshot',
+                    coordinatorOwnsLiveTruth: directTruthSatisfied,
+                    directPeerTruth: {
+                        required: requireDirectPeerTruth,
+                        satisfied: directTruthSatisfied,
+                        directEvidenceCount: directTruth.directEvidenceCount,
+                        localConfirmedCount: directTruth.localConfirmedCount,
+                        peerAttemptedCount: directTruth.peerAttemptedCount,
+                        peerConfirmedCount: directTruth.peerConfirmedCount,
+                        unavailableNodeIds: directTruth.unavailableNodeIds,
+                    },
+                };
+                if (requireDirectPeerTruth && !directTruthSatisfied) {
+                    return {
+                        success: false,
+                        code: 'mesh_direct_peer_truth_unavailable',
+                        error: 'Selected coordinator could not confirm direct mesh truth yet. Bootstrap inventory stays unavailable until direct get_mesh probes succeed.',
+                        sourceOfTruth,
+                    };
+                }
+                return { success: true, mesh: meshRecord.mesh, sourceOfTruth };
             }
 
             case 'create_mesh': {
@@ -3393,9 +3550,16 @@ export class DaemonCommandRouter {
                         }
                         if (workspace) {
                             if (!fs.existsSync(workspace)) {
-                                // Workspace not local — attempt a P2P git probe for remote nodes.
+                                // Workspace not local — prefer direct live inline truth, then attempt a P2P git probe.
+                                const inlineTransitGit = buildInlineMeshTransitGitStatus(node);
                                 let remoteProbeApplied = false;
-                                if (!isSelfNode && daemonId && this.deps.dispatchMeshCommand) {
+                                if (inlineTransitGit) {
+                                    status.git = inlineTransitGit;
+                                    status.health = inlineTransitGit.isGitRepo
+                                        ? deriveMeshNodeHealthFromGit(inlineTransitGit as unknown as Record<string, unknown>)
+                                        : 'degraded';
+                                    remoteProbeApplied = true;
+                                } else if (!isSelfNode && daemonId && this.deps.dispatchMeshCommand) {
                                     try {
                                         const remoteGit = await probeRemoteMeshGitStatus({
                                             dispatchMeshCommand: this.deps.dispatchMeshCommand,
@@ -3408,6 +3572,7 @@ export class DaemonCommandRouter {
                                             status.health = remoteGit.isGitRepo
                                                 ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
                                                 : 'degraded';
+                                            recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
                                             remoteProbeApplied = true;
                                         }
                                     } catch {
@@ -3427,6 +3592,7 @@ export class DaemonCommandRouter {
                                                     status.health = remoteGit.isGitRepo
                                                         ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
                                                         : 'degraded';
+                                                    recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
                                                     remoteProbeApplied = true;
                                                 }
                                             } catch {
@@ -3437,7 +3603,6 @@ export class DaemonCommandRouter {
                                 }
                                 if (!remoteProbeApplied) {
                                     const connectionState = readStringValue((status.connection as any)?.state);
-                                    const inlineTransitGit = buildInlineMeshTransitGitStatus(node);
                                     const pendingPeerGitProbe = !inlineTransitGit
                                         && !isSelfNode
                                         && !!daemonId
@@ -3471,6 +3636,7 @@ export class DaemonCommandRouter {
                                 try {
                                     const gitStatus = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
                                     status.git = gitStatus;
+                                    recordInlineMeshDirectGitTruth(node, gitStatus as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
                                     if (gitStatus.isGitRepo) {
                                         status.health = deriveMeshNodeHealthFromGit(gitStatus as unknown as Record<string, unknown>);
                                     } else {

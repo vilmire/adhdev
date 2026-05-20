@@ -1,0 +1,269 @@
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DaemonCommandRouter } from '../../src/commands/router.js'
+
+function git(args: string[], cwd: string) {
+  execFileSync('git', args, { cwd, stdio: 'pipe' })
+}
+
+function initRepo(path: string) {
+  mkdirSync(path, { recursive: true })
+  git(['init', '-b', 'main'], path)
+  git(['config', 'user.name', 'Test User'], path)
+  git(['config', 'user.email', 'test@example.com'], path)
+  writeFileSync(join(path, 'README.md'), '# test\n', 'utf-8')
+  git(['add', 'README.md'], path)
+  git(['commit', '-m', 'init'], path)
+}
+
+function createRouter(dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<unknown>) {
+  return new DaemonCommandRouter({
+    commandHandler: { handle: vi.fn(async () => ({ success: false })) } as any,
+    cliManager: { handleCliCommand: vi.fn(async () => ({ success: false })) } as any,
+    cdpManagers: new Map(),
+    providerLoader: {
+      resolve: vi.fn(() => null),
+      getMeta: vi.fn(() => null),
+    } as any,
+    instanceManager: {
+      collectAllStates: () => [],
+      listInstanceIds: () => [],
+      getInstance: () => null,
+    } as any,
+    detectedIdes: { value: [] },
+    sessionRegistry: {} as any,
+    sessionHostControl: {
+      listSessions: vi.fn(async () => []),
+    } as any,
+    dispatchMeshCommand,
+    packageName: 'adhdev',
+    statusVersion: '0.9.71',
+  })
+}
+
+describe('DaemonCommandRouter direct Repo Mesh truth', () => {
+  const roots: string[] = []
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    while (roots.length > 0) {
+      rmSync(roots.pop()!, { recursive: true, force: true })
+    }
+  })
+
+  it('hydrates bootstrap get_mesh responses with direct local and peer truth, including remote submodules like oss', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-direct-mesh-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    const dispatchMeshCommand = vi.fn(async () => ({
+      status: {
+        isGitRepo: true,
+        workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+        repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+        branch: 'main',
+        ahead: 0,
+        behind: 6,
+        staged: 0,
+        modified: 0,
+        untracked: 0,
+        deleted: 0,
+        renamed: 0,
+        conflicted: 0,
+        headCommit: '710e11de',
+        submodules: [{
+          path: 'oss',
+          repoPath: '/Users/moltbot/.openclaw/workspace/projects/adhdev/oss',
+          commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a',
+          dirty: false,
+          outOfSync: false,
+        }],
+      },
+    }))
+    const router = createRouter(dispatchMeshCommand)
+    const inlineMesh = {
+      id: 'mesh_303',
+      name: 'ADHDev',
+      coordinator: { preferredNodeId: 'node_local' },
+      nodes: [
+        {
+          id: 'node_local',
+          daemonId: 'daemon-local',
+          machineId: 'machine-local',
+          workspace: localRepo,
+          repoRoot: localRepo,
+          policy: {},
+        },
+        {
+          id: 'node_303',
+          daemonId: 'daemon-remote',
+          machineId: 'machine-remote',
+          workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+          repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+          policy: {},
+        },
+      ],
+    }
+
+    const result: any = await router.execute('get_mesh', {
+      meshId: 'mesh_303',
+      inlineMesh,
+      requireDirectPeerTruth: true,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.sourceOfTruth).toMatchObject({
+      membership: 'inline_bootstrap_snapshot',
+      coordinatorOwnsLiveTruth: true,
+      directPeerTruth: {
+        required: true,
+        satisfied: true,
+        localConfirmedCount: 1,
+        peerAttemptedCount: 1,
+        peerConfirmedCount: 1,
+      },
+    })
+    expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon-remote', 'git_status', {
+      workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+    })
+    const remoteNode = result.mesh.nodes.find((node: any) => node.id === 'node_303')
+    expect(remoteNode.lastGit.status.submodules).toMatchObject([
+      {
+        path: 'oss',
+        dirty: false,
+        outOfSync: false,
+      },
+    ])
+  })
+
+  it('fails closed when bootstrap get_mesh cannot confirm any direct truth', async () => {
+    const router = createRouter()
+    const result: any = await router.execute('get_mesh', {
+      meshId: 'mesh_unavailable',
+      inlineMesh: {
+        id: 'mesh_unavailable',
+        nodes: [
+          {
+            id: 'node_missing',
+            daemonId: 'daemon-missing',
+            workspace: '/path/that/does/not/exist',
+          },
+        ],
+      },
+      requireDirectPeerTruth: true,
+    })
+
+    expect(result).toMatchObject({
+      success: false,
+      code: 'mesh_direct_peer_truth_unavailable',
+      sourceOfTruth: {
+        membership: 'inline_bootstrap_snapshot',
+        coordinatorOwnsLiveTruth: false,
+        directPeerTruth: {
+          required: true,
+          satisfied: false,
+          directEvidenceCount: 0,
+        },
+      },
+    })
+  })
+
+  it('keeps direct live git truth ahead of stale cached fallback when mesh_status runs after get_mesh', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-mesh-status-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    const remoteGit = {
+      isGitRepo: true,
+      workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+      repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+      branch: 'main',
+      ahead: 0,
+      behind: 6,
+      staged: 0,
+      modified: 0,
+      untracked: 0,
+      deleted: 0,
+      renamed: 0,
+      conflicted: 0,
+      headCommit: '710e11de',
+      submodules: [{
+        path: 'oss',
+        repoPath: '/Users/moltbot/.openclaw/workspace/projects/adhdev/oss',
+        commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a',
+        dirty: false,
+        outOfSync: false,
+      }],
+    }
+    const dispatchMeshCommand = vi.fn(async () => ({ status: remoteGit }))
+    const router = createRouter(dispatchMeshCommand)
+    const inlineMesh = {
+      id: 'mesh_303',
+      name: 'ADHDev',
+      coordinator: { preferredNodeId: 'node_local' },
+      nodes: [
+        {
+          id: 'node_local',
+          daemonId: 'daemon-local',
+          machineId: 'machine-local',
+          workspace: localRepo,
+          repoRoot: localRepo,
+          policy: {},
+        },
+        {
+          id: 'node_303',
+          daemonId: 'daemon-remote',
+          machineId: 'machine-remote',
+          workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+          repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+          policy: {},
+        },
+      ],
+    }
+
+    await router.execute('get_mesh', {
+      meshId: 'mesh_303',
+      inlineMesh,
+      requireDirectPeerTruth: true,
+    })
+
+    dispatchMeshCommand.mockClear()
+    dispatchMeshCommand.mockImplementation(async () => {
+      throw new Error('mesh_status should reuse cached direct truth instead of re-probing')
+    })
+
+    const status: any = await router.execute('mesh_status', {
+      meshId: 'mesh_303',
+      inlineMesh: {
+        ...inlineMesh,
+        nodes: [
+          inlineMesh.nodes[0],
+          {
+            ...inlineMesh.nodes[1],
+            cachedStatus: {
+              git: {
+                isGitRepo: true,
+                branch: 'stale-bootstrap-branch',
+                headCommit: 'deadbeef',
+              },
+            },
+          },
+        ],
+      },
+    })
+
+    expect(status.success).toBe(true)
+    expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    const remoteNode = status.nodes.find((node: any) => node.nodeId === 'node_303')
+    expect(remoteNode.git).toMatchObject({
+      branch: 'main',
+      headCommit: '710e11de',
+      submodules: [{ path: 'oss', dirty: false, outOfSync: false }],
+    })
+  })
+})
