@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -122,7 +122,8 @@ describe('resolveMeshCoordinatorSetup', () => {
     mkdirSync(goodBin, { recursive: true })
     const goodNode = join(goodBin, 'node')
     const mcpEntry = join(root, 'mcp-server.js')
-    symlinkSync(findWebSocketNode(), goodNode)
+    const websocketNode = findWebSocketNode()
+    writeFileSync(goodNode, `#!/bin/sh\nexec ${JSON.stringify(websocketNode)} "$@"\n`, 'utf-8')
     writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
     chmodSync(goodNode, 0o755)
     const previousNodeOverride = process.env.ADHDEV_MCP_NODE_EXECUTABLE
