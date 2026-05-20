@@ -114,14 +114,24 @@ function readBooleanValue(...values: unknown[]): boolean | undefined {
     return undefined;
 }
 
-function readGitSubmodules(value: unknown): GitSubmoduleStatus[] | undefined {
+function joinRepoPath(root: string | undefined, relativePath: string | undefined): string | undefined {
+    const normalizedRoot = typeof root === 'string' ? root.trim().replace(/[\\/]+$/, '') : '';
+    const normalizedPath = typeof relativePath === 'string' ? relativePath.trim() : '';
+    if (!normalizedPath) return undefined;
+    if (/^(?:[A-Za-z]:[\\/]|\/)/.test(normalizedPath)) return normalizedPath;
+    if (!normalizedRoot) return undefined;
+    return `${normalizedRoot}/${normalizedPath.replace(/^[\\/]+/, '')}`;
+}
+
+function readGitSubmodules(value: unknown, parentRepoRoot?: string): GitSubmoduleStatus[] | undefined {
     if (!Array.isArray(value)) return undefined;
     const submodules = value
         .map(entry => {
             const submodule = readObjectRecord(entry);
             const path = readStringValue(submodule.path);
             const commit = readStringValue(submodule.commit);
-            const repoPath = readStringValue(submodule.repoPath, submodule.repo_root);
+            const repoPath = readStringValue(submodule.repoPath, submodule.repo_root)
+                ?? joinRepoPath(parentRepoRoot, path);
             if (!path || !commit || !repoPath) return null;
             return {
                 path,
@@ -149,10 +159,11 @@ function normalizeInlineMeshGitStatus(
         : [];
     const conflictCount = readNumberValue(status.conflicts) ?? conflictFiles.length;
     const hasConflicts = readBooleanValue(status.hasConflicts) ?? conflictCount > 0;
-    const submodules = readGitSubmodules(status.submodules);
+    const repoRoot = readStringValue(status.repoRoot, status.repo_root, node?.repoRoot, node?.repo_root, status.workspace, node?.workspace) || undefined;
+    const submodules = readGitSubmodules(status.submodules, repoRoot);
     return {
         workspace: readStringValue(status.workspace, node?.workspace) || '',
-        repoRoot: readStringValue(status.repoRoot, node?.repoRoot, node?.workspace) || null,
+        repoRoot: repoRoot ?? null,
         isGitRepo,
         branch: readStringValue(status.branch) ?? null,
         headCommit: readStringValue(status.headCommit) ?? null,
