@@ -180,6 +180,13 @@ describe('extractRepoMeshStatus', () => {
         type: 'submoduleLink',
       }),
     ]))
+    expect(graph.stats).toMatchObject({
+      totalNodes: 2,
+      onlineNodes: 2,
+      incompleteSnapshotNodes: 0,
+      missingSubmoduleSnapshotNodes: 0,
+    })
+    expect(graph.snapshotWarnings).toEqual([])
   })
 
   it('returns null for unrelated payloads', () => {
