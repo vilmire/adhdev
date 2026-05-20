@@ -308,6 +308,12 @@ function hasInlineMeshTransientNodeState(node: any): boolean {
         || 'provider_type' in node;
 }
 
+function inlineMeshCarriesTransientNodeTruth(inlineMesh: any): boolean {
+    if (!inlineMesh || typeof inlineMesh !== 'object' || Array.isArray(inlineMesh)) return false;
+    if (!Array.isArray(inlineMesh.nodes) || inlineMesh.nodes.length === 0) return false;
+    return inlineMesh.nodes.some((node: any) => hasInlineMeshTransientNodeState(node));
+}
+
 function readInlineMeshNodeId(node: any): string {
     return readStringValue(node?.id, node?.nodeId) || '';
 }
@@ -1285,8 +1291,10 @@ export class DaemonCommandRouter {
         if (preferInline) {
             const cached = this.getCachedInlineMesh(meshId);
             if (cached) return { mesh: cached, inline: true, source: 'inline_cache' };
-            const warmedInline = this.warmInlineMeshCache(meshId, inlineMesh);
-            if (warmedInline) return { mesh: warmedInline, inline: true, source: 'inline_bootstrap' };
+            if (inlineMeshCarriesTransientNodeTruth(inlineMesh)) {
+                this.warmInlineMeshCache(meshId, inlineMesh);
+                return { mesh: inlineMesh, inline: true, source: 'inline_bootstrap' };
+            }
         }
         try {
             const { getMesh } = await import('../config/mesh-config.js');

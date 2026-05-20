@@ -172,6 +172,114 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
     })
   })
 
+  it('prefers persisted local mesh membership over a stale inline bootstrap snapshot when no cached live mesh exists', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-local-mesh-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    const configDir = join(root, 'config')
+    initRepo(localRepo)
+
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    process.env.ADHDEV_CONFIG_DIR = configDir
+
+    try {
+      const { createMesh, addNode } = await import('../../src/config/mesh-config.js')
+      const localMesh = createMesh({
+        name: 'Persisted Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+      })
+      const localNode = addNode(localMesh.id, {
+        workspace: localRepo,
+        repoRoot: localRepo,
+        daemonId: 'daemon-local',
+        machineId: 'machine-local',
+        policy: {},
+      })
+      const remoteNodeEntry = addNode(localMesh.id, {
+        workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+        repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+        daemonId: 'daemon-remote',
+        machineId: 'machine-remote',
+        policy: {},
+      })
+
+      const dispatchMeshCommand = vi.fn(async () => ({
+        status: {
+          isGitRepo: true,
+          workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+          repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+          branch: 'main',
+          ahead: 0,
+          behind: 0,
+          staged: 0,
+          modified: 0,
+          untracked: 0,
+          deleted: 0,
+          renamed: 0,
+          conflicted: 0,
+          headCommit: '5aa1284d',
+          submodules: [{
+            path: 'oss',
+            repoPath: '/Users/moltbot/.openclaw/workspace/projects/adhdev/oss',
+            commit: '2ec6a14d6668b75318da109413505b92749d4f7c',
+            dirty: false,
+            outOfSync: false,
+          }],
+        },
+      }))
+      const router = createRouter(dispatchMeshCommand)
+
+      const result: any = await router.execute('get_mesh', {
+        meshId: localMesh.id,
+        inlineMesh: {
+          id: localMesh.id,
+          name: localMesh.name,
+          coordinator: { preferredNodeId: localNode?.id },
+          nodes: [
+            {
+              id: localNode?.id,
+              daemonId: 'daemon-local',
+              machineId: 'machine-local',
+              workspace: localRepo,
+              repoRoot: localRepo,
+              policy: {},
+            },
+          ],
+        },
+        requireDirectPeerTruth: true,
+      })
+
+      expect(result.success).toBe(true)
+      expect(result.sourceOfTruth).toMatchObject({
+        membership: 'local_mesh_config',
+        coordinatorOwnsLiveTruth: true,
+        directPeerTruth: {
+          required: true,
+          satisfied: true,
+          localConfirmedCount: 1,
+          peerAttemptedCount: 1,
+          peerConfirmedCount: 1,
+        },
+      })
+      expect(result.mesh.nodes).toHaveLength(2)
+      expect(result.mesh.nodes.map((node: any) => node.workspace)).toEqual([
+        localRepo,
+        '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+      ])
+      const remoteNode = result.mesh.nodes.find((node: any) => node.id === remoteNodeEntry?.id)
+      expect(remoteNode?.lastGit?.status?.submodules).toMatchObject([
+        {
+          path: 'oss',
+          dirty: false,
+          outOfSync: false,
+        },
+      ])
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+    }
+  })
+
   it('keeps direct live git truth ahead of stale cached fallback when mesh_status runs after get_mesh', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-router-mesh-status-'))
     roots.push(root)
