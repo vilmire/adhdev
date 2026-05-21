@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/daemon-standalone",
-  "version": "0.9.82-rc.36",
+  "version": "0.9.82-rc.37",
   "description": "ADHDev standalone daemon — embedded HTTP/WS server for local dashboard",
   "main": "dist/index.js",
   "bin": {
