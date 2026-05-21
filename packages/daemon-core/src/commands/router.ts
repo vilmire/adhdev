@@ -3902,8 +3902,17 @@ export class DaemonCommandRouter {
                             peerConfirmedCount: 0,
                             unavailableNodeIds: [] as string[],
                         };
+                    // Default/cached loads may not attempt a remote peer probe yet; do not surface that as
+                    // a direct mesh truth failure until an explicit probe attempt actually fails.
+                    const passivePeerTruthNotAttempted = requireDirectPeerTruth
+                        && !refreshRequested
+                        && directTruth.directEvidenceCount > 0
+                        && directTruth.peerAttemptedCount === 0;
+                    const effectiveDirectTruth = passivePeerTruthNotAttempted
+                        ? { ...directTruth, unavailableNodeIds: [] as string[] }
+                        : directTruth;
                     const directTruthSatisfied = !requireDirectPeerTruth
-                        || (directTruth.directEvidenceCount > 0 && directTruth.unavailableNodeIds.length === 0);
+                        || (effectiveDirectTruth.directEvidenceCount > 0 && effectiveDirectTruth.unavailableNodeIds.length === 0);
                     if (requireDirectPeerTruth && !directTruthSatisfied) {
                         const failureResult = {
                             success: false,
@@ -3937,7 +3946,7 @@ export class DaemonCommandRouter {
                         });
                         return failureResult;
                     }
-                    const directTruthUnavailableNodeIds = new Set(directTruth.unavailableNodeIds);
+                    const directTruthUnavailableNodeIds = new Set(effectiveDirectTruth.unavailableNodeIds);
                     const selectedCoordinatorNodeId = readStringValue(
                         mesh.coordinator?.preferredNodeId,
                         (mesh.nodes?.[0] as any)?.id,
@@ -4158,11 +4167,11 @@ export class DaemonCommandRouter {
                                 directPeerTruth: {
                                     required: true,
                                     satisfied: directTruthSatisfied,
-                                    directEvidenceCount: directTruth.directEvidenceCount,
-                                    localConfirmedCount: directTruth.localConfirmedCount,
-                                    peerAttemptedCount: directTruth.peerAttemptedCount,
-                                    peerConfirmedCount: directTruth.peerConfirmedCount,
-                                    unavailableNodeIds: directTruth.unavailableNodeIds,
+                                    directEvidenceCount: effectiveDirectTruth.directEvidenceCount,
+                                    localConfirmedCount: effectiveDirectTruth.localConfirmedCount,
+                                    peerAttemptedCount: effectiveDirectTruth.peerAttemptedCount,
+                                    peerConfirmedCount: effectiveDirectTruth.peerConfirmedCount,
+                                    unavailableNodeIds: effectiveDirectTruth.unavailableNodeIds,
                                 },
                             } : {}),
                             historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary'],

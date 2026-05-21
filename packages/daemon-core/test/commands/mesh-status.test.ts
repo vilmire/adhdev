@@ -664,6 +664,70 @@ describe('mesh_status', () => {
     }
   })
 
+  it('does not fail cached/default loads when no remote direct peer probe was attempted', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-no-peer-attempt-')
+    try {
+      const { router } = createRouter()
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_no_peer_attempt',
+        requireDirectPeerTruth: true,
+        refresh: false,
+        inlineMesh: {
+          id: 'mesh_no_peer_attempt',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_7' },
+          policy: {},
+          nodes: [
+            {
+              id: 'node_7',
+              daemonId: 'daemon_7',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+            {
+              id: 'node_303',
+              daemonId: 'daemon_303',
+              machineLabel: 'Remote',
+              workspace: '/missing/node_303/adhdev',
+              repoRoot: '/missing/node_303/adhdev',
+              providers: [],
+              policy: { providerPriority: ['hermes-cli'] },
+              cachedStatus: {
+                health: 'unknown',
+                gitProbePending: true,
+                error: 'waiting for live peer git snapshot',
+              },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.code).not.toBe('mesh_direct_peer_truth_unavailable')
+      expect(String(result.error ?? '')).not.toContain('Selected coordinator could not confirm direct mesh truth yet')
+      expect(result.sourceOfTruth).toMatchObject({
+        coordinatorOwnsLiveTruth: true,
+        currentStatus: 'live_git_and_session_probes',
+        directPeerTruth: expect.objectContaining({
+          required: true,
+          satisfied: true,
+          localConfirmedCount: 1,
+          peerAttemptedCount: 0,
+          peerConfirmedCount: 0,
+          unavailableNodeIds: [],
+        }),
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('fails closed when a direct peer remains unavailable even if another peer has live git truth', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-single-aggregate-')
     try {
