@@ -263,16 +263,12 @@ function buildInlineMeshTransitGitStatus(node: any): Record<string, unknown> | u
     const probeGitResult = readObjectRecord(probeGit.result);
     const probeDirectStatus = readObjectRecord(probeGit.status);
     const probeNestedStatus = readObjectRecord(probeGitResult.status);
-    const status = Object.keys(directStatus).length
-        ? directStatus
-        : Object.keys(nestedStatus).length
-            ? nestedStatus
-            : Object.keys(probeDirectStatus).length
-                ? probeDirectStatus
-                : Object.keys(probeNestedStatus).length
-                    ? probeNestedStatus
-                    : {};
-    return normalizeInlineMeshGitStatus(status, node, { lastCheckedAt: Date.now() });
+    const candidates = [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus];
+    for (const status of candidates) {
+        const normalized = normalizeInlineMeshGitStatus(status, node, { lastCheckedAt: Date.now() });
+        if (normalized) return normalized;
+    }
+    return undefined;
 }
 
 function recordInlineMeshDirectGitTruth(
@@ -1445,10 +1441,73 @@ export class DaemonCommandRouter {
         return JSON.parse(JSON.stringify(value)) as T;
     }
 
-    private getCachedAggregateMeshStatus(meshId: string): any | null {
+    private hydrateCachedAggregateMeshStatusFromInline(snapshot: any, mesh: any, options?: { requireDirectPeerTruth?: boolean }): any {
+        if (!mesh || typeof mesh !== 'object' || !Array.isArray(mesh.nodes) || !Array.isArray(snapshot?.nodes)) return snapshot;
+        const inlineNodesById = new Map<string, any>();
+        for (const node of mesh.nodes) {
+            const nodeId = readInlineMeshNodeId(node);
+            if (nodeId) inlineNodesById.set(nodeId, node);
+        }
+        if (!inlineNodesById.size) return snapshot;
+
+        let changed = false;
+        const unavailableNodeIds = new Set<string>();
+        const sourceOfTruth = readObjectRecord(snapshot.sourceOfTruth);
+        const directPeerTruth = readObjectRecord(sourceOfTruth.directPeerTruth);
+        for (const entry of Array.isArray(directPeerTruth.unavailableNodeIds) ? directPeerTruth.unavailableNodeIds : []) {
+            const nodeId = readStringValue(entry);
+            if (nodeId) unavailableNodeIds.add(nodeId);
+        }
+
+        const nodes = snapshot.nodes.map((statusNode: any) => {
+            const nodeId = readStringValue(statusNode?.nodeId, statusNode?.id);
+            const inlineNode = nodeId ? inlineNodesById.get(nodeId) : undefined;
+            if (!inlineNode) return statusNode;
+            const liveGit = buildInlineMeshTransitGitStatus(inlineNode);
+            if (!liveGit) return statusNode;
+            const nextStatus = { ...statusNode };
+            nextStatus.git = liveGit;
+            nextStatus.health = deriveMeshNodeHealthFromGit(liveGit);
+            delete nextStatus.gitProbePending;
+            if (readStringValue(nextStatus.error) === 'waiting for live peer git snapshot') delete nextStatus.error;
+            if (!readStringValue(nextStatus.machineStatus)) nextStatus.machineStatus = 'online';
+            if (nodeId) unavailableNodeIds.delete(nodeId);
+            changed = true;
+            return nextStatus;
+        });
+
+        if (!changed && !(options?.requireDirectPeerTruth && unavailableNodeIds.size > 0)) return snapshot;
+        const nextSourceOfTruth = {
+            ...sourceOfTruth,
+            ...(Object.keys(directPeerTruth).length ? {
+                directPeerTruth: {
+                    ...directPeerTruth,
+                    satisfied: options?.requireDirectPeerTruth === true ? unavailableNodeIds.size === 0 : directPeerTruth.satisfied,
+                    unavailableNodeIds: [...unavailableNodeIds],
+                },
+                ...(options?.requireDirectPeerTruth === true ? {
+                    coordinatorOwnsLiveTruth: unavailableNodeIds.size === 0,
+                    currentStatus: unavailableNodeIds.size === 0 ? 'live_git_and_session_probes' : 'direct_peer_truth_unavailable',
+                } : {}),
+            } : {}),
+        };
+        return {
+            ...snapshot,
+            ...(options?.requireDirectPeerTruth === true && unavailableNodeIds.size > 0 ? {
+                success: false,
+                code: 'mesh_direct_peer_truth_unavailable',
+                error: 'Selected coordinator could not confirm direct mesh truth for every remote node yet.',
+            } : {}),
+            sourceOfTruth: nextSourceOfTruth,
+            nodes,
+        };
+    }
+
+    private getCachedAggregateMeshStatus(meshId: string, mesh?: any, options?: { requireDirectPeerTruth?: boolean }): any | null {
         const cached = this.aggregateMeshStatusCache.get(meshId);
         if (!cached?.snapshot || cached.snapshot.success !== true || !Array.isArray(cached.snapshot.nodes)) return null;
-        const snapshot = this.cloneJsonValue(cached.snapshot);
+        let snapshot = this.cloneJsonValue(cached.snapshot);
+        snapshot = this.hydrateCachedAggregateMeshStatusFromInline(snapshot, mesh, options);
         const ageMs = Math.max(0, Date.now() - cached.builtAt);
         const sourceOfTruth = snapshot.sourceOfTruth && typeof snapshot.sourceOfTruth === 'object'
             ? snapshot.sourceOfTruth
@@ -1522,7 +1581,14 @@ export class DaemonCommandRouter {
         const preferInline = options?.preferInline === true;
         if (preferInline) {
             const cached = this.getCachedInlineMesh(meshId);
-            if (cached) return { mesh: cached, inline: true, source: 'inline_cache' };
+            if (cached) {
+                if (inlineMeshCarriesTransientNodeTruth(inlineMesh)) {
+                    const merged = reconcileInlineMeshCache(cached, inlineMesh as any);
+                    this.inlineMeshCache.set(meshId, sanitizeInlineMesh(merged));
+                    return { mesh: merged, inline: true, source: 'inline_cache' };
+                }
+                return { mesh: cached, inline: true, source: 'inline_cache' };
+            }
             if (inlineMeshCarriesTransientNodeTruth(inlineMesh)) {
                 this.warmInlineMeshCache(meshId, inlineMesh);
                 return { mesh: inlineMesh, inline: true, source: 'inline_bootstrap' };
@@ -3794,7 +3860,7 @@ export class DaemonCommandRouter {
 
                     const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
                     if (!refreshRequested) {
-                        const cachedStatus = this.getCachedAggregateMeshStatus(meshId);
+                        const cachedStatus = this.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
                         if (cachedStatus) {
                             logRepoMeshStatusDebug('return_cached', {
                                 meshId,
@@ -3836,7 +3902,8 @@ export class DaemonCommandRouter {
                             peerConfirmedCount: 0,
                             unavailableNodeIds: [] as string[],
                         };
-                    const directTruthSatisfied = meshRecord.source !== 'inline_bootstrap' || directTruth.directEvidenceCount > 0;
+                    const directTruthSatisfied = !requireDirectPeerTruth
+                        || (directTruth.directEvidenceCount > 0 && directTruth.unavailableNodeIds.length === 0);
                     if (requireDirectPeerTruth && !directTruthSatisfied) {
                         const failureResult = {
                             success: false,

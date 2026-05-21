@@ -9,7 +9,7 @@ vi.mock('../../src/components/MeshGraph/MeshGraphView', () => ({
   default: () => null,
 }))
 
-import MeshObservabilitySurface, { describeProviders, resolveGitLogRequest, summarizeNodeDrift, summarizeSelectedHead } from '../../src/components/MeshGraph/MeshObservabilitySurface'
+import MeshObservabilitySurface, { describeProviders, resolveGitLogRequest, resolveLatestGraphNodeForDetail, summarizeNodeDrift, summarizeSelectedHead } from '../../src/components/MeshGraph/MeshObservabilitySurface'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
 
 function renderSurface(status: any): string {
@@ -212,6 +212,62 @@ describe('MeshObservabilitySurface', () => {
     expect(summarizeSelectedHead(node, [])).toBe('083fe01')
     expect(summarizeSelectedHead(node, [])).not.toBe('Pending live git probe')
     expect(describeProviders(node)).toBe('installed providers not reported; priority hermes-cli, antigravity-cli')
+  })
+
+  it('hydrates selected detail graph fields from latest node status when stale graph warnings remain', () => {
+    const graphNode: any = {
+      id: 'node_303',
+      type: 'machine',
+      label: 'node_303',
+      workspace: '/remote/repo',
+      branch: null,
+      upstream: null,
+      upstreamStatus: null,
+      machineLabel: 'node_303',
+      health: 'unknown',
+      ahead: 0,
+      behind: 0,
+      dirtyFiles: 0,
+      activeSessions: 0,
+      providers: [],
+      snapshotCompleteness: 'pending_git',
+      snapshotWarnings: ['waiting for a live peer git snapshot'],
+      branchConvergence: null,
+      source: 'mesh_status',
+    }
+    const statusNode: any = {
+      nodeId: 'node_303',
+      machineLabel: 'node_303',
+      workspace: '/remote/repo',
+      health: 'online',
+      providers: [],
+      activeSessions: [],
+      git: {
+        isGitRepo: true,
+        workspace: '/remote/repo',
+        repoRoot: '/remote/repo',
+        branch: 'main',
+        upstream: 'origin/main',
+        upstreamStatus: 'fresh',
+        ahead: 0,
+        behind: 0,
+        staged: 0,
+        modified: 0,
+        untracked: 0,
+        deleted: 0,
+        renamed: 0,
+        hasConflicts: false,
+      },
+    }
+
+    const resolved = resolveLatestGraphNodeForDetail(graphNode, statusNode)
+    expect(resolved).toMatchObject({
+      branch: 'main',
+      upstream: 'origin/main',
+      health: 'online',
+      snapshotCompleteness: 'complete',
+      snapshotWarnings: [],
+    })
   })
 
   it('routes git_log to the selected node daemon and skips detached graph-only workspaces', () => {

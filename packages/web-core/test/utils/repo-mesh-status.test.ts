@@ -284,6 +284,62 @@ describe('extractRepoMeshStatus', () => {
     expect(graphNode?.snapshotWarnings.join('\n')).not.toContain('no peer git snapshot')
   })
 
+  it('uses nested live git status when an outer pending wrapper is present', () => {
+    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const normalized = extractRepoMeshStatus({
+      success: true,
+      result: {
+        meshId: 'mesh_nested_live_git',
+        meshName: 'Nested Live Git Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        refreshedAt: '2026-05-21T01:51Z',
+        nodes: [
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            health: 'unknown',
+            activeSessions: [],
+            gitProbePending: true,
+            lastGit: {
+              status: { code: 'pending_git', message: 'waiting for live peer git snapshot' },
+              result: {
+                status: {
+                  isGitRepo: true,
+                  workspace: repoRoot,
+                  repoRoot,
+                  branch: 'main',
+                  upstream: 'origin/main',
+                  upstreamStatus: 'fresh',
+                  headCommit: '083fe011',
+                  ahead: 0,
+                  behind: 1,
+                  staged: 0,
+                  modified: 0,
+                  untracked: 0,
+                  deleted: 0,
+                  renamed: 0,
+                  hasConflicts: false,
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as any)
+
+    const node303 = normalized?.nodes[0]
+    expect(node303).toMatchObject({
+      health: 'online',
+      git: expect.objectContaining({ branch: 'main', upstream: 'origin/main', headCommit: '083fe011' }),
+    })
+    expect(node303).not.toHaveProperty('gitProbePending')
+    const graph = buildMeshGraph(normalized as any)
+    expect(graph.nodes[0]?.snapshotCompleteness).not.toBe('pending_git')
+    expect(graph.nodes[0]?.snapshotWarnings.join('\n')).not.toContain('waiting for a live peer git snapshot')
+  })
+
   it('keeps node-scoped live git evidence when another peer has failed mesh transport', () => {
     const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({

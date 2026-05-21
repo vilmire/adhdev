@@ -336,6 +336,35 @@ function describeTimestamp(value: string | undefined, pending: boolean): string 
     return formatTimestamp(value) ?? value ?? (pending ? 'pending live refresh' : 'not reported')
 }
 
+export function resolveLatestGraphNodeForDetail(graphNode: MeshGraphNode | null, statusNode: RepoMeshNodeStatus | null): MeshGraphNode | null {
+    if (!graphNode || !statusNode?.git) return graphNode
+    const stalePendingWarnings = graphNode.snapshotWarnings.filter(warning => {
+        const normalized = warning.toLowerCase()
+        return normalized.includes('live peer git snapshot')
+            || normalized.includes('no peer git snapshot')
+            || normalized.includes('git probe')
+            || normalized.includes('pending_git')
+    })
+    const hasStalePendingState = graphNode.snapshotCompleteness === 'pending_git'
+        || graphNode.snapshotCompleteness === 'missing_git'
+        || stalePendingWarnings.length > 0
+        || graphNode.branch == null
+    if (!hasStalePendingState) return graphNode
+    const snapshotWarnings = graphNode.snapshotWarnings.filter(warning => !stalePendingWarnings.includes(warning))
+    return {
+        ...graphNode,
+        branch: statusNode.git.branch ?? graphNode.branch,
+        upstream: statusNode.git.upstream ?? graphNode.upstream,
+        upstreamStatus: statusNode.git.upstreamStatus ?? graphNode.upstreamStatus,
+        health: statusNode.health,
+        ahead: statusNode.git.ahead ?? graphNode.ahead,
+        behind: statusNode.git.behind ?? graphNode.behind,
+        dirtyFiles: (statusNode.git.staged ?? 0) + (statusNode.git.modified ?? 0) + (statusNode.git.untracked ?? 0) + (statusNode.git.deleted ?? 0) + (statusNode.git.renamed ?? 0),
+        snapshotCompleteness: snapshotWarnings.length > 0 ? graphNode.snapshotCompleteness : 'complete',
+        snapshotWarnings,
+    }
+}
+
 export default function MeshObservabilitySurface({
     graph,
     status,
@@ -383,8 +412,9 @@ export default function MeshObservabilitySurface({
         })
     }, [graphNodeById, selectedNodeId])
 
-    const selectedGraphNode = selectedNodeId ? graphNodeById.get(selectedNodeId) ?? null : null
+    const rawSelectedGraphNode = selectedNodeId ? graphNodeById.get(selectedNodeId) ?? null : null
     const selectedNodeStatus = selectedNodeId ? nodeStatusById.get(selectedNodeId) ?? null : null
+    const selectedGraphNode = resolveLatestGraphNodeForDetail(rawSelectedGraphNode, selectedNodeStatus)
     const selectedQueueTask = detailSelection?.kind === 'queue'
         ? queueTasks.find(task => task.id === detailSelection.taskId) ?? null
         : null

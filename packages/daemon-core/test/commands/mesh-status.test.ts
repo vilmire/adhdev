@@ -570,7 +570,101 @@ describe('mesh_status', () => {
     }
   })
 
-  it('returns connected peer git truth from one aggregate mesh_status call and isolates failed peers', async () => {
+  it('hydrates a cached pending aggregate from later inline live git truth before returning cache hits', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-cache-hydrate-')
+    try {
+      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      const { router, sessionHostControl } = createRouter()
+      const pendingInlineMesh = {
+        id: 'mesh_cache_hydrate',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        coordinator: { preferredNodeId: 'node_7' },
+        policy: {},
+        nodes: [
+          { id: 'node_7', daemonId: 'daemon_7', machineLabel: 'Local', workspace: repoRoot, repoRoot, providers: ['hermes-cli'], policy: { providerPriority: ['hermes-cli'] } },
+          {
+            id: 'node_303',
+            daemonId: 'daemon_303',
+            machineLabel: 'node_303',
+            workspace: remoteWorkspace,
+            repoRoot: remoteWorkspace,
+            policy: { providerPriority: ['hermes-cli'] },
+            cachedStatus: {
+              health: 'unknown',
+              gitProbePending: true,
+              error: 'waiting for live peer git snapshot',
+              git: { isGitRepo: false, branch: null, upstream: null, headCommit: null },
+            },
+          },
+        ],
+      }
+
+      const stale = await router.execute('mesh_status', {
+        meshId: 'mesh_cache_hydrate',
+        inlineMesh: pendingInlineMesh,
+        refresh: true,
+      }) as any
+      expect(stale.success).toBe(true)
+      expect(stale.nodes.find((node: any) => node.nodeId === 'node_303')).toMatchObject({
+        gitProbePending: true,
+        health: 'unknown',
+      })
+
+      sessionHostControl.listSessions.mockClear()
+      const liveInlineMesh = {
+        ...pendingInlineMesh,
+        nodes: [
+          pendingInlineMesh.nodes[0],
+          {
+            ...pendingInlineMesh.nodes[1],
+            lastGit: {
+              status: { code: 'pending_git', message: 'older pending wrapper' },
+              result: {
+                status: {
+                  isGitRepo: true,
+                  workspace: remoteWorkspace,
+                  repoRoot: remoteWorkspace,
+                  branch: 'main',
+                  upstream: 'origin/main',
+                  upstreamStatus: 'fresh',
+                  headCommit: 'live303',
+                  ahead: 0,
+                  behind: 0,
+                  staged: 0,
+                  modified: 0,
+                  untracked: 0,
+                  deleted: 0,
+                  renamed: 0,
+                  hasConflicts: false,
+                },
+              },
+            },
+          },
+        ],
+      }
+
+      const cached = await router.execute('mesh_status', {
+        meshId: 'mesh_cache_hydrate',
+        inlineMesh: liveInlineMesh,
+        refresh: false,
+      }) as any
+      const node303 = cached.nodes.find((node: any) => node.nodeId === 'node_303')
+      expect(cached.sourceOfTruth.aggregateSnapshot).toMatchObject({ cached: true, refreshReason: 'memory_cache_hit' })
+      expect(node303).toMatchObject({
+        health: 'online',
+        git: expect.objectContaining({ branch: 'main', upstream: 'origin/main', headCommit: 'live303' }),
+      })
+      expect(node303).not.toHaveProperty('gitProbePending')
+      expect(node303).not.toHaveProperty('error')
+      expect(sessionHostControl.listSessions).not.toHaveBeenCalled()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed when a direct peer remains unavailable even if another peer has live git truth', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-single-aggregate-')
     try {
       const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
@@ -687,46 +781,21 @@ describe('mesh_status', () => {
       }) as any
 
       expect(result).toMatchObject({
-        success: true,
+        success: false,
+        code: 'mesh_direct_peer_truth_unavailable',
         sourceOfTruth: {
           membership: 'inline_bootstrap_snapshot',
-          coordinatorOwnsLiveTruth: true,
-          currentStatus: 'live_git_and_session_probes',
+          coordinatorOwnsLiveTruth: false,
+          currentStatus: 'direct_peer_truth_unavailable',
           directPeerTruth: expect.objectContaining({
             required: true,
-            satisfied: true,
+            satisfied: false,
             peerAttemptedCount: 2,
             peerConfirmedCount: 1,
+            unavailableNodeIds: ['node_9f061_timeout_peer'],
           }),
         },
       })
-      const node303 = result.nodes.find((node: any) => node.nodeId === 'node_303')
-      expect(node303).toMatchObject({
-        health: 'dirty',
-        launchReady: true,
-        providerPriority: ['hermes-cli'],
-        connection: expect.objectContaining({ state: 'connected', transport: 'direct', source: 'mesh_peer_status' }),
-        git: expect.objectContaining({
-          branch: 'main',
-          upstream: 'origin/main',
-          headCommit: '083fe011',
-          behind: 8,
-          modified: 1,
-          untracked: 1,
-          stashCount: 2,
-          submodules: [
-            expect.objectContaining({ path: 'adhdev-providers' }),
-            expect.objectContaining({ path: 'oss' }),
-          ],
-        }),
-      })
-      expect(node303).not.toHaveProperty('gitProbePending')
-      const failedPeer = result.nodes.find((node: any) => node.nodeId === 'node_9f061_timeout_peer')
-      expect(failedPeer).toMatchObject({
-        health: 'unknown',
-        connection: expect.objectContaining({ state: 'failed' }),
-      })
-      expect(failedPeer?.git).toBeUndefined()
       expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
     } finally {
       await rm(dir, { recursive: true, force: true })

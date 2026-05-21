@@ -142,16 +142,11 @@ function readTransitGitStatus(node: JsonRecord): GitRepoStatus | undefined {
     const probeGitResult = readRecord(probeGit.result)
     const probeDirectStatus = readRecord(probeGit.status)
     const probeNestedStatus = readRecord(probeGitResult.status)
-    const status = Object.keys(directStatus).length
-        ? directStatus
-        : Object.keys(nestedStatus).length
-            ? nestedStatus
-            : Object.keys(probeDirectStatus).length
-                ? probeDirectStatus
-                : Object.keys(probeNestedStatus).length
-                    ? probeNestedStatus
-                    : {}
-    return normalizeGitStatus(status, node, { lastCheckedAt: Date.now() })
+    for (const status of [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus]) {
+        const normalized = normalizeGitStatus(status, node, { lastCheckedAt: Date.now() })
+        if (normalized) return normalized
+    }
+    return undefined
 }
 
 function getGitSubmoduleDriftState(git: GitRepoStatus | null | undefined): { dirty: boolean; outOfSync: boolean } {
