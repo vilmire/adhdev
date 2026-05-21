@@ -166,6 +166,12 @@ function deriveMeshNodeHealthFromGit(git: GitRepoStatus | null | undefined): Rep
     return 'online'
 }
 
+function preferGitDerivedHealth(rawHealth: string | undefined, git: GitRepoStatus | undefined): RepoMeshNodeStatus['health'] | undefined {
+    const gitHealth = git ? deriveMeshNodeHealthFromGit(git) : undefined
+    if (!rawHealth || rawHealth === 'unknown') return gitHealth
+    return rawHealth as RepoMeshNodeStatus['health']
+}
+
 function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | undefined {
     const details = Array.isArray(node.activeSessionDetails)
         ? node.activeSessionDetails
@@ -232,9 +238,10 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
     const git = authoritativeGit ?? cachedGit
 
     const machineStatus = readString(record.machineStatus, record.machine_status, cachedStatus.machineStatus, cachedStatus.machine_status)
+    const rawHealth = readString(record.health)
     const health = liveGit
         ? deriveMeshNodeHealthFromGit(git)
-        : readString(record.health)
+        : preferGitDerivedHealth(rawHealth, authoritativeGit)
             || (git ? deriveMeshNodeHealthFromGit(git) : undefined)
             || readString(cachedStatus.health)
             || machineStatus
@@ -247,6 +254,8 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
     const activeSessions = readStringArray(record.activeSessions)
     const derivedActiveSessions = activeSessionDetails?.map(entry => entry.sessionId) ?? []
     const providerPriority = readStringArray(record.providerPriority)
+    const rawGitProbePending = readBoolean(record.gitProbePending, record.git_probe_pending)
+    const gitProbePending = authoritativeGit ? undefined : rawGitProbePending
 
     return {
         nodeId,
@@ -260,7 +269,7 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
         ...(readString(record.worktreeBranch, record.worktree_branch) ? { worktreeBranch: readString(record.worktreeBranch, record.worktree_branch) } : {}),
         health: health as RepoMeshNodeStatus['health'],
         ...(git ? { git } : {}),
-        ...(readBoolean(record.gitProbePending, record.git_probe_pending) !== undefined ? { gitProbePending: readBoolean(record.gitProbePending, record.git_probe_pending) } : {}),
+        ...(gitProbePending !== undefined ? { gitProbePending } : {}),
         providers: readStringArray(record.providers),
         activeSessions: activeSessions.length > 0 ? activeSessions : derivedActiveSessions,
         ...(activeSessionDetails && activeSessionDetails.length > 0 ? { activeSessionDetails } : {}),

@@ -189,6 +189,100 @@ describe('extractRepoMeshStatus', () => {
     expect(graph.snapshotWarnings).toEqual([])
   })
 
+  it('clears pending git and derives health when direct mesh peer status coexists with live git fields', () => {
+    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const normalized = extractRepoMeshStatus({
+      success: true,
+      result: {
+        meshId: 'mesh_direct_live_git',
+        meshName: 'Direct Live Git Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        refreshedAt: '2026-05-21T01:03:51Z',
+        sourceOfTruth: { currentStatus: 'live_git_and_session_probes' },
+        nodes: [
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            repoRoot,
+            daemonId: '67cf05aed2496f7ed6b261391e9e15bae893bd08ed633c155e9c866b18cbf96a',
+            machineStatus: 'online',
+            health: 'unknown',
+            launchReady: true,
+            providers: [],
+            providerPriority: ['hermes-cli', 'antigravity-cli'],
+            activeSessions: [],
+            gitProbePending: true,
+            connection: {
+              state: 'connected',
+              transport: 'direct',
+              reported: true,
+              source: 'mesh_peer_status',
+            },
+            git: {
+              isGitRepo: true,
+              workspace: repoRoot,
+              repoRoot,
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              headCommit: '083fe011',
+              ahead: 0,
+              behind: 1,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              lastCheckedAt: Date.parse('2026-05-21T00:52:50Z'),
+              submodules: [
+                {
+                  path: 'oss',
+                  commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a',
+                  repoPath: `${repoRoot}/oss`,
+                  dirty: false,
+                  outOfSync: false,
+                  lastCheckedAt: Date.parse('2026-05-21T00:52:50Z'),
+                },
+              ],
+            },
+          },
+        ],
+        queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+        ledger: { entries: [], summary: { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 } },
+      },
+    } as any)
+
+    const node303 = normalized?.nodes.find(node => node.nodeId === 'node_303')
+    expect(node303).toMatchObject({
+      health: 'online',
+      providerPriority: ['hermes-cli', 'antigravity-cli'],
+      connection: expect.objectContaining({
+        transport: 'direct',
+        source: 'mesh_peer_status',
+      }),
+      git: expect.objectContaining({
+        branch: 'main',
+        headCommit: '083fe011',
+        upstream: 'origin/main',
+        behind: 1,
+      }),
+    })
+    expect(node303).not.toHaveProperty('gitProbePending')
+
+    const graph = buildMeshGraph(normalized as any)
+    const graphNode = graph.nodes.find(node => node.id === 'node_303')
+    expect(graphNode).toMatchObject({
+      branch: 'main',
+      health: 'online',
+    })
+    expect(graphNode?.snapshotCompleteness).not.toBe('pending_git')
+    expect(graphNode?.snapshotWarnings.join('\n')).not.toContain('waiting for a live peer git snapshot')
+    expect(graphNode?.snapshotWarnings.join('\n')).not.toContain('no peer git snapshot')
+  })
+
   it('returns null for unrelated payloads', () => {
     expect(extractRepoMeshStatus({ success: true, result: { ok: true } } as any)).toBeNull()
   })

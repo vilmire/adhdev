@@ -115,8 +115,24 @@ export interface MeshGraph {
 
 const STALE_SNAPSHOT_MS = 5 * 60 * 1000
 
+function hasLiveGitEvidence(node: RepoMeshNodeStatus): boolean {
+    const git = node.git
+    return Boolean(
+        git
+        && (
+            git.isGitRepo === true
+            || git.isGitRepo === false
+            || git.branch
+            || git.upstream
+            || git.headCommit
+            || typeof git.lastCheckedAt === 'number'
+            || (git.submodules?.length ?? 0) > 0
+        ),
+    )
+}
+
 function isPendingPeerGitSnapshot(node: RepoMeshNodeStatus): boolean {
-    if (node.git?.isGitRepo === true) return false
+    if (hasLiveGitEvidence(node)) return false
     if (node.gitProbePending) return true
     if (node.connection?.state === 'connecting') return true
     return false

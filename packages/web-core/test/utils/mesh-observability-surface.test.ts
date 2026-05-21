@@ -9,7 +9,7 @@ vi.mock('../../src/components/MeshGraph/MeshGraphView', () => ({
   default: () => null,
 }))
 
-import MeshObservabilitySurface, { resolveGitLogRequest } from '../../src/components/MeshGraph/MeshObservabilitySurface'
+import MeshObservabilitySurface, { describeProviders, resolveGitLogRequest, summarizeNodeDrift, summarizeSelectedHead } from '../../src/components/MeshGraph/MeshObservabilitySurface'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
 
 function renderSurface(status: any): string {
@@ -168,6 +168,50 @@ describe('MeshObservabilitySurface', () => {
     expect(html).toContain('1 missing submodule visibility')
     expect(html).toContain('1 node(s) are missing peer submodule visibility reported elsewhere in the mesh')
     expect(html).not.toContain('mesh converged')
+  })
+
+  it('uses live git evidence in detail helpers even when mesh_peer_status still marks gitProbePending', () => {
+    const node: any = {
+      nodeId: 'node_303',
+      machineLabel: 'node_303',
+      workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+      repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+      health: 'online',
+      providers: [],
+      providerPriority: ['hermes-cli', 'antigravity-cli'],
+      activeSessions: [],
+      launchReady: true,
+      gitProbePending: true,
+      connection: {
+        state: 'connected',
+        transport: 'direct',
+        reported: true,
+        source: 'mesh_peer_status',
+      },
+      git: {
+        isGitRepo: true,
+        workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+        repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+        branch: 'main',
+        upstream: 'origin/main',
+        upstreamStatus: 'fresh',
+        headCommit: '083fe011',
+        ahead: 0,
+        behind: 1,
+        staged: 0,
+        modified: 0,
+        untracked: 0,
+        deleted: 0,
+        renamed: 0,
+        hasConflicts: false,
+      },
+    }
+
+    expect(summarizeNodeDrift(node)).toBe('main · ↑0/↓1')
+    expect(summarizeNodeDrift(node)).not.toBe('Git probe pending')
+    expect(summarizeSelectedHead(node, [])).toBe('083fe01')
+    expect(summarizeSelectedHead(node, [])).not.toBe('Pending live git probe')
+    expect(describeProviders(node)).toBe('installed providers not reported; priority hermes-cli, antigravity-cli')
   })
 
   it('routes git_log to the selected node daemon and skips detached graph-only workspaces', () => {

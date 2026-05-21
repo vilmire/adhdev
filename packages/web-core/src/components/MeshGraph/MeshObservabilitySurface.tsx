@@ -205,10 +205,9 @@ function buildDashboardSessionHref(daemonId: string | null | undefined, sessionI
     return `/dashboard?${params.toString()}`
 }
 
-function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
-    if (node.gitProbePending) return 'Git probe pending'
+export function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
     const git = node.git
-    if (!git) return 'No git probe'
+    if (!git) return node.gitProbePending ? 'Git probe pending' : 'No git probe'
     const changes = (git.staged ?? 0) + (git.modified ?? 0) + (git.untracked ?? 0) + (git.deleted ?? 0) + (git.renamed ?? 0)
     const parts: string[] = []
     if (git.branch) parts.push(git.branch)
@@ -288,6 +287,12 @@ function summarizeHead(statusNode: RepoMeshNodeStatus | null, historyEntries: Gi
     return [shortCommit(latestEntry.commit), latestEntry.message].filter(Boolean).join(' · ')
 }
 
+export function summarizeSelectedHead(statusNode: RepoMeshNodeStatus | null, historyEntries: GitLogEntry[]): string | null {
+    const summary = summarizeHead(statusNode, historyEntries)
+    if (summary) return summary
+    return statusNode?.gitProbePending ? 'Pending live git probe' : null
+}
+
 function extractGitLogEntries(response: any): GitLogEntry[] {
     const body = response?.result ?? response
     const log = body?.log ?? response?.log ?? body
@@ -316,9 +321,9 @@ export function resolveGitLogRequest(args: {
     return null
 }
 
-function describeProviders(node: RepoMeshNodeStatus): string {
+export function describeProviders(node: RepoMeshNodeStatus): string {
     if ((node.providers ?? []).length > 0) return node.providers.join(', ')
-    if ((node.providerPriority ?? []).length > 0) return 'not reported yet'
+    if ((node.providerPriority ?? []).length > 0) return `installed providers not reported; priority ${(node.providerPriority ?? []).join(', ')}`
     return 'not reported yet'
 }
 
@@ -403,9 +408,7 @@ export default function MeshObservabilitySurface({
     })
     const selectedGitWorkspace = selectedGitRequest?.workspace ?? null
     const selectedGitHistory = selectedGitWorkspace ? gitHistoryByWorkspace[selectedGitWorkspace] ?? null : null
-    const selectedHeadSummary = selectedNodeStatus?.gitProbePending && !selectedGitHistory?.entries?.length
-        ? 'Pending live git probe'
-        : summarizeHead(selectedNodeStatus, selectedGitHistory?.entries ?? [])
+    const selectedHeadSummary = summarizeSelectedHead(selectedNodeStatus, selectedGitHistory?.entries ?? [])
 
     const openSessionChat = useCallback((sessionId: string | null | undefined) => {
         if (!sessionId) return
