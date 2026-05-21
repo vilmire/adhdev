@@ -404,6 +404,134 @@ describe('extractRepoMeshStatus', () => {
     expect(graphNode?.snapshotWarnings.join('\n')).not.toContain('no peer git snapshot')
   })
 
+  it('normalizes live git and launch readiness over stale bootstrap pending snapshot fields', () => {
+    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const normalized = extractRepoMeshStatus({
+      success: true,
+      result: {
+        meshId: 'mesh_node303_bootstrap_pending',
+        meshName: 'Node 303 Bootstrap Pending Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        refreshedAt: '2026-05-21T04:24:47Z',
+        sourceOfTruth: { currentStatus: 'live_git_and_session_probes' },
+        nodes: [
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            repoRoot,
+            daemonId: '67cf05aed2496f7ed6b261391e9e15bae893bd08ed633c155e9c866b18cbf96a',
+            machineId: 'mreg_3f4af21a2741a088a0c41835',
+            machineStatus: 'online',
+            health: 'unknown',
+            launchReady: true,
+            providers: [],
+            providerPriority: ['hermes-cli'],
+            activeSessions: [],
+            gitProbePending: true,
+            cachedStatus: {
+              health: 'unknown',
+              launchReady: false,
+              gitProbePending: true,
+              error: 'waiting for live peer git snapshot',
+              git: {
+                isGitRepo: false,
+                workspace: repoRoot,
+                repoRoot,
+                branch: null,
+                upstream: null,
+                headCommit: null,
+              },
+            },
+            connection: {
+              state: 'connected',
+              transport: 'direct',
+              reported: true,
+              source: 'mesh_peer_status',
+            },
+            git: {
+              isGitRepo: true,
+              workspace: repoRoot,
+              repoRoot,
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              headCommit: '083fe011',
+              ahead: 0,
+              behind: 8,
+              staged: 0,
+              modified: 1,
+              untracked: 1,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              stashCount: 2,
+              lastCheckedAt: Date.parse('2026-05-21T04:24:47Z'),
+              submodules: [
+                {
+                  path: 'adhdev-providers',
+                  commit: 'provider-sha',
+                  repoPath: `${repoRoot}/adhdev-providers`,
+                  dirty: false,
+                  outOfSync: false,
+                },
+                {
+                  path: 'oss',
+                  commit: 'oss-sha',
+                  repoPath: `${repoRoot}/oss`,
+                  dirty: false,
+                  outOfSync: false,
+                },
+              ],
+            },
+          },
+        ],
+        queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+        ledger: { entries: [], summary: { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 } },
+      },
+    } as any)
+
+    const node303 = normalized?.nodes.find(node => node.nodeId === 'node_303')
+    expect(node303).toMatchObject({
+      health: 'dirty',
+      launchReady: true,
+      git: expect.objectContaining({
+        branch: 'main',
+        upstream: 'origin/main',
+        headCommit: '083fe011',
+        behind: 8,
+        modified: 1,
+        untracked: 1,
+        stashCount: 2,
+        submodules: [
+          expect.objectContaining({ path: 'adhdev-providers' }),
+          expect.objectContaining({ path: 'oss' }),
+        ],
+      }),
+    })
+    expect(node303).not.toHaveProperty('gitProbePending')
+    expect(node303?.error).toBeUndefined()
+    expect(describeProviders(node303 as any)).toBe('installed providers not reported; priority hermes-cli')
+    expect(summarizeNodeDrift(node303 as any)).toBe('main · ↑0/↓8 · 2 dirty')
+    expect(summarizeSelectedHead(node303 as any, [])).toBe('083fe01')
+
+    const graph = buildMeshGraph(normalized as any)
+    const graphNode = graph.nodes.find(node => node.id === 'node_303')
+    expect(graphNode).toMatchObject({
+      branch: 'main',
+      upstream: 'origin/main',
+      health: 'dirty',
+      snapshotCompleteness: 'complete',
+      submoduleCommit: '083fe011',
+    })
+    expect(graph.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'node_303::submodule::adhdev-providers', type: 'submoduleNode' }),
+      expect.objectContaining({ id: 'node_303::submodule::oss', type: 'submoduleNode' }),
+    ]))
+    expect(graphNode?.snapshotWarnings).toEqual([])
+  })
+
   it('returns null for unrelated payloads', () => {
     expect(extractRepoMeshStatus({ success: true, result: { ok: true } } as any)).toBeNull()
   })
