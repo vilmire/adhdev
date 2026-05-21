@@ -271,20 +271,37 @@ function buildLivePeerGitConnection(connection: RepoMeshNodeStatus['connection']
     }
 }
 
+export function repoMeshNodeHasLiveGitEvidence(node: Pick<RepoMeshNodeStatus, 'git'>): boolean {
+    const git = node.git
+    return Boolean(
+        git
+        && (
+            git.isGitRepo === true
+            || git.isGitRepo === false
+            || git.branch
+            || git.upstream
+            || git.headCommit
+            || typeof git.lastCheckedAt === 'number'
+            || (git.submodules?.length ?? 0) > 0
+        ),
+    )
+}
+
 function scoreRepoMeshNodeTruth(node: RepoMeshNodeStatus): number {
     let score = 0
     const git = node.git
-    if (git) {
-        score += 50
-        if (git.isGitRepo === true) score += 20
-        if (git.isGitRepo === false) score += 5
-        if (git.branch) score += 15
-        if (git.upstream) score += 10
-        if (git.headCommit) score += 10
-        if (git.upstreamStatus && git.upstreamStatus !== 'unchecked') score += 5
-        if (typeof git.lastCheckedAt === 'number') score += 5
-        score += (git.submodules?.length ?? 0) * 4
+    if (repoMeshNodeHasLiveGitEvidence(node)) {
+        score += 80
+        if (git?.isGitRepo === true) score += 20
+        if (git?.isGitRepo === false) score += 5
+        if (git?.branch) score += 20
+        if (git?.upstream) score += 12
+        if (git?.headCommit) score += 12
+        if (git?.upstreamStatus && git.upstreamStatus !== 'unchecked') score += 6
+        if (typeof git?.lastCheckedAt === 'number') score += 6
+        score += (git?.submodules?.length ?? 0) * 6
     }
+    if ((node as any).branchConvergence?.status) score += 12
     if (node.connection?.state === 'connected' || node.connection?.state === 'self') score += 8
     if (node.connection?.transport === 'direct') score += 4
     if (node.connection?.source === 'mesh_peer_status') score += 4
@@ -292,7 +309,7 @@ function scoreRepoMeshNodeTruth(node: RepoMeshNodeStatus): number {
     if (node.health === 'dirty') score += 3
     if (node.health === 'degraded') score += 2
     if (node.launchReady) score += 2
-    if (node.gitProbePending) score -= 20
+    if (node.gitProbePending) score -= 40
     if (node.error) score -= 10
     return score
 }
@@ -339,7 +356,7 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
 
     const cachedStatus = readRecord(record.cachedStatus)
     const liveGit = readTransitGitStatus(record)
-    const directGit = liveGit ? undefined : normalizeGitStatus(readRecord(record.git), record)
+    const directGit = liveGit ? undefined : normalizeGitStatus(readRecord(record.git), record) ?? normalizeGitStatus(record, record)
     const authoritativeGit = liveGit ?? directGit
     const cachedGit = authoritativeGit ? undefined : normalizeGitStatus(readRecord(cachedStatus.git), record)
     const git = authoritativeGit ?? cachedGit
@@ -394,6 +411,50 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
     }
 }
 
+function canonicalizeRepoMeshNodes(nodes: RepoMeshNodeStatus[]): RepoMeshNodeStatus[] {
+    const nodesById = new Map<string, RepoMeshNodeStatus>()
+    const canonicalNodes: RepoMeshNodeStatus[] = []
+    for (const node of nodes) {
+        const existing = nodesById.get(node.nodeId)
+        if (!existing) {
+            nodesById.set(node.nodeId, node)
+            canonicalNodes.push(node)
+            continue
+        }
+        const merged = mergeRepoMeshNodeStatus(existing, node)
+        nodesById.set(node.nodeId, merged)
+        const index = canonicalNodes.findIndex(entry => entry.nodeId === node.nodeId)
+        if (index >= 0) canonicalNodes[index] = merged
+    }
+    return canonicalNodes
+}
+
+export function canonicalizeRepoMeshStatus(status: RepoMeshStatus): RepoMeshStatus {
+    return {
+        ...status,
+        nodes: canonicalizeRepoMeshNodes(status.nodes ?? []),
+    }
+}
+
+export function summarizeRepoMeshCanonicalNodeDebug(node: RepoMeshNodeStatus | null | undefined): Record<string, unknown> {
+    const git = node?.git
+    return {
+        nodeId: node?.nodeId ?? null,
+        chosenSource: git ? 'live_git' : node?.gitProbePending ? 'pending_git' : 'no_git',
+        hasLiveGit: repoMeshNodeHasLiveGitEvidence(node ?? { git: undefined } as RepoMeshNodeStatus),
+        branch: git?.branch ?? null,
+        upstream: git?.upstream ?? null,
+        headCommit: git?.headCommit ?? null,
+        submoduleCount: git?.submodules?.length ?? 0,
+        pendingGit: node?.gitProbePending === true,
+        connection: node?.connection ? {
+            state: node.connection.state,
+            transport: node.connection.transport,
+            source: node.connection.source,
+        } : null,
+    }
+}
+
 function normalizeRepoMeshStatus(candidate: JsonRecord): RepoMeshStatus | null {
     const meshId = readString(candidate.meshId, candidate.mesh_id, candidate.id)
     const nodesValue = candidate.nodes
@@ -404,20 +465,7 @@ function normalizeRepoMeshStatus(candidate: JsonRecord): RepoMeshStatus | null {
         : null
     if (!meshId || !normalizedNodes) return null
 
-    const nodesById = new Map<string, RepoMeshNodeStatus>()
-    const nodes: RepoMeshNodeStatus[] = []
-    for (const node of normalizedNodes) {
-        const existing = nodesById.get(node.nodeId)
-        if (!existing) {
-            nodesById.set(node.nodeId, node)
-            nodes.push(node)
-            continue
-        }
-        const merged = mergeRepoMeshNodeStatus(existing, node)
-        nodesById.set(node.nodeId, merged)
-        const index = nodes.findIndex(entry => entry.nodeId === node.nodeId)
-        if (index >= 0) nodes[index] = merged
-    }
+    const nodes = canonicalizeRepoMeshNodes(normalizedNodes)
     const meshName = readString(candidate.meshName, candidate.mesh_name, candidate.name)
     const repoIdentity = readString(candidate.repoIdentity, candidate.repo_identity)
     const refreshedAt = readString(candidate.refreshedAt, candidate.refreshed_at, candidate.updatedAt, candidate.updated_at)

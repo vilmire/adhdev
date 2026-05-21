@@ -9,6 +9,7 @@ import type {
     RepoMeshNodeStatus,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
+import { canonicalizeRepoMeshStatus, repoMeshNodeHasLiveGitEvidence } from './repo-mesh-status'
 
 export type MeshGraphNodeType = 'defaultBranchNode' | 'worktreeNode' | 'orphanNode' | 'submoduleNode'
 export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink'
@@ -116,19 +117,7 @@ export interface MeshGraph {
 const STALE_SNAPSHOT_MS = 5 * 60 * 1000
 
 function hasLiveGitEvidence(node: RepoMeshNodeStatus): boolean {
-    const git = node.git
-    return Boolean(
-        git
-        && (
-            git.isGitRepo === true
-            || git.isGitRepo === false
-            || git.branch
-            || git.upstream
-            || git.headCommit
-            || typeof git.lastCheckedAt === 'number'
-            || (git.submodules?.length ?? 0) > 0
-        ),
-    )
+    return repoMeshNodeHasLiveGitEvidence(node)
 }
 
 function isPendingPeerGitSnapshot(node: RepoMeshNodeStatus): boolean {
@@ -283,7 +272,37 @@ function pickDominantBranchConvergence(convergences: MeshGraphBranchConvergence[
     ))
 }
 
+function readProvidedBranchConvergence(node: RepoMeshNodeStatus): MeshGraphBranchConvergence | null {
+    if (isPendingPeerGitSnapshot(node)) return null
+    const provided = (node as unknown as { branchConvergence?: Partial<MeshGraphBranchConvergence> }).branchConvergence
+    if (!provided || typeof provided !== 'object') return null
+    const status = provided.status
+    if (!status || !['merged_to_main', 'pushed_feature_branch_needs_merge', 'blocked_review', 'cleanup_candidate', 'not_mergeable'].includes(status)) return null
+    const git = node.git
+    return {
+        status: status as MeshGraphBranchConvergenceStatus,
+        needsConvergence: provided.needsConvergence ?? status !== 'merged_to_main',
+        reason: provided.reason ?? 'provided_by_coordinator',
+        nextStep: provided.nextStep ?? null,
+        branch: provided.branch ?? git?.branch ?? null,
+        defaultBranch: provided.defaultBranch ?? null,
+        upstream: provided.upstream ?? git?.upstream ?? null,
+        upstreamStatus: provided.upstreamStatus ?? git?.upstreamStatus ?? null,
+        ahead: provided.ahead ?? git?.ahead ?? 0,
+        behind: provided.behind ?? git?.behind ?? 0,
+        dirty: provided.dirty ?? (isDirty(git) || hasDirtySubmodules(git)),
+        hasConflicts: provided.hasConflicts ?? (Boolean(git?.hasConflicts) || hasOutOfSyncSubmodules(git)),
+    }
+}
+
 function evaluateBranchConvergence(node: RepoMeshNodeStatus, defaultBranch: string | null): MeshGraphBranchConvergence | null {
+    const providedConvergence = readProvidedBranchConvergence(node)
+    if (providedConvergence) {
+        return {
+            ...providedConvergence,
+            defaultBranch: providedConvergence.defaultBranch ?? defaultBranch,
+        }
+    }
     if (!defaultBranch) return null
     if (isPendingPeerGitSnapshot(node)) return null
 
@@ -472,20 +491,21 @@ function assessSnapshotCompleteness(args: {
 }
 
 export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
-    const meshDefaultBranch = typeof (status as any).defaultBranch === 'string' && (status as any).defaultBranch.trim().length > 0
-        ? (status as any).defaultBranch.trim()
+    const canonicalStatus = canonicalizeRepoMeshStatus(status)
+    const meshDefaultBranch = typeof (canonicalStatus as any).defaultBranch === 'string' && (canonicalStatus as any).defaultBranch.trim().length > 0
+        ? (canonicalStatus as any).defaultBranch.trim()
         : null
-    const inferredDefaultBranch = meshDefaultBranch ?? inferDefaultBranch(status.nodes)
-    const refreshedAtMs = parseTimestampMs(status.refreshedAt)
+    const inferredDefaultBranch = meshDefaultBranch ?? inferDefaultBranch(canonicalStatus.nodes)
+    const refreshedAtMs = parseTimestampMs(canonicalStatus.refreshedAt)
     const expectedSubmodulePaths = new Set(
-        status.nodes.flatMap(node => (node.git?.submodules ?? []).map(submodule => submodule.path)),
+        canonicalStatus.nodes.flatMap(node => (node.git?.submodules ?? []).map(submodule => submodule.path)),
     )
     const nodes: MeshGraphNode[] = []
     const edges: MeshGraphEdge[] = []
     const warnings: string[] = []
     const branchToNodeIds = new Map<string, string[]>()
 
-    for (const nodeStatus of status.nodes) {
+    for (const nodeStatus of canonicalStatus.nodes) {
         const git = nodeStatus.git
         const branch = git?.branch ?? null
         const submoduleHealth = getParentSubmoduleHealth(git)
@@ -608,7 +628,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             id: defaultBranchNodeId,
             type: 'defaultBranchNode',
             label: inferredDefaultBranch,
-            workspace: status.repoIdentity,
+            workspace: canonicalStatus.repoIdentity,
             branch: inferredDefaultBranch,
             upstream: null,
             upstreamStatus: null,
@@ -640,7 +660,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             source: {
                 nodeId: defaultBranchNodeId,
                 machineLabel: inferredDefaultBranch,
-                workspace: status.repoIdentity,
+                workspace: canonicalStatus.repoIdentity,
                 health: pickDominantHealth(branchNodes.map(node => node.health)),
                 providers: [],
                 activeSessions: [],
@@ -734,10 +754,10 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     if (!inferredDefaultBranch) warnings.push('Could not infer a default branch from live mesh status')
 
     return {
-        meshId: status.meshId,
-        meshName: status.meshName,
-        repoIdentity: status.repoIdentity,
-        refreshedAt: status.refreshedAt,
+        meshId: canonicalStatus.meshId,
+        meshName: canonicalStatus.meshName,
+        repoIdentity: canonicalStatus.repoIdentity,
+        refreshedAt: canonicalStatus.refreshedAt,
         nodes,
         edges,
         stats: {

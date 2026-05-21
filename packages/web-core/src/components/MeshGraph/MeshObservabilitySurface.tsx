@@ -13,6 +13,8 @@ import { getDashboardActiveTabHref } from '../../utils/dashboard-route-paths'
 import MeshGraphView from './MeshGraphView'
 import { getMeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData, MeshGraphNode } from './types'
+import { buildMeshGraph } from '../../utils/mesh-visualization'
+import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from '../../utils/repo-mesh-status'
 
 type DetailSelection =
     | { kind: 'node'; nodeId: string }
@@ -349,7 +351,18 @@ export function resolveLatestGraphNodeForDetail(graphNode: MeshGraphNode | null,
         || graphNode.snapshotCompleteness === 'missing_git'
         || stalePendingWarnings.length > 0
         || graphNode.branch == null
+        || graphNode.branchConvergence == null
     if (!hasStalePendingState) return graphNode
+    const replacementGraph = buildMeshGraph({
+        meshId: 'selected-detail-canonical',
+        meshName: 'Selected detail canonical',
+        repoIdentity: statusNode.repoRoot ?? statusNode.workspace,
+        defaultBranch: (statusNode as any).branchConvergence?.defaultBranch ?? statusNode.git.branch ?? undefined,
+        refreshedAt: new Date(statusNode.git.lastCheckedAt ?? Date.now()).toISOString(),
+        nodes: [statusNode],
+    } as RepoMeshStatus)
+    const replacementNode = replacementGraph.nodes.find(node => node.id === statusNode.nodeId)
+    if (replacementNode) return replacementNode
     const snapshotWarnings = graphNode.snapshotWarnings.filter(warning => !stalePendingWarnings.includes(warning))
     return {
         ...graphNode,
@@ -366,7 +379,7 @@ export function resolveLatestGraphNodeForDetail(graphNode: MeshGraphNode | null,
 }
 
 export default function MeshObservabilitySurface({
-    graph,
+    graph: _graph,
     status,
     emptyMessage = 'No live mesh graph is available for this coordinator yet.',
     daemonId = null,
@@ -374,19 +387,21 @@ export default function MeshObservabilitySurface({
 }: MeshObservabilitySurfaceProps) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
+    const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
+    const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [canonicalStatus]) as MeshGraphData
     const navigate = useNavigate()
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
     const [queueFilter, setQueueFilter] = useState<'active' | 'history' | 'all'>('active')
     const [gitHistoryByWorkspace, setGitHistoryByWorkspace] = useState<Record<string, GitHistoryState>>({})
 
-    const nodeStatusById = useMemo(() => new Map(status.nodes.map(node => [node.nodeId, node])), [status.nodes])
-    const graphNodeById = useMemo(() => new Map(graph.nodes.map(node => [node.id, node])), [graph.nodes])
-    const queueTasks = status.queue?.tasks ?? []
-    const queueSummary = status.queue?.summary ?? null
+    const nodeStatusById = useMemo(() => new Map(canonicalStatus.nodes.map(node => [node.nodeId, node])), [canonicalStatus.nodes])
+    const graphNodeById = useMemo(() => new Map(canonicalGraph.nodes.map(node => [node.id, node])), [canonicalGraph.nodes])
+    const queueTasks = canonicalStatus.queue?.tasks ?? []
+    const queueSummary = canonicalStatus.queue?.summary ?? null
     const queueActiveCounts = queueSummary?.activeCounts ?? EMPTY_QUEUE_ACTIVE_COUNTS
-    const ledgerSummary = status.ledger?.summary ?? EMPTY_LEDGER_SUMMARY
-    const sessionEntries = useMemo(() => collectSessionEntries(status), [status])
+    const ledgerSummary = canonicalStatus.ledger?.summary ?? EMPTY_LEDGER_SUMMARY
+    const sessionEntries = useMemo(() => collectSessionEntries(canonicalStatus), [canonicalStatus])
     const stateCounts = useMemo(() => {
         const counts = new Map<string, number>()
         for (const entry of sessionEntries) {
@@ -415,6 +430,30 @@ export default function MeshObservabilitySurface({
     const rawSelectedGraphNode = selectedNodeId ? graphNodeById.get(selectedNodeId) ?? null : null
     const selectedNodeStatus = selectedNodeId ? nodeStatusById.get(selectedNodeId) ?? null : null
     const selectedGraphNode = resolveLatestGraphNodeForDetail(rawSelectedGraphNode, selectedNodeStatus)
+
+    useEffect(() => {
+        if (!selectedNodeId) return
+        try {
+            console.info('[RepoMeshGraphDebug]', {
+                event: 'selected_canonical_node',
+                meshId: canonicalStatus.meshId,
+                selectedNodeId,
+                canonicalNode: summarizeRepoMeshCanonicalNodeDebug(selectedNodeStatus),
+                graphNode: selectedGraphNode ? {
+                    id: selectedGraphNode.id,
+                    branch: selectedGraphNode.branch,
+                    upstream: selectedGraphNode.upstream,
+                    headCommit: selectedGraphNode.submoduleCommit,
+                    submoduleCount: selectedNodeStatus?.git?.submodules?.length ?? 0,
+                    snapshotCompleteness: selectedGraphNode.snapshotCompleteness,
+                    snapshotWarnings: selectedGraphNode.snapshotWarnings,
+                    branchConvergence: selectedGraphNode.branchConvergence?.status ?? null,
+                } : null,
+            })
+        } catch {
+            // Debug logging must never affect rendering.
+        }
+    }, [canonicalStatus.meshId, selectedGraphNode, selectedNodeId, selectedNodeStatus])
     const selectedQueueTask = detailSelection?.kind === 'queue'
         ? queueTasks.find(task => task.id === detailSelection.taskId) ?? null
         : null
@@ -503,16 +542,16 @@ export default function MeshObservabilitySurface({
     }, [gitHistoryByWorkspace, selectedGitRequest, sendDaemonCommand])
 
     const statusWarnings = [
-        ...(graph.warnings ?? []),
-        ...(status.nodes.filter(node => node.machineStatus && node.machineStatus !== 'online').map(node => `${node.machineLabel}: ${node.machineStatus}`)),
+        ...(canonicalGraph.warnings ?? []),
+        ...(canonicalStatus.nodes.filter(node => node.machineStatus && node.machineStatus !== 'online').map(node => `${node.machineLabel}: ${node.machineStatus}`)),
     ]
-    const hasSnapshotGaps = graph.stats.incompleteSnapshotNodes > 0
-    const headlineLabel = graph.stats.followUpNodes > 0
-        ? `${graph.stats.followUpNodes} need follow-up`
+    const hasSnapshotGaps = canonicalGraph.stats.incompleteSnapshotNodes > 0
+    const headlineLabel = canonicalGraph.stats.followUpNodes > 0
+        ? `${canonicalGraph.stats.followUpNodes} need follow-up`
         : hasSnapshotGaps
             ? 'mesh visibility incomplete'
             : 'mesh converged'
-    const headlineTone = graph.stats.followUpNodes > 0 ? 'danger' : hasSnapshotGaps ? 'warn' : 'good'
+    const headlineTone = canonicalGraph.stats.followUpNodes > 0 ? 'danger' : hasSnapshotGaps ? 'warn' : 'good'
     const hasDetailPane = Boolean(selectedQueueTask || selectedSessionEntry || selectedGraphNode)
 
     return (
@@ -526,39 +565,39 @@ export default function MeshObservabilitySurface({
                                 label={headlineLabel}
                                 tone={headlineTone}
                             />
-                            {graph.stats.blockedReviewNodes > 0 && (
-                                <Badge label={`${graph.stats.blockedReviewNodes} blocked review`} tone="danger" />
+                            {canonicalGraph.stats.blockedReviewNodes > 0 && (
+                                <Badge label={`${canonicalGraph.stats.blockedReviewNodes} blocked review`} tone="danger" />
                             )}
-                            {graph.stats.notMergeableNodes > 0 && (
-                                <Badge label={`${graph.stats.notMergeableNodes} not mergeable`} tone="danger" />
+                            {canonicalGraph.stats.notMergeableNodes > 0 && (
+                                <Badge label={`${canonicalGraph.stats.notMergeableNodes} not mergeable`} tone="danger" />
                             )}
-                            {graph.stats.mergeReadyNodes > 0 && (
-                                <Badge label={`${graph.stats.mergeReadyNodes} need merge`} tone="warn" />
+                            {canonicalGraph.stats.mergeReadyNodes > 0 && (
+                                <Badge label={`${canonicalGraph.stats.mergeReadyNodes} need merge`} tone="warn" />
                             )}
-                            {graph.stats.cleanupCandidateNodes > 0 && (
-                                <Badge label={`${graph.stats.cleanupCandidateNodes} refine/cleanup`} tone="info" />
+                            {canonicalGraph.stats.cleanupCandidateNodes > 0 && (
+                                <Badge label={`${canonicalGraph.stats.cleanupCandidateNodes} refine/cleanup`} tone="info" />
                             )}
-                            {graph.stats.offlineNodes > 0 && (
-                                <Badge label={`${graph.stats.offlineNodes} offline`} tone="danger" />
+                            {canonicalGraph.stats.offlineNodes > 0 && (
+                                <Badge label={`${canonicalGraph.stats.offlineNodes} offline`} tone="danger" />
                             )}
-                            {graph.stats.incompleteSnapshotNodes > 0 && (
-                                <Badge label={`${graph.stats.incompleteSnapshotNodes} incomplete peer snapshot`} tone="warn" />
+                            {canonicalGraph.stats.incompleteSnapshotNodes > 0 && (
+                                <Badge label={`${canonicalGraph.stats.incompleteSnapshotNodes} incomplete peer snapshot`} tone="warn" />
                             )}
-                            {graph.stats.missingGitSnapshotNodes > 0 && (
-                                <Badge label={`${graph.stats.missingGitSnapshotNodes} no git snapshot`} tone="warn" />
+                            {canonicalGraph.stats.missingGitSnapshotNodes > 0 && (
+                                <Badge label={`${canonicalGraph.stats.missingGitSnapshotNodes} no git snapshot`} tone="warn" />
                             )}
-                            {graph.stats.missingSubmoduleSnapshotNodes > 0 && (
-                                <Badge label={`${graph.stats.missingSubmoduleSnapshotNodes} missing submodule visibility`} tone="warn" />
+                            {canonicalGraph.stats.missingSubmoduleSnapshotNodes > 0 && (
+                                <Badge label={`${canonicalGraph.stats.missingSubmoduleSnapshotNodes} missing submodule visibility`} tone="warn" />
                             )}
-                            {graph.stats.staleGitSnapshotNodes > 0 && (
-                                <Badge label={`${graph.stats.staleGitSnapshotNodes} stale peer snapshot`} tone="warn" />
+                            {canonicalGraph.stats.staleGitSnapshotNodes > 0 && (
+                                <Badge label={`${canonicalGraph.stats.staleGitSnapshotNodes} stale peer snapshot`} tone="warn" />
                             )}
                             {(queueSummary?.active ?? 0) > 0 && (
                                 <Badge label={`${queueSummary?.active ?? 0} active queue`} tone="info" />
                             )}
-                            <Badge label={`${graph.stats.totalNodes} nodes`} tone="default" />
-                            {graph.stats.totalActiveSessions > 0 && (
-                                <Badge label={`${graph.stats.totalActiveSessions} active sessions`} tone="info" />
+                            <Badge label={`${canonicalGraph.stats.totalNodes} nodes`} tone="default" />
+                            {canonicalGraph.stats.totalActiveSessions > 0 && (
+                                <Badge label={`${canonicalGraph.stats.totalActiveSessions} active sessions`} tone="info" />
                             )}
                         </div>
                         <details className={`max-w-full rounded-xl px-3 py-2 text-xs ${meshTheme.isDark ? 'border border-white/10 bg-white/[0.03] text-slate-300' : 'border border-slate-200 bg-slate-50 text-slate-600'}`}>
@@ -567,8 +606,8 @@ export default function MeshObservabilitySurface({
                             </summary>
                             <div className="mt-3 flex flex-col gap-3">
                                 <div className="flex flex-wrap gap-2">
-                                    <Badge label={`${graph.stats.dirtyNodes} dirty`} tone={graph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
-                                    <Badge label={`${graph.stats.orphanNodes} orphan`} tone={graph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
+                                    <Badge label={`${canonicalGraph.stats.dirtyNodes} dirty`} tone={canonicalGraph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
+                                    <Badge label={`${canonicalGraph.stats.orphanNodes} orphan`} tone={canonicalGraph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
                                     <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
                                     {stateCounts.length === 0 ? (
                                         <Badge label="no session metadata" />
@@ -594,9 +633,9 @@ export default function MeshObservabilitySurface({
                             </div>
                         </details>
                     </div>
-                    {graph.nodes.length > 0 ? (
+                    {canonicalGraph.nodes.length > 0 ? (
                         <MeshGraphView
-                            data={graph}
+                            data={canonicalGraph}
                             selectedNodeId={selectedNodeId}
                             onNodeClick={node => {
                                 const shouldCollapse = detailSelection?.kind === 'node' && selectedNodeId === node.id
@@ -1062,7 +1101,7 @@ export default function MeshObservabilitySurface({
                 <Card title="Nodes" subtitle="Health, branch, drift, and provider view per node.">
                     <div className="max-h-[22vh] overflow-y-auto pr-1">
                         <div className="flex flex-col gap-2">
-                            {status.nodes.map(node => (
+                            {canonicalStatus.nodes.map(node => (
                                 <button
                                     key={node.nodeId}
                                     type="button"
@@ -1096,11 +1135,11 @@ export default function MeshObservabilitySurface({
 
                 <Card title="Recent mesh events" subtitle="Read-only ledger tail from mesh_status.">
                     <div className="max-h-[18vh] overflow-y-auto pr-1">
-                        {(status.ledger?.entries ?? []).length === 0 ? (
+                        {(canonicalStatus.ledger?.entries ?? []).length === 0 ? (
                             <div className={`text-xs ${meshTheme.textMuted}`}>No recent ledger entries.</div>
                         ) : (
                             <div className="flex flex-col gap-2">
-                                {(status.ledger?.entries ?? []).map((entry: RepoMeshLedgerEntryStatus) => (
+                                {(canonicalStatus.ledger?.entries ?? []).map((entry: RepoMeshLedgerEntryStatus) => (
                                     <div key={entry.id} className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
                                         <div className="flex items-center justify-between gap-3">
                                             <span className={`font-medium ${meshTheme.textPrimary}`}>{entry.kind}</span>

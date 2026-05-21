@@ -257,6 +257,23 @@ describe('MeshObservabilitySurface', () => {
         deleted: 0,
         renamed: 0,
         hasConflicts: false,
+        lastCheckedAt: Date.parse('2026-05-22T00:00:00.000Z'),
+        submodules: [
+          { path: 'oss', commit: '65d7f5dafc495ec4c24d378e3d12a01a2b09a3b2', repoPath: '/remote/repo/oss', dirty: false, outOfSync: false },
+          { path: 'adhdev-providers', commit: '1c29790fc14ad87f75fc6aed958fda8f36dbab0d', repoPath: '/remote/repo/adhdev-providers', dirty: false, outOfSync: false },
+        ],
+      },
+      branchConvergence: {
+        defaultBranch: 'main',
+        branch: 'main',
+        upstream: 'origin/main',
+        upstreamStatus: 'fresh',
+        ahead: 0,
+        behind: 0,
+        status: 'merged_to_main',
+        needsConvergence: false,
+        reason: 'clean_default_branch',
+        nextStep: null,
       },
     }
 
@@ -267,6 +284,7 @@ describe('MeshObservabilitySurface', () => {
       health: 'online',
       snapshotCompleteness: 'complete',
       snapshotWarnings: [],
+      branchConvergence: expect.objectContaining({ status: 'merged_to_main', needsConvergence: false }),
     })
   })
 
