@@ -1470,6 +1470,10 @@ export class DaemonCommandRouter {
         return warmedInline ? { mesh: warmedInline, inline: true, source: 'inline_bootstrap' } : null;
     }
 
+    private invalidateAggregateMeshStatus(meshId: string): void {
+        this.aggregateMeshStatusCache.delete(meshId);
+    }
+
     private updateInlineMeshNode(meshId: string, mesh: any, node: any): void {
         if (!mesh || !Array.isArray(mesh.nodes) || !node?.id) return;
         const idx = mesh.nodes.findIndex((entry: any) => entry?.id === node.id || entry?.nodeId === node.id);
@@ -1477,6 +1481,7 @@ export class DaemonCommandRouter {
         else mesh.nodes.push(node);
         mesh.updatedAt = new Date().toISOString();
         this.inlineMeshCache.set(meshId, mesh);
+        this.invalidateAggregateMeshStatus(meshId);
     }
 
     private removeInlineMeshNode(meshId: string, mesh: any, nodeId: string): boolean {
@@ -1486,6 +1491,7 @@ export class DaemonCommandRouter {
         mesh.nodes.splice(idx, 1);
         mesh.updatedAt = new Date().toISOString();
         this.inlineMeshCache.set(meshId, mesh);
+        this.invalidateAggregateMeshStatus(meshId);
         return true;
     }
 
@@ -2704,6 +2710,7 @@ export class DaemonCommandRouter {
                     const mesh = updateMesh(meshId, patch as any);
                     if (!mesh) return { success: false, error: 'Mesh not found' };
                     this.inlineMeshCache.set(meshId, mesh);
+                    this.invalidateAggregateMeshStatus(meshId);
                     return { success: true, mesh };
                 } catch (e: any) {
                     return { success: false, error: e.message };
@@ -3183,6 +3190,7 @@ export class DaemonCommandRouter {
                     } else {
                         const { removeNode } = await import('../config/mesh-config.js');
                         removed = removeNode(meshId, nodeId);
+                        if (removed) this.invalidateAggregateMeshStatus(meshId);
                     }
 
                     // Record in task ledger
@@ -3268,6 +3276,7 @@ export class DaemonCommandRouter {
                             policy: { ...(sourceNode.policy || {}) },
                         });
                         if (!node) return { success: false, error: 'Failed to register worktree node' };
+                        this.invalidateAggregateMeshStatus(meshId);
                     }
 
                     // Initialize submodules if policy allows (default: true)
