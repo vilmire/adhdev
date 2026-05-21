@@ -114,6 +114,75 @@ function readBooleanValue(...values: unknown[]): boolean | undefined {
     return undefined;
 }
 
+function summarizeRepoMeshDebugGit(git: unknown): Record<string, unknown> | null {
+    const record = readObjectRecord(git);
+    if (!Object.keys(record).length) return null;
+    const submodules = Array.isArray(record.submodules)
+        ? record.submodules.map((entry: any) => ({
+            path: readStringValue(entry?.path) ?? null,
+            commit: readStringValue(entry?.commit)?.slice(0, 12) ?? null,
+            dirty: readBooleanValue(entry?.dirty) ?? false,
+            outOfSync: readBooleanValue(entry?.outOfSync, entry?.out_of_sync) ?? false,
+        }))
+        : [];
+    return {
+        isGitRepo: readBooleanValue(record.isGitRepo),
+        workspace: readStringValue(record.workspace) ?? null,
+        repoRoot: readStringValue(record.repoRoot, record.repo_root) ?? null,
+        branch: readStringValue(record.branch) ?? null,
+        upstream: readStringValue(record.upstream) ?? null,
+        upstreamStatus: readStringValue(record.upstreamStatus, record.upstream_status) ?? null,
+        headCommit: readStringValue(record.headCommit, record.head_commit)?.slice(0, 12) ?? null,
+        ahead: readNumberValue(record.ahead) ?? null,
+        behind: readNumberValue(record.behind) ?? null,
+        dirtyCounts: {
+            staged: readNumberValue(record.staged) ?? 0,
+            modified: readNumberValue(record.modified) ?? 0,
+            untracked: readNumberValue(record.untracked) ?? 0,
+            deleted: readNumberValue(record.deleted) ?? 0,
+            renamed: readNumberValue(record.renamed) ?? 0,
+        },
+        lastCheckedAt: readNumberValue(record.lastCheckedAt, record.last_checked_at) ?? null,
+        submoduleCount: submodules.length,
+        submodules,
+    };
+}
+
+function summarizeRepoMeshStatusDebug(status: any): Record<string, unknown> {
+    const nodes = Array.isArray(status?.nodes) ? status.nodes : [];
+    return {
+        success: status?.success,
+        meshId: readStringValue(status?.meshId, status?.mesh_id) ?? null,
+        refreshedAt: readStringValue(status?.refreshedAt, status?.refreshed_at) ?? null,
+        sourceOfTruth: status?.sourceOfTruth ?? null,
+        nodeCount: nodes.length,
+        nodes: nodes.map((node: any) => ({
+            nodeId: readStringValue(node?.nodeId, node?.id) ?? null,
+            daemonId: readStringValue(node?.daemonId, node?.daemon_id) ?? null,
+            workspace: readStringValue(node?.workspace, node?.git?.workspace) ?? null,
+            health: readStringValue(node?.health) ?? null,
+            machineStatus: readStringValue(node?.machineStatus, node?.machine_status) ?? null,
+            connection: node?.connection && typeof node.connection === 'object' ? {
+                state: readStringValue(node.connection.state) ?? null,
+                transport: readStringValue(node.connection.transport) ?? null,
+                source: readStringValue(node.connection.source) ?? null,
+                reported: readBooleanValue(node.connection.reported) ?? null,
+            } : null,
+            gitProbePending: node?.gitProbePending === true,
+            launchReady: node?.launchReady === true,
+            git: summarizeRepoMeshDebugGit(node?.git),
+        })),
+    };
+}
+
+function logRepoMeshStatusDebug(event: string, fields: Record<string, unknown>): void {
+    try {
+        LOG.info('MeshStatusDebug', `[RepoMeshStatusDebug] ${JSON.stringify({ event, ...fields })}`);
+    } catch {
+        LOG.info('MeshStatusDebug', `[RepoMeshStatusDebug] ${event}`);
+    }
+}
+
 function joinRepoPath(root: string | undefined, relativePath: string | undefined): string | undefined {
     const normalizedRoot = typeof root === 'string' ? root.trim().replace(/[\\/]+$/, '') : '';
     const normalizedPath = typeof relativePath === 'string' ? relativePath.trim() : '';
@@ -3726,7 +3795,15 @@ export class DaemonCommandRouter {
                     const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
                     if (!refreshRequested) {
                         const cachedStatus = this.getCachedAggregateMeshStatus(meshId);
-                        if (cachedStatus) return cachedStatus;
+                        if (cachedStatus) {
+                            logRepoMeshStatusDebug('return_cached', {
+                                meshId,
+                                command: 'mesh_status',
+                                refreshRequested,
+                                summary: summarizeRepoMeshStatusDebug(cachedStatus),
+                            });
+                            return cachedStatus;
+                        }
                     }
                     const refreshReason = refreshRequested ? 'explicit_refresh' : 'cold_cache_miss';
 
@@ -3761,7 +3838,7 @@ export class DaemonCommandRouter {
                         };
                     const directTruthSatisfied = meshRecord.source !== 'inline_bootstrap' || directTruth.directEvidenceCount > 0;
                     if (requireDirectPeerTruth && !directTruthSatisfied) {
-                        return {
+                        const failureResult = {
                             success: false,
                             code: 'mesh_direct_peer_truth_unavailable',
                             error: 'Selected coordinator could not confirm direct mesh truth yet. Bootstrap inventory stays unavailable until direct mesh_status probes succeed.',
@@ -3784,6 +3861,14 @@ export class DaemonCommandRouter {
                                 },
                             },
                         };
+                        logRepoMeshStatusDebug('direct_truth_unavailable', {
+                            meshId,
+                            command: 'mesh_status',
+                            refreshRequested,
+                            meshSource: meshRecord.source,
+                            directTruth,
+                        });
+                        return failureResult;
                     }
                     const directTruthUnavailableNodeIds = new Set(directTruth.unavailableNodeIds);
                     const selectedCoordinatorNodeId = readStringValue(
@@ -4019,7 +4104,17 @@ export class DaemonCommandRouter {
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
                     };
-                    return this.rememberAggregateMeshStatus(meshId, statusResult, refreshReason);
+                    const rememberedStatus = this.rememberAggregateMeshStatus(meshId, statusResult, refreshReason);
+                    logRepoMeshStatusDebug('return_live', {
+                        meshId,
+                        command: 'mesh_status',
+                        refreshRequested,
+                        refreshReason,
+                        meshSource: meshRecord.source,
+                        directTruth,
+                        summary: summarizeRepoMeshStatusDebug(rememberedStatus),
+                    });
+                    return rememberedStatus;
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
