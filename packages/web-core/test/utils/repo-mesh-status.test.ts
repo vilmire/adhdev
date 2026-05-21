@@ -303,7 +303,7 @@ describe('extractRepoMeshStatus', () => {
             activeSessions: [],
             gitProbePending: true,
             lastGit: {
-              status: { code: 'pending_git', message: 'waiting for live peer git snapshot' },
+              status: { isGitRepo: false, branch: null, upstream: null, headCommit: null, error: 'waiting for live peer git snapshot' },
               result: {
                 status: {
                   isGitRepo: true,

@@ -132,6 +132,22 @@ function normalizeGitStatus(
     }
 }
 
+function scoreGitStatusCandidate(git: GitRepoStatus | undefined): number {
+    if (!git) return Number.NEGATIVE_INFINITY
+    let score = 0
+    if (git.isGitRepo === true) score += 50
+    if (git.isGitRepo === false) score -= 10
+    if (git.branch) score += 20
+    if (git.headCommit) score += 20
+    if (git.upstream) score += 10
+    if (git.upstreamStatus && git.upstreamStatus !== 'unchecked') score += 5
+    if (typeof git.ahead === 'number') score += 2
+    if (typeof git.behind === 'number') score += 2
+    if (Array.isArray(git.submodules) && git.submodules.length > 0) score += 4 + git.submodules.length
+    if (git.error) score -= 20
+    return score
+}
+
 function readTransitGitStatus(node: JsonRecord): GitRepoStatus | undefined {
     const rawGit = readRecord(node.lastGit ?? node.last_git)
     const gitResult = readRecord(rawGit.result)
@@ -142,11 +158,14 @@ function readTransitGitStatus(node: JsonRecord): GitRepoStatus | undefined {
     const probeGitResult = readRecord(probeGit.result)
     const probeDirectStatus = readRecord(probeGit.status)
     const probeNestedStatus = readRecord(probeGitResult.status)
+    let best: { git: GitRepoStatus; score: number } | null = null
     for (const status of [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus]) {
         const normalized = normalizeGitStatus(status, node, { lastCheckedAt: Date.now() })
-        if (normalized) return normalized
+        if (!normalized) continue
+        const score = scoreGitStatusCandidate(normalized)
+        if (!best || score > best.score) best = { git: normalized, score }
     }
-    return undefined
+    return best?.git
 }
 
 function getGitSubmoduleDriftState(git: GitRepoStatus | null | undefined): { dirty: boolean; outOfSync: boolean } {
@@ -238,6 +257,20 @@ function readConnectionStatus(node: JsonRecord): RepoMeshNodeStatus['connection'
     return Object.keys(connection).length > 0 ? connection as unknown as RepoMeshNodeStatus['connection'] : undefined
 }
 
+function buildLivePeerGitConnection(connection: RepoMeshNodeStatus['connection']): RepoMeshNodeStatus['connection'] {
+    const source = connection?.source
+    const transport = connection?.transport
+    return {
+        ...connection,
+        perspective: connection?.perspective ?? 'selected_coordinator',
+        source: source && source !== 'not_reported' ? source : 'mesh_peer_status',
+        state: 'connected',
+        transport: transport && transport !== 'unknown' ? transport : 'direct',
+        reported: true,
+        reason: 'Live peer git snapshot reported by the selected coordinator.',
+    }
+}
+
 function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
     const record = readRecord(node)
     const nodeId = readString(record.nodeId, record.id)
@@ -269,6 +302,11 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
     const providerPriority = readStringArray(record.providerPriority)
     const rawGitProbePending = readBoolean(record.gitProbePending, record.git_probe_pending)
     const gitProbePending = authoritativeGit ? undefined : rawGitProbePending
+    const rawConnection = readConnectionStatus(record)
+    const connectionState = rawConnection?.state
+    const connection = liveGit && (!rawConnection?.reported || connectionState === 'unknown')
+        ? buildLivePeerGitConnection(rawConnection)
+        : rawConnection
 
     return {
         nodeId,
@@ -287,10 +325,10 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
         activeSessions: activeSessions.length > 0 ? activeSessions : derivedActiveSessions,
         ...(activeSessionDetails && activeSessionDetails.length > 0 ? { activeSessionDetails } : {}),
         ...(providerPriority.length > 0 ? { providerPriority } : {}),
-        ...(readBoolean(record.launchReady) !== undefined ? { launchReady: readBoolean(record.launchReady) } : {}),
+        ...(readBoolean(record.launchReady) !== undefined ? { launchReady: readBoolean(record.launchReady) } : liveGit ? { launchReady: true } : {}),
         ...(readString(record.lastSeenAt, record.last_seen_at, cachedStatus.lastSeenAt, cachedStatus.last_seen_at) ? { lastSeenAt: readString(record.lastSeenAt, record.last_seen_at, cachedStatus.lastSeenAt, cachedStatus.last_seen_at) } : {}),
         ...(readString(record.updatedAt, record.updated_at, cachedStatus.updatedAt, cachedStatus.updated_at) ? { updatedAt: readString(record.updatedAt, record.updated_at, cachedStatus.updatedAt, cachedStatus.updated_at) } : {}),
-        ...(readConnectionStatus(record) ? { connection: readConnectionStatus(record) } : {}),
+        ...(connection ? { connection } : {}),
         ...(error ? { error } : {}),
     }
 }

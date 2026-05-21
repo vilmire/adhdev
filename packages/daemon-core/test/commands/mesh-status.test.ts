@@ -570,6 +570,102 @@ describe('mesh_status', () => {
     }
   })
 
+  it('refreshes instead of returning a stale pending cache hit when direct peer truth is required', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-stale-cache-refresh-')
+    try {
+      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      let allowRemoteGit = false
+      const dispatchMeshCommand = vi.fn(async (_daemonId: string, command: string) => {
+        expect(command).toBe('git_status')
+        if (!allowRemoteGit) return { success: false, error: 'not ready' }
+        return {
+          success: true,
+          status: {
+            isGitRepo: true,
+            workspace: remoteWorkspace,
+            repoRoot: remoteWorkspace,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            headCommit: 'live-after-stale-cache',
+            ahead: 0,
+            behind: 10,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+          },
+        }
+      })
+      const { router, sessionHostControl } = createRouter({ dispatchMeshCommand })
+      const inlineMesh = {
+        id: 'mesh_stale_pending_cache',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        coordinator: { preferredNodeId: 'node_7' },
+        nodes: [
+          { id: 'node_7', daemonId: 'daemon_7', machineLabel: 'Local', workspace: repoRoot, repoRoot, providers: ['hermes-cli'], policy: { providerPriority: ['hermes-cli'] } },
+          {
+            id: 'node_303',
+            daemonId: 'daemon_303',
+            machineLabel: 'node_303',
+            workspace: remoteWorkspace,
+            repoRoot: remoteWorkspace,
+            providers: [],
+            policy: { providerPriority: ['hermes-cli'] },
+            cachedStatus: {
+              health: 'unknown',
+              gitProbePending: true,
+              error: 'waiting for live peer git snapshot',
+            },
+          },
+        ],
+      }
+
+      const stale = await router.execute('mesh_status', {
+        meshId: 'mesh_stale_pending_cache',
+        inlineMesh,
+        refresh: true,
+      }) as any
+      expect(stale.success).toBe(true)
+      const staleNode303 = stale.nodes.find((node: any) => node.nodeId === 'node_303')
+      expect(staleNode303).toMatchObject({ gitProbePending: true })
+      expect(staleNode303.git ?? null).toBeNull()
+
+      allowRemoteGit = true
+      dispatchMeshCommand.mockClear()
+      sessionHostControl.listSessions.mockClear()
+      const refreshed = await router.execute('mesh_status', {
+        meshId: 'mesh_stale_pending_cache',
+        inlineMesh,
+        requireDirectPeerTruth: true,
+        refresh: false,
+      }) as any
+
+      expect(refreshed.success).toBe(true)
+      expect(refreshed.sourceOfTruth.aggregateSnapshot).toMatchObject({
+        cached: false,
+        refreshReason: 'stale_pending_cache_refresh',
+      })
+      expect(dispatchMeshCommand).toHaveBeenCalled()
+      expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
+      const node303 = refreshed.nodes.find((node: any) => node.nodeId === 'node_303')
+      expect(node303).toMatchObject({
+        health: 'online',
+        launchReady: true,
+        connection: expect.objectContaining({ state: 'connected', transport: 'direct', reported: true }),
+        git: expect.objectContaining({ branch: 'main', upstream: 'origin/main', headCommit: 'live-after-stale-cache' }),
+      })
+      expect(node303).not.toHaveProperty('gitProbePending')
+      expect(node303).not.toHaveProperty('error')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('hydrates a cached pending aggregate from later inline live git truth before returning cache hits', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-cache-hydrate-')
     try {
@@ -620,7 +716,7 @@ describe('mesh_status', () => {
           {
             ...pendingInlineMesh.nodes[1],
             lastGit: {
-              status: { code: 'pending_git', message: 'older pending wrapper' },
+              status: { isGitRepo: false, branch: null, upstream: null, headCommit: null, error: 'pending_git' },
               result: {
                 status: {
                   isGitRepo: true,

@@ -253,6 +253,22 @@ function normalizeInlineMeshGitStatus(
     };
 }
 
+function scoreInlineMeshGitStatus(git: Record<string, unknown> | undefined): number {
+    if (!git) return Number.NEGATIVE_INFINITY;
+    let score = 0;
+    if (readBooleanValue(git.isGitRepo) === true) score += 50;
+    if (readBooleanValue(git.isGitRepo) === false) score -= 10;
+    if (readStringValue(git.branch)) score += 20;
+    if (readStringValue(git.headCommit)) score += 20;
+    if (readStringValue(git.upstream)) score += 10;
+    if (readStringValue(git.upstreamStatus)) score += 5;
+    if (readNumberValue(git.ahead) !== undefined) score += 2;
+    if (readNumberValue(git.behind) !== undefined) score += 2;
+    if (Array.isArray(git.submodules) && git.submodules.length > 0) score += 4 + git.submodules.length;
+    if (readStringValue(git.error)) score -= 20;
+    return score;
+}
+
 function buildInlineMeshTransitGitStatus(node: any): Record<string, unknown> | undefined {
     const rawGit = readObjectRecord(node?.lastGit ?? node?.last_git);
     const gitResult = readObjectRecord(rawGit.result);
@@ -264,11 +280,38 @@ function buildInlineMeshTransitGitStatus(node: any): Record<string, unknown> | u
     const probeDirectStatus = readObjectRecord(probeGit.status);
     const probeNestedStatus = readObjectRecord(probeGitResult.status);
     const candidates = [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus];
+    let best: { git: Record<string, unknown>; score: number } | null = null;
     for (const status of candidates) {
         const normalized = normalizeInlineMeshGitStatus(status, node, { lastCheckedAt: Date.now() });
-        if (normalized) return normalized;
+        if (!normalized) continue;
+        const score = scoreInlineMeshGitStatus(normalized);
+        if (!best || score > best.score) best = { git: normalized, score };
     }
-    return undefined;
+    return best?.git;
+}
+
+function shouldRefreshStalePendingAggregate(snapshot: any, options?: { requireDirectPeerTruth?: boolean }): boolean {
+    if (options?.requireDirectPeerTruth !== true || !Array.isArray(snapshot?.nodes)) return false;
+    return snapshot.nodes.some((node: any) => {
+        if (node?.gitProbePending !== true) return false;
+        const git = readObjectRecord(node?.git);
+        return !readBooleanValue(git.isGitRepo) && !readStringValue(git.branch, git.headCommit, git.upstream);
+    });
+}
+
+function buildLivePeerGitConnection(connection: Record<string, unknown>, timestamp = new Date().toISOString()): Record<string, unknown> {
+    const source = readStringValue(connection.source);
+    const transport = readStringValue(connection.transport);
+    return {
+        ...connection,
+        perspective: readStringValue(connection.perspective) ?? 'selected_coordinator',
+        source: source && source !== 'not_reported' ? source : 'mesh_peer_status',
+        state: 'connected',
+        transport: transport && transport !== 'unknown' ? transport : 'direct',
+        reported: true,
+        reason: 'Live peer git snapshot reported by the selected coordinator.',
+        lastStateChangeAt: readStringValue(connection.lastStateChangeAt) ?? timestamp,
+    };
 }
 
 function recordInlineMeshDirectGitTruth(
@@ -1468,8 +1511,16 @@ export class DaemonCommandRouter {
             const nextStatus = { ...statusNode };
             nextStatus.git = liveGit;
             nextStatus.health = deriveMeshNodeHealthFromGit(liveGit);
+            nextStatus.launchReady = readBooleanValue(nextStatus.launchReady) ?? true;
+            const connection = readObjectRecord(nextStatus.connection);
+            const connectionState = readStringValue(connection.state);
+            const connectionReported = readBooleanValue(connection.reported) ?? false;
+            if (!connectionReported || connectionState === 'unknown') {
+                nextStatus.connection = buildLivePeerGitConnection(connection);
+            }
             delete nextStatus.gitProbePending;
-            if (readStringValue(nextStatus.error) === 'waiting for live peer git snapshot') delete nextStatus.error;
+            const error = readStringValue(nextStatus.error);
+            if (error && /pending_git|git probe|live peer git snapshot|no peer git snapshot/i.test(error)) delete nextStatus.error;
             if (!readStringValue(nextStatus.machineStatus)) nextStatus.machineStatus = 'online';
             if (nodeId) unavailableNodeIds.delete(nodeId);
             changed = true;
@@ -1508,6 +1559,7 @@ export class DaemonCommandRouter {
         if (!cached?.snapshot || cached.snapshot.success !== true || !Array.isArray(cached.snapshot.nodes)) return null;
         let snapshot = this.cloneJsonValue(cached.snapshot);
         snapshot = this.hydrateCachedAggregateMeshStatusFromInline(snapshot, mesh, options);
+        if (shouldRefreshStalePendingAggregate(snapshot, options)) return null;
         const ageMs = Math.max(0, Date.now() - cached.builtAt);
         const sourceOfTruth = snapshot.sourceOfTruth && typeof snapshot.sourceOfTruth === 'object'
             ? snapshot.sourceOfTruth
@@ -3859,6 +3911,7 @@ export class DaemonCommandRouter {
                     if (!mesh) return { success: false, error: 'Mesh not found' };
 
                     const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
+                    const hadAggregateCache = this.aggregateMeshStatusCache.has(meshId);
                     if (!refreshRequested) {
                         const cachedStatus = this.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
                         if (cachedStatus) {
@@ -3871,7 +3924,11 @@ export class DaemonCommandRouter {
                             return cachedStatus;
                         }
                     }
-                    const refreshReason = refreshRequested ? 'explicit_refresh' : 'cold_cache_miss';
+                    const refreshReason = refreshRequested
+                        ? 'explicit_refresh'
+                        : hadAggregateCache
+                            ? 'stale_pending_cache_refresh'
+                            : 'cold_cache_miss';
 
                     const { getMeshQueueStats, getQueue } = await import('../mesh/mesh-work-queue.js');
                     const queue = getQueue(meshId);
@@ -4050,6 +4107,12 @@ export class DaemonCommandRouter {
                                     status.health = inlineTransitGit.isGitRepo
                                         ? deriveMeshNodeHealthFromGit(inlineTransitGit as unknown as Record<string, unknown>)
                                         : 'degraded';
+                                    const connection = readObjectRecord(status.connection);
+                                    const connectionState = readStringValue(connection.state);
+                                    const connectionReported = readBooleanValue(connection.reported) ?? false;
+                                    if (!connectionReported || connectionState === 'unknown') {
+                                        status.connection = buildLivePeerGitConnection(connection, refreshedAt);
+                                    }
                                     remoteProbeApplied = true;
                                 } else if (!isSelfNode && daemonId && this.deps.dispatchMeshCommand && !directTruthUnavailableNodeIds.has(nodeId)) {
                                     try {
@@ -4064,6 +4127,12 @@ export class DaemonCommandRouter {
                                             status.health = remoteGit.isGitRepo
                                                 ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
                                                 : 'degraded';
+                                            const connection = readObjectRecord(status.connection);
+                                            const connectionState = readStringValue(connection.state);
+                                            const connectionReported = readBooleanValue(connection.reported) ?? false;
+                                            if (!connectionReported || connectionState === 'unknown') {
+                                                status.connection = buildLivePeerGitConnection(connection, refreshedAt);
+                                            }
                                             recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
                                             remoteProbeApplied = true;
                                         }
@@ -4084,6 +4153,12 @@ export class DaemonCommandRouter {
                                                     status.health = remoteGit.isGitRepo
                                                         ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
                                                         : 'degraded';
+                                                    const connection = readObjectRecord(status.connection);
+                                                    const connectionState = readStringValue(connection.state);
+                                                    const connectionReported = readBooleanValue(connection.reported) ?? false;
+                                                    if (!connectionReported || connectionState === 'unknown') {
+                                                        status.connection = buildLivePeerGitConnection(connection, refreshedAt);
+                                                    }
                                                     recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
                                                     remoteProbeApplied = true;
                                                 }
