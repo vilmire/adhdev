@@ -614,11 +614,19 @@ function extractGitDiff(value: any): any {
 
 function extractSubmodules(value: any, ignorePaths: string[]): any[] | undefined {
     const payload = unwrapCommandPayload(value);
-    const subs = payload?.submodules ?? value?.submodules;
+    const subs = payload?.status?.submodules
+        ?? payload?.submodules
+        ?? value?.status?.submodules
+        ?? value?.submodules;
     if (!Array.isArray(subs)) return undefined;
     if (ignorePaths.length === 0) return subs;
     const ignoreSet = new Set(ignorePaths);
     return subs.filter((s: any) => s?.path && !ignoreSet.has(s.path));
+}
+
+function assignFullGitSnapshot(entry: Record<string, unknown>, status: any): void {
+    if (!status || typeof status !== 'object' || Array.isArray(status)) return;
+    entry.git = status;
 }
 
 function extractLaunchPayload(value: any): any {
@@ -1671,6 +1679,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 const uncommittedChanges = countUncommittedChanges(status);
                 const dirty = isGitStatusDirty(status);
                 entry.health = status?.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
+                assignFullGitSnapshot(entry, status);
                 entry.branch = status?.branch;
                 entry.isDirty = dirty;
                 entry.uncommittedChanges = uncommittedChanges;
@@ -1693,6 +1702,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 const uncommittedChanges = countUncommittedChanges(status);
                 const dirty = isGitStatusDirty(status);
                 entry.health = status?.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
+                assignFullGitSnapshot(entry, status);
                 entry.branch = status?.branch;
                 entry.isDirty = dirty;
                 entry.uncommittedChanges = uncommittedChanges;

@@ -443,6 +443,111 @@ test('mesh_git_status preserves P2P relay recovery payload for coordinator feedb
   assert.equal(status.command, 'git_status');
 });
 
+test('mesh_status preserves full git snapshot fields from the aggregate node status shape', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-status-full-git-${Date.now()}`,
+      name: 'Status Full Git Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-full-git',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'git_status') {
+      return {
+        success: true,
+        status: {
+          workspace: '/repo-remote',
+          repoRoot: '/repo-remote',
+          isGitRepo: true,
+          branch: 'main',
+          headCommit: '083fe011',
+          headMessage: 'fix: aggregate truth',
+          upstream: 'origin/main',
+          upstreamStatus: 'diverged',
+          ahead: 2,
+          behind: 12,
+          staged: 3,
+          modified: 1,
+          untracked: 1,
+          deleted: 1,
+          renamed: 1,
+          hasConflicts: false,
+          conflictFiles: [],
+          stashCount: 2,
+          lastCheckedAt: 1710000000000,
+          submodules: [
+            {
+              path: 'oss',
+              commit: 'abc1234',
+              repoPath: '/repo-remote/oss',
+              dirty: false,
+              outOfSync: true,
+              lastCheckedAt: 1710000000001,
+            },
+          ],
+        },
+      };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const status = JSON.parse(await meshStatus(ctx));
+  const nodeStatus = status.nodes.find((node: any) => node.nodeId === 'node-full-git');
+
+  assert.equal(nodeStatus.branch, 'main');
+  assert.equal(nodeStatus.git.isGitRepo, true);
+  assert.equal(nodeStatus.git.repoRoot, '/repo-remote');
+  assert.equal(nodeStatus.git.headCommit, '083fe011');
+  assert.equal(nodeStatus.git.headMessage, 'fix: aggregate truth');
+  assert.equal(nodeStatus.git.upstream, 'origin/main');
+  assert.equal(nodeStatus.git.upstreamStatus, 'diverged');
+  assert.equal(nodeStatus.git.ahead, 2);
+  assert.equal(nodeStatus.git.behind, 12);
+  assert.equal(nodeStatus.git.staged, 3);
+  assert.equal(nodeStatus.git.modified, 1);
+  assert.equal(nodeStatus.git.untracked, 1);
+  assert.equal(nodeStatus.git.deleted, 1);
+  assert.equal(nodeStatus.git.renamed, 1);
+  assert.equal(nodeStatus.git.stashCount, 2);
+  assert.equal(nodeStatus.git.lastCheckedAt, 1710000000000);
+  assert.deepEqual(nodeStatus.git.submodules, [
+    {
+      path: 'oss',
+      commit: 'abc1234',
+      repoPath: '/repo-remote/oss',
+      dirty: false,
+      outOfSync: true,
+      lastCheckedAt: 1710000000001,
+    },
+  ]);
+  assert.deepEqual(nodeStatus.outOfSyncSubmodules, ['oss']);
+});
+
 test('mesh_status marks git_status P2P timeout as recoverable degraded node metadata', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
