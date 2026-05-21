@@ -325,12 +325,44 @@ function normalizeRepoMeshStatus(candidate: JsonRecord): RepoMeshStatus | null {
     } as RepoMeshStatus
 }
 
+function scoreRepoMeshStatusTruth(status: RepoMeshStatus): number {
+    let score = 0
+    const sourceOfTruth = readRecord((status as unknown as JsonRecord).sourceOfTruth)
+    const directPeerTruth = readRecord(sourceOfTruth.directPeerTruth)
+    const currentStatus = readString(sourceOfTruth.currentStatus)
+    if (currentStatus === 'live_git_and_session_probes') score += 100
+    if (sourceOfTruth.coordinatorOwnsLiveTruth === true) score += 25
+    if (directPeerTruth.satisfied === true) score += 15
+    for (const node of status.nodes) {
+        const git = node.git
+        if (!git) {
+            if (node.gitProbePending) score -= 8
+            continue
+        }
+        score += 10
+        if (git.isGitRepo === true) score += 5
+        if (git.isGitRepo === false) score += 1
+        if (git.branch) score += 4
+        if (git.upstream) score += 3
+        if (git.headCommit) score += 3
+        if (git.upstreamStatus && git.upstreamStatus !== 'unchecked') score += 2
+        if (typeof git.ahead === 'number') score += 1
+        if (typeof git.behind === 'number') score += 1
+        if (typeof git.lastCheckedAt === 'number') score += 2
+        score += (git.submodules?.length ?? 0) * 2
+    }
+    return score
+}
+
 export function extractRepoMeshStatus(response: any): RepoMeshStatus | null {
     const body = response?.result ?? response
     const candidates = [response?.status, body?.status, body, response]
+    let best: { status: RepoMeshStatus; score: number } | null = null
     for (const candidate of candidates) {
         const normalized = normalizeRepoMeshStatus(readRecord(candidate))
-        if (normalized) return normalized
+        if (!normalized) continue
+        const score = scoreRepoMeshStatusTruth(normalized)
+        if (!best || score > best.score) best = { status: normalized, score }
     }
-    return null
+    return best?.status ?? null
 }
