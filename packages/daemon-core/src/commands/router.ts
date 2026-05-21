@@ -769,16 +769,123 @@ type MeshRefineValidationSummary = {
     outputLimitBytes: number;
 };
 
+type MeshRefineStageStatus = 'passed' | 'failed' | 'skipped';
+
+type MeshRefinePatchEquivalenceSummary = {
+    status: MeshRefineStageStatus;
+    equivalent: boolean;
+    baseHead: string;
+    branchHead: string;
+    mergeBase?: string;
+    mergedTree?: string;
+    expectedPatchId?: string;
+    actualPatchId?: string;
+    durationMs: number;
+    error?: string;
+    stdout?: string;
+    stderr?: string;
+};
+
 const REFINE_VALIDATION_CATEGORIES = ['typecheck', 'test', 'lint', 'build'] as const;
 const REFINE_VALIDATION_TIMEOUT_MS = 120_000;
 const REFINE_VALIDATION_OUTPUT_LIMIT_BYTES = 128 * 1024;
 const REFINE_VALIDATION_SUMMARY_CHARS = 2_000;
 const REFINE_VALIDATION_MAX_COMMANDS = 4;
+const REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
 
 function truncateValidationOutput(value: unknown): string {
     const text = typeof value === 'string' ? value : value == null ? '' : String(value);
     if (text.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text;
     return `${text.slice(0, REFINE_VALIDATION_SUMMARY_CHARS)}\n[truncated ${text.length - REFINE_VALIDATION_SUMMARY_CHARS} chars]`;
+}
+
+function recordMeshRefineStage(
+    stages: Array<Record<string, unknown>>,
+    stage: string,
+    status: MeshRefineStageStatus,
+    startedAt: number,
+    details?: Record<string, unknown>,
+): void {
+    stages.push({
+        stage,
+        status,
+        durationMs: Date.now() - startedAt,
+        ...(details || {}),
+    });
+}
+
+async function computeGitPatchId(cwd: string, fromRef: string, toRef: string): Promise<string> {
+    const { execFileSync } = await import('node:child_process');
+    const diff = execFileSync('git', ['diff', '--patch', '--full-index', fromRef, toRef], {
+        cwd,
+        encoding: 'utf8',
+        maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+    });
+    if (!diff.trim()) return '';
+    const patchId = execFileSync('git', ['patch-id', '--stable'], {
+        cwd,
+        input: diff,
+        encoding: 'utf8',
+        maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+    }).trim();
+    return patchId.split(/\s+/)[0] || '';
+}
+
+async function runMeshRefinePatchEquivalenceGate(
+    repoRoot: string,
+    baseHead: string,
+    branchHead: string,
+): Promise<MeshRefinePatchEquivalenceSummary> {
+    const startedAt = Date.now();
+    try {
+        const { execFileSync } = await import('node:child_process');
+        const git = (args: string[]) => execFileSync('git', args, {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+        });
+        const mergeBase = git(['merge-base', baseHead, branchHead]).trim();
+        const mergeTreeStdout = git(['merge-tree', '--write-tree', baseHead, branchHead]);
+        const mergedTree = mergeTreeStdout.trim().split(/\s+/)[0] || '';
+        if (!mergeBase || !mergedTree) {
+            return {
+                status: 'failed',
+                equivalent: false,
+                baseHead,
+                branchHead,
+                mergeBase: mergeBase || undefined,
+                mergedTree: mergedTree || undefined,
+                durationMs: Date.now() - startedAt,
+                error: 'patch equivalence preflight could not resolve merge-base or synthetic merge tree',
+                stdout: truncateValidationOutput(mergeTreeStdout),
+            };
+        }
+        const expectedPatchId = await computeGitPatchId(repoRoot, mergeBase, branchHead);
+        const actualPatchId = await computeGitPatchId(repoRoot, baseHead, mergedTree);
+        const equivalent = expectedPatchId === actualPatchId;
+        return {
+            status: equivalent ? 'passed' : 'failed',
+            equivalent,
+            baseHead,
+            branchHead,
+            mergeBase,
+            mergedTree,
+            expectedPatchId,
+            actualPatchId,
+            durationMs: Date.now() - startedAt,
+        };
+    } catch (e: any) {
+        return {
+            status: 'failed',
+            equivalent: false,
+            baseHead,
+            branchHead,
+            durationMs: Date.now() - startedAt,
+            error: e?.message || String(e),
+            stdout: truncateValidationOutput(e?.stdout),
+            stderr: truncateValidationOutput(e?.stderr),
+        };
+    }
 }
 
 function readPackageScripts(workspace: string): Record<string, string> {
@@ -2755,34 +2862,49 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+                const refineStages: Array<Record<string, unknown>> = [];
                 try {
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
                     const mesh = meshRecord?.mesh;
                     const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
-                    if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
+                    if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh`, refineStages };
 
                     if (!node.isLocalWorktree || !node.workspace) {
-                        return { success: false, error: `Refinery requires a local worktree node` };
+                        return { success: false, error: `Refinery requires a local worktree node`, refineStages };
                     }
 
                     const sourceNode = node.clonedFromNodeId
                         ? mesh?.nodes.find((n: any) => n.id === node.clonedFromNodeId || n.nodeId === node.clonedFromNodeId)
                         : mesh?.nodes.find((n: any) => !n.isLocalWorktree);
                     const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
-                    if (!repoRoot) return { success: false, error: 'Source node repoRoot not found' };
+                    if (!repoRoot) return { success: false, error: 'Source node repoRoot not found', refineStages };
 
                     const { execFile } = await import('node:child_process');
                     const { promisify } = await import('node:util');
                     const execFileAsync = promisify(execFile);
 
+                    const resolveStarted = Date.now();
                     const { stdout: branchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8' });
                     const branch = branchStdout.trim();
-                    if (!branch) return { success: false, error: 'Could not determine branch of the worktree node' };
+                    if (!branch) return { success: false, error: 'Could not determine branch of the worktree node', refineStages };
 
                     const { stdout: baseBranchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8' });
                     const baseBranch = baseBranchStdout.trim();
+                    const { stdout: baseHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+                    const { stdout: branchHeadStdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8' });
+                    const baseHead = baseHeadStdout.trim();
+                    const branchHead = branchHeadStdout.trim();
+                    recordMeshRefineStage(refineStages, 'resolve_refs', 'passed', resolveStarted, { branch, baseBranch, baseHead, branchHead });
 
+                    const validationStarted = Date.now();
                     const validationSummary = await runMeshRefineValidationGate(mesh, node.workspace);
+                    recordMeshRefineStage(
+                        refineStages,
+                        'validation',
+                        validationSummary.status === 'passed' ? 'passed' : validationSummary.status === 'failed' ? 'failed' : 'skipped',
+                        validationStarted,
+                        { validationStatus: validationSummary.status, commandsRun: validationSummary.commandsRun.length },
+                    );
                     if (validationSummary.status === 'failed') {
                         return {
                             success: false,
@@ -2792,6 +2914,7 @@ export class DaemonCommandRouter {
                             branch,
                             into: baseBranch,
                             validationSummary,
+                            refineStages,
                             finalBranchConvergenceState: {
                                 branch,
                                 baseBranch,
@@ -2811,6 +2934,7 @@ export class DaemonCommandRouter {
                             branch,
                             into: baseBranch,
                             validationSummary,
+                            refineStages,
                             finalBranchConvergenceState: {
                                 branch,
                                 baseBranch,
@@ -2822,39 +2946,127 @@ export class DaemonCommandRouter {
                         };
                     }
 
-                    try {
-                        await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Auto-merge branch '${branch}' via Refinery`], { cwd: repoRoot, encoding: 'utf8' });
-                    } catch (e: any) {
+                    const patchEquivalenceStarted = Date.now();
+                    const patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
+                    recordMeshRefineStage(refineStages, 'patch_equivalence', patchEquivalence.status, patchEquivalenceStarted, {
+                        equivalent: patchEquivalence.equivalent,
+                        expectedPatchId: patchEquivalence.expectedPatchId,
+                        actualPatchId: patchEquivalence.actualPatchId,
+                        error: patchEquivalence.error,
+                    });
+                    if (!patchEquivalence.equivalent) {
                         return {
                             success: false,
-                            error: `Merge failed (conflicts?): ${e.message}`,
+                            code: 'patch_equivalence_failed',
+                            convergenceStatus: 'blocked_review',
+                            error: 'Refinery patch-equivalence preflight failed; merge/refine was not attempted.',
+                            branch,
+                            into: baseBranch,
                             validationSummary,
+                            patchEquivalence,
+                            refineStages,
                             finalBranchConvergenceState: {
                                 branch,
                                 baseBranch,
                                 merged: false,
                                 removed: false,
                                 validation: 'passed',
+                                patchEquivalence: 'failed',
+                                status: 'blocked_review',
+                            },
+                        };
+                    }
+
+                    let mergeResult: Record<string, unknown> | undefined;
+                    const mergeStarted = Date.now();
+                    try {
+                        const result = await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Auto-merge branch '${branch}' via Refinery`], { cwd: repoRoot, encoding: 'utf8' });
+                        mergeResult = {
+                            stdout: truncateValidationOutput(result.stdout),
+                            stderr: truncateValidationOutput(result.stderr),
+                            durationMs: Date.now() - mergeStarted,
+                        };
+                        recordMeshRefineStage(refineStages, 'merge', 'passed', mergeStarted, mergeResult);
+                    } catch (e: any) {
+                        recordMeshRefineStage(refineStages, 'merge', 'failed', mergeStarted, {
+                            error: e?.message || String(e),
+                            stdout: truncateValidationOutput(e?.stdout),
+                            stderr: truncateValidationOutput(e?.stderr),
+                        });
+                        return {
+                            success: false,
+                            error: `Merge failed (conflicts?): ${e.message}`,
+                            validationSummary,
+                            patchEquivalence,
+                            refineStages,
+                            finalBranchConvergenceState: {
+                                branch,
+                                baseBranch,
+                                merged: false,
+                                removed: false,
+                                validation: 'passed',
+                                patchEquivalence: 'passed',
                                 status: 'not_mergeable',
                             },
                         };
                     }
 
+                    const cleanupStarted = Date.now();
                     const removeResult = await this.execute('remove_mesh_node', {
                         meshId,
                         nodeId,
-                        sessionCleanupMode: 'kill',
+                        sessionCleanupMode: 'preserve',
                         inlineMesh: args?.inlineMesh,
                     });
+                    recordMeshRefineStage(refineStages, 'cleanup', removeResult?.success === false ? 'failed' : 'passed', cleanupStarted, {
+                        removed: removeResult?.removed,
+                        code: removeResult?.code,
+                        error: removeResult?.error,
+                    });
 
+                    let ledgerError: string | undefined;
+                    const ledgerStarted = Date.now();
                     try {
                         const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
                         appendLedgerEntry(meshId, {
                             kind: 'node_removed',
                             nodeId,
-                            payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary },
+                            payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary, patchEquivalence },
                         });
-                    } catch {}
+                        recordMeshRefineStage(refineStages, 'ledger', 'passed', ledgerStarted);
+                    } catch (e: any) {
+                        ledgerError = e?.message || String(e);
+                        recordMeshRefineStage(refineStages, 'ledger', 'failed', ledgerStarted, { error: ledgerError });
+                    }
+
+                    const finalBranchConvergenceState = {
+                        branch: baseBranch,
+                        mergedBranch: branch,
+                        baseBranch,
+                        merged: true,
+                        removed: removeResult?.success !== false,
+                        validation: 'passed',
+                        patchEquivalence: 'passed',
+                        status: removeResult?.success === false ? 'merged_cleanup_failed' : 'merged',
+                    };
+
+                    if (removeResult?.success === false) {
+                        return {
+                            success: false,
+                            code: 'cleanup_failed',
+                            error: 'Refinery merge completed but worktree cleanup failed; manual cleanup/retry is required.',
+                            merged: true,
+                            branch,
+                            into: baseBranch,
+                            removeResult,
+                            validationSummary,
+                            patchEquivalence,
+                            mergeResult,
+                            refineStages,
+                            ...(ledgerError ? { ledgerError } : {}),
+                            finalBranchConvergenceState,
+                        };
+                    }
 
                     return {
                         success: true,
@@ -2863,18 +3075,14 @@ export class DaemonCommandRouter {
                         into: baseBranch,
                         removeResult,
                         validationSummary,
-                        finalBranchConvergenceState: {
-                            branch: baseBranch,
-                            mergedBranch: branch,
-                            baseBranch,
-                            merged: true,
-                            removed: removeResult?.success !== false,
-                            validation: 'passed',
-                            status: removeResult?.success === false ? 'merged_cleanup_failed' : 'merged',
-                        },
+                        patchEquivalence,
+                        mergeResult,
+                        refineStages,
+                        ...(ledgerError ? { ledgerError } : {}),
+                        finalBranchConvergenceState,
                     };
                 } catch (e: any) {
-                    return { success: false, error: e.message };
+                    return { success: false, error: e.message, refineStages };
                 }
             }
 

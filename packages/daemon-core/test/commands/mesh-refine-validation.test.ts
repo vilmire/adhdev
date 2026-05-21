@@ -120,6 +120,9 @@ describe('refine_mesh_node validation gate', () => {
     try {
       initGitRepo(repo)
       const worktree = createWorktreeWithCommit(root, repo)
+      writeFileSync(join(repo, 'SOURCE_ONLY.md'), 'source change\n', 'utf-8')
+      execFileSync('git', ['add', 'SOURCE_ONLY.md'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'source-only change'], { cwd: repo })
       const mesh = createMesh(repo, worktree)
       const router = createRouter()
 
@@ -135,9 +138,46 @@ describe('refine_mesh_node validation gate', () => {
         'npm run typecheck',
         'npm run test',
       ])
+      expect(result.refineStages.map((entry: any) => entry.stage)).toEqual([
+        'resolve_refs',
+        'validation',
+        'patch_equivalence',
+        'merge',
+        'cleanup',
+        'ledger',
+      ])
+      expect(result.patchEquivalence).toMatchObject({ status: 'passed', equivalent: true })
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
+      expect(readFileSync(join(repo, 'SOURCE_ONLY.md'), 'utf-8')).toBe('source change\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-worktree')).toBe(false)
       expect(result.finalBranchConvergenceState).toMatchObject({ branch: 'main', merged: true, validation: 'passed' })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reports cleanup failure as an observable partial convergence state after merge', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-cleanup-fail-'))
+    const repo = join(root, 'repo')
+    try {
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-cleanup-fail')
+      delete mesh.nodes[1].worktreeBranch
+      const router = createRouter()
+
+      const result: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-cleanup-fail',
+        inlineMesh: mesh,
+      })
+
+      expect(result).toMatchObject({ success: false, code: 'cleanup_failed', merged: true })
+      expect(result.removeResult).toMatchObject({ success: false, removed: false, code: 'mesh_worktree_cleanup_missing_branch' })
+      expect(result.refineStages.map((entry: any) => `${entry.stage}:${entry.status}`)).toContain('cleanup:failed')
+      expect(result.finalBranchConvergenceState).toMatchObject({ status: 'merged_cleanup_failed', merged: true, removed: false })
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
+      expect(mesh.nodes.some((node: any) => node.id === 'node-cleanup-fail')).toBe(true)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
