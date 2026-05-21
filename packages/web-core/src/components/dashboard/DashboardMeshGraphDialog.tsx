@@ -8,7 +8,6 @@ import { MeshObservabilitySurface } from '../MeshGraph'
 import type { MeshGraphData } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import { useTheme } from '../../hooks/useTheme'
-import { hasPendingDashboardMeshRefresh, nextDashboardMeshRefreshDelayMs } from '../../utils/dashboard-mesh-live-refresh'
 import { extractRepoMeshStatus } from '../../utils/repo-mesh-status'
 import { getMeshGraphTheme } from '../MeshGraph/meshGraphTheme'
 
@@ -31,32 +30,28 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null)
-    const pendingRefreshAttemptRef = useRef(0)
-    const pendingRefreshTimerRef = useRef<number | null>(null)
+    const hasUsableGraphRef = useRef(false)
 
-    const loadGraph = useCallback(async () => {
-        if (pendingRefreshTimerRef.current != null) {
-            window.clearTimeout(pendingRefreshTimerRef.current)
-            pendingRefreshTimerRef.current = null
-        }
+    useEffect(() => {
+        hasUsableGraphRef.current = graph !== null && meshStatus !== null
+    }, [graph, meshStatus])
+
+    const loadGraph = useCallback(async (refresh = false) => {
         if (!daemonId || !meshId) {
-            pendingRefreshAttemptRef.current = 0
             setError('This coordinator does not expose a live mesh id.')
             setGraph(null)
             setMeshStatus(null)
             return
         }
 
-        setLoading(true)
+        setLoading(!hasUsableGraphRef.current)
         setError(null)
         try {
             const response = meshOverrides?.loadMeshStatus
-                ? await meshOverrides.loadMeshStatus(daemonId, meshId)
-                : await sendDaemonCommand(daemonId, 'mesh_status', { meshId })
+                ? await meshOverrides.loadMeshStatus(daemonId, meshId, { refresh })
+                : await sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })
             const status = extractRepoMeshStatus(response)
             if (!status) {
-                setGraph(null)
-                setMeshStatus(null)
                 setError('mesh_status returned an unexpected payload.')
                 return
             }
@@ -65,9 +60,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             setGraph(nextGraph)
             setLastLoadedAt(status.refreshedAt || new Date().toISOString())
         } catch (err) {
-            pendingRefreshAttemptRef.current = 0
-            setGraph(null)
-            setMeshStatus(null)
             setError(err instanceof Error ? err.message : 'Failed to load live mesh status')
         } finally {
             setLoading(false)
@@ -75,36 +67,8 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     }, [daemonId, meshId, meshOverrides, sendDaemonCommand])
 
     useEffect(() => {
-        pendingRefreshAttemptRef.current = 0
-        if (pendingRefreshTimerRef.current != null) {
-            window.clearTimeout(pendingRefreshTimerRef.current)
-            pendingRefreshTimerRef.current = null
-        }
-        loadGraph()
+        loadGraph(false)
     }, [loadGraph])
-
-    useEffect(() => {
-        if (pendingRefreshTimerRef.current != null) {
-            window.clearTimeout(pendingRefreshTimerRef.current)
-            pendingRefreshTimerRef.current = null
-        }
-        if (loading || !meshStatus || !hasPendingDashboardMeshRefresh(meshStatus.nodes)) {
-            if (!loading) pendingRefreshAttemptRef.current = 0
-            return
-        }
-        const delayMs = nextDashboardMeshRefreshDelayMs(pendingRefreshAttemptRef.current)
-        if (delayMs == null) return
-        pendingRefreshTimerRef.current = window.setTimeout(() => {
-            pendingRefreshAttemptRef.current += 1
-            void loadGraph()
-        }, delayMs)
-        return () => {
-            if (pendingRefreshTimerRef.current != null) {
-                window.clearTimeout(pendingRefreshTimerRef.current)
-                pendingRefreshTimerRef.current = null
-            }
-        }
-    }, [loadGraph, loading, meshStatus])
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -159,8 +123,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                         <button
                             type="button"
                             onClick={() => {
-                                pendingRefreshAttemptRef.current = 0
-                                void loadGraph()
+                                void loadGraph(true)
                             }}
                             disabled={loading}
                             className="btn btn-secondary btn-sm rounded-xl px-3.5"

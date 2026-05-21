@@ -466,6 +466,110 @@ describe('mesh_status', () => {
     }
   })
 
+  it('returns cached coordinator-owned aggregate mesh_status without refreshing peer git on default requests', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-cache-')
+    try {
+      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      const dispatchMeshCommand = vi.fn(async (_daemonId: string, command: string) => {
+        expect(command).toBe('git_status')
+        return {
+          success: true,
+          status: {
+            isGitRepo: true,
+            workspace: remoteWorkspace,
+            repoRoot: remoteWorkspace,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            headCommit: 'cb6fda78',
+            ahead: 2,
+            behind: 14,
+            staged: 0,
+            modified: 1,
+            untracked: 1,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            stashCount: 2,
+            lastCheckedAt: Date.parse('2026-05-21T14:10:00.000Z'),
+            submodules: [
+              { path: 'adhdev-providers', repoPath: `${remoteWorkspace}/adhdev-providers`, commit: 'provider-sha', dirty: false, outOfSync: false },
+              { path: 'oss', repoPath: `${remoteWorkspace}/oss`, commit: 'oss-sha', dirty: false, outOfSync: false },
+            ],
+          },
+        }
+      })
+      const { router, sessionHostControl } = createRouter({ dispatchMeshCommand })
+      const inlineMesh = {
+        id: 'mesh_303_cache',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        coordinator: { preferredNodeId: 'node_7' },
+        policy: {},
+        nodes: [
+          { id: 'node_7', daemonId: 'daemon_7', machineLabel: 'Local', workspace: repoRoot, repoRoot, providers: ['hermes-cli'], policy: { providerPriority: ['hermes-cli'] } },
+          {
+            id: 'node_303a1ded96a859540d7bf608448d1fcc',
+            daemonId: 'daemon_303',
+            machineLabel: 'node_303',
+            workspace: remoteWorkspace,
+            repoRoot: remoteWorkspace,
+            providers: [],
+            policy: { providerPriority: ['hermes-cli'] },
+            cachedStatus: {
+              health: 'unknown',
+              gitProbePending: true,
+              error: 'waiting for live peer git snapshot',
+              git: { isGitRepo: false, branch: null, upstream: null, headCommit: null },
+            },
+          },
+        ],
+      }
+
+      const refreshed = await router.execute('mesh_status', {
+        meshId: 'mesh_303_cache',
+        inlineMesh,
+        requireDirectPeerTruth: true,
+        refresh: true,
+      }) as any
+
+      expect(refreshed.success).toBe(true)
+      expect(refreshed.sourceOfTruth.aggregateSnapshot).toMatchObject({
+        owner: 'coordinator_daemon_memory',
+        cached: false,
+        refreshReason: 'explicit_refresh',
+      })
+      expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
+      expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
+
+      dispatchMeshCommand.mockClear()
+      sessionHostControl.listSessions.mockClear()
+
+      const cached = await router.execute('mesh_status', {
+        meshId: 'mesh_303_cache',
+        inlineMesh,
+        requireDirectPeerTruth: true,
+        refresh: false,
+      }) as any
+
+      expect(cached.success).toBe(true)
+      expect(cached.sourceOfTruth.aggregateSnapshot).toMatchObject({
+        owner: 'coordinator_daemon_memory',
+        cached: true,
+        refreshReason: 'memory_cache_hit',
+      })
+      expect(cached.sourceOfTruth.aggregateSnapshot.ageMs).toEqual(expect.any(Number))
+      expect(cached.nodes.find((node: any) => node.nodeId === 'node_303a1ded96a859540d7bf608448d1fcc')).toMatchObject({
+        git: expect.objectContaining({ branch: 'main', upstream: 'origin/main', headCommit: 'cb6fda78' }),
+      })
+      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+      expect(sessionHostControl.listSessions).not.toHaveBeenCalled()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('returns connected peer git truth from one aggregate mesh_status call and isolates failed peers', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-single-aggregate-')
     try {

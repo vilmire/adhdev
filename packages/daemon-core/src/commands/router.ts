@@ -1364,9 +1364,65 @@ export class DaemonCommandRouter {
      *  Allows the MCP server to query mesh data via get_mesh even when
      *  the mesh doesn't exist in the local meshes.json file. */
     private inlineMeshCache = new Map<string, any>();
+    /** Coordinator-owned whole-mesh aggregate status snapshots. Browser callers read this by default. */
+    private aggregateMeshStatusCache = new Map<string, { builtAt: number; snapshot: any }>();
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
+    }
+
+    private cloneJsonValue<T>(value: T): T {
+        if (typeof structuredClone === 'function') return structuredClone(value);
+        return JSON.parse(JSON.stringify(value)) as T;
+    }
+
+    private getCachedAggregateMeshStatus(meshId: string): any | null {
+        const cached = this.aggregateMeshStatusCache.get(meshId);
+        if (!cached?.snapshot || cached.snapshot.success !== true || !Array.isArray(cached.snapshot.nodes)) return null;
+        const snapshot = this.cloneJsonValue(cached.snapshot);
+        const ageMs = Math.max(0, Date.now() - cached.builtAt);
+        const sourceOfTruth = snapshot.sourceOfTruth && typeof snapshot.sourceOfTruth === 'object'
+            ? snapshot.sourceOfTruth
+            : {};
+        snapshot.sourceOfTruth = {
+            ...sourceOfTruth,
+            aggregateSnapshot: {
+                ...(sourceOfTruth.aggregateSnapshot && typeof sourceOfTruth.aggregateSnapshot === 'object'
+                    ? sourceOfTruth.aggregateSnapshot
+                    : {}),
+                owner: 'coordinator_daemon_memory',
+                cached: true,
+                source: 'memory',
+                refreshReason: 'memory_cache_hit',
+                ageMs,
+                cachedAt: new Date(cached.builtAt).toISOString(),
+                returnedAt: new Date().toISOString(),
+            },
+        };
+        return snapshot;
+    }
+
+    private rememberAggregateMeshStatus(meshId: string, snapshot: any, refreshReason: string): any {
+        if (!snapshot || typeof snapshot !== 'object' || snapshot.success !== true || !Array.isArray(snapshot.nodes)) return snapshot;
+        const builtAt = Date.now();
+        const next = this.cloneJsonValue(snapshot);
+        const sourceOfTruth = next.sourceOfTruth && typeof next.sourceOfTruth === 'object'
+            ? next.sourceOfTruth
+            : {};
+        next.sourceOfTruth = {
+            ...sourceOfTruth,
+            aggregateSnapshot: {
+                owner: 'coordinator_daemon_memory',
+                cached: false,
+                source: 'live_refresh',
+                refreshReason,
+                ageMs: 0,
+                cachedAt: new Date(builtAt).toISOString(),
+                returnedAt: new Date(builtAt).toISOString(),
+            },
+        };
+        this.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: this.cloneJsonValue(next) });
+        return next;
     }
 
     public getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
@@ -3658,6 +3714,13 @@ export class DaemonCommandRouter {
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
 
+                    const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
+                    if (!refreshRequested) {
+                        const cachedStatus = this.getCachedAggregateMeshStatus(meshId);
+                        if (cachedStatus) return cachedStatus;
+                    }
+                    const refreshReason = refreshRequested ? 'explicit_refresh' : 'cold_cache_miss';
+
                     const { getMeshQueueStats, getQueue } = await import('../mesh/mesh-work-queue.js');
                     const queue = getQueue(meshId);
                     const queueSummary = getMeshQueueStats(meshId);
@@ -3915,13 +3978,13 @@ export class DaemonCommandRouter {
                         nodeStatuses.push(status);
                     }
 
-                    return {
+                    const statusResult = {
                         success: true,
                         meshId: mesh.id,
                         meshName: mesh.name,
                         repoIdentity: mesh.repoIdentity,
                         defaultBranch: mesh.defaultBranch,
-                        refreshedAt: new Date().toISOString(),
+                        refreshedAt,
                         sourceOfTruth: {
                             membership: meshRecord?.source === 'inline_cache'
                                 ? 'coordinator_inline_mesh_cache'
@@ -3947,6 +4010,7 @@ export class DaemonCommandRouter {
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
                     };
+                    return this.rememberAggregateMeshStatus(meshId, statusResult, refreshReason);
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
