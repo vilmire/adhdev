@@ -694,6 +694,111 @@ describe('extractRepoMeshStatus', () => {
     expect(graph.snapshotWarnings).toEqual([])
   })
 
+  it('deduplicates stale pending and live peer rows for the same node before graph/detail derivation', () => {
+    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const normalized = extractRepoMeshStatus({
+      success: true,
+      result: {
+        success: true,
+        meshId: 'mesh_node303_duplicate_precedence',
+        meshName: 'Node 303 Duplicate Precedence Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        refreshedAt: '2026-05-22T00:00:00.000Z',
+        sourceOfTruth: {
+          currentStatus: 'live_git_and_session_probes',
+          directPeerTruth: { required: true, satisfied: true },
+        },
+        nodes: [
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            repoRoot,
+            machineStatus: 'online',
+            health: 'unknown',
+            launchReady: true,
+            gitProbePending: true,
+            connection: { state: 'unknown', transport: 'unknown', source: 'not_reported' },
+          },
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            repoRoot,
+            daemonId: 'daemon_303',
+            machineId: 'machine_303',
+            machineStatus: 'online',
+            health: 'online',
+            launchReady: true,
+            providers: [],
+            providerPriority: ['hermes-cli'],
+            activeSessions: [],
+            connection: { state: 'connected', transport: 'direct', reported: true, source: 'mesh_peer_status' },
+            git: {
+              isGitRepo: true,
+              workspace: repoRoot,
+              repoRoot,
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              headCommit: '3a71b5ad',
+              headMessage: 'chore: sync cloud MCP server vendor',
+              ahead: 0,
+              behind: 0,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              lastCheckedAt: Date.parse('2026-05-22T00:00:00.000Z'),
+              submodules: [
+                { path: 'oss', commit: '65d7f5dafc495ec4c24d378e3d12a01a2b09a3b2', repoPath: `${repoRoot}/oss`, dirty: false, outOfSync: false },
+                { path: 'adhdev-providers', commit: '1c29790fc14ad87f75fc6aed958fda8f36dbab0d', repoPath: `${repoRoot}/adhdev-providers`, dirty: false, outOfSync: false },
+              ],
+            },
+          },
+        ],
+        queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+        ledger: { entries: [], summary: { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 } },
+      },
+    } as any)
+
+    expect(normalized?.nodes).toHaveLength(1)
+    const node303 = normalized?.nodes[0]
+    expect(node303).toMatchObject({
+      nodeId: 'node_303',
+      daemonId: 'daemon_303',
+      machineId: 'machine_303',
+      health: 'online',
+      launchReady: true,
+      connection: expect.objectContaining({ state: 'connected', transport: 'direct', source: 'mesh_peer_status' }),
+      git: expect.objectContaining({
+        branch: 'main',
+        upstream: 'origin/main',
+        headCommit: '3a71b5ad',
+        submodules: [
+          expect.objectContaining({ path: 'oss' }),
+          expect.objectContaining({ path: 'adhdev-providers' }),
+        ],
+      }),
+    })
+    expect(node303).not.toHaveProperty('gitProbePending')
+
+    const graph = buildMeshGraph(normalized as any)
+    const graphNodes = graph.nodes.filter(node => node.id === 'node_303')
+    expect(graphNodes).toHaveLength(1)
+    expect(graphNodes[0]).toMatchObject({
+      branch: 'main',
+      upstream: 'origin/main',
+      snapshotCompleteness: 'complete',
+      branchConvergence: expect.objectContaining({ status: 'merged_to_main' }),
+    })
+    expect(graphNodes[0]?.snapshotWarnings).toEqual([])
+    expect(graph.snapshotWarnings).toEqual([])
+  })
+
   it('returns null for unrelated payloads', () => {
     expect(extractRepoMeshStatus({ success: true, result: { ok: true } } as any)).toBeNull()
   })

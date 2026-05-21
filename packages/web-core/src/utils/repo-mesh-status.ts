@@ -271,6 +271,67 @@ function buildLivePeerGitConnection(connection: RepoMeshNodeStatus['connection']
     }
 }
 
+function scoreRepoMeshNodeTruth(node: RepoMeshNodeStatus): number {
+    let score = 0
+    const git = node.git
+    if (git) {
+        score += 50
+        if (git.isGitRepo === true) score += 20
+        if (git.isGitRepo === false) score += 5
+        if (git.branch) score += 15
+        if (git.upstream) score += 10
+        if (git.headCommit) score += 10
+        if (git.upstreamStatus && git.upstreamStatus !== 'unchecked') score += 5
+        if (typeof git.lastCheckedAt === 'number') score += 5
+        score += (git.submodules?.length ?? 0) * 4
+    }
+    if (node.connection?.state === 'connected' || node.connection?.state === 'self') score += 8
+    if (node.connection?.transport === 'direct') score += 4
+    if (node.connection?.source === 'mesh_peer_status') score += 4
+    if (node.health === 'online') score += 4
+    if (node.health === 'dirty') score += 3
+    if (node.health === 'degraded') score += 2
+    if (node.launchReady) score += 2
+    if (node.gitProbePending) score -= 20
+    if (node.error) score -= 10
+    return score
+}
+
+function mergeRepoMeshNodeStatus(existing: RepoMeshNodeStatus, incoming: RepoMeshNodeStatus): RepoMeshNodeStatus {
+    const existingScore = scoreRepoMeshNodeTruth(existing)
+    const incomingScore = scoreRepoMeshNodeTruth(incoming)
+    const primary = incomingScore > existingScore ? incoming : existing
+    const secondary = primary === incoming ? existing : incoming
+    const git = primary.git ?? secondary.git
+    const providers = (primary.providers?.length ?? 0) > 0 ? primary.providers : secondary.providers
+    const activeSessions = (primary.activeSessions?.length ?? 0) > 0 ? primary.activeSessions : secondary.activeSessions
+    const activeSessionDetails = (primary.activeSessionDetails?.length ?? 0) > 0 ? primary.activeSessionDetails : secondary.activeSessionDetails
+    const providerPriority = (primary.providerPriority?.length ?? 0) > 0 ? primary.providerPriority : secondary.providerPriority
+    const connection = primary.connection ?? secondary.connection
+    const merged: RepoMeshNodeStatus = {
+        ...secondary,
+        ...primary,
+        machineLabel: primary.machineLabel || secondary.machineLabel,
+        workspace: primary.workspace || secondary.workspace,
+        ...(primary.repoRoot || secondary.repoRoot ? { repoRoot: primary.repoRoot || secondary.repoRoot } : {}),
+        ...(primary.daemonId || secondary.daemonId ? { daemonId: primary.daemonId || secondary.daemonId } : {}),
+        ...(primary.machineId || secondary.machineId ? { machineId: primary.machineId || secondary.machineId } : {}),
+        ...(primary.machineStatus || secondary.machineStatus ? { machineStatus: primary.machineStatus || secondary.machineStatus } : {}),
+        health: git && (!primary.health || primary.health === 'unknown') ? deriveMeshNodeHealthFromGit(git) : primary.health,
+        providers: providers ?? [],
+        activeSessions: activeSessions ?? [],
+        ...(activeSessionDetails && activeSessionDetails.length > 0 ? { activeSessionDetails } : {}),
+        ...(providerPriority && providerPriority.length > 0 ? { providerPriority } : {}),
+        ...(connection ? { connection } : {}),
+        ...(git ? { git } : {}),
+    }
+    if (git) {
+        delete (merged as { gitProbePending?: boolean }).gitProbePending
+        delete (merged as { error?: string }).error
+    }
+    return merged
+}
+
 function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
     const record = readRecord(node)
     const nodeId = readString(record.nodeId, record.id)
@@ -336,13 +397,27 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
 function normalizeRepoMeshStatus(candidate: JsonRecord): RepoMeshStatus | null {
     const meshId = readString(candidate.meshId, candidate.mesh_id, candidate.id)
     const nodesValue = candidate.nodes
-    const nodes = Array.isArray(nodesValue)
+    const normalizedNodes = Array.isArray(nodesValue)
         ? nodesValue
             .map(node => normalizeRepoMeshNodeStatus(node))
             .filter((node): node is RepoMeshNodeStatus => node !== null)
         : null
-    if (!meshId || !nodes) return null
+    if (!meshId || !normalizedNodes) return null
 
+    const nodesById = new Map<string, RepoMeshNodeStatus>()
+    const nodes: RepoMeshNodeStatus[] = []
+    for (const node of normalizedNodes) {
+        const existing = nodesById.get(node.nodeId)
+        if (!existing) {
+            nodesById.set(node.nodeId, node)
+            nodes.push(node)
+            continue
+        }
+        const merged = mergeRepoMeshNodeStatus(existing, node)
+        nodesById.set(node.nodeId, merged)
+        const index = nodes.findIndex(entry => entry.nodeId === node.nodeId)
+        if (index >= 0) nodes[index] = merged
+    }
     const meshName = readString(candidate.meshName, candidate.mesh_name, candidate.name)
     const repoIdentity = readString(candidate.repoIdentity, candidate.repo_identity)
     const refreshedAt = readString(candidate.refreshedAt, candidate.refreshed_at, candidate.updatedAt, candidate.updated_at)
