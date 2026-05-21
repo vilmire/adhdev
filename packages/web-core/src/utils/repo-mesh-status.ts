@@ -73,13 +73,31 @@ function readGitSubmodules(value: unknown, parentRepoRoot?: string): GitRepoStat
     return submodules.length > 0 ? submodules : undefined
 }
 
+function hasGitStatusEvidence(status: JsonRecord): boolean {
+    return readBoolean(status.isGitRepo) !== undefined
+        || Boolean(readString(status.branch, status.upstream, status.upstreamStatus, status.upstream_status, status.headCommit))
+        || readNumber(
+            status.ahead,
+            status.behind,
+            status.staged,
+            status.modified,
+            status.untracked,
+            status.deleted,
+            status.renamed,
+            status.lastCheckedAt,
+            status.last_checked_at,
+        ) !== undefined
+        || (Array.isArray(status.submodules) && status.submodules.length > 0)
+}
+
 function normalizeGitStatus(
     status: JsonRecord,
     node: JsonRecord,
     options?: { lastCheckedAt?: number },
 ): GitRepoStatus | undefined {
-    const isGitRepo = readBoolean(status.isGitRepo)
-    if (!Object.keys(status).length || isGitRepo === undefined) return undefined
+    const explicitIsGitRepo = readBoolean(status.isGitRepo)
+    if (!Object.keys(status).length || !hasGitStatusEvidence(status)) return undefined
+    const isGitRepo = explicitIsGitRepo ?? true
     const conflictFiles = Array.isArray(status.conflictFiles)
         ? status.conflictFiles.filter((entry): entry is string => typeof entry === 'string')
         : []

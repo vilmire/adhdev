@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
 import { extractRepoMeshStatus } from '../../src/utils/repo-mesh-status'
+import { describeProviders, summarizeNodeDrift, summarizeSelectedHead } from '../../src/components/MeshGraph/MeshObservabilitySurface'
 
 describe('extractRepoMeshStatus', () => {
   const status = {
@@ -279,6 +280,126 @@ describe('extractRepoMeshStatus', () => {
       health: 'online',
     })
     expect(graphNode?.snapshotCompleteness).not.toBe('pending_git')
+    expect(graphNode?.snapshotWarnings.join('\n')).not.toContain('waiting for a live peer git snapshot')
+    expect(graphNode?.snapshotWarnings.join('\n')).not.toContain('no peer git snapshot')
+  })
+
+  it('keeps node-scoped live git evidence when another peer has failed mesh transport', () => {
+    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const normalized = extractRepoMeshStatus({
+      success: true,
+      result: {
+        meshId: 'mesh_direct_live_git',
+        meshName: 'Direct Live Git Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        refreshedAt: '2026-05-21T01:42:18Z',
+        sourceOfTruth: { currentStatus: 'live_git_and_session_probes' },
+        nodes: [
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            repoRoot,
+            daemonId: '67cf05aed2496f7ed6b261391e9e15bae893bd08ed633c155e9c866b18cbf96a',
+            machineId: 'mreg_3f4af21a2741a088a0c41835',
+            machineStatus: 'online',
+            health: 'unknown',
+            launchReady: true,
+            providers: [],
+            providerPriority: ['hermes-cli', 'antigravity-cli'],
+            activeSessions: [],
+            gitProbePending: true,
+            connection: {
+              state: 'connected',
+              transport: 'direct',
+              reported: true,
+              source: 'mesh_peer_status',
+              lastConnectedAt: '2026-05-21T01:41:49Z',
+              lastCommandAt: '2026-05-21T01:42:18Z',
+            },
+            git: {
+              workspace: repoRoot,
+              repoRoot,
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              headCommit: '083fe011',
+              ahead: 0,
+              behind: 3,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              lastCheckedAt: Date.parse('2026-05-21T01:42:18Z'),
+              submodules: [
+                {
+                  path: 'oss',
+                  commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a',
+                  repoPath: `${repoRoot}/oss`,
+                  dirty: false,
+                  outOfSync: false,
+                  lastCheckedAt: Date.parse('2026-05-21T01:42:18Z'),
+                },
+              ],
+            },
+          },
+          {
+            nodeId: 'node_timeout_peer',
+            machineLabel: 'node_timeout_peer',
+            workspace: '/Users/other/project',
+            daemonId: '9f061b89ce435a06666a3e70db28d6230b1b3081b370fbd5766e631ea0a6e78d',
+            machineStatus: 'online',
+            health: 'unknown',
+            providers: [],
+            providerPriority: ['hermes-cli'],
+            activeSessions: [],
+            gitProbePending: true,
+            connection: {
+              state: 'failed',
+              transport: 'unknown',
+              reported: true,
+              source: 'mesh_peer_status',
+              reason: 'Failed to set remote desc: Unexpected remote answer description in signaling state stable',
+              lastCommandAt: '2026-05-21T01:42:46Z',
+            },
+          },
+        ],
+        queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+        ledger: { entries: [], summary: { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 } },
+      },
+    } as any)
+
+    const node303 = normalized?.nodes.find(node => node.nodeId === 'node_303')
+    expect(node303).toMatchObject({
+      health: 'online',
+      providerPriority: ['hermes-cli', 'antigravity-cli'],
+      connection: expect.objectContaining({
+        transport: 'direct',
+        source: 'mesh_peer_status',
+      }),
+      git: expect.objectContaining({
+        branch: 'main',
+        upstream: 'origin/main',
+        headCommit: '083fe011',
+        ahead: 0,
+        behind: 3,
+      }),
+    })
+    expect(node303).not.toHaveProperty('gitProbePending')
+    expect(describeProviders(node303 as any)).toBe('installed providers not reported; priority hermes-cli, antigravity-cli')
+    expect(summarizeNodeDrift(node303 as any)).toBe('main · ↑0/↓3')
+    expect(summarizeSelectedHead(node303 as any, [])).toBe('083fe01')
+
+    const graph = buildMeshGraph(normalized as any)
+    const graphNode = graph.nodes.find(node => node.id === 'node_303')
+    expect(graphNode).toMatchObject({
+      branch: 'main',
+      upstream: 'origin/main',
+      snapshotCompleteness: 'complete',
+    })
     expect(graphNode?.snapshotWarnings.join('\n')).not.toContain('waiting for a live peer git snapshot')
     expect(graphNode?.snapshotWarnings.join('\n')).not.toContain('no peer git snapshot')
   })
