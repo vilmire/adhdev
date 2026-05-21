@@ -466,6 +466,169 @@ describe('mesh_status', () => {
     }
   })
 
+  it('returns connected peer git truth from one aggregate mesh_status call and isolates failed peers', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-single-aggregate-')
+    try {
+      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      const failedDaemonId = '9f061b89ce435a06666a3e70db28d6230b1b3081b370fbd5766e631ea0a6e78d'
+      const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string, args: Record<string, unknown>) => {
+        expect(command).toBe('git_status')
+        if (daemonId === 'daemon_303') {
+          expect(args).toMatchObject({ workspace: remoteWorkspace })
+          return {
+            success: true,
+            status: {
+              isGitRepo: true,
+              workspace: remoteWorkspace,
+              repoRoot: remoteWorkspace,
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              headCommit: '083fe011',
+              ahead: 0,
+              behind: 8,
+              staged: 0,
+              modified: 1,
+              untracked: 1,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              stashCount: 2,
+              lastCheckedAt: Date.parse('2026-05-21T13:24:47.000Z'),
+              submodules: [
+                { path: 'adhdev-providers', repoPath: `${remoteWorkspace}/adhdev-providers`, commit: 'provider-sha', dirty: false, outOfSync: false },
+                { path: 'oss', repoPath: `${remoteWorkspace}/oss`, commit: 'oss-sha', dirty: false, outOfSync: false },
+              ],
+            },
+          }
+        }
+        if (daemonId === failedDaemonId) {
+          throw new Error('P2P state changed to failed after remote_desc_duplicate_ignored on mesh_p2p_answer')
+        }
+        throw new Error(`unexpected daemon ${daemonId}`)
+      })
+      const getMeshPeerConnectionStatus = vi.fn((daemonId: string) => {
+        if (daemonId === 'daemon_303') {
+          return {
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'connected',
+            transport: 'direct',
+            reported: true,
+            reason: 'Connected directly peer-to-peer.',
+            lastConnectedAt: '2026-05-21T13:22:47.000Z',
+            lastCommandAt: '2026-05-21T13:24:47.000Z',
+          }
+        }
+        if (daemonId === failedDaemonId) {
+          return {
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'failed',
+            transport: 'unknown',
+            reported: true,
+            reason: 'P2P state changed to failed after remote_desc_duplicate_ignored on mesh_p2p_answer',
+            lastCommandAt: '2026-05-21T13:21:07.119Z',
+          }
+        }
+        return null
+      })
+      const { router } = createRouter({ dispatchMeshCommand, getMeshPeerConnectionStatus })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_303',
+        requireDirectPeerTruth: true,
+        inlineMesh: {
+          id: 'mesh_303',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_7' },
+          policy: {},
+          nodes: [
+            {
+              id: 'node_7',
+              daemonId: 'daemon_7',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+            {
+              id: 'node_303',
+              daemonId: 'daemon_303',
+              machineLabel: 'Remote',
+              workspace: remoteWorkspace,
+              repoRoot: remoteWorkspace,
+              providers: [],
+              policy: { providerPriority: ['hermes-cli'] },
+              cachedStatus: {
+                health: 'unknown',
+                gitProbePending: true,
+                error: 'waiting for live peer git snapshot',
+              },
+            },
+            {
+              id: 'node_9f061_timeout_peer',
+              daemonId: failedDaemonId,
+              machineLabel: 'Failed peer',
+              workspace: '/missing/9f061/Prefex',
+              repoRoot: '/missing/9f061/Prefex',
+              providers: [],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result).toMatchObject({
+        success: true,
+        sourceOfTruth: {
+          membership: 'inline_bootstrap_snapshot',
+          coordinatorOwnsLiveTruth: true,
+          currentStatus: 'live_git_and_session_probes',
+          directPeerTruth: expect.objectContaining({
+            required: true,
+            satisfied: true,
+            peerAttemptedCount: 2,
+            peerConfirmedCount: 1,
+          }),
+        },
+      })
+      const node303 = result.nodes.find((node: any) => node.nodeId === 'node_303')
+      expect(node303).toMatchObject({
+        health: 'dirty',
+        launchReady: true,
+        providerPriority: ['hermes-cli'],
+        connection: expect.objectContaining({ state: 'connected', transport: 'direct', source: 'mesh_peer_status' }),
+        git: expect.objectContaining({
+          branch: 'main',
+          upstream: 'origin/main',
+          headCommit: '083fe011',
+          behind: 8,
+          modified: 1,
+          untracked: 1,
+          stashCount: 2,
+          submodules: [
+            expect.objectContaining({ path: 'adhdev-providers' }),
+            expect.objectContaining({ path: 'oss' }),
+          ],
+        }),
+      })
+      expect(node303).not.toHaveProperty('gitProbePending')
+      const failedPeer = result.nodes.find((node: any) => node.nodeId === 'node_9f061_timeout_peer')
+      expect(failedPeer).toMatchObject({
+        health: 'unknown',
+        connection: expect.objectContaining({ state: 'failed' }),
+      })
+      expect(failedPeer?.git).toBeUndefined()
+      expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('treats local submodule drift as parent dirty health for local workspaces', async () => {
     const { dir, repoRoot } = await createTempGitRepoWithSubmodule('mesh-status-submodule-')
     try {

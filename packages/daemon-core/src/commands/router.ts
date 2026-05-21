@@ -3671,6 +3671,49 @@ export class DaemonCommandRouter {
                     const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
 
                     const localMachineId = loadConfig().machineId || '';
+                    const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
+                    const directTruth = requireDirectPeerTruth
+                        ? await hydrateInlineMeshDirectTruth({
+                            mesh,
+                            meshSource: meshRecord.source,
+                            dispatchMeshCommand: this.deps.dispatchMeshCommand,
+                            statusInstanceId: this.deps.statusInstanceId,
+                            localMachineId,
+                        })
+                        : {
+                            directEvidenceCount: 0,
+                            localConfirmedCount: 0,
+                            peerAttemptedCount: 0,
+                            peerConfirmedCount: 0,
+                            unavailableNodeIds: [] as string[],
+                        };
+                    const directTruthSatisfied = meshRecord.source !== 'inline_bootstrap' || directTruth.directEvidenceCount > 0;
+                    if (requireDirectPeerTruth && !directTruthSatisfied) {
+                        return {
+                            success: false,
+                            code: 'mesh_direct_peer_truth_unavailable',
+                            error: 'Selected coordinator could not confirm direct mesh truth yet. Bootstrap inventory stays unavailable until direct mesh_status probes succeed.',
+                            sourceOfTruth: {
+                                membership: meshRecord.source === 'inline_cache'
+                                    ? 'coordinator_inline_mesh_cache'
+                                    : meshRecord.source === 'local_config'
+                                        ? 'local_mesh_config'
+                                        : 'inline_bootstrap_snapshot',
+                                coordinatorOwnsLiveTruth: false,
+                                currentStatus: 'direct_peer_truth_unavailable',
+                                directPeerTruth: {
+                                    required: true,
+                                    satisfied: false,
+                                    directEvidenceCount: directTruth.directEvidenceCount,
+                                    localConfirmedCount: directTruth.localConfirmedCount,
+                                    peerAttemptedCount: directTruth.peerAttemptedCount,
+                                    peerConfirmedCount: directTruth.peerConfirmedCount,
+                                    unavailableNodeIds: directTruth.unavailableNodeIds,
+                                },
+                            },
+                        };
+                    }
+                    const directTruthUnavailableNodeIds = new Set(directTruth.unavailableNodeIds);
                     const selectedCoordinatorNodeId = readStringValue(
                         mesh.coordinator?.preferredNodeId,
                         (mesh.nodes?.[0] as any)?.id,
@@ -3775,7 +3818,7 @@ export class DaemonCommandRouter {
                                         ? deriveMeshNodeHealthFromGit(inlineTransitGit as unknown as Record<string, unknown>)
                                         : 'degraded';
                                     remoteProbeApplied = true;
-                                } else if (!isSelfNode && daemonId && this.deps.dispatchMeshCommand) {
+                                } else if (!isSelfNode && daemonId && this.deps.dispatchMeshCommand && !directTruthUnavailableNodeIds.has(nodeId)) {
                                     try {
                                         const remoteGit = await probeRemoteMeshGitStatus({
                                             dispatchMeshCommand: this.deps.dispatchMeshCommand,
@@ -3885,7 +3928,19 @@ export class DaemonCommandRouter {
                                 : meshRecord?.source === 'local_config'
                                     ? 'local_mesh_config'
                                     : 'inline_bootstrap_snapshot',
-                            coordinatorOwnsLiveTruth: meshRecord?.source !== 'inline_bootstrap',
+                            coordinatorOwnsLiveTruth: directTruthSatisfied,
+                            ...(requireDirectPeerTruth ? {
+                                currentStatus: directTruthSatisfied ? 'live_git_and_session_probes' : 'direct_peer_truth_unavailable',
+                                directPeerTruth: {
+                                    required: true,
+                                    satisfied: directTruthSatisfied,
+                                    directEvidenceCount: directTruth.directEvidenceCount,
+                                    localConfirmedCount: directTruth.localConfirmedCount,
+                                    peerAttemptedCount: directTruth.peerAttemptedCount,
+                                    peerConfirmedCount: directTruth.peerConfirmedCount,
+                                    unavailableNodeIds: directTruth.unavailableNodeIds,
+                                },
+                            } : {}),
                             historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary'],
                         },
                         nodes: nodeStatuses,
