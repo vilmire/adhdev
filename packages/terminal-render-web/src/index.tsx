@@ -9,6 +9,9 @@ import '@xterm/xterm/css/xterm.css';
 import { Terminal } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { FitAddon } from '@xterm/addon-fit';
+import { sanitizeTerminalInputForProvider } from './input-sanitizer';
+
+export { sanitizeTerminalInputForProvider } from './input-sanitizer';
 
 const DEFAULT_SESSION_HOST_COLS = 80;
 const DEFAULT_SESSION_HOST_ROWS = 32;
@@ -363,7 +366,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
         disposable = term.onData((data: string) => {
           if (readOnlyRef.current) return;
-          const cleanData = data.replace(/\x1b\[[?>][0-9;]*c/g, '');
+          const cleanData = sanitizeTerminalInputForProvider(data);
           if (!cleanData) return;
           const restoreViewportAfterInput = pendingLocalInputViewportRestoreRef.current ?? preserveViewportAfterLocalInput(term);
           pendingLocalInputViewportRestoreRef.current = null;
