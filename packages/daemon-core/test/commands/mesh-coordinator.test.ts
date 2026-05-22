@@ -1067,7 +1067,7 @@ describe('resolveMeshCoordinatorSetup', () => {
         meshName: 'Inline Preferred Mesh',
         sourceOfTruth: {
           membership: 'inline_bootstrap_snapshot',
-          coordinatorOwnsLiveTruth: false,
+          coordinatorOwnsLiveTruth: true,
         },
       })
       expect(((result as any).nodes as any[]).map(node => node.nodeId)).toContain('node-remote')
