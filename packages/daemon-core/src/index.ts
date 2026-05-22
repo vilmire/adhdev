@@ -180,6 +180,8 @@ export type { MeshSyncTransport, MeshSyncResult, RemoteMeshRecord } from './mesh
 // ── Mesh Task Ledger ──
 export { appendLedgerEntry, appendRemoteLedgerEntries, readLedgerEntries, readLedgerSlice, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, MAX_LEDGER_SLICE_LIMIT } from './mesh/mesh-ledger.js';
 export type { AppendRemoteLedgerResult, MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext } from './mesh/mesh-ledger.js';
+export { fastForwardMeshNode } from './mesh/mesh-fast-forward.js';
+export type { MeshFastForwardNodeArgs, MeshFastForwardPlannedStep, MeshFastForwardResult } from './mesh/mesh-fast-forward.js';
 export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence } from './mesh/mesh-ledger-reconciliation.js';
 export type { MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 

@@ -37,6 +37,7 @@ export type MeshLedgerKind =
     | 'recovery_attempted'
     | 'ledger_replicated'
     | 'ledger_reconciled'
+    | 'direct_fast_forward'
     ;
 
 export interface MeshLedgerEntry {

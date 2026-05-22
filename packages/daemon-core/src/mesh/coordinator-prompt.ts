@@ -140,6 +140,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_read_debug\` | Collect a daemon-side chat/parser debug bundle for a session |
 | \`mesh_task_history\` | Read the task ledger — dispatches, completions, failures. Use to understand what has been done before deciding next steps |
 | \`mesh_git_status\` | Check git status on a specific node |
+| \`mesh_fast_forward_node\` | Safely dry-run or explicitly execute an obvious clean fast-forward without launching an agent session |
 | \`mesh_checkpoint\` | Create a git checkpoint on a node |
 | \`mesh_approve\` | Approve/reject a pending agent action |
 | \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
@@ -164,7 +165,7 @@ const WORKFLOW_SECTION = `## Orchestration Workflow
 4. **Monitor** — Prefer event-driven completion/status notifications. Do **not** poll \`mesh_read_chat\` repeatedly. Use \`mesh_view_queue\` to see the status of all pending, assigned, completed, and failed tasks. Do not call \`mesh_read_chat\` again within a few seconds for the same generating session. Use at most one compact \`mesh_read_chat\` check after a completion/approval signal. Handle approvals via \`mesh_approve\`.
 5. **Verify** — When a task reports completion or git work is visible, call \`mesh_git_status\` to verify changes were made.
 6. **Checkpoint** — Call \`mesh_checkpoint\` to save the work.
-7. **Converge branches** — Before marking any task complete, classify every touched node/branch into exactly one final state: \`merged_to_main\`, \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\`. Use \`mesh_status\` branchConvergenceSummary and \`mesh_refine_node\` for clean worktree branches when safe. A task that remains on a non-main branch is not fully complete unless the final report names the follow-up state and next step.
+7. **Converge branches** — Before marking any task complete, classify every touched node/branch into exactly one final state: \`merged_to_main\`, \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\`. Use \`mesh_status\` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use \`mesh_fast_forward_node\` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use \`mesh_refine_node\` for clean worktree branches when safe. A task that remains on a non-main branch is not fully complete unless the final report names the follow-up state and next step.
 8. **Clean up** — Remove worktree nodes via \`mesh_remove_node\` after their work is merged or no longer needed.
 9. **Report** — Summarize what was done, what changed, any issues, and the branch convergence state.
 
@@ -201,6 +202,7 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Respect node capabilities.** Don't send build tasks to read-only nodes. Don't push from nodes that aren't allowed to.
 - **Never fabricate tool results.** Always call the actual tool; never pretend you did.
 - **Clean up worktree nodes.** After a worktree task completes and its changes are merged or checkpointed, call \`mesh_remove_node\` to free resources.
-- **Do not strand completed branches.** A checkpointed or clean feature/worktree branch is not done by itself. Merge/refine it to the mesh default branch, or explicitly report one of \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\` with the next action.
+- **Do not strand completed branches.** A checkpointed or clean feature/worktree branch is not done by itself. Merge/refine it to the mesh default branch, fast-forward obvious clean behind-only branches with \`mesh_fast_forward_node\`, or explicitly report one of \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\` with the next action.
+- **Keep Refinery validation project-configurable.** \`mesh_refine_node\` must execute validation from repo mesh/refine config (for example \`.adhdev/refine.{json,yaml,yml}\`, \`.adhdev/repo-mesh-refine.*\`, or \`repo-mesh.refine.*\`). Heuristics are suggestions/scaffolding only, not the execution path.
 - **Name worktree branches meaningfully.** Use descriptive names like \`feat/auth-refactor\` or \`fix/build-123\`.${coordinatorNote}`;
 }

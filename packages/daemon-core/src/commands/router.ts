@@ -40,6 +40,7 @@ import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } f
 import { buildSessionEntries } from '../status/builders.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
+import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import {
     MESH_REFINE_CONFIG_LOCATIONS,
     MESH_REFINE_CONFIG_SCHEMA,
@@ -3317,6 +3318,35 @@ export class DaemonCommandRouter {
                     mergeWillRun: false,
                     cleanupWillRun: false,
                 };
+            }
+
+            case 'fast_forward_mesh_node': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+                let workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
+                let submoduleIgnorePaths = Array.isArray(args?.submoduleIgnorePaths)
+                    ? args.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string')
+                    : undefined;
+                if (!workspace && meshId && nodeId) {
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    const mesh = meshRecord?.mesh;
+                    const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
+                    if (!submoduleIgnorePaths && Array.isArray(node?.policy?.submoduleIgnorePaths)) {
+                        submoduleIgnorePaths = node.policy.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string');
+                    }
+                }
+                const result = await (fastForwardMeshNode({
+                    meshId: meshId || undefined,
+                    nodeId: nodeId || undefined,
+                    workspace,
+                    branch: typeof args?.branch === 'string' ? args.branch : undefined,
+                    execute: args?.execute === true,
+                    dryRun: args?.dryRun === true,
+                    updateSubmodules: args?.updateSubmodules === true,
+                    submoduleIgnorePaths,
+                }) as Promise<unknown>);
+                return result as CommandRouterResult;
             }
 
             case 'refine_mesh_node': {
