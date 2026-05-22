@@ -1576,13 +1576,13 @@ export class DaemonCommandRouter {
     }
 
 
-    private async requireMeshHostMutationOwner(meshId: string, inlineMesh: unknown, operation: string): Promise<Record<string, unknown> | null> {
+    private async requireMeshHostMutationOwner(meshId: string, inlineMesh: unknown, operation: string): Promise<CommandRouterResult | null> {
         const meshRecord = await this.getMeshForCommand(meshId, inlineMesh, { preferInline: true });
         const mesh = meshRecord?.mesh;
         if (!mesh) return { success: false, error: 'Mesh not found' };
         const meshHost = resolveMeshHostStatus(mesh);
         if (!meshHost.canOwnCoordinator || !meshHost.canOwnQueue) {
-            return { ...buildMeshHostRequiredFailure(mesh, operation), meshId };
+            return { ...buildMeshHostRequiredFailure(mesh, operation), success: false, meshId };
         }
         return null;
     }
