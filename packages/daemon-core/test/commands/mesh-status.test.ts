@@ -76,6 +76,98 @@ function createRouter(overrides: Record<string, unknown> = {}) {
 }
 
 describe('mesh_status', () => {
+  it('surfaces Mesh Host ownership metadata from inline mesh records', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-host-metadata-')
+    try {
+      const { router } = createRouter()
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-hosted',
+        inlineMesh: {
+          id: 'mesh-hosted',
+          name: 'Hosted Mesh',
+          repoIdentity: 'repo',
+          policy: {},
+          meshHost: {
+            role: 'member',
+            hostDaemonId: 'daemon-host',
+            hostAddress: 'http://127.0.0.1:3847',
+            pairing: { status: 'paired', tokenId: 'tok_redacted' },
+          },
+          nodes: [
+            {
+              id: 'node-member',
+              daemonId: 'daemon-member',
+              machineLabel: 'Member',
+              workspace: repoRoot,
+              providers: ['hermes-cli'],
+              role: 'member',
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.meshHost).toEqual(expect.objectContaining({
+        role: 'member',
+        hostDaemonId: 'daemon-host',
+        hostAddress: 'http://127.0.0.1:3847',
+        canOwnCoordinator: false,
+        canOwnQueue: false,
+      }))
+      expect(result.nodes[0]).toEqual(expect.objectContaining({
+        nodeId: 'node-member',
+        role: 'member',
+      }))
+      expect(result.sourceOfTruth.meshHost).toEqual(expect.objectContaining({
+        owner: 'mesh_host_daemon',
+        localRole: 'member',
+      }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('blocks coordinator launch from explicit member daemons', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-coordinator-member-block-')
+    try {
+      const { router } = createRouter()
+
+      const result = await router.execute('launch_mesh_coordinator', {
+        meshId: 'mesh-member',
+        cliType: 'hermes-cli',
+        inlineMesh: {
+          id: 'mesh-member',
+          name: 'Member Mesh',
+          repoIdentity: 'repo',
+          policy: {},
+          meshHost: { role: 'member', hostDaemonId: 'daemon-host' },
+          nodes: [
+            {
+              id: 'node-member',
+              daemonId: 'daemon-member',
+              machineLabel: 'Member',
+              workspace: repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(false)
+      expect(result.code).toBe('mesh_host_required')
+      expect(result.meshHost).toEqual(expect.objectContaining({
+        role: 'member',
+        hostDaemonId: 'daemon-host',
+        canOwnCoordinator: false,
+      }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('reports live local runtimes and cached remote active sessions', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-')
     try {

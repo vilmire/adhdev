@@ -40,6 +40,15 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(queue[0].id).to.equal(task.id);
     });
 
+    it('blocks queue ownership mutations from member daemons when ownership is declared', () => {
+        expect(() => enqueueTask(meshId, 'member task', { ownerRole: 'member' } as any))
+            .to.throw(/Mesh Host/);
+
+        const hostTask = enqueueTask(meshId, 'host task', { ownerRole: 'host' } as any);
+        expect(hostTask.status).to.equal('pending');
+        expect(getQueue(meshId)).to.have.length(1);
+    });
+
     it('should claim the oldest pending task', () => {
         const t1 = enqueueTask(meshId, 'task 1');
         const t2 = enqueueTask(meshId, 'task 2');

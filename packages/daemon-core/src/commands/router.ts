@@ -39,6 +39,7 @@ import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../sessi
 import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
 import { buildSessionEntries } from '../status/builders.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents } from '../mesh/mesh-events.js';
+import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
@@ -2876,7 +2877,10 @@ export class DaemonCommandRouter {
                 if (!name) return { success: false, error: 'name required' };
                 try {
                     const { createMesh } = await import('../config/mesh-config.js');
-                    const mesh = createMesh({ name, repoIdentity, repoRemoteUrl, defaultBranch, policy: args?.policy });
+                    const meshHost = args?.meshHost && typeof args.meshHost === 'object' && !Array.isArray(args.meshHost)
+                        ? args.meshHost
+                        : undefined;
+                    const mesh = createMesh({ name, repoIdentity, repoRemoteUrl, defaultBranch, policy: args?.policy, meshHost });
                     return { success: true, mesh };
                 } catch (e: any) {
                     return { success: false, error: e.message };
@@ -2893,6 +2897,7 @@ export class DaemonCommandRouter {
                     if (typeof args?.defaultBranch === 'string') patch.defaultBranch = args.defaultBranch;
                     if (args?.policy && typeof args.policy === 'object' && !Array.isArray(args.policy)) patch.policy = args.policy;
                     if (args?.coordinator && typeof args.coordinator === 'object' && !Array.isArray(args.coordinator)) patch.coordinator = args.coordinator;
+                    if (args?.meshHost && typeof args.meshHost === 'object' && !Array.isArray(args.meshHost)) patch.meshHost = args.meshHost;
                     if (!Object.keys(patch).length) return { success: false, error: 'No updates provided' };
                     const mesh = updateMesh(meshId, patch as any);
                     if (!mesh) return { success: false, error: 'Mesh not found' };
@@ -2902,6 +2907,38 @@ export class DaemonCommandRouter {
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
+            }
+
+            case 'get_mesh_host_pairing': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                const mesh = meshRecord?.mesh;
+                if (!mesh) return { success: false, error: 'Mesh not found' };
+                return {
+                    success: true,
+                    meshId,
+                    meshHost: resolveMeshHostStatus(mesh),
+                    manualPairing: {
+                        status: 'skeleton',
+                        description: 'Future standalone member daemons will enter a Mesh Host address/token here; cloud remains a control-plane for easier host setup.',
+                    },
+                };
+            }
+
+            case 'configure_mesh_host_pairing': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const hostAddress = typeof args?.hostAddress === 'string' ? args.hostAddress.trim() : '';
+                const token = typeof args?.token === 'string' ? args.token.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                if (!hostAddress || !token) return { success: false, error: 'hostAddress and token required' };
+                return {
+                    success: false,
+                    code: 'mesh_host_pairing_not_implemented',
+                    meshId,
+                    hostAddress,
+                    error: 'Manual Mesh Host pairing is reserved as a standalone command skeleton; join URL/token signaling is not implemented in this slice.',
+                };
             }
 
             case 'delete_mesh': {
@@ -3043,7 +3080,8 @@ export class DaemonCommandRouter {
                         ...(readOnly ? { readOnly: true } : {}),
                         ...(providerPriority.length ? { providerPriority } : {}),
                     };
-                    const node = addNode(meshId, { workspace, ...(policy ? { policy } : {}) });
+                    const role = normalizeMeshDaemonRole(args?.role);
+                    const node = addNode(meshId, { workspace, ...(policy ? { policy } : {}), ...(role ? { role } : {}) });
                     if (!node) return { success: false, error: 'Mesh not found' };
                     return { success: true, node };
                 } catch (e: any) {
@@ -3536,6 +3574,15 @@ export class DaemonCommandRouter {
                         mesh = getMesh(meshId);
                     }
                     if (!mesh) return { success: false, error: 'Mesh not found' };
+                    const meshHost = resolveMeshHostStatus(mesh);
+                    if (!meshHost.canOwnCoordinator) {
+                        return {
+                            success: false,
+                            ...buildMeshHostRequiredFailure(mesh, 'coordinator launch'),
+                            meshId,
+                            cliType,
+                        };
+                    }
                     if (!Array.isArray(mesh.nodes) || mesh.nodes.length === 0) return { success: false, error: 'No nodes in mesh' };
 
                     const requestedCoordinatorNodeId = typeof args?.coordinatorNodeId === 'string'
@@ -3909,6 +3956,7 @@ export class DaemonCommandRouter {
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
+                    const meshHost = resolveMeshHostStatus(mesh);
 
                     const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
                     const hadAggregateCache = this.aggregateMeshStatusCache.has(meshId);
@@ -4030,6 +4078,7 @@ export class DaemonCommandRouter {
                             repoRoot: node.repoRoot,
                             isLocalWorktree: node.isLocalWorktree,
                             worktreeBranch: node.worktreeBranch,
+                            role: normalizeMeshDaemonRole(node.role) || (meshHost.hostNodeId && nodeId === meshHost.hostNodeId ? 'host' : undefined),
                             daemonId,
                             machineId: node.machineId,
                             machineStatus: node.machineStatus,
@@ -4230,6 +4279,7 @@ export class DaemonCommandRouter {
                         repoIdentity: mesh.repoIdentity,
                         defaultBranch: mesh.defaultBranch,
                         refreshedAt,
+                        meshHost,
                         sourceOfTruth: {
                             membership: meshRecord?.source === 'inline_cache'
                                 ? 'coordinator_inline_mesh_cache'
@@ -4237,6 +4287,13 @@ export class DaemonCommandRouter {
                                     ? 'local_mesh_config'
                                     : 'inline_bootstrap_snapshot',
                             coordinatorOwnsLiveTruth: directTruthSatisfied,
+                            meshHost: {
+                                owner: 'mesh_host_daemon',
+                                localRole: meshHost.role,
+                                hostDaemonId: meshHost.hostDaemonId,
+                                hostNodeId: meshHost.hostNodeId,
+                                hostAddress: meshHost.hostAddress,
+                            },
                             ...(requireDirectPeerTruth ? {
                                 currentStatus: directTruthSatisfied ? 'live_git_and_session_probes' : 'direct_peer_truth_unavailable',
                                 directPeerTruth: {

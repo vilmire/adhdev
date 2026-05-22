@@ -23,9 +23,38 @@ export interface RepoMesh {
     defaultBranch?: string;
     policy: RepoMeshPolicy;
     coordinator: RepoMeshCoordinatorConfig;
+    meshHost?: RepoMeshHostMetadata;
     projectContext: ProjectContextSnapshot;
     nodes: RepoMeshNode[];
     status: 'active' | 'archived' | 'deleted';
+}
+
+export type RepoMeshDaemonRole = 'host' | 'member';
+
+export interface RepoMeshHostPairingMetadata {
+    status: 'not_configured' | 'pairing' | 'paired' | 'revoked';
+    tokenId?: string;
+    joinedAt?: string;
+    lastPairedAt?: string;
+}
+
+export interface RepoMeshHostMetadata {
+    /** Local daemon role for this mesh. Missing metadata defaults to host for standalone compatibility. */
+    role: RepoMeshDaemonRole;
+    /** Daemon that owns mesh truth/status/git/queue/session/ledger/coordinator ownership. */
+    hostDaemonId?: string;
+    /** Mesh node that represents the host daemon, when known. */
+    hostNodeId?: string;
+    /** Future standalone manual pairing endpoint entered by member daemons. */
+    hostAddress?: string;
+    /** Redacted pairing state only; raw join tokens must not be persisted here. */
+    pairing?: RepoMeshHostPairingMetadata;
+}
+
+export interface RepoMeshHostStatus extends RepoMeshHostMetadata {
+    canOwnCoordinator: boolean;
+    canOwnQueue: boolean;
+    defaulted: boolean;
 }
 
 export interface RepoMeshNode {
@@ -42,6 +71,7 @@ export interface RepoMeshNode {
     effectiveCapabilities: RepoMeshNodeCapabilities;
     policy: RepoMeshNodePolicy;
     health: RepoMeshNodeHealth;
+    role?: RepoMeshDaemonRole;
     status: 'enabled' | 'disabled' | 'removed';
 }
 
@@ -229,6 +259,7 @@ export interface LocalMeshEntry {
     defaultBranch?: string;
     policy: RepoMeshPolicy;
     coordinator: RepoMeshCoordinatorConfig;
+    meshHost?: RepoMeshHostMetadata;
     nodes: LocalMeshNodeEntry[];
     createdAt: string;
     updatedAt: string;
@@ -251,6 +282,7 @@ export interface LocalMeshNodeEntry {
     clonedFromNodeId?: string;
     /** Optional associated/external repos configured as node metadata. */
     relatedRepos?: RepoMeshRelatedRepo[];
+    role?: RepoMeshDaemonRole;
 }
 
 // ─── Mesh Status (runtime, not persisted) ───────
@@ -261,6 +293,7 @@ export interface RepoMeshStatus {
     repoIdentity: string;
     defaultBranch?: string;
     refreshedAt: string;
+    meshHost?: RepoMeshHostStatus;
     nodes: RepoMeshNodeStatus[];
     queue?: RepoMeshQueueStatus;
     ledger?: RepoMeshLedgerStatus;
@@ -301,6 +334,7 @@ export interface RepoMeshNodeStatus {
     repoRoot?: string;
     daemonId?: string;
     machineId?: string;
+    role?: RepoMeshDaemonRole;
     machineStatus?: string;
     isLocalWorktree?: boolean;
     worktreeBranch?: string;

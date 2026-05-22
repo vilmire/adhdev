@@ -2,6 +2,8 @@ import { existsSync, writeFileSync, readFileSync, openSync, closeSync, unlinkSyn
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getLedgerDir } from './mesh-ledger.js';
+import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
+import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -43,6 +45,10 @@ export interface MeshWorkQueueEntry {
     dispatchTimestamp?: string;
     createdAt: string;
     updatedAt: string;
+}
+
+export interface MeshQueueMutationOptions {
+    ownerRole?: RepoMeshDaemonRole;
 }
 
 function getQueuePath(meshId: string): string {
@@ -97,8 +103,9 @@ function writeQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
 export function enqueueTask(
     meshId: string,
     message: string,
-    opts?: { targetNodeId?: string; targetSessionId?: string }
+    opts?: { targetNodeId?: string; targetSessionId?: string } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry {
+    requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
         const queue = readQueue(meshId);
         const entry: MeshWorkQueueEntry = {
@@ -166,7 +173,9 @@ export function updateTaskStatus(
     meshId: string,
     taskId: string,
     status: MeshTaskStatus,
+    opts?: MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
+    requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
         const queue = readQueue(meshId);
         const idx = queue.findIndex(q => q.id === taskId);
@@ -201,8 +210,9 @@ export function recordTaskAutoLaunch(
 export function cancelTask(
     meshId: string,
     taskId: string,
-    opts?: { reason?: string },
+    opts?: { reason?: string } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
+    requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
         const queue = readQueue(meshId);
         const idx = queue.findIndex(q => q.id === taskId);
@@ -230,8 +240,9 @@ export function requeueTask(
         targetSessionId?: string;
         clearTargetNode?: boolean;
         clearTargetSession?: boolean;
-    },
+    } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
+    requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
         const queue = readQueue(meshId);
         const idx = queue.findIndex(q => q.id === taskId);

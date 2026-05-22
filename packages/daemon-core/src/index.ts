@@ -88,6 +88,10 @@ export type {
 // ── Repo Mesh Types (cross-package) ──
 export type {
   RepoMesh,
+  RepoMeshDaemonRole,
+  RepoMeshHostMetadata,
+  RepoMeshHostPairingMetadata,
+  RepoMeshHostStatus,
   RepoMeshNode,
   RepoMeshNodeHealth,
   RepoMeshPolicy,
@@ -166,7 +170,10 @@ export type { MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshL
 
 // ── Mesh Work Queue (GUPP) ──
 export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats } from './mesh/mesh-work-queue.js';
-export type { MeshWorkQueueEntry, MeshTaskStatus, MeshWorkQueueStats } from './mesh/mesh-work-queue.js';
+export type { MeshWorkQueueEntry, MeshTaskStatus, MeshWorkQueueStats, MeshQueueMutationOptions } from './mesh/mesh-work-queue.js';
+
+// ── Mesh Host Ownership ──
+export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHostOwner, normalizeMeshDaemonRole, requireMeshHostQueueOwner, resolveMeshHostStatus } from './mesh/mesh-host-ownership.js';
 
 // ── Mesh Visualization ──
 // buildMeshGraph and MeshGraph types moved to @adhdev/web-core to avoid

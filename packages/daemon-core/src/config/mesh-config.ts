@@ -18,8 +18,11 @@ import type {
     RepoMeshNodePolicy,
     RepoMeshNodeCapabilities,
     RepoMeshCoordinatorConfig,
+    RepoMeshHostMetadata,
+    RepoMeshDaemonRole,
 } from '../repo-mesh-types.js';
 import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
+import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
 // ─── Persistence ────────────────────────────────
 
@@ -112,6 +115,7 @@ export interface CreateMeshOptions {
     defaultBranch?: string;
     policy?: Partial<RepoMeshPolicy>;
     coordinator?: RepoMeshCoordinatorConfig;
+    meshHost?: RepoMeshHostMetadata;
 }
 
 export function createMesh(opts: CreateMeshOptions): LocalMeshEntry {
@@ -133,6 +137,7 @@ export function createMesh(opts: CreateMeshOptions): LocalMeshEntry {
         defaultBranch: opts.defaultBranch,
         policy: mergeMeshPolicy(undefined, opts.policy),
         coordinator: opts.coordinator || {},
+        meshHost: opts.meshHost || createDefaultMeshHostMetadata(),
         nodes: [],
         createdAt: now,
         updatedAt: now,
@@ -148,6 +153,7 @@ export interface UpdateMeshOptions {
     defaultBranch?: string;
     policy?: Partial<RepoMeshPolicy>;
     coordinator?: RepoMeshCoordinatorConfig;
+    meshHost?: RepoMeshHostMetadata;
 }
 
 export function updateMesh(meshId: string, opts: UpdateMeshOptions): LocalMeshEntry | undefined {
@@ -159,6 +165,7 @@ export function updateMesh(meshId: string, opts: UpdateMeshOptions): LocalMeshEn
     if (opts.defaultBranch !== undefined) mesh.defaultBranch = opts.defaultBranch;
     if (opts.policy) mesh.policy = mergeMeshPolicy(mesh.policy, opts.policy);
     if (opts.coordinator) mesh.coordinator = opts.coordinator;
+    if (opts.meshHost) mesh.meshHost = opts.meshHost;
     mesh.updatedAt = new Date().toISOString();
 
     saveMeshConfig(config);
@@ -186,6 +193,7 @@ export interface AddNodeOptions {
     isLocalWorktree?: boolean;
     worktreeBranch?: string;
     clonedFromNodeId?: string;
+    role?: RepoMeshDaemonRole;
 }
 
 export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntry | undefined {
@@ -213,6 +221,7 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
         isLocalWorktree: opts.isLocalWorktree,
         worktreeBranch: opts.worktreeBranch,
         clonedFromNodeId: opts.clonedFromNodeId,
+        role: opts.role,
     };
 
     mesh.nodes.push(node);
