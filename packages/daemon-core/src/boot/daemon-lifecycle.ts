@@ -309,6 +309,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         statusInstanceId: config.statusInstanceId,
         statusVersion: config.statusVersion,
         getMeshPeerConnectionStatus: config.getMeshPeerConnectionStatus,
+        dispatchMeshCommand: config.dispatchMeshCommand,
         getCdpLogFn: config.getCdpLogFn || ((ideType: string) => LOG.forComponent(`CDP:${ideType}`).asLogFn()),
     });
 
