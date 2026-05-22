@@ -11,6 +11,7 @@ describe('RepoMesh import boundaries', () => {
     const source = readSource('pages/RepoMesh.tsx')
 
     expect(source).not.toContain("from '@adhdev/web-core'")
-    expect(source).toContain("from '../utils/mesh-visualization'")
+    expect(source).not.toContain("from '../utils/mesh-visualization'")
+    expect(source).toContain("from '../utils/repo-mesh-status'")
   })
 })

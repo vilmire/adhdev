@@ -9,16 +9,16 @@ vi.mock('../../src/components/MeshGraph/MeshGraphView', () => ({
   default: () => null,
 }))
 
-import MeshObservabilitySurface, { describeProviders, resolveGitLogRequest, resolveLatestGraphNodeForDetail, summarizeNodeDrift, summarizeSelectedHead } from '../../src/components/MeshGraph/MeshObservabilitySurface'
+import MeshObservabilitySurface, { describeProviders, resolveGitLogRequest, resolveSelectedGraphNodeForDetail, summarizeNodeDrift, summarizeSelectedHead } from '../../src/components/MeshGraph/MeshObservabilitySurface'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
+import { canonicalizeRepoMeshStatus } from '../../src/utils/repo-mesh-status'
 
 function renderSurface(status: any): string {
-  const graph = buildMeshGraph(status)
   return renderToString(
     React.createElement(
       StaticRouter,
       { location: '/' },
-      React.createElement(MeshObservabilitySurface, { graph: graph as any, status: status as any }),
+      React.createElement(MeshObservabilitySurface, { status: status as any }),
     ),
   )
 }
@@ -214,78 +214,108 @@ describe('MeshObservabilitySurface', () => {
     expect(describeProviders(node)).toBe('installed providers not reported; priority hermes-cli, antigravity-cli')
   })
 
-  it('hydrates selected detail graph fields from latest node status when stale graph warnings remain', () => {
-    const graphNode: any = {
-      id: 'node_303',
-      type: 'machine',
-      label: 'node_303',
-      workspace: '/remote/repo',
+  it('keeps selected detail on the same canonical graph node used for rendering', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/components/MeshGraph/MeshObservabilitySurface.tsx'),
+      'utf8',
+    )
+    expect(source).toContain('const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [canonicalStatus])')
+    expect(source).toContain('const selectedGraphNode = resolveSelectedGraphNodeForDetail(canonicalGraph, selectedNodeId)')
+    expect(source).toContain('role="dialog"')
+    expect(source).toContain('onClick={closeGraphDetail}')
+    expect(source).not.toContain('resolveLatestGraphNodeForDetail')
+    expect(source).not.toContain('false && hasDetailPane')
+
+    const graph = buildMeshGraph({
+      meshId: 'mesh_same_source',
+      meshName: 'Same Source Mesh',
+      repoIdentity: 'repo',
+      defaultBranch: 'main',
+      refreshedAt: '2026-05-22T00:00:00.000Z',
+      nodes: [
+        {
+          nodeId: 'node_same',
+          machineLabel: 'node_same',
+          workspace: '/remote/repo',
+          health: 'unknown',
+          providers: [],
+          activeSessions: [],
+          gitProbePending: true,
+        },
+      ],
+      queue: { tasks: [] },
+      ledger: { entries: [] },
+    } as any)
+
+    const renderedGraphNode = graph.nodes.find(node => node.id === 'node_same')!
+    const resolved = resolveSelectedGraphNodeForDetail(graph as any, 'node_same')
+
+    expect(resolved).toBe(renderedGraphNode)
+    expect(resolved).toMatchObject({
       branch: null,
-      upstream: null,
-      upstreamStatus: null,
-      machineLabel: 'node_303',
-      health: 'unknown',
-      ahead: 0,
-      behind: 0,
-      dirtyFiles: 0,
-      activeSessions: 0,
-      providers: [],
       snapshotCompleteness: 'pending_git',
-      snapshotWarnings: ['waiting for a live peer git snapshot'],
-      branchConvergence: null,
-      source: 'mesh_status',
-    }
-    const statusNode: any = {
-      nodeId: 'node_303',
-      machineLabel: 'node_303',
-      workspace: '/remote/repo',
-      health: 'online',
-      providers: [],
-      activeSessions: [],
-      git: {
-        isGitRepo: true,
-        workspace: '/remote/repo',
-        repoRoot: '/remote/repo',
-        branch: 'main',
-        upstream: 'origin/main',
-        upstreamStatus: 'fresh',
-        ahead: 0,
-        behind: 0,
-        staged: 0,
-        modified: 0,
-        untracked: 0,
-        deleted: 0,
-        renamed: 0,
-        hasConflicts: false,
-        lastCheckedAt: Date.parse('2026-05-22T00:00:00.000Z'),
-        submodules: [
-          { path: 'oss', commit: '65d7f5dafc495ec4c24d378e3d12a01a2b09a3b2', repoPath: '/remote/repo/oss', dirty: false, outOfSync: false },
-          { path: 'adhdev-providers', commit: '1c29790fc14ad87f75fc6aed958fda8f36dbab0d', repoPath: '/remote/repo/adhdev-providers', dirty: false, outOfSync: false },
-        ],
-      },
-      branchConvergence: {
-        defaultBranch: 'main',
-        branch: 'main',
-        upstream: 'origin/main',
-        upstreamStatus: 'fresh',
-        ahead: 0,
-        behind: 0,
-        status: 'merged_to_main',
-        needsConvergence: false,
-        reason: 'clean_default_branch',
-        nextStep: null,
-      },
+    })
+  })
+
+  it('canonicalizes duplicate stale and live rows to one live node before graph/detail render', () => {
+    const status: any = {
+      meshId: 'mesh_duplicate',
+      meshName: 'Duplicate Mesh',
+      repoIdentity: 'repo',
+      defaultBranch: 'main',
+      refreshedAt: '2026-05-22T00:00:00.000Z',
+      nodes: [
+        {
+          nodeId: 'node_same',
+          machineLabel: 'node_same',
+          workspace: '/repo',
+          health: 'unknown',
+          providers: [],
+          activeSessions: [],
+          gitProbePending: true,
+          connection: { state: 'unknown', source: 'not_reported' },
+        },
+        {
+          nodeId: 'node_same',
+          machineLabel: 'node_same',
+          workspace: '/repo',
+          health: 'online',
+          providers: ['hermes-cli'],
+          activeSessions: ['sess_1'],
+          git: {
+            isGitRepo: true,
+            workspace: '/repo',
+            repoRoot: '/repo',
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            headCommit: 'abcdef1234567890',
+            ahead: 1,
+            behind: 0,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            lastCheckedAt: Date.parse('2026-05-22T00:00:00.000Z'),
+          },
+          connection: { state: 'connected', transport: 'direct', source: 'mesh_status', reported: true },
+        },
+      ],
+      queue: { tasks: [] },
+      ledger: { entries: [] },
     }
 
-    const resolved = resolveLatestGraphNodeForDetail(graphNode, statusNode)
-    expect(resolved).toMatchObject({
-      branch: 'main',
-      upstream: 'origin/main',
-      health: 'online',
-      snapshotCompleteness: 'complete',
-      snapshotWarnings: [],
-      branchConvergence: expect.objectContaining({ status: 'merged_to_main', needsConvergence: false }),
-    })
+    const canonical = canonicalizeRepoMeshStatus(status)
+    const graph = buildMeshGraph(canonical as any)
+    const detailNode = resolveSelectedGraphNodeForDetail(graph as any, 'node_same')
+
+    expect(canonical.nodes).toHaveLength(1)
+    expect(canonical.nodes[0].git?.branch).toBe('main')
+    expect(canonical.nodes[0].gitProbePending).toBeUndefined()
+    expect(graph.nodes.filter(node => node.id === 'node_same')).toHaveLength(1)
+    expect(detailNode?.branch).toBe('main')
   })
 
   it('routes git_log to the selected node daemon and skips detached graph-only workspaces', () => {

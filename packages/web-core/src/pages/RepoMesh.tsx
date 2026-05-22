@@ -31,7 +31,6 @@ import {
     type MeshCoordinatorMetadata,
 } from '../utils/mesh-coordinator-setup'
 import { MeshObservabilitySurface } from '../components/MeshGraph'
-import { buildMeshGraph, type MeshGraph } from '../utils/mesh-visualization'
 import { extractRepoMeshStatus } from '../utils/repo-mesh-status'
 
 // ─── Types (matches daemon-core LocalMeshEntry shape) ───
@@ -259,7 +258,6 @@ export default function RepoMesh() {
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
 
     // Graph state
-    const [meshGraph, setMeshGraph] = useState<MeshGraph | null>(null)
     const [meshGraphStatus, setMeshGraphStatus] = useState<RepoMeshStatus | null>(null)
     const [graphLoading, setGraphLoading] = useState(false)
     const [graphError, setGraphError] = useState<string | null>(null)
@@ -376,23 +374,18 @@ export default function RepoMesh() {
             setGraphError(null)
             const res: any = await sendCommand(daemonId, 'mesh_status', { meshId: selectedMeshId })
             if (res?.success === false) {
-                setMeshGraph(null)
                 setMeshGraphStatus(null)
                 setGraphError(res?.error || 'mesh_status failed')
                 return
             }
             const status = extractRepoMeshStatus(res)
             if (status) {
-                const graph = buildMeshGraph(status)
-                setMeshGraph(graph)
                 setMeshGraphStatus(status)
             } else {
-                setMeshGraph(null)
                 setMeshGraphStatus(null)
                 setGraphError('mesh_status returned an unexpected payload.')
             }
         } catch (e: any) {
-            setMeshGraph(null)
             setMeshGraphStatus(null)
             setGraphError(e?.message || 'Failed to load mesh graph')
         } finally {
@@ -402,7 +395,6 @@ export default function RepoMesh() {
 
     useEffect(() => {
         if (selectedMeshId) {
-            setMeshGraph(null)
             setMeshGraphStatus(null)
             setGraphError(null)
             void loadMeshGraph()
@@ -880,13 +872,12 @@ export default function RepoMesh() {
                         {graphError}
                     </div>
                 )}
-                {!meshGraph || !meshGraphStatus ? (
+                {!meshGraphStatus ? (
                     <div className="text-[12px] text-text-muted rounded-lg border border-border-subtle bg-bg-secondary px-3 py-3">
                         {graphLoading ? 'Loading graph...' : 'Refresh the graph to inspect queue activity, sessions, node drift, and mesh topology from this standalone daemon.'}
                     </div>
                 ) : (
                     <MeshObservabilitySurface
-                        graph={meshGraph}
                         status={meshGraphStatus}
                         emptyMessage="Refresh the graph to inspect queue activity, sessions, node drift, and mesh topology from this standalone daemon."
                         daemonId={daemonId}

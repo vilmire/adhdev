@@ -48,11 +48,11 @@ type FlowNodeData = Record<string, unknown> & {
 type FlowNode = Node<FlowNodeData, 'meshNode'>
 type FlowEdge = Edge
 
-const COLUMN_GAP = 390
-const WORKTREE_ROW_GAP = 192
-const SUBMODULE_ROW_GAP = 120
-const SUBMODULE_OFFSET_X = 36
-const SUBMODULE_OFFSET_Y = 148
+const COLUMN_GAP = 420
+const WORKTREE_ROW_GAP = 212
+const SUBMODULE_ROW_GAP = 132
+const SUBMODULE_OFFSET_X = 44
+const SUBMODULE_OFFSET_Y = 166
 const STACK_SECTION_GAP = 24
 
 const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))

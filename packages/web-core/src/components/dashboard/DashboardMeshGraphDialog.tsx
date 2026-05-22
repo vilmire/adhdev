@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
-import { buildMeshGraph } from '../../utils/mesh-visualization'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
 import { IconMesh, IconX } from '../Icons'
 import { MeshObservabilitySurface } from '../MeshGraph'
-import type { MeshGraphData } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import { useTheme } from '../../hooks/useTheme'
 import { extractRepoMeshStatus } from '../../utils/repo-mesh-status'
@@ -25,7 +23,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const meshOverrides = useDashboardMeshOverrides()
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
-    const [graph, setGraph] = useState<MeshGraphData | null>(null)
     const [meshStatus, setMeshStatus] = useState<RepoMeshStatus | null>(null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -33,13 +30,12 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const hasUsableGraphRef = useRef(false)
 
     useEffect(() => {
-        hasUsableGraphRef.current = graph !== null && meshStatus !== null
-    }, [graph, meshStatus])
+        hasUsableGraphRef.current = meshStatus !== null
+    }, [meshStatus])
 
     const loadGraph = useCallback(async (refresh = false) => {
         if (!daemonId || !meshId) {
             setError('This coordinator does not expose a live mesh id.')
-            setGraph(null)
             setMeshStatus(null)
             return
         }
@@ -55,9 +51,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 setError('mesh_status returned an unexpected payload.')
                 return
             }
-            const nextGraph = buildMeshGraph(status)
             setMeshStatus(status)
-            setGraph(nextGraph)
             setLastLoadedAt(status.refreshedAt || new Date().toISOString())
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load live mesh status')
@@ -78,7 +72,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [onClose])
 
-    const detailLabel = graph?.meshName || meshStatus?.meshName || meshId || 'Repo Mesh'
+    const detailLabel = meshStatus?.meshName || meshId || 'Repo Mesh'
     const lastLoadedLabel = lastLoadedAt ? new Date(lastLoadedAt).toLocaleTimeString() : null
     const emptyMessage = useMemo(
         () => (loading ? 'Loading live mesh status…' : 'No live mesh graph is available for this coordinator yet.'),
@@ -109,7 +103,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                 <p className={meshTheme.dialogSubtitleClass}>
                                     {getConversationTitle(activeConv)}
                                     {activeConv.workspaceName ? ` · ${activeConv.workspaceName}` : ''}
-                                    {graph?.repoIdentity ? ` · ${graph.repoIdentity}` : ''}
+                                    {meshStatus?.repoIdentity ? ` · ${meshStatus.repoIdentity}` : ''}
                                 </p>
                             </div>
                         </div>
@@ -149,9 +143,8 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 )}
 
                 <div className={meshTheme.dialogBodyClass}>
-                    {graph && meshStatus ? (
+                    {meshStatus ? (
                         <MeshObservabilitySurface
-                            graph={graph}
                             status={meshStatus}
                             emptyMessage={emptyMessage}
                             daemonId={daemonId}

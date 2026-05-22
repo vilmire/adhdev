@@ -1,15 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type {
     GitLogEntry,
-    RepoMeshLedgerEntryStatus,
     RepoMeshNodeStatus,
     RepoMeshQueueTask,
     RepoMeshSessionStatus,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
-import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
-import { getDashboardActiveTabHref } from '../../utils/dashboard-route-paths'
 import MeshGraphView from './MeshGraphView'
 import { getMeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData, MeshGraphNode } from './types'
@@ -22,7 +19,6 @@ type DetailSelection =
     | { kind: 'queue'; taskId: string }
 
 interface MeshObservabilitySurfaceProps {
-    graph: MeshGraphData
     status: RepoMeshStatus
     emptyMessage?: string
     daemonId?: string | null
@@ -44,8 +40,6 @@ type GitHistoryState = {
     entries: GitLogEntry[]
 }
 
-const ACTIVE_QUEUE_STATUSES = new Set(['pending', 'assigned'])
-const EMPTY_QUEUE_ACTIVE_COUNTS = { pending: 0, assigned: 0 }
 const EMPTY_LEDGER_SUMMARY = { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 }
 
 const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
@@ -53,19 +47,6 @@ const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
 function Badge({ label, tone = 'default' }: { label: string; tone?: 'default' | 'good' | 'warn' | 'danger' | 'info' }) {
     const meshTheme = useContext(MeshGraphThemeContext)
     return <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] ${meshTheme.badge(tone)}`}>{label}</span>
-}
-
-function Card({ title, subtitle, children, className = '' }: { title: string; subtitle?: string; children: ReactNode; className?: string }) {
-    const meshTheme = useContext(MeshGraphThemeContext)
-    return (
-        <section className={`${meshTheme.cardClass} ${className}`}>
-            <div className={meshTheme.cardHeaderClass}>
-                <div className={meshTheme.cardTitleClass}>{title}</div>
-                {subtitle && <div className={meshTheme.cardSubtitleClass}>{subtitle}</div>}
-            </div>
-            <div className="px-4 py-3">{children}</div>
-        </section>
-    )
 }
 
 function Row({ label, value }: { label: string; value: ReactNode }) {
@@ -76,57 +57,6 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
             <span className={meshTheme.rowValueClass}>{value}</span>
         </div>
     )
-}
-
-function ActionButton({
-    label,
-    onClick,
-    tone = 'default',
-}: {
-    label: string
-    onClick: () => void
-    tone?: 'default' | 'info' | 'success'
-}) {
-    const meshTheme = useContext(MeshGraphThemeContext)
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className={`rounded-full border px-2.5 py-1 text-[11px] transition ${meshTheme.actionButton(tone)}`}
-        >
-            {label}
-        </button>
-    )
-}
-
-function formatTimestamp(value: string | null | undefined): string | null {
-    if (!value) return null
-    const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return value
-    return date.toLocaleString()
-}
-
-function formatCommitTimestamp(value: number | null | undefined): string | null {
-    if (!value) return null
-    const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return null
-    return date.toLocaleString()
-}
-
-function queueTone(status: string): 'default' | 'good' | 'warn' | 'danger' | 'info' {
-    switch (status) {
-        case 'completed':
-            return 'good'
-        case 'failed':
-        case 'cancelled':
-            return 'danger'
-        case 'assigned':
-            return 'info'
-        case 'pending':
-            return 'warn'
-        default:
-            return 'default'
-    }
 }
 
 function healthTone(status: string): 'default' | 'good' | 'warn' | 'danger' | 'info' {
@@ -193,20 +123,6 @@ function connectionLabel(connection: RepoMeshNodeStatus['connection'] | null | u
     return `mesh ${connection.state}`
 }
 
-function formatYesNo(value: boolean | null | undefined): string {
-    if (value === true) return 'yes'
-    if (value === false) return 'no'
-    return 'unknown'
-}
-
-function buildDashboardSessionHref(daemonId: string | null | undefined, sessionId: string | null | undefined): string | null {
-    if (!sessionId) return null
-    const params = new URLSearchParams()
-    if (daemonId) params.set('daemonId', daemonId)
-    params.set('targetSessionId', sessionId)
-    return `/dashboard?${params.toString()}`
-}
-
 export function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
     const git = node.git
     if (!git) return node.gitProbePending ? 'Git probe pending' : 'No git probe'
@@ -222,23 +138,6 @@ export function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
     if (driftedSubmodules.length > 0) parts.push(`${driftedSubmodules.length} submodule drift`)
     if (git.hasConflicts) parts.push('conflicts')
     return parts.join(' · ') || 'Clean'
-}
-
-function describeBranchConvergenceStatus(status: string | null | undefined): string | null {
-    switch (status) {
-        case 'merged_to_main':
-            return 'merged to default branch'
-        case 'pushed_feature_branch_needs_merge':
-            return 'feature branch still needs merge'
-        case 'cleanup_candidate':
-            return 'worktree still needs refine / cleanup'
-        case 'blocked_review':
-            return 'review blocked before convergence'
-        case 'not_mergeable':
-            return 'not mergeable yet'
-        default:
-            return null
-    }
 }
 
 function collectSessionEntries(status: RepoMeshStatus): SessionListEntry[] {
@@ -259,12 +158,6 @@ function collectSessionEntries(status: RepoMeshStatus): SessionListEntry[] {
         }
     }
     return entries
-}
-
-function describeQueueTask(task: RepoMeshQueueTask): string {
-    const target = task.assignedNodeId || task.targetNodeId || 'unbound'
-    const session = task.assignedSessionId || task.targetSessionId || 'no session'
-    return `${target} · ${session}`
 }
 
 export function getQueueTaskNodeTarget(task: RepoMeshQueueTask): string | null {
@@ -334,52 +227,18 @@ function describeConnection(node: RepoMeshNodeStatus): string {
     return connectionLabel(node.connection)
 }
 
-function describeTimestamp(value: string | undefined, pending: boolean): string {
-    return formatTimestamp(value) ?? value ?? (pending ? 'pending live refresh' : 'not reported')
+function describeGraphNodeSource(node: MeshGraphNode): string {
+    const source = node.source as { kind?: string; connection?: RepoMeshNodeStatus['connection'] } | null | undefined
+    if (source?.kind) return source.kind
+    return source?.connection?.source ?? 'mesh_status'
 }
 
-export function resolveLatestGraphNodeForDetail(graphNode: MeshGraphNode | null, statusNode: RepoMeshNodeStatus | null): MeshGraphNode | null {
-    if (!graphNode || !statusNode?.git) return graphNode
-    const stalePendingWarnings = graphNode.snapshotWarnings.filter(warning => {
-        const normalized = warning.toLowerCase()
-        return normalized.includes('live peer git snapshot')
-            || normalized.includes('no peer git snapshot')
-            || normalized.includes('git probe')
-            || normalized.includes('pending_git')
-    })
-    const hasStalePendingState = graphNode.snapshotCompleteness === 'pending_git'
-        || graphNode.snapshotCompleteness === 'missing_git'
-        || stalePendingWarnings.length > 0
-        || graphNode.branch == null
-        || graphNode.branchConvergence == null
-    if (!hasStalePendingState) return graphNode
-    const replacementGraph = buildMeshGraph({
-        meshId: 'selected-detail-canonical',
-        meshName: 'Selected detail canonical',
-        repoIdentity: statusNode.repoRoot ?? statusNode.workspace,
-        defaultBranch: (statusNode as any).branchConvergence?.defaultBranch ?? statusNode.git.branch ?? undefined,
-        refreshedAt: new Date(statusNode.git.lastCheckedAt ?? Date.now()).toISOString(),
-        nodes: [statusNode],
-    } as RepoMeshStatus)
-    const replacementNode = replacementGraph.nodes.find(node => node.id === statusNode.nodeId)
-    if (replacementNode) return replacementNode
-    const snapshotWarnings = graphNode.snapshotWarnings.filter(warning => !stalePendingWarnings.includes(warning))
-    return {
-        ...graphNode,
-        branch: statusNode.git.branch ?? graphNode.branch,
-        upstream: statusNode.git.upstream ?? graphNode.upstream,
-        upstreamStatus: statusNode.git.upstreamStatus ?? graphNode.upstreamStatus,
-        health: statusNode.health,
-        ahead: statusNode.git.ahead ?? graphNode.ahead,
-        behind: statusNode.git.behind ?? graphNode.behind,
-        dirtyFiles: (statusNode.git.staged ?? 0) + (statusNode.git.modified ?? 0) + (statusNode.git.untracked ?? 0) + (statusNode.git.deleted ?? 0) + (statusNode.git.renamed ?? 0),
-        snapshotCompleteness: snapshotWarnings.length > 0 ? graphNode.snapshotCompleteness : 'complete',
-        snapshotWarnings,
-    }
+export function resolveSelectedGraphNodeForDetail(graph: MeshGraphData, selectedNodeId: string | null | undefined): MeshGraphNode | null {
+    if (!selectedNodeId) return null
+    return graph.nodes.find(node => node.id === selectedNodeId) ?? null
 }
 
 export default function MeshObservabilitySurface({
-    graph: _graph,
     status,
     emptyMessage = 'No live mesh graph is available for this coordinator yet.',
     daemonId = null,
@@ -389,17 +248,13 @@ export default function MeshObservabilitySurface({
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
     const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [canonicalStatus]) as MeshGraphData
-    const navigate = useNavigate()
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
-    const [queueFilter, setQueueFilter] = useState<'active' | 'history' | 'all'>('active')
     const [gitHistoryByWorkspace, setGitHistoryByWorkspace] = useState<Record<string, GitHistoryState>>({})
 
     const nodeStatusById = useMemo(() => new Map(canonicalStatus.nodes.map(node => [node.nodeId, node])), [canonicalStatus.nodes])
     const graphNodeById = useMemo(() => new Map(canonicalGraph.nodes.map(node => [node.id, node])), [canonicalGraph.nodes])
-    const queueTasks = canonicalStatus.queue?.tasks ?? []
     const queueSummary = canonicalStatus.queue?.summary ?? null
-    const queueActiveCounts = queueSummary?.activeCounts ?? EMPTY_QUEUE_ACTIVE_COUNTS
     const ledgerSummary = canonicalStatus.ledger?.summary ?? EMPTY_LEDGER_SUMMARY
     const sessionEntries = useMemo(() => collectSessionEntries(canonicalStatus), [canonicalStatus])
     const stateCounts = useMemo(() => {
@@ -410,12 +265,6 @@ export default function MeshObservabilitySurface({
         }
         return [...counts.entries()].sort((a, b) => b[1] - a[1])
     }, [sessionEntries])
-    const visibleQueueTasks = useMemo(() => {
-        if (queueFilter === 'all') return queueTasks
-        if (queueFilter === 'active') return queueTasks.filter(task => ACTIVE_QUEUE_STATUSES.has(task.status))
-        return queueTasks.filter(task => !ACTIVE_QUEUE_STATUSES.has(task.status))
-    }, [queueFilter, queueTasks])
-
     useEffect(() => {
         if (!selectedNodeId) return
         if (graphNodeById.has(selectedNodeId)) return
@@ -427,9 +276,8 @@ export default function MeshObservabilitySurface({
         })
     }, [graphNodeById, selectedNodeId])
 
-    const rawSelectedGraphNode = selectedNodeId ? graphNodeById.get(selectedNodeId) ?? null : null
     const selectedNodeStatus = selectedNodeId ? nodeStatusById.get(selectedNodeId) ?? null : null
-    const selectedGraphNode = resolveLatestGraphNodeForDetail(rawSelectedGraphNode, selectedNodeStatus)
+    const selectedGraphNode = resolveSelectedGraphNodeForDetail(canonicalGraph, selectedNodeId)
 
     useEffect(() => {
         if (!selectedNodeId) return
@@ -454,9 +302,6 @@ export default function MeshObservabilitySurface({
             // Debug logging must never affect rendering.
         }
     }, [canonicalStatus.meshId, selectedGraphNode, selectedNodeId, selectedNodeStatus])
-    const selectedQueueTask = detailSelection?.kind === 'queue'
-        ? queueTasks.find(task => task.id === detailSelection.taskId) ?? null
-        : null
     const selectedSessionEntry = detailSelection?.kind === 'session'
         ? sessionEntries.find(entry => entry.nodeId === detailSelection.nodeId && entry.session.sessionId === detailSelection.sessionId) ?? null
         : null
@@ -464,11 +309,6 @@ export default function MeshObservabilitySurface({
         () => sessionEntries.filter(entry => entry.nodeId === selectedNodeId),
         [selectedNodeId, sessionEntries],
     )
-    const selectedNodeQueueTasks = useMemo(
-        () => queueTasks.filter(task => getQueueTaskNodeTarget(task) === selectedNodeId),
-        [queueTasks, selectedNodeId],
-    )
-
     const selectedGitRequest = resolveGitLogRequest({
         coordinatorDaemonId: daemonId,
         selectedNodeStatus,
@@ -479,22 +319,19 @@ export default function MeshObservabilitySurface({
     const selectedGitHistory = selectedGitWorkspace ? gitHistoryByWorkspace[selectedGitWorkspace] ?? null : null
     const selectedHeadSummary = summarizeSelectedHead(selectedNodeStatus, selectedGitHistory?.entries ?? [])
 
-    const openSessionChat = useCallback((sessionId: string | null | undefined) => {
-        if (!sessionId) return
-        navigate(getDashboardActiveTabHref(sessionId), {
-            state: { openRemoteForTabKey: sessionId },
-        })
-    }, [navigate])
-
-    const selectSessionDetail = useCallback((nodeId: string, sessionId: string) => {
-        setSelectedNodeId(nodeId)
-        setDetailSelection({ kind: 'session', nodeId, sessionId })
+    const closeGraphDetail = useCallback(() => {
+        setSelectedNodeId(null)
+        setDetailSelection(null)
     }, [])
 
-    const focusNodeDetail = useCallback((nodeId: string) => {
-        setSelectedNodeId(nodeId)
-        setDetailSelection({ kind: 'node', nodeId })
-    }, [])
+    useEffect(() => {
+        if (!selectedGraphNode) return
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') closeGraphDetail()
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+    }, [closeGraphDetail, selectedGraphNode])
 
     useEffect(() => {
         if (!selectedGitRequest || !sendDaemonCommand) return
@@ -552,13 +389,12 @@ export default function MeshObservabilitySurface({
             ? 'mesh visibility incomplete'
             : 'mesh converged'
     const headlineTone = canonicalGraph.stats.followUpNodes > 0 ? 'danger' : hasSnapshotGaps ? 'warn' : 'good'
-    const hasDetailPane = Boolean(selectedQueueTask || selectedSessionEntry || selectedGraphNode)
 
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
-        <div className="flex min-h-0 flex-col gap-4 xl:flex-row">
+        <div className="flex min-h-0 flex-col gap-4">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
-                <div className={`${meshTheme.cardClass} min-h-0 flex-1 rounded-[28px] p-3 sm:p-4`} style={{ minHeight: 420 }}>
+                <div className={`${meshTheme.cardClass} relative min-h-0 flex-1 rounded-[28px] p-3 sm:p-4`} style={{ minHeight: 420 }}>
                     <div className={`mb-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl px-3.5 py-3 ${meshTheme.isDark ? 'border border-white/10 bg-slate-950/45' : 'border border-slate-200 bg-white/95 shadow-sm'}`}>
                         <div className={`flex min-w-0 flex-1 flex-wrap gap-2 text-xs ${meshTheme.textSecondary}`}>
                             <Badge
@@ -651,509 +487,66 @@ export default function MeshObservabilitySurface({
                     ) : (
                         <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{emptyMessage}</div>
                     )}
+                    {selectedGraphNode && detailSelection?.kind === 'node' && (
+                        <div className="absolute inset-3 z-20 flex items-center justify-center rounded-[24px] bg-slate-950/35 p-3 backdrop-blur-sm" onClick={closeGraphDetail} role="presentation">
+                            <section
+                                role="dialog"
+                                aria-modal="false"
+                                aria-label="Selected node"
+                                className={meshTheme.isDark
+                                    ? 'max-h-[min(78vh,520px)] w-full max-w-xl overflow-y-auto rounded-2xl border border-white/12 bg-slate-950/95 p-4 shadow-2xl shadow-black/40'
+                                    : 'max-h-[min(78vh,520px)] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-2xl shadow-slate-900/15'}
+                                onClick={event => event.stopPropagation()}
+                            >
+                                <div className="mb-3 flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphNode.label}</div>
+                                        <div className={`mt-1 font-mono text-[11px] ${meshTheme.textMuted}`}>{selectedGraphNode.id.slice(0, 16)}</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={closeGraphDetail}
+                                        className={meshTheme.isDark ? 'rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-slate-200 transition hover:bg-white/[0.08]' : 'rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:bg-slate-50'}
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+                                <div className="mb-3 flex flex-wrap gap-2">
+                                    <Badge label={selectedNodeStatus?.health ?? selectedGraphNode.health} tone={healthTone(selectedNodeStatus?.health ?? selectedGraphNode.health)} />
+                                    {selectedGraphNode.branch && <Badge label={selectedGraphNode.branch} tone="default" />}
+                                    {selectedGraphNode.ahead > 0 && <Badge label={`ahead ${selectedGraphNode.ahead}`} tone="warn" />}
+                                    {selectedGraphNode.behind > 0 && <Badge label={`behind ${selectedGraphNode.behind}`} tone="warn" />}
+                                    {selectedGraphNode.dirtyFiles > 0 && <Badge label={`${selectedGraphNode.dirtyFiles} dirty`} tone="warn" />}
+                                    {selectedNodeStatus?.connection && <Badge label={describeConnection(selectedNodeStatus)} tone={connectionTone(selectedNodeStatus.connection)} />}
+                                    {selectedNodeSessionEntries.length > 0 && <Badge label={`${selectedNodeSessionEntries.length} sessions`} tone="info" />}
+                                </div>
+                                <div className="grid gap-2 text-xs sm:grid-cols-2">
+                                    <Row label="Workspace" value={selectedNodeStatus?.workspace ?? selectedGraphNode.workspace} />
+                                    <Row label="Branch" value={selectedGraphNode.branch ?? 'unknown'} />
+                                    <Row label="HEAD" value={selectedHeadSummary ?? (selectedNodeStatus?.gitProbePending ? 'Pending live git probe' : 'not reported')} />
+                                    <Row label="Upstream" value={selectedGraphNode.upstream ?? 'none'} />
+                                    <Row label="Dirty/ahead/behind" value={`${selectedGraphNode.dirtyFiles} dirty · ↑${selectedGraphNode.ahead}/↓${selectedGraphNode.behind}`} />
+                                    <Row label="Source" value={String(selectedNodeStatus?.connection?.source ?? describeGraphNodeSource(selectedGraphNode))} />
+                                    <Row label="Transport" value={selectedNodeStatus?.connection?.transport ?? 'unknown'} />
+                                    <Row label="Sessions" value={selectedNodeSessionEntries.length > 0 ? selectedNodeSessionEntries.map(entry => entry.session.state || entry.session.lifecycle || 'unknown').join(', ') : 'none active'} />
+                                </div>
+                                {selectedGraphNode.snapshotWarnings.length > 0 && (
+                                    <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-xs text-amber-100' : 'mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800'}>
+                                        <div className="font-medium">Key warning</div>
+                                        <div className="mt-1">{selectedGraphNode.snapshotWarnings[0]}</div>
+                                    </div>
+                                )}
+                                {selectedGraphNode.branchConvergence?.nextStep && (
+                                    <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
+                                        <div className="font-medium">Follow-up</div>
+                                        <div className="mt-1">{selectedGraphNode.branchConvergence.nextStep}</div>
+                                    </div>
+                                )}
+                            </section>
+                        </div>
+                    )}
                 </div>
             </div>
-
-            {hasDetailPane && (
-                <div className="flex w-full shrink-0 flex-col gap-4 xl:w-[420px]">
-                <Card title="Selected detail" subtitle="Node, session, or queue item drill-down.">
-                    <div className="flex flex-col gap-3">
-                        {detailSelection?.kind === 'queue' && selectedQueueTask ? (
-                            <>
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <Badge label={selectedQueueTask.status} tone={queueTone(selectedQueueTask.status)} />
-                                    <Badge label={selectedQueueTask.id.slice(0, 8)} tone="default" />
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {getQueueTaskNodeTarget(selectedQueueTask) && (
-                                        <ActionButton label="View node" onClick={() => focusNodeDetail(getQueueTaskNodeTarget(selectedQueueTask) || '')} />
-                                    )}
-                                    {(() => {
-                                        const sessionId = getQueueTaskSessionTarget(selectedQueueTask)
-                                        if (!sessionId) return null
-                                        const linkedEntry = sessionEntries.find(entry => entry.session.sessionId === sessionId) ?? null
-                                        return (
-                                            <>
-                                                {linkedEntry && (
-                                                    <ActionButton
-                                                        label="View session"
-                                                        onClick={() => selectSessionDetail(linkedEntry.nodeId, linkedEntry.session.sessionId)}
-                                                    />
-                                                )}
-                                                <ActionButton label="Open chat" tone="info" onClick={() => openSessionChat(sessionId)} />
-                                            </>
-                                        )
-                                    })()}
-                                </div>
-                                <Row label="Message" value={selectedQueueTask.message} />
-                                <Row label="Routing" value={describeQueueTask(selectedQueueTask)} />
-                                <Row label="Created" value={formatTimestamp(selectedQueueTask.createdAt) ?? 'unknown'} />
-                                <Row label="Updated" value={formatTimestamp(selectedQueueTask.updatedAt) ?? 'unknown'} />
-                                <Row label="Requeues" value={selectedQueueTask.requeueCount ?? 0} />
-                                <Row label="Auto-launch" value={selectedQueueTask.autoLaunch ? `${selectedQueueTask.autoLaunch.status}${selectedQueueTask.autoLaunch.providerType ? ` · ${selectedQueueTask.autoLaunch.providerType}` : ''}` : 'none'} />
-                                {(() => {
-                                    const sessionId = selectedQueueTask.assignedSessionId || selectedQueueTask.targetSessionId || selectedQueueTask.autoLaunch?.sessionId || null
-                                    const nodeId = selectedQueueTask.assignedNodeId || selectedQueueTask.targetNodeId || selectedQueueTask.autoLaunch?.nodeId || null
-                                    const dashboardHref = buildDashboardSessionHref(nodeId ? nodeStatusById.get(nodeId)?.daemonId : null, sessionId)
-                                    return dashboardHref ? (
-                                        <a
-                                            href={dashboardHref}
-                                            className={meshTheme.isDark ? 'inline-flex w-fit items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-100 transition hover:bg-sky-500/20' : 'inline-flex w-fit items-center rounded-full border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100'}
-                                        >
-                                            Open linked dashboard chat
-                                        </a>
-                                    ) : null
-                                })()}
-                                {selectedQueueTask.cancelReason && <Row label="Cancel reason" value={selectedQueueTask.cancelReason} />}
-                                {selectedQueueTask.requeueReason && <Row label="Requeue reason" value={selectedQueueTask.requeueReason} />}
-                            </>
-                        ) : detailSelection?.kind === 'session' && selectedSessionEntry ? (
-                            <>
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <Badge label={selectedSessionEntry.session.state || selectedSessionEntry.session.lifecycle || 'unknown'} tone={sessionTone(selectedSessionEntry.session.state || selectedSessionEntry.session.lifecycle)} />
-                                    {selectedSessionEntry.session.providerType && <Badge label={selectedSessionEntry.session.providerType} tone="info" />}
-                                    {selectedSessionEntry.session.isCached && <Badge label="cached" tone="default" />}
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    <ActionButton label="View node" onClick={() => focusNodeDetail(selectedSessionEntry.nodeId)} />
-                                    <ActionButton label="Open chat" tone="info" onClick={() => openSessionChat(selectedSessionEntry.session.sessionId)} />
-                                </div>
-                                <Row label="Session id" value={selectedSessionEntry.session.sessionId} />
-                                <Row label="Node" value={selectedSessionEntry.machineLabel} />
-                                <Row label="Workspace" value={selectedSessionEntry.workspace} />
-                                <Row label="Branch" value={selectedSessionEntry.branch ?? 'unknown'} />
-                                <Row label="Node health" value={selectedSessionEntry.nodeHealth} />
-                                <Row label="Lifecycle" value={selectedSessionEntry.session.lifecycle ?? 'unknown'} />
-                                {selectedSessionEntry.session.surfaceKind && <Row label="Surface" value={selectedSessionEntry.session.surfaceKind} />}
-                                {selectedSessionEntry.session.recoveryState && <Row label="Recovery" value={selectedSessionEntry.session.recoveryState} />}
-                                {selectedSessionEntry.session.lastActivityAt && <Row label="Last activity" value={formatTimestamp(selectedSessionEntry.session.lastActivityAt) ?? selectedSessionEntry.session.lastActivityAt} />}
-                                {(() => {
-                                    const dashboardHref = buildDashboardSessionHref(
-                                        nodeStatusById.get(selectedSessionEntry.nodeId)?.daemonId,
-                                        selectedSessionEntry.session.sessionId,
-                                    )
-                                    return dashboardHref ? (
-                                        <a
-                                            href={dashboardHref}
-                                            className={meshTheme.isDark ? 'inline-flex w-fit items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-100 transition hover:bg-sky-500/20' : 'inline-flex w-fit items-center rounded-full border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100'}
-                                        >
-                                            Open dashboard chat
-                                        </a>
-                                    ) : null
-                                })()}
-                                <div className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-slate-950/40 p-3' : 'rounded-xl border border-slate-200 bg-slate-50 p-3'}>
-                                    <div className={`mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Git context</div>
-                                    <div className={`flex flex-col gap-2 text-xs ${meshTheme.textSecondary}`}>
-                                        <div>{selectedHeadSummary || 'HEAD subject not present in cached mesh_status.'}</div>
-                                        {selectedGitHistory?.loading && <div className="text-slate-500">Loading recent commits…</div>}
-                                        {selectedGitHistory?.error && <div className="text-amber-200">Recent history unavailable: {selectedGitHistory.error}</div>}
-                                        {(selectedGitHistory?.entries ?? []).slice(0, 5).map(entry => (
-                                            <div key={entry.commit} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-2.5 py-2' : 'rounded-lg border border-slate-200 bg-white px-2.5 py-2'}>
-                                                <div className={`font-medium ${meshTheme.textPrimary}`}>{shortCommit(entry.commit)} · {entry.message}</div>
-                                                <div className="mt-1 text-[11px] text-slate-500">
-                                                    {entry.authorName || 'unknown author'}
-                                                    {formatCommitTimestamp(entry.committedAt) ? ` · ${formatCommitTimestamp(entry.committedAt)}` : ''}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            </>
-                        ) : selectedGraphNode ? (
-                            <>
-                                <div className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-slate-950/40 p-3' : 'rounded-xl border border-slate-200 bg-slate-50 p-3'}>
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0">
-                                            <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphNode.label}</div>
-                                            <div className={`mt-1 break-all text-xs ${meshTheme.textMuted}`}>{selectedNodeStatus?.workspace ?? selectedGraphNode.workspace}</div>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setSelectedNodeId(null)
-                                                setDetailSelection(null)
-                                            }}
-                                            className={meshTheme.isDark ? 'rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-xs text-slate-300 transition hover:bg-white/[0.06] hover:text-white' : 'rounded-full border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 transition hover:bg-slate-50 hover:text-slate-900'}
-                                        >
-                                            Close
-                                        </button>
-                                    </div>
-                                    <div className="mt-2 flex flex-wrap gap-2">
-                                        {selectedGraphNode.branch && <Badge label={selectedGraphNode.branch} tone="default" />}
-                                        {selectedGraphNode.branchConvergence?.status && (
-                                            <Badge
-                                                label={selectedGraphNode.branchConvergence.status}
-                                                tone={selectedGraphNode.branchConvergence.needsConvergence ? 'warn' : 'good'}
-                                            />
-                                        )}
-                                        {selectedGraphNode.snapshotWarnings.length > 0 && (
-                                            <Badge label={`snapshot ${selectedGraphNode.snapshotCompleteness}`} tone="warn" />
-                                        )}
-                                    </div>
-                                    <div className="mt-3 flex flex-col gap-0.5">
-                                        <Row label="Graph branch" value={selectedGraphNode.branch ?? 'unknown'} />
-                                        <Row label="Graph upstream" value={selectedGraphNode.upstream ?? 'none'} />
-                                        <Row label="Convergence" value={describeBranchConvergenceStatus(selectedGraphNode.branchConvergence?.status) ?? 'not classified'} />
-                                    </div>
-                                    {selectedGraphNode.snapshotWarnings.length > 0 && (
-                                        <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-xs text-amber-100' : 'mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800'}>
-                                            <div className="font-medium">Peer snapshot warning</div>
-                                            <div className="mt-1">{selectedGraphNode.snapshotWarnings[0]}</div>
-                                        </div>
-                                    )}
-                                    {selectedGraphNode.branchConvergence?.nextStep && (
-                                        <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
-                                            <div className="font-medium">Convergence follow-up</div>
-                                            <div className="mt-1">{selectedGraphNode.branchConvergence.nextStep}</div>
-                                        </div>
-                                    )}
-                                </div>
-                                {selectedNodeStatus && (
-                                    <div className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-slate-950/40 p-3' : 'rounded-xl border border-slate-200 bg-slate-50 p-3'}>
-                                        <div className="mb-2 flex flex-wrap items-center gap-2">
-                                            <Badge label={selectedNodeStatus.health} tone={healthTone(selectedNodeStatus.health)} />
-                                            {selectedNodeStatus.machineStatus && <Badge label={selectedNodeStatus.machineStatus} tone={selectedNodeStatus.machineStatus === 'online' ? 'good' : 'warn'} />}
-                                            <Badge label={`launchReady ${formatYesNo(selectedNodeStatus.launchReady)}`} tone={selectedNodeStatus.launchReady ? 'good' : 'warn'} />
-                                            <Badge label={describeConnection(selectedNodeStatus)} tone={connectionTone(selectedNodeStatus.connection)} />
-                                            {selectedNodeStatus.worktreeBranch && <Badge label={selectedNodeStatus.worktreeBranch} tone="info" />}
-                                        </div>
-                                        <div className="flex flex-col gap-0.5">
-                                            <Row label="Repo root" value={selectedNodeStatus.repoRoot ?? selectedNodeStatus.workspace} />
-                                            <Row label="Provider(s)" value={describeProviders(selectedNodeStatus)} />
-                                            <Row label="Provider priority" value={(selectedNodeStatus.providerPriority ?? []).join(', ') || 'not configured'} />
-                                            <Row label="Drift" value={summarizeNodeDrift(selectedNodeStatus)} />
-                                            <Row label="HEAD" value={selectedHeadSummary ?? (selectedNodeStatus.gitProbePending ? 'Pending live git probe' : 'Not available')} />
-                                            <Row label="Daemon" value={selectedNodeStatus.daemonId ?? 'unknown'} />
-                                            <Row label="Machine" value={selectedNodeStatus.machineId ?? selectedNodeStatus.machineLabel} />
-                                            <Row label="Launch ready" value={formatYesNo(selectedNodeStatus.launchReady)} />
-                                            <Row label="Mesh connection" value={describeConnection(selectedNodeStatus)} />
-                                            <Row label="Transport" value={selectedNodeStatus.connection?.transport ?? 'unknown'} />
-                                            <Row label="Connection source" value={selectedNodeStatus.connection?.source ?? 'unknown'} />
-                                            <Row label="Last seen" value={describeTimestamp(selectedNodeStatus.lastSeenAt, Boolean(selectedNodeStatus.gitProbePending))} />
-                                            <Row label="Updated" value={describeTimestamp(selectedNodeStatus.updatedAt, Boolean(selectedNodeStatus.gitProbePending))} />
-                                            {selectedNodeStatus.connection?.lastConnectedAt && <Row label="Last connected" value={formatTimestamp(selectedNodeStatus.connection.lastConnectedAt) ?? selectedNodeStatus.connection.lastConnectedAt} />}
-                                            {selectedNodeStatus.connection?.lastCommandAt && <Row label="Last mesh command" value={formatTimestamp(selectedNodeStatus.connection.lastCommandAt) ?? selectedNodeStatus.connection.lastCommandAt} />}
-                                            {selectedNodeStatus.connection?.reason && <Row label="Connection reason" value={selectedNodeStatus.connection.reason} />}
-                                            <Row label="Sessions" value={selectedNodeStatus.activeSessions.length} />
-                                            {selectedNodeStatus.error && <Row label="Error" value={selectedNodeStatus.error} />}
-                                        </div>
-                                        {selectedNodeSessionEntries.length > 0 && (
-                                            <div className="mt-3">
-                                                <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Active sessions</div>
-                                                <div className="flex flex-col gap-2">
-                                                    {selectedNodeSessionEntries.map(entry => {
-                                                        const state = entry.session.state || entry.session.lifecycle || 'unknown'
-                                                        return (
-                                                            <div key={`${entry.nodeId}:${entry.session.sessionId}`} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
-                                                                <div className="flex items-start justify-between gap-2">
-                                                                    <div className="min-w-0 flex-1">
-                                                                        <div className={`truncate font-medium ${meshTheme.textPrimary}`}>{entry.session.title || entry.session.sessionId}</div>
-                                                                        <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{entry.session.providerType || 'unknown provider'} · {state}</div>
-                                                                    </div>
-                                                                    <Badge label={state} tone={sessionTone(state)} />
-                                                                </div>
-                                                                <div className="mt-2 flex flex-wrap gap-2">
-                                                                    <ActionButton label="View session" onClick={() => selectSessionDetail(entry.nodeId, entry.session.sessionId)} />
-                                                                    <ActionButton label="Open chat" tone="info" onClick={() => openSessionChat(entry.session.sessionId)} />
-                                                                </div>
-                                                            </div>
-                                                        )
-                                                    })}
-                                                </div>
-                                            </div>
-                                        )}
-                                        {selectedNodeQueueTasks.length > 0 && (
-                                            <div className="mt-3">
-                                                <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Related queue items</div>
-                                                <div className="flex flex-col gap-2">
-                                                    {selectedNodeQueueTasks.map(task => {
-                                                        const sessionId = getQueueTaskSessionTarget(task)
-                                                        const linkedEntry = sessionId ? sessionEntries.find(entry => entry.session.sessionId === sessionId) ?? null : null
-                                                        return (
-                                                            <div key={task.id} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
-                                                                <div className="flex items-start justify-between gap-2">
-                                                                    <div className="min-w-0 flex-1">
-                                                                        <div className={`truncate font-medium ${meshTheme.textPrimary}`}>{task.message}</div>
-                                                                        <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{describeQueueTask(task)}</div>
-                                                                    </div>
-                                                                    <Badge label={task.status} tone={queueTone(task.status)} />
-                                                                </div>
-                                                                <div className="mt-2 flex flex-wrap gap-2">
-                                                                    <ActionButton label="View queue detail" onClick={() => setDetailSelection({ kind: 'queue', taskId: task.id })} />
-                                                                    {linkedEntry && (
-                                                                        <ActionButton label="View session" onClick={() => selectSessionDetail(linkedEntry.nodeId, linkedEntry.session.sessionId)} />
-                                                                    )}
-                                                                    {sessionId && <ActionButton label="Open chat" tone="info" onClick={() => openSessionChat(sessionId)} />}
-                                                                </div>
-                                                            </div>
-                                                        )
-                                                    })}
-                                                </div>
-                                            </div>
-                                        )}
-                                        <div className="mt-3">
-                                            <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Recent commits</div>
-                                            <div className="flex flex-col gap-2">
-                                                {selectedGitHistory?.loading && <div className={meshTheme.isDark ? 'text-xs text-slate-500' : 'text-xs text-slate-500'}>Loading recent commits…</div>}
-                                                {selectedGitHistory?.error && <div className="text-xs text-amber-200">Recent history unavailable: {selectedGitHistory.error}</div>}
-                                                {!selectedGitHistory?.loading && !selectedGitHistory?.error && (selectedGitHistory?.entries ?? []).length === 0 && (
-                                                    <div className={meshTheme.isDark ? 'text-xs text-slate-500' : 'text-xs text-slate-500'}>Recent commit history not available from the current mesh snapshot yet.</div>
-                                                )}
-                                                {(selectedGitHistory?.entries ?? []).slice(0, 5).map(entry => (
-                                                    <div key={entry.commit} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
-                                                        <div className={`font-medium ${meshTheme.textPrimary}`}>{shortCommit(entry.commit)} · {entry.message}</div>
-                                                        <div className="mt-1 text-[11px] text-slate-500">
-                                                            {entry.authorName || 'unknown author'}
-                                                            {formatCommitTimestamp(entry.committedAt) ? ` · ${formatCommitTimestamp(entry.committedAt)}` : ''}
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                        {(selectedNodeStatus.git?.submodules?.length ?? 0) > 0 && (
-                                            <div className="mt-3">
-                                                <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Submodules</div>
-                                                <div className="flex flex-col gap-2">
-                                                    {(selectedNodeStatus.git?.submodules ?? []).map(submodule => (
-                                                        <div key={`${selectedNodeStatus.nodeId}:${submodule.path}`} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
-                                                            <div className="flex flex-wrap items-center gap-2">
-                                                                <span className="font-medium">{submodule.path}</span>
-                                                                {submodule.dirty && <Badge label="dirty" tone="warn" />}
-                                                                {(submodule.outOfSync || submodule.error) && <Badge label="drift" tone="danger" />}
-                                                            </div>
-                                                            <div className="mt-1 break-all text-[11px] text-slate-400">{submodule.repoPath}</div>
-                                                            <div className="mt-1 text-[11px] text-slate-500">Select the submodule node in the graph for its own HEAD and recent history.</div>
-                                                            {submodule.error && <div className="mt-1 text-[11px] text-rose-200">{submodule.error}</div>}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                                {!selectedNodeStatus && (
-                                    <div className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-slate-950/40 p-3' : 'rounded-xl border border-slate-200 bg-slate-50 p-3'}>
-                                        <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Git context</div>
-                                        <div className="text-xs text-slate-300">{selectedHeadSummary ?? 'No daemon-owned node status is attached to this graph node.'}</div>
-                                        <div className="mt-3">
-                                            <div className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Recent commits</div>
-                                            <div className="flex flex-col gap-2">
-                                                {selectedGitHistory?.loading && <div className={meshTheme.isDark ? 'text-xs text-slate-500' : 'text-xs text-slate-500'}>Loading recent commits…</div>}
-                                                {selectedGitHistory?.error && <div className="text-xs text-amber-200">Recent history unavailable: {selectedGitHistory.error}</div>}
-                                                {!selectedGitHistory?.loading && !selectedGitHistory?.error && (selectedGitHistory?.entries ?? []).length === 0 && (
-                                                    <div className={meshTheme.isDark ? 'text-xs text-slate-500' : 'text-xs text-slate-500'}>Recent commit history not available for this detached graph node yet.</div>
-                                                )}
-                                                {(selectedGitHistory?.entries ?? []).slice(0, 5).map(entry => (
-                                                    <div key={entry.commit} className={meshTheme.isDark ? 'rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
-                                                        <div className={`font-medium ${meshTheme.textPrimary}`}>{shortCommit(entry.commit)} · {entry.message}</div>
-                                                        <div className="mt-1 text-[11px] text-slate-500">
-                                                            {entry.authorName || 'unknown author'}
-                                                            {formatCommitTimestamp(entry.committedAt) ? ` · ${formatCommitTimestamp(entry.committedAt)}` : ''}
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                            </>
-                        ) : (
-                            <div className={`text-xs ${meshTheme.textMuted}`}>Select a node, session, or queue item.</div>
-                        )}
-                    </div>
-                </Card>
-
-                <Card title="Queue" subtitle="Active work plus recent history from mesh_status.">
-                    <div className="mb-3 flex flex-wrap gap-2">
-                        {(['active', 'history', 'all'] as const).map(filter => (
-                            <button
-                                key={filter}
-                                type="button"
-                                onClick={() => setQueueFilter(filter)}
-                                className={`rounded-full border px-3 py-1 text-xs transition ${queueFilter === filter ? (meshTheme.isDark ? 'border-sky-400/30 bg-sky-500/10 text-sky-100' : 'border-sky-300 bg-sky-50 text-sky-700') : (meshTheme.isDark ? 'border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.06]' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50')}`}
-                            >
-                                {filter}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 xl:grid-cols-2">
-                        <div className={meshTheme.isDark ? 'rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600'}>Active <span className={`ml-1 ${meshTheme.textPrimary}`}>{queueSummary?.active ?? 0}</span></div>
-                        <div className={meshTheme.isDark ? 'rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600'}>Pending <span className={`ml-1 ${meshTheme.textPrimary}`}>{queueActiveCounts.pending}</span></div>
-                        <div className={meshTheme.isDark ? 'rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600'}>Assigned <span className={`ml-1 ${meshTheme.textPrimary}`}>{queueActiveCounts.assigned}</span></div>
-                        <div className={meshTheme.isDark ? 'rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-slate-300' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600'}>History <span className={`ml-1 ${meshTheme.textPrimary}`}>{queueSummary?.historical ?? 0}</span></div>
-                    </div>
-                    <div className="max-h-[24vh] overflow-y-auto pr-1">
-                        {visibleQueueTasks.length === 0 ? (
-                            <div className={`text-xs ${meshTheme.textMuted}`}>No queue items for this filter.</div>
-                        ) : (
-                            <div className="flex flex-col gap-2">
-                                {visibleQueueTasks.map(task => {
-                                    const sessionId = getQueueTaskSessionTarget(task)
-                                    const linkedEntry = sessionId ? sessionEntries.find(entry => entry.session.sessionId === sessionId) ?? null : null
-                                    const nodeId = getQueueTaskNodeTarget(task)
-                                    return (
-                                        <button
-                                            key={task.id}
-                                            type="button"
-                                            onClick={() => setDetailSelection({ kind: 'queue', taskId: task.id })}
-                                            className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'queue' && detailSelection.taskId === task.id ? (meshTheme.isDark ? 'border-sky-400/30 bg-sky-500/10' : 'border-sky-300 bg-sky-50') : (meshTheme.isDark ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]' : 'border-slate-200 bg-white hover:bg-slate-50')}`}
-                                        >
-                                            <div className="flex items-start justify-between gap-3">
-                                                <div className="min-w-0 flex-1">
-                                                    <div className={`truncate text-xs font-medium ${meshTheme.textPrimary}`}>{task.message}</div>
-                                                    <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{describeQueueTask(task)}</div>
-                                                </div>
-                                                <Badge label={task.status} tone={queueTone(task.status)} />
-                                            </div>
-                                            {(nodeId || linkedEntry || sessionId) && (
-                                                <div className="mt-2 flex flex-wrap gap-2">
-                                                    {nodeId && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={event => {
-                                                                event.stopPropagation()
-                                                                focusNodeDetail(nodeId)
-                                                            }}
-                                                            className={meshTheme.isDark ? 'text-[11px] text-slate-300 underline underline-offset-2 transition hover:text-white' : 'text-[11px] text-slate-600 underline underline-offset-2 transition hover:text-slate-900'}
-                                                        >
-                                                            View node
-                                                        </button>
-                                                    )}
-                                                    {linkedEntry && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={event => {
-                                                                event.stopPropagation()
-                                                                selectSessionDetail(linkedEntry.nodeId, linkedEntry.session.sessionId)
-                                                            }}
-                                                            className={meshTheme.isDark ? 'text-[11px] text-slate-300 underline underline-offset-2 transition hover:text-white' : 'text-[11px] text-slate-600 underline underline-offset-2 transition hover:text-slate-900'}
-                                                        >
-                                                            View session
-                                                        </button>
-                                                    )}
-                                                    {sessionId && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={event => {
-                                                                event.stopPropagation()
-                                                                openSessionChat(sessionId)
-                                                            }}
-                                                            className={meshTheme.isDark ? 'text-[11px] text-sky-200 underline underline-offset-2 transition hover:text-white' : 'text-[11px] text-sky-700 underline underline-offset-2 transition hover:text-sky-900'}
-                                                        >
-                                                            Open chat
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </button>
-                                    )
-                                })}
-                            </div>
-                        )}
-                    </div>
-                </Card>
-
-                <Card title="Sessions" subtitle="Node-level active session roster.">
-                    <div className="max-h-[22vh] overflow-y-auto pr-1">
-                        {sessionEntries.length === 0 ? (
-                            <div className={`text-xs ${meshTheme.textMuted}`}>No active session metadata in this mesh snapshot.</div>
-                        ) : (
-                            <div className="flex flex-col gap-2">
-                                {sessionEntries.map(entry => {
-                                    const state = entry.session.state || entry.session.lifecycle || 'unknown'
-                                    return (
-                                        <button
-                                            key={`${entry.nodeId}:${entry.session.sessionId}`}
-                                            type="button"
-                                            onClick={() => {
-                                                setSelectedNodeId(entry.nodeId)
-                                                setDetailSelection({ kind: 'session', nodeId: entry.nodeId, sessionId: entry.session.sessionId })
-                                            }}
-                                            className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'session' && detailSelection.nodeId === entry.nodeId && detailSelection.sessionId === entry.session.sessionId ? (meshTheme.isDark ? 'border-sky-400/30 bg-sky-500/10' : 'border-sky-300 bg-sky-50') : (meshTheme.isDark ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]' : 'border-slate-200 bg-white hover:bg-slate-50')}`}
-                                        >
-                                            <div className="flex items-start justify-between gap-3">
-                                                <div className="min-w-0 flex-1">
-                                                    <div className={`truncate text-xs font-medium ${meshTheme.textPrimary}`}>{entry.machineLabel}</div>
-                                                    <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{entry.session.title || entry.session.providerType || 'unknown provider'} · {entry.branch || 'no branch'}</div>
-                                                </div>
-                                                <div className="flex flex-col items-end gap-1">
-                                                    <Badge label={state} tone={sessionTone(state)} />
-                                                    <button
-                                                        type="button"
-                                                        onClick={event => {
-                                                            event.stopPropagation()
-                                                            openSessionChat(entry.session.sessionId)
-                                                        }}
-                                                        className={meshTheme.isDark ? 'text-[11px] text-sky-200 underline underline-offset-2 transition hover:text-white' : 'text-[11px] text-sky-700 underline underline-offset-2 transition hover:text-sky-900'}
-                                                    >
-                                                        Open chat
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </button>
-                                    )
-                                })}
-                            </div>
-                        )}
-                    </div>
-                </Card>
-
-                <Card title="Nodes" subtitle="Health, branch, drift, and provider view per node.">
-                    <div className="max-h-[22vh] overflow-y-auto pr-1">
-                        <div className="flex flex-col gap-2">
-                            {canonicalStatus.nodes.map(node => (
-                                <button
-                                    key={node.nodeId}
-                                    type="button"
-                                    onClick={() => {
-                                        setSelectedNodeId(node.nodeId)
-                                        setDetailSelection({ kind: 'node', nodeId: node.nodeId })
-                                    }}
-                                    className={`rounded-xl border px-3 py-2 text-left transition ${detailSelection?.kind === 'node' && detailSelection.nodeId === node.nodeId ? (meshTheme.isDark ? 'border-sky-400/30 bg-sky-500/10' : 'border-sky-300 bg-sky-50') : (meshTheme.isDark ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]' : 'border-slate-200 bg-white hover:bg-slate-50')}`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0 flex-1">
-                                            <div className={`truncate text-xs font-medium ${meshTheme.textPrimary}`}>{node.machineLabel}</div>
-                                            <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{summarizeNodeDrift(node)}</div>
-                                            <div className={meshTheme.isDark ? 'mt-1 truncate text-[11px] text-slate-500' : 'mt-1 truncate text-[11px] text-slate-500'}>{(node.providers ?? []).join(', ') || 'no provider metadata'}</div>
-                                            <div className="mt-1 flex flex-wrap gap-1">
-                                                <Badge label={`launchReady ${formatYesNo(node.launchReady)}`} tone={node.launchReady ? 'good' : 'warn'} />
-                                                <Badge label={connectionLabel(node.connection)} tone={connectionTone(node.connection)} />
-                                            </div>
-                                        </div>
-                                        <div className="flex flex-col items-end gap-1">
-                                            <Badge label={node.health} tone={healthTone(node.health)} />
-                                            {node.machineStatus && <Badge label={node.machineStatus} tone={node.machineStatus === 'online' ? 'good' : 'warn'} />}
-                                            {node.activeSessions.length > 0 && <Badge label={`${node.activeSessions.length} sessions`} tone="info" />}
-                                        </div>
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                </Card>
-
-                <Card title="Recent mesh events" subtitle="Read-only ledger tail from mesh_status.">
-                    <div className="max-h-[18vh] overflow-y-auto pr-1">
-                        {(canonicalStatus.ledger?.entries ?? []).length === 0 ? (
-                            <div className={`text-xs ${meshTheme.textMuted}`}>No recent ledger entries.</div>
-                        ) : (
-                            <div className="flex flex-col gap-2">
-                                {(canonicalStatus.ledger?.entries ?? []).map((entry: RepoMeshLedgerEntryStatus) => (
-                                    <div key={entry.id} className={meshTheme.isDark ? 'rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-200' : 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'}>
-                                        <div className="flex items-center justify-between gap-3">
-                                            <span className={`font-medium ${meshTheme.textPrimary}`}>{entry.kind}</span>
-                                            <span className={meshTheme.isDark ? 'text-[11px] text-slate-500' : 'text-[11px] text-slate-500'}>{formatTimestamp(entry.timestamp) ?? entry.timestamp}</span>
-                                        </div>
-                                        <div className={`mt-1 truncate text-[11px] ${meshTheme.textMuted}`}>{entry.nodeId || entry.sessionId || entry.providerType || 'mesh-wide event'}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </Card>
-                </div>
-            )}
         </div>
         </MeshGraphThemeContext.Provider>
     )
