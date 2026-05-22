@@ -799,6 +799,133 @@ describe('extractRepoMeshStatus', () => {
     expect(graph.snapshotWarnings).toEqual([])
   })
 
+  it('does not let a failed mesh peer status row erase canonical live aggregate git truth', () => {
+    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const normalized = extractRepoMeshStatus({
+      success: true,
+      result: {
+        success: true,
+        meshId: 'mesh_node303_failed_connection_precedence',
+        meshName: 'Node 303 Failed Connection Precedence Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        refreshedAt: '2026-05-22T03:56:45.000Z',
+        sourceOfTruth: {
+          currentStatus: 'live_git_and_session_probes',
+          directPeerTruth: { required: true, satisfied: true },
+        },
+        nodes: [
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            repoRoot,
+            machineStatus: 'online',
+            health: 'online',
+            launchReady: true,
+            providers: [],
+            providerPriority: ['hermes-cli'],
+            activeSessions: [],
+            git: {
+              isGitRepo: true,
+              workspace: repoRoot,
+              repoRoot,
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              headCommit: '3a71b5ad',
+              headMessage: 'chore: sync cloud MCP server vendor',
+              ahead: 0,
+              behind: 2,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              lastCheckedAt: Date.parse('2026-05-22T03:56:45.000Z'),
+              submodules: [
+                { path: 'oss', commit: '65d7f5dafc495ec4c24d378e3d12a01a2b09a3b2', repoPath: `${repoRoot}/oss`, dirty: false, outOfSync: false },
+                { path: 'adhdev-providers', commit: '1c29790fc14ad87f75fc6aed958fda8f36dbab0d', repoPath: `${repoRoot}/adhdev-providers`, dirty: false, outOfSync: false },
+              ],
+            },
+            branchConvergence: {
+              defaultBranch: 'main',
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              ahead: 0,
+              behind: 2,
+              isDefaultBranch: true,
+              status: 'blocked_review',
+              needsConvergence: true,
+              reason: 'default_branch_not_even_with_upstream',
+              nextStep: 'Bring main even with its upstream before declaring convergence complete.',
+            },
+          },
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            repoRoot,
+            machineStatus: 'offline',
+            health: 'offline',
+            launchReady: false,
+            activeSessions: [],
+            connection: {
+              state: 'failed',
+              transport: 'direct',
+              reported: true,
+              source: 'mesh_peer_status',
+              reason: 'P2P DataChannel closed',
+            },
+          },
+        ],
+        queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+        ledger: { entries: [], summary: { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 } },
+      },
+    } as any)
+
+    expect(normalized?.nodes).toHaveLength(1)
+    const node303 = normalized?.nodes[0]
+    expect(node303).toMatchObject({
+      nodeId: 'node_303',
+      health: 'online',
+      launchReady: true,
+      git: expect.objectContaining({
+        branch: 'main',
+        upstream: 'origin/main',
+        headCommit: '3a71b5ad',
+        behind: 2,
+        submodules: [
+          expect.objectContaining({ path: 'oss' }),
+          expect.objectContaining({ path: 'adhdev-providers' }),
+        ],
+      }),
+      branchConvergence: expect.objectContaining({
+        status: 'blocked_review',
+        reason: 'default_branch_not_even_with_upstream',
+      }),
+    })
+    expect(node303).not.toHaveProperty('gitProbePending')
+
+    const graph = buildMeshGraph(normalized as any)
+    const graphNode = graph.nodes.find(node => node.id === 'node_303')
+    expect(graphNode).toMatchObject({
+      branch: 'main',
+      upstream: 'origin/main',
+      submoduleCommit: '3a71b5ad',
+      snapshotCompleteness: 'complete',
+      branchConvergence: expect.objectContaining({ status: 'blocked_review', needsConvergence: true }),
+    })
+    expect(graph.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'node_303::submodule::oss', type: 'submoduleNode' }),
+      expect.objectContaining({ id: 'node_303::submodule::adhdev-providers', type: 'submoduleNode' }),
+    ]))
+    expect(graphNode?.snapshotWarnings).toEqual([])
+    expect(graph.snapshotWarnings).toEqual([])
+  })
+
   it('returns null for unrelated payloads', () => {
     expect(extractRepoMeshStatus({ success: true, result: { ok: true } } as any)).toBeNull()
   })

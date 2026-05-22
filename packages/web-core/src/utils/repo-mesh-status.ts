@@ -381,6 +381,7 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
     const rawGitProbePending = readBoolean(record.gitProbePending, record.git_probe_pending)
     const gitProbePending = authoritativeGit ? undefined : rawGitProbePending
     const rawConnection = readConnectionStatus(record)
+    const rawBranchConvergence = readRecord(record.branchConvergence ?? record.branch_convergence)
     const connectionState = rawConnection?.state
     const connection = liveGit && (!rawConnection?.reported || connectionState === 'unknown')
         ? buildLivePeerGitConnection(rawConnection)
@@ -407,6 +408,7 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
         ...(readString(record.lastSeenAt, record.last_seen_at, cachedStatus.lastSeenAt, cachedStatus.last_seen_at) ? { lastSeenAt: readString(record.lastSeenAt, record.last_seen_at, cachedStatus.lastSeenAt, cachedStatus.last_seen_at) } : {}),
         ...(readString(record.updatedAt, record.updated_at, cachedStatus.updatedAt, cachedStatus.updated_at) ? { updatedAt: readString(record.updatedAt, record.updated_at, cachedStatus.updatedAt, cachedStatus.updated_at) } : {}),
         ...(connection ? { connection } : {}),
+        ...(Object.keys(rawBranchConvergence).length > 0 ? { branchConvergence: rawBranchConvergence } : {}),
         ...(error ? { error } : {}),
     }
 }
