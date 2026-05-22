@@ -27,7 +27,7 @@ describe('mesh graph view interaction boundaries', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 
         expect(source).toContain('meshTheme.graphShellClass')
-        expect(source).toContain('h-[420px] w-full min-w-0 min-h-[420px] sm:h-[520px] xl:h-[640px]')
+        expect(source).toContain('h-[460px] w-full min-w-0 min-h-[460px] sm:h-[560px] xl:h-[680px]')
         expect(source).toContain('className="h-full w-full"')
     })
 

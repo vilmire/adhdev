@@ -21,7 +21,6 @@ import {
 } from '@xyflow/react'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import {
-    formatMeshGraphAheadBehind,
     getMeshGraphAttentionBadge,
     getMeshGraphCalloutText,
     shouldShowMeshGraphCallout,
@@ -34,6 +33,11 @@ import {
 } from '../../utils/mesh-graph-viewport'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme } from './meshGraphTheme'
+import {
+    buildMeshGraphLayout,
+    getMeshGraphNodeCardWidth,
+    getNodeSummaryForLayout,
+} from './meshGraphLayout'
 
 interface MeshGraphViewProps {
     data: MeshGraphData
@@ -47,13 +51,6 @@ type FlowNodeData = Record<string, unknown> & {
 
 type FlowNode = Node<FlowNodeData, 'meshNode'>
 type FlowEdge = Edge
-
-const COLUMN_GAP = 420
-const WORKTREE_ROW_GAP = 212
-const SUBMODULE_ROW_GAP = 132
-const SUBMODULE_OFFSET_X = 44
-const SUBMODULE_OFFSET_Y = 166
-const STACK_SECTION_GAP = 24
 
 const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
 
@@ -158,38 +155,6 @@ function formatHealth(health: MeshGraphNode['health']): string {
     return health.replace(/_/g, ' ')
 }
 
-function isUpstreamVerified(node: MeshGraphNode): boolean {
-    return !node.upstream || node.upstreamStatus === 'fresh'
-}
-
-function getNodeSummary(node: MeshGraphNode): string {
-    if (node.type === 'defaultBranchNode') {
-        return node.nextStepHint || 'Default branch anchor'
-    }
-
-    if (node.type === 'submoduleNode') {
-        const parts = [node.machineLabel ? `parent ${node.machineLabel}` : null]
-        if (node.outOfSync) parts.push('out of sync')
-        else if (node.dirty) parts.push('local changes')
-        else parts.push('synced')
-        return parts.filter(Boolean).join(' · ')
-    }
-
-    const parts: string[] = []
-    if (node.upstream) parts.push(node.upstream)
-    if (!isUpstreamVerified(node)) {
-        parts.push('upstream unverified')
-    } else {
-        const drift = formatMeshGraphAheadBehind(node)
-        if (drift) parts.push(drift)
-    }
-    if (node.activeSessionCount > 0) parts.push(`${node.activeSessionCount} session${node.activeSessionCount === 1 ? '' : 's'}`)
-    if (node.dirtyFiles > 0) parts.push(`${node.dirtyFiles} dirty`)
-    if (node.hasConflicts) parts.push('conflicts')
-    if (parts.length === 0) return node.branchConvergence?.needsConvergence ? 'Needs follow-up' : 'Clean and even with upstream'
-    return parts.join(' · ')
-}
-
 function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const meshTheme = useContext(MeshGraphThemeContext)
     const node = data.graphNode
@@ -203,12 +168,13 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             : node.machineLabel || node.workspace
     const shortCommit = node.submoduleCommit ? node.submoduleCommit.slice(0, 7) : null
     const attentionBadge = getMeshGraphAttentionBadge(node)
-    const nodeSummary = getNodeSummary(node)
+    const nodeSummary = getNodeSummaryForLayout(node)
     const calloutText = getMeshGraphCalloutText(node)
 
     return (
         <div
-            className={`${isSubmoduleNode ? 'w-[204px]' : 'w-[220px]'} rounded-2xl border px-3.5 py-3 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
+            className={`${isSubmoduleNode ? 'w-[228px]' : 'w-[256px]'} rounded-2xl border px-4 py-3.5 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
+            style={{ width: getMeshGraphNodeCardWidth(node) }}
         >
             <Handle
                 type="target"
@@ -303,167 +269,17 @@ const nodeTypes: NodeTypes = {
     meshNode: MeshNodeCard,
 }
 
-function compareNodes(a: MeshGraphNode, b: MeshGraphNode): number {
-    if (a.type === 'defaultBranchNode' && b.type !== 'defaultBranchNode') return -1
-    if (b.type === 'defaultBranchNode' && a.type !== 'defaultBranchNode') return 1
-    if (a.type === 'submoduleNode' && b.type !== 'submoduleNode') return 1
-    if (b.type === 'submoduleNode' && a.type !== 'submoduleNode') return -1
-    if (a.branch && b.branch && a.branch !== b.branch) return a.branch.localeCompare(b.branch)
-    if (a.branch && !b.branch) return -1
-    if (!a.branch && b.branch) return 1
-    return a.label.localeCompare(b.label)
-}
-
 function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark')): { nodes: FlowNode[]; edges: FlowEdge[] } {
-    const sortedNodes = [...data.nodes].sort(compareNodes)
-    const defaultAnchor = sortedNodes.find(node => node.type === 'defaultBranchNode') ?? null
-    const submoduleNodesByParent = new Map<string, MeshGraphNode[]>()
-
-    for (const node of sortedNodes) {
-        if (node.type !== 'submoduleNode' || !node.parentNodeId) continue
-        const bucket = submoduleNodesByParent.get(node.parentNodeId) ?? []
-        bucket.push(node)
-        submoduleNodesByParent.set(node.parentNodeId, bucket)
-    }
-
-    const nonDefaultNodes = sortedNodes.filter(node => node.id !== defaultAnchor?.id && node.type !== 'submoduleNode')
-    const branchGroups = new Map<string, MeshGraphNode[]>()
-    const orphanNodes: MeshGraphNode[] = []
-
-    for (const node of nonDefaultNodes) {
-        if (node.isOrphan || !node.branch) {
-            orphanNodes.push(node)
-            continue
-        }
-        const key = node.branch
-        const bucket = branchGroups.get(key) ?? []
-        bucket.push(node)
-        branchGroups.set(key, bucket)
-    }
-
-    const orderedGroups = [...branchGroups.entries()].sort(([a], [b]) => {
-        if (defaultAnchor?.branch && a === defaultAnchor.branch && b !== defaultAnchor.branch) return -1
-        if (defaultAnchor?.branch && b === defaultAnchor.branch && a !== defaultAnchor.branch) return 1
-        return a.localeCompare(b)
-    })
-
-    if (orphanNodes.length > 0) {
-        orderedGroups.push(['__orphans__', [...orphanNodes].sort(compareNodes)])
-    }
-
-    if (orderedGroups.length === 0) {
-        orderedGroups.push(['__nodes__', []])
-    }
-
-    const flowNodes: FlowNode[] = []
-    const groupCount = orderedGroups.length
-    const totalWidth = Math.max(1, groupCount - 1) * COLUMN_GAP
-    const topRowY = defaultAnchor ? 0 : 80
-    const contentRowStartY = defaultAnchor ? WORKTREE_ROW_GAP : 0
-
-    if (defaultAnchor) {
-        flowNodes.push({
-            id: defaultAnchor.id,
-            type: 'meshNode',
-            position: { x: totalWidth / 2, y: topRowY },
-            data: { graphNode: defaultAnchor },
-            selected: false,
-            draggable: false,
-            selectable: true,
-        })
-    }
-
-    orderedGroups.forEach(([groupKey, groupNodes], columnIndex) => {
-        const x = columnIndex * COLUMN_GAP
-        const nodesForColumn = groupNodes.length > 0
-            ? groupNodes
-            : nonDefaultNodes.length > 0
-                ? nonDefaultNodes
-                : []
-        let cursorY = contentRowStartY
-
-        nodesForColumn.forEach(node => {
-            flowNodes.push({
-                id: node.id,
-                type: 'meshNode',
-                position: { x, y: cursorY },
-                data: { graphNode: node },
-                selected: false,
-                draggable: false,
-                selectable: true,
-            })
-
-            const submoduleNodes = [...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes)
-            if (submoduleNodes.length > 0) {
-                submoduleNodes.forEach((submoduleNode, submoduleIndex) => {
-                    flowNodes.push({
-                        id: submoduleNode.id,
-                        type: 'meshNode',
-                        position: { x: x + SUBMODULE_OFFSET_X, y: cursorY + SUBMODULE_OFFSET_Y + submoduleIndex * SUBMODULE_ROW_GAP },
-                        data: { graphNode: submoduleNode },
-                        selected: false,
-                        draggable: false,
-                        selectable: true,
-                    })
-                })
-                cursorY += SUBMODULE_OFFSET_Y + submoduleNodes.length * SUBMODULE_ROW_GAP + STACK_SECTION_GAP
-                return
-            }
-
-            cursorY += WORKTREE_ROW_GAP
-        })
-
-        if (groupKey === '__nodes__' && nonDefaultNodes.length === 0 && defaultAnchor) {
-            flowNodes.push({
-                id: `${defaultAnchor.id}__placeholder`,
-                type: 'meshNode',
-                position: { x, y: contentRowStartY },
-                data: {
-                    graphNode: {
-                        id: `${defaultAnchor.id}__placeholder`,
-                        type: 'worktreeNode',
-                        label: 'No active worktrees',
-                        workspace: data.repoIdentity,
-                        branch: defaultAnchor.branch,
-                        upstream: null,
-                        upstreamStatus: null,
-                        machineLabel: null,
-                        health: 'unknown',
-                        ahead: 0,
-                        behind: 0,
-                        dirty: false,
-                        dirtyFiles: 0,
-                        hasConflicts: false,
-                        activeSessionCount: 0,
-                        activeSessions: [],
-                        providers: [],
-                        isOrphan: false,
-                        orphanReasons: [],
-                        nextStepHint: 'Waiting for worktree nodes to report live mesh status.',
-                        error: undefined,
-                        parentNodeId: null,
-                        submodulePath: null,
-                        submoduleCommit: null,
-                        outOfSync: false,
-                        snapshotCompleteness: 'complete',
-                        snapshotWarnings: [],
-                        branchConvergence: null,
-                        source: {
-                            nodeId: `${defaultAnchor.id}__placeholder`,
-                            machineLabel: '',
-                            workspace: data.repoIdentity,
-                            health: 'unknown',
-                            providers: [],
-                            activeSessions: [],
-                        },
-                    },
-                },
-                selected: false,
-                draggable: false,
-                selectable: false,
-            })
-        }
-    })
+    const layout = buildMeshGraphLayout(data)
+    const flowNodes: FlowNode[] = layout.nodes.map(node => ({
+        id: node.id,
+        type: node.type,
+        position: node.position,
+        data: { graphNode: node.graphNode },
+        selected: node.selected,
+        draggable: node.draggable,
+        selectable: node.selectable,
+    }))
 
     const flowEdges: FlowEdge[] = data.edges.map(edge => ({
         id: edge.id,
@@ -493,8 +309,8 @@ function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark'))
             fillOpacity: 1,
             stroke: meshTheme.edgeLabelBorderColor,
         },
-        labelBgPadding: [5, 3],
-        labelBgBorderRadius: 6,
+        labelBgPadding: [6, 4],
+        labelBgBorderRadius: 7,
     }))
 
     return { nodes: flowNodes, edges: flowEdges }
@@ -534,8 +350,8 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
             const shouldFocusSubset = initialFocusNodeIds.length > 0 && initialFocusNodeIds.length < data.nodes.length
             void reactFlow.fitView({
                 nodes: shouldFocusSubset ? initialFocusNodeIds.map(id => ({ id })) : undefined,
-                padding: shouldFocusSubset ? 0.2 : 0.16,
-                maxZoom: shouldFocusSubset ? 1.04 : 0.96,
+                padding: shouldFocusSubset ? 0.24 : 0.2,
+                maxZoom: shouldFocusSubset ? 0.98 : 0.9,
                 duration: 260,
             })
             lastViewportKeyRef.current = viewportKey
@@ -615,7 +431,7 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                     Focused on the main path first · drag or scroll to pan
                 </div>
             </div>
-            <div className="h-[420px] w-full min-w-0 min-h-[420px] sm:h-[520px] xl:h-[640px]">
+            <div className="h-[460px] w-full min-w-0 min-h-[460px] sm:h-[560px] xl:h-[680px]">
                 <ReactFlow<FlowNode, FlowEdge>
                     nodes={nodes}
                     edges={layout.edges}

@@ -10,6 +10,7 @@ vi.mock('../../src/components/MeshGraph/MeshGraphView', () => ({
 }))
 
 import MeshObservabilitySurface, { describeProviders, resolveGitLogRequest, resolveSelectedGraphNodeForDetail, summarizeNodeDrift, summarizeSelectedHead } from '../../src/components/MeshGraph/MeshObservabilitySurface'
+import { MESH_GRAPH_LAYOUT, buildMeshGraphLayout, estimateMeshGraphNodeHeight, getMeshGraphNodeCardWidth } from '../../src/components/MeshGraph/meshGraphLayout'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
 import { canonicalizeRepoMeshStatus } from '../../src/utils/repo-mesh-status'
 
@@ -347,4 +348,126 @@ describe('MeshObservabilitySurface', () => {
       } as any,
     })).toBeNull()
   })
+
+  it('keeps deterministic layout boxes separated for long labels and stacked submodules', () => {
+    const graph = buildMeshGraph({
+      meshId: 'mesh_spacing',
+      meshName: 'Spacing Mesh',
+      repoIdentity: 'repo-with-very-long-identity-for-layout-pressure',
+      defaultBranch: 'main',
+      refreshedAt: '2026-05-22T00:00:00.000Z',
+      nodes: [
+        {
+          nodeId: 'node_coordinator',
+          machineLabel: 'Coordinator with a long visible label',
+          workspace: '/repo/main-with-a-long-workspace-label',
+          health: 'online',
+          providers: ['hermes-cli'],
+          activeSessions: ['sess-1', 'sess-2'],
+          git: {
+            isGitRepo: true,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            submodules: [
+              { path: 'oss/packages/web-core-with-long-path', commit: '1234567890abcdef', repoPath: '/repo/main/oss', dirty: false, outOfSync: true },
+              { path: 'vendor/extremely-long-submodule-name', commit: 'abcdef1234567890', repoPath: '/repo/main/vendor', dirty: true, outOfSync: false },
+            ],
+          },
+        },
+        {
+          nodeId: 'node_peer',
+          machineLabel: 'Peer node with long label',
+          workspace: '/repo/peer',
+          health: 'dirty',
+          providers: ['claude-cli'],
+          activeSessions: ['sess-peer'],
+          git: {
+            isGitRepo: true,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            ahead: 1,
+            behind: 1,
+            staged: 0,
+            modified: 2,
+            untracked: 1,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            submodules: [
+              { path: 'oss/packages/web-core-with-long-path', commit: '1234567890abcdef', repoPath: '/repo/peer/oss', dirty: false, outOfSync: false },
+            ],
+          },
+        },
+        {
+          nodeId: 'node_feature',
+          machineLabel: 'Feature worktree',
+          workspace: '/repo/feature',
+          health: 'online',
+          providers: ['codex-cli'],
+          activeSessions: [],
+          git: {
+            isGitRepo: true,
+            branch: 'fix/mesh-graph-layout-spacing-with-long-branch-label',
+            upstream: 'origin/fix/mesh-graph-layout-spacing-with-long-branch-label',
+            upstreamStatus: 'fresh',
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+          },
+        },
+      ],
+      queue: { tasks: [] },
+      ledger: { entries: [] },
+    } as any)
+
+    const layout = buildMeshGraphLayout(graph as any)
+    const boxes = new Map(layout.nodes.map(node => [node.id, {
+      left: node.position.x,
+      top: node.position.y,
+      right: node.position.x + getMeshGraphNodeCardWidth(node.graphNode),
+      bottom: node.position.y + estimateMeshGraphNodeHeight(node.graphNode),
+    }]))
+    const overlaps = (a: NonNullable<ReturnType<typeof boxes.get>>, b: NonNullable<ReturnType<typeof boxes.get>>) => (
+      a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+    )
+
+    expect(layout.columnGap).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.columnGap)
+    expect(layout.columnGap).toBeGreaterThan(500)
+
+    const layoutNodes = [...boxes.entries()]
+    for (let i = 0; i < layoutNodes.length; i += 1) {
+      for (let j = i + 1; j < layoutNodes.length; j += 1) {
+        expect(overlaps(layoutNodes[i][1], layoutNodes[j][1]), `${layoutNodes[i][0]} overlaps ${layoutNodes[j][0]}`).toBe(false)
+      }
+    }
+
+    const parent = boxes.get('node_coordinator')!
+    const parentChildren = [
+      boxes.get('node_coordinator::submodule::oss/packages/web-core-with-long-path')!,
+      boxes.get('node_coordinator::submodule::vendor/extremely-long-submodule-name')!,
+    ].sort((a, b) => a.top - b.top)
+    const child = parentChildren[0]
+    const secondChild = parentChildren[1]
+    const peer = boxes.get('node_peer')!
+
+    expect(child.top - parent.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.parentToSubmoduleGap)
+    expect(secondChild.top - child.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.submoduleStackGap)
+    expect(peer.top - secondChild.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.worktreeStackGap)
+  })
+
 })

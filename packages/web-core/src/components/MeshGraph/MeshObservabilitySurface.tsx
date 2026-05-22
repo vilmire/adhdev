@@ -488,14 +488,14 @@ export default function MeshObservabilitySurface({
                         <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{emptyMessage}</div>
                     )}
                     {selectedGraphNode && detailSelection?.kind === 'node' && (
-                        <div className="absolute inset-3 z-20 flex items-center justify-center rounded-[24px] bg-slate-950/35 p-3 backdrop-blur-sm" onClick={closeGraphDetail} role="presentation">
+                        <div className="absolute inset-x-3 bottom-3 top-20 z-20 flex items-end justify-center p-2 sm:inset-5 sm:top-24 sm:items-start sm:justify-end" onClick={closeGraphDetail} role="presentation">
                             <section
                                 role="dialog"
                                 aria-modal="false"
                                 aria-label="Selected node"
                                 className={meshTheme.isDark
-                                    ? 'max-h-[min(78vh,520px)] w-full max-w-xl overflow-y-auto rounded-2xl border border-white/12 bg-slate-950/95 p-4 shadow-2xl shadow-black/40'
-                                    : 'max-h-[min(78vh,520px)] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-2xl shadow-slate-900/15'}
+                                    ? 'max-h-[min(72vh,540px)] w-full max-w-[min(28rem,calc(100vw-2.5rem))] overflow-y-auto rounded-2xl border border-white/12 bg-slate-950/96 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl'
+                                    : 'max-h-[min(72vh,540px)] w-full max-w-[min(28rem,calc(100vw-2.5rem))] overflow-y-auto rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/15 backdrop-blur-xl'}
                                 onClick={event => event.stopPropagation()}
                             >
                                 <div className="mb-3 flex items-start justify-between gap-3">

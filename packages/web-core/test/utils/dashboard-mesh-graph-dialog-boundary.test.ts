@@ -50,7 +50,7 @@ describe('dashboard mesh graph dialog wiring', () => {
         expect(graphViewSource).toContain('Focused on the main path first · drag or scroll to pan')
         expect(surfaceSource).toContain('role="dialog"')
         expect(surfaceSource).toContain('onClick={closeGraphDetail}')
-        expect(surfaceSource).toContain('absolute inset-3 z-20')
+        expect(surfaceSource).toContain('absolute inset-x-3 bottom-3 top-20')
         expect(surfaceSource).not.toContain('max-h-[24vh] overflow-y-auto')
         expect(surfaceSource).not.toContain('max-h-[22vh] overflow-y-auto')
     })
