@@ -5,10 +5,11 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 23 tools: mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
+ * 24 tools: mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *           mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
- *           mesh_read_debug, mesh_launch_session, mesh_git_status, mesh_checkpoint,
- *           mesh_approve, mesh_clone_node, mesh_remove_node, mesh_refine_node,
+ *           mesh_read_debug, mesh_launch_session, mesh_git_status,
+ *           mesh_fast_forward_node, mesh_checkpoint, mesh_approve,
+ *           mesh_clone_node, mesh_remove_node, mesh_refine_node,
  *           mesh_refine_config_schema, mesh_validate_refine_config,
  *           mesh_suggest_refine_config, mesh_refine_plan,
  *           mesh_cleanup_sessions, mesh_task_history, mesh_reconcile_ledger
@@ -1515,6 +1516,22 @@ export const MESH_GIT_STATUS_TOOL = {
     },
 };
 
+export const MESH_FAST_FORWARD_NODE_TOOL = {
+    name: 'mesh_fast_forward_node',
+    description: 'Safely dry-run or execute an obvious direct fast-forward for a mesh node without launching an agent session. Defaults to dry-run; execution requires execute=true. Never pushes, rebases, resets, cleans, or checks out arbitrary revisions.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Target node ID.' },
+            branch: { type: 'string', description: 'Optional guard: require the node\'s current branch to match this branch before planning/executing.' },
+            execute: { type: 'boolean', description: 'When true, apply the fast-forward if all safety gates pass. Defaults false/dry-run.' },
+            dry_run: { type: 'boolean', description: 'Preview only. Defaults true unless execute=true; dry_run=true overrides execute.' },
+            update_submodules: { type: 'boolean', description: 'When true, if the root fast-forward changes gitlinks, run only git submodule update --init --recursive and verify submodules clean.' },
+        },
+        required: ['node_id'],
+    },
+};
+
 export const MESH_CHECKPOINT_TOOL = {
     name: 'mesh_checkpoint',
     description: 'Create a git checkpoint (commit) on a mesh node workspace.',
@@ -1604,7 +1621,7 @@ export const MESH_TASK_HISTORY_TOOL = {
         type: 'object' as const,
         properties: {
             tail: { type: 'number', description: 'Number of recent entries to return (default: 20).' },
-            kind: { type: 'string', description: 'Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed.' },
+            kind: { type: 'string', description: 'Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed, direct_fast_forward.' },
         },
     },
 };
@@ -1689,6 +1706,7 @@ export const ALL_MESH_TOOLS = [
     MESH_READ_DEBUG_TOOL,
     MESH_LAUNCH_SESSION_TOOL,
     MESH_GIT_STATUS_TOOL,
+    MESH_FAST_FORWARD_NODE_TOOL,
     MESH_CHECKPOINT_TOOL,
     MESH_APPROVE_TOOL,
     MESH_CLONE_NODE_TOOL,
@@ -2644,6 +2662,57 @@ export async function meshGitStatus(
         return JSON.stringify({
             ...failure,
             workspace: node.workspace,
+        }, null, 2);
+    }
+}
+
+export async function meshFastForwardNode(
+    ctx: MeshContext,
+    args: { node_id: string; branch?: string; execute?: boolean; dry_run?: boolean; update_submodules?: boolean },
+): Promise<string> {
+    await refreshMeshFromDaemon(ctx);
+    const node = await findNodeWithRefresh(ctx, args.node_id);
+    const submoduleIgnorePaths = (node.policy as any)?.submoduleIgnorePaths || [];
+
+    if (node.policy?.readOnly) {
+        return JSON.stringify({
+            success: false,
+            code: 'node_read_only',
+            nodeId: args.node_id,
+            workspace: node.workspace,
+            allowed: false,
+            willRun: false,
+            executed: false,
+            blockingReasons: ['node_read_only'],
+        }, null, 2);
+    }
+
+    try {
+        const dryRun = args.dry_run === true || args.execute !== true;
+        const result = await commandForNode(ctx, node, 'fast_forward_mesh_node', {
+            meshId: ctx.mesh.id,
+            nodeId: node.id,
+            workspace: node.workspace,
+            branch: typeof args.branch === 'string' ? args.branch : undefined,
+            execute: args.execute === true && args.dry_run !== true,
+            dryRun,
+            updateSubmodules: args.update_submodules === true,
+            submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : undefined,
+        });
+        return JSON.stringify(unwrapCommandPayload(result), null, 2);
+    } catch (e: any) {
+        const failure = buildCoordinatorP2pRelayFailure(e, {
+            command: 'fast_forward_mesh_node',
+            targetDaemonId: node.daemonId,
+            nodeId: args.node_id,
+        });
+        return JSON.stringify({
+            ...failure,
+            workspace: node.workspace,
+            allowed: false,
+            willRun: false,
+            executed: false,
+            blockingReasons: [failure.code || 'mesh_fast_forward_unavailable'],
         }, null, 2);
     }
 }

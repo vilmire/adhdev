@@ -245,6 +245,11 @@ var meshSessionProviderMetadata = /* @__PURE__ */ new Map();
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : void 0;
 }
+function findNode(mesh, nodeId) {
+  const node = mesh.nodes.find((n) => n.id === nodeId);
+  if (!node) throw new Error(`Node '${nodeId}' is not a member of mesh '${mesh.name}'`);
+  return node;
+}
 var DUPLICATE_DISPATCH_WINDOW_MS = 6e4;
 var STALE_ASSIGNED_QUEUE_MS = 30 * 6e4;
 var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
@@ -1423,6 +1428,21 @@ var MESH_GIT_STATUS_TOOL = {
     required: ["node_id"]
   }
 };
+var MESH_FAST_FORWARD_NODE_TOOL = {
+  name: "mesh_fast_forward_node",
+  description: "Safely dry-run or execute an obvious direct fast-forward for a mesh node without launching an agent session. Defaults to dry-run; execution requires execute=true. Never pushes, rebases, resets, cleans, or checks out arbitrary revisions.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Target node ID." },
+      branch: { type: "string", description: "Optional guard: require the node's current branch to match this branch before planning/executing." },
+      execute: { type: "boolean", description: "When true, apply the fast-forward if all safety gates pass. Defaults false/dry-run." },
+      dry_run: { type: "boolean", description: "Preview only. Defaults true unless execute=true; dry_run=true overrides execute." },
+      update_submodules: { type: "boolean", description: "When true, if the root fast-forward changes gitlinks, run only git submodule update --init --recursive and verify submodules clean." }
+    },
+    required: ["node_id"]
+  }
+};
 var MESH_CHECKPOINT_TOOL = {
   name: "mesh_checkpoint",
   description: "Create a git checkpoint (commit) on a mesh node workspace.",
@@ -1506,7 +1526,7 @@ var MESH_TASK_HISTORY_TOOL = {
     type: "object",
     properties: {
       tail: { type: "number", description: "Number of recent entries to return (default: 20)." },
-      kind: { type: "string", description: "Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed." }
+      kind: { type: "string", description: "Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed, direct_fast_forward." }
     }
   }
 };
@@ -1535,6 +1555,43 @@ var MESH_REFINE_NODE_TOOL = {
     required: ["node_id"]
   }
 };
+var MESH_REFINE_CONFIG_SCHEMA_TOOL = {
+  name: "mesh_refine_config_schema",
+  description: "Return the Repo Mesh Refinery config JSON schema and supported repo-local config locations. This is the validation source of truth; heuristic command detection is suggestions-only.",
+  inputSchema: { type: "object", properties: {} }
+};
+var MESH_VALIDATE_REFINE_CONFIG_TOOL = {
+  name: "mesh_validate_refine_config",
+  description: "Validate the repo mesh/refine config for a node/workspace without running validation commands or merging.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Optional node/workspace whose refine config should be loaded. Defaults to the first mesh node." },
+      config: { type: "object", description: "Optional inline config object to validate instead of loading from the repo." }
+    }
+  }
+};
+var MESH_SUGGEST_REFINE_CONFIG_TOOL = {
+  name: "mesh_suggest_refine_config",
+  description: "Suggest a repo mesh/refine config scaffold from project context/package scripts. Suggestions are never executed until saved as explicit refine config.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Optional node/workspace used for suggestions. Defaults to the first mesh node." }
+    }
+  }
+};
+var MESH_REFINE_PLAN_TOOL = {
+  name: "mesh_refine_plan",
+  description: "Dry-run Refinery plan for a worktree node: reports config source, validation commands, suggestions/unavailable reason, and merge/cleanup intent without executing validation or git merge.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Node ID of the worktree node to plan." }
+    },
+    required: ["node_id"]
+  }
+};
 var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_LIST_NODES_TOOL,
@@ -1547,11 +1604,16 @@ var ALL_MESH_TOOLS = [
   MESH_READ_DEBUG_TOOL,
   MESH_LAUNCH_SESSION_TOOL,
   MESH_GIT_STATUS_TOOL,
+  MESH_FAST_FORWARD_NODE_TOOL,
   MESH_CHECKPOINT_TOOL,
   MESH_APPROVE_TOOL,
   MESH_CLONE_NODE_TOOL,
   MESH_REMOVE_NODE_TOOL,
   MESH_REFINE_NODE_TOOL,
+  MESH_REFINE_CONFIG_SCHEMA_TOOL,
+  MESH_VALIDATE_REFINE_CONFIG_TOOL,
+  MESH_SUGGEST_REFINE_CONFIG_TOOL,
+  MESH_REFINE_PLAN_TOOL,
   MESH_CLEANUP_SESSIONS_TOOL,
   MESH_TASK_HISTORY_TOOL,
   MESH_RECONCILE_LEDGER_TOOL
@@ -2350,6 +2412,51 @@ async function meshGitStatus(ctx, args) {
     }, null, 2);
   }
 }
+async function meshFastForwardNode(ctx, args) {
+  await refreshMeshFromDaemon(ctx);
+  const node = await findNodeWithRefresh(ctx, args.node_id);
+  const submoduleIgnorePaths = node.policy?.submoduleIgnorePaths || [];
+  if (node.policy?.readOnly) {
+    return JSON.stringify({
+      success: false,
+      code: "node_read_only",
+      nodeId: args.node_id,
+      workspace: node.workspace,
+      allowed: false,
+      willRun: false,
+      executed: false,
+      blockingReasons: ["node_read_only"]
+    }, null, 2);
+  }
+  try {
+    const dryRun = args.dry_run === true || args.execute !== true;
+    const result = await commandForNode(ctx, node, "fast_forward_mesh_node", {
+      meshId: ctx.mesh.id,
+      nodeId: node.id,
+      workspace: node.workspace,
+      branch: typeof args.branch === "string" ? args.branch : void 0,
+      execute: args.execute === true && args.dry_run !== true,
+      dryRun,
+      updateSubmodules: args.update_submodules === true,
+      submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : void 0
+    });
+    return JSON.stringify(unwrapCommandPayload(result), null, 2);
+  } catch (e) {
+    const failure = buildCoordinatorP2pRelayFailure(e, {
+      command: "fast_forward_mesh_node",
+      targetDaemonId: node.daemonId,
+      nodeId: args.node_id
+    });
+    return JSON.stringify({
+      ...failure,
+      workspace: node.workspace,
+      allowed: false,
+      willRun: false,
+      executed: false,
+      blockingReasons: [failure.code || "mesh_fast_forward_unavailable"]
+    }, null, 2);
+  }
+}
 async function meshCheckpoint(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   if (node.policy?.readOnly) {
@@ -2548,6 +2655,43 @@ async function meshRemoveNode(ctx, args) {
   } else {
     return JSON.stringify({ error: "Cloud mesh remove_node requires node daemonId" });
   }
+}
+function resolveRefineConfigNode(ctx, nodeId) {
+  if (nodeId) return findNode(ctx.mesh, nodeId);
+  const node = ctx.mesh.nodes.find((entry) => !!entry.workspace);
+  if (!node) throw new Error("No mesh node with a workspace is available");
+  return node;
+}
+async function meshRefineConfigSchema(ctx) {
+  const node = resolveRefineConfigNode(ctx);
+  const result = await commandForNode(ctx, node, "get_mesh_refine_config_schema", {});
+  return JSON.stringify(result, null, 2);
+}
+async function meshValidateRefineConfig(ctx, args) {
+  const node = resolveRefineConfigNode(ctx, args.node_id);
+  const result = await commandForNode(ctx, node, "validate_mesh_refine_config", {
+    workspace: node.workspace,
+    inlineMesh: ctx.mesh,
+    ...args.config ? { config: args.config } : {}
+  });
+  return JSON.stringify(result, null, 2);
+}
+async function meshSuggestRefineConfig(ctx, args) {
+  const node = resolveRefineConfigNode(ctx, args.node_id);
+  const result = await commandForNode(ctx, node, "suggest_mesh_refine_config", {
+    workspace: node.workspace,
+    inlineMesh: ctx.mesh
+  });
+  return JSON.stringify(result, null, 2);
+}
+async function meshRefinePlan(ctx, args) {
+  const node = await findNodeWithRefresh(ctx, args.node_id);
+  const result = await commandForNode(ctx, node, "plan_mesh_refine_node", {
+    meshId: ctx.mesh.id,
+    nodeId: args.node_id,
+    inlineMesh: ctx.mesh
+  });
+  return JSON.stringify(result, null, 2);
 }
 async function meshRefineNode(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
@@ -4306,6 +4450,9 @@ async function startMcpServer(opts) {
           case "mesh_git_status":
             text = await meshGitStatus(meshCtx, a);
             break;
+          case "mesh_fast_forward_node":
+            text = await meshFastForwardNode(meshCtx, a);
+            break;
           case "mesh_checkpoint":
             text = await meshCheckpoint(meshCtx, a);
             break;
@@ -4320,6 +4467,18 @@ async function startMcpServer(opts) {
             break;
           case "mesh_refine_node":
             text = await meshRefineNode(meshCtx, a);
+            break;
+          case "mesh_refine_config_schema":
+            text = await meshRefineConfigSchema(meshCtx);
+            break;
+          case "mesh_validate_refine_config":
+            text = await meshValidateRefineConfig(meshCtx, a);
+            break;
+          case "mesh_suggest_refine_config":
+            text = await meshSuggestRefineConfig(meshCtx, a);
+            break;
+          case "mesh_refine_plan":
+            text = await meshRefinePlan(meshCtx, a);
             break;
           case "mesh_cleanup_sessions":
             text = await meshCleanupSessions(meshCtx, a);

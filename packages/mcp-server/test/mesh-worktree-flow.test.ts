@@ -2546,9 +2546,10 @@ test('mesh queue management tools cancel and requeue stale assignments without d
   assert.equal(queue.find(task => task.id === assigned.id)?.status, 'pending');
 });
 
-test('mesh tool registry documents the 23 exposed mesh tools including queue cancel/requeue, read-debug, worktree clone/remove/refine, refine config planning, session cleanup, and reconcile-ledger', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 23);
+test('mesh tool registry documents the 24 exposed mesh tools including queue cancel/requeue, read-debug, direct fast-forward, worktree clone/remove/refine, refine config planning, session cleanup, and reconcile-ledger', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 24);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_read_debug'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_fast_forward_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_clone_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_remove_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_node'));
