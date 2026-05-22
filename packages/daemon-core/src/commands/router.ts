@@ -1336,6 +1336,50 @@ function summarizeSessionHostPruneResult(result: unknown): Record<string, unknow
     };
 }
 
+function normalizeStandaloneHostCommandUrl(hostAddress: string): string {
+    const raw = hostAddress.trim();
+    if (!raw) throw new Error('hostAddress required');
+    const url = new URL(raw.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:'));
+    url.pathname = '/api/v1/command';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+}
+
+function buildMemberJoinNode(mesh: any, args: any, fallbackDaemonId?: string): Record<string, unknown> | null {
+    const requestedNodeId = typeof args?.memberNodeId === 'string' ? args.memberNodeId.trim() : '';
+    const explicit = args?.memberNode && typeof args.memberNode === 'object' && !Array.isArray(args.memberNode)
+        ? args.memberNode as Record<string, any>
+        : null;
+    const configured = Array.isArray(mesh?.nodes)
+        ? (requestedNodeId
+            ? mesh.nodes.find((node: any) => node?.id === requestedNodeId || node?.nodeId === requestedNodeId)
+            : mesh.nodes[0])
+        : null;
+    const source = explicit || configured;
+    const workspace = typeof source?.workspace === 'string' && source.workspace.trim()
+        ? source.workspace.trim()
+        : typeof args?.workspace === 'string' && args.workspace.trim()
+            ? args.workspace.trim()
+            : process.cwd();
+    if (!workspace) return null;
+    const nodeId = typeof source?.id === 'string' && source.id.trim()
+        ? source.id.trim()
+        : typeof source?.nodeId === 'string' && source.nodeId.trim()
+            ? source.nodeId.trim()
+            : undefined;
+    return {
+        ...(nodeId ? { id: nodeId } : {}),
+        workspace,
+        ...(typeof source?.repoRoot === 'string' && source.repoRoot.trim() ? { repoRoot: source.repoRoot.trim() } : {}),
+        ...(typeof source?.daemonId === 'string' && source.daemonId.trim() ? { daemonId: source.daemonId.trim() } : fallbackDaemonId ? { daemonId: fallbackDaemonId } : {}),
+        ...(typeof source?.machineId === 'string' && source.machineId.trim() ? { machineId: source.machineId.trim() } : {}),
+        userOverrides: source?.userOverrides && typeof source.userOverrides === 'object' && !Array.isArray(source.userOverrides) ? source.userOverrides : {},
+        policy: source?.policy && typeof source.policy === 'object' && !Array.isArray(source.policy) ? source.policy : {},
+        role: 'member',
+    };
+}
+
 export class DaemonCommandRouter {
     private deps: CommandRouterDeps;
     /** In-memory cache for cloud-originating meshes passed via inlineMesh.
@@ -1529,6 +1573,18 @@ export class DaemonCommandRouter {
 
     private invalidateAggregateMeshStatus(meshId: string): void {
         this.aggregateMeshStatusCache.delete(meshId);
+    }
+
+
+    private async requireMeshHostMutationOwner(meshId: string, inlineMesh: unknown, operation: string): Promise<Record<string, unknown> | null> {
+        const meshRecord = await this.getMeshForCommand(meshId, inlineMesh, { preferInline: true });
+        const mesh = meshRecord?.mesh;
+        if (!mesh) return { success: false, error: 'Mesh not found' };
+        const meshHost = resolveMeshHostStatus(mesh);
+        if (!meshHost.canOwnCoordinator || !meshHost.canOwnQueue) {
+            return { ...buildMeshHostRequiredFailure(mesh, operation), meshId };
+        }
+        return null;
     }
 
     private updateInlineMeshNode(meshId: string, mesh: any, node: any): void {
@@ -2794,8 +2850,9 @@ export class DaemonCommandRouter {
                     meshHost,
                     manualPairing: {
                         status: pairingStatus,
-                        joinImplemented: false,
-                        description: 'Standalone can save and retrieve a manual Mesh Host address/token skeleton; join/signaling remains pending in this slice.',
+                        joinImplemented: true,
+                        protocol: 'standalone_command_direct_v1',
+                        description: 'Standalone manual pairing can save address/token metadata, apply a host join over direct standalone command HTTP or injected mesh command dispatch, and check persisted status. P2P signaling remains outside this slice.',
                     },
                 };
             }
@@ -2820,12 +2877,179 @@ export class DaemonCommandRouter {
                         meshHost,
                         manualPairing: {
                             status: meshHost.pairing?.status || 'pairing',
-                            joinImplemented: false,
-                            description: 'Manual Mesh Host pairing config was saved locally. Host join/signaling is pending and not implemented in this slice.',
+                            joinImplemented: true,
+                            protocol: 'standalone_command_direct_v1',
+                            description: 'Manual Mesh Host pairing config was saved locally. Use join_mesh_host_pairing to apply it to the host. Raw token was not persisted.',
                         },
                     };
                 } catch (e: any) {
                     return { success: false, code: 'mesh_host_pairing_invalid', meshId, hostAddress, error: e.message };
+                }
+            }
+
+            case 'create_mesh_host_pairing_token': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                try {
+                    const { createMeshHostPairingToken } = await import('../config/mesh-config.js');
+                    const created = createMeshHostPairingToken(meshId, {
+                        token: typeof args?.token === 'string' ? args.token : undefined,
+                        expiresAt: typeof args?.expiresAt === 'string' ? args.expiresAt : undefined,
+                    });
+                    if (!created) return { success: false, error: 'Mesh not found' };
+                    this.inlineMeshCache.set(meshId, created.mesh);
+                    this.invalidateAggregateMeshStatus(meshId);
+                    return {
+                        success: true,
+                        code: 'mesh_host_pairing_token_created',
+                        meshId,
+                        token: created.token,
+                        tokenId: created.tokenId,
+                        expiresAt: created.expiresAt,
+                        meshHost: resolveMeshHostStatus(created.mesh),
+                        warning: 'Raw token is returned once and is not persisted; share it with member daemons over a trusted channel.',
+                    };
+                } catch (e: any) {
+                    return { success: false, code: 'mesh_host_pairing_token_invalid', meshId, error: e.message };
+                }
+            }
+
+            case 'apply_mesh_host_join': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const token = typeof args?.token === 'string' ? args.token.trim() : '';
+                const memberNode = args?.memberNode && typeof args.memberNode === 'object' && !Array.isArray(args.memberNode)
+                    ? args.memberNode
+                    : null;
+                if (!meshId) return { success: false, error: 'meshId required' };
+                if (!token || !memberNode) return { success: false, error: 'token and memberNode required' };
+                try {
+                    const { applyMeshHostJoinRequest } = await import('../config/mesh-config.js');
+                    const applied = applyMeshHostJoinRequest(meshId, {
+                        token,
+                        memberNode: memberNode as any,
+                        memberMeshId: typeof args?.memberMeshId === 'string' ? args.memberMeshId : undefined,
+                    });
+                    if (!applied) return { success: false, error: 'Mesh not found' };
+                    if (!applied.accepted) {
+                        return {
+                            success: false,
+                            code: 'mesh_host_join_rejected',
+                            meshId,
+                            tokenId: applied.tokenId,
+                            meshHost: applied.meshHost ? resolveMeshHostStatus({ meshHost: applied.meshHost }) : undefined,
+                            error: applied.reason,
+                        };
+                    }
+                    this.inlineMeshCache.set(meshId, applied.mesh);
+                    this.invalidateAggregateMeshStatus(meshId);
+                    try {
+                        const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+                        appendLedgerEntry(meshId, {
+                            kind: 'node_joined',
+                            nodeId: applied.node.id,
+                            payload: { role: 'member', tokenId: applied.tokenId, workspace: applied.node.workspace },
+                        });
+                    } catch { /* ledger append is best-effort */ }
+                    return {
+                        success: true,
+                        code: 'mesh_host_join_accepted',
+                        meshId,
+                        node: applied.node,
+                        tokenId: applied.tokenId,
+                        meshHost: resolveMeshHostStatus(applied.mesh),
+                    };
+                } catch (e: any) {
+                    return { success: false, code: 'mesh_host_join_failed', meshId, error: e.message };
+                }
+            }
+
+            case 'join_mesh_host_pairing': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const token = typeof args?.token === 'string' ? args.token.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                if (!token) return { success: false, error: 'token required because raw pairing tokens are not persisted' };
+                const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                const mesh = meshRecord?.mesh;
+                if (!mesh) return { success: false, error: 'Mesh not found' };
+                const meshHost = resolveMeshHostStatus(mesh);
+                if (meshHost.role !== 'member') {
+                    return { success: false, code: 'mesh_host_join_not_member', meshId, meshHost, error: 'join_mesh_host_pairing must run from a member daemon configured with a Mesh Host address/token.' };
+                }
+                try {
+                    const { tokenIdForManualPairing, markMeshHostPairingJoined } = await import('../config/mesh-config.js');
+                    const tokenId = tokenIdForManualPairing(token);
+                    if (meshHost.pairing?.tokenId && meshHost.pairing.tokenId !== tokenId) {
+                        return { success: false, code: 'mesh_host_join_rejected', meshId, tokenId, meshHost, error: 'invalid pairing token' };
+                    }
+                    const memberNode = buildMemberJoinNode(mesh, args, this.deps.statusInstanceId);
+                    if (!memberNode) return { success: false, error: 'member node metadata unavailable' };
+                    const hostMeshId = typeof args?.hostMeshId === 'string' && args.hostMeshId.trim() ? args.hostMeshId.trim() : meshId;
+                    const hostDaemonId = typeof args?.hostDaemonId === 'string' && args.hostDaemonId.trim()
+                        ? args.hostDaemonId.trim()
+                        : meshHost.hostDaemonId;
+                    let hostResult: any;
+                    let transport: string;
+                    if (hostDaemonId && this.deps.dispatchMeshCommand) {
+                        transport = 'mesh_command_dispatch';
+                        hostResult = await this.deps.dispatchMeshCommand(hostDaemonId, 'apply_mesh_host_join', {
+                            meshId: hostMeshId,
+                            token,
+                            memberMeshId: meshId,
+                            memberNode,
+                        });
+                    } else if (meshHost.hostAddress) {
+                        transport = 'standalone_http_command';
+                        const commandUrl = normalizeStandaloneHostCommandUrl(meshHost.hostAddress);
+                        const response = await fetch(commandUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ type: 'apply_mesh_host_join', payload: { meshId: hostMeshId, token, memberMeshId: meshId, memberNode } }),
+                        });
+                        hostResult = await response.json().catch(() => ({ success: false, error: `Host returned HTTP ${response.status}` }));
+                        if (!response.ok && hostResult?.success !== false) hostResult = { success: false, error: `Host returned HTTP ${response.status}` };
+                    } else {
+                        return {
+                            success: false,
+                            code: 'mesh_host_join_transport_unavailable',
+                            meshId,
+                            meshHost,
+                            error: 'No hostDaemonId dispatch path or hostAddress HTTP command path is available. P2P signaling join is not implemented in this slice.',
+                        };
+                    }
+                    if (!hostResult?.success) {
+                        return { success: false, code: hostResult?.code || 'mesh_host_join_rejected', meshId, meshHost, transport, error: hostResult?.error || 'Mesh Host rejected join request', hostResult };
+                    }
+                    const joined = meshRecord.inline
+                        ? null
+                        : markMeshHostPairingJoined(meshId, {
+                            tokenId: hostResult.tokenId || tokenId,
+                            hostDaemonId: hostResult.meshHost?.hostDaemonId || hostDaemonId,
+                            hostNodeId: hostResult.meshHost?.hostNodeId,
+                            joinedAt: hostResult.meshHost?.pairing?.joinedAt,
+                        });
+                    if (joined) {
+                        this.inlineMeshCache.set(meshId, joined.mesh);
+                        this.invalidateAggregateMeshStatus(meshId);
+                    }
+                    return {
+                        success: true,
+                        code: 'mesh_host_join_applied',
+                        meshId,
+                        hostMeshId,
+                        transport,
+                        node: hostResult.node,
+                        tokenId: hostResult.tokenId || tokenId,
+                        meshHost: joined ? resolveMeshHostStatus(joined.mesh) : { ...meshHost, pairing: { ...(meshHost.pairing || {}), status: 'paired', tokenId: hostResult.tokenId || tokenId } },
+                        hostResult,
+                        manualPairing: {
+                            status: 'paired',
+                            joinImplemented: true,
+                            protocol: 'standalone_command_direct_v1',
+                            description: 'Mesh Host accepted the join and local member pairing status was marked paired. P2P runtime signaling remains outside this slice.',
+                        },
+                    };
+                } catch (e: any) {
+                    return { success: false, code: 'mesh_host_join_failed', meshId, meshHost, error: e.message };
                 }
             }
 
@@ -2922,6 +3146,8 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const taskId = typeof args?.taskId === 'string' ? args.taskId.trim() : '';
                 if (!meshId || !taskId) return { success: false, error: 'meshId and taskId required' };
+                const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue cancellation');
+                if (ownerFailure) return ownerFailure;
                 try {
                     const { cancelTask } = await import('../mesh/mesh-work-queue.js');
                     const reason = typeof args?.reason === 'string' ? args.reason : undefined;
@@ -2937,6 +3163,8 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const taskId = typeof args?.taskId === 'string' ? args.taskId.trim() : '';
                 if (!meshId || !taskId) return { success: false, error: 'meshId and taskId required' };
+                const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue requeue');
+                if (ownerFailure) return ownerFailure;
                 try {
                     const { requeueTask } = await import('../mesh/mesh-work-queue.js');
                     const task = requeueTask(meshId, taskId, {
@@ -2958,6 +3186,8 @@ export class DaemonCommandRouter {
                 const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
                 if (!workspace) return { success: false, error: 'workspace required' };
+                const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node addition');
+                if (ownerFailure) return ownerFailure;
                 try {
                     const { addNode } = await import('../config/mesh-config.js');
                     const providerPriority = Array.isArray(args?.providerPriority)
@@ -2981,6 +3211,8 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+                const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node update');
+                if (ownerFailure) return ownerFailure;
                 try {
                     const { updateNode } = await import('../config/mesh-config.js');
                     const policy = args?.policy && typeof args.policy === 'object' && !Array.isArray(args.policy)
@@ -3009,6 +3241,8 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+                const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node removal');
+                if (ownerFailure) return ownerFailure;
                 try {
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
                     const mesh = meshRecord?.mesh;
@@ -3392,6 +3626,8 @@ export class DaemonCommandRouter {
                 if (!meshId) return { success: false, error: 'meshId required' };
                 if (!sourceNodeId) return { success: false, error: 'sourceNodeId required' };
                 if (!branch) return { success: false, error: 'branch required' };
+                const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'worktree clone');
+                if (ownerFailure) return ownerFailure;
 
                 try {
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
@@ -3482,6 +3718,8 @@ export class DaemonCommandRouter {
             case 'trigger_mesh_queue': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
+                const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue trigger');
+                if (ownerFailure) return ownerFailure;
                 try {
                     const { triggerMeshQueue } = await import('../mesh/mesh-events.js');
                     if (meshId) {

@@ -30,7 +30,7 @@ export function resolveMeshHostStatus(mesh: unknown): RepoMeshHostStatus {
     if (hostNodeId) normalized.hostNodeId = hostNodeId;
     if (hostAddress) normalized.hostAddress = hostAddress;
     if (pairing) {
-        const status = pairing.status === 'pairing' || pairing.status === 'paired' || pairing.status === 'revoked'
+        const status = pairing.status === 'pairing' || pairing.status === 'paired' || pairing.status === 'rejected' || pairing.status === 'revoked'
             ? pairing.status
             : 'not_configured';
         normalized.pairing = {
@@ -38,6 +38,8 @@ export function resolveMeshHostStatus(mesh: unknown): RepoMeshHostStatus {
             ...(readString(pairing.tokenId) ? { tokenId: readString(pairing.tokenId) } : {}),
             ...(readString(pairing.joinedAt) ? { joinedAt: readString(pairing.joinedAt) } : {}),
             ...(readString(pairing.lastPairedAt) ? { lastPairedAt: readString(pairing.lastPairedAt) } : {}),
+            ...(readString(pairing.lastRejectedAt) ? { lastRejectedAt: readString(pairing.lastRejectedAt) } : {}),
+            ...(readString(pairing.expiresAt) ? { expiresAt: readString(pairing.expiresAt) } : {}),
         };
     }
     return normalized;

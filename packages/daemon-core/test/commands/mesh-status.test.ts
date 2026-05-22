@@ -121,8 +121,118 @@ describe('mesh_status', () => {
       expect(fetched.meshHost.pairing.tokenId).toBe(configured.meshHost.pairing.tokenId)
       expect(fetched.manualPairing).toEqual(expect.objectContaining({
         status: 'pairing',
-        joinImplemented: false,
+        joinImplemented: true,
+        protocol: 'standalone_command_direct_v1',
       }))
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await rm(configDir, { recursive: true, force: true })
+    }
+  })
+
+
+  it('applies a member join to a host mesh via command dispatch and persists paired status without raw token', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-host-join-'))
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh, createMeshHostPairingToken, addNode, configureMeshHostPairing, getMesh } = await import('../../src/config/mesh-config.js')
+      const hostMesh = createMesh({ name: 'Host Mesh', repoIdentity: 'github.com/acme/repo' })
+      const memberMesh = createMesh({ name: 'Member Mesh', repoIdentity: 'github.com/acme/repo-member' })
+      const hostToken = createMeshHostPairingToken(hostMesh.id, { token: 'join-token-secret' })
+      expect(hostToken?.tokenId).toMatch(/^tok_[a-f0-9]{16}$/)
+      addNode(memberMesh.id, { workspace: '/tmp/member-workspace', daemonId: 'daemon-member', role: 'member', policy: { providerPriority: ['hermes-cli'] } })
+      configureMeshHostPairing(memberMesh.id, { hostAddress: 'http://127.0.0.1:3847', token: 'join-token-secret' })
+
+      let routerRef: any
+      const created = createRouter({
+        dispatchMeshCommand: vi.fn(async (_daemonId: string, command: string, payload: Record<string, unknown>) => routerRef.execute(command, payload)),
+      })
+      routerRef = created.router
+      const { router } = created
+
+      const joined = await router.execute('join_mesh_host_pairing', {
+        meshId: memberMesh.id,
+        hostMeshId: hostMesh.id,
+        hostDaemonId: 'daemon-host',
+        token: 'join-token-secret',
+      }) as any
+
+      expect(joined.success).toBe(true)
+      expect(joined.code).toBe('mesh_host_join_applied')
+      expect(joined.transport).toBe('mesh_command_dispatch')
+      expect(joined.meshHost).toEqual(expect.objectContaining({
+        role: 'member',
+        pairing: expect.objectContaining({ status: 'paired', tokenId: hostToken?.tokenId }),
+      }))
+      const persistedMember = getMesh(memberMesh.id)
+      expect(persistedMember?.meshHost?.pairing?.status).toBe('paired')
+      const persistedHost = getMesh(hostMesh.id)
+      expect(persistedHost?.meshHost?.role).toBe('host')
+      expect(persistedHost?.nodes).toHaveLength(1)
+      expect(persistedHost?.nodes[0]).toEqual(expect.objectContaining({
+        workspace: '/tmp/member-workspace',
+        daemonId: 'daemon-member',
+        role: 'member',
+      }))
+      const rawConfig = await readFile(join(configDir, 'meshes.json'), 'utf8')
+      expect(rawConfig).not.toContain('join-token-secret')
+
+      const reloadedRouter = createRouter().router
+      const fetched = await reloadedRouter.execute('get_mesh_host_pairing', { meshId: memberMesh.id }) as any
+      expect(fetched.meshHost.pairing.status).toBe('paired')
+      const status = await reloadedRouter.execute('mesh_status', { meshId: memberMesh.id }) as any
+      expect(status.success).toBe(true)
+      expect(status.meshHost).toEqual(expect.objectContaining({
+        role: 'member',
+        pairing: expect.objectContaining({ status: 'paired' }),
+      }))
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await rm(configDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects invalid join tokens and keeps member daemons from mutating the host-owned queue', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-host-join-invalid-'))
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh, createMeshHostPairingToken, addNode, configureMeshHostPairing, getMesh } = await import('../../src/config/mesh-config.js')
+      const hostMesh = createMesh({ name: 'Host Mesh', repoIdentity: 'github.com/acme/repo' })
+      const memberMesh = createMesh({ name: 'Member Mesh', repoIdentity: 'github.com/acme/repo-member' })
+      createMeshHostPairingToken(hostMesh.id, { token: 'good-token' })
+      addNode(memberMesh.id, { workspace: '/tmp/member-workspace', daemonId: 'daemon-member', role: 'member' })
+      configureMeshHostPairing(memberMesh.id, { hostAddress: 'http://127.0.0.1:3847', token: 'bad-token' })
+
+      let routerRef: any
+      const created = createRouter({
+        dispatchMeshCommand: vi.fn(async (_daemonId: string, command: string, payload: Record<string, unknown>) => routerRef.execute(command, payload)),
+      })
+      routerRef = created.router
+      const { router } = created
+
+      const rejected = await router.execute('join_mesh_host_pairing', {
+        meshId: memberMesh.id,
+        hostMeshId: hostMesh.id,
+        hostDaemonId: 'daemon-host',
+        token: 'bad-token',
+      }) as any
+      expect(rejected.success).toBe(false)
+      expect(rejected.code).toBe('mesh_host_join_rejected')
+      expect(getMesh(hostMesh.id)?.nodes).toHaveLength(0)
+
+      const guarded = await router.execute('cancel_mesh_queue_task', {
+        meshId: memberMesh.id,
+        taskId: 'task_missing',
+      }) as any
+      expect(guarded.success).toBe(false)
+      expect(guarded.code).toBe('mesh_host_required')
+      expect(guarded.meshHost).toEqual(expect.objectContaining({ role: 'member', canOwnQueue: false }))
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir

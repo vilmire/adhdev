@@ -67,7 +67,7 @@ interface MeshHostMetadata {
     canOwnCoordinator?: boolean
     canOwnQueue?: boolean
     pairing?: {
-        status?: 'not_configured' | 'pairing' | 'paired' | 'revoked' | string
+        status?: 'not_configured' | 'pairing' | 'paired' | 'rejected' | 'revoked' | string
         tokenId?: string
         joinedAt?: string
         lastPairedAt?: string
@@ -83,6 +83,7 @@ interface MeshHostPairingStatus {
     manualPairing?: {
         status?: string
         joinImplemented?: boolean
+        protocol?: string
         description?: string
     }
     error?: string
@@ -267,6 +268,7 @@ export default function RepoMesh() {
     const [hostPairing, setHostPairing] = useState<MeshHostPairingStatus | null>(null)
     const [hostPairingLoading, setHostPairingLoading] = useState(false)
     const [hostPairingSaving, setHostPairingSaving] = useState(false)
+    const [hostPairingJoining, setHostPairingJoining] = useState(false)
     const [hostAddressDraft, setHostAddressDraft] = useState('')
     const [hostTokenDraft, setHostTokenDraft] = useState('')
 
@@ -511,7 +513,8 @@ export default function RepoMesh() {
             if (res?.success) {
                 setHostPairing(res)
                 setHostAddressDraft(res.hostAddress || res.meshHost?.hostAddress || hostAddressDraft.trim())
-                setHostTokenDraft('')
+                // Keep the in-memory password field so the user can click Apply join immediately.
+                // The daemon persists only tokenId; raw token is never written to meshes.json.
                 await loadMeshes()
             } else {
                 setHostPairing({ success: false, error: res?.error || 'Failed to save Mesh Host pairing' })
@@ -520,6 +523,31 @@ export default function RepoMesh() {
             setHostPairing({ success: false, error: e?.message || 'Failed to save Mesh Host pairing' })
         } finally {
             setHostPairingSaving(false)
+        }
+    }
+
+
+    async function handleApplyHostPairing() {
+        if (!daemonId || !selectedMeshId || !hostTokenDraft.trim()) return
+        setHostPairingJoining(true)
+        try {
+            const res: any = await sendCommand(daemonId, 'join_mesh_host_pairing', {
+                meshId: selectedMeshId,
+                token: hostTokenDraft.trim(),
+            })
+            if (res?.success) {
+                setHostPairing(res)
+                setHostTokenDraft('')
+                await loadMeshes()
+                await loadHostPairing(selectedMeshId)
+                await loadMeshGraph()
+            } else {
+                setHostPairing({ success: false, meshHost: res?.meshHost, manualPairing: res?.manualPairing, error: res?.error || 'Failed to apply Mesh Host join' })
+            }
+        } catch (e: any) {
+            setHostPairing({ success: false, error: e?.message || 'Failed to apply Mesh Host join' })
+        } finally {
+            setHostPairingJoining(false)
         }
     }
 
@@ -637,7 +665,7 @@ export default function RepoMesh() {
     const policy = readMeshPolicy(selectedMesh)
     const meshHost = hostPairing?.meshHost || selectedMesh.meshHost || {}
     const pairingStatus = hostPairing?.manualPairing?.status || meshHost.pairing?.status || 'not_configured'
-    const rawPairingDescription = hostPairing?.manualPairing?.description || 'Manual address/token config is saved locally; join/signaling remains pending in this slice.'
+    const rawPairingDescription = hostPairing?.manualPairing?.description || 'Manual address/token config is saved locally; Apply join sends the token once to the Mesh Host command endpoint. P2P runtime signaling remains outside this slice.'
     return (
         <AppPage
             icon={<IconMesh />}
@@ -654,7 +682,7 @@ export default function RepoMesh() {
 
             <Section
                 title="Mesh Host pairing"
-                description="Standalone manual pairing skeleton. Enter another daemon's Mesh Host address/token to save local config; host join/signaling is pending."
+                description="Standalone manual pairing. Save a Mesh Host address/token, apply the join to the host command endpoint, then check persisted status."
             >
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,420px)]">
                     <div className="rounded-xl border border-border-subtle bg-bg-secondary p-4 text-sm">
@@ -689,7 +717,7 @@ export default function RepoMesh() {
                                 value={hostAddressDraft}
                                 onChange={event => setHostAddressDraft(event.target.value)}
                                 placeholder="http://127.0.0.1:3847"
-                                disabled={hostPairingSaving}
+                                disabled={hostPairingSaving || hostPairingJoining}
                             />
                         </FormField>
                         <FormField label="Pairing token" hint="The raw token is used once to derive a local token id; it is not displayed after save.">
@@ -698,7 +726,7 @@ export default function RepoMesh() {
                                 onChange={event => setHostTokenDraft(event.target.value)}
                                 placeholder="paste Mesh Host pairing token"
                                 type="password"
-                                disabled={hostPairingSaving}
+                                disabled={hostPairingSaving || hostPairingJoining}
                             />
                         </FormField>
                         <div className="mt-3 flex flex-wrap gap-2">
@@ -706,15 +734,23 @@ export default function RepoMesh() {
                                 type="button"
                                 className="btn btn-primary btn-sm"
                                 onClick={handleSaveHostPairing}
-                                disabled={hostPairingSaving || !hostAddressDraft.trim() || !hostTokenDraft.trim()}
+                                disabled={hostPairingSaving || hostPairingJoining || !hostAddressDraft.trim() || !hostTokenDraft.trim()}
                             >
                                 {hostPairingSaving ? 'Saving...' : 'Save manual pairing'}
                             </button>
                             <button
                                 type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={handleApplyHostPairing}
+                                disabled={hostPairingJoining || hostPairingSaving || !hostTokenDraft.trim()}
+                            >
+                                {hostPairingJoining ? 'Applying...' : 'Apply join'}
+                            </button>
+                            <button
+                                type="button"
                                 className="btn btn-secondary btn-sm"
                                 onClick={() => loadHostPairing(selectedMeshId)}
-                                disabled={hostPairingLoading || hostPairingSaving}
+                                disabled={hostPairingLoading || hostPairingSaving || hostPairingJoining}
                             >
                                 {hostPairingLoading ? 'Checking...' : 'Check saved config'}
                             </button>

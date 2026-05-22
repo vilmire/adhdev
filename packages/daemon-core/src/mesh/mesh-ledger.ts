@@ -31,6 +31,7 @@ export type MeshLedgerKind =
     | 'session_stopped'
     | 'checkpoint_created'
     | 'node_cloned'
+    | 'node_joined'
     | 'node_removed'
     | 'coordinator_started'
     | 'recovery_attempted'

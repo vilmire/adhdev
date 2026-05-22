@@ -8,7 +8,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { getConfigDir } from './config.js';
 import type {
     LocalMeshConfig,
@@ -196,8 +196,32 @@ function normalizeManualHostAddress(hostAddress: string): string {
     return normalized;
 }
 
-function tokenIdForManualPairing(token: string): string {
+export function tokenIdForManualPairing(token: string): string {
     return `tok_${createHash('sha256').update(token).digest('hex').slice(0, 16)}`;
+}
+
+function normalizeTokenExpiry(value: unknown): string | undefined {
+    if (typeof value !== 'string' || !value.trim()) return undefined;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) throw new Error('expiresAt must be a valid ISO date');
+    return date.toISOString();
+}
+
+function assertPairingTokenValid(pairing: RepoMeshHostMetadata['pairing'], rawToken: string, nowIso: string): { ok: true; tokenId: string } | { ok: false; reason: string; expectedTokenId?: string; presentedTokenId?: string } {
+    const token = rawToken.trim();
+    if (!token) return { ok: false, reason: 'token required' };
+    const presentedTokenId = tokenIdForManualPairing(token);
+    const expectedTokenId = pairing?.tokenId;
+    if (!expectedTokenId || pairing?.status === 'not_configured' || pairing?.status === 'revoked') {
+        return { ok: false, reason: 'host pairing token is not configured', presentedTokenId };
+    }
+    if (pairing.expiresAt && new Date(pairing.expiresAt).getTime() <= new Date(nowIso).getTime()) {
+        return { ok: false, reason: 'host pairing token expired', expectedTokenId, presentedTokenId };
+    }
+    if (presentedTokenId !== expectedTokenId) {
+        return { ok: false, reason: 'invalid pairing token', expectedTokenId, presentedTokenId };
+    }
+    return { ok: true, tokenId: presentedTokenId };
 }
 
 export interface ConfigureMeshHostPairingOptions {
@@ -235,6 +259,160 @@ export function configureMeshHostPairing(
     mesh.updatedAt = now;
     saveMeshConfig(config);
     return { mesh, meshHost, hostAddress };
+}
+
+export interface CreateMeshHostPairingTokenOptions {
+    token?: string;
+    expiresAt?: string;
+    now?: string;
+}
+
+export function createMeshHostPairingToken(
+    meshId: string,
+    opts: CreateMeshHostPairingTokenOptions = {},
+): { mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata; token: string; tokenId: string; expiresAt?: string } | undefined {
+    const config = loadMeshConfig();
+    const mesh = config.meshes.find(m => m.id === meshId);
+    if (!mesh) return undefined;
+    const now = opts.now || new Date().toISOString();
+    const token = (opts.token || `mhj_${randomBytes(24).toString('base64url')}`).trim();
+    if (!token) throw new Error('token required');
+    const tokenId = tokenIdForManualPairing(token);
+    const expiresAt = normalizeTokenExpiry(opts.expiresAt);
+    const previous = mesh.meshHost || createDefaultMeshHostMetadata();
+    if (previous.role === 'member') {
+        throw new Error('Mesh Host daemon required to create host pairing tokens; member daemons cannot mint host join tokens.');
+    }
+    const meshHost: RepoMeshHostMetadata = {
+        ...previous,
+        role: 'host',
+        pairing: {
+            status: 'pairing',
+            tokenId,
+            lastPairedAt: now,
+            ...(expiresAt ? { expiresAt } : {}),
+        },
+    };
+    mesh.meshHost = meshHost;
+    mesh.updatedAt = now;
+    saveMeshConfig(config);
+    return { mesh, meshHost, token, tokenId, ...(expiresAt ? { expiresAt } : {}) };
+}
+
+export interface MeshHostJoinMemberNodeInput {
+    id?: string;
+    workspace: string;
+    repoRoot?: string;
+    daemonId?: string;
+    machineId?: string;
+    userOverrides?: Partial<RepoMeshNodeCapabilities>;
+    policy?: RepoMeshNodePolicy;
+    role?: RepoMeshDaemonRole;
+}
+
+export interface ApplyMeshHostJoinOptions {
+    token: string;
+    memberNode: MeshHostJoinMemberNodeInput;
+    memberMeshId?: string;
+    now?: string;
+}
+
+export function applyMeshHostJoinRequest(
+    meshId: string,
+    opts: ApplyMeshHostJoinOptions,
+): { accepted: true; mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata; node: LocalMeshNodeEntry; tokenId: string } | { accepted: false; mesh?: LocalMeshEntry; meshHost?: RepoMeshHostMetadata; tokenId?: string; reason: string } | undefined {
+    const config = loadMeshConfig();
+    const mesh = config.meshes.find(m => m.id === meshId);
+    if (!mesh) return undefined;
+    const now = opts.now || new Date().toISOString();
+    const previous = mesh.meshHost || createDefaultMeshHostMetadata();
+    if (previous.role === 'member') {
+        return { accepted: false, mesh, meshHost: previous, reason: 'Mesh Host daemon required to accept join requests' };
+    }
+    const meshHost: RepoMeshHostMetadata = { ...previous, role: 'host' };
+    const validation = assertPairingTokenValid(meshHost.pairing, opts.token, now);
+    if (!validation.ok) {
+        mesh.meshHost = {
+            ...meshHost,
+            pairing: {
+                ...(meshHost.pairing || { status: 'not_configured' as const }),
+                status: 'rejected',
+                lastRejectedAt: now,
+            },
+        };
+        mesh.updatedAt = now;
+        saveMeshConfig(config);
+        return { accepted: false, mesh, meshHost: mesh.meshHost, tokenId: validation.presentedTokenId, reason: validation.reason };
+    }
+
+    const workspace = opts.memberNode.workspace.trim();
+    if (!workspace) throw new Error('memberNode.workspace required');
+    const memberId = opts.memberNode.id?.trim();
+    let node = mesh.nodes.find(n => (memberId && n.id === memberId) || n.workspace === workspace);
+    if (node) {
+        node.workspace = workspace;
+        node.repoRoot = opts.memberNode.repoRoot;
+        node.daemonId = opts.memberNode.daemonId;
+        node.machineId = opts.memberNode.machineId;
+        node.userOverrides = opts.memberNode.userOverrides || node.userOverrides || {};
+        node.policy = { ...(node.policy || {}), ...(opts.memberNode.policy || {}) };
+        node.role = 'member';
+    } else {
+        if (mesh.nodes.length >= 10) throw new Error('Maximum 10 nodes per mesh');
+        node = {
+            id: memberId || `node_${randomUUID().replace(/-/g, '')}`,
+            workspace,
+            repoRoot: opts.memberNode.repoRoot,
+            daemonId: opts.memberNode.daemonId,
+            machineId: opts.memberNode.machineId,
+            userOverrides: opts.memberNode.userOverrides || {},
+            policy: opts.memberNode.policy || {},
+            role: 'member',
+        };
+        mesh.nodes.push(node);
+    }
+    mesh.meshHost = {
+        ...meshHost,
+        pairing: {
+            ...(meshHost.pairing || {}),
+            status: 'paired',
+            tokenId: validation.tokenId,
+            joinedAt: now,
+            lastPairedAt: meshHost.pairing?.lastPairedAt || now,
+            ...(meshHost.pairing?.expiresAt ? { expiresAt: meshHost.pairing.expiresAt } : {}),
+        },
+    };
+    mesh.updatedAt = now;
+    saveMeshConfig(config);
+    return { accepted: true, mesh, meshHost: mesh.meshHost, node, tokenId: validation.tokenId };
+}
+
+export function markMeshHostPairingJoined(
+    meshId: string,
+    opts: { hostDaemonId?: string; hostNodeId?: string; joinedAt?: string; token?: string; tokenId?: string },
+): { mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata } | undefined {
+    const config = loadMeshConfig();
+    const mesh = config.meshes.find(m => m.id === meshId);
+    if (!mesh) return undefined;
+    const now = opts.joinedAt || new Date().toISOString();
+    const previous = mesh.meshHost || createDefaultMeshHostMetadata();
+    const tokenId = opts.tokenId || (opts.token ? tokenIdForManualPairing(opts.token) : previous.pairing?.tokenId);
+    mesh.meshHost = {
+        ...previous,
+        role: 'member',
+        ...(opts.hostDaemonId ? { hostDaemonId: opts.hostDaemonId } : {}),
+        ...(opts.hostNodeId ? { hostNodeId: opts.hostNodeId } : {}),
+        pairing: {
+            ...(previous.pairing || {}),
+            status: 'paired',
+            ...(tokenId ? { tokenId } : {}),
+            joinedAt: now,
+            lastPairedAt: previous.pairing?.lastPairedAt || now,
+        },
+    };
+    mesh.updatedAt = now;
+    saveMeshConfig(config);
+    return { mesh, meshHost: mesh.meshHost };
 }
 
 // ─── Node Operations ────────────────────────────

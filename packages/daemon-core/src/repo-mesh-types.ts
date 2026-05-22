@@ -32,10 +32,12 @@ export interface RepoMesh {
 export type RepoMeshDaemonRole = 'host' | 'member';
 
 export interface RepoMeshHostPairingMetadata {
-    status: 'not_configured' | 'pairing' | 'paired' | 'revoked';
+    status: 'not_configured' | 'pairing' | 'paired' | 'rejected' | 'revoked';
     tokenId?: string;
     joinedAt?: string;
     lastPairedAt?: string;
+    lastRejectedAt?: string;
+    expiresAt?: string;
 }
 
 export interface RepoMeshHostMetadata {
