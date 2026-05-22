@@ -40,6 +40,15 @@ import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } f
 import { buildSessionEntries } from '../status/builders.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
+import {
+    MESH_REFINE_CONFIG_LOCATIONS,
+    MESH_REFINE_CONFIG_SCHEMA,
+    loadMeshRefineConfig,
+    resolveMeshRefineValidationPlan,
+    suggestMeshRefineConfig,
+    validateMeshRefineConfig,
+    type MeshRefineValidationCommandPlan,
+} from '../mesh/refine-config.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
@@ -860,13 +869,7 @@ async function resolveProviderTypeFromPriority(args: {
 }
 type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
 type MeshRefineValidationStatus = 'passed' | 'failed' | 'skipped';
-type MeshRefineValidationCommand = {
-    command: string;
-    args: string[];
-    displayCommand: string;
-    category: string;
-    source: string;
-};
+type MeshRefineValidationCommand = MeshRefineValidationCommandPlan;
 
 type MeshRefineValidationSummary = {
     status: MeshRefineValidationStatus;
@@ -876,6 +879,10 @@ type MeshRefineValidationSummary = {
     skippedReason?: string;
     timeoutMs: number;
     outputLimitBytes: number;
+    configSource?: string;
+    configSourceType?: string;
+    suggestions?: unknown[];
+    suggestedConfig?: unknown;
 };
 
 type MeshRefineStageStatus = 'passed' | 'failed' | 'skipped';
@@ -997,171 +1004,25 @@ async function runMeshRefinePatchEquivalenceGate(
     }
 }
 
-function readPackageScripts(workspace: string): Record<string, string> {
-    try {
-        const packageJsonPath = pathJoin(workspace, 'package.json');
-        const parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-        return parsed?.scripts && typeof parsed.scripts === 'object' && !Array.isArray(parsed.scripts)
-            ? parsed.scripts as Record<string, string>
-            : {};
-    } catch {
-        return {};
-    }
-}
-
-function tokenizeValidationCommand(command: string): string[] | null {
-    const trimmed = command.trim();
-    if (!trimmed) return null;
-    // Fail closed: the gate never hands shell syntax to a shell. Package-manager
-    // scripts are invoked via execFile(binary, args), and metacharacters/quotes are
-    // rejected before tokenization so `npm run test && rm -rf` cannot be smuggled in.
-    if (/[;&|<>`$\\\n\r'\"]/.test(trimmed)) return null;
-    const tokens = trimmed.split(/\s+/).filter(Boolean);
-    if (!tokens.length) return null;
-    if (tokens.some(token => !/^[A-Za-z0-9_@./:=+-]+$/.test(token))) return null;
-    return tokens;
-}
-
-function scriptMatchesValidationCategory(scriptName: string, category: string): boolean {
-    return scriptName === category || scriptName.startsWith(`${category}:`);
-}
-
-function parsePackageManagerValidationCommand(
-    rawCommand: string,
-    category: string,
-    scripts: Record<string, string>,
-    source: string,
-): { command?: MeshRefineValidationCommand; rejected?: Record<string, unknown> } {
-    const tokens = tokenizeValidationCommand(rawCommand);
-    if (!tokens) {
-        return { rejected: { command: rawCommand, category, source, reason: 'unsafe command string is not allowlisted' } };
-    }
-
-    const [binary, second, third, ...rest] = tokens;
-    let scriptName = '';
-    let command = binary;
-    let args: string[] = [];
-
-    if ((binary === 'npm' || binary === 'pnpm' || binary === 'bun') && second === 'run' && third) {
-        scriptName = third;
-        args = ['run', scriptName, ...rest];
-    } else if (binary === 'npm' && second === 'test' && !third) {
-        scriptName = 'test';
-        args = ['test'];
-    } else if (binary === 'yarn' && second === 'run' && third) {
-        scriptName = third;
-        args = ['run', scriptName, ...rest];
-    } else if (binary === 'yarn' && second && !third) {
-        scriptName = second;
-        args = [scriptName];
-    } else {
-        return { rejected: { command: rawCommand, category, source, reason: 'command is not a supported package-manager script invocation' } };
-    }
-
-    if (!scriptName || !Object.prototype.hasOwnProperty.call(scripts, scriptName)) {
-        return { rejected: { command: rawCommand, category, source, script: scriptName, reason: 'script is not declared in package.json' } };
-    }
-    if (!scriptMatchesValidationCategory(scriptName, category)) {
-        return { rejected: { command: rawCommand, category, source, script: scriptName, reason: 'script name is outside the validation category allowlist' } };
-    }
-
+function buildMeshRefineValidationPlan(mesh: any, workspace: string): Record<string, unknown> {
+    const plan = resolveMeshRefineValidationPlan(mesh, workspace);
     return {
-        command: {
-            command,
-            args,
-            displayCommand: [command, ...args].join(' '),
-            category,
-            source,
-        },
-    };
-}
-
-function collectProjectContextValidationCandidates(mesh: any): Array<{ command: string; category: string; source: string; confidence?: string }> {
-    const commands = mesh?.projectContext?.commands;
-    if (!commands || typeof commands !== 'object' || Array.isArray(commands)) return [];
-    const candidates: Array<{ command: string; category: string; source: string; confidence?: string }> = [];
-    for (const category of REFINE_VALIDATION_CATEGORIES) {
-        const entries = Array.isArray(commands[category]) ? commands[category] : [];
-        for (const entry of entries) {
-            if (typeof entry?.command !== 'string') continue;
-            candidates.push({
-                command: entry.command,
-                category,
-                source: typeof entry.sourcePath === 'string' ? entry.sourcePath : 'projectContext.commands',
-                confidence: typeof entry.confidence === 'string' ? entry.confidence : undefined,
-            });
-        }
-    }
-    return candidates.sort((a, b) => {
-        const rank = (value?: string) => value === 'high' ? 0 : value === 'medium' ? 1 : 2;
-        return rank(a.confidence) - rank(b.confidence);
-    });
-}
-
-function collectPolicyValidationCandidates(mesh: any): Array<{ command: string; category: string; source: string }> {
-    const policy = mesh?.policy && typeof mesh.policy === 'object' && !Array.isArray(mesh.policy) ? mesh.policy : {};
-    const configured = Array.isArray(policy.validationCommands)
-        ? policy.validationCommands
-        : Array.isArray(policy.validationGate?.commands)
-            ? policy.validationGate.commands
-            : [];
-    return configured
-        .map((entry: any) => typeof entry === 'string' ? { command: entry, category: '', source: 'mesh.policy.validationCommands' } : entry)
-        .filter((entry: any) => entry && typeof entry.command === 'string')
-        .map((entry: any) => {
-            const commandText = entry.command.trim();
-            const category = REFINE_VALIDATION_CATEGORIES.find(cat => commandText.includes(` ${cat}`)) ?? '';
-            return { command: commandText, category, source: 'mesh.policy.validationCommands' };
-        })
-        .filter((entry: any) => !!entry.category);
-}
-
-function selectMeshRefineValidationCommands(mesh: any, workspace: string): { commands: MeshRefineValidationCommand[]; rejectedCommands: Array<Record<string, unknown>>; source: string } {
-    const scripts = readPackageScripts(workspace);
-    const rejectedCommands: Array<Record<string, unknown>> = [];
-    const selected: MeshRefineValidationCommand[] = [];
-    const seen = new Set<string>();
-    const candidates = [
-        ...collectPolicyValidationCandidates(mesh),
-        ...collectProjectContextValidationCandidates(mesh),
-    ];
-
-    for (const candidate of candidates) {
-        const parsed = parsePackageManagerValidationCommand(candidate.command, candidate.category, scripts, candidate.source);
-        if (parsed.rejected) {
-            rejectedCommands.push(parsed.rejected);
-            continue;
-        }
-        if (!parsed.command || seen.has(parsed.command.displayCommand)) continue;
-        selected.push(parsed.command);
-        seen.add(parsed.command.displayCommand);
-        if (selected.length >= REFINE_VALIDATION_MAX_COMMANDS) break;
-    }
-
-    if (!selected.length && candidates.length === 0) {
-        for (const category of REFINE_VALIDATION_CATEGORIES) {
-            if (!Object.prototype.hasOwnProperty.call(scripts, category)) continue;
-            const fallback = parsePackageManagerValidationCommand(`npm run ${category}`, category, scripts, 'package.json:scripts');
-            if (fallback.command && !seen.has(fallback.command.displayCommand)) {
-                selected.push(fallback.command);
-                seen.add(fallback.command.displayCommand);
-            } else if (fallback.rejected) {
-                rejectedCommands.push(fallback.rejected);
-            }
-            if (selected.length >= 2) break;
-        }
-    }
-
-    return {
-        commands: selected,
-        rejectedCommands,
-        source: selected.some(command => command.source === 'mesh.policy.validationCommands')
-            ? 'mesh_policy'
-            : selected.some(command => command.source !== 'package.json:scripts')
-                ? 'project_context'
-                : selected.length
-                    ? 'package_json_scripts'
-                    : 'unavailable',
+        source: plan.source,
+        sourceType: plan.sourceType,
+        commands: plan.commands.map(command => ({
+            displayCommand: command.displayCommand,
+            category: command.category,
+            source: command.source,
+            cwd: command.cwd,
+            timeoutMs: command.timeoutMs,
+        })),
+        unavailableReason: plan.unavailableReason,
+        rejectedCommands: plan.rejectedCommands,
+        suggestions: plan.suggestions,
+        suggestedConfig: plan.suggestedConfig,
+        note: plan.sourceType === 'unavailable'
+            ? 'No validation command will be executed until a repo mesh/refine config is provided. Heuristics are suggestions only.'
+            : 'Validation commands are resolved from repo mesh/refine config; heuristics are suggestions only.',
     };
 }
 
@@ -1169,7 +1030,7 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
     const execFileAsync = promisify(execFile);
-    const selection = selectMeshRefineValidationCommands(mesh, workspace);
+    const selection = resolveMeshRefineValidationPlan(mesh, workspace);
     const summary: MeshRefineValidationSummary = {
         status: 'skipped',
         required: true,
@@ -1178,22 +1039,28 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
         skippedReason: undefined,
         timeoutMs: REFINE_VALIDATION_TIMEOUT_MS,
         outputLimitBytes: REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
+        configSource: selection.source,
+        configSourceType: selection.sourceType,
+        suggestions: selection.suggestions,
+        suggestedConfig: selection.suggestedConfig,
     };
 
     if (!selection.commands.length) {
-        summary.skippedReason = 'validation_unavailable: no allowlisted projectContext, mesh policy, or package.json build/test/typecheck/lint command was available';
+        summary.skippedReason = selection.unavailableReason || 'validation_unavailable: repo mesh/refine config did not provide executable validation.commands';
         return summary;
     }
 
     for (const candidate of selection.commands) {
         const startedAt = Date.now();
+        const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
+        const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
         try {
             const result = await execFileAsync(candidate.command, candidate.args, {
-                cwd: workspace,
+                cwd,
                 encoding: 'utf8',
-                timeout: REFINE_VALIDATION_TIMEOUT_MS,
+                timeout,
                 maxBuffer: REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
-                env: { ...process.env, CI: process.env.CI || '1' },
+                env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
             });
             summary.commandsRun.push({
                 command: candidate.command,
@@ -1201,6 +1068,7 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
                 displayCommand: candidate.displayCommand,
                 category: candidate.category,
                 source: candidate.source,
+                cwd,
                 passed: true,
                 exitCode: 0,
                 durationMs: Date.now() - startedAt,
@@ -1214,6 +1082,7 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
                 displayCommand: candidate.displayCommand,
                 category: candidate.category,
                 source: candidate.source,
+                cwd,
                 passed: false,
                 exitCode: typeof error?.code === 'number' ? error.code : null,
                 signal: typeof error?.signal === 'string' ? error.signal : null,
@@ -3163,6 +3032,57 @@ export class DaemonCommandRouter {
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
+            }
+
+            case 'get_mesh_refine_config_schema': {
+                return {
+                    success: true,
+                    schema: MESH_REFINE_CONFIG_SCHEMA,
+                    locations: MESH_REFINE_CONFIG_LOCATIONS,
+                    sourceOfTruth: 'repo mesh/refine config',
+                    heuristicRole: 'suggestions_only_not_execution_path',
+                };
+            }
+
+            case 'validate_mesh_refine_config': {
+                const workspace = typeof args?.workspace === 'string' ? args.workspace : process.cwd();
+                const mesh = args?.inlineMesh || {};
+                const loaded = args?.config !== undefined
+                    ? { config: args.config, source: 'inline', sourceType: 'mesh_policy' as const }
+                    : loadMeshRefineConfig(mesh, workspace);
+                const validation = loaded.config
+                    ? validateMeshRefineConfig(loaded.config, loaded.source)
+                    : { valid: false, errors: [((loaded as { error?: string }).error) || 'repo mesh/refine config unavailable'], commands: [], rejectedCommands: [] };
+                return { success: validation.valid, ...loaded, ...validation };
+            }
+
+            case 'suggest_mesh_refine_config': {
+                const workspace = typeof args?.workspace === 'string' ? args.workspace : process.cwd();
+                const mesh = args?.inlineMesh || {};
+                return {
+                    success: true,
+                    ...suggestMeshRefineConfig(mesh, workspace),
+                    note: 'Suggestions are heuristic scaffold only; Refinery will not execute them until saved into repo mesh/refine config.',
+                };
+            }
+
+            case 'plan_mesh_refine_node': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+                if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+                const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                const mesh = meshRecord?.mesh;
+                const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
+                return {
+                    success: true,
+                    dryRun: true,
+                    nodeId,
+                    workspace: node.workspace,
+                    validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
+                    mergeWillRun: false,
+                    cleanupWillRun: false,
+                };
             }
 
             case 'refine_mesh_node': {

@@ -5,10 +5,12 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 19 tools: mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
+ * 23 tools: mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *           mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
  *           mesh_read_debug, mesh_launch_session, mesh_git_status, mesh_checkpoint,
  *           mesh_approve, mesh_clone_node, mesh_remove_node, mesh_refine_node,
+ *           mesh_refine_config_schema, mesh_validate_refine_config,
+ *           mesh_suggest_refine_config, mesh_refine_plan,
  *           mesh_cleanup_sessions, mesh_task_history, mesh_reconcile_ledger
  */
 
@@ -1634,6 +1636,47 @@ export const MESH_REFINE_NODE_TOOL = {
     },
 };
 
+export const MESH_REFINE_CONFIG_SCHEMA_TOOL = {
+    name: 'mesh_refine_config_schema',
+    description: 'Return the Repo Mesh Refinery config JSON schema and supported repo-local config locations. This is the validation source of truth; heuristic command detection is suggestions-only.',
+    inputSchema: { type: 'object' as const, properties: {} },
+};
+
+export const MESH_VALIDATE_REFINE_CONFIG_TOOL = {
+    name: 'mesh_validate_refine_config',
+    description: 'Validate the repo mesh/refine config for a node/workspace without running validation commands or merging.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Optional node/workspace whose refine config should be loaded. Defaults to the first mesh node.' },
+            config: { type: 'object', description: 'Optional inline config object to validate instead of loading from the repo.' },
+        },
+    },
+};
+
+export const MESH_SUGGEST_REFINE_CONFIG_TOOL = {
+    name: 'mesh_suggest_refine_config',
+    description: 'Suggest a repo mesh/refine config scaffold from project context/package scripts. Suggestions are never executed until saved as explicit refine config.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Optional node/workspace used for suggestions. Defaults to the first mesh node.' },
+        },
+    },
+};
+
+export const MESH_REFINE_PLAN_TOOL = {
+    name: 'mesh_refine_plan',
+    description: 'Dry-run Refinery plan for a worktree node: reports config source, validation commands, suggestions/unavailable reason, and merge/cleanup intent without executing validation or git merge.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Node ID of the worktree node to plan.' },
+        },
+        required: ['node_id'],
+    },
+};
+
 export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_LIST_NODES_TOOL,
@@ -1651,6 +1694,10 @@ export const ALL_MESH_TOOLS = [
     MESH_CLONE_NODE_TOOL,
     MESH_REMOVE_NODE_TOOL,
     MESH_REFINE_NODE_TOOL,
+    MESH_REFINE_CONFIG_SCHEMA_TOOL,
+    MESH_VALIDATE_REFINE_CONFIG_TOOL,
+    MESH_SUGGEST_REFINE_CONFIG_TOOL,
+    MESH_REFINE_PLAN_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
     MESH_TASK_HISTORY_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
@@ -2828,6 +2875,57 @@ export async function meshRemoveNode(
     } else {
         return JSON.stringify({ error: 'Cloud mesh remove_node requires node daemonId' });
     }
+}
+
+function resolveRefineConfigNode(ctx: MeshContext, nodeId?: string): LocalMeshNodeEntry {
+    if (nodeId) return findNode(ctx.mesh, nodeId);
+    const node = ctx.mesh.nodes.find((entry: LocalMeshNodeEntry) => !!entry.workspace);
+    if (!node) throw new Error('No mesh node with a workspace is available');
+    return node;
+}
+
+export async function meshRefineConfigSchema(ctx: MeshContext): Promise<string> {
+    const node = resolveRefineConfigNode(ctx);
+    const result = await commandForNode(ctx, node, 'get_mesh_refine_config_schema', {});
+    return JSON.stringify(result, null, 2);
+}
+
+export async function meshValidateRefineConfig(
+    ctx: MeshContext,
+    args: { node_id?: string; config?: Record<string, unknown> },
+): Promise<string> {
+    const node = resolveRefineConfigNode(ctx, args.node_id);
+    const result = await commandForNode(ctx, node, 'validate_mesh_refine_config', {
+        workspace: node.workspace,
+        inlineMesh: ctx.mesh,
+        ...(args.config ? { config: args.config } : {}),
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+export async function meshSuggestRefineConfig(
+    ctx: MeshContext,
+    args: { node_id?: string },
+): Promise<string> {
+    const node = resolveRefineConfigNode(ctx, args.node_id);
+    const result = await commandForNode(ctx, node, 'suggest_mesh_refine_config', {
+        workspace: node.workspace,
+        inlineMesh: ctx.mesh,
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+export async function meshRefinePlan(
+    ctx: MeshContext,
+    args: { node_id: string },
+): Promise<string> {
+    const node = await findNodeWithRefresh(ctx, args.node_id);
+    const result = await commandForNode(ctx, node, 'plan_mesh_refine_node', {
+        meshId: ctx.mesh.id,
+        nodeId: args.node_id,
+        inlineMesh: ctx.mesh,
+    });
+    return JSON.stringify(result, null, 2);
 }
 
 export async function meshRefineNode(

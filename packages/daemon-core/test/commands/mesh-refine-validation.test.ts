@@ -45,13 +45,17 @@ function initGitRepo(repo: string) {
 function createMesh(repo: string, worktree: string, nodeId = 'node-worktree', commands: any = {
   test: [{ command: 'npm run test', sourcePath: 'package.json', confidence: 'high' }],
   typecheck: [{ command: 'npm run typecheck', sourcePath: 'package.json', confidence: 'high' }],
-}) {
+}, includeRefineConfig = true) {
+  const refineCommands = ['typecheck', 'test', 'lint', 'build'].flatMap((category: any) => {
+    const entries = commands[category]
+    return Array.isArray(entries) ? entries.map((entry: any) => ({ command: entry.command, category })) : []
+  })
   return {
     id: `mesh-${nodeId}`,
     name: 'Validation Mesh',
     repoIdentity: 'example/repo',
     defaultBranch: 'main',
-    policy: {},
+    policy: includeRefineConfig ? { refineConfig: { version: 1, validation: { required: true, commands: refineCommands } } } : {},
     coordinator: {},
     projectContext: {
       version: 1,
@@ -207,6 +211,64 @@ describe('refine_mesh_node validation gate', () => {
       expect(existsSync(pwned)).toBe(false)
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-injection')).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not execute heuristic package scripts when repo mesh/refine config is missing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-no-config-'))
+    const repo = join(root, 'repo')
+    try {
+      initGitRepo(repo)
+      writeFileSync(join(repo, 'validation.js'), 'console.error("heuristic should not run")\nprocess.exit(9)\n', 'utf-8')
+      execFileSync('git', ['add', 'validation.js'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'make heuristic fail'], { cwd: repo })
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-no-config', {
+        test: [{ command: 'npm run test', sourcePath: 'package.json', confidence: 'high' }],
+      }, false)
+      const router = createRouter()
+
+      const result: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-no-config',
+        inlineMesh: mesh,
+      })
+
+      expect(result).toMatchObject({ success: false, code: 'validation_unavailable', convergenceStatus: 'blocked_review' })
+      expect(result.validationSummary.status).toBe('skipped')
+      expect(result.validationSummary.commandsRun).toEqual([])
+      expect(result.validationSummary.skippedReason).toContain('No repo mesh/refine config found')
+      expect(result.validationSummary.suggestedConfig.validation.commands[0]).toMatchObject({ command: 'npm run test', category: 'test' })
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
+      expect(mesh.nodes.some((node: any) => node.id === 'node-no-config')).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('returns a dry-run refine plan with config source and heuristic suggestions', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-plan-'))
+    const repo = join(root, 'repo')
+    try {
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-plan')
+      const router = createRouter()
+
+      const result: any = await router.execute('plan_mesh_refine_node', {
+        meshId: mesh.id,
+        nodeId: 'node-plan',
+        inlineMesh: mesh,
+      })
+
+      expect(result).toMatchObject({ success: true, dryRun: true, mergeWillRun: false, cleanupWillRun: false })
+      expect(result.validationPlan.source).toBe('mesh.policy.refineConfig')
+      expect(result.validationPlan.sourceType).toBe('mesh_policy')
+      expect(result.validationPlan.commands.map((entry: any) => entry.displayCommand)).toEqual(['npm run typecheck', 'npm run test'])
+      expect(result.validationPlan.note).toContain('heuristics are suggestions only')
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

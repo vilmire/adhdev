@@ -40,7 +40,9 @@ import {
   meshEnqueueTask, meshViewQueue, meshQueueCancel, meshQueueRequeue,
   meshReadDebug,
   meshLaunchSession, meshGitStatus, meshCheckpoint, meshApprove,
-  meshCloneNode, meshRemoveNode, meshRefineNode, meshCleanupSessions, meshTaskHistory, meshReconcileLedger
+  meshCloneNode, meshRemoveNode, meshRefineNode,
+  meshRefineConfigSchema, meshValidateRefineConfig, meshSuggestRefineConfig, meshRefinePlan,
+  meshCleanupSessions, meshTaskHistory, meshReconcileLedger
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 
@@ -252,6 +254,10 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_clone_node': text = await meshCloneNode(meshCtx, a as any); break;
           case 'mesh_remove_node': text = await meshRemoveNode(meshCtx, a as any); break;
           case 'mesh_refine_node': text = await meshRefineNode(meshCtx, a as any); break;
+          case 'mesh_refine_config_schema': text = await meshRefineConfigSchema(meshCtx); break;
+          case 'mesh_validate_refine_config': text = await meshValidateRefineConfig(meshCtx, a as any); break;
+          case 'mesh_suggest_refine_config': text = await meshSuggestRefineConfig(meshCtx, a as any); break;
+          case 'mesh_refine_plan': text = await meshRefinePlan(meshCtx, a as any); break;
           case 'mesh_cleanup_sessions': text = await meshCleanupSessions(meshCtx, a as any); break;
           case 'mesh_task_history': text = await meshTaskHistory(meshCtx, a as any); break;
           case 'mesh_reconcile_ledger': text = await meshReconcileLedger(meshCtx, a as any); break;

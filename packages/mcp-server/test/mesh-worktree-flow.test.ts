@@ -2546,12 +2546,16 @@ test('mesh queue management tools cancel and requeue stale assignments without d
   assert.equal(queue.find(task => task.id === assigned.id)?.status, 'pending');
 });
 
-test('mesh tool registry documents the 19 exposed mesh tools including queue cancel/requeue, read-debug, worktree clone/remove/refine, session cleanup, and reconcile-ledger', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 19);
+test('mesh tool registry documents the 23 exposed mesh tools including queue cancel/requeue, read-debug, worktree clone/remove/refine, refine config planning, session cleanup, and reconcile-ledger', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 23);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_read_debug'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_clone_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_remove_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_node'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_config_schema'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_validate_refine_config'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_refine_config'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_plan'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_cleanup_sessions'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_cancel'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_requeue'));

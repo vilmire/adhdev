@@ -159,6 +159,21 @@ export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './con
 // ── Mesh Coordinator ──
 export { buildCoordinatorSystemPrompt } from './mesh/coordinator-prompt.js';
 export type { CoordinatorPromptContext } from './mesh/coordinator-prompt.js';
+export {
+  MESH_REFINE_CONFIG_LOCATIONS,
+  MESH_REFINE_CONFIG_SCHEMA,
+  loadMeshRefineConfig,
+  resolveMeshRefineValidationPlan,
+  suggestMeshRefineConfig,
+  validateMeshRefineConfig,
+} from './mesh/refine-config.js';
+export type {
+  MeshRefineValidationCategory,
+  MeshRefineValidationCommandPlan,
+  MeshRefineValidationPlan,
+  RepoMeshRefineConfig,
+  RepoMeshRefineValidationCommandConfig,
+} from './mesh/refine-config.js';
 export { syncMeshes } from './mesh/mesh-sync.js';
 export type { MeshSyncTransport, MeshSyncResult, RemoteMeshRecord } from './mesh/mesh-sync.js';
 
