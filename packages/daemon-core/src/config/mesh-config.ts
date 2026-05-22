@@ -8,7 +8,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { getConfigDir } from './config.js';
 import type {
     LocalMeshConfig,
@@ -179,6 +179,62 @@ export function deleteMesh(meshId: string): boolean {
     config.meshes.splice(idx, 1);
     saveMeshConfig(config);
     return true;
+}
+
+function normalizeManualHostAddress(hostAddress: string): string {
+    const normalized = hostAddress.trim().replace(/\/+$/, '');
+    if (!normalized) throw new Error('hostAddress required');
+    let parsed: URL;
+    try {
+        parsed = new URL(normalized);
+    } catch {
+        throw new Error('hostAddress must be a valid http(s) or ws(s) URL');
+    }
+    if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) {
+        throw new Error('hostAddress must use http, https, ws, or wss');
+    }
+    return normalized;
+}
+
+function tokenIdForManualPairing(token: string): string {
+    return `tok_${createHash('sha256').update(token).digest('hex').slice(0, 16)}`;
+}
+
+export interface ConfigureMeshHostPairingOptions {
+    hostAddress: string;
+    token: string;
+    now?: string;
+}
+
+export function configureMeshHostPairing(
+    meshId: string,
+    opts: ConfigureMeshHostPairingOptions,
+): { mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata; hostAddress: string } | undefined {
+    const hostAddress = normalizeManualHostAddress(opts.hostAddress);
+    const token = opts.token.trim();
+    if (!token) throw new Error('token required');
+
+    const config = loadMeshConfig();
+    const mesh = config.meshes.find(m => m.id === meshId);
+    if (!mesh) return undefined;
+
+    const now = opts.now || new Date().toISOString();
+    const previous = mesh.meshHost || createDefaultMeshHostMetadata();
+    const meshHost: RepoMeshHostMetadata = {
+        ...previous,
+        role: 'member',
+        hostAddress,
+        pairing: {
+            status: 'pairing',
+            tokenId: tokenIdForManualPairing(token),
+            lastPairedAt: now,
+        },
+    };
+
+    mesh.meshHost = meshHost;
+    mesh.updatedAt = now;
+    saveMeshConfig(config);
+    return { mesh, meshHost, hostAddress };
 }
 
 // ─── Node Operations ────────────────────────────

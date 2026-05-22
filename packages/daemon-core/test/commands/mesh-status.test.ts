@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -76,6 +76,60 @@ function createRouter(overrides: Record<string, unknown> = {}) {
 }
 
 describe('mesh_status', () => {
+  it('persists standalone manual Mesh Host pairing config without storing the raw token', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-host-pairing-config-'))
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh } = await import('../../src/config/mesh-config.js')
+      const mesh = createMesh({ name: 'Standalone Mesh', repoIdentity: 'github.com/acme/repo' })
+      const { router } = createRouter()
+
+      const configured = await router.execute('configure_mesh_host_pairing', {
+        meshId: mesh.id,
+        hostAddress: ' http://127.0.0.1:3847 ',
+        token: 'join-token-secret',
+      }) as any
+
+      expect(configured).toEqual(expect.objectContaining({
+        success: true,
+        meshId: mesh.id,
+        hostAddress: 'http://127.0.0.1:3847',
+        code: 'mesh_host_pairing_pending',
+      }))
+      expect(configured.meshHost).toEqual(expect.objectContaining({
+        role: 'member',
+        hostAddress: 'http://127.0.0.1:3847',
+        pairing: expect.objectContaining({
+          status: 'pairing',
+          tokenId: expect.stringMatching(/^tok_[a-f0-9]{16}$/),
+        }),
+      }))
+
+      const rawConfig = await readFile(join(configDir, 'meshes.json'), 'utf8')
+      expect(rawConfig).toContain('http://127.0.0.1:3847')
+      expect(rawConfig).not.toContain('join-token-secret')
+
+      const fetched = await router.execute('get_mesh_host_pairing', { meshId: mesh.id }) as any
+      expect(fetched).toEqual(expect.objectContaining({
+        success: true,
+        meshId: mesh.id,
+        hostAddress: 'http://127.0.0.1:3847',
+        code: 'mesh_host_pairing_pending',
+      }))
+      expect(fetched.meshHost.pairing.tokenId).toBe(configured.meshHost.pairing.tokenId)
+      expect(fetched.manualPairing).toEqual(expect.objectContaining({
+        status: 'pairing',
+        joinImplemented: false,
+      }))
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await rm(configDir, { recursive: true, force: true })
+    }
+  })
+
   it('surfaces Mesh Host ownership metadata from inline mesh records', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-host-metadata-')
     try {

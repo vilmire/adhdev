@@ -2915,13 +2915,18 @@ export class DaemonCommandRouter {
                 const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                 const mesh = meshRecord?.mesh;
                 if (!mesh) return { success: false, error: 'Mesh not found' };
+                const meshHost = resolveMeshHostStatus(mesh);
+                const pairingStatus = meshHost.pairing?.status || 'not_configured';
                 return {
                     success: true,
+                    code: pairingStatus === 'not_configured' ? 'mesh_host_pairing_not_configured' : 'mesh_host_pairing_pending',
                     meshId,
-                    meshHost: resolveMeshHostStatus(mesh),
+                    hostAddress: meshHost.hostAddress,
+                    meshHost,
                     manualPairing: {
-                        status: 'skeleton',
-                        description: 'Future standalone member daemons will enter a Mesh Host address/token here; cloud remains a control-plane for easier host setup.',
+                        status: pairingStatus,
+                        joinImplemented: false,
+                        description: 'Standalone can save and retrieve a manual Mesh Host address/token skeleton; join/signaling remains pending in this slice.',
                     },
                 };
             }
@@ -2932,13 +2937,27 @@ export class DaemonCommandRouter {
                 const token = typeof args?.token === 'string' ? args.token.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
                 if (!hostAddress || !token) return { success: false, error: 'hostAddress and token required' };
-                return {
-                    success: false,
-                    code: 'mesh_host_pairing_not_implemented',
-                    meshId,
-                    hostAddress,
-                    error: 'Manual Mesh Host pairing is reserved as a standalone command skeleton; join URL/token signaling is not implemented in this slice.',
-                };
+                try {
+                    const { configureMeshHostPairing } = await import('../config/mesh-config.js');
+                    const configured = configureMeshHostPairing(meshId, { hostAddress, token });
+                    if (!configured) return { success: false, error: 'Mesh not found' };
+                    this.inlineMeshCache.set(meshId, configured.mesh);
+                    const meshHost = resolveMeshHostStatus(configured.mesh);
+                    return {
+                        success: true,
+                        code: 'mesh_host_pairing_pending',
+                        meshId,
+                        hostAddress: configured.hostAddress,
+                        meshHost,
+                        manualPairing: {
+                            status: meshHost.pairing?.status || 'pairing',
+                            joinImplemented: false,
+                            description: 'Manual Mesh Host pairing config was saved locally. Host join/signaling is pending and not implemented in this slice.',
+                        },
+                    };
+                } catch (e: any) {
+                    return { success: false, code: 'mesh_host_pairing_invalid', meshId, hostAddress, error: e.message };
+                }
             }
 
             case 'delete_mesh': {
