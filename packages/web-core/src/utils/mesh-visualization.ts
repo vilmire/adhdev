@@ -279,19 +279,51 @@ function readProvidedBranchConvergence(node: RepoMeshNodeStatus): MeshGraphBranc
     const status = provided.status
     if (!status || !['merged_to_main', 'pushed_feature_branch_needs_merge', 'blocked_review', 'cleanup_candidate', 'not_mergeable'].includes(status)) return null
     const git = node.git
+    const dirty = isDirty(git) || hasDirtySubmodules(git)
+    const hasConflicts = Boolean(git?.hasConflicts) || hasOutOfSyncSubmodules(git)
+    const ahead = git?.ahead ?? 0
+    const behind = git?.behind ?? 0
+    const branch = git?.branch ?? null
+    const upstream = git?.upstream ?? null
+    const upstreamStatus = git?.upstreamStatus ?? null
+    const defaultBranch = provided.defaultBranch ?? null
+    const providedNumberMismatchesGit = (value: unknown, gitValue: number) => typeof value === 'number' && value !== gitValue
+    const providedStringMismatchesGit = (value: unknown, gitValue: string | null) => typeof value === 'string' && gitValue !== null && value !== gitValue
+
+    const staleAgainstCurrentGit = Boolean(git) && (
+        providedStringMismatchesGit(provided.branch, branch)
+        || providedStringMismatchesGit(provided.upstream, upstream)
+        || providedStringMismatchesGit(provided.upstreamStatus, upstreamStatus)
+        || providedNumberMismatchesGit(provided.ahead, ahead)
+        || providedNumberMismatchesGit(provided.behind, behind)
+        || (typeof provided.dirty === 'boolean' && provided.dirty !== dirty)
+        || (typeof provided.hasConflicts === 'boolean' && provided.hasConflicts !== hasConflicts)
+        || (status !== 'merged_to_main'
+            && git?.isGitRepo === true
+            && branch !== null
+            && defaultBranch !== null
+            && branch === defaultBranch
+            && ahead === 0
+            && behind === 0
+            && !dirty
+            && !hasConflicts
+            && (!upstream || !upstreamStatus || upstreamStatus === 'fresh'))
+    )
+    if (staleAgainstCurrentGit) return null
+
     return {
         status: status as MeshGraphBranchConvergenceStatus,
         needsConvergence: provided.needsConvergence ?? status !== 'merged_to_main',
         reason: provided.reason ?? 'provided_by_coordinator',
         nextStep: provided.nextStep ?? null,
-        branch: provided.branch ?? git?.branch ?? null,
-        defaultBranch: provided.defaultBranch ?? null,
-        upstream: provided.upstream ?? git?.upstream ?? null,
-        upstreamStatus: provided.upstreamStatus ?? git?.upstreamStatus ?? null,
-        ahead: provided.ahead ?? git?.ahead ?? 0,
-        behind: provided.behind ?? git?.behind ?? 0,
-        dirty: provided.dirty ?? (isDirty(git) || hasDirtySubmodules(git)),
-        hasConflicts: provided.hasConflicts ?? (Boolean(git?.hasConflicts) || hasOutOfSyncSubmodules(git)),
+        branch: provided.branch ?? branch,
+        defaultBranch,
+        upstream: provided.upstream ?? upstream,
+        upstreamStatus: provided.upstreamStatus ?? upstreamStatus,
+        ahead: provided.ahead ?? ahead,
+        behind: provided.behind ?? behind,
+        dirty: provided.dirty ?? dirty,
+        hasConflicts: provided.hasConflicts ?? hasConflicts,
     }
 }
 
