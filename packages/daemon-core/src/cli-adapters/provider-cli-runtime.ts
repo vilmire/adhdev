@@ -36,7 +36,9 @@ export function resolveCliSpawnPlan(options: {
         : spawnConfig.command;
     const binaryPath = findBinary(configuredCommand);
     const isWin = os.platform() === 'win32';
-    const allArgs = [...spawnConfig.args, ...extraArgs];
+    const allArgs = [...spawnConfig.args, ...extraArgs].map((arg) =>
+        typeof arg === 'string' ? arg.replace(/\{\{workingDir\}\}/g, workingDir) : arg,
+    );
 
     let shellCmd: string;
     let shellArgs: string[];
