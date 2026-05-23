@@ -379,6 +379,60 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       vi.useRealTimers()
     }
   })
+
+  it('emits completion with timeout diagnostics if idle parser never exposes a final assistant turn', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'hermes-cli',
+        name: 'Hermes Agent',
+        category: 'cli',
+        spawn: { command: 'hermes', args: [] },
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+      instance.providerSessionId = 'provider-history-1'
+
+      let status = 'generating'
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({
+          status: 'idle',
+          title: 'Hermes Agent',
+          messages: [
+            { role: 'assistant', content: 'previous reply', kind: 'standard' },
+            { role: 'user', content: 'same-session continuation', kind: 'standard' },
+          ],
+        }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+      expect(events.map((event) => event.event)).toContain('agent:generating_started')
+
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(30_000)
+
+      const completed = events.find((event) => event.event === 'agent:generating_completed')
+      expect(completed).toMatchObject({
+        completionDiagnostic: {
+          emittedAfterFinalizationTimeout: true,
+          blockReason: 'missing_final_assistant',
+          providerSessionId: 'provider-history-1',
+          parsedStatus: 'idle',
+          finalAssistantPresent: false,
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('CliProviderInstance incremental history persistence', () => {

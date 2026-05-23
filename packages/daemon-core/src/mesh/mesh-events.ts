@@ -135,10 +135,21 @@ function isMeshCoordinatorEvent(eventName: unknown): eventName is string {
 }
 
 function formatCompletionMetadata(event: Record<string, unknown>): string {
+    const completionDiagnostic = event.completionDiagnostic && typeof event.completionDiagnostic === 'object'
+        ? event.completionDiagnostic as Record<string, unknown>
+        : null;
+    const diagnosticReason = completionDiagnostic
+        ? readNonEmptyString(completionDiagnostic.blockReason) || 'present'
+        : '';
+    const finalAssistantPresent = typeof completionDiagnostic?.finalAssistantPresent === 'boolean'
+        ? String(completionDiagnostic.finalAssistantPresent)
+        : '';
     const parts = [
         readNonEmptyString(event.targetSessionId) ? `session_id=${readNonEmptyString(event.targetSessionId)}` : '',
         readNonEmptyString(event.providerType) ? `provider=${readNonEmptyString(event.providerType)}` : '',
         readNonEmptyString(event.providerSessionId) ? `provider_session_id=${readNonEmptyString(event.providerSessionId)}` : '',
+        diagnosticReason ? `completion_diagnostic=${diagnosticReason}` : '',
+        finalAssistantPresent ? `final_assistant=${finalAssistantPresent}` : '',
     ].filter(Boolean);
     return parts.length > 0 ? ` (${parts.join('; ')})` : '';
 }
@@ -836,6 +847,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     taskId: completedTaskForLedger?.id || undefined,
                     providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
                     finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                    completionDiagnostic: args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
+                        ? args.metadataEvent.completionDiagnostic
+                        : undefined,
                     evidence: completionEvidence,
                 },
             });

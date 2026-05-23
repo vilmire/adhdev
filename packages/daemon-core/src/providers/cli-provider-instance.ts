@@ -743,6 +743,55 @@ export class CliProviderInstance implements ProviderInstance {
         return role === 'assistant' && !!content;
     }
 
+    private buildCompletedFinalizationDiagnostic(args: {
+        blockReason: string;
+        latestStatus?: any;
+        latestVisibleStatus: string;
+        waitedMs: number;
+        pending: CompletedDebouncePending;
+        emittedAfterFinalizationTimeout: boolean;
+    }): Record<string, unknown> {
+        let parsed: any = null;
+        let parseError: string | undefined;
+        try {
+            parsed = this.adapter.getScriptParsedStatus();
+        } catch (error: any) {
+            parseError = error?.message || String(error);
+        }
+
+        const visibleMessages = (Array.isArray(parsed?.messages) ? parsed.messages : [])
+            .filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
+        const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
+        const lastVisibleRole = typeof lastVisible?.role === 'string' ? lastVisible.role.trim().toLowerCase() : null;
+        const lastVisibleKind = typeof (lastVisible as any)?.kind === 'string' ? (lastVisible as any).kind : null;
+        const lastVisibleContentLength = lastVisible ? flattenContent(lastVisible.content).trim().length : 0;
+
+        return {
+            providerType: this.type,
+            sessionId: this.instanceId,
+            providerSessionId: this.providerSessionId || null,
+            workspace: this.workingDir,
+            blockReason: args.blockReason,
+            emittedAfterFinalizationTimeout: args.emittedAfterFinalizationTimeout,
+            waitedMs: args.waitedMs,
+            maxWaitMs: COMPLETED_FINALIZATION_MAX_WAIT_MS,
+            adapterStatus: typeof args.latestStatus?.status === 'string' ? args.latestStatus.status : null,
+            latestVisibleStatus: args.latestVisibleStatus,
+            parsedStatus: typeof parsed?.status === 'string' ? parsed.status : (parseError ? 'parse_error' : 'unknown'),
+            parseError: parseError || undefined,
+            finalAssistantPresent: this.completionHasFinalAssistantMessage(parsed?.messages),
+            visibleMessageCount: visibleMessages.length,
+            lastVisibleRole,
+            lastVisibleKind,
+            lastVisibleContentLength,
+            pendingStartedAt: this.generatingStartedAt || null,
+            pendingFirstObservedAt: args.pending.firstObservedAt,
+            pendingTimestamp: args.pending.timestamp,
+            pendingDurationSec: args.pending.duration,
+            previousBlockReason: args.pending.loggedBlockReason || null,
+        };
+    }
+
     private hasAdapterPendingResponse(): boolean {
         const adapterAny = this.adapter as any;
         if (adapterAny?.isWaitingForResponse === true) return true;
@@ -828,7 +877,23 @@ export class CliProviderInstance implements ProviderInstance {
                 this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
                 return;
             }
-            LOG.warn('CLI', `[${this.type}] suppressed completed event after ${waitedMs}ms without finalized assistant turn (${blockReason})`);
+            const completionDiagnostic = this.buildCompletedFinalizationDiagnostic({
+                blockReason,
+                latestStatus,
+                latestVisibleStatus,
+                waitedMs,
+                pending,
+                emittedAfterFinalizationTimeout: true,
+            });
+            LOG.warn('CLI', `[${this.type}] emitting completed event after ${waitedMs}ms without finalized assistant turn (${blockReason})`);
+            this.pushEvent({
+                event: 'agent:generating_completed',
+                chatTitle: pending.chatTitle,
+                duration: pending.duration,
+                timestamp: pending.timestamp,
+                finalSummary: extractFinalSummaryFromMessages(this.adapter?.getScriptParsedStatus()?.messages),
+                completionDiagnostic,
+            });
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
             this.generatingStartedAt = 0;

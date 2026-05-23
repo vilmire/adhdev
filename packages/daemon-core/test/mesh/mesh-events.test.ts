@@ -194,6 +194,71 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('records a second task_completed for same-session continuations after an earlier completion', () => {
+    const meshId = `mesh_same_session_continuation_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components, emit, coordinator } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      const firstQueued = enqueueTask(meshId, 'first delegated task')
+      expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(firstQueued.id)
+      const firstCompletionAt = Date.now() + 1_000
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'provider-history-1',
+        finalSummary: 'first final assistant report',
+        timestamp: firstCompletionAt,
+      })
+
+      const secondQueued = enqueueTask(meshId, 'same-session continuation task')
+      expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(secondQueued.id)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'provider-history-1',
+        finalSummary: 'second final assistant report',
+        timestamp: firstCompletionAt + 1_000,
+        completionDiagnostic: {
+          sessionId: 'runtime-session-1',
+          providerSessionId: 'provider-history-1',
+          blockReason: 'missing_final_assistant',
+          parsedStatus: 'idle',
+          finalAssistantPresent: false,
+          emittedAfterFinalizationTimeout: true,
+        },
+      })
+
+      const completedEntries = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')
+      expect(completedEntries).toHaveLength(2)
+      expect(completedEntries.map(entry => entry.payload.taskId)).toEqual([firstQueued.id, secondQueued.id])
+      expect(completedEntries[1].payload.completionDiagnostic).toMatchObject({
+        sessionId: 'runtime-session-1',
+        providerSessionId: 'provider-history-1',
+        blockReason: 'missing_final_assistant',
+        parsedStatus: 'idle',
+        finalAssistantPresent: false,
+      })
+      const secondCoordinatorMessage = coordinator.onEvent.mock.calls[1][1].input.textFallback
+      expect(secondCoordinatorMessage).toContain('completion_diagnostic=missing_final_assistant')
+      expect(secondCoordinatorMessage).toContain('final_assistant=false')
+      expect(getQueue(meshId).map(task => task.status)).toEqual(['completed', 'completed'])
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('records task completion evidence when a ready event completes an assigned task', () => {
     const meshId = `mesh_ready_evidence_${Date.now()}`
     try {
