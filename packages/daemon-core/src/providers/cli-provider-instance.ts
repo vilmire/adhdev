@@ -926,7 +926,16 @@ export class CliProviderInstance implements ProviderInstance {
                 this.autoApproveBusyTimer = null;
             }, 2000);
             const modal = adapterStatus.activeModal;
-            const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(modal?.buttons, this.provider);
+            const { index: buttonIndex, label: buttonLabel, unsafe } = pickApprovalButton(modal?.buttons, this.provider);
+            if (unsafe) {
+                LOG.warn('CLI', `[${this.type}] auto-approve skipped unsafe button "${buttonLabel}"`);
+                if (this.autoApproveBusyTimer) {
+                    clearTimeout(this.autoApproveBusyTimer);
+                    this.autoApproveBusyTimer = null;
+                }
+                this.autoApproveBusy = false;
+                return false;
+            }
             this.recordAutoApproval(modal?.message, buttonLabel, now);
             setTimeout(() => {
                 this.adapter.resolveModal(buttonIndex);

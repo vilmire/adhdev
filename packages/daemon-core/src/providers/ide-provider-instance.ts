@@ -129,7 +129,7 @@ export class IdeProviderInstance implements ProviderInstance {
         const autoApproveActive = (
             this.currentStatus === 'waiting_approval'
             || this.cachedChat?.status === 'waiting_approval'
-        ) && this.canAutoApprove();
+        ) && this.canAutoApprove(this.cachedChat);
         const visibleStatus = (autoApproveActive ? 'generating' : this.currentStatus) as ProviderState['status'];
 
  // Collect extension status
@@ -184,7 +184,7 @@ export class IdeProviderInstance implements ProviderInstance {
         const autoApproveActive = (
             this.currentStatus === 'waiting_approval'
             || this.cachedChat?.status === 'waiting_approval'
-        ) && this.canAutoApprove();
+        ) && this.canAutoApprove(this.cachedChat);
         const visibleStatus = autoApproveActive ? 'generating' : this.currentStatus;
         return {
             id: this.instanceId,
@@ -441,7 +441,7 @@ export class IdeProviderInstance implements ProviderInstance {
         const rawAgentStatus = (chatStatus === 'streaming' || chatStatus === 'generating') ? 'generating'
             : chatStatus === 'waiting_approval' ? 'waiting_approval'
             : 'idle';
-        const autoApproveActive = rawAgentStatus === 'waiting_approval' && this.canAutoApprove();
+        const autoApproveActive = rawAgentStatus === 'waiting_approval' && this.canAutoApprove(chatData);
         const agentStatus = autoApproveActive ? 'generating' : rawAgentStatus;
         const lastMsg = Array.isArray(chatData?.messages) && chatData.messages.length > 0
             ? chatData.messages[chatData.messages.length - 1]
@@ -673,10 +673,14 @@ export class IdeProviderInstance implements ProviderInstance {
         if (this.context) this.context.cdp = cdp;
     }
 
-    private canAutoApprove(): boolean {
-        return this.settings.autoApprove !== false
-            && typeof this.provider.scripts?.resolveAction === 'function'
-            && !!this.context?.cdp?.isConnected;
+    private canAutoApprove(chatData?: any): boolean {
+        if (this.settings.autoApprove === false) return false;
+        if (typeof this.provider.scripts?.resolveAction !== 'function') return false;
+        if (!this.context?.cdp?.isConnected) return false;
+        if (chatData?.activeModal?.buttons) {
+            return !pickApprovalButton(chatData.activeModal.buttons, this.provider).unsafe;
+        }
+        return true;
     }
 
  // ─── Auto-approve via CDP script ────────────────────
@@ -694,7 +698,11 @@ export class IdeProviderInstance implements ProviderInstance {
 
         this.autoApproveBusy = true;
         try {
-            const { label: targetButton } = pickApprovalButton(_chatData?.activeModal?.buttons, this.provider);
+            const { label: targetButton, unsafe } = pickApprovalButton(_chatData?.activeModal?.buttons, this.provider);
+            if (unsafe) {
+                LOG.warn('IdeInstance', `[IdeInstance:${this.type}] autoApprove skipped unsafe button "${targetButton}"`);
+                return;
+            }
 
             const script = scriptFn({ action: 'approve', button: targetButton, buttonText: targetButton });
             if (!script) return;

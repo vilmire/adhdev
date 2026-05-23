@@ -27,4 +27,25 @@ describe('approval-utils', () => {
       approvalPositiveHints: ['yes', 'allow', 'always allow'],
     })).toEqual({ index: 0, label: '1 Yes' })
   })
+
+  it('marks all-destructive choices unsafe so auto-approve can leave them alone', () => {
+    expect(pickApprovalButton([
+      'Terminate current task',
+      'Cancel',
+    ])).toEqual({ index: 0, label: 'Terminate current task', unsafe: true })
+  })
+
+  it('falls back to a non-destructive choice when no positive hint matches', () => {
+    expect(pickApprovalButton([
+      'Terminate current task',
+      'Keep waiting',
+    ])).toEqual({ index: 1, label: 'Keep waiting' })
+  })
+
+  it('does not let positive words make a destructive button auto-approvable', () => {
+    expect(pickApprovalButton([
+      'Confirm termination',
+      'Keep running',
+    ])).toEqual({ index: 1, label: 'Keep running' })
+  })
 })
