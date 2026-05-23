@@ -8,15 +8,63 @@ import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
 export type MeshHistoricalTaskStatus = Extract<MeshTaskStatus, 'completed' | 'failed' | 'cancelled'>;
+export type MeshTaskMode = 'code_change' | 'validation' | 'live_debug_readonly' | 'launch_app' | 'convergence';
 
 export const ACTIVE_MESH_QUEUE_STATUSES: MeshActiveTaskStatus[] = ['pending', 'assigned'];
 export const HISTORICAL_MESH_QUEUE_STATUSES: MeshHistoricalTaskStatus[] = ['completed', 'failed', 'cancelled'];
+export const MESH_TASK_MODES: MeshTaskMode[] = ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'];
+
+export interface MeshTaskModeValidationResult {
+    valid: boolean;
+    taskMode?: MeshTaskMode;
+    violations: string[];
+    allowedOperations?: string[];
+}
+
+const LIVE_DEBUG_READONLY_FORBIDDEN: Array<{ label: string; pattern: RegExp }> = [
+    { label: 'source_edit', pattern: /\b(edit|modify|patch|apply\s+patch|write\s+(?:to\s+)?(?:file|source)|overwrite|delete\s+file|remove\s+file|create\s+file|touch\s+file)\b/i },
+    { label: 'git_mutation', pattern: /\b(?:git\s+(?:add|commit|push|reset|rebase|clean|checkout|switch|merge|tag|restore|rm|mv)|push\b)/i },
+    { label: 'checkpoint', pattern: /\b(checkpoint|mesh_checkpoint)\b/i },
+    { label: 'deploy_or_version_bump', pattern: /\b(deploy|wrangler\s+deploy|version[-\s]?bump|npm\s+version|release)\b/i },
+    { label: 'destructive_shell', pattern: /\b(rm\s+-rf|mv\s+\S+\s+\S+|truncate\s|tee\s+\S+|sed\s+-i)\b/i },
+];
+
+export function normalizeMeshTaskMode(value: unknown): MeshTaskMode | undefined {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim() as MeshTaskMode;
+    return (MESH_TASK_MODES as string[]).includes(normalized) ? normalized : undefined;
+}
+
+export function validateMeshTaskModeRequest(mode: unknown, message: string): MeshTaskModeValidationResult {
+    const taskMode = normalizeMeshTaskMode(mode);
+    if (!taskMode) {
+        return { valid: true, violations: [] };
+    }
+    if (taskMode !== 'live_debug_readonly') {
+        return { valid: true, taskMode, violations: [] };
+    }
+    const violations = LIVE_DEBUG_READONLY_FORBIDDEN
+        .filter(rule => rule.pattern.test(message || ''))
+        .map(rule => rule.label);
+    return {
+        valid: violations.length === 0,
+        taskMode,
+        violations,
+        allowedOperations: [
+            'process/log/window/port/session inspection',
+            'read-only filesystem listing/reading',
+            'status probes and keep-running handle reporting',
+            'diagnostic summaries without source edits, commits, checkpoints, pushes, deploys, resets, rebases, or destructive cleanups',
+        ],
+    };
+}
 
 export interface MeshWorkQueueEntry {
     id: string;
     meshId: string;
     message: string;
     status: MeshTaskStatus;
+    taskMode?: MeshTaskMode;
     /** If specified, only this node can claim the task (used by legacy mesh_send_task) */
     targetNodeId?: string;
     /** If specified, only this runtime session can claim the task */
@@ -103,9 +151,13 @@ function writeQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
 export function enqueueTask(
     meshId: string,
     message: string,
-    opts?: { targetNodeId?: string; targetSessionId?: string } & MeshQueueMutationOptions,
+    opts?: { targetNodeId?: string; targetSessionId?: string; taskMode?: MeshTaskMode | string } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry {
     requireMeshHostQueueOwner(opts);
+    const modeValidation = validateMeshTaskModeRequest(opts?.taskMode, message);
+    if (!modeValidation.valid) {
+        throw new Error(`live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(', ')})`);
+    }
     return withQueueLock(meshId, () => {
         const queue = readQueue(meshId);
         const entry: MeshWorkQueueEntry = {
@@ -113,6 +165,7 @@ export function enqueueTask(
             meshId,
             message,
             status: 'pending',
+            taskMode: modeValidation.taskMode,
             targetNodeId: opts?.targetNodeId,
             targetSessionId: opts?.targetSessionId,
             createdAt: new Date().toISOString(),

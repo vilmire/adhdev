@@ -178,16 +178,18 @@ export { syncMeshes } from './mesh/mesh-sync.js';
 export type { MeshSyncTransport, MeshSyncResult, RemoteMeshRecord } from './mesh/mesh-sync.js';
 
 // ── Mesh Task Ledger ──
-export { appendLedgerEntry, appendRemoteLedgerEntries, readLedgerEntries, readLedgerSlice, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, MAX_LEDGER_SLICE_LIMIT } from './mesh/mesh-ledger.js';
-export type { AppendRemoteLedgerResult, MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext } from './mesh/mesh-ledger.js';
+export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEvidence, normalizeMeshWorkerResult, readLedgerEntries, readLedgerSlice, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, MAX_LEDGER_SLICE_LIMIT } from './mesh/mesh-ledger.js';
+export type { AppendRemoteLedgerResult, MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext, MeshTaskCompletionEvidence, MeshWorkerResultArtifact, MeshProcessArtifact, MeshValidationResultArtifact } from './mesh/mesh-ledger.js';
 export { fastForwardMeshNode } from './mesh/mesh-fast-forward.js';
 export type { MeshFastForwardNodeArgs, MeshFastForwardPlannedStep, MeshFastForwardResult } from './mesh/mesh-fast-forward.js';
 export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence } from './mesh/mesh-ledger-reconciliation.js';
 export type { MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats } from './mesh/mesh-work-queue.js';
-export type { MeshWorkQueueEntry, MeshTaskStatus, MeshWorkQueueStats, MeshQueueMutationOptions } from './mesh/mesh-work-queue.js';
+export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, normalizeMeshTaskMode, validateMeshTaskModeRequest } from './mesh/mesh-work-queue.js';
+export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshWorkQueueStats, MeshQueueMutationOptions, MeshTaskModeValidationResult } from './mesh/mesh-work-queue.js';
+export { buildMeshActiveWork, buildMeshActiveWorkSummary } from './mesh/mesh-active-work.js';
+export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource } from './mesh/mesh-active-work.js';
 
 // ── Mesh Host Ownership ──
 export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHostOwner, normalizeMeshDaemonRole, requireMeshHostQueueOwner, resolveMeshHostStatus } from './mesh/mesh-host-ownership.js';

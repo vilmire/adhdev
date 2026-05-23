@@ -63,6 +63,44 @@ export function isIntentionalCleanupStopEntry(entry: Pick<MeshLedgerEntry, 'kind
             || payload.source === 'mesh_remove_node');
 }
 
+export type MeshWorkerResultStatus = 'completed' | 'failed' | 'blocked' | 'partial' | 'unknown';
+export type MeshProcessArtifactKind = 'process' | 'log' | 'port' | 'window' | 'session' | 'file' | 'url' | 'other';
+
+export interface MeshValidationResultArtifact {
+    command?: string;
+    status: 'passed' | 'failed' | 'skipped' | 'unknown';
+    durationMs?: number;
+    outputPath?: string;
+    summary?: string;
+}
+
+export interface MeshProcessArtifact {
+    kind: MeshProcessArtifactKind;
+    id?: string;
+    label?: string;
+    locator?: string;
+    pid?: number;
+    port?: number;
+    url?: string;
+    path?: string;
+    sessionId?: string;
+    keepRunning?: boolean;
+    metadata?: Record<string, unknown>;
+}
+
+export interface MeshWorkerResultArtifact {
+    status: MeshWorkerResultStatus;
+    classification?: string;
+    changedFiles: string[];
+    validationResults: MeshValidationResultArtifact[];
+    gitStatus?: Record<string, unknown>;
+    processArtifacts: MeshProcessArtifact[];
+    errors: string[];
+    nextAction?: string;
+    requiresUserAction: boolean;
+    source: 'explicit_metadata' | 'final_summary_json' | 'default';
+}
+
 export interface MeshTaskCompletionEvidence {
     source: 'agent_status_event';
     event: 'agent:generating_completed' | 'agent:ready';
@@ -76,6 +114,7 @@ export interface MeshTaskCompletionEvidence {
         providerSessionId?: string;
         finalSummaryAvailable: boolean;
     };
+    workerResult: MeshWorkerResultArtifact;
     git: {
         status: 'deferred';
         reason: string;
@@ -98,6 +137,7 @@ export interface BuildTaskCompletionEvidenceOptions {
     providerType?: string;
     providerSessionId?: string;
     finalSummary?: string;
+    workerResult?: Record<string, unknown>;
     completedAt?: string;
 }
 
@@ -190,6 +230,100 @@ function getRotatedPath(meshId: string, index: number): string {
 
 // ─── Core API ───────────────────────────────────
 
+function readNonEmptyString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value.map(item => readNonEmptyString(item)).filter(Boolean) as string[];
+}
+
+function extractJsonObjectFromSummary(summary?: string): Record<string, unknown> | undefined {
+    const text = readNonEmptyString(summary);
+    if (!text) return undefined;
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidates = [fenced?.[1], text].filter(Boolean) as string[];
+    for (const candidate of candidates) {
+        const trimmed = candidate.trim();
+        if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+        } catch { /* try next candidate */ }
+    }
+    return undefined;
+}
+
+function normalizeValidationResults(value: unknown): MeshValidationResultArtifact[] {
+    if (!Array.isArray(value)) return [];
+    return value
+        .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+        .map((item: any) => {
+            const status = ['passed', 'failed', 'skipped', 'unknown'].includes(item.status) ? item.status : 'unknown';
+            return {
+                ...(readNonEmptyString(item.command) ? { command: readNonEmptyString(item.command) } : {}),
+                status,
+                ...(Number.isFinite(Number(item.durationMs)) ? { durationMs: Number(item.durationMs) } : {}),
+                ...(readNonEmptyString(item.outputPath) ? { outputPath: readNonEmptyString(item.outputPath) } : {}),
+                ...(readNonEmptyString(item.summary) ? { summary: readNonEmptyString(item.summary) } : {}),
+            };
+        });
+}
+
+function normalizeProcessArtifacts(value: unknown): MeshProcessArtifact[] {
+    if (!Array.isArray(value)) return [];
+    const kinds = new Set(['process', 'log', 'port', 'window', 'session', 'file', 'url', 'other']);
+    return value
+        .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+        .map((item: any) => ({
+            kind: kinds.has(item.kind) ? item.kind : 'other',
+            ...(readNonEmptyString(item.id) ? { id: readNonEmptyString(item.id) } : {}),
+            ...(readNonEmptyString(item.label) ? { label: readNonEmptyString(item.label) } : {}),
+            ...(readNonEmptyString(item.locator) ? { locator: readNonEmptyString(item.locator) } : {}),
+            ...(Number.isFinite(Number(item.pid)) ? { pid: Number(item.pid) } : {}),
+            ...(Number.isFinite(Number(item.port)) ? { port: Number(item.port) } : {}),
+            ...(readNonEmptyString(item.url) ? { url: readNonEmptyString(item.url) } : {}),
+            ...(readNonEmptyString(item.path) ? { path: readNonEmptyString(item.path) } : {}),
+            ...(readNonEmptyString(item.sessionId) ? { sessionId: readNonEmptyString(item.sessionId) } : {}),
+            ...(typeof item.keepRunning === 'boolean' ? { keepRunning: item.keepRunning } : {}),
+            ...(item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata) ? { metadata: item.metadata as Record<string, unknown> } : {}),
+        }));
+}
+
+export function normalizeMeshWorkerResult(input?: Record<string, unknown>, source: MeshWorkerResultArtifact['source'] = 'explicit_metadata'): MeshWorkerResultArtifact {
+    const raw = input && typeof input === 'object' ? input : {};
+    const status = ['completed', 'failed', 'blocked', 'partial', 'unknown'].includes(String(raw.status))
+        ? raw.status as MeshWorkerResultStatus
+        : 'unknown';
+    const gitStatus = raw.gitStatus && typeof raw.gitStatus === 'object' && !Array.isArray(raw.gitStatus)
+        ? raw.gitStatus as Record<string, unknown>
+        : undefined;
+    return {
+        status,
+        ...(readNonEmptyString(raw.classification) ? { classification: readNonEmptyString(raw.classification) } : {}),
+        changedFiles: readStringArray(raw.changedFiles),
+        validationResults: normalizeValidationResults(raw.validationResults),
+        ...(gitStatus ? { gitStatus } : {}),
+        processArtifacts: normalizeProcessArtifacts(raw.processArtifacts),
+        errors: readStringArray(raw.errors),
+        ...(readNonEmptyString(raw.nextAction) ? { nextAction: readNonEmptyString(raw.nextAction) } : {}),
+        requiresUserAction: raw.requiresUserAction === true,
+        source,
+    };
+}
+
+function resolveWorkerResult(opts: BuildTaskCompletionEvidenceOptions): MeshWorkerResultArtifact {
+    if (opts.workerResult && typeof opts.workerResult === 'object') {
+        return normalizeMeshWorkerResult(opts.workerResult, 'explicit_metadata');
+    }
+    const parsed = extractJsonObjectFromSummary(opts.finalSummary);
+    if (parsed) {
+        return normalizeMeshWorkerResult(parsed, 'final_summary_json');
+    }
+    return normalizeMeshWorkerResult(undefined, 'default');
+}
+
 export function buildTaskCompletionEvidence(opts: BuildTaskCompletionEvidenceOptions): MeshTaskCompletionEvidence {
     const providerSessionId = opts.providerSessionId?.trim() || undefined;
     const providerType = opts.providerType?.trim() || undefined;
@@ -206,6 +340,7 @@ export function buildTaskCompletionEvidence(opts: BuildTaskCompletionEvidenceOpt
             providerSessionId,
             finalSummaryAvailable: typeof opts.finalSummary === 'string' && opts.finalSummary.trim().length > 0,
         },
+        workerResult: resolveWorkerResult(opts),
         git: {
             status: 'deferred',
             reason: 'ordinary_completion_git_status_not_checked',

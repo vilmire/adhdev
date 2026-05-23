@@ -25,6 +25,10 @@ interface RemoteIdleSession {
 const REMOTE_IDLE_SESSION_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const remoteIdleSessions = new Map<string, RemoteIdleSession>(); // key: `${nodeId}:${sessionId}`
 
+function readWorkerResultMetadata(event: Record<string, unknown>): Record<string, unknown> | undefined {
+    return readRecord(event.workerResult) || readRecord(event.meshWorkerResult) || readRecord(event.structuredResult);
+}
+
 function sweepExpiredRemoteIdleSessions(): void {
     const now = Date.now();
     for (const [key, session] of remoteIdleSessions) {
@@ -105,6 +109,12 @@ export function clearPendingMeshCoordinatorEvents(meshId?: string): void {
 
 function readNonEmptyString(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : undefined;
 }
 
 function resolveEventSessionId(event: Record<string, unknown>, fallback?: unknown): string {
@@ -759,6 +769,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
+        const providerSessionId = readNonEmptyString(args.metadataEvent.providerSessionId) || undefined;
+        const finalSummary = readNonEmptyString(args.metadataEvent.finalSummary) || undefined;
+        const workerResult = readWorkerResultMetadata(args.metadataEvent);
         const completedTask = sessionId
             ? updateSessionTaskStatus(args.meshId, sessionId, 'completed')
             : null;
@@ -775,15 +788,17 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         nodeLabel: args.nodeLabel,
                         taskId: completedTask.id,
                         completedViaReady: true,
-                        providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
-                        finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                        providerSessionId,
+                        finalSummary,
+                        workerResult,
                         evidence: buildTaskCompletionEvidence({
                             event: 'agent:ready',
                             nodeId,
                             sessionId,
                             providerType: providerType || undefined,
-                            providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
-                            finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                            providerSessionId,
+                            finalSummary,
+                            workerResult,
                         }),
                     },
                 });
@@ -826,14 +841,18 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             const ledgerNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined;
             const ledgerSessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId) || undefined;
             const ledgerProviderType = readNonEmptyString(args.metadataEvent.providerType) || undefined;
+            const providerSessionId = readNonEmptyString(args.metadataEvent.providerSessionId) || undefined;
+            const finalSummary = readNonEmptyString(args.metadataEvent.finalSummary) || undefined;
+            const workerResult = readWorkerResultMetadata(args.metadataEvent);
             const completionEvidence = ledgerKind === 'task_completed' && ledgerNodeId && ledgerSessionId
                 ? buildTaskCompletionEvidence({
                     event: 'agent:generating_completed',
                     nodeId: ledgerNodeId,
                     sessionId: ledgerSessionId,
                     providerType: ledgerProviderType,
-                    providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
-                    finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                    providerSessionId,
+                    finalSummary,
+                    workerResult,
                 })
                 : undefined;
             appendLedgerEntry(args.meshId, {
@@ -845,8 +864,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     event: args.event,
                     nodeLabel: args.nodeLabel,
                     taskId: completedTaskForLedger?.id || undefined,
-                    providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
-                    finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                    providerSessionId,
+                    finalSummary,
+                    workerResult,
                     completionDiagnostic: args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
                         ? args.metadataEvent.completionDiagnostic
                         : undefined,

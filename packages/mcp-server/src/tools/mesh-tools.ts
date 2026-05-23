@@ -15,6 +15,7 @@
  *           mesh_cleanup_sessions, mesh_task_history, mesh_reconcile_ledger
  */
 
+import { randomUUID } from 'node:crypto';
 import { CloudTransport } from '../transports/cloud.js';
 import { IpcTransport } from '../transports/ipc.js';
 import { isLocalTransport } from '../transports/mode.js';
@@ -25,6 +26,7 @@ import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy, RepoMeshRelate
 import {
     appendLedgerEntry,
     appendRemoteLedgerEntries,
+    buildMeshActiveWork,
     buildMeshLedgerReconciliationEvidence,
     buildMeshLedgerReplicaEvidence,
     buildP2pRelayFailurePayload,
@@ -39,6 +41,7 @@ import {
     readLedgerEntries,
     readLedgerSlice,
     requeueTask,
+    validateMeshTaskModeRequest,
 } from '@adhdev/daemon-core';
 
 export interface MeshContext {
@@ -61,6 +64,36 @@ const meshSessionProviderMetadata = new Map<string, MeshSessionProviderMetadata>
 
 function readString(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function summarizeTaskMessage(message: string): { taskTitle: string; taskSummary: string } {
+    const taskSummary = message.replace(/\s+/g, ' ').trim();
+    const taskTitle = taskSummary.length > 96 ? `${taskSummary.slice(0, 93)}...` : taskSummary;
+    return { taskTitle: taskTitle || '(untitled task)', taskSummary };
+}
+
+function buildDirectTaskPayload(
+    message: string,
+    via: 'p2p_direct' | 'local_direct' | 'mesh_send_task',
+    opts: {
+        taskId: string;
+        taskMode?: string;
+        providerType?: string;
+        targetSessionId?: string;
+    },
+): Record<string, unknown> {
+    const descriptor = summarizeTaskMessage(message);
+    return {
+        source: 'direct',
+        via,
+        taskId: opts.taskId,
+        message,
+        taskTitle: descriptor.taskTitle,
+        taskSummary: descriptor.taskSummary,
+        ...(opts.taskMode ? { taskMode: opts.taskMode } : {}),
+        ...(opts.providerType ? { providerType: opts.providerType } : {}),
+        ...(opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {}),
+    };
 }
 
 function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
@@ -764,7 +797,7 @@ function getLatestActiveLaunchFailure(meshId: string, nodeId: string): Record<st
 }
 
 type RemoteAgentDispatchResult =
-    | { success: true; dispatched: true; sessionId: string }
+    | { success: true; dispatched: true; sessionId: string; providerType?: string }
     | ({ success: false; error: string } & Record<string, unknown>);
 
 function buildCoordinatorP2pRelayFailure(
@@ -905,7 +938,7 @@ async function ipcDispatchToRemoteAgent(
                 error: `P2P dispatch failed: ${errorMessage}`,
             };
         }
-        return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType };
+        return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType, providerType: resolvedProviderType };
     } catch (e: any) {
         const errorMessage = e?.message || String(e);
         return {
@@ -1390,6 +1423,8 @@ export const MESH_ENQUEUE_TASK_TOOL = {
         type: 'object' as const,
         properties: {
             message: { type: 'string', description: 'The task instruction for the agent.' },
+            task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch.' },
+            taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
         },
         required: ['message'],
     },
@@ -1454,6 +1489,8 @@ export const MESH_SEND_TASK_TOOL = {
             node_id: { type: 'string', description: 'Target node ID (from mesh_list_nodes).' },
             session_id: { type: 'string', description: 'Agent session ID on the target node.' },
             message: { type: 'string', description: 'Natural-language task to send to the agent.' },
+            task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch.' },
+            taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
         },
         required: ['node_id', 'session_id', 'message'],
     },
@@ -1856,6 +1893,13 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         results.push(entry);
     }
 
+    const activeWorkEvidence = buildMeshActiveWork({
+        meshId: mesh.id,
+        queue: getQueue(mesh.id),
+        ledgerEntries: readLedgerEntries(mesh.id, { tail: 500 }),
+        nodes: mesh.nodes,
+    });
+
     const response: Record<string, unknown> = {
         meshId: mesh.id,
         meshName: mesh.name,
@@ -1865,9 +1909,12 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         sourceOfTruth: {
             membership: 'coordinator_daemon_live_mesh',
             currentStatus: 'live_git_and_session_probes',
+            activeWork: 'mesh_queue_file_and_local_ledger',
             historicalEvidenceOnly: ['recoveryHints', 'ledgerSummary'],
         },
         nodes: results,
+        activeWork: activeWorkEvidence.activeWork,
+        activeWorkSummary: activeWorkEvidence.summary,
         branchConvergenceSummary: summarizeBranchConvergence(results),
     };
 
@@ -2011,15 +2058,16 @@ export async function meshListNodes(ctx: MeshContext): Promise<string> {
 
 export async function meshEnqueueTask(
     ctx: MeshContext,
-    args: { message: string },
+    args: { message: string; task_mode?: string; taskMode?: string },
 ): Promise<string> {
+    const taskMode = readString(args.task_mode) || readString(args.taskMode);
     try {
-        const task = enqueueTask(ctx.mesh.id, args.message);
+        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode });
 
         // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
         if (isLocalTransport(ctx.transport) && !(ctx.transport instanceof IpcTransport)) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-            return JSON.stringify({ success: true, taskId: task.id, status: task.status });
+            return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode });
         }
 
         // ── IpcTransport (Cloud Mesh): the queue file lives on THIS machine only.
@@ -2041,11 +2089,24 @@ export async function meshEnqueueTask(
                         .then(result => {
                             if (result.success) {
                                 try {
+                                    const providerType = result.providerType;
+                                    const descriptor = summarizeTaskMessage(args.message);
                                     appendLedgerEntry(ctx.mesh.id, {
                                         kind: 'task_dispatched',
                                         nodeId: node.id,
                                         sessionId: result.sessionId,
-                                        payload: { message: args.message, via: 'p2p_direct', taskId: task.id },
+                                        providerType,
+                                        payload: {
+                                            source: 'queue',
+                                            via: 'p2p_direct',
+                                            taskId: task.id,
+                                            message: args.message,
+                                            taskTitle: descriptor.taskTitle,
+                                            taskSummary: descriptor.taskSummary,
+                                            ...(task.taskMode ? { taskMode: task.taskMode } : {}),
+                                            ...(providerType ? { providerType } : {}),
+                                            targetSessionId: result.sessionId,
+                                        },
                                     });
                                 } catch { /* best-effort */ }
                             }
@@ -2056,13 +2117,17 @@ export async function meshEnqueueTask(
             // Fire-and-forget — don't block the coordinator response
             Promise.all(dispatchPromises).catch(() => {});
 
-            return JSON.stringify({ success: true, taskId: task.id, status: task.status });
+            return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode });
         }
 
         // ── CloudTransport fallback ───────────────────────────────────────────────
-        return JSON.stringify({ success: true, taskId: task.id, status: task.status });
+        return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode });
     } catch (e: any) {
-        return JSON.stringify({ success: false, error: e.message });
+        const message = e?.message || String(e);
+        if (message.includes('live_debug_readonly_guardrail_violation')) {
+            return JSON.stringify({ success: false, code: 'live_debug_readonly_guardrail_violation', taskMode, error: message });
+        }
+        return JSON.stringify({ success: false, error: message });
     }
 }
 
@@ -2078,6 +2143,12 @@ export async function meshViewQueue(
         const summary = buildQueueStatusSummary(fullQueue);
         const visibleSummary = buildQueueStatusSummary(queue);
         const maintenance = buildQueueMaintenanceReport(fullQueue);
+        const activeWorkEvidence = buildMeshActiveWork({
+            meshId: ctx.mesh.id,
+            queue: fullQueue,
+            ledgerEntries: readLedgerEntries(ctx.mesh.id, { tail: 500 }),
+            nodes: ctx.mesh.nodes,
+        });
         const staleAssignedTasks = (maintenance as any).staleAssignedTasks || [];
         const requestedHistoricalRows = queue.some((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
         return JSON.stringify({
@@ -2095,6 +2166,8 @@ export async function meshViewQueue(
             },
             queue,
             visibleQueue: queue,
+            activeWork: activeWorkEvidence.activeWork,
+            activeWorkSummary: activeWorkEvidence.summary,
             visibleSummary,
             summary,
             activeCounts: (summary as any).activeCounts,
@@ -2179,8 +2252,21 @@ export async function meshQueueRequeue(
 
 export async function meshSendTask(
     ctx: MeshContext,
-    args: { node_id: string; session_id?: string; message: string },
+    args: { node_id: string; session_id?: string; message: string; task_mode?: string; taskMode?: string },
 ): Promise<string> {
+    const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
+    const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, args.message);
+    if (!modeValidation.valid) {
+        return JSON.stringify({
+            success: false,
+            code: 'live_debug_readonly_guardrail_violation',
+            taskMode: modeValidation.taskMode || requestedTaskMode,
+            violations: modeValidation.violations,
+            allowedOperations: modeValidation.allowedOperations,
+            error: `live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(', ')})`,
+        });
+    }
+    const taskMode = modeValidation.taskMode;
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
     // Policy check: read-only node cannot receive tasks
@@ -2217,6 +2303,7 @@ export async function meshSendTask(
                 meshId: ctx.mesh.id,
                 message: args.message,
                 targetNodeId: args.node_id,
+                ...(taskMode ? { taskMode } : {}),
             });
             return JSON.stringify(res);
         }
@@ -2229,9 +2316,9 @@ export async function meshSendTask(
         // because it cannot read the queue.  Instead we relay agent_command
         // directly over P2P so the remote daemon forwards it to its agent.
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
-
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
             const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id || ''));
+            const taskId = randomUUID();
             const result = await ipcDispatchToRemoteAgent(ctx, node, {
                 session_id: args.session_id,
                 message: args.message,
@@ -2241,19 +2328,30 @@ export async function meshSendTask(
                 // Record dispatch in ledger so task_history is accurate
                 const dispatchedSessionId = args.session_id || result.sessionId;
                 try {
+                    const providerType = result.providerType || cached?.providerType;
                     appendLedgerEntry(ctx.mesh.id, {
                         kind: 'task_dispatched',
                         nodeId: args.node_id,
                         sessionId: dispatchedSessionId,
-                        payload: {
-                            message: args.message,
-                            via: 'p2p_direct',
-                            ...(dispatchedSessionId ? { targetSessionId: dispatchedSessionId } : {}),
-                        },
+                        providerType,
+                        payload: buildDirectTaskPayload(args.message, 'p2p_direct', {
+                            taskId,
+                            taskMode,
+                            providerType,
+                            targetSessionId: dispatchedSessionId,
+                        }),
                     });
                 } catch { /* best-effort */ }
             }
-            return JSON.stringify({ ...result, nodeId: args.node_id, dispatched: result.success === true });
+            return JSON.stringify({
+                ...result,
+                nodeId: args.node_id,
+                sessionId: result.success ? (args.session_id || result.sessionId) : args.session_id,
+                ...(result.success ? { source: 'direct', taskId } : {}),
+                taskMode,
+                ...(result.success && result.providerType ? { providerType: result.providerType } : {}),
+                dispatched: result.success === true,
+            });
         }
 
         // ── LocalTransport or local IpcTransport node ────────────────────────
@@ -2320,22 +2418,29 @@ export async function meshSendTask(
                     error: dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task',
                 });
             }
+            const taskId = randomUUID();
             try {
                 appendLedgerEntry(ctx.mesh.id, {
                     kind: 'task_dispatched',
                     nodeId: args.node_id,
                     sessionId: args.session_id,
                     providerType: resolvedProviderType,
-                    payload: { message: args.message, via: 'local_direct' },
+                    payload: buildDirectTaskPayload(args.message, 'local_direct', {
+                        taskId,
+                        taskMode,
+                        providerType: resolvedProviderType,
+                        targetSessionId: args.session_id,
+                    }),
                 });
             } catch { /* best-effort */ }
-            return JSON.stringify({ success: true, dispatched: true, nodeId: args.node_id, sessionId: args.session_id });
+            return JSON.stringify({ success: true, dispatched: true, source: 'direct', taskId, taskMode, providerType: resolvedProviderType, nodeId: args.node_id, sessionId: args.session_id });
         }
 
         // ── Untargeted local task: use queue pull ─────────────────────────────
         const task = enqueueTask(ctx.mesh.id, args.message, {
             targetNodeId: args.node_id,
             targetSessionId: args.session_id,
+            taskMode,
         });
 
         if (isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport) {
@@ -2347,7 +2452,7 @@ export async function meshSendTask(
             ? drainPendingMeshCoordinatorEvents(ctx.mesh.id)
             : [];
 
-        const result: Record<string, unknown> = { success: true, nodeId: args.node_id, taskId: task.id, status: task.status };
+        const result: Record<string, unknown> = { success: true, source: 'queue', nodeId: args.node_id, taskId: task.id, status: task.status, taskMode: task.taskMode };
         if (pendingEvents.length > 0) {
             result.pendingCoordinatorEvents = pendingEvents;
         }
