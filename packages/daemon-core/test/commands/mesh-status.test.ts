@@ -1016,6 +1016,108 @@ describe('mesh_status', () => {
     }
   })
 
+  it('drops cached inline nodes that are absent from a newer live inline snapshot before direct truth gating', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-prune-inline-cache-')
+    try {
+      const { router } = createRouter()
+
+      await router.execute('mesh_status', {
+        meshId: 'mesh_prune_inline_cache',
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh_prune_inline_cache',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_7' },
+          policy: {},
+          nodes: [
+            { id: 'node_7', daemonId: 'daemon_7', machineLabel: 'Local', workspace: repoRoot, repoRoot, policy: { providerPriority: ['hermes-cli'] } },
+            { id: 'node_removed', daemonId: 'daemon_removed', machineLabel: 'Removed', workspace: '/missing/removed/worktree', repoRoot: '/missing/removed/worktree', policy: { providerPriority: ['hermes-cli'] } },
+          ],
+        },
+      })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_prune_inline_cache',
+        requireDirectPeerTruth: true,
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh_prune_inline_cache',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_7' },
+          policy: {},
+          nodes: [
+            { id: 'node_7', daemonId: 'daemon_7', machineLabel: 'Local', workspace: repoRoot, repoRoot, policy: { providerPriority: ['hermes-cli'] }, lastSeenAt: new Date().toISOString() },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.nodes.map((node: any) => node.nodeId)).toEqual(['node_7'])
+      expect(result.sourceOfTruth.directPeerTruth).toMatchObject({
+        required: true,
+        satisfied: true,
+        localConfirmedCount: 1,
+        peerAttemptedCount: 0,
+        unavailableNodeIds: [],
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts selected-coordinator local filesystem git as direct truth for non-self local worktree nodes', async () => {
+    const primary = await createTempGitRepo('mesh-status-local-direct-primary-')
+    const sibling = await createTempGitRepo('mesh-status-local-direct-sibling-')
+    try {
+      const dispatchMeshCommand = vi.fn(async () => {
+        throw new Error('local workspace should not need P2P dispatch')
+      })
+      const { router } = createRouter({ dispatchMeshCommand })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_local_worktree_direct_truth',
+        requireDirectPeerTruth: true,
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh_local_worktree_direct_truth',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_primary' },
+          policy: {},
+          nodes: [
+            { id: 'node_primary', daemonId: 'daemon_primary', machineLabel: 'Primary', workspace: primary.repoRoot, repoRoot: primary.repoRoot, policy: { providerPriority: ['hermes-cli'] } },
+            { id: 'node_local_worktree', daemonId: 'daemon_local_worktree', machineLabel: 'Local worktree', workspace: sibling.repoRoot, repoRoot: sibling.repoRoot, policy: { providerPriority: ['hermes-cli'] } },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.code).not.toBe('mesh_direct_peer_truth_unavailable')
+      expect(result.sourceOfTruth.directPeerTruth).toMatchObject({
+        required: true,
+        satisfied: true,
+        localConfirmedCount: 2,
+        peerAttemptedCount: 0,
+        peerConfirmedCount: 0,
+        unavailableNodeIds: [],
+      })
+      const localWorktree = result.nodes.find((node: any) => node.nodeId === 'node_local_worktree')
+      expect(localWorktree).toMatchObject({
+        health: 'online',
+        git: expect.objectContaining({ isGitRepo: true, branch: expect.any(String) }),
+      })
+      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    } finally {
+      await rm(primary.dir, { recursive: true, force: true })
+      await rm(sibling.dir, { recursive: true, force: true })
+    }
+  })
+
   it('does not fail cached/default loads when no remote direct peer probe was attempted', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-no-peer-attempt-')
     try {
