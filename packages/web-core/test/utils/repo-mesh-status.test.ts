@@ -799,6 +799,136 @@ describe('extractRepoMeshStatus', () => {
     expect(graph.snapshotWarnings).toEqual([])
   })
 
+  it('drops stale follow-up convergence when newer live git truth says the default branch is clean', () => {
+    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const normalized = extractRepoMeshStatus({
+      success: true,
+      result: {
+        success: true,
+        meshId: 'mesh_node303_stale_followup_precedence',
+        meshName: 'Node 303 Stale Follow-up Precedence Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        refreshedAt: '2026-05-22T04:10:00.000Z',
+        sourceOfTruth: {
+          currentStatus: 'live_git_and_session_probes',
+          directPeerTruth: { required: true, satisfied: true },
+        },
+        nodes: [
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            repoRoot,
+            machineStatus: 'online',
+            health: 'online',
+            launchReady: true,
+            providers: [],
+            providerPriority: ['hermes-cli'],
+            activeSessions: [],
+            git: {
+              isGitRepo: true,
+              workspace: repoRoot,
+              repoRoot,
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              headCommit: '3a71b5ad',
+              headMessage: 'chore: sync cloud MCP server vendor',
+              ahead: 0,
+              behind: 2,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              lastCheckedAt: Date.parse('2026-05-22T03:56:45.000Z'),
+            },
+            branchConvergence: {
+              defaultBranch: 'main',
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              ahead: 0,
+              behind: 2,
+              isDefaultBranch: true,
+              status: 'blocked_review',
+              needsConvergence: true,
+              reason: 'default_branch_not_even_with_upstream',
+              nextStep: 'Bring main even with its upstream before declaring convergence complete.',
+            },
+          },
+          {
+            nodeId: 'node_303',
+            machineLabel: 'node_303',
+            workspace: repoRoot,
+            repoRoot,
+            daemonId: 'daemon_303',
+            machineId: 'machine_303',
+            machineStatus: 'online',
+            health: 'online',
+            launchReady: true,
+            providers: [],
+            providerPriority: ['hermes-cli'],
+            activeSessions: [],
+            connection: { state: 'connected', transport: 'direct', reported: true, source: 'mesh_peer_status' },
+            git: {
+              isGitRepo: true,
+              workspace: repoRoot,
+              repoRoot,
+              branch: 'main',
+              upstream: 'origin/main',
+              upstreamStatus: 'fresh',
+              headCommit: '4c91e62f',
+              headMessage: 'Merge branch fix/mesh-followup-stale-ui',
+              ahead: 0,
+              behind: 0,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              lastCheckedAt: Date.parse('2026-05-22T04:10:00.000Z'),
+            },
+          },
+        ],
+        queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+        ledger: { entries: [], summary: { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 } },
+      },
+    } as any)
+
+    expect(normalized?.nodes).toHaveLength(1)
+    const node303 = normalized?.nodes[0]
+    expect(node303).toMatchObject({
+      nodeId: 'node_303',
+      daemonId: 'daemon_303',
+      machineId: 'machine_303',
+      git: expect.objectContaining({
+        branch: 'main',
+        upstream: 'origin/main',
+        headCommit: '4c91e62f',
+        ahead: 0,
+        behind: 0,
+      }),
+    })
+
+    const graph = buildMeshGraph(normalized as any)
+    const graphNode = graph.nodes.find(node => node.id === 'node_303')
+    expect(graphNode).toMatchObject({
+      branch: 'main',
+      upstream: 'origin/main',
+      branchConvergence: expect.objectContaining({
+        status: 'merged_to_main',
+        needsConvergence: false,
+        reason: 'clean_default_branch',
+      }),
+    })
+    expect(graph.stats.followUpNodes).toBe(0)
+    expect(graph.warnings.join('\n')).not.toContain('follow-up')
+  })
+
   it('does not let a failed mesh peer status row erase canonical live aggregate git truth', () => {
     const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
