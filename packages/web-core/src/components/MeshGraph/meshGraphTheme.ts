@@ -13,7 +13,6 @@ export interface MeshGraphTheme {
     graphShellClass: string
     graphStatChipClass: string
     graphHintChipClass: string
-    graphMiniMapClass: string
     graphControlsClass: string
     graphBackgroundDotColor: string
     edgeLabelTextColor: string
@@ -88,7 +87,6 @@ export function getMeshGraphTheme(theme: Theme): MeshGraphTheme {
             graphShellClass: 'relative w-full min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.16),_rgba(248,250,252,0.98)_42%,_rgba(255,255,255,1))]',
             graphStatChipClass: 'rounded-full border border-slate-300 bg-white/95 px-3 py-1 text-slate-700 shadow-sm',
             graphHintChipClass: 'rounded-full border border-slate-300 bg-white/95 px-3 py-1 text-[10px] text-slate-500 shadow-sm',
-            graphMiniMapClass: '!bottom-4 !right-4 !bg-white/95 !border !border-slate-200 !rounded-xl !shadow-md',
             graphControlsClass: '!bottom-4 !left-4 !shadow-md',
             graphBackgroundDotColor: 'rgba(148, 163, 184, 0.34)',
             edgeLabelTextColor: '#334155',
@@ -134,7 +132,6 @@ export function getMeshGraphTheme(theme: Theme): MeshGraphTheme {
         graphShellClass: 'relative w-full min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_rgba(15,23,42,0.98)_42%,_rgba(2,6,23,1))]',
         graphStatChipClass: 'rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-slate-200',
         graphHintChipClass: 'rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-[10px] text-slate-300',
-        graphMiniMapClass: '!bottom-4 !right-4 !bg-slate-950/85 !border !border-white/10 !rounded-xl',
         graphControlsClass: '!bottom-4 !left-4 !shadow-lg',
         graphBackgroundDotColor: 'rgba(148, 163, 184, 0.22)',
         edgeLabelTextColor: '#cbd5e1',

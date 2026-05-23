@@ -1,11 +1,7 @@
-import type { MeshGraph, MeshGraphNode } from './mesh-visualization'
+import type { MeshGraph } from './mesh-visualization'
 
 function uniqueIds(ids: Array<string | null | undefined>): string[] {
     return [...new Set(ids.filter((value): value is string => Boolean(value)))]
-}
-
-function nonSubmoduleNodes(data: MeshGraph): MeshGraphNode[] {
-    return data.nodes.filter(node => node.type !== 'submoduleNode')
 }
 
 export function getMeshGraphInitialFocusNodeIds(data: MeshGraph): string[] {
@@ -21,7 +17,7 @@ export function getMeshGraphInitialFocusNodeIds(data: MeshGraph): string[] {
     ))
 
     const nonOrphanNodes = data.nodes.filter(node => node.type !== 'submoduleNode' && !node.isOrphan)
-    const visibleNodes = nonSubmoduleNodes(data)
+    const visibleNodes = data.nodes.filter(node => node.type !== 'submoduleNode')
 
     if (defaultAnchor || primaryBranchNodes.length > 0) {
         return uniqueIds([defaultAnchor?.id, ...primaryBranchNodes.map(node => node.id)])
@@ -36,15 +32,6 @@ export function getMeshGraphInitialFocusNodeIds(data: MeshGraph): string[] {
     }
 
     return uniqueIds(data.nodes.map(node => node.id))
-}
-
-export function shouldShowMeshGraphMiniMap(data: MeshGraph): boolean {
-    const visibleNodes = nonSubmoduleNodes(data)
-    const branchCount = new Set(visibleNodes.map(node => node.branch).filter((branch): branch is string => Boolean(branch))).size
-    const submoduleCount = data.nodes.filter(node => node.type === 'submoduleNode').length
-    const orphanCount = visibleNodes.filter(node => node.isOrphan).length
-
-    return visibleNodes.length >= 6 || branchCount >= 3 || submoduleCount >= 3 || orphanCount > 0
 }
 
 export function getMeshGraphLayoutKey(data: MeshGraph): string {

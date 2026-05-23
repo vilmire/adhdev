@@ -395,7 +395,7 @@ export default function MeshObservabilitySurface({
         <div className="flex min-h-0 flex-col gap-4">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
                 <div className={`${meshTheme.cardClass} relative min-h-0 flex-1 rounded-[28px] p-3 sm:p-4`} style={{ minHeight: 420 }}>
-                    <div className={`mb-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl px-3.5 py-3 ${meshTheme.isDark ? 'border border-white/10 bg-slate-950/45' : 'border border-slate-200 bg-white/95 shadow-sm'}`}>
+                    <div className={`absolute inset-x-4 top-4 z-30 flex max-h-[42dvh] flex-wrap items-start justify-between gap-3 overflow-y-auto rounded-2xl px-3.5 py-3 backdrop-blur-xl sm:static sm:mb-3 sm:max-h-none sm:overflow-visible sm:backdrop-blur-none ${meshTheme.isDark ? 'border border-white/10 bg-slate-950/85 sm:bg-slate-950/45' : 'border border-slate-200 bg-white/95 shadow-lg shadow-slate-900/10 sm:bg-white/95 sm:shadow-sm'}`}>
                         <div className={`flex min-w-0 flex-1 flex-wrap gap-2 text-xs ${meshTheme.textSecondary}`}>
                             <Badge
                                 label={headlineLabel}

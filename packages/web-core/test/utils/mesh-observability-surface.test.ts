@@ -42,6 +42,20 @@ describe('MeshObservabilitySurface', () => {
     expect(html).toContain('0 recent failures')
   })
 
+  it('keeps mobile graph status badges as an in-graph floating overlay instead of a layout-blocking header', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/components/MeshGraph/MeshObservabilitySurface.tsx'),
+      'utf8',
+    )
+
+    expect(source).toContain('relative min-h-0 flex-1 rounded-[28px]')
+    expect(source).toContain('absolute inset-x-4 top-4 z-30')
+    expect(source).toContain('max-h-[42dvh]')
+    expect(source).toContain('overflow-y-auto')
+    expect(source).toContain('sm:static sm:mb-3')
+    expect(source).toContain('sm:overflow-visible')
+  })
+
   it('renders upstream unverified when a node only has stale remote-tracking refs', () => {
     const status = {
       meshId: 'mesh_freshness',

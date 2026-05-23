@@ -9,7 +9,6 @@ import {
     Controls,
     Handle,
     MarkerType,
-    MiniMap,
     Position,
     ReactFlow,
     useNodesInitialized,
@@ -29,7 +28,6 @@ import {
     getMeshGraphInitialFocusNodeIds,
     getMeshGraphLayoutKey,
     getMeshGraphViewportKey,
-    shouldShowMeshGraphMiniMap,
 } from '../../utils/mesh-graph-viewport'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme } from './meshGraphTheme'
@@ -370,7 +368,6 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const layout = useMemo(() => buildLayout(data, meshTheme), [data, meshTheme])
-    const showMiniMap = useMemo(() => shouldShowMeshGraphMiniMap(data), [data])
     const surfaceRef = useRef<HTMLDivElement | null>(null)
     const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 })
     const viewportKey = useMemo(
@@ -444,7 +441,7 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                     panOnDrag
                     panOnScroll
                     zoomOnScroll={false}
-                    zoomOnPinch={false}
+                    zoomOnPinch
                     zoomOnDoubleClick={false}
                     selectionOnDrag={false}
                     onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}
@@ -453,13 +450,7 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                     proOptions={{ hideAttribution: true }}
                 >
                     <MeshViewportController data={data} viewportKey={viewportKey} />
-                    {showMiniMap && (
-                        <MiniMap
-                            className={meshTheme.graphMiniMapClass}
-                            nodeColor={currentNode => getHealthDot((currentNode.data as FlowNodeData).graphNode.health)}
-                        />
-                    )}
-                    <Controls className={meshTheme.graphControlsClass} showInteractive={false} />
+                    <Controls className={meshTheme.graphControlsClass} position="bottom-left" showZoom showFitView showInteractive={false} />
                     <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color={meshTheme.graphBackgroundDotColor} />
                 </ReactFlow>
             </div>

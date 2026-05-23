@@ -1,7 +1,5 @@
 import type { MeshGraphData, MeshGraphNode } from './types'
 
-const LARGE_GRAPH_MINIMAP_THRESHOLD = 7
-
 function rankOverviewNode(node: MeshGraphNode): number {
     if (node.type === 'defaultBranchNode') return 0
     if (node.isOrphan) return 3
@@ -79,8 +77,4 @@ export function shouldShowMeshGraphCallout(node: MeshGraphNode): boolean {
     if (node.health === 'offline' || node.health === 'degraded' || node.health === 'wrong_branch') return true
     if (node.dirty) return true
     return false
-}
-
-export function shouldShowMeshGraphMiniMap(data: MeshGraphData): boolean {
-    return data.nodes.length >= LARGE_GRAPH_MINIMAP_THRESHOLD
 }

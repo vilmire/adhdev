@@ -5,7 +5,6 @@ import {
   getMeshGraphAttentionBadge,
   getMeshGraphViewportFocusNodeIds,
   shouldShowMeshGraphCallout,
-  shouldShowMeshGraphMiniMap,
 } from '../../src/components/MeshGraph/meshGraphViewModel'
 
 function graphNode(overrides: Partial<MeshGraphNode>): MeshGraphNode {
@@ -154,8 +153,4 @@ describe('meshGraphViewModel', () => {
     expect(shouldShowMeshGraphCallout(node)).toBe(true)
   })
 
-  it('only shows the minimap once the graph is large enough to need a secondary locator', () => {
-    expect(shouldShowMeshGraphMiniMap(graphData(Array.from({ length: 6 }, (_, index) => graphNode({ id: `node-${index}` }))))).toBe(false)
-    expect(shouldShowMeshGraphMiniMap(graphData(Array.from({ length: 7 }, (_, index) => graphNode({ id: `node-${index}` }))))).toBe(true)
-  })
 })
