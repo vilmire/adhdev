@@ -460,16 +460,16 @@ function reconcileInlineMeshCache(cached: any, incoming: any): any {
     const incomingNodes = Array.isArray(incoming.nodes) ? incoming.nodes : [];
     if (!cachedNodes.length || !incomingNodes.length) return { ...cached, ...incoming };
 
-    const incomingById = new Map<string, any>();
-    for (const node of incomingNodes) {
+    const cachedById = new Map<string, any>();
+    for (const node of cachedNodes) {
         const nodeId = readInlineMeshNodeId(node);
-        if (nodeId) incomingById.set(nodeId, node);
+        if (nodeId) cachedById.set(nodeId, node);
     }
 
-    const nodes = cachedNodes.map((cachedNode: any) => {
-        const nodeId = readInlineMeshNodeId(cachedNode);
-        const incomingNode = nodeId ? incomingById.get(nodeId) : undefined;
-        if (!incomingNode) return cachedNode;
+    const nodes = incomingNodes.map((incomingNode: any) => {
+        const nodeId = readInlineMeshNodeId(incomingNode);
+        const cachedNode = nodeId ? cachedById.get(nodeId) : undefined;
+        if (!cachedNode) return incomingNode;
         if (hasInlineMeshTransientNodeState(incomingNode)) {
             return { ...cachedNode, ...incomingNode };
         }
@@ -673,7 +673,7 @@ async function hydrateInlineMeshDirectTruth(args: {
             continue;
         }
 
-        if (isSelfNode && fs.existsSync(workspace)) {
+        if (fs.existsSync(workspace)) {
             try {
                 const localGit = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
                 if (localGit?.isGitRepo) {
