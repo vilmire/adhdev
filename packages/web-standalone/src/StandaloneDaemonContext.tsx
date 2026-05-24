@@ -128,6 +128,7 @@ export function sendPtyInputViaWs(daemonId: string, sessionId: string, data: str
         return false
     }
 }
+standaloneConnectionManager.registerPtyInputSender(sendPtyInputViaWs)
 
 /**
  * WS-based connection adapter — implements the same interface as
