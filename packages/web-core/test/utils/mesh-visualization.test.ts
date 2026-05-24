@@ -507,6 +507,156 @@ describe('buildMeshGraph', () => {
         expect(graph.warnings).toContain('1 submodule(s) are out of sync with their parent checkout')
     })
 
+    it('drops stale blocked convergence when current live git is a clean merged default branch', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_live_git_stale_convergence',
+            meshName: 'Live Git Stale Convergence Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-05-24T12:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_1171c7758bbdb3f751295c9ba844e289',
+                    machineLabel: 'node_117',
+                    workspace: '/repo/main-peer',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'connected', transport: 'direct', reported: true, source: 'mesh_peer_status' },
+                    git: {
+                        ...baseGit('main'),
+                        upstream: 'origin/main',
+                        headCommit: '6a16d844',
+                        submodules: [
+                            { path: 'oss', commit: 'b24fd8e70e28f7f12889de7ce60ff7836efd8634', repoPath: '/repo/main-peer/oss', dirty: false, outOfSync: false },
+                            { path: 'adhdev-providers', commit: 'f68d59da547cd56bee59fd912b7b2f493cf09102', repoPath: '/repo/main-peer/adhdev-providers', dirty: false, outOfSync: false },
+                        ],
+                    },
+                    branchConvergence: {
+                        status: 'blocked_review',
+                        needsConvergence: true,
+                        reason: 'previous_snapshot_default_branch_not_even',
+                        nextStep: 'stale previous follow-up must not survive live git truth',
+                    },
+                },
+            ],
+        } as any)
+
+        const graphNode = graph.nodes.find(node => node.id === 'node_1171c7758bbdb3f751295c9ba844e289')
+        expect(graphNode).toEqual(expect.objectContaining({
+            branch: 'main',
+            upstream: 'origin/main',
+            snapshotCompleteness: 'complete',
+            branchConvergence: expect.objectContaining({
+                status: 'merged_to_main',
+                needsConvergence: false,
+                reason: 'clean_default_branch',
+            }),
+        }))
+        expect(graph.stats.blockedReviewNodes).toBe(0)
+    })
+
+    it('drops stale upstream-unverified convergence when current feature branch upstream is fresh', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_feature_upstream_fresh',
+            meshName: 'Feature Upstream Fresh Mesh',
+            repoIdentity: 'repo',
+            defaultBranch: 'main',
+            refreshedAt: '2026-05-24T12:02:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_feature_fresh',
+                    machineLabel: 'feature',
+                    workspace: '/repo/feature',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: {
+                        ...baseGit('fix/mesh-graph-upstream-unverified-stale-after-refresh'),
+                        upstream: 'origin/fix/mesh-graph-upstream-unverified-stale-after-refresh',
+                    },
+                    branchConvergence: {
+                        branch: 'fix/mesh-graph-upstream-unverified-stale-after-refresh',
+                        upstream: 'origin/fix/mesh-graph-upstream-unverified-stale-after-refresh',
+                        status: 'blocked_review',
+                        needsConvergence: true,
+                        reason: 'feature_branch_upstream_unverified',
+                    },
+                },
+            ],
+        } as any)
+
+        expect(graph.nodes.find(node => node.id === 'node_feature_fresh')).toEqual(expect.objectContaining({
+            branchConvergence: expect.objectContaining({
+                status: 'pushed_feature_branch_needs_merge',
+                needsConvergence: true,
+                reason: 'clean_non_default_branch',
+            }),
+        }))
+        expect(graph.stats.blockedReviewNodes).toBe(0)
+        expect(graph.stats.mergeReadyNodes).toBe(1)
+    })
+
+    it('recomputes the synthetic default branch aggregate from current clean members when follow-ups are empty', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_b8b65f3d055abf3fd934bd02aa39490e',
+            meshName: 'Converged Main Mesh',
+            repoIdentity: 'github.com/vilmire/adhdev',
+            refreshedAt: '2026-05-24T12:05:00.000Z',
+            branchConvergenceSummary: {
+                needsFollowUp: false,
+                unresolvedCount: 0,
+                followUps: [],
+            },
+            nodes: [
+                {
+                    nodeId: 'node_7',
+                    machineLabel: 'node_7',
+                    workspace: '/Users/vilmire/Work/adhdev',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'self', transport: 'direct', reported: true, source: 'mesh_peer_status' },
+                    git: { ...baseGit('main'), upstream: 'origin/main', headCommit: '6a16d844' },
+                    branchConvergence: {
+                        status: 'blocked_review',
+                        needsConvergence: true,
+                        reason: 'stale_previous_review_block',
+                    },
+                },
+                {
+                    nodeId: 'node_1171c7758bbdb3f751295c9ba844e289',
+                    machineLabel: 'node_117',
+                    workspace: '/Users/moltbot/Documents/Work/adhdev',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'connected', transport: 'direct', reported: true, source: 'mesh_peer_status' },
+                    git: { ...baseGit('main'), upstream: 'origin/main', headCommit: '6a16d844' },
+                    branchConvergence: {
+                        status: 'blocked_review',
+                        needsConvergence: true,
+                        reason: 'stale_previous_review_block',
+                    },
+                },
+            ],
+        } as any)
+
+        const defaultBranchNode = graph.nodes.find(node => node.id === '__branch_main')
+        expect(defaultBranchNode).toEqual(expect.objectContaining({
+            type: 'defaultBranchNode',
+            branch: 'main',
+            branchConvergence: expect.objectContaining({
+                status: 'merged_to_main',
+                needsConvergence: false,
+                reason: 'clean_default_branch_aggregate',
+            }),
+        }))
+        expect(graph.nodes.filter(node => node.type !== 'submoduleNode').every(node => node.branchConvergence?.status !== 'blocked_review')).toBe(true)
+        expect(graph.stats.followUpNodes).toBe(0)
+        expect(graph.stats.blockedReviewNodes).toBe(0)
+        expect(graph.warnings.join('\n')).not.toContain('blocked on branch convergence')
+    })
+
     it('marks online nodes with pending peer git probes as pending instead of blocked review', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_pending_probe',
