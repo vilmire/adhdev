@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events'
+import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../src/mesh/mesh-events'
 
 function createRouter() {
   return new DaemonCommandRouter({
@@ -103,6 +103,17 @@ function expectAccepted(result: any, nodeId: string) {
   expect(result.startedAt).toMatch(/T/)
 }
 
+function createMeshEventComponents(meshId: string, messages: string[], coordinatorCount = 1) {
+  const coordinators = Array.from({ length: coordinatorCount }, (_, idx) => ({
+    getState: () => ({ instanceId: `coord-${idx}`, settings: { meshCoordinatorFor: meshId } }),
+    onEvent: (_event: string, payload: any) => messages.push(payload?.input?.text || ''),
+  }))
+  return {
+    cliManager: { adapters: new Map(), handleCliCommand: async () => ({ success: true }) },
+    instanceManager: { getByCategory: () => coordinators },
+  } as any
+}
+
 async function waitForRefineLedger(meshId: string, jobId: string, timeoutMs = 5000): Promise<any> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -118,6 +129,90 @@ async function waitForRefineLedger(meshId: string, jobId: string, timeoutMs = 50
 }
 
 describe('refine_mesh_node validation gate', () => {
+  it('delivers async refine completion and failure as coordinator-visible system messages with duplicate suppression', () => {
+    const meshId = `mesh-refine-delivery-${Date.now()}`
+    const messages: string[] = []
+    const components = createMeshEventComponents(meshId, messages)
+
+    const completed = handleMeshForwardEvent(components, {
+      event: 'refine:completed',
+      meshId,
+      nodeId: 'node-delivery',
+      workspace: '/tmp/node-delivery',
+      jobId: 'refine_job_delivery_completed',
+      status: 'completed',
+      result: {
+        success: true,
+        merged: true,
+        branch: 'feat/refine',
+        into: 'main',
+        validationSummary: { status: 'passed' },
+      },
+    })
+    expect(completed).toMatchObject({ success: true, forwarded: 1 })
+    expect(messages[0]).toContain('completed successfully')
+    expect(messages[0]).toContain('job_id=refine_job_delivery_completed')
+    expect(messages[0]).toContain('validation=passed')
+
+    const duplicate = handleMeshForwardEvent(components, {
+      event: 'refine:completed',
+      meshId,
+      nodeId: 'node-delivery',
+      jobId: 'refine_job_delivery_completed',
+      status: 'completed',
+    })
+    expect(duplicate).toMatchObject({ success: true, suppressed: true, duplicateRefineTerminalEvent: true })
+    expect(messages).toHaveLength(1)
+
+    const failed = handleMeshForwardEvent(components, {
+      event: 'refine:failed',
+      meshId,
+      nodeId: 'node-delivery',
+      jobId: 'refine_job_delivery_failed',
+      status: 'failed',
+      result: { success: false, code: 'validation_failed', error: 'validation failed' },
+    })
+    expect(failed).toMatchObject({ success: true, forwarded: 1 })
+    expect(messages[1]).toContain('failed')
+    expect(messages[1]).toContain('job_id=refine_job_delivery_failed')
+    expect(messages[1]).toContain('code=validation_failed')
+  })
+
+  it('buffers forwarded refine terminal events for MCP coordinators when no live CLI coordinator exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-pending-delivery-'))
+    const meshId = `mesh-refine-pending-${Date.now()}`
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      const messages: string[] = []
+      const components = createMeshEventComponents(meshId, messages, 0)
+      const forwarded = handleMeshForwardEvent(components, {
+        event: 'refine:completed',
+        meshId,
+        nodeId: 'node-pending',
+        workspace: '/tmp/node-pending',
+        jobId: 'refine_job_pending_completed',
+        status: 'completed',
+        result: { success: true, merged: true, validationSummary: { status: 'passed' } },
+      })
+
+      expect(forwarded).toMatchObject({ success: true, forwarded: 0 })
+      expect(messages).toEqual([])
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({ event: 'refine:completed', meshId, nodeId: 'node-pending' })
+      expect((pending[0].metadataEvent as any)).toMatchObject({
+        jobId: 'refine_job_pending_completed',
+        status: 'completed',
+        result: { success: true, merged: true },
+      })
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('accepts refine asynchronously and records validation failure in ledger and pending events', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-fail-'))
     const repo = join(root, 'repo')
