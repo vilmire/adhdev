@@ -1145,6 +1145,92 @@ describe('extractRepoMeshStatus', () => {
     expect(graph.snapshotWarnings).toEqual([])
   })
 
+  it('prefers the latest command result over stale top-level status even when the stale snapshot has more truthy fields', () => {
+    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const cleanNode = (nodeId: string, headCommit: string) => ({
+      nodeId,
+      machineLabel: nodeId,
+      workspace: repoRoot,
+      repoRoot,
+      health: 'online',
+      connection: { state: 'connected', transport: 'direct', reported: true, source: 'mesh_peer_status' },
+      git: {
+        isGitRepo: true,
+        workspace: repoRoot,
+        repoRoot,
+        branch: 'main',
+        upstream: 'origin/main',
+        upstreamStatus: 'fresh',
+        upstreamFetchedAt: Date.parse('2026-05-24T00:10:00.000Z'),
+        headCommit,
+        ahead: 0,
+        behind: 0,
+        staged: 0,
+        modified: 0,
+        untracked: 0,
+        deleted: 0,
+        renamed: 0,
+        hasConflicts: false,
+        lastCheckedAt: Date.parse('2026-05-24T00:10:00.000Z'),
+      },
+    })
+    const staleNode = (nodeId: string) => ({
+      nodeId,
+      machineLabel: nodeId,
+      workspace: `${repoRoot}/stale-${nodeId}`,
+      repoRoot: `${repoRoot}/stale-${nodeId}`,
+      health: 'online',
+      git: {
+        isGitRepo: true,
+        workspace: `${repoRoot}/stale-${nodeId}`,
+        repoRoot: `${repoRoot}/stale-${nodeId}`,
+        branch: 'main',
+        upstream: 'origin/main',
+        upstreamStatus: 'stale',
+        upstreamFetchError: 'fetch timed out',
+        headCommit: `stale-${nodeId}`,
+        ahead: 0,
+        behind: 0,
+        staged: 0,
+        modified: 0,
+        untracked: 0,
+        deleted: 0,
+        renamed: 0,
+        hasConflicts: false,
+        lastCheckedAt: Date.parse('2026-05-23T23:59:00.000Z'),
+      },
+      branchConvergence: {
+        status: 'blocked_review',
+        needsConvergence: true,
+        reason: 'upstream_unverified',
+        nextStep: 'Stale snapshot should not survive a newer command result.',
+      },
+    })
+
+    const latestResult = {
+      ...status,
+      meshId: 'mesh_latest_command_result',
+      refreshedAt: '2026-05-24T00:10:00.000Z',
+      nodes: [cleanNode('node_7', 'fresh-node-7'), cleanNode('node_303', 'fresh-node-303')],
+    }
+    const staleTopLevelStatus = {
+      ...status,
+      meshId: 'mesh_stale_top_level_status',
+      refreshedAt: '2026-05-23T23:59:00.000Z',
+      sourceOfTruth: { currentStatus: 'live_git_and_session_probes' },
+      nodes: ['node_old_1', 'node_old_2', 'node_old_3', 'node_old_4', 'node_old_5', 'node_old_6'].map(staleNode),
+      followUps: [{ branch: 'main', count: 1, reason: 'upstream_unverified' }],
+    }
+
+    const normalized = extractRepoMeshStatus({ success: true, status: staleTopLevelStatus, result: latestResult } as any)
+    expect(normalized?.refreshedAt).toBe('2026-05-24T00:10:00.000Z')
+    expect(normalized?.nodes.map(node => node.nodeId)).toEqual(['node_7', 'node_303'])
+
+    const graph = buildMeshGraph(normalized as any)
+    expect(graph.nodes.map(node => node.id)).not.toContain('node_old_1')
+    expect(graph.nodes.every(node => node.branchConvergence?.reason !== 'upstream_unverified')).toBe(true)
+  })
+
   it('returns null for unrelated payloads', () => {
     expect(extractRepoMeshStatus({ success: true, result: { ok: true } } as any)).toBeNull()
   })

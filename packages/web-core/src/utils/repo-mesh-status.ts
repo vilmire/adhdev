@@ -534,9 +534,7 @@ function scoreRepoMeshStatusTruth(status: RepoMeshStatus): number {
     return score
 }
 
-export function extractRepoMeshStatus(response: any): RepoMeshStatus | null {
-    const body = response?.result ?? response
-    const candidates = [response?.status, body?.status, body, response]
+function pickBestRepoMeshStatus(candidates: unknown[]): RepoMeshStatus | null {
     let best: { status: RepoMeshStatus; score: number } | null = null
     for (const candidate of candidates) {
         const normalized = normalizeRepoMeshStatus(readRecord(candidate))
@@ -545,4 +543,18 @@ export function extractRepoMeshStatus(response: any): RepoMeshStatus | null {
         if (!best || score > best.score) best = { status: normalized, score }
     }
     return best?.status ?? null
+}
+
+export function extractRepoMeshStatus(response: any): RepoMeshStatus | null {
+    const hasWrappedResult = Boolean(response && typeof response === 'object' && 'result' in response)
+    const body = hasWrappedResult ? response?.result : response
+
+    // Cloud/P2P command responses wrap the daemon-owned payload under `result`.
+    // A top-level `status` can be transport/UI-side metadata from an older refresh;
+    // never let that outer snapshot outscore the latest command result and keep
+    // removed nodes or stale upstream_unverified follow-ups alive after refresh.
+    const primary = pickBestRepoMeshStatus([body?.status, body])
+    if (primary) return primary
+
+    return pickBestRepoMeshStatus([response?.status, response])
 }
