@@ -58,6 +58,29 @@ export interface PendingMeshCoordinatorEvent {
     queuedAt: number;
 }
 
+const REFINE_TERMINAL_EVENTS = new Set(['refine:completed', 'refine:failed']);
+
+function readRefineJobId(event: { metadataEvent?: Record<string, unknown> } | Record<string, unknown>): string {
+    const metadata = readRecord((event as any).metadataEvent) || event as Record<string, unknown>;
+    const result = readRecord(metadata.result);
+    const refineJob = readRecord(result?.refineJob);
+    return readNonEmptyString(metadata.jobId) || readNonEmptyString(refineJob?.jobId);
+}
+
+function buildRefineTerminalEventFingerprint(meshId: string, eventName: string, metadataEvent: Record<string, unknown>): string {
+    const jobId = readRefineJobId({ metadataEvent });
+    return jobId && REFINE_TERMINAL_EVENTS.has(eventName) ? `${meshId}::${eventName}::${jobId}` : '';
+}
+
+function hasPendingRefineTerminalEventDuplicate(event: PendingMeshCoordinatorEvent): boolean {
+    if (!REFINE_TERMINAL_EVENTS.has(event.event)) return false;
+    const jobId = readRefineJobId(event);
+    if (!jobId) return false;
+    return getPendingMeshCoordinatorEvents(event.meshId).some((pending) =>
+        pending.event === event.event && readRefineJobId(pending) === jobId,
+    );
+}
+
 function getPendingEventsPath(meshId: string): string {
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
     return join(getLedgerDir(), `${safe}.pending-events.jsonl`);
@@ -65,6 +88,10 @@ function getPendingEventsPath(meshId: string): string {
 
 export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent): boolean {
     try {
+        if (hasPendingRefineTerminalEventDuplicate(event)) {
+            LOG.info('MeshEvents', `Suppressed duplicate pending ${event.event} for refine job ${readRefineJobId(event)}`);
+            return true;
+        }
         appendFileSync(getPendingEventsPath(event.meshId), JSON.stringify(event) + '\n', 'utf-8');
         return true;
     } catch (e: any) {
@@ -131,6 +158,9 @@ const MESH_COORDINATOR_EVENTS = new Set([
     'agent:stopped',
     'agent:ready',
     'monitor:long_generating',
+    'refine:accepted',
+    'refine:completed',
+    'refine:failed',
 ]);
 
 const EVENT_TO_LEDGER_KIND: Record<string, MeshLedgerKind> = {
@@ -256,6 +286,18 @@ function isDuplicateMeshCompletionEvent(args: {
     finalSummary?: string;
 }): boolean {
     const fingerprint = buildMeshCompletionFingerprint(args);
+    if (!fingerprint) return false;
+    const now = Date.now();
+    for (const [key, seenAt] of recentCompletionFingerprints.entries()) {
+        if (now - seenAt > RECENT_COMPLETION_FINGERPRINT_TTL_MS) recentCompletionFingerprints.delete(key);
+    }
+    if (recentCompletionFingerprints.has(fingerprint)) return true;
+    recentCompletionFingerprints.set(fingerprint, now);
+    return false;
+}
+
+function isDuplicateRefineTerminalEvent(meshId: string, eventName: string, metadataEvent: Record<string, unknown>): boolean {
+    const fingerprint = buildRefineTerminalEventFingerprint(meshId, eventName, metadataEvent);
     if (!fingerprint) return false;
     const now = Date.now();
     for (const [key, seenAt] of recentCompletionFingerprints.entries()) {
@@ -700,6 +742,32 @@ function buildMeshSystemMessage(args: {
     if (args.event === 'monitor:long_generating') {
         return `[System] ${args.nodeLabel} has been generating for a long time${metadata}. Use mesh_read_chat once for a status check, but do not poll repeatedly.`;
     }
+    if (args.event === 'refine:accepted') {
+        const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
+        return `[System] Refinery accepted async job${jobId ? ` ${jobId}` : ''} for ${args.nodeLabel}. Completion/failure will be delivered as a terminal refine event; do not poll repeatedly.`;
+    }
+    if (args.event === 'refine:completed') {
+        const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
+        const result = readRecord(args.metadataEvent.result);
+        const validationSummary = readRecord(result?.validationSummary);
+        const validationStatus = readNonEmptyString(validationSummary?.status);
+        const into = readNonEmptyString(result?.into);
+        const branch = readNonEmptyString(result?.branch);
+        const details = [
+            jobId ? `job_id=${jobId}` : '',
+            branch && into ? `${branch}→${into}` : '',
+            validationStatus ? `validation=${validationStatus}` : '',
+        ].filter(Boolean).join('; ');
+        return `[System] Refinery async job for ${args.nodeLabel} completed successfully${details ? ` (${details})` : ''}. The worktree was merged and cleanup completed; continue from the updated mesh state.`;
+    }
+    if (args.event === 'refine:failed') {
+        const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
+        const result = readRecord(args.metadataEvent.result);
+        const code = readNonEmptyString(result?.code);
+        const error = readNonEmptyString(result?.error);
+        const details = [jobId ? `job_id=${jobId}` : '', code ? `code=${code}` : ''].filter(Boolean).join('; ');
+        return `[System] Refinery async job for ${args.nodeLabel} failed${details ? ` (${details})` : ''}${error ? `: ${error}` : '.'} Review the terminal refine event/ledger before retrying.`;
+    }
     return '';
 }
 
@@ -726,6 +794,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
         LOG.info('MeshEvents', `Suppressed ${args.event} for intentionally cleanup-stopped session ${eventSessionId || '(unknown session)'}`);
         return { success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true };
+    }
+
+    if (isDuplicateRefineTerminalEvent(args.meshId, args.event, args.metadataEvent)) {
+        LOG.info('MeshEvents', `Suppressed duplicate ${args.event} for refine job ${readRefineJobId({ metadataEvent: args.metadataEvent })}`);
+        return { success: true, forwarded: 0, suppressed: true, duplicateRefineTerminalEvent: true };
     }
 
     const eventTimestamp = readEventTimestamp(args.metadataEvent.timestamp);
@@ -1005,6 +1078,14 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             providerType: readNonEmptyString(payload.providerType),
             providerSessionId: readNonEmptyString(payload.providerSessionId),
             finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
+            jobId: readNonEmptyString(payload.jobId),
+            interactionId: readNonEmptyString(payload.interactionId),
+            status: readNonEmptyString(payload.status),
+            targetDaemonId: readNonEmptyString(payload.targetDaemonId),
+            startedAt: readNonEmptyString(payload.startedAt),
+            completedAt: readNonEmptyString(payload.completedAt),
+            retryOfJobId: readNonEmptyString(payload.retryOfJobId),
+            ...(payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result) ? { result: payload.result } : {}),
             ...(payload.timestamp !== undefined ? { timestamp: payload.timestamp } : {}),
             intentional: payload.intentional === true,
             intentionalStop: payload.intentionalStop === true,
