@@ -23,6 +23,8 @@ class StandaloneConnectionManager {
     private runtimeListeners = new Map<string, Set<(event: RuntimeEvent) => void>>()
     private screenshotCallbacks = new Map<string, ScreenshotCallback>()
     private statusCallbacks = new Set<StatusCallback>()
+    private stateChangeCallbacks = new Set<(daemonId: string, state: string) => void>()
+    private ptyInputSender: ((daemonId: string, sessionId: string, data: string) => boolean) | null = null
 
     private resolveDaemonId(id: string): string | null {
         if (this.adapters.has(id)) return id
@@ -46,6 +48,13 @@ class StandaloneConnectionManager {
 
     setState(daemonId: string, state: ConnectionStatus | string): void {
         this.states.set(daemonId, state)
+        const resolved = this.resolveDaemonId(daemonId) || daemonId
+        this.stateChangeCallbacks.forEach(cb => cb(resolved, state))
+    }
+
+    onStateChange(callback: (daemonId: string, state: string) => void): () => void {
+        this.stateChangeCallbacks.add(callback)
+        return () => { this.stateChangeCallbacks.delete(callback) }
     }
 
     retryConnection(_daemonId: string): void {}
@@ -60,8 +69,14 @@ class StandaloneConnectionManager {
         return resolved ? (this.states.get(resolved) || 'disconnected') : 'disconnected'
     }
 
+    registerPtyInputSender(fn: (daemonId: string, sessionId: string, data: string) => boolean): void {
+        this.ptyInputSender = fn
+    }
+
     sendData(_daemonId: string, _data: any): boolean { return false }
-    sendPtyInput(_daemonId: string, _sessionId: string, _data: string): boolean { return false }
+    sendPtyInput(daemonId: string, sessionId: string, data: string): boolean {
+        return this.ptyInputSender ? this.ptyInputSender(daemonId, sessionId, data) : false
+    }
 
     onScreenshot(key: string, callback: ScreenshotCallback): () => void {
         this.screenshotCallbacks.set(key, callback)
