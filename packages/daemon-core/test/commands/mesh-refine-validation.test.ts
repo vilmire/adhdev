@@ -194,6 +194,87 @@ describe('refine_mesh_node validation gate', () => {
     }
   }, 60000)
 
+  it('starts a new async refine job after a terminal validation failure instead of returning the failed job as duplicate', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-retry-failed-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      writeFileSync(join(repo, 'validation.js'), 'console.error("validation failed")\nprocess.exit(7)\n', 'utf-8')
+      execFileSync('git', ['add', 'validation.js'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'make validation fail'], { cwd: repo })
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-retry-failed', {
+        test: [{ command: 'npm run test', sourcePath: 'package.json', confidence: 'high' }],
+      })
+      const router = createRouter()
+
+      const first: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-failed', inlineMesh: mesh })
+      expectAccepted(first, 'node-retry-failed')
+      const firstTerminal = await waitForRefineLedger(mesh.id, first.jobId)
+      expect(firstTerminal.kind).toBe('task_failed')
+
+      const retry: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-failed', inlineMesh: mesh })
+      expectAccepted(retry, 'node-retry-failed')
+      expect(retry.jobId).not.toBe(first.jobId)
+      expect(retry.duplicate).not.toBe(true)
+      expect(retry.retryOfJobId).toBe(first.jobId)
+      const retryDispatched = readLedgerEntries(mesh.id).find(entry =>
+        entry.kind === 'task_dispatched'
+        && (entry.payload as any)?.refineJob?.jobId === retry.jobId
+      )
+      expect((retryDispatched?.payload as any)?.refineJob?.retryOfJobId).toBe(first.jobId)
+      const events = drainPendingMeshCoordinatorEvents(mesh.id)
+      expect(events.some(event => event.event === 'refine:accepted'
+        && (event.metadataEvent as any).jobId === retry.jobId
+        && (event.metadataEvent as any).retryOfJobId === first.jobId)).toBe(true)
+      await waitForRefineLedger(mesh.id, retry.jobId)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('starts a new async refine job after a completed terminal job when the same node is reintroduced', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-retry-completed-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-retry-completed')
+      const originalNode = { ...mesh.nodes[1] }
+      const router = createRouter()
+
+      const first: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-completed', inlineMesh: mesh })
+      expectAccepted(first, 'node-retry-completed')
+      const firstTerminal = await waitForRefineLedger(mesh.id, first.jobId)
+      expect(firstTerminal.kind).toBe('task_completed')
+
+      execFileSync('git', ['worktree', 'add', '-q', worktree, 'feat/refine'], { cwd: repo })
+      writeFileSync(join(worktree, 'README.md'), `${readFileSync(join(worktree, 'README.md'), 'utf-8')}retry\n`, 'utf-8')
+      execFileSync('git', ['add', 'README.md'], { cwd: worktree })
+      execFileSync('git', ['commit', '-q', '-m', 'retry change'], { cwd: worktree })
+      mesh.nodes.push(originalNode)
+
+      const retry: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-completed', inlineMesh: mesh })
+      expectAccepted(retry, 'node-retry-completed')
+      expect(retry.jobId).not.toBe(first.jobId)
+      expect(retry.duplicate).not.toBe(true)
+      expect(retry.retryOfJobId).toBe(first.jobId)
+      const retryTerminal = await waitForRefineLedger(mesh.id, retry.jobId)
+      expect(retryTerminal.kind).toBe('task_completed')
+      expect((retryTerminal.payload as any).refineJob.retryOfJobId).toBe(first.jobId)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
   it('records validation pass, merge, cleanup and final convergence in completion evidence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-pass-'))
     const repo = join(root, 'repo')
