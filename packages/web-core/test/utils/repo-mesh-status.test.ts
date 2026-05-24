@@ -24,6 +24,95 @@ describe('extractRepoMeshStatus', () => {
     expect(extractRepoMeshStatus({ success: true, result: { status } } as any)).toEqual(status)
   })
 
+  it('prefers fresh result status over stale upstream-unverified wrapper status', () => {
+    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const staleWrapperStatus = {
+      ...status,
+      meshId: 'mesh_upstream_freshness_precedence',
+      meshName: 'Upstream Freshness Precedence Mesh',
+      refreshedAt: '2026-05-23T00:00:00.000Z',
+      sourceOfTruth: { currentStatus: 'live_git_and_session_probes' },
+      nodes: [
+        {
+          nodeId: 'node_303',
+          machineLabel: 'node_303',
+          workspace: repoRoot,
+          repoRoot,
+          health: 'online',
+          git: {
+            isGitRepo: true,
+            workspace: repoRoot,
+            repoRoot,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'stale',
+            upstreamFetchError: 'fetch timed out',
+            headCommit: 'stale123',
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            lastCheckedAt: Date.parse('2026-05-23T00:00:00.000Z'),
+          },
+        },
+      ],
+    }
+    const freshResultStatus = {
+      ...staleWrapperStatus,
+      refreshedAt: '2026-05-23T00:00:10.000Z',
+      nodes: [
+        {
+          nodeId: 'node_303',
+          machineLabel: 'node_303',
+          workspace: repoRoot,
+          repoRoot,
+          health: 'online',
+          connection: { state: 'connected', transport: 'direct', reported: true, source: 'mesh_peer_status' },
+          git: {
+            isGitRepo: true,
+            workspace: repoRoot,
+            repoRoot,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            upstreamFetchedAt: Date.parse('2026-05-23T00:00:10.000Z'),
+            headCommit: 'fresh456',
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            lastCheckedAt: Date.parse('2026-05-23T00:00:10.000Z'),
+          },
+        },
+      ],
+    }
+
+    const normalized = extractRepoMeshStatus({ success: true, status: staleWrapperStatus, result: freshResultStatus } as any)
+    const node303 = normalized?.nodes[0]
+    expect(node303?.git).toMatchObject({
+      upstreamStatus: 'fresh',
+      upstreamFetchedAt: Date.parse('2026-05-23T00:00:10.000Z'),
+      headCommit: 'fresh456',
+    })
+    expect(node303?.git).not.toHaveProperty('upstreamFetchError')
+
+    const graph = buildMeshGraph(normalized as any)
+    const graphNode = graph.nodes.find(node => node.id === 'node_303')
+    expect(graphNode?.branchConvergence).toMatchObject({
+      status: 'merged_to_main',
+      needsConvergence: false,
+      reason: 'clean_default_branch',
+    })
+  })
+
   it('normalizes raw node payloads so live git probe truth outranks stale cached orphan snapshots on the client path', () => {
     const response = {
       success: true,
