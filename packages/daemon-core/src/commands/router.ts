@@ -460,6 +460,11 @@ function reconcileInlineMeshCache(cached: any, incoming: any): any {
     const incomingNodes = Array.isArray(incoming.nodes) ? incoming.nodes : [];
     if (!cachedNodes.length || !incomingNodes.length) return { ...cached, ...incoming };
 
+    const cachedUpdatedAt = Date.parse(readStringValue(cached.updatedAt, cached.updated_at) || '');
+    const incomingUpdatedAt = Date.parse(readStringValue(incoming.updatedAt, incoming.updated_at) || '');
+    const preserveCachedMembership = Number.isFinite(cachedUpdatedAt)
+        && (!Number.isFinite(incomingUpdatedAt) || cachedUpdatedAt > incomingUpdatedAt);
+
     const cachedById = new Map<string, any>();
     for (const node of cachedNodes) {
         const nodeId = readInlineMeshNodeId(node);
@@ -469,12 +474,13 @@ function reconcileInlineMeshCache(cached: any, incoming: any): any {
     const nodes = incomingNodes.map((incomingNode: any) => {
         const nodeId = readInlineMeshNodeId(incomingNode);
         const cachedNode = nodeId ? cachedById.get(nodeId) : undefined;
+        if (!cachedNode && preserveCachedMembership) return null;
         if (!cachedNode) return incomingNode;
         if (hasInlineMeshTransientNodeState(incomingNode)) {
             return { ...cachedNode, ...incomingNode };
         }
         return { ...stripInlineMeshTransientNodeState(cachedNode), ...incomingNode };
-    });
+    }).filter(Boolean);
 
     return {
         ...cached,
