@@ -925,6 +925,7 @@ type MeshRefineJobHandle = {
     startedAt: string;
     completedAt?: string;
     duplicate?: boolean;
+    retryOfJobId?: string;
     eventDelivery: {
         pendingEvents: true;
         ledger: true;
@@ -2188,6 +2189,7 @@ export class DaemonCommandRouter {
         completedAt?: string;
         jobId?: string;
         interactionId?: string;
+        retryOfJobId?: string;
     }): MeshRefineJobHandle {
         return {
             success: true,
@@ -2202,6 +2204,7 @@ export class DaemonCommandRouter {
             workspace: readStringValue(args.node?.workspace),
             startedAt: args.startedAt || new Date().toISOString(),
             ...(args.completedAt ? { completedAt: args.completedAt } : {}),
+            ...(args.retryOfJobId ? { retryOfJobId: args.retryOfJobId } : {}),
             eventDelivery: { pendingEvents: true, ledger: true },
             evidence: {
                 pendingEventsCommand: 'get_pending_mesh_events',
@@ -2229,6 +2232,7 @@ export class DaemonCommandRouter {
                 status: handle.status,
                 startedAt: handle.startedAt,
                 completedAt: handle.completedAt,
+                retryOfJobId: handle.retryOfJobId,
                 ...(result ? { result } : {}),
             },
             queuedAt: Date.now(),
@@ -2253,8 +2257,10 @@ export class DaemonCommandRouter {
                         workspace: handle.workspace,
                         startedAt: handle.startedAt,
                         completedAt: handle.completedAt,
+                        retryOfJobId: handle.retryOfJobId,
                     },
                     async: true,
+                    retryOfJobId: handle.retryOfJobId,
                     ...(result ? {
                         success: result.success === true,
                         result,
@@ -2509,6 +2515,7 @@ export class DaemonCommandRouter {
             completedAt,
             jobId: handle.jobId,
             interactionId: handle.interactionId,
+            retryOfJobId: handle.retryOfJobId,
             node: { daemonId: handle.targetDaemonId, workspace: handle.workspace },
         });
         const terminal: MeshRefineTerminalJob = { ...terminalHandle, result };
@@ -2524,7 +2531,6 @@ export class DaemonCommandRouter {
         const running = this.runningRefineJobs.get(key);
         if (running) return { ...running, duplicate: true };
         const terminal = this.terminalRefineJobs.get(key);
-        if (terminal) return { ...terminal, duplicate: true };
 
         const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
         const mesh = meshRecord?.mesh;
@@ -2532,7 +2538,7 @@ export class DaemonCommandRouter {
         if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
         if (!node.isLocalWorktree || !node.workspace) return { success: false, error: `Refinery requires a local worktree node` };
 
-        const handle = this.buildRefineJobHandle({ meshId, nodeId, node });
+        const handle = this.buildRefineJobHandle({ meshId, nodeId, node, retryOfJobId: terminal?.jobId });
         this.runningRefineJobs.set(key, handle);
         await this.appendRefineJobLedger('task_dispatched', handle);
         this.queueRefineJobEvent('refine:accepted', handle);
