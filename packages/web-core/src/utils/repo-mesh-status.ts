@@ -40,6 +40,24 @@ function readStringArray(value: unknown): string[] {
         : []
 }
 
+function scoreGitUpstreamFreshness(status: GitRepoStatus['upstreamStatus'] | undefined): number {
+    switch (status) {
+        case 'fresh':
+            return 30
+        case 'no_upstream':
+            return 4
+        case 'unchecked':
+        case undefined:
+            return 0
+        case 'stale':
+            return -10
+        case 'unavailable':
+            return -15
+        default:
+            return 0
+    }
+}
+
 function joinRepoPath(root: string | undefined, relativePath: string | undefined): string | undefined {
     const normalizedRoot = typeof root === 'string' ? root.trim().replace(/[\\/]+$/, '') : ''
     const normalizedPath = typeof relativePath === 'string' ? relativePath.trim() : ''
@@ -106,6 +124,8 @@ function normalizeGitStatus(
     const repoRoot = readString(status.repoRoot, status.repo_root, node.repoRoot, node.repo_root, status.workspace, node.workspace) || undefined
     const submodules = readGitSubmodules(status.submodules, repoRoot)
     const upstreamStatus = readString(status.upstreamStatus, status.upstream_status)
+    const upstreamFetchedAt = readNumber(status.upstreamFetchedAt, status.upstream_fetched_at)
+    const upstreamFetchError = readString(status.upstreamFetchError, status.upstream_fetch_error)
     const error = readString(status.error)
     return {
         workspace: readString(status.workspace, node.workspace) || '',
@@ -116,6 +136,8 @@ function normalizeGitStatus(
         headMessage: readString(status.headMessage) ?? null,
         upstream: readString(status.upstream) ?? null,
         upstreamStatus: (upstreamStatus as GitRepoStatus['upstreamStatus']) ?? 'unchecked',
+        ...(upstreamFetchedAt !== undefined ? { upstreamFetchedAt } : {}),
+        ...(upstreamFetchError ? { upstreamFetchError } : {}),
         ahead: readNumber(status.ahead) ?? 0,
         behind: readNumber(status.behind) ?? 0,
         staged: readNumber(status.staged) ?? 0,
@@ -140,7 +162,7 @@ function scoreGitStatusCandidate(git: GitRepoStatus | undefined): number {
     if (git.branch) score += 20
     if (git.headCommit) score += 20
     if (git.upstream) score += 10
-    if (git.upstreamStatus && git.upstreamStatus !== 'unchecked') score += 5
+    score += scoreGitUpstreamFreshness(git.upstreamStatus)
     if (typeof git.ahead === 'number') score += 2
     if (typeof git.behind === 'number') score += 2
     if (Array.isArray(git.submodules) && git.submodules.length > 0) score += 4 + git.submodules.length
@@ -297,7 +319,7 @@ function scoreRepoMeshNodeTruth(node: RepoMeshNodeStatus): number {
         if (git?.branch) score += 20
         if (git?.upstream) score += 12
         if (git?.headCommit) score += 12
-        if (git?.upstreamStatus && git.upstreamStatus !== 'unchecked') score += 6
+        score += scoreGitUpstreamFreshness(git?.upstreamStatus)
         if (typeof git?.lastCheckedAt === 'number') score += 6
         score += (git?.submodules?.length ?? 0) * 6
     }
@@ -503,7 +525,7 @@ function scoreRepoMeshStatusTruth(status: RepoMeshStatus): number {
         if (git.branch) score += 4
         if (git.upstream) score += 3
         if (git.headCommit) score += 3
-        if (git.upstreamStatus && git.upstreamStatus !== 'unchecked') score += 2
+        score += scoreGitUpstreamFreshness(git.upstreamStatus)
         if (typeof git.ahead === 'number') score += 1
         if (typeof git.behind === 'number') score += 1
         if (typeof git.lastCheckedAt === 'number') score += 2
