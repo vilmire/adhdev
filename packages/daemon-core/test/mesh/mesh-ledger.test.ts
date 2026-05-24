@@ -81,6 +81,15 @@ describe('mesh-ledger', () => {
                     commandsRun: [],
                     reason: 'ordinary_completion_validation_not_run',
                 },
+                workerResult: {
+                    status: 'unknown',
+                    changedFiles: [],
+                    validationResults: [],
+                    processArtifacts: [],
+                    errors: [],
+                    requiresUserAction: false,
+                    source: 'default',
+                },
                 checkpoint: {
                     attempted: false,
                     reason: 'not_attempted_for_ordinary_completion',
