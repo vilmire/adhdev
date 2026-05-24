@@ -272,7 +272,44 @@ function pickDominantBranchConvergence(convergences: MeshGraphBranchConvergence[
     ))
 }
 
-function readProvidedBranchConvergence(node: RepoMeshNodeStatus): MeshGraphBranchConvergence | null {
+function readBranchConvergenceFollowUps(status: RepoMeshStatus): unknown[] | null {
+    const summary = (status as unknown as { branchConvergenceSummary?: { followUps?: unknown[]; needsFollowUp?: boolean; unresolvedCount?: number } }).branchConvergenceSummary
+    if (Array.isArray(summary?.followUps)) return summary.followUps
+    const topLevelFollowUps = (status as unknown as { followUps?: unknown[] }).followUps
+    if (Array.isArray(topLevelFollowUps)) return topLevelFollowUps
+    if (summary?.needsFollowUp === false || summary?.unresolvedCount === 0) return []
+    return null
+}
+
+function isCleanDefaultBranchMember(node: MeshGraphNode, defaultBranch: string): boolean {
+    return node.type !== 'submoduleNode'
+        && node.branch === defaultBranch
+        && node.ahead === 0
+        && node.behind === 0
+        && !node.dirty
+        && !node.hasConflicts
+        && (!node.upstreamStatus || node.upstreamStatus === 'fresh')
+        && node.snapshotCompleteness === 'complete'
+}
+
+function buildCleanDefaultBranchConvergence(defaultBranch: string, branchNodes: MeshGraphNode[]): MeshGraphBranchConvergence {
+    return {
+        status: 'merged_to_main',
+        needsConvergence: false,
+        reason: 'clean_default_branch_aggregate',
+        nextStep: null,
+        branch: defaultBranch,
+        defaultBranch,
+        upstream: branchNodes.find(node => node.upstream)?.upstream ?? null,
+        upstreamStatus: branchNodes.find(node => node.upstreamStatus)?.upstreamStatus ?? null,
+        ahead: 0,
+        behind: 0,
+        dirty: false,
+        hasConflicts: false,
+    }
+}
+
+function readProvidedBranchConvergence(node: RepoMeshNodeStatus, defaultBranchHint: string | null): MeshGraphBranchConvergence | null {
     if (isPendingPeerGitSnapshot(node)) return null
     const provided = (node as unknown as { branchConvergence?: Partial<MeshGraphBranchConvergence> }).branchConvergence
     if (!provided || typeof provided !== 'object') return null
@@ -286,9 +323,13 @@ function readProvidedBranchConvergence(node: RepoMeshNodeStatus): MeshGraphBranc
     const branch = git?.branch ?? null
     const upstream = git?.upstream ?? null
     const upstreamStatus = git?.upstreamStatus ?? null
-    const defaultBranch = provided.defaultBranch ?? null
+    const defaultBranch = provided.defaultBranch ?? defaultBranchHint ?? null
+    const reason = typeof provided.reason === 'string' ? provided.reason : null
     const providedNumberMismatchesGit = (value: unknown, gitValue: number) => typeof value === 'number' && value !== gitValue
     const providedStringMismatchesGit = (value: unknown, gitValue: string | null) => typeof value === 'string' && gitValue !== null && value !== gitValue
+    const providedUpstreamUnverifiedButGitIsFresh = status === 'blocked_review'
+        && upstreamStatus === 'fresh'
+        && (reason === 'upstream_unverified' || reason?.endsWith('_upstream_unverified') === true)
 
     const staleAgainstCurrentGit = Boolean(git) && (
         providedStringMismatchesGit(provided.branch, branch)
@@ -298,6 +339,7 @@ function readProvidedBranchConvergence(node: RepoMeshNodeStatus): MeshGraphBranc
         || providedNumberMismatchesGit(provided.behind, behind)
         || (typeof provided.dirty === 'boolean' && provided.dirty !== dirty)
         || (typeof provided.hasConflicts === 'boolean' && provided.hasConflicts !== hasConflicts)
+        || providedUpstreamUnverifiedButGitIsFresh
         || (status !== 'merged_to_main'
             && git?.isGitRepo === true
             && branch !== null
@@ -328,7 +370,7 @@ function readProvidedBranchConvergence(node: RepoMeshNodeStatus): MeshGraphBranc
 }
 
 function evaluateBranchConvergence(node: RepoMeshNodeStatus, defaultBranch: string | null): MeshGraphBranchConvergence | null {
-    const providedConvergence = readProvidedBranchConvergence(node)
+    const providedConvergence = readProvidedBranchConvergence(node, defaultBranch)
     if (providedConvergence) {
         return {
             ...providedConvergence,
@@ -651,10 +693,17 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const branchConvergences = branchNodes
             .map(node => node.branchConvergence)
             .filter(Boolean) as MeshGraphBranchConvergence[]
-        const dominantBranchConvergence = branchConvergences.length > 0
-            ? pickDominantBranchConvergence(branchConvergences)
-            : null
-        const unresolvedBranchConvergenceCount = branchConvergences.filter(convergence => convergence.needsConvergence).length
+        const followUps = readBranchConvergenceFollowUps(canonicalStatus)
+        const allCurrentMembersCleanMerged = branchNodes.length > 0
+            && branchNodes.every(node => isCleanDefaultBranchMember(node, inferredDefaultBranch))
+        const dominantBranchConvergence = followUps?.length === 0 && allCurrentMembersCleanMerged
+            ? buildCleanDefaultBranchConvergence(inferredDefaultBranch, branchNodes)
+            : branchConvergences.length > 0
+                ? pickDominantBranchConvergence(branchConvergences)
+                : null
+        const unresolvedBranchConvergenceCount = followUps?.length === 0 && allCurrentMembersCleanMerged
+            ? 0
+            : branchConvergences.filter(convergence => convergence.needsConvergence).length
 
         const syntheticDefaultNode: MeshGraphNode = {
             id: defaultBranchNodeId,
