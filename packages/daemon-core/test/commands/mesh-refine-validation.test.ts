@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
+import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
+import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events'
 
 function createRouter() {
   return new DaemonCommandRouter({
@@ -85,11 +87,43 @@ function createWorktreeWithCommit(root: string, repo: string) {
   return worktree
 }
 
+function withConfigDir(root: string) {
+  process.env.ADHDEV_CONFIG_DIR = join(root, '.adhdev')
+}
+
+function expectAccepted(result: any, nodeId: string) {
+  expect(result).toMatchObject({
+    success: true,
+    async: true,
+    status: 'accepted',
+    targetNodeId: nodeId,
+  })
+  expect(result.jobId).toMatch(/^refine_/)
+  expect(result.interactionId).toMatch(/^ix_/)
+  expect(result.startedAt).toMatch(/T/)
+}
+
+async function waitForRefineLedger(meshId: string, jobId: string, timeoutMs = 5000): Promise<any> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const entries = readLedgerEntries(meshId)
+    const terminal = entries.find(entry =>
+      (entry.kind === 'task_completed' || entry.kind === 'task_failed')
+      && (entry.payload as any)?.refineJob?.jobId === jobId
+    )
+    if (terminal) return terminal
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  throw new Error(`Timed out waiting for refine job ${jobId}`)
+}
+
 describe('refine_mesh_node validation gate', () => {
-  it('blocks merge/refine when an allowlisted validation command fails', async () => {
+  it('accepts refine asynchronously and records validation failure in ledger and pending events', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-fail-'))
     const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
     try {
+      withConfigDir(root)
       initGitRepo(repo)
       writeFileSync(join(repo, 'validation.js'), 'console.error("validation failed")\nprocess.exit(7)\n', 'utf-8')
       execFileSync('git', ['add', 'validation.js'], { cwd: repo })
@@ -106,22 +140,66 @@ describe('refine_mesh_node validation gate', () => {
         inlineMesh: mesh,
       })
 
-      expect(result).toMatchObject({ success: false, code: 'validation_failed', convergenceStatus: 'blocked_review' })
-      expect(result.validationSummary.status).toBe('failed')
-      expect(result.validationSummary.commandsRun).toHaveLength(1)
-      expect(result.validationSummary.commandsRun[0]).toMatchObject({ command: 'npm', args: ['run', 'test'], exitCode: 7, passed: false })
-      expect(result.validationSummary.commandsRun[0].stderr).toContain('validation failed')
+      expectAccepted(result, 'node-fail')
+      const terminal = await waitForRefineLedger(mesh.id, result.jobId)
+      expect(terminal.kind).toBe('task_failed')
+      expect((terminal.payload as any).result).toMatchObject({ success: false, code: 'validation_failed', convergenceStatus: 'blocked_review' })
+      expect((terminal.payload as any).result.validationSummary.commandsRun[0]).toMatchObject({ command: 'npm', args: ['run', 'test'], exitCode: 7, passed: false })
+      expect((terminal.payload as any).result.validationSummary.commandsRun[0].stderr).toContain('validation failed')
+      const events = drainPendingMeshCoordinatorEvents(mesh.id)
+      expect(events.some(event => event.event === 'refine:failed' && (event.metadataEvent as any).jobId === result.jobId)).toBe(true)
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-fail')).toBe(true)
     } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
   }, 60000)
 
-  it('runs allowlisted ProjectContextSnapshot commands before merging a clean worktree', async () => {
+  it('returns before long validation completes and reuses the in-flight job for duplicate refine requests', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-async-duplicate-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      writeFileSync(join(repo, 'validation.js'), 'setTimeout(() => process.exit(0), 750)\n', 'utf-8')
+      execFileSync('git', ['add', 'validation.js'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'slow validation'], { cwd: repo })
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-slow', {
+        test: [{ command: 'npm run test', sourcePath: 'package.json', confidence: 'high' }],
+      })
+      const router = createRouter()
+
+      const started = Date.now()
+      const first: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-slow', inlineMesh: mesh })
+      const elapsedMs = Date.now() - started
+      const second: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-slow', inlineMesh: mesh })
+
+      expectAccepted(first, 'node-slow')
+      expect(elapsedMs).toBeLessThan(250)
+      expect(second).toMatchObject({ success: true, async: true, status: 'accepted', duplicate: true, jobId: first.jobId })
+      const terminal = await waitForRefineLedger(mesh.id, first.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      expect((terminal.payload as any).result).toMatchObject({ success: true, merged: true })
+      const events = drainPendingMeshCoordinatorEvents(mesh.id)
+      expect(events.some(event => event.event === 'refine:accepted' && (event.metadataEvent as any).jobId === first.jobId)).toBe(true)
+      expect(events.some(event => event.event === 'refine:completed' && (event.metadataEvent as any).jobId === first.jobId)).toBe(true)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('records validation pass, merge, cleanup and final convergence in completion evidence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-pass-'))
     const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
     try {
+      withConfigDir(root)
       initGitRepo(repo)
       const worktree = createWorktreeWithCommit(root, repo)
       writeFileSync(join(repo, 'SOURCE_ONLY.md'), 'source change\n', 'utf-8')
@@ -130,12 +208,16 @@ describe('refine_mesh_node validation gate', () => {
       const mesh = createMesh(repo, worktree)
       const router = createRouter()
 
-      const result: any = await router.execute('refine_mesh_node', {
+      const accepted: any = await router.execute('refine_mesh_node', {
         meshId: mesh.id,
         nodeId: 'node-worktree',
         inlineMesh: mesh,
       })
 
+      expectAccepted(accepted, 'node-worktree')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
       expect(result).toMatchObject({ success: true, merged: true })
       expect(result.validationSummary.status).toBe('passed')
       expect(result.validationSummary.commandsRun.map((entry: any) => `${entry.command} ${entry.args.join(' ')}`)).toEqual([
@@ -156,26 +238,34 @@ describe('refine_mesh_node validation gate', () => {
       expect(mesh.nodes.some((node: any) => node.id === 'node-worktree')).toBe(false)
       expect(result.finalBranchConvergenceState).toMatchObject({ branch: 'main', merged: true, validation: 'passed' })
     } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  })
+  }, 60000)
 
-  it('reports cleanup failure as an observable partial convergence state after merge', async () => {
+  it('records cleanup failure as an observable partial convergence state after merge', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-cleanup-fail-'))
     const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
     try {
+      withConfigDir(root)
       initGitRepo(repo)
       const worktree = createWorktreeWithCommit(root, repo)
       const mesh = createMesh(repo, worktree, 'node-cleanup-fail')
       delete mesh.nodes[1].worktreeBranch
       const router = createRouter()
 
-      const result: any = await router.execute('refine_mesh_node', {
+      const accepted: any = await router.execute('refine_mesh_node', {
         meshId: mesh.id,
         nodeId: 'node-cleanup-fail',
         inlineMesh: mesh,
       })
 
+      expectAccepted(accepted, 'node-cleanup-fail')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_failed')
+      const result = (terminal.payload as any).result
       expect(result).toMatchObject({ success: false, code: 'cleanup_failed', merged: true })
       expect(result.removeResult).toMatchObject({ success: false, removed: false, code: 'mesh_worktree_cleanup_missing_branch' })
       expect(result.refineStages.map((entry: any) => `${entry.stage}:${entry.status}`)).toContain('cleanup:failed')
@@ -183,14 +273,18 @@ describe('refine_mesh_node validation gate', () => {
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-cleanup-fail')).toBe(true)
     } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  })
+  }, 60000)
 
-  it('rejects arbitrary command injection instead of passing it to a shell', async () => {
+  it('records config/command guard failures asynchronously without running unsafe commands', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-injection-'))
     const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
     try {
+      withConfigDir(root)
       initGitRepo(repo)
       const worktree = createWorktreeWithCommit(root, repo)
       const pwned = join(worktree, 'pwned')
@@ -199,12 +293,16 @@ describe('refine_mesh_node validation gate', () => {
       })
       const router = createRouter()
 
-      const result: any = await router.execute('refine_mesh_node', {
+      const accepted: any = await router.execute('refine_mesh_node', {
         meshId: mesh.id,
         nodeId: 'node-injection',
         inlineMesh: mesh,
       })
 
+      expectAccepted(accepted, 'node-injection')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_failed')
+      const result = (terminal.payload as any).result
       expect(result).toMatchObject({ success: false, code: 'validation_unavailable', convergenceStatus: 'blocked_review' })
       expect(result.validationSummary.status).toBe('skipped')
       expect(result.validationSummary.rejectedCommands[0].reason).toMatch(/not allowlisted|unsafe/i)
@@ -212,14 +310,18 @@ describe('refine_mesh_node validation gate', () => {
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-injection')).toBe(true)
     } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  })
+  }, 60000)
 
   it('does not execute heuristic package scripts when repo mesh/refine config is missing', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-no-config-'))
     const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
     try {
+      withConfigDir(root)
       initGitRepo(repo)
       writeFileSync(join(repo, 'validation.js'), 'console.error("heuristic should not run")\nprocess.exit(9)\n', 'utf-8')
       execFileSync('git', ['add', 'validation.js'], { cwd: repo })
@@ -230,12 +332,15 @@ describe('refine_mesh_node validation gate', () => {
       }, false)
       const router = createRouter()
 
-      const result: any = await router.execute('refine_mesh_node', {
+      const accepted: any = await router.execute('refine_mesh_node', {
         meshId: mesh.id,
         nodeId: 'node-no-config',
         inlineMesh: mesh,
       })
 
+      expectAccepted(accepted, 'node-no-config')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      const result = (terminal.payload as any).result
       expect(result).toMatchObject({ success: false, code: 'validation_unavailable', convergenceStatus: 'blocked_review' })
       expect(result.validationSummary.status).toBe('skipped')
       expect(result.validationSummary.commandsRun).toEqual([])
@@ -244,9 +349,11 @@ describe('refine_mesh_node validation gate', () => {
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-no-config')).toBe(true)
     } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  })
+  }, 60000)
 
   it('returns a dry-run refine plan with config source and heuristic suggestions', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-plan-'))
