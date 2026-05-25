@@ -166,6 +166,7 @@ function summarizeRepoMeshStatusDebug(status: any): Record<string, unknown> {
         meshId: readStringValue(status?.meshId, status?.mesh_id) ?? null,
         refreshedAt: readStringValue(status?.refreshedAt, status?.refreshed_at) ?? null,
         sourceOfTruth: status?.sourceOfTruth ?? null,
+        branchConvergenceSummary: status?.branchConvergenceSummary ?? status?.branch_convergence_summary ?? null,
         nodeCount: nodes.length,
         nodes: nodes.map((node: any) => ({
             nodeId: readStringValue(node?.nodeId, node?.id) ?? null,
@@ -182,6 +183,7 @@ function summarizeRepoMeshStatusDebug(status: any): Record<string, unknown> {
             gitProbePending: node?.gitProbePending === true,
             launchReady: node?.launchReady === true,
             git: summarizeRepoMeshDebugGit(node?.git),
+            branchConvergence: node?.branchConvergence ?? node?.branch_convergence ?? null,
         })),
     };
 }
@@ -793,7 +795,7 @@ async function probeRemoteMeshGitStatus(args: {
 }): Promise<Record<string, unknown> | null> {
     if (!args.dispatchMeshCommand) return null;
     const remoteResult = await Promise.race([
-        args.dispatchMeshCommand(args.daemonId, 'git_status', { workspace: args.workspace }),
+        args.dispatchMeshCommand(args.daemonId, 'git_status', { workspace: args.workspace, refreshUpstream: true }),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), args.timeoutMs)),
     ]) as any;
     const remoteGit = remoteResult?.status ?? remoteResult?.git ?? remoteResult;
