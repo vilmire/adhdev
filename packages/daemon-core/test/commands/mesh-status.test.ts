@@ -826,6 +826,57 @@ describe('mesh_status', () => {
     }
   })
 
+  it('does not reuse cached mesh_status after queue storage changes outside the router', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-status-queue-cache-'))
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-queue-revision-')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh, addNode } = await import('../../src/config/mesh-config.js')
+      const { enqueueTask, __resetBeadsDBForTests } = await import('../../src/mesh/mesh-work-queue.js')
+      __resetBeadsDBForTests()
+
+      const mesh = createMesh({
+        name: 'Queue Cache Mesh',
+        repoIdentity: 'github.com/acme/queue-cache',
+        defaultBranch: 'master',
+      })
+      addNode(mesh.id, { workspace: repoRoot, repoRoot })
+
+      const { router, sessionHostControl } = createRouter()
+      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
+      expect(initial.success).toBe(true)
+      expect(initial.queue.summary.total).toBe(0)
+      expect(initial.sourceOfTruth.aggregateSnapshot.cached).toBe(false)
+
+      sessionHostControl.listSessions.mockClear()
+      enqueueTask(mesh.id, 'queue task created by another mesh process')
+
+      const afterQueueChange = await router.execute('mesh_status', { meshId: mesh.id }) as any
+
+      expect(afterQueueChange.success).toBe(true)
+      expect(afterQueueChange.queue.summary.total).toBe(1)
+      expect(afterQueueChange.queue.tasks).toHaveLength(1)
+      expect(afterQueueChange.queue.tasks[0]).toEqual(expect.objectContaining({
+        message: 'queue task created by another mesh process',
+        status: 'pending',
+      }))
+      expect(afterQueueChange.sourceOfTruth.aggregateSnapshot).toMatchObject({
+        cached: false,
+        refreshReason: 'stale_pending_cache_refresh',
+      })
+      expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
+    } finally {
+      const { __resetBeadsDBForTests } = await import('../../src/mesh/mesh-work-queue.js')
+      __resetBeadsDBForTests()
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await rm(configDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('refreshes instead of returning a stale pending cache hit when direct peer truth is required', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-stale-cache-refresh-')
     try {

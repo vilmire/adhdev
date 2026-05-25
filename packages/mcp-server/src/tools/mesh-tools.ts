@@ -2213,6 +2213,9 @@ export async function meshQueueCancel(
         if (!taskId) return JSON.stringify({ success: false, error: 'task_id required' });
         const task = cancelTask(ctx.mesh.id, taskId, { reason: args.reason });
         if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
+        if (isLocalTransport(ctx.transport)) {
+            ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
+        }
         return JSON.stringify({ success: true, task }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
