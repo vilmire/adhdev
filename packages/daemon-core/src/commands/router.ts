@@ -5101,7 +5101,7 @@ export class DaemonCommandRouter {
 
         // 3. Kill OS process if requested
         if (killProcess) {
-            const running = isIdeRunning(ideType);
+            const running = await isIdeRunning(ideType);
             if (running) {
                 LOG.info('StopIDE', `Killing IDE process: ${ideType}`);
                 const killed = await killIdeProcess(ideType);
