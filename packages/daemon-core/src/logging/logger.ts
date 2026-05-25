@@ -20,6 +20,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { AsyncBatchWriter } from './async-batch-writer.js';
 
 // ─── Log Level ──────────────────────────────
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -123,7 +124,7 @@ function writeToFile(line: string): void {
             checkDateRotation();
             rotateSizeIfNeeded();
         }
-        fs.appendFileSync(currentLogFile, line + '\n');
+        AsyncBatchWriter.write(currentLogFile, line + '\n');
     } catch { }
 }
 

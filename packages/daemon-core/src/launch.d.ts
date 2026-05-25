@@ -18,7 +18,7 @@
 /** Kill IDE process (graceful → force) */
 export declare function killIdeProcess(ideId: string): Promise<boolean>;
 /** Check if IDE process is running */
-export declare function isIdeRunning(ideId: string): boolean;
+export declare function isIdeRunning(ideId: string): Promise<boolean>;
 export interface LaunchOptions {
     ideId?: string;
     workspace?: string;

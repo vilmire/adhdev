@@ -16,7 +16,18 @@
  * adhdev launch --workspace /path — Open specific workspace
  */
 
-import { execSync, spawn, spawnSync } from 'child_process';
+import { exec, spawn, spawnSync } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
+
+async function execQuiet(command: string, options: any = {}): Promise<string> {
+    try {
+        const { stdout } = await execAsync(command, options);
+        return stdout.toString();
+    } catch {
+        return '';
+    }
+}
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
@@ -76,11 +87,11 @@ function getIdePathCandidates(ideId: string): string[] {
     return getProviderLoader().getIdePathCandidates(ideId);
 }
 
-function getMacAppProcessPids(ideId: string): number[] {
+async function getMacAppProcessPids(ideId: string): Promise<number[]> {
     const appPaths = getIdePathCandidates(ideId);
     if (appPaths.length === 0) return [];
     try {
-        const output = execSync('ps axww -o pid=,args=', {
+        const output = await execQuiet('ps axww -o pid=,args=', {
             encoding: 'utf-8',
             timeout: 3000,
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -91,8 +102,8 @@ function getMacAppProcessPids(ideId: string): number[] {
     }
 }
 
-function killMacAppPathProcesses(ideId: string, signal: NodeJS.Signals): boolean {
-    const pids = getMacAppProcessPids(ideId);
+async function killMacAppPathProcesses(ideId: string, signal: NodeJS.Signals): Promise<boolean> {
+    const pids = (await getMacAppProcessPids(ideId));
     let signalled = false;
     for (const pid of pids) {
         try {
@@ -163,49 +174,49 @@ export async function killIdeProcess(ideId: string): Promise<boolean> {
         if (plat === 'darwin' && appName) {
  // macOS: graceful quit via osascript
             try {
-                execSync(`osascript -e 'tell application "${escapeForAppleScript(appName)}" to quit' 2>/dev/null`, {
+                await execQuiet(`osascript -e 'tell application "${escapeForAppleScript(appName)}" to quit' 2>/dev/null`, {
                     timeout: 5000,
                 });
             } catch {
-                try { execSync(`pkill -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
+                try { await execQuiet(`pkill -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
             }
             killMacAppPathProcesses(ideId, 'SIGTERM');
         } else if (plat === 'win32' && winProcesses) {
  // Windows: taskkill for each process name
             for (const proc of winProcesses) {
                 try {
-                    execSync(`taskkill /IM "${proc}" /F 2>nul`, { timeout: 5000 });
+                    await execQuiet(`taskkill /IM "${proc}" /F 2>nul`, { timeout: 5000 });
                 } catch { }
             }
  // Process name may differ, so also try via WMIC
             try {
                 const exeName = winProcesses[0].replace('.exe', '');
-                execSync(`powershell -Command "Get-Process -Name '${exeName}' -ErrorAction SilentlyContinue | Stop-Process -Force"`, {
+                await execQuiet(`powershell -Command "Get-Process -Name '${exeName}' -ErrorAction SilentlyContinue | Stop-Process -Force"`, {
                     timeout: 10000,
                 });
             } catch { }
         } else {
-            try { execSync(`pkill -f "${ideId}" 2>/dev/null`); } catch { }
+            try { await execQuiet(`pkill -f "${ideId}" 2>/dev/null`); } catch { }
         }
 
  // Wait for process kill (max 15 seconds)
         for (let i = 0; i < 30; i++) {
             await new Promise(r => setTimeout(r, 500));
-            if (!isIdeRunning(ideId)) return true;
+            if (!(await isIdeRunning)(ideId)) return true;
         }
 
  // Force terminate retry
         if (plat === 'darwin' && appName) {
-            try { execSync(`pkill -9 -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
+            try { await execQuiet(`pkill -9 -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
             killMacAppPathProcesses(ideId, 'SIGKILL');
         } else if (plat === 'win32' && winProcesses) {
             for (const proc of winProcesses) {
-                try { execSync(`taskkill /IM "${proc}" /F 2>nul`); } catch { }
+                try { await execQuiet(`taskkill /IM "${proc}" /F 2>nul`); } catch { }
             }
         }
 
         await new Promise(r => setTimeout(r, 2000));
-        return !isIdeRunning(ideId);
+        return !(await isIdeRunning)(ideId);
 
     } catch {
         return false;
@@ -213,15 +224,15 @@ export async function killIdeProcess(ideId: string): Promise<boolean> {
 }
 
 /** Check if IDE process is running */
-export function isIdeRunning(ideId: string): boolean {
+export async function isIdeRunning(ideId: string): Promise<boolean> {
     const plat = os.platform();
 
     try {
         if (plat === 'darwin') {
             const appName = getMacAppIdentifiers()[ideId];
-            if (!appName) return getMacAppProcessPids(ideId).length > 0;
+            if (!appName) return (await getMacAppProcessPids(ideId)).length > 0;
             try {
-                const result = execSync(`pgrep -x "${appName}" 2>/dev/null`, {
+                const result = await execQuiet(`pgrep -x "${appName}" 2>/dev/null`, {
                     encoding: 'utf-8',
                     timeout: 3000,
                 });
@@ -229,7 +240,7 @@ export function isIdeRunning(ideId: string): boolean {
             } catch { }
 
             try {
-                const result = execSync(
+                const result = await execQuiet(
                     `osascript -e 'tell application "System Events" to count (every process whose name is "${escapeForAppleScript(appName)}")'`,
                     {
                         encoding: 'utf-8',
@@ -240,21 +251,21 @@ export function isIdeRunning(ideId: string): boolean {
                 if (Number.parseInt(result.trim() || '0', 10) > 0) return true;
             } catch { }
 
-            return getMacAppProcessPids(ideId).length > 0;
+            return (await getMacAppProcessPids(ideId)).length > 0;
         } else if (plat === 'win32') {
             const winProcesses = getWinProcessNames()[ideId];
             if (!winProcesses) return false;
  // Check each process name
             for (const proc of winProcesses) {
                 try {
-                    const result = execSync(`tasklist /FI "IMAGENAME eq ${proc}" /NH 2>nul`, { encoding: 'utf-8' });
+                    const result = await execQuiet(`tasklist /FI "IMAGENAME eq ${proc}" /NH 2>nul`, { encoding: 'utf-8' });
                     if (result.includes(proc)) return true;
                 } catch { }
             }
  // Also check via PowerShell (when tasklist cannot find)
             try {
                 const exeName = winProcesses[0].replace('.exe', '');
-                const result = execSync(
+                const result = await execQuiet(
                     `powershell -Command "(Get-Process -Name '${exeName}' -ErrorAction SilentlyContinue).Count"`,
                     { encoding: 'utf-8', timeout: 5000 }
                 );
@@ -262,7 +273,7 @@ export function isIdeRunning(ideId: string): boolean {
             } catch { }
             return false;
         } else {
-            const result = execSync(`pgrep -f "${ideId}" 2>/dev/null`, { encoding: 'utf-8' });
+            const result = await execQuiet(`pgrep -f "${ideId}" 2>/dev/null`, { encoding: 'utf-8' });
             return result.trim().length > 0;
         }
     } catch {
@@ -271,14 +282,14 @@ export function isIdeRunning(ideId: string): boolean {
 }
 
 /** Detect currently open workspace path */
-function detectCurrentWorkspace(ideId: string): string | undefined {
+async function detectCurrentWorkspace(ideId: string): Promise<string | undefined> {
     const plat = os.platform();
 
     if (plat === 'darwin') {
         try {
             const appName = getMacAppIdentifiers()[ideId];
             if (!appName) return undefined;
-            const result = execSync(
+            const result = await execQuiet(
                 `lsof -c "${appName}" 2>/dev/null | grep cwd | head -1 | awk '{print $NF}'`,
                 { encoding: 'utf-8', timeout: 3000 }
             );
@@ -392,8 +403,8 @@ export async function launchWithCdp(options: LaunchOptions = {}): Promise<Launch
     }
 
  // 4. Check if IDE is currently running
-    const alreadyRunning = isIdeRunning(targetIde.id);
-    const workspace = options.workspace || (alreadyRunning ? detectCurrentWorkspace(targetIde.id) : undefined);
+    const alreadyRunning = await isIdeRunning(targetIde.id);
+    const workspace = options.workspace || (alreadyRunning ? await detectCurrentWorkspace(targetIde.id) : undefined);
 
  // 5. If IDE is running, terminate it
     if (alreadyRunning) {

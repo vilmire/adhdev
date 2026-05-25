@@ -13,8 +13,9 @@
  * Safety:  mode 0o600, atomic append via appendFileSync
  */
 
-import { existsSync, mkdirSync, readFileSync, appendFileSync, statSync, renameSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
+import { AsyncBatchWriter } from '../logging/async-batch-writer.js';
 import { randomUUID } from 'crypto';
 import { getConfigDir } from '../config/config.js';
 import { EventEmitter } from 'events';
@@ -390,7 +391,7 @@ export function appendLedgerEntry(
 
     try {
         const line = JSON.stringify(entry) + '\n';
-        appendFileSync(filePath, line, { encoding: 'utf-8', mode: 0o600 });
+        AsyncBatchWriter.write(filePath, line);
         meshLedgerEvents.emit('append', meshId, entry);
         return entry;
     } catch (e: any) {
@@ -446,7 +447,7 @@ export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEnt
 
     try {
         const lines = validEntries.map(e => JSON.stringify(e)).join('\n') + '\n';
-        appendFileSync(ledgerPath, lines, { encoding: 'utf-8', mode: 0o600 });
+        AsyncBatchWriter.write(ledgerPath, lines);
         for (const entry of validEntries) {
             meshLedgerEvents.emit('append', meshId, entry);
         }

@@ -11,6 +11,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { AsyncBatchWriter } from '../logging/async-batch-writer.js';
 import * as os from 'os';
 import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normalization.js';
 import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
@@ -805,7 +806,7 @@ export class ChatHistoryWriter {
             const fileName = `${filePrefix}${date}.jsonl`;
             const filePath = path.join(dir, fileName);
             const lines = newMessages.map(m => JSON.stringify(m)).join('\n') + '\n';
-            fs.appendFileSync(filePath, lines, 'utf-8');
+            AsyncBatchWriter.write(filePath, lines);
             updateSavedHistoryIndexForAppendedMessages(agentType, dir, fileName, effectiveHistoryKey, newMessages);
 
  // Detect session switch — only for unstable runtime-only histories.
@@ -942,7 +943,7 @@ export class ChatHistoryWriter {
                 historySessionId: id,
                 workspace: ws,
             };
-            fs.appendFileSync(filePath, JSON.stringify(record) + '\n', 'utf-8');
+            AsyncBatchWriter.write(filePath, JSON.stringify(record) + '\n');
             updateSavedHistoryIndexForSessionStart(agentType, dir, fileName, id, ws);
         } catch {
             // Ignore — must not affect main functionality
@@ -1019,7 +1020,7 @@ export class ChatHistoryWriter {
                     : new Set<string>();
                 const nextLines = rewritten.filter((line) => !existing.has(line));
                 if (nextLines.length > 0) {
-                    fs.appendFileSync(targetPath, `${nextLines.join('\n')}\n`, 'utf-8');
+                    AsyncBatchWriter.write(targetPath, `${nextLines.join('\n')}\n`);
                 }
                 fs.unlinkSync(sourcePath);
             }

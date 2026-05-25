@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { AsyncBatchWriter } from './async-batch-writer.js';
 
 // ─── Config ──────────────────────────────────
 const LOG_DIR = process.platform === 'win32'
@@ -152,7 +153,7 @@ export function logCommand(entry: CommandLogEntry): void {
             ...(entry.durationMs !== undefined ? { ms: entry.durationMs } : {}),
         });
         
-        fs.appendFileSync(currentFile, line + '\n');
+        AsyncBatchWriter.write(currentFile, line + '\n');
     } catch { /* never crash the daemon for logging */ }
 }
 
