@@ -43,6 +43,20 @@ type ReadChatPayload = {
     [key: string]: unknown;
 };
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
 export class IdeProviderInstance implements ProviderInstance {
     readonly type: string;
     readonly category = 'ide' as const;
@@ -320,7 +334,7 @@ export class IdeProviderInstance implements ProviderInstance {
                 if (webviewScript) {
                     const matchText = this.provider.webviewMatchText;
                     const matchFn = matchText ? (body: string) => body.includes(matchText) : undefined;
-                    const webviewRaw = await cdp.evaluateInWebviewFrame(webviewScript, matchFn);
+                    const webviewRaw = await withTimeout(cdp.evaluateInWebviewFrame(webviewScript, matchFn), 30000, 'evaluateInWebviewFrame');
                     if (webviewRaw) {
                         raw = typeof webviewRaw === 'string' ? (() => { try { return JSON.parse(webviewRaw); } catch { return null; } })() : webviewRaw;
                     }
@@ -331,7 +345,7 @@ export class IdeProviderInstance implements ProviderInstance {
             if (!raw) {
                 const readChatScript = this.getReadChatScript();
                 if (!readChatScript) return;
-                raw = await cdp.evaluate(readChatScript, 30000);
+                raw = await withTimeout(cdp.evaluate(readChatScript, 30000), 30000, 'evaluate.readChatScript');
                 if (typeof raw === 'string') {
                     try { raw = JSON.parse(raw); } catch { return; }
                 }
@@ -706,7 +720,7 @@ export class IdeProviderInstance implements ProviderInstance {
             );
 
             LOG.info('IdeInstance', `[IdeInstance:${this.type}] autoApprove: executing resolveAction for "${targetButton}"`);
-            let rawResult = await cdp.evaluate(script, 10000);
+            let rawResult = await withTimeout(cdp.evaluate(script, 10000), 10000, 'evaluate.autoApprove');
             if (typeof rawResult === 'string') {
                 try { rawResult = JSON.parse(rawResult); } catch { }
             }

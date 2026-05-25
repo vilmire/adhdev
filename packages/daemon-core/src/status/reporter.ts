@@ -51,6 +51,8 @@ export class DaemonStatusReporter {
     private lastStatusSentAt = 0;
     private statusPendingThrottle = false;
     private lastP2PStatusHash = '';
+    private lastP2PStatusSentAt: number = 0;
+    private p2pDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private lastServerStatusHash = '';
     private lastStatusSummary = '';
 
@@ -355,7 +357,20 @@ export class DaemonStatusReporter {
             : { ...hashTarget, sessions };
         const h = this.simpleHash(JSON.stringify(hashPayload));
         if (h !== this.lastP2PStatusHash) {
+            const now = Date.now();
+            // Rate limit: max 1 per 500ms
+            if (this.lastP2PStatusSentAt && now - this.lastP2PStatusSentAt < 500) {
+                if (!this.p2pDebounceTimer) {
+                    this.p2pDebounceTimer = setTimeout(() => {
+                        this.p2pDebounceTimer = null;
+                        this.sendUnifiedStatusReport({ reason: 'p2p_debounce' });
+                    }, 500);
+                }
+                return false; // Dropped for now, but will trigger later
+            }
+            
             this.lastP2PStatusHash = h;
+            this.lastP2PStatusSentAt = now;
             this.deps.p2p?.sendStatus(payload);
             return true;
         }
