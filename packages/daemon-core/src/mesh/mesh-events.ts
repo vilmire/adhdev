@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, unlinkSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
@@ -8,7 +8,6 @@ import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getLedgerDir, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch } from './mesh-work-queue.js';
-import { AsyncBatchWriter } from '../logging/async-batch-writer.js';
 
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
@@ -93,7 +92,7 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
             LOG.info('MeshEvents', `Suppressed duplicate pending ${event.event} for refine job ${readRefineJobId(event)}`);
             return true;
         }
-        AsyncBatchWriter.write(getPendingEventsPath(event.meshId), JSON.stringify(event) + '\n');
+        appendFileSync(getPendingEventsPath(event.meshId), JSON.stringify(event) + '\n', 'utf-8');
         return true;
     } catch (e: any) {
         LOG.warn('MeshEvents', `Failed to persist pending coordinator event: ${e?.message || e}`);
