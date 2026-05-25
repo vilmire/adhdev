@@ -54,7 +54,8 @@ async function updateDarwinMemoryCache() {
         const fileBacked = counts['file_backed'] ?? 0;
 
         const availPages = free + inactive + speculative + purgeable + fileBacked;
-        cachedDarwinAvail = availPages * pageSize;
+        const bytes = availPages * pageSize;
+        cachedDarwinAvail = Number.isFinite(bytes) && bytes >= 0 ? Math.min(bytes, os.totalmem()) : null;
     } catch {
         // silently fallback
     }
