@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DaemonCommandRouter } from '../../src/commands/router.js'
+import { LOG } from '../../src/logging/logger.js'
 
 function git(args: string[], cwd: string) {
   execFileSync('git', args, { cwd, stdio: 'pipe' })
@@ -129,6 +130,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
     })
     expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon-remote', 'git_status', {
       workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+      refreshUpstream: true,
     })
     const remoteNode = result.mesh.nodes.find((node: any) => node.id === 'node_303')
     expect(remoteNode.lastGit.status.submodules).toMatchObject([
@@ -407,6 +409,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       }],
     }
     const dispatchMeshCommand = vi.fn(async () => ({ status: remoteGit }))
+    const logInfo = vi.spyOn(LOG, 'info').mockImplementation(() => undefined)
     const router = createRouter(dispatchMeshCommand)
     const inlineMesh = {
       id: 'mesh_browser_payload',
@@ -440,6 +443,28 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       refresh: true,
     })
 
+    expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon-remote', 'git_status', {
+      workspace: '/Users/moltbot/Documents/Work/adhdev',
+      refreshUpstream: true,
+    })
+    const debugMessage = logInfo.mock.calls
+      .filter(([category]) => category === 'MeshStatusDebug')
+      .map(([, message]) => String(message))
+      .find(message => message.includes('"event":"return_live"'))
+    expect(debugMessage).toBeTruthy()
+    const debugPayload = JSON.parse(debugMessage!.slice(debugMessage!.indexOf('{')))
+    const debugRemoteNode = debugPayload.summary.nodes.find((node: any) => node.nodeId === 'node_117')
+    expect(debugRemoteNode.git.upstreamStatus).toBe('fresh')
+    expect(debugRemoteNode.branchConvergence).toMatchObject({
+      status: 'merged_to_main',
+      upstreamStatus: 'fresh',
+      needsConvergence: false,
+    })
+    expect(debugPayload.summary.branchConvergenceSummary).toMatchObject({
+      needsFollowUp: false,
+      unresolvedCount: 0,
+      followUps: [],
+    })
     expect(status.success).toBe(true)
     expect(status.sourceOfTruth.directPeerTruth).toMatchObject({
       required: true,
