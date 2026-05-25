@@ -106,6 +106,35 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with exactly TURN-TWO and nothing else.\r')
   })
 
+  it('clears a stale adapter waiting guard when the rich parser has finalized idle output', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'Reply with exactly TURN-ONE and nothing else.',
+      startedAt: Date.now() - 10_000,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.activeModal = null
+    adapter.recentOutputBuffer = 'stale Working spinner fragment'
+    adapter.terminalScreen = { getText: () => 'stale Working spinner fragment' }
+    adapter.runDetectStatus = vi.fn(() => 'generating')
+    adapter.runParseApproval = vi.fn(() => null)
+    adapter.getScriptParsedStatus = vi.fn(() => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'Reply with exactly TURN-ONE and nothing else.' },
+        { role: 'assistant', content: 'TURN-ONE' },
+      ],
+      activeModal: null,
+    }))
+
+    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).resolves.toBeUndefined()
+    expect(adapter.currentTurnScope?.prompt).toBe('Reply with exactly TURN-TWO and nothing else.')
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with exactly TURN-TWO and nothing else.\r')
+  })
+
   it('retries submit when the response buffer only contains the echoed long prompt', async () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'idle'
