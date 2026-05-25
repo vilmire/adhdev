@@ -37,8 +37,8 @@ export class AsyncBatchWriter {
                     const prevPromise = this.writePromises.get(filePath);
                     if (prevPromise) await prevPromise;
                     await fs.promises.appendFile(filePath, dataToWrite, { encoding: 'utf-8', mode: 0o600 });
-                } catch (e) {
-                    console.error(`[AsyncBatchWriter] Failed to write to ${filePath}:`, e);
+                } catch {
+                    // Logging must never create secondary failures or late console noise.
                 }
             };
 

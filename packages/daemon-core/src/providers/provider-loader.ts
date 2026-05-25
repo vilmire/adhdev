@@ -1067,13 +1067,17 @@ export class ProviderLoader {
           awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
         });
 
+        let reloadTimer: ReturnType<typeof setTimeout> | null = null;
         const handleChange = (filePath: string) => {
           if (/[\/\\]fixtures[\/\\]/.test(filePath)) {
             return;
           }
           if (filePath.endsWith('.js') || filePath.endsWith('.json')) {
-            this.log(`File changed: ${path.basename(filePath)}, reloading...`);
-            this.reload();
+            if (reloadTimer) clearTimeout(reloadTimer);
+            reloadTimer = setTimeout(() => {
+              this.log(`File changed: ${path.basename(filePath)}, reloading...`);
+              this.reload();
+            }, 300);
           }
         };
 
@@ -1130,7 +1134,9 @@ export class ProviderLoader {
       return { updated: false };
     }
     const https = require('https') as typeof import('https');
-    const { execSync } = require('child_process') as typeof import('child_process');
+    const { exec } = require('child_process') as typeof import('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
 
     const metaPath = path.join(this.upstreamDir, ProviderLoader.META_FILE);
     let prevEtag = '';
@@ -1207,7 +1213,7 @@ export class ProviderLoader {
 
  // Extract
       fs.mkdirSync(tmpExtract, { recursive: true });
-      execSync(`tar -xzf "${tmpTar}" -C "${tmpExtract}"`, { timeout: 30000 });
+      await execAsync(`tar -xzf "${tmpTar}" -C "${tmpExtract}"`, { timeout: 30000 });
 
  // Tarball internal structure: adhdev-providers-main/ide/... → strip 1 level
       const extracted = fs.readdirSync(tmpExtract);

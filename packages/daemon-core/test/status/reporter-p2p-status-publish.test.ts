@@ -143,6 +143,54 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
     })
   })
 
+  it('debounces rapid p2p status changes while preserving full status payloads', async () => {
+    const { reporter, sendStatus } = createReporter({
+      serverConnected: false,
+      p2pConnected: true,
+    })
+
+    await reporter.sendUnifiedStatusReport({ p2pOnly: true, reason: 'initial' })
+    expect(sendStatus).toHaveBeenCalledTimes(1)
+    expect(sendStatus.mock.calls[0]?.[0]?._delta).toBeUndefined()
+    expect(sendStatus.mock.calls[0]?.[0]?.sessions).toHaveLength(1)
+
+    buildStatusSnapshotMock.mockReturnValue({
+      instanceId: 'daemon-1',
+      machine: { platform: 'darwin', hostname: 'test-host' },
+      timestamp: 456,
+      p2p: { available: true, state: 'connected', peers: 1, screenshotActive: false },
+      sessions: [
+        {
+          id: 'cli-1',
+          parentId: null,
+          providerType: 'hermes-cli',
+          providerName: 'Hermes Agent',
+          kind: 'agent',
+          transport: 'pty',
+          status: 'generating',
+          workspace: '/repo',
+          title: 'Hermes task',
+          unread: true,
+          inboxBucket: 'task_complete',
+          completionMarker: 'id:msg_2',
+          seenCompletionMarker: '',
+          lastUpdated: 456,
+        },
+      ],
+    })
+
+    await reporter.sendUnifiedStatusReport({ p2pOnly: true, reason: 'rapid' })
+    expect(sendStatus).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(sendStatus).toHaveBeenCalledTimes(2)
+    expect(sendStatus.mock.calls[1]?.[0]?._delta).toBeUndefined()
+    expect(sendStatus.mock.calls[1]?.[0]?.sessions?.[0]).toMatchObject({
+      id: 'cli-1',
+      status: 'generating',
+    })
+  })
+
   it('preserves provider transcript metadata on canonical status events for completion refreshes', () => {
     const { reporter, sendStatusEvent, sendMessage } = createReporter({
       serverConnected: true,
