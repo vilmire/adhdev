@@ -1,8 +1,21 @@
-import Database from 'better-sqlite3';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
+import { createRequire } from 'module';
 import { getLedgerDir } from './mesh-ledger.js';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
+import type BetterSqlite3 from 'better-sqlite3';
+import type { Database as DatabaseHandle } from 'better-sqlite3';
+
+let DatabaseCtor: typeof BetterSqlite3 | undefined;
+
+function loadDatabaseCtor(): typeof BetterSqlite3 {
+    if (DatabaseCtor) return DatabaseCtor;
+    const runtimeRequire = typeof require === 'function'
+        ? require
+        : createRequire(import.meta.url);
+    DatabaseCtor = runtimeRequire('better-sqlite3') as typeof BetterSqlite3;
+    return DatabaseCtor;
+}
 
 function safeMeshId(meshId: string): string {
     return meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -14,14 +27,14 @@ function legacyQueuePath(meshId: string): string {
 
 export class BeadsDB {
     private static instance: BeadsDB | undefined;
-    private readonly db: Database.Database;
+    private readonly db: DatabaseHandle;
     private readonly migratedMeshIds = new Set<string>();
 
     private constructor(dbPath: string) {
         const dir = dirname(dbPath);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-        this.db = new Database(dbPath);
+        this.db = new (loadDatabaseCtor())(dbPath);
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('synchronous = NORMAL');
         this.db.pragma('foreign_keys = ON');

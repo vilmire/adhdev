@@ -8,7 +8,7 @@ export default defineConfig({
   target: 'node18',
   splitting: false,
   sourcemap: true,
-  // Bundle everything into a single file — daemon-core has no external deps except ws/chalk/conf
-  external: ['ws', 'chalk', 'conf', 'node-pty'],
+  // Keep native modules external so their bindings resolve from their package roots.
+  external: ['ws', 'chalk', 'conf', 'node-pty', 'better-sqlite3'],
   noExternal: [],
 });
