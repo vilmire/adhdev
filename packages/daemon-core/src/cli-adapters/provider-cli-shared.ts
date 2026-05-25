@@ -484,17 +484,25 @@ export function findBinary(name: string): string {
         return path.isAbsolute(expanded) ? expanded : path.resolve(expanded);
     }
     const isWin = os.platform() === 'win32';
-    try {
-        const cmd = isWin ? `where ${trimmed}` : `which ${trimmed}`;
-        return execSync(cmd, {
-            encoding: 'utf-8',
-            timeout: 5000,
-            stdio: ['pipe', 'pipe', 'pipe'],
-            ...(isWin ? { windowsHide: true } : {}),
-        }).trim().split('\n')[0].trim();
-    } catch {
-        return isWin ? `${trimmed}.cmd` : trimmed;
+    const paths = (process.env.PATH || '').split(path.delimiter);
+    const exes = isWin ? ['.exe', '.cmd', '.bat', ''] : [''];
+    
+    for (const p of paths) {
+        if (!p) continue;
+        for (const ext of exes) {
+            const fullPath = path.join(p, trimmed + ext);
+            try {
+                const fs = require('fs');
+                if (fs.existsSync(fullPath)) {
+                    const stat = fs.statSync(fullPath);
+                    if (stat.isFile() && (isWin || (stat.mode & 0o111))) {
+                        return fullPath;
+                    }
+                }
+            } catch { }
+        }
     }
+    return isWin ? `${trimmed}.cmd` : trimmed;
 }
 
 export function isScriptBinary(binaryPath: string): boolean {
