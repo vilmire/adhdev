@@ -286,12 +286,14 @@ function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark'))
         label: edge.label,
         type: edge.type === 'worktreeLink' || edge.type === 'submoduleLink' ? 'smoothstep' : 'bezier',
         animated: edge.type === 'orphanLink',
-        markerEnd: {
-            type: MarkerType.ArrowClosed,
-            width: edge.type === 'submoduleLink' ? 16 : 18,
-            height: edge.type === 'submoduleLink' ? 16 : 18,
-            color: edgeColor(edge),
-        },
+        markerEnd: edge.direction === 'directed'
+            ? {
+                type: MarkerType.ArrowClosed,
+                width: edge.type === 'submoduleLink' ? 16 : 18,
+                height: edge.type === 'submoduleLink' ? 16 : 18,
+                color: edgeColor(edge),
+            }
+            : undefined,
         style: {
             stroke: edgeColor(edge),
             strokeWidth: edge.type === 'orphanLink' ? 2.25 : edge.type === 'submoduleLink' ? 1.7 : edge.type === 'worktreeLink' ? 1.8 : 2,

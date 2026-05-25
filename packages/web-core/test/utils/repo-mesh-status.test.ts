@@ -91,6 +91,19 @@ describe('extractRepoMeshStatus', () => {
             hasConflicts: false,
             lastCheckedAt: Date.parse('2026-05-23T00:00:10.000Z'),
           },
+          branchConvergence: {
+            status: 'merged_to_main',
+            needsConvergence: false,
+            reason: 'live_mesh_truth_merged',
+            branch: 'main',
+            defaultBranch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            ahead: 0,
+            behind: 0,
+            dirty: false,
+            hasConflicts: false,
+          },
         },
       ],
     }
@@ -109,7 +122,7 @@ describe('extractRepoMeshStatus', () => {
     expect(graphNode?.branchConvergence).toMatchObject({
       status: 'merged_to_main',
       needsConvergence: false,
-      reason: 'clean_default_branch',
+      reason: 'live_mesh_truth_merged',
     })
   })
 
@@ -777,7 +790,7 @@ describe('extractRepoMeshStatus', () => {
       branch: 'main',
       upstream: 'origin/main',
       snapshotCompleteness: 'complete',
-      branchConvergence: expect.objectContaining({ status: 'merged_to_main' }),
+      branchConvergence: null,
     })
     expect(graphNode?.snapshotWarnings).toEqual([])
     expect(graph.snapshotWarnings).toEqual([])
@@ -882,13 +895,13 @@ describe('extractRepoMeshStatus', () => {
       branch: 'main',
       upstream: 'origin/main',
       snapshotCompleteness: 'complete',
-      branchConvergence: expect.objectContaining({ status: 'merged_to_main' }),
+      branchConvergence: null,
     })
     expect(graphNodes[0]?.snapshotWarnings).toEqual([])
     expect(graph.snapshotWarnings).toEqual([])
   })
 
-  it('drops stale follow-up convergence when newer live git truth says the default branch is clean', () => {
+  it('does not carry stale follow-up convergence from a lower-ranked duplicate node', () => {
     const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
       success: true,
@@ -1008,11 +1021,7 @@ describe('extractRepoMeshStatus', () => {
     expect(graphNode).toMatchObject({
       branch: 'main',
       upstream: 'origin/main',
-      branchConvergence: expect.objectContaining({
-        status: 'merged_to_main',
-        needsConvergence: false,
-        reason: 'clean_default_branch',
-      }),
+      branchConvergence: null,
     })
     expect(graph.stats.followUpNodes).toBe(0)
     expect(graph.warnings.join('\n')).not.toContain('follow-up')

@@ -364,6 +364,12 @@ function mergeRepoMeshNodeStatus(existing: RepoMeshNodeStatus, incoming: RepoMes
         ...(connection ? { connection } : {}),
         ...(git ? { git } : {}),
     }
+    const primaryBranchConvergence = readRecord((primary as any).branchConvergence)
+    if (Object.keys(primaryBranchConvergence).length > 0) {
+        Object.assign(merged, { branchConvergence: primaryBranchConvergence })
+    } else {
+        delete (merged as { branchConvergence?: unknown }).branchConvergence
+    }
     if (git) {
         delete (merged as { gitProbePending?: boolean }).gitProbePending
         delete (merged as { error?: string }).error
