@@ -7,8 +7,10 @@
  * Migrated from @adhdev/core — this is now the single source of truth.
  */
 
-import { execSync } from 'child_process';
-import { existsSync } from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
+import { existsSync, statSync } from 'fs';
 import { platform, homedir } from 'os';
 import * as path from 'path';
 import type { ProviderLoader } from '../providers/provider-loader.js';
@@ -73,25 +75,33 @@ function findCliCommand(command: string): string | null {
         const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
         return existsSync(resolved) ? resolved : null;
     }
-    try {
-        const result = execSync(
-            platform() === 'win32' ? `where ${trimmed}` : `which ${trimmed}`,
-            { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
-        ).trim();
-        return result.split('\n')[0] || null;
-    } catch {
-        return null;
+    const isWin = platform() === 'win32';
+    const paths = (process.env.PATH || '').split(isWin ? ';' : ':');
+    const exes = isWin ? ['.exe', '.cmd', '.bat', ''] : [''];
+    for (const p of paths) {
+        if (!p) continue;
+        for (const ext of exes) {
+            const fullPath = path.join(p, trimmed + ext);
+            try {
+                if (existsSync(fullPath)) {
+                    const stat = statSync(fullPath);
+                    if (stat.isFile() && (isWin || (stat.mode & 0o111))) {
+                        return fullPath;
+                    }
+                }
+            } catch { }
+        }
     }
+    return null;
 }
 
-function getIdeVersion(cliCommand: string): string | null {
+async function getIdeVersion(cliCommand: string): Promise<string | null> {
     try {
-        const result = execSync(`"${cliCommand}" --version`, {
+        const { stdout } = await execAsync(`"${cliCommand}" --version`, {
             encoding: 'utf-8',
             timeout: 10000,
-            stdio: ['pipe', 'pipe', 'pipe'],
-        }).trim();
-        return result.split('\n')[0] || null;
+        });
+        return stdout.trim().split('\n')[0] || null;
     } catch {
         return null;
     }
@@ -152,7 +162,7 @@ export async function detectIDEs(providerLoader?: ProviderLoader): Promise<IDEIn
         const installed = os === 'darwin'
             ? !!(resolvedCli || appPath)
             : !!resolvedCli;
-        const version = resolvedCli ? getIdeVersion(resolvedCli) : null;
+        const version = resolvedCli ? await getIdeVersion(resolvedCli) : null;
 
         results.push({
             id: def.id,

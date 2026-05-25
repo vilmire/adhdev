@@ -13,7 +13,7 @@
  * Safety:  mode 0o600, atomic append via appendFileSync
  */
 
-import { existsSync, mkdirSync, readFileSync, appendFileSync, statSync, renameSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getConfigDir } from '../config/config.js';

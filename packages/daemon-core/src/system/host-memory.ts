@@ -11,7 +11,10 @@
  */
 
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 export interface HostMemorySnapshot {
     totalMem: number;
@@ -21,19 +24,22 @@ export interface HostMemorySnapshot {
     availableMem: number;
 }
 
-function parseDarwinAvailableBytes(totalMem: number): number | null {
-    if (os.platform() !== 'darwin') return null;
+let cachedDarwinAvail: number | null = null;
+let darwinMemoryInterval: NodeJS.Timeout | null = null;
+
+async function updateDarwinMemoryCache() {
+    if (os.platform() !== 'darwin') return;
     try {
-        const out = execSync('vm_stat', {
+        const { stdout } = await execAsync('vm_stat', {
             encoding: 'utf-8',
             timeout: 4000,
             maxBuffer: 256 * 1024,
         });
-        const pageSizeMatch = out.match(/page size of (\d+)\s*bytes/i);
+        const pageSizeMatch = stdout.match(/page size of (\d+)\s*bytes/i);
         const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 4096;
 
         const counts: Record<string, number> = {};
-        for (const line of out.split('\n')) {
+        for (const line of stdout.split('\n')) {
             const m = line.match(/^\s*Pages\s+([^:]+):\s+([\d,]+)\s*\.?/);
             if (!m) continue;
             const key = m[1].trim().toLowerCase().replace(/\s+/g, '_');
@@ -49,17 +55,28 @@ function parseDarwinAvailableBytes(totalMem: number): number | null {
 
         const availPages = free + inactive + speculative + purgeable + fileBacked;
         const bytes = availPages * pageSize;
-        if (!Number.isFinite(bytes) || bytes < 0) return null;
-        return Math.min(bytes, totalMem);
+        cachedDarwinAvail = Number.isFinite(bytes) && bytes >= 0 ? Math.min(bytes, os.totalmem()) : null;
     } catch {
-        return null;
+        // silently fallback
     }
 }
 
 export function getHostMemorySnapshot(): HostMemorySnapshot {
+    if (os.platform() === 'darwin' && !darwinMemoryInterval) {
+        updateDarwinMemoryCache();
+        darwinMemoryInterval = setInterval(updateDarwinMemoryCache, 3000);
+        darwinMemoryInterval.unref();
+    }
+
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
-    const darwinAvail = parseDarwinAvailableBytes(totalMem);
-    const availableMem = darwinAvail != null ? darwinAvail : freeMem;
-    return { totalMem, freeMem, availableMem };
+    const availableMem = os.platform() === 'darwin'
+        ? (cachedDarwinAvail ?? freeMem)
+        : freeMem;
+
+    return {
+        totalMem,
+        freeMem,
+        availableMem,
+    };
 }

@@ -122,20 +122,22 @@ export interface InstallResult {
 /**
  * Check if an extension is already installed
  */
-export function isExtensionInstalled(
+import { promisify } from 'util';
+const execAsync = promisify(exec);
+
+export async function isExtensionInstalled(
     ide: IDEInfo,
     marketplaceId: string
-): boolean {
+): Promise<boolean> {
     if (!ide.cliCommand) return false;
 
     try {
-        const result = execSync(`"${ide.cliCommand}" --list-extensions`, {
+        const { stdout } = await execAsync(`"${ide.cliCommand}" --list-extensions`, {
             encoding: 'utf-8',
             timeout: 15000,
-            stdio: ['pipe', 'pipe', 'pipe'],
         });
 
-        const installed = result
+        const installed = stdout
             .trim()
             .split('\n')
             .map((e) => e.trim().toLowerCase());
@@ -163,7 +165,7 @@ export async function installExtension(
     }
 
  // Check if already installed
-    const alreadyInstalled = isExtensionInstalled(ide, extension.marketplaceId);
+    const alreadyInstalled = await isExtensionInstalled(ide, extension.marketplaceId);
     if (alreadyInstalled) {
         return {
             extensionId: extension.id,
