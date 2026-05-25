@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -15,33 +15,6 @@ const baseProvider: ProviderModule = {
   spawn: { command: 'test' },
 }
 
-function nodeSupportsWebSocket(command: string): boolean {
-  try {
-    execFileSync(command, ['-e', 'process.exit(typeof WebSocket === "function" ? 0 : 1)'], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
-}
-
-function findWebSocketNode(): string {
-  const candidates = [
-    process.env.ADHDEV_MCP_NODE_EXECUTABLE,
-    process.env.ADHDEV_NODE_EXECUTABLE,
-    process.env.npm_node_execpath,
-    ...String(process.env.PATH || '').split(':').filter(Boolean).map((entry) => join(entry, 'node')),
-    '/Users/vilmire/.nvm/versions/node/v22.17.0/bin/node',
-    '/opt/homebrew/bin/node',
-    '/usr/local/bin/node',
-    process.execPath,
-  ].filter((candidate): candidate is string => Boolean(candidate?.trim()))
-
-  for (const candidate of candidates) {
-    if (nodeSupportsWebSocket(candidate)) return candidate
-  }
-  throw new Error('No WebSocket-capable Node runtime available for Repo Mesh MCP test')
-}
-
 function resolveHermesCoordinatorHomeForTest(meshId: string, workspace: string): string {
   const key = `${meshId || 'mesh'}\n${resolve(workspace || tmpdir())}`
   const hash = createHash('sha256').update(key).digest('hex').slice(0, 16)
@@ -53,7 +26,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     vi.restoreAllMocks()
   })
 
-  it('returns auto-import config that launches MCP through Node and an absolute entrypoint, not a PATH bin shim', () => {
+  it('returns auto-import config that launches the published adhdev mcp entrypoint', () => {
     const provider: ProviderModule = {
       ...baseProvider,
       meshCoordinator: {
@@ -71,21 +44,19 @@ describe('resolveMeshCoordinatorSetup', () => {
       provider,
       meshId: 'mesh_123',
       workspace: '/repo',
-      nodeExecutable: '/usr/local/bin/node',
-      adhdevMcpEntryPath: '/opt/adhdev/vendor/mcp-server/index.js',
     })).toEqual({
       kind: 'auto_import',
       serverName: 'adhdev-mesh',
       configPath: '/repo/.mcp.json',
       configFormat: 'claude_mcp_json',
       mcpServer: {
-        command: '/usr/local/bin/node',
-        args: ['/opt/adhdev/vendor/mcp-server/index.js', '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
+        command: 'adhdev',
+        args: ['mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
       },
     })
   })
 
-  it('can target a standalone local MCP transport and custom port', () => {
+  it('can target a standalone local MCP transport and custom port through adhdev mcp', () => {
     const provider: ProviderModule = {
       ...baseProvider,
       meshCoordinator: {
@@ -103,32 +74,18 @@ describe('resolveMeshCoordinatorSetup', () => {
       provider,
       meshId: 'mesh_local',
       workspace: '/repo',
-      nodeExecutable: '/usr/local/bin/node',
-      adhdevMcpEntryPath: '/opt/adhdev/vendor/mcp-server/index.js',
       adhdevMcpTransport: 'local',
       adhdevMcpPort: 3957,
     })).toEqual(expect.objectContaining({
       kind: 'auto_import',
       mcpServer: {
-        command: '/usr/local/bin/node',
-        args: ['/opt/adhdev/vendor/mcp-server/index.js', '--mode', 'local', '--repo-mesh', 'mesh_local', '--port', '3957'],
+        command: 'adhdev',
+        args: ['mcp', '--mode', 'local', '--repo-mesh', 'mesh_local', '--port', '3957'],
       },
     }))
   })
 
-  it('honors an explicit MCP Node override after verifying it can run WebSocket IPC', () => {
-    const root = mkdtempSync(join(tmpdir(), 'adhdev-mcp-node-runtime-'))
-    const goodBin = join(root, 'good-bin')
-    mkdirSync(goodBin, { recursive: true })
-    const goodNode = join(goodBin, 'node')
-    const mcpEntry = join(root, 'mcp-server.js')
-    const websocketNode = findWebSocketNode()
-    writeFileSync(goodNode, `#!/bin/sh\nexec ${JSON.stringify(websocketNode)} "$@"\n`, 'utf-8')
-    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
-    chmodSync(goodNode, 0o755)
-    const previousNodeOverride = process.env.ADHDEV_MCP_NODE_EXECUTABLE
-    process.env.ADHDEV_MCP_NODE_EXECUTABLE = goodNode
-
+  it('honors an explicit adhdev command override while keeping the mcp subcommand contract', () => {
     const provider: ProviderModule = {
       ...baseProvider,
       meshCoordinator: {
@@ -142,72 +99,18 @@ describe('resolveMeshCoordinatorSetup', () => {
       },
     }
 
-    try {
-      expect(resolveMeshCoordinatorSetup({
-        provider,
-        meshId: 'mesh_node_runtime',
-        workspace: '/repo',
-        adhdevMcpEntryPath: mcpEntry,
-      })).toMatchObject({
-        kind: 'auto_import',
-        mcpServer: {
-          command: realpathSync(goodNode),
-          args: [realpathSync(mcpEntry), '--mode', 'ipc', '--repo-mesh', 'mesh_node_runtime'],
-        },
-      })
-    } finally {
-      if (previousNodeOverride === undefined) delete process.env.ADHDEV_MCP_NODE_EXECUTABLE
-      else process.env.ADHDEV_MCP_NODE_EXECUTABLE = previousNodeOverride
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it('resolves the sibling mcp-server workspace dist when standalone runs from a source checkout', () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'adhdev-mcp-workspace-'))
-    const standaloneSrc = join(repoRoot, 'packages', 'daemon-standalone', 'src')
-    const mcpDist = join(repoRoot, 'packages', 'mcp-server', 'dist')
-    mkdirSync(standaloneSrc, { recursive: true })
-    mkdirSync(mcpDist, { recursive: true })
-    const standaloneEntry = join(standaloneSrc, 'index.ts')
-    const mcpEntry = join(mcpDist, 'index.js')
-    writeFileSync(standaloneEntry, '// standalone dev entry\n', 'utf-8')
-    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
-    const previousArgv1 = process.argv[1]
-    process.argv[1] = standaloneEntry
-
-    const provider: ProviderModule = {
-      ...baseProvider,
-      meshCoordinator: {
-        supported: true,
-        mcpConfig: {
-          mode: 'auto_import',
-          format: 'claude_mcp_json',
-          path: '.mcp.json',
-          serverName: 'adhdev-mesh',
-        },
+    expect(resolveMeshCoordinatorSetup({
+      provider,
+      meshId: 'mesh_custom_command',
+      workspace: '/repo',
+      adhdevMcpCommand: '/custom/bin/adhdev',
+    })).toMatchObject({
+      kind: 'auto_import',
+      mcpServer: {
+        command: '/custom/bin/adhdev',
+        args: ['mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_custom_command'],
       },
-    }
-
-    try {
-      expect(resolveMeshCoordinatorSetup({
-        provider,
-        meshId: 'mesh_dev_checkout',
-        workspace: '/repo',
-        nodeExecutable: '/usr/local/bin/node',
-      })).toEqual({
-        kind: 'auto_import',
-        serverName: 'adhdev-mesh',
-        configPath: '/repo/.mcp.json',
-        configFormat: 'claude_mcp_json',
-        mcpServer: {
-          command: '/usr/local/bin/node',
-          args: [realpathSync(mcpEntry), '--mode', 'ipc', '--repo-mesh', 'mesh_dev_checkout'],
-        },
-      })
-    } finally {
-      process.argv[1] = previousArgv1
-      rmSync(repoRoot, { recursive: true, force: true })
-    }
+    })
   })
 
   it('materializes Hermes manual setup templates without pretending launch succeeded', () => {
@@ -222,7 +125,7 @@ describe('resolveMeshCoordinatorSetup', () => {
           configPathCommand: 'hermes config path',
           requiresRestart: true,
           instructions: 'Add this server to Hermes config.',
-          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - --repo-mesh\n      - {{meshId}}\n',
+          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - mcp\n      - --mode\n      - ipc\n      - --repo-mesh\n      - {{meshId}}\n',
         },
       },
     }
@@ -231,7 +134,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       provider,
       meshId: 'mesh_456',
       workspace: '/repo',
-      adhdevMcpCommand: '/repo/node_modules/.bin/adhdev-mcp',
+      adhdevMcpCommand: '/repo/node_modules/.bin/adhdev',
     })).toEqual({
       kind: 'manual',
       serverName: 'adhdev-mesh',
@@ -239,7 +142,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       configPathCommand: 'hermes config path',
       requiresRestart: true,
       instructions: 'Add this server to Hermes config.',
-      template: 'mcp_servers:\n  adhdev-mesh:\n    command: /repo/node_modules/.bin/adhdev-mcp\n    args:\n      - --repo-mesh\n      - mesh_456\n',
+      template: 'mcp_servers:\n  adhdev-mesh:\n    command: /repo/node_modules/.bin/adhdev\n    args:\n      - mcp\n      - --mode\n      - ipc\n      - --repo-mesh\n      - mesh_456\n',
     })
   })
 
@@ -510,7 +413,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     }
   })
 
-  it('writes Claude MCP config with a Node-launched absolute MCP server entrypoint instead of adhdev-mcp on PATH', async () => {
+  it('writes Claude MCP config with the published adhdev mcp entrypoint', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-coordinator-'))
     const mcpEntry = join(workspace, 'mcp-server.js')
     writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
@@ -554,16 +457,14 @@ describe('resolveMeshCoordinatorSetup', () => {
       expect(result).toMatchObject({ success: true, sessionId: 'session-1' })
       const mcpConfig = JSON.parse(readFileSync(join(workspace, '.mcp.json'), 'utf-8'))
       expect(mcpConfig.mcpServers['adhdev-mesh']).toEqual({
-        command: expect.any(String),
-        args: [realpathSync(mcpEntry), '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
+        command: 'adhdev',
+        args: ['mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
         env: {
           ADHDEV_INLINE_MESH: JSON.stringify(inlineMesh),
           ADHDEV_MCP_TRANSPORT: 'ipc',
         },
       })
-      expect(mcpConfig.mcpServers['adhdev-mesh'].command).not.toBe('adhdev-mcp')
-      expect(mcpConfig.mcpServers['adhdev-mesh'].command).toMatch(/^\//)
-      expect(nodeSupportsWebSocket(mcpConfig.mcpServers['adhdev-mesh'].command)).toBe(true)
+      expect(mcpConfig.mcpServers['adhdev-mesh'].command).toBe('adhdev')
       expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
         cliType: 'claude-cli',
         dir: workspace,
@@ -652,7 +553,7 @@ describe('resolveMeshCoordinatorSetup', () => {
           configPathCommand: 'hermes config path',
           requiresRestart: true,
           instructions: 'Hermes CLI does not auto-import repo-local .mcp.json. Add this MCP server to Hermes config under mcp_servers, then start a fresh Hermes session.',
-          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
+          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - mcp\n      - --mode\n      - ipc\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
         },
       },
     }
@@ -749,7 +650,7 @@ describe('resolveMeshCoordinatorSetup', () => {
           configPathCommand: 'hermes config path',
           requiresRestart: true,
           instructions: 'Hermes CLI does not auto-import repo-local .mcp.json. Add this MCP server to Hermes config under mcp_servers, then start a fresh Hermes session.',
-          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
+          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - mcp\n      - --mode\n      - ipc\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
         },
       },
     }
