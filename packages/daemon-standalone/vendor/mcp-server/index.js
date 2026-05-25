@@ -35,6 +35,9 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
+// src/tools/mesh-tools.ts
+var import_node_crypto = require("crypto");
+
 // src/transports/ipc.ts
 var DEFAULT_IPC_PORT = 19222;
 var DEFAULT_IPC_PATH = "/ipc";
@@ -244,6 +247,25 @@ var import_daemon_core = require("@adhdev/daemon-core");
 var meshSessionProviderMetadata = /* @__PURE__ */ new Map();
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : void 0;
+}
+function summarizeTaskMessage(message) {
+  const taskSummary = message.replace(/\s+/g, " ").trim();
+  const taskTitle = taskSummary.length > 96 ? `${taskSummary.slice(0, 93)}...` : taskSummary;
+  return { taskTitle: taskTitle || "(untitled task)", taskSummary };
+}
+function buildDirectTaskPayload(message, via, opts) {
+  const descriptor = summarizeTaskMessage(message);
+  return {
+    source: "direct",
+    via,
+    taskId: opts.taskId,
+    message,
+    taskTitle: descriptor.taskTitle,
+    taskSummary: descriptor.taskSummary,
+    ...opts.taskMode ? { taskMode: opts.taskMode } : {},
+    ...opts.providerType ? { providerType: opts.providerType } : {},
+    ...opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {}
+  };
 }
 function findNode(mesh, nodeId) {
   const node = mesh.nodes.find((n) => n.id === nodeId);
@@ -523,6 +545,18 @@ function filterQueueForView(queue, view, statuses) {
   if (view === "active") return queue.filter((task) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || "")));
   if (view === "historical") return queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
   return queue;
+}
+function prioritizeActiveQueueRows(queue) {
+  const active = [];
+  const historical = [];
+  const other = [];
+  for (const task of queue) {
+    const status = String(task?.status || "");
+    if (ACTIVE_QUEUE_STATUSES.has(status)) active.push(task);
+    else if (HISTORICAL_QUEUE_STATUSES.has(status)) historical.push(task);
+    else other.push(task);
+  }
+  return [...active, ...other, ...historical];
 }
 function slimQueueTask(task) {
   return {
@@ -929,7 +963,7 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
         error: `P2P dispatch failed: ${errorMessage}`
       };
     }
-    return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType };
+    return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType, providerType: resolvedProviderType };
   } catch (e) {
     const errorMessage = e?.message || String(e);
     return {
@@ -1224,6 +1258,14 @@ function buildMeshForwardPayloadFromPendingEvent(event) {
     providerType: readString(metadataEvent.providerType),
     providerSessionId: readString(metadataEvent.providerSessionId),
     finalSummary: readString(metadataEvent.finalSummary) || readString(metadataEvent.summary),
+    jobId: readString(metadataEvent.jobId),
+    interactionId: readString(metadataEvent.interactionId),
+    status: readString(metadataEvent.status),
+    targetDaemonId: readString(metadataEvent.targetDaemonId),
+    startedAt: readString(metadataEvent.startedAt),
+    completedAt: readString(metadataEvent.completedAt),
+    retryOfJobId: readString(metadataEvent.retryOfJobId),
+    ...metadataEvent.result && typeof metadataEvent.result === "object" && !Array.isArray(metadataEvent.result) ? { result: metadataEvent.result } : {},
     ...metadataEvent.intentional === true ? { intentional: true } : {},
     ...metadataEvent.intentionalStop === true ? { intentionalStop: true } : {},
     ...metadataEvent.operatorCleanup === true ? { operatorCleanup: true } : {},
@@ -1310,7 +1352,9 @@ var MESH_ENQUEUE_TASK_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
-      message: { type: "string", description: "The task instruction for the agent." }
+      message: { type: "string", description: "The task instruction for the agent." },
+      task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch." },
+      taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." }
     },
     required: ["message"]
   }
@@ -1370,7 +1414,9 @@ var MESH_SEND_TASK_TOOL = {
     properties: {
       node_id: { type: "string", description: "Target node ID (from mesh_list_nodes)." },
       session_id: { type: "string", description: "Agent session ID on the target node." },
-      message: { type: "string", description: "Natural-language task to send to the agent." }
+      message: { type: "string", description: "Natural-language task to send to the agent." },
+      task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch." },
+      taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." }
     },
     required: ["node_id", "session_id", "message"]
   }
@@ -1546,7 +1592,7 @@ var MESH_RECONCILE_LEDGER_TOOL = {
 };
 var MESH_REFINE_NODE_TOOL = {
   name: "mesh_refine_node",
-  description: "The Refinery: Automatically validate and merge a completed worktree node back into its base branch. This tool automates the validation gate and merge queue step. It will merge the node's branch into its base branch and cleanly remove the worktree node and its sessions.",
+  description: "The Refinery: Accept an async validation/merge/cleanup job for a completed worktree node. The immediate response includes async:true, status:'accepted', jobId, interactionId, target node, and startedAt; completion/failure evidence is delivered through pending mesh events and the mesh task ledger.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1736,6 +1782,12 @@ async function meshStatus(ctx) {
     if (relatedRepos.length) entry.relatedRepos = relatedRepos;
     results.push(entry);
   }
+  const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
+    meshId: mesh.id,
+    queue: (0, import_daemon_core.getQueue)(mesh.id),
+    ledgerEntries: (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail: 500 }),
+    nodes: mesh.nodes
+  });
   const response = {
     meshId: mesh.id,
     meshName: mesh.name,
@@ -1745,9 +1797,12 @@ async function meshStatus(ctx) {
     sourceOfTruth: {
       membership: "coordinator_daemon_live_mesh",
       currentStatus: "live_git_and_session_probes",
+      activeWork: "mesh_queue_file_and_local_ledger",
       historicalEvidenceOnly: ["recoveryHints", "ledgerSummary"]
     },
     nodes: results,
+    activeWork: activeWorkEvidence.activeWork,
+    activeWorkSummary: activeWorkEvidence.summary,
     branchConvergenceSummary: summarizeBranchConvergence(results)
   };
   try {
@@ -1869,12 +1924,13 @@ async function meshListNodes(ctx) {
   }, null, 2);
 }
 async function meshEnqueueTask(ctx, args) {
+  const taskMode = readString(args.task_mode) || readString(args.taskMode);
   try {
-    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message);
+    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode });
     if (isLocalTransport(ctx.transport) && !(ctx.transport instanceof IpcTransport)) {
       ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
       });
-      return JSON.stringify({ success: true, taskId: task.id, status: task.status });
+      return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode });
     }
     if (ctx.transport instanceof IpcTransport) {
       ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
@@ -1887,11 +1943,24 @@ async function meshEnqueueTask(ctx, args) {
           ipcDispatchToRemoteAgent(ctx, node, { message: args.message }).then((result) => {
             if (result.success) {
               try {
+                const providerType = result.providerType;
+                const descriptor = summarizeTaskMessage(args.message);
                 (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
                   kind: "task_dispatched",
                   nodeId: node.id,
                   sessionId: result.sessionId,
-                  payload: { message: args.message, via: "p2p_direct", taskId: task.id }
+                  providerType,
+                  payload: {
+                    source: "queue",
+                    via: "p2p_direct",
+                    taskId: task.id,
+                    message: args.message,
+                    taskTitle: descriptor.taskTitle,
+                    taskSummary: descriptor.taskSummary,
+                    ...task.taskMode ? { taskMode: task.taskMode } : {},
+                    ...providerType ? { providerType } : {},
+                    targetSessionId: result.sessionId
+                  }
                 });
               } catch {
               }
@@ -1902,22 +1971,32 @@ async function meshEnqueueTask(ctx, args) {
       }
       Promise.all(dispatchPromises).catch(() => {
       });
-      return JSON.stringify({ success: true, taskId: task.id, status: task.status });
+      return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode });
     }
-    return JSON.stringify({ success: true, taskId: task.id, status: task.status });
+    return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode });
   } catch (e) {
-    return JSON.stringify({ success: false, error: e.message });
+    const message = e?.message || String(e);
+    if (message.includes("live_debug_readonly_guardrail_violation")) {
+      return JSON.stringify({ success: false, code: "live_debug_readonly_guardrail_violation", taskMode, error: message });
+    }
+    return JSON.stringify({ success: false, error: message });
   }
 }
 async function meshViewQueue(ctx, args) {
   try {
     const statusFilter = sanitizeQueueStatusFilter(args.status);
     const view = normalizeQueueViewMode(args.view);
-    const fullQueue = annotateQueueStaleness((0, import_daemon_core.getQueue)(ctx.mesh.id), ctx.mesh);
+    const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness((0, import_daemon_core.getQueue)(ctx.mesh.id), ctx.mesh));
     const queue = filterQueueForView(fullQueue, view, statusFilter);
     const summary = buildQueueStatusSummary(fullQueue);
     const visibleSummary = buildQueueStatusSummary(queue);
     const maintenance = buildQueueMaintenanceReport(fullQueue);
+    const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
+      meshId: ctx.mesh.id,
+      queue: fullQueue,
+      ledgerEntries: (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 500 }),
+      nodes: ctx.mesh.nodes
+    });
     const staleAssignedTasks = maintenance.staleAssignedTasks || [];
     const requestedHistoricalRows = queue.some((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
     return JSON.stringify({
@@ -1935,6 +2014,8 @@ async function meshViewQueue(ctx, args) {
       },
       queue,
       visibleQueue: queue,
+      activeWork: activeWorkEvidence.activeWork,
+      activeWorkSummary: activeWorkEvidence.summary,
       visibleSummary,
       summary,
       activeCounts: summary.activeCounts,
@@ -1968,6 +2049,10 @@ async function meshQueueCancel(ctx, args) {
     if (!taskId) return JSON.stringify({ success: false, error: "task_id required" });
     const task = (0, import_daemon_core.cancelTask)(ctx.mesh.id, taskId, { reason: args.reason });
     if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
+    if (isLocalTransport(ctx.transport)) {
+      ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
+      });
+    }
     return JSON.stringify({ success: true, task }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e.message });
@@ -1998,6 +2083,19 @@ async function meshQueueRequeue(ctx, args) {
   }
 }
 async function meshSendTask(ctx, args) {
+  const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
+  const modeValidation = (0, import_daemon_core.validateMeshTaskModeRequest)(requestedTaskMode, args.message);
+  if (!modeValidation.valid) {
+    return JSON.stringify({
+      success: false,
+      code: "live_debug_readonly_guardrail_violation",
+      taskMode: modeValidation.taskMode || requestedTaskMode,
+      violations: modeValidation.violations,
+      allowedOperations: modeValidation.allowedOperations,
+      error: `live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(", ")})`
+    });
+  }
+  const taskMode = modeValidation.taskMode;
   const node = await findNodeWithRefresh(ctx, args.node_id);
   if (node.policy?.readOnly) {
     return JSON.stringify({ error: `Node '${args.node_id}' is read-only` });
@@ -2025,13 +2123,15 @@ async function meshSendTask(ctx, args) {
       const res = await ctx.transport.meshEnqueueTask(node.daemonId, {
         meshId: ctx.mesh.id,
         message: args.message,
-        targetNodeId: args.node_id
+        targetNodeId: args.node_id,
+        ...taskMode ? { taskMode } : {}
       });
       return JSON.stringify(res);
     }
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
       const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id || ""));
+      const taskId = (0, import_node_crypto.randomUUID)();
       const result2 = await ipcDispatchToRemoteAgent(ctx, node, {
         session_id: args.session_id,
         message: args.message,
@@ -2040,20 +2140,31 @@ async function meshSendTask(ctx, args) {
       if (result2.success) {
         const dispatchedSessionId = args.session_id || result2.sessionId;
         try {
+          const providerType = result2.providerType || cached?.providerType;
           (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
             kind: "task_dispatched",
             nodeId: args.node_id,
             sessionId: dispatchedSessionId,
-            payload: {
-              message: args.message,
-              via: "p2p_direct",
-              ...dispatchedSessionId ? { targetSessionId: dispatchedSessionId } : {}
-            }
+            providerType,
+            payload: buildDirectTaskPayload(args.message, "p2p_direct", {
+              taskId,
+              taskMode,
+              providerType,
+              targetSessionId: dispatchedSessionId
+            })
           });
         } catch {
         }
       }
-      return JSON.stringify({ ...result2, nodeId: args.node_id, dispatched: result2.success === true });
+      return JSON.stringify({
+        ...result2,
+        nodeId: args.node_id,
+        sessionId: result2.success ? args.session_id || result2.sessionId : args.session_id,
+        ...result2.success ? { source: "direct", taskId } : {},
+        taskMode,
+        ...result2.success && result2.providerType ? { providerType: result2.providerType } : {},
+        dispatched: result2.success === true
+      });
     }
     if (args.session_id && isLocalTransport(ctx.transport)) {
       const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
@@ -2115,28 +2226,35 @@ async function meshSendTask(ctx, args) {
           error: dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task"
         });
       }
+      const taskId = (0, import_node_crypto.randomUUID)();
       try {
         (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
           kind: "task_dispatched",
           nodeId: args.node_id,
           sessionId: args.session_id,
           providerType: resolvedProviderType,
-          payload: { message: args.message, via: "local_direct" }
+          payload: buildDirectTaskPayload(args.message, "local_direct", {
+            taskId,
+            taskMode,
+            providerType: resolvedProviderType,
+            targetSessionId: args.session_id
+          })
         });
       } catch {
       }
-      return JSON.stringify({ success: true, dispatched: true, nodeId: args.node_id, sessionId: args.session_id });
+      return JSON.stringify({ success: true, dispatched: true, source: "direct", taskId, taskMode, providerType: resolvedProviderType, nodeId: args.node_id, sessionId: args.session_id });
     }
     const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, {
       targetNodeId: args.node_id,
-      targetSessionId: args.session_id
+      targetSessionId: args.session_id,
+      taskMode
     });
     if (isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport) {
       ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
       });
     }
     const pendingEvents = isLocalTransport(ctx.transport) ? (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id) : [];
-    const result = { success: true, nodeId: args.node_id, taskId: task.id, status: task.status };
+    const result = { success: true, source: "queue", nodeId: args.node_id, taskId: task.id, status: task.status, taskMode: task.taskMode };
     if (pendingEvents.length > 0) {
       result.pendingCoordinatorEvents = pendingEvents;
     }
@@ -2701,7 +2819,7 @@ async function meshRefineNode(ctx, args) {
       nodeId: args.node_id,
       inlineMesh: ctx.mesh
     });
-    if (result?.success && result.removeResult?.removed !== false) {
+    if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
       const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
       if (idx >= 0) {
         ctx.mesh.nodes.splice(idx, 1);
@@ -2716,7 +2834,7 @@ async function meshRefineNode(ctx, args) {
         nodeId: args.node_id,
         inlineMesh: ctx.mesh
       });
-      if (res?.success && res.removeResult?.removed !== false) {
+      if (res?.success && res.async !== true && res.removeResult?.removed !== false) {
         const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
         if (idx >= 0) {
           ctx.mesh.nodes.splice(idx, 1);
@@ -2753,13 +2871,13 @@ var STANDARD_TOOLS = [
 function buildMcpHelpText() {
   const meshTools = ALL_MESH_TOOLS.map((tool) => tool.name);
   return `
-adhdev-mcp \u2014 ADHDev MCP Server
+ADHDev MCP Server
 
 Usage:
-  adhdev-mcp                                    Local mode (requires standalone daemon)
-  adhdev-mcp --api-key <key>                    Cloud mode (ADHDev cloud API)
-  adhdev-mcp --mode ipc --repo-mesh <mesh_id>   Cloud daemon IPC mesh mode
-  adhdev-mcp --repo-mesh <mesh_id>              Mesh mode (coordinator-scoped tools)
+  adhdev mcp                                    Local mode (requires standalone daemon)
+  adhdev mcp --api-key <key>                    Cloud mode (ADHDev cloud API)
+  adhdev mcp --mode ipc --repo-mesh <mesh_id>   Cloud daemon IPC mesh mode
+  adhdev-mcp --help                             Compatibility bin (same server, legacy package entrypoint)
 
 Options:
   --mode <mode>           Transport: local, cloud, or ipc
