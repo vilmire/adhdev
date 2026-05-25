@@ -21,7 +21,7 @@ vi.mock('../../src/detection/cli-detector.js', () => ({
 }))
 
 import { handleMeshForwardEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
-import { claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetBeadsDBForTests, claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 
 function createComponents(meshId = 'mesh_inline_1') {
@@ -69,6 +69,8 @@ function createComponents(meshId = 'mesh_inline_1') {
 function cleanupMeshFiles(meshId: string) {
   const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
   const ledgerPath = path.join(getLedgerDir(), `${meshId}.jsonl`)
+  __clearMeshQueueForTests(meshId)
+  __resetBeadsDBForTests()
   if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
   if (fs.existsSync(ledgerPath)) fs.unlinkSync(ledgerPath)
 }
@@ -137,7 +139,6 @@ describe('setupMeshEventForwarding', () => {
 
   it('marks the assigned queue task completed when a completion event only carries instanceId', () => {
     const meshId = `mesh_completion_fallback_${Date.now()}`
-    const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
     try {
       meshConfigMocks.getMesh.mockReturnValue({
         id: meshId,
@@ -190,7 +191,6 @@ describe('setupMeshEventForwarding', () => {
       })
     } finally {
       cleanupMeshFiles(meshId)
-      if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
     }
   })
 
