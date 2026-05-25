@@ -956,6 +956,38 @@ export class ProviderCliAdapter implements CliAdapter {
         return true;
     }
 
+    private clearParsedIdleResponseGuard(reason: string, parsedStatus: any): boolean {
+        const parsedRawStatus = typeof parsedStatus?.status === 'string' ? parsedStatus.status.trim() : '';
+        const parsedModal = parsedStatus?.activeModal ?? parsedStatus?.modal ?? null;
+        const blockingModal = this.activeModal || this.runParseApproval(this.recentOutputBuffer);
+        if (
+            !this.isWaitingForResponse
+            || parsedRawStatus !== 'idle'
+            || !!parsedModal
+            || !!blockingModal
+            || !this.parsedStatusHasFinalAssistantMessage(parsedStatus)
+        ) {
+            return false;
+        }
+        this.clearAllTimers();
+        this.clearIdleFinishCandidate(reason);
+        this.responseBuffer = '';
+        this.isWaitingForResponse = false;
+        this.responseSettleIgnoreUntil = 0;
+        this.submitRetryUsed = false;
+        this.submitRetryPromptSnippet = '';
+        this.finishRetryCount = 0;
+        this.currentTurnScope = null;
+        this.activeModal = null;
+        this.setStatus('idle', reason);
+        this.recordTrace('parsed_idle_response_cleared', {
+            reason,
+            parsedStatus: parsedRawStatus,
+            parsedMessageCount: Array.isArray(parsedStatus?.messages) ? parsedStatus.messages.length : 0,
+        });
+        return true;
+    }
+
     private hasMeaningfulResponseBuffer(promptSnippet: string): boolean {
         const raw = String(this.responseBuffer || '').trim();
         if (!raw) return false;
@@ -1994,7 +2026,10 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         }
         if (this.isWaitingForResponse && !allowInputDuringGeneration) {
-            if (!this.clearStaleIdleResponseGuard('send_message_guard')) {
+            if (
+                !this.clearStaleIdleResponseGuard('send_message_guard')
+                && !this.clearParsedIdleResponseGuard('send_message_parsed_idle_guard', parsedStatusBeforeSend)
+            ) {
                 throw new Error(`${this.cliName} is still processing the previous prompt`);
             }
         }
