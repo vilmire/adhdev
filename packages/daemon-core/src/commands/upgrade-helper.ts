@@ -3,7 +3,6 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { AsyncBatchWriter } from '../logging/async-batch-writer.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
 
@@ -43,7 +42,7 @@ function getUpgradeLogPath(): string {
 function appendUpgradeLog(message: string): void {
   const line = `[${new Date().toISOString()}] ${message}\n`;
   try {
-    AsyncBatchWriter.write(getUpgradeLogPath(), line);
+    fs.appendFileSync(getUpgradeLogPath(), line, 'utf8');
   } catch {
     // noop
   }
