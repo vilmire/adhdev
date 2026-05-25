@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "vilmire",
+      "id": 5513793,
+      "comment_id": 4532100541,
+      "created_at": "2026-05-25T06:36:42Z",
+      "repoId": 1184511583,
+      "pullRequestNo": 3
+    }
+  ]
 }
