@@ -438,6 +438,19 @@ function filterQueueForView(queue: any[], view: QueueViewMode, statuses?: string
     return queue;
 }
 
+function prioritizeActiveQueueRows(queue: any[]): any[] {
+    const active: any[] = [];
+    const historical: any[] = [];
+    const other: any[] = [];
+    for (const task of queue) {
+        const status = String(task?.status || '');
+        if (ACTIVE_QUEUE_STATUSES.has(status)) active.push(task);
+        else if (HISTORICAL_QUEUE_STATUSES.has(status)) historical.push(task);
+        else other.push(task);
+    }
+    return [...active, ...other, ...historical];
+}
+
 function slimQueueTask(task: any): Record<string, unknown> {
     return {
         id: task?.id,
@@ -2146,7 +2159,7 @@ export async function meshViewQueue(
     try {
         const statusFilter = sanitizeQueueStatusFilter(args.status);
         const view = normalizeQueueViewMode(args.view);
-        const fullQueue = annotateQueueStaleness(getQueue(ctx.mesh.id), ctx.mesh);
+        const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(getQueue(ctx.mesh.id), ctx.mesh));
         const queue = filterQueueForView(fullQueue, view, statusFilter);
         const summary = buildQueueStatusSummary(fullQueue);
         const visibleSummary = buildQueueStatusSummary(queue);
