@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   execSync: vi.fn(),
+  exec: vi.fn(),
   spawn: vi.fn(() => ({ unref: vi.fn() })),
   spawnSync: vi.fn(),
   platform: vi.fn(() => 'darwin'),
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('child_process', () => ({
   execSync: mocks.execSync,
+  exec: mocks.exec,
   spawn: mocks.spawn,
   spawnSync: mocks.spawnSync,
 }))
@@ -53,6 +55,16 @@ import { isIdeRunning, killIdeProcess, launchWithCdp } from '../../src/launch'
 describe('macOS app bundle process fallback', () => {
   beforeEach(() => {
     mocks.execSync.mockReset()
+    mocks.exec.mockReset()
+    mocks.exec.mockImplementation((command: string, options: any, callback?: any) => {
+      const cb = typeof options === 'function' ? options : callback
+      try {
+        cb(null, mocks.execSync(command), '')
+      } catch (error) {
+        cb(error, '', '')
+      }
+      return {} as any
+    })
     mocks.spawn.mockClear()
     mocks.spawnSync.mockReset()
     mocks.detectIDEs.mockReset()
@@ -65,7 +77,7 @@ describe('macOS app bundle process fallback', () => {
     vi.restoreAllMocks()
   })
 
-  it('detects Antigravity when macOS exposes the process as Electron under the app bundle path', () => {
+  it('detects Antigravity when macOS exposes the process as Electron under the app bundle path', async () => {
     mocks.execSync.mockImplementation((command: string) => {
       if (command.startsWith('pgrep -x "Antigravity"')) throw new Error('no process named Antigravity')
       if (command.includes('System Events')) return '0\n'
@@ -79,7 +91,7 @@ describe('macOS app bundle process fallback', () => {
       throw new Error(`unexpected command: ${command}`)
     })
 
-    expect(isIdeRunning('antigravity')).toBe(true)
+    await expect(isIdeRunning('antigravity')).resolves.toBe(true)
   })
 
   it('kills only Antigravity app-bundle Electron processes when the process name is not Antigravity', async () => {

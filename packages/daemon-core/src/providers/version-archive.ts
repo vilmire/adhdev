@@ -117,20 +117,18 @@ export class VersionArchive {
 
 // ─── Version Detection ──────────────────────────────
 
-import { promisify } from 'util';
 import { exec } from 'child_process';
-const execAsync = promisify(exec);
 
 async function runCommand(cmd: string, timeout = 10000): Promise<string | null> {
-  try {
-    const { stdout } = await execAsync(cmd, {
+  return new Promise((resolve) => {
+    exec(cmd, {
       encoding: 'utf-8',
       timeout,
+    }, (error, stdout) => {
+      if (error) return resolve(null);
+      resolve(stdout.trim());
     });
-    return stdout.trim();
-  } catch {
-    return null;
-  }
+  });
 }
 
 function findBinary(name: string): string | null {

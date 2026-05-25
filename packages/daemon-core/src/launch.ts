@@ -17,16 +17,14 @@
  */
 
 import { exec, spawn, spawnSync } from 'child_process';
-import { promisify } from 'util';
-const execAsync = promisify(exec);
 
 async function execQuiet(command: string, options: any = {}): Promise<string> {
-    try {
-        const { stdout } = await execAsync(command, options);
-        return stdout.toString();
-    } catch {
-        return '';
-    }
+    return new Promise((resolve) => {
+        exec(command, options, (error, stdout) => {
+            if (error) return resolve('');
+            resolve(stdout.toString());
+        });
+    });
 }
 import * as net from 'net';
 import * as os from 'os';
@@ -180,7 +178,7 @@ export async function killIdeProcess(ideId: string): Promise<boolean> {
             } catch {
                 try { await execQuiet(`pkill -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
             }
-            killMacAppPathProcesses(ideId, 'SIGTERM');
+            await killMacAppPathProcesses(ideId, 'SIGTERM');
         } else if (plat === 'win32' && winProcesses) {
  // Windows: taskkill for each process name
             for (const proc of winProcesses) {
@@ -202,13 +200,13 @@ export async function killIdeProcess(ideId: string): Promise<boolean> {
  // Wait for process kill (max 15 seconds)
         for (let i = 0; i < 30; i++) {
             await new Promise(r => setTimeout(r, 500));
-            if (!(await isIdeRunning)(ideId)) return true;
+            if (!(await isIdeRunning(ideId))) return true;
         }
 
  // Force terminate retry
         if (plat === 'darwin' && appName) {
             try { await execQuiet(`pkill -9 -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
-            killMacAppPathProcesses(ideId, 'SIGKILL');
+            await killMacAppPathProcesses(ideId, 'SIGKILL');
         } else if (plat === 'win32' && winProcesses) {
             for (const proc of winProcesses) {
                 try { await execQuiet(`taskkill /IM "${proc}" /F 2>nul`); } catch { }
@@ -216,7 +214,7 @@ export async function killIdeProcess(ideId: string): Promise<boolean> {
         }
 
         await new Promise(r => setTimeout(r, 2000));
-        return !(await isIdeRunning)(ideId);
+        return !(await isIdeRunning(ideId));
 
     } catch {
         return false;
