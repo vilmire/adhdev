@@ -272,6 +272,12 @@ describe('buildMeshGraph', () => {
                         renamed: 0,
                         hasConflicts: false,
                     },
+                    branchConvergence: {
+                        status: 'blocked_review',
+                        needsConvergence: true,
+                        reason: 'default_branch_not_even_with_upstream',
+                        nextStep: 'Bring main even with origin/main before declaring convergence complete.',
+                    },
                 },
             ],
         } as any)
@@ -507,7 +513,7 @@ describe('buildMeshGraph', () => {
         expect(graph.warnings).toContain('1 submodule(s) are out of sync with their parent checkout')
     })
 
-    it('drops stale blocked convergence when current live git is a clean merged default branch', () => {
+    it('preserves daemon-provided branch convergence instead of overriding it from local graph heuristics', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_live_git_stale_convergence',
             meshName: 'Live Git Stale Convergence Mesh',
@@ -547,15 +553,15 @@ describe('buildMeshGraph', () => {
             upstream: 'origin/main',
             snapshotCompleteness: 'complete',
             branchConvergence: expect.objectContaining({
-                status: 'merged_to_main',
-                needsConvergence: false,
-                reason: 'clean_default_branch',
+                status: 'blocked_review',
+                needsConvergence: true,
+                reason: 'previous_snapshot_default_branch_not_even',
             }),
         }))
-        expect(graph.stats.blockedReviewNodes).toBe(0)
+        expect(graph.stats.blockedReviewNodes).toBe(1)
     })
 
-    it('drops stale upstream-unverified convergence when current feature branch upstream is fresh', () => {
+    it('does not invent feature branch convergence when daemon convergence fields are missing', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_feature_upstream_fresh',
             meshName: 'Feature Upstream Fresh Mesh',
@@ -574,26 +580,16 @@ describe('buildMeshGraph', () => {
                         ...baseGit('fix/mesh-graph-upstream-unverified-stale-after-refresh'),
                         upstream: 'origin/fix/mesh-graph-upstream-unverified-stale-after-refresh',
                     },
-                    branchConvergence: {
-                        branch: 'fix/mesh-graph-upstream-unverified-stale-after-refresh',
-                        upstream: 'origin/fix/mesh-graph-upstream-unverified-stale-after-refresh',
-                        status: 'blocked_review',
-                        needsConvergence: true,
-                        reason: 'feature_branch_upstream_unverified',
-                    },
                 },
             ],
         } as any)
 
         expect(graph.nodes.find(node => node.id === 'node_feature_fresh')).toEqual(expect.objectContaining({
-            branchConvergence: expect.objectContaining({
-                status: 'pushed_feature_branch_needs_merge',
-                needsConvergence: true,
-                reason: 'clean_non_default_branch',
-            }),
+            branchConvergence: null,
         }))
         expect(graph.stats.blockedReviewNodes).toBe(0)
-        expect(graph.stats.mergeReadyNodes).toBe(1)
+        expect(graph.stats.mergeReadyNodes).toBe(0)
+        expect(graph.warnings.join('\n')).not.toContain('blocked on branch convergence')
     })
 
     it('recomputes the synthetic default branch aggregate from current clean members when follow-ups are empty', () => {
@@ -618,9 +614,17 @@ describe('buildMeshGraph', () => {
                     connection: { state: 'self', transport: 'direct', reported: true, source: 'mesh_peer_status' },
                     git: { ...baseGit('main'), upstream: 'origin/main', headCommit: '6a16d844' },
                     branchConvergence: {
-                        status: 'blocked_review',
-                        needsConvergence: true,
-                        reason: 'stale_previous_review_block',
+                        status: 'merged_to_main',
+                        needsConvergence: false,
+                        reason: 'live_mesh_truth_merged',
+                        branch: 'main',
+                        defaultBranch: 'main',
+                        upstream: 'origin/main',
+                        upstreamStatus: 'fresh',
+                        ahead: 0,
+                        behind: 0,
+                        dirty: false,
+                        hasConflicts: false,
                     },
                 },
                 {
@@ -633,9 +637,17 @@ describe('buildMeshGraph', () => {
                     connection: { state: 'connected', transport: 'direct', reported: true, source: 'mesh_peer_status' },
                     git: { ...baseGit('main'), upstream: 'origin/main', headCommit: '6a16d844' },
                     branchConvergence: {
-                        status: 'blocked_review',
-                        needsConvergence: true,
-                        reason: 'stale_previous_review_block',
+                        status: 'merged_to_main',
+                        needsConvergence: false,
+                        reason: 'live_mesh_truth_merged',
+                        branch: 'main',
+                        defaultBranch: 'main',
+                        upstream: 'origin/main',
+                        upstreamStatus: 'fresh',
+                        ahead: 0,
+                        behind: 0,
+                        dirty: false,
+                        hasConflicts: false,
                     },
                 },
             ],
@@ -701,4 +713,46 @@ describe('buildMeshGraph', () => {
         expect(peerNode?.snapshotWarnings.join(' ')).toContain('waiting for a live peer git snapshot')
         expect(graph.warnings.join(' ')).not.toContain('blocked on branch convergence')
     })
+
+    it('models default branch member and same-branch peer links as undirected relation lines', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_peer_edges',
+            meshName: 'Peer Edge Mesh',
+            repoIdentity: 'repo',
+            defaultBranch: 'main',
+            refreshedAt: '2026-05-24T12:10:00.000Z',
+            branchConvergenceSummary: { needsFollowUp: false, unresolvedCount: 0, followUps: [] },
+            nodes: [
+                {
+                    nodeId: 'node_7',
+                    machineLabel: 'node_7',
+                    workspace: '/repo/a',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: { ...baseGit('main'), headCommit: 'd53b899b' },
+                    branchConvergence: { status: 'merged_to_main', needsConvergence: false, reason: 'live', branch: 'main', defaultBranch: 'main' },
+                },
+                {
+                    nodeId: 'node_117',
+                    machineLabel: 'node_117',
+                    workspace: '/repo/b',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: { ...baseGit('main'), headCommit: 'd53b899b' },
+                    branchConvergence: { status: 'merged_to_main', needsConvergence: false, reason: 'live', branch: 'main', defaultBranch: 'main' },
+                },
+            ],
+        } as any)
+
+        expect(graph.edges.filter(edge => edge.type === 'parentBranch')).toEqual(expect.arrayContaining([
+            expect.objectContaining({ source: '__branch_main', target: 'node_7', direction: 'undirected' }),
+            expect.objectContaining({ source: '__branch_main', target: 'node_117', direction: 'undirected' }),
+        ]))
+        expect(graph.edges.find(edge => edge.type === 'worktreeLink' && edge.label === 'main peers')).toEqual(expect.objectContaining({
+            direction: 'undirected',
+        }))
+    })
+
 })

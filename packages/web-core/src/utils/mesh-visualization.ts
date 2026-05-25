@@ -83,6 +83,7 @@ export interface MeshGraphEdge {
     target: string
     type: MeshGraphEdgeType
     label?: string
+    direction: 'directed' | 'undirected'
 }
 
 export interface MeshGraph {
@@ -324,34 +325,6 @@ function readProvidedBranchConvergence(node: RepoMeshNodeStatus, defaultBranchHi
     const upstream = git?.upstream ?? null
     const upstreamStatus = git?.upstreamStatus ?? null
     const defaultBranch = provided.defaultBranch ?? defaultBranchHint ?? null
-    const reason = typeof provided.reason === 'string' ? provided.reason : null
-    const providedNumberMismatchesGit = (value: unknown, gitValue: number) => typeof value === 'number' && value !== gitValue
-    const providedStringMismatchesGit = (value: unknown, gitValue: string | null) => typeof value === 'string' && gitValue !== null && value !== gitValue
-    const providedUpstreamUnverifiedButGitIsFresh = status === 'blocked_review'
-        && upstreamStatus === 'fresh'
-        && (reason === 'upstream_unverified' || reason?.endsWith('_upstream_unverified') === true)
-
-    const staleAgainstCurrentGit = Boolean(git) && (
-        providedStringMismatchesGit(provided.branch, branch)
-        || providedStringMismatchesGit(provided.upstream, upstream)
-        || providedStringMismatchesGit(provided.upstreamStatus, upstreamStatus)
-        || providedNumberMismatchesGit(provided.ahead, ahead)
-        || providedNumberMismatchesGit(provided.behind, behind)
-        || (typeof provided.dirty === 'boolean' && provided.dirty !== dirty)
-        || (typeof provided.hasConflicts === 'boolean' && provided.hasConflicts !== hasConflicts)
-        || providedUpstreamUnverifiedButGitIsFresh
-        || (status !== 'merged_to_main'
-            && git?.isGitRepo === true
-            && branch !== null
-            && defaultBranch !== null
-            && branch === defaultBranch
-            && ahead === 0
-            && behind === 0
-            && !dirty
-            && !hasConflicts
-            && (!upstream || !upstreamStatus || upstreamStatus === 'fresh'))
-    )
-    if (staleAgainstCurrentGit) return null
 
     return {
         status: status as MeshGraphBranchConvergenceStatus,
@@ -377,114 +350,12 @@ function evaluateBranchConvergence(node: RepoMeshNodeStatus, defaultBranch: stri
             defaultBranch: providedConvergence.defaultBranch ?? defaultBranch,
         }
     }
-    if (!defaultBranch) return null
-    if (isPendingPeerGitSnapshot(node)) return null
 
-    const git = node.git
-    const branch = git?.branch ?? null
-    const upstream = git?.upstream ?? null
-    const upstreamStatus = git?.upstreamStatus ?? null
-    const ahead = git?.ahead ?? 0
-    const behind = git?.behind ?? 0
-    const dirty = isDirty(git) || hasDirtySubmodules(git)
-    const hasConflicts = Boolean(git?.hasConflicts) || hasOutOfSyncSubmodules(git)
-    const base = {
-        branch,
-        defaultBranch,
-        upstream,
-        upstreamStatus,
-        ahead,
-        behind,
-        dirty,
-        hasConflicts,
-    }
-
-    if (git?.isGitRepo !== true) {
-        return {
-            ...base,
-            status: 'blocked_review',
-            needsConvergence: true,
-            reason: 'git_status_unavailable',
-            nextStep: `Resolve git status for '${node.machineLabel || node.nodeId}' before declaring the mesh converged.`,
-        }
-    }
-
-    if (!branch) {
-        return {
-            ...base,
-            status: 'blocked_review',
-            needsConvergence: true,
-            reason: 'branch_unknown',
-            nextStep: `Inspect '${node.machineLabel || node.nodeId}' and confirm which branch should converge into ${defaultBranch}.`,
-        }
-    }
-
-    if (hasConflicts || dirty) {
-        return {
-            ...base,
-            status: 'not_mergeable',
-            needsConvergence: true,
-            reason: git?.hasConflicts ? 'conflicts_present' : hasOutOfSyncSubmodules(git) ? 'submodule_out_of_sync' : 'dirty_workspace',
-            nextStep: `Commit, checkpoint, or resolve '${branch}' before any convergence step into ${defaultBranch}.`,
-        }
-    }
-
-    if (upstream && upstreamStatus && upstreamStatus !== 'fresh') {
-        return {
-            ...base,
-            status: 'blocked_review',
-            needsConvergence: true,
-            reason: 'upstream_unverified',
-            nextStep: `Refresh '${branch}' against ${upstream} before claiming the mesh is converged.`,
-        }
-    }
-
-    if (branch === defaultBranch) {
-        if (ahead > 0 || behind > 0) {
-            return {
-                ...base,
-                status: 'blocked_review',
-                needsConvergence: true,
-                reason: 'default_branch_not_even_with_upstream',
-                nextStep: `Bring ${defaultBranch} even with ${upstream ?? 'its upstream'} before declaring convergence complete.`,
-            }
-        }
-        return {
-            ...base,
-            status: 'merged_to_main',
-            needsConvergence: false,
-            reason: 'clean_default_branch',
-            nextStep: null,
-        }
-    }
-
-    if (node.isLocalWorktree) {
-        return {
-            ...base,
-            status: 'cleanup_candidate',
-            needsConvergence: true,
-            reason: 'clean_non_default_worktree_branch',
-            nextStep: `Run refine / cleanup for '${branch}' or explicitly classify the worktree before ending the task.`,
-        }
-    }
-
-    if (!upstream || ahead > 0 || behind > 0) {
-        return {
-            ...base,
-            status: 'blocked_review',
-            needsConvergence: true,
-            reason: !upstream ? 'feature_branch_missing_upstream' : 'feature_branch_not_even_with_upstream',
-            nextStep: `Push or reconcile '${branch}', then merge it into ${defaultBranch} or mark it blocked with a reason.`,
-        }
-    }
-
-    return {
-        ...base,
-        status: 'pushed_feature_branch_needs_merge',
-        needsConvergence: true,
-        reason: 'clean_non_default_branch',
-        nextStep: `Review and merge '${branch}' into ${defaultBranch}; do not treat it as fully complete while it remains off ${defaultBranch}.`,
-    }
+    // Browser-facing graph convergence is intentionally read-only: the daemon's
+    // live mesh_status branchConvergence/branchConvergenceSummary is the single
+    // source of truth. Missing fields are unknown/pending, not UI-invented
+    // blocked_review/upstream_unverified states.
+    return null
 }
 
 function getSubmoduleHealth(submodule: MeshGraphSubmoduleStatus): RepoMeshNodeHealth {
@@ -679,6 +550,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 target: submoduleNodeId,
                 type: 'submoduleLink',
                 label: submodule.outOfSync ? 'submodule out of sync' : 'submodule',
+                direction: 'directed',
             })
         }
     }
@@ -758,6 +630,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                     target: node.id,
                     type: 'parentBranch',
                     label: 'checked out',
+                    direction: 'undirected',
                 })
                 continue
             }
@@ -768,6 +641,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                     target: node.id,
                     type: node.isOrphan ? 'orphanLink' : 'parentBranch',
                     label: node.branch,
+                    direction: 'undirected',
                 })
                 continue
             }
@@ -778,6 +652,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                     target: node.id,
                     type: 'orphanLink',
                     label: 'detached',
+                    direction: 'undirected',
                 })
             }
         }
@@ -796,6 +671,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 target: ordered[index].id,
                 type: 'worktreeLink',
                 label: index === 1 ? `${branch} peers` : undefined,
+                direction: 'undirected',
             })
         }
     }
