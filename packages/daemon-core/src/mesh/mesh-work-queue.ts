@@ -4,7 +4,6 @@ import { randomUUID } from 'crypto';
 import { getLedgerDir } from './mesh-ledger.js';
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
-import { BeadsDB } from './beads-db.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -116,22 +115,34 @@ function getLockPath(meshId: string): string {
  * to prevent deadlock (best-effort — far better than no locking at all).
  */
 function withQueueLock<T>(meshId: string, fn: () => T): T {
-    // With SQLite BeadsDB, we don't need a file lock for everything, 
-    // but we can retain the lock if complex orchestration checks rely on it.
-    // However, the most robust way is to just let SQLite handle concurrency.
-    // We'll keep the lock signature for API compatibility but execute directly.
-    return fn();
+    const lockPath = getLockPath(meshId);
+    let fd = -1;
+    for (let i = 0; i < 10; i++) {
+        try { fd = openSync(lockPath, 'wx'); break; } catch {
+            const deadline = Date.now() + 30;
+            while (Date.now() < deadline) { /* spin */ }
+        }
+    }
+    try { return fn(); } finally {
+        if (fd !== -1) try { closeSync(fd); } catch { /* noop */ }
+        try { unlinkSync(lockPath); } catch { /* already removed */ }
+    }
 }
 
 function readQueue(meshId: string): MeshWorkQueueEntry[] {
-    return BeadsDB.getInstance().getQueueEntries(meshId);
+    const path = getQueuePath(meshId);
+    if (!existsSync(path)) return [];
+    try {
+        const content = readFileSync(path, 'utf-8');
+        return JSON.parse(content) as MeshWorkQueueEntry[];
+    } catch {
+        return [];
+    }
 }
 
 function writeQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
-    const db = BeadsDB.getInstance();
-    for (const q of queue) {
-        db.upsertQueueEntry(q);
-    }
+    const path = getQueuePath(meshId);
+    writeFileSync(path, JSON.stringify(queue, null, 2), 'utf-8');
 }
 
 /**
@@ -222,23 +233,6 @@ export function updateTaskStatus(
         const queue = readQueue(meshId);
         const idx = queue.findIndex(q => q.id === taskId);
         if (idx === -1) return null;
-        
-        // --- GasTown Refinery Gate (Auto-requeue on failure) ---
-        if (status === 'failed') {
-            const currentRequeueCount = queue[idx].requeueCount || 0;
-            if (currentRequeueCount < 3) {
-                queue[idx].status = 'pending';
-                queue[idx].assignedNodeId = undefined;
-                queue[idx].assignedSessionId = undefined;
-                queue[idx].requeueCount = currentRequeueCount + 1;
-                queue[idx].requeueReason = `Refinery Gate: auto-requeue after failure (attempt ${currentRequeueCount + 1}/3)`;
-                queue[idx].requeuedAt = new Date().toISOString();
-                queue[idx].updatedAt = new Date().toISOString();
-                writeQueue(meshId, queue);
-                return queue[idx];
-            }
-        }
-
         queue[idx].status = status;
         queue[idx].updatedAt = new Date().toISOString();
         writeQueue(meshId, queue);
@@ -348,23 +342,6 @@ export function updateSessionTaskStatus(
             if (time > bestTime) { bestTime = time; bestIdx = i; }
         }
         if (bestIdx === -1) return null;
-        
-        // --- GasTown Refinery Gate (Auto-requeue on failure) ---
-        if (status === 'failed') {
-            const currentRequeueCount = queue[bestIdx].requeueCount || 0;
-            if (currentRequeueCount < 3) {
-                queue[bestIdx].status = 'pending';
-                queue[bestIdx].assignedNodeId = undefined;
-                queue[bestIdx].assignedSessionId = undefined;
-                queue[bestIdx].requeueCount = currentRequeueCount + 1;
-                queue[bestIdx].requeueReason = `Refinery Gate: auto-requeue after failure (attempt ${currentRequeueCount + 1}/3)`;
-                queue[bestIdx].requeuedAt = new Date().toISOString();
-                queue[bestIdx].updatedAt = new Date().toISOString();
-                writeQueue(meshId, queue);
-                return queue[bestIdx];
-            }
-        }
-        
         queue[bestIdx].status = status;
         queue[bestIdx].updatedAt = new Date().toISOString();
         writeQueue(meshId, queue);
