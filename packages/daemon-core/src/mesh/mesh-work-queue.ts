@@ -1,9 +1,7 @@
-import { existsSync, writeFileSync, readFileSync, openSync, closeSync, unlinkSync } from 'fs';
-import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { getLedgerDir } from './mesh-ledger.js';
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
+import { BeadsDB } from './beads-db.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -99,50 +97,16 @@ export interface MeshQueueMutationOptions {
     ownerRole?: RepoMeshDaemonRole;
 }
 
-function getQueuePath(meshId: string): string {
-    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return join(getLedgerDir(), `${safe}.queue.json`);
-}
-
-function getLockPath(meshId: string): string {
-    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return join(getLedgerDir(), `${safe}.queue.lock`);
-}
-
-/**
- * Simple advisory file lock using O_EXCL (atomic create) for queue mutations.
- * Retries up to 10 times at 30 ms intervals; proceeds without lock on timeout
- * to prevent deadlock (best-effort — far better than no locking at all).
- */
-function withQueueLock<T>(meshId: string, fn: () => T): T {
-    const lockPath = getLockPath(meshId);
-    let fd = -1;
-    for (let i = 0; i < 10; i++) {
-        try { fd = openSync(lockPath, 'wx'); break; } catch {
-            const deadline = Date.now() + 30;
-            while (Date.now() < deadline) { /* spin */ }
-        }
-    }
-    try { return fn(); } finally {
-        if (fd !== -1) try { closeSync(fd); } catch { /* noop */ }
-        try { unlinkSync(lockPath); } catch { /* already removed */ }
-    }
+function withQueueLock<T>(_meshId: string, fn: () => T): T {
+    return BeadsDB.getInstance().transaction(fn);
 }
 
 function readQueue(meshId: string): MeshWorkQueueEntry[] {
-    const path = getQueuePath(meshId);
-    if (!existsSync(path)) return [];
-    try {
-        const content = readFileSync(path, 'utf-8');
-        return JSON.parse(content) as MeshWorkQueueEntry[];
-    } catch {
-        return [];
-    }
+    return BeadsDB.getInstance().getQueueEntries(meshId);
 }
 
 function writeQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
-    const path = getQueuePath(meshId);
-    writeFileSync(path, JSON.stringify(queue, null, 2), 'utf-8');
+    BeadsDB.getInstance().replaceQueue(meshId, queue);
 }
 
 /**
@@ -407,4 +371,18 @@ export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
                 message: q.message,
             })),
     };
+}
+
+export function __replaceMeshQueueForTests(meshId: string, queue: MeshWorkQueueEntry[]): void {
+    BeadsDB.getInstance().transaction(() => {
+        BeadsDB.getInstance().replaceQueue(meshId, queue);
+    });
+}
+
+export function __clearMeshQueueForTests(meshId: string): void {
+    BeadsDB.getInstance().deleteQueue(meshId);
+}
+
+export function __resetBeadsDBForTests(): void {
+    BeadsDB.resetForTests();
 }

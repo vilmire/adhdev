@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as os from 'os';
 import {
     enqueueTask,
     getQueue,
@@ -10,7 +9,10 @@ import {
     updateSessionTaskStatus,
     cancelTask,
     requeueTask,
-    getMeshQueueStats
+    getMeshQueueStats,
+    __clearMeshQueueForTests,
+    __replaceMeshQueueForTests,
+    __resetBeadsDBForTests
 } from '../../src/mesh/mesh-work-queue.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
 
@@ -19,12 +21,15 @@ describe('Mesh Work Queue (GUPP)', () => {
     const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`);
 
     beforeEach(() => {
+        __clearMeshQueueForTests(meshId);
         if (fs.existsSync(queuePath)) {
             fs.unlinkSync(queuePath);
         }
     });
 
     afterEach(() => {
+        __clearMeshQueueForTests(meshId);
+        __resetBeadsDBForTests();
         if (fs.existsSync(queuePath)) {
             fs.unlinkSync(queuePath);
         }
@@ -38,6 +43,29 @@ describe('Mesh Work Queue (GUPP)', () => {
         const queue = getQueue(meshId);
         expect(queue.length).to.equal(1);
         expect(queue[0].id).to.equal(task.id);
+    });
+
+    it('imports an existing JSON queue into BeadsDB on first read', () => {
+        const now = new Date().toISOString();
+        const legacyTask = {
+            id: 'legacy-task-1',
+            meshId,
+            message: 'legacy queued task',
+            status: 'pending' as const,
+            createdAt: now,
+            updatedAt: now,
+        };
+        fs.writeFileSync(queuePath, JSON.stringify([legacyTask], null, 2), 'utf-8');
+        __resetBeadsDBForTests();
+
+        const queue = getQueue(meshId);
+
+        expect(queue).to.have.length(1);
+        expect(queue[0]).to.deep.include({
+            id: 'legacy-task-1',
+            message: 'legacy queued task',
+            status: 'pending',
+        });
     });
 
     it('blocks queue ownership mutations from member daemons when ownership is declared', () => {
@@ -164,7 +192,7 @@ describe('Mesh Work Queue (GUPP)', () => {
 
         // Manually assign both tasks to the same session (bypassing claimNextTask guard)
         // to simulate the edge case where assignment tracking drifts
-        const queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
+        const queue = getQueue(meshId);
         const now = Date.now();
         queue[0].status = 'assigned';
         queue[0].assignedNodeId = 'node1';
@@ -178,7 +206,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         queue[1].dispatchTimestamp = new Date(now).toISOString();
         queue[1].updatedAt = new Date(now).toISOString();
 
-        fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+        __replaceMeshQueueForTests(meshId, queue);
 
         // Completion should target the most recently dispatched task (t2)
         const completed = updateSessionTaskStatus(meshId, 'session1', 'completed');
@@ -198,7 +226,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         const t1 = enqueueTask(meshId, 'legacy task 1');
         const t2 = enqueueTask(meshId, 'legacy task 2');
 
-        const queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
+        const queue = getQueue(meshId);
         const now = Date.now();
         queue[0].status = 'assigned';
         queue[0].assignedNodeId = 'node1';
@@ -212,7 +240,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         // No dispatchTimestamp — legacy entry
         queue[1].updatedAt = new Date(now).toISOString();
 
-        fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+        __replaceMeshQueueForTests(meshId, queue);
 
         const completed = updateSessionTaskStatus(meshId, 'session1', 'completed');
         expect(completed?.id).to.equal(t2.id);
@@ -226,7 +254,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         const olderTask = enqueueTask(meshId, 'older task');
         const newerTask = enqueueTask(meshId, 'newer continuation task');
 
-        const queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
+        const queue = getQueue(meshId);
         const now = Date.now();
         const staleCompletionAt = new Date(now).toISOString();
 
@@ -242,7 +270,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         queue[1].dispatchTimestamp = new Date(now + 5000).toISOString();
         queue[1].updatedAt = new Date(now + 5000).toISOString();
 
-        fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+        __replaceMeshQueueForTests(meshId, queue);
 
         const completed = updateSessionTaskStatus(meshId, 'session1', 'completed', { occurredAt: staleCompletionAt });
         expect(completed).to.be.null;
