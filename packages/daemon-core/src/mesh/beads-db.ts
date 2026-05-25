@@ -118,6 +118,14 @@ export class BeadsDB {
         return rows.map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
     }
 
+    getQueueRevision(meshId: string): string {
+        this.ensureLegacyQueueMigrated(meshId);
+        const rows = this.db
+            .prepare('SELECT id, status, updated_at FROM mesh_queue WHERE mesh_id = ? ORDER BY id ASC')
+            .all(meshId) as Array<{ id: string; status: string; updated_at: string }>;
+        return rows.map(row => `${row.id}:${row.status}:${row.updated_at}`).join('|');
+    }
+
     replaceQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
         const deleteStmt = this.db.prepare('DELETE FROM mesh_queue WHERE mesh_id = ?');
         const insert = this.db.prepare(`

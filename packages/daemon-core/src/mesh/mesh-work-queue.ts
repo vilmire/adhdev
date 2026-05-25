@@ -153,6 +153,10 @@ export function getQueue(meshId: string, opts?: { status?: MeshTaskStatus[] }): 
     return queue;
 }
 
+export function getMeshQueueRevision(meshId: string): string {
+    return BeadsDB.getInstance().getQueueRevision(meshId);
+}
+
 /**
  * Find the next pending task that this node is allowed to claim, and mark it as assigned.
  */
