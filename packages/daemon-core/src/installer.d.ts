@@ -31,7 +31,7 @@ export interface InstallResult {
 /**
  * Check if an extension is already installed
  */
-export declare function isExtensionInstalled(ide: IDEInfo, marketplaceId: string): boolean;
+export declare function isExtensionInstalled(ide: IDEInfo, marketplaceId: string): Promise<boolean>;
 /**
  * Install a single extension
  */

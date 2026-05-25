@@ -12,7 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execSync } from 'child_process';
+// Removed execSync import
 import { platform } from 'os';
 import type { ProviderLoader } from './provider-loader.js';
 import type { ProviderModule } from './contracts.js';
@@ -117,22 +117,42 @@ export class VersionArchive {
 
 // ─── Version Detection ──────────────────────────────
 
-function runCommand(cmd: string, timeout = 10000): string | null {
+import { promisify } from 'util';
+import { exec } from 'child_process';
+const execAsync = promisify(exec);
+
+async function runCommand(cmd: string, timeout = 10000): Promise<string | null> {
   try {
-    return execSync(cmd, {
+    const { stdout } = await execAsync(cmd, {
       encoding: 'utf-8',
       timeout,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
+    });
+    return stdout.trim();
   } catch {
     return null;
   }
 }
 
 function findBinary(name: string): string | null {
-  const cmd = platform() === 'win32' ? `where ${name}` : `which ${name}`;
-  const result = runCommand(cmd, 5000);
-  return result ? result.split('\n')[0] : null;
+  const isWin = platform() === 'win32';
+  const paths = (process.env.PATH || '').split(isWin ? ';' : ':');
+  const exes = isWin ? ['.exe', '.cmd', '.bat', ''] : [''];
+  
+  for (const p of paths) {
+    if (!p) continue;
+    for (const ext of exes) {
+      const fullPath = path.join(p, name + ext);
+      try {
+        if (fs.existsSync(fullPath)) {
+          const stat = fs.statSync(fullPath);
+          if (stat.isFile() && (isWin || (stat.mode & 0o111))) {
+            return fullPath;
+          }
+        }
+      } catch { }
+    }
+  }
+  return null;
 }
 
 /** Extract version string from CLI output */
@@ -162,16 +182,16 @@ function getPlatformVersionCommand(
   return undefined;
 }
 
-function getVersion(binary: string, versionCommand?: string): string | null {
+async function getVersion(binary: string, versionCommand?: string): Promise<string | null> {
   // Custom version command from provider.json
   if (versionCommand) {
-    const raw = runCommand(versionCommand);
+    const raw = await runCommand(versionCommand);
     return raw ? parseVersion(raw) : null;
   }
 
   // Default: try --version, then -V, then -v
   for (const flag of ['--version', '-V', '-v']) {
-    const raw = runCommand(`"${binary}" ${flag}`);
+    const raw = await runCommand(`"${binary}" ${flag}`);
     if (raw && raw.length < 500) return parseVersion(raw);
   }
   return null;
@@ -191,11 +211,11 @@ function checkPathExists(paths: string[]): string | null {
 }
 
 /** macOS: Get app version from Info.plist */
-function getMacAppVersion(appPath: string): string | null {
+async function getMacAppVersion(appPath: string): Promise<string | null> {
   if (platform() !== 'darwin' || !appPath.endsWith('.app')) return null;
   const plistPath = path.join(appPath, 'Contents', 'Info.plist');
   if (!fs.existsSync(plistPath)) return null;
-  const raw = runCommand(`/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "${plistPath}"`);
+  const raw = await runCommand(`/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "${plistPath}"`);
   return raw || null;
 }
 
@@ -242,10 +262,10 @@ export async function detectAllVersions(
 
       // Version: try CLI first, then plist
       if (resolvedBin) {
-        info.version = getVersion(resolvedBin, versionCommand);
+        info.version = await getVersion(resolvedBin, versionCommand);
       }
       if (!info.version && appPath) {
-        info.version = getMacAppVersion(appPath);
+        info.version = await getMacAppVersion(appPath);
       }
 
     } else if (provider.category === 'cli' || provider.category === 'acp') {
@@ -256,7 +276,7 @@ export async function detectAllVersions(
       info.binary = binPath || null;
 
       if (binPath) {
-        info.version = getVersion(binPath, versionCommand);
+        info.version = await getVersion(binPath, versionCommand);
       }
 
     } else if (provider.category === 'extension') {
