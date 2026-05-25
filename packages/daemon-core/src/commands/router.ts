@@ -249,6 +249,10 @@ function normalizeInlineMeshGitStatus(
         headCommit: readStringValue(status.headCommit) ?? null,
         headMessage: readStringValue(status.headMessage) ?? null,
         upstream: readStringValue(status.upstream) ?? null,
+        upstreamStatus: readStringValue(status.upstreamStatus, status.upstream_status)
+            ?? (readStringValue(status.upstream) ? 'unchecked' : 'no_upstream'),
+        upstreamFetchedAt: readNumberValue(status.upstreamFetchedAt, status.upstream_fetched_at),
+        upstreamFetchError: readStringValue(status.upstreamFetchError, status.upstream_fetch_error),
         ahead: readNumberValue(status.ahead) ?? 0,
         behind: readNumberValue(status.behind) ?? 0,
         staged: readNumberValue(status.staged) ?? 0,
@@ -490,8 +494,16 @@ function reconcileInlineMeshCache(cached: any, incoming: any): any {
 }
 
 function hasGitWorktreeChanges(git: Record<string, unknown> | null | undefined): boolean {
-    if (!git) return false;
-    return Number(git.staged || 0) + Number(git.modified || 0) + Number(git.untracked || 0) + Number(git.deleted || 0) + Number(git.renamed || 0) > 0;
+    return countGitWorktreeChanges(git) > 0;
+}
+
+function countGitWorktreeChanges(git: Record<string, unknown> | null | undefined): number {
+    if (!git) return 0;
+    return Number(git.staged || 0)
+        + Number(git.modified || 0)
+        + Number(git.untracked || 0)
+        + Number(git.deleted || 0)
+        + Number(git.renamed || 0);
 }
 
 function getGitSubmoduleDriftState(git: Record<string, unknown> | null | undefined): { dirty: boolean; outOfSync: boolean } {
@@ -514,6 +526,167 @@ function deriveMeshNodeHealthFromGit(git: Record<string, unknown> | null | undef
     if (submoduleDrift.outOfSync) return 'degraded';
     if (submoduleDrift.dirty || hasGitWorktreeChanges(git)) return 'dirty';
     return 'online';
+}
+
+function readMeshNodeLabel(status: Record<string, unknown>, node: any): string {
+    return readStringValue(status.nodeId, node?.id, node?.nodeId) ?? 'unknown';
+}
+
+function buildInlineMeshBranchConvergence(args: {
+    mesh: any;
+    node: any;
+    status: Record<string, unknown>;
+}): Record<string, unknown> {
+    const git = readObjectRecord(args.status.git);
+    const nodeLabel = readMeshNodeLabel(args.status, args.node);
+    const defaultBranch = readStringValue(args.mesh?.defaultBranch) ?? 'main';
+    const branch = readStringValue(git.branch, args.node?.worktreeBranch) ?? null;
+    const upstream = readStringValue(git.upstream) ?? null;
+    const upstreamStatus = readStringValue(git.upstreamStatus, git.upstream_status)
+        ?? (upstream ? 'unchecked' : 'no_upstream');
+    const ahead = readNumberValue(git.ahead) ?? 0;
+    const behind = readNumberValue(git.behind) ?? 0;
+    const uncommittedChanges = countGitWorktreeChanges(git);
+    const hasConflicts = readBooleanValue(git.hasConflicts)
+        ?? (Array.isArray(git.conflictFiles) && git.conflictFiles.length > 0);
+    const base = {
+        defaultBranch,
+        branch,
+        upstream,
+        upstreamStatus,
+        ahead,
+        behind,
+        isWorktree: args.node?.isLocalWorktree === true || args.status.isLocalWorktree === true,
+        isDefaultBranch: branch === defaultBranch,
+    };
+
+    if (readBooleanValue(git.isGitRepo) !== true) {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: 'git_status_unavailable',
+            nextStep: `Resolve git status for node '${nodeLabel}' before marking the task complete.`,
+        };
+    }
+
+    if (!branch) {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: 'branch_unknown',
+            nextStep: `Inspect node '${nodeLabel}' git branch before deciding whether it is merged to ${defaultBranch}.`,
+        };
+    }
+
+    if (hasConflicts || uncommittedChanges > 0) {
+        return {
+            ...base,
+            status: 'not_mergeable',
+            needsConvergence: true,
+            reason: hasConflicts ? 'conflicts_present' : 'dirty_workspace',
+            nextStep: `Commit, checkpoint, or resolve node '${nodeLabel}' before any main convergence step.`,
+        };
+    }
+
+    if (branch === defaultBranch) {
+        if (upstream && upstreamStatus !== 'fresh') {
+            return {
+                ...base,
+                status: 'blocked_review',
+                needsConvergence: true,
+                reason: 'default_branch_upstream_unverified',
+                nextStep: `Refresh ${defaultBranch}'s upstream refs or resolve the fetch failure before declaring convergence complete for node '${nodeLabel}'.`,
+            };
+        }
+        if (ahead > 0 || behind > 0) {
+            return {
+                ...base,
+                status: 'blocked_review',
+                needsConvergence: true,
+                reason: 'default_branch_not_even_with_upstream',
+                nextStep: `Bring ${defaultBranch} even with its upstream before declaring convergence complete.`,
+            };
+        }
+        return {
+            ...base,
+            status: 'merged_to_main',
+            needsConvergence: false,
+            reason: 'clean_default_branch',
+            nextStep: null,
+        };
+    }
+
+    if (args.node?.isLocalWorktree === true || args.status.isLocalWorktree === true) {
+        return {
+            ...base,
+            status: 'cleanup_candidate',
+            needsConvergence: true,
+            reason: 'clean_non_default_worktree_branch',
+            nextStep: `Run mesh_refine_node(node_id: "${nodeLabel}") or explicitly classify this worktree as blocked_review/not_mergeable before ending the task.`,
+        };
+    }
+
+    if (upstream && upstreamStatus !== 'fresh') {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: 'feature_branch_upstream_unverified',
+            nextStep: `Refresh branch '${branch}' upstream refs or resolve the fetch failure before deciding whether it is ready to merge into ${defaultBranch}.`,
+        };
+    }
+
+    if (!upstream || ahead > 0 || behind > 0) {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: !upstream ? 'feature_branch_missing_upstream' : 'feature_branch_not_even_with_upstream',
+            nextStep: `Push or reconcile branch '${branch}', then merge it into ${defaultBranch} or mark it not_mergeable with a reason.`,
+        };
+    }
+
+    return {
+        ...base,
+        status: 'pushed_feature_branch_needs_merge',
+        needsConvergence: true,
+        reason: 'clean_non_default_branch',
+        nextStep: `Review and merge branch '${branch}' into ${defaultBranch}; do not report the task as fully complete while it remains off main.`,
+    };
+}
+
+function applyInlineMeshBranchConvergence(mesh: any, node: any, status: Record<string, unknown>): void {
+    const git = readObjectRecord(status.git);
+    if (Object.keys(git).length === 0 && !status.gitProbePending) return;
+    const uncommittedChanges = countGitWorktreeChanges(git);
+    status.isDirty = uncommittedChanges > 0;
+    status.uncommittedChanges = uncommittedChanges;
+    status.branchConvergence = buildInlineMeshBranchConvergence({ mesh, node, status });
+}
+
+function summarizeInlineMeshBranchConvergence(nodes: Array<Record<string, unknown>>): Record<string, unknown> {
+    const followUps = nodes
+        .filter(node => readObjectRecord(node.branchConvergence).needsConvergence === true)
+        .map(node => {
+            const convergence = readObjectRecord(node.branchConvergence);
+            return {
+                nodeId: node.nodeId,
+                workspace: node.workspace,
+                branch: convergence.branch,
+                status: convergence.status,
+                reason: convergence.reason,
+                nextStep: convergence.nextStep,
+            };
+        });
+
+    return {
+        needsFollowUp: followUps.length > 0,
+        unresolvedCount: followUps.length,
+        requiredFinalStates: ['merged_to_main', 'pushed_feature_branch_needs_merge', 'blocked_review', 'cleanup_candidate', 'not_mergeable'],
+        followUps,
+    };
 }
 
 function readCachedInlineMeshActiveSessions(node: any): string[] {
@@ -1466,6 +1639,7 @@ export class DaemonCommandRouter {
             const nextStatus = { ...statusNode };
             nextStatus.git = liveGit;
             nextStatus.health = deriveMeshNodeHealthFromGit(liveGit);
+            applyInlineMeshBranchConvergence(mesh, inlineNode, nextStatus);
             nextStatus.launchReady = readBooleanValue(nextStatus.launchReady) ?? true;
             const connection = readObjectRecord(nextStatus.connection);
             const connectionState = readStringValue(connection.state);
@@ -1505,6 +1679,7 @@ export class DaemonCommandRouter {
                 error: 'Selected coordinator could not confirm direct mesh truth for every remote node yet.',
             } : {}),
             sourceOfTruth: nextSourceOfTruth,
+            branchConvergenceSummary: summarizeInlineMeshBranchConvergence(nodes),
             nodes,
         };
     }
@@ -4639,11 +4814,13 @@ export class DaemonCommandRouter {
                                         node,
                                         pendingPeerGitProbe ? { skipGit: true, skipError: true, skipHealth: true } : undefined,
                                     )) {
+                                        applyInlineMeshBranchConvergence(mesh, node, status);
                                         finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
                                         nodeStatuses.push(status);
                                         continue;
                                     }
                                     if (meshRecord?.source === 'inline_cache' && !isSelfNode) {
+                                        applyInlineMeshBranchConvergence(mesh, node, status);
                                         finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
                                         nodeStatuses.push(status);
                                         continue;
@@ -4669,6 +4846,7 @@ export class DaemonCommandRouter {
                         } else {
                             applyCachedInlineMeshNodeStatus(status, node);
                         }
+                        applyInlineMeshBranchConvergence(mesh, node, status);
                         finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
                         nodeStatuses.push(status);
                     }
@@ -4709,6 +4887,7 @@ export class DaemonCommandRouter {
                             } : {}),
                             historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary'],
                         },
+                        branchConvergenceSummary: summarizeInlineMeshBranchConvergence(nodeStatuses),
                         nodes: nodeStatuses,
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },

@@ -374,4 +374,108 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       submodules: [{ path: 'oss', dirty: false, outOfSync: false }],
     })
   })
+
+  it('preserves branch convergence summary and peer upstream freshness in browser-facing mesh_status', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-mesh-convergence-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    const remoteGit = {
+      isGitRepo: true,
+      workspace: '/Users/moltbot/Documents/Work/adhdev',
+      repoRoot: '/Users/moltbot/Documents/Work/adhdev',
+      branch: 'main',
+      upstream: 'origin/main',
+      upstreamStatus: 'fresh',
+      upstreamFetchedAt: Date.now(),
+      ahead: 0,
+      behind: 0,
+      staged: 0,
+      modified: 0,
+      untracked: 0,
+      deleted: 0,
+      renamed: 0,
+      conflicted: 0,
+      headCommit: '4909dcbf',
+      submodules: [{
+        path: 'oss',
+        repoPath: '/Users/moltbot/Documents/Work/adhdev/oss',
+        commit: '3fbbafedb5ad21ce1fcae815b5909873bb176fdf',
+        dirty: false,
+        outOfSync: false,
+      }],
+    }
+    const dispatchMeshCommand = vi.fn(async () => ({ status: remoteGit }))
+    const router = createRouter(dispatchMeshCommand)
+    const inlineMesh = {
+      id: 'mesh_browser_payload',
+      name: 'ADHDev',
+      defaultBranch: 'main',
+      coordinator: { preferredNodeId: 'node_7' },
+      nodes: [
+        {
+          id: 'node_7',
+          daemonId: 'daemon-local',
+          machineId: 'machine-local',
+          workspace: localRepo,
+          repoRoot: localRepo,
+          policy: {},
+        },
+        {
+          id: 'node_117',
+          daemonId: 'daemon-remote',
+          machineId: 'machine-remote',
+          workspace: '/Users/moltbot/Documents/Work/adhdev',
+          repoRoot: '/Users/moltbot/Documents/Work/adhdev',
+          policy: {},
+        },
+      ],
+    }
+
+    const status: any = await router.execute('mesh_status', {
+      meshId: 'mesh_browser_payload',
+      inlineMesh,
+      requireDirectPeerTruth: true,
+      refresh: true,
+    })
+
+    expect(status.success).toBe(true)
+    expect(status.sourceOfTruth.directPeerTruth).toMatchObject({
+      required: true,
+      satisfied: true,
+      localConfirmedCount: 1,
+      peerAttemptedCount: 1,
+      peerConfirmedCount: 1,
+      unavailableNodeIds: [],
+    })
+    expect(status.branchConvergenceSummary).toMatchObject({
+      needsFollowUp: false,
+      unresolvedCount: 0,
+      followUps: [],
+    })
+    const localNode = status.nodes.find((node: any) => node.nodeId === 'node_7')
+    const remoteNode = status.nodes.find((node: any) => node.nodeId === 'node_117')
+    expect(localNode.branchConvergence).toMatchObject({
+      status: 'merged_to_main',
+      reason: 'clean_default_branch',
+      needsConvergence: false,
+    })
+    expect(remoteNode.git).toMatchObject({
+      branch: 'main',
+      upstream: 'origin/main',
+      upstreamStatus: 'fresh',
+      ahead: 0,
+      behind: 0,
+      headCommit: '4909dcbf',
+    })
+    expect(remoteNode.branchConvergence).toMatchObject({
+      status: 'merged_to_main',
+      reason: 'clean_default_branch',
+      upstreamStatus: 'fresh',
+      ahead: 0,
+      behind: 0,
+      needsConvergence: false,
+    })
+  })
 })
