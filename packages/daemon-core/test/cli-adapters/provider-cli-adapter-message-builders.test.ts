@@ -861,6 +861,105 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(second).toEqual(first)
   })
 
+  it('projects getStatus idle from a fresh parsed idle final assistant turn', () => {
+    const parseSession = vi.fn(() => ({
+      id: 'cli_session',
+      status: 'idle',
+      title: 'Codex CLI',
+      messages: [
+        { role: 'user', content: 'finish the task' },
+        { role: 'assistant', content: 'Done.' },
+      ],
+    }))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      category: 'cli',
+      binary: 'codex',
+      spawn: {
+        command: 'codex',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseSession,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => '›\n\ngpt-5.4 low · /tmp/project'),
+    }
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'finish the task',
+      startedAt: 1,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.activeModal = null
+
+    adapter.getScriptParsedStatus()
+    const status = adapter.getStatus()
+
+    expect(status.status).toBe('idle')
+    expect(parseSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps getStatus generating when parsed idle has no final assistant turn', () => {
+    const parseSession = vi.fn(() => ({
+      id: 'cli_session',
+      status: 'idle',
+      title: 'Codex CLI',
+      messages: [
+        { role: 'user', content: 'finish the task' },
+      ],
+    }))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      category: 'cli',
+      binary: 'codex',
+      spawn: {
+        command: 'codex',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseSession,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => '›\n\ngpt-5.4 low · /tmp/project'),
+    }
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'finish the task',
+      startedAt: 1,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.activeModal = null
+
+    adapter.getScriptParsedStatus()
+    const status = adapter.getStatus()
+
+    expect(status.status).toBe('generating')
+    expect(parseSession).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps parsed status cached across ANSI-only cursor output that does not change semantic terminal content', () => {
     const parseSession = vi.fn(() => ({
       id: 'cli_session',
@@ -948,4 +1047,3 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(input.recentBuffer).toBe('recent startup text')
   })
 })
-
