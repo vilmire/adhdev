@@ -404,6 +404,7 @@ describe('refine_mesh_node validation gate', () => {
         'resolve_refs',
         'validation',
         'patch_equivalence',
+        'submodule_reachability',
         'merge',
         'cleanup',
         'ledger',
@@ -413,6 +414,55 @@ describe('refine_mesh_node validation gate', () => {
       expect(readFileSync(join(repo, 'SOURCE_ONLY.md'), 'utf-8')).toBe('source change\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-worktree')).toBe(false)
       expect(result.finalBranchConvergenceState).toMatchObject({ branch: 'main', merged: true, validation: 'passed' })
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('fails before merge or cleanup when the merged tree points at an unreachable submodule gitlink', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-missing-submodule-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      const missingCommit = '1234567890abcdef1234567890abcdef12345678'
+      execFileSync('git', ['update-index', '--add', '--cacheinfo', '160000', missingCommit, 'oss'], { cwd: worktree })
+      execFileSync('git', ['commit', '-q', '-m', 'point submodule at missing commit'], { cwd: worktree })
+      const mesh = createMesh(repo, worktree, 'node-missing-submodule')
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-missing-submodule',
+        inlineMesh: mesh,
+      })
+
+      expectAccepted(accepted, 'node-missing-submodule')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_failed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({
+        success: false,
+        code: 'submodule_reachability_failed',
+        convergenceStatus: 'blocked_review',
+      })
+      expect(result.submoduleReachability).toMatchObject({
+        status: 'failed',
+        checked: 1,
+        unreachable: [{ path: 'oss', commit: missingCommit, reachable: false }],
+      })
+      expect(result.refineStages.map((entry: any) => `${entry.stage}:${entry.status}`)).toContain('submodule_reachability:failed')
+      expect(result.refineStages.some((entry: any) => entry.stage === 'merge')).toBe(false)
+      expect(result.refineStages.some((entry: any) => entry.stage === 'cleanup')).toBe(false)
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
+      expect(mesh.nodes.some((node: any) => node.id === 'node-missing-submodule')).toBe(true)
+      const events = drainPendingMeshCoordinatorEvents(mesh.id)
+      const failedEvent = events.find(event => event.event === 'refine:failed' && (event.metadataEvent as any).jobId === accepted.jobId)
+      expect((failedEvent?.metadataEvent as any)?.result).toMatchObject({ code: 'submodule_reachability_failed' })
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
