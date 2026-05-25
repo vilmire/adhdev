@@ -1552,6 +1552,15 @@ export class ProviderCliAdapter implements CliAdapter {
         return !!(startupModal || this.activeModal);
     }
 
+    private parsedStatusHasFinalAssistantMessage(parsed: any): boolean {
+        const messages = Array.isArray(parsed?.messages) ? parsed.messages : [];
+        const lastAssistant = [...messages].reverse().find((message: any) => {
+            if (!message || message.role !== 'assistant') return false;
+            return typeof message.content === 'string' && message.content.trim().length > 0;
+        });
+        return !!lastAssistant;
+    }
+
     private projectEffectiveStatus(startupModal: { message: string; buttons: string[] } | null = null): CliSessionStatus['status'] {
         if (this.parseErrorMessage) return 'error';
         if (this.hasActionableApproval(startupModal)) return 'waiting_approval';
@@ -1575,6 +1584,12 @@ export class ProviderCliAdapter implements CliAdapter {
             if (parsed?.status === 'waiting_approval' && parsedModal) {
                 effectiveStatus = 'waiting_approval';
                 effectiveModal = parsedModal;
+            } else if (
+                effectiveStatus === 'generating'
+                && parsed?.status === 'idle'
+                && this.parsedStatusHasFinalAssistantMessage(parsed)
+            ) {
+                effectiveStatus = 'idle';
             }
         }
         const bufferState = this.getBufferState();
