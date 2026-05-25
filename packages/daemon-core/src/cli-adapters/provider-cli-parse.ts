@@ -35,6 +35,7 @@ export function buildCliParseInput(options: {
     accumulatedRawBuffer: string;
     recentOutputBuffer: string;
     terminalScreenText: string;
+    workingDir?: string;
     baseMessages: CliChatMessage[];
     partialResponse: string;
     isWaitingForResponse?: boolean;
@@ -46,6 +47,7 @@ export function buildCliParseInput(options: {
         accumulatedRawBuffer,
         recentOutputBuffer,
         terminalScreenText,
+        workingDir,
         baseMessages,
         partialResponse,
         isWaitingForResponse,
@@ -66,6 +68,8 @@ export function buildCliParseInput(options: {
         rawBuffer,
         recentBuffer,
         screenText,
+        workspace: workingDir,
+        workingDir,
         screen: buildCliScreenSnapshot(screenText),
         bufferScreen: buildCliScreenSnapshot(buffer),
         recentScreen: buildCliScreenSnapshot(recentBuffer),

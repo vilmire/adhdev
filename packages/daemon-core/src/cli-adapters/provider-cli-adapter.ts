@@ -761,6 +761,17 @@ export class ProviderCliAdapter implements CliAdapter {
         if (stableMs < 2000) return;
 
         const startupModal = this.runParseApproval(this.recentOutputBuffer);
+        const startupStatus = this.runDetectStatus(screenText || this.recentOutputBuffer);
+        if (!startupModal && startupStatus !== 'idle') {
+            this.recordTrace('startup_settle_deferred', {
+                trigger,
+                startupStatus,
+                stableMs,
+                screenText: summarizeCliTraceText(screenText, 500),
+            });
+            this.scheduleStartupSettleCheck();
+            return;
+        }
         this.startupParseGate = false;
         if (this.startupSettleTimer) {
             clearTimeout(this.startupSettleTimer);
@@ -1521,6 +1532,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 accumulatedRawBuffer: this.accumulatedRawBuffer,
                 recentOutputBuffer: this.recentOutputBuffer,
                 terminalScreenText: parseScreenText,
+                workingDir: this.workingDir,
                 baseMessages: [],
                 partialResponse: this.responseBuffer,
                 isWaitingForResponse: this.isWaitingForResponse,
@@ -1605,8 +1617,14 @@ export class ProviderCliAdapter implements CliAdapter {
     getStatus(options: { allowParse?: boolean } = {}): CliSessionStatus {
         const allowParse = options.allowParse !== false;
         const startupModal = allowParse && this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
+        const startupDetectedStatus = allowParse && this.startupParseGate && !startupModal
+            ? this.runDetectStatus(this.recentOutputBuffer || this.terminalScreen.getText())
+            : null;
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
         let effectiveModal = startupModal || this.activeModal;
+        if (startupDetectedStatus === 'waiting_approval') {
+            effectiveStatus = 'waiting_approval';
+        }
         if (allowParse && !startupModal && !effectiveModal) {
             const parsed = this.getFreshParsedStatusCache();
             const parsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
@@ -1616,6 +1634,12 @@ export class ProviderCliAdapter implements CliAdapter {
             if (parsed?.status === 'waiting_approval' && parsedModal) {
                 effectiveStatus = 'waiting_approval';
                 effectiveModal = parsedModal;
+            } else if (
+                effectiveStatus === 'idle'
+                && parsed?.status === 'generating'
+                && !this.parsedStatusHasFinalAssistantMessage(parsed)
+            ) {
+                effectiveStatus = 'generating';
             } else if (
                 effectiveStatus === 'generating'
                 && parsed?.status === 'idle'
@@ -1712,6 +1736,7 @@ export class ProviderCliAdapter implements CliAdapter {
             accumulatedRawBuffer: this.accumulatedRawBuffer,
             recentOutputBuffer: this.recentOutputBuffer,
             terminalScreenText: this.getParseScreenText(this.terminalScreen.getText()),
+            workingDir: this.workingDir,
             baseMessages: [],
             partialResponse: this.responseBuffer,
             isWaitingForResponse: this.isWaitingForResponse,
@@ -2419,10 +2444,23 @@ export class ProviderCliAdapter implements CliAdapter {
     getDebugState(): Record<string, any> {
         const screenText = sanitizeTerminalText(this.terminalScreen.getText());
         const startupModal = this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
-        const effectiveStatus = this.projectEffectiveStatus(startupModal);
-        const effectiveReady = this.ready || !!startupModal;
+        const startupDetectedStatus = this.startupParseGate && !startupModal
+            ? this.runDetectStatus(this.recentOutputBuffer || screenText)
+            : null;
+        const effectiveReady = this.ready || !!startupModal || startupDetectedStatus === 'waiting_approval';
         const parsedDebugState = this.getParsedDebugState();
         const parsedMessages = Array.isArray(parsedDebugState?.messages) ? parsedDebugState.messages : [];
+        let effectiveStatus = this.projectEffectiveStatus(startupModal);
+        if (startupDetectedStatus === 'waiting_approval') {
+            effectiveStatus = 'waiting_approval';
+        }
+        if (
+            effectiveStatus === 'idle'
+            && parsedDebugState?.status === 'generating'
+            && !this.parsedStatusHasFinalAssistantMessage(parsedDebugState)
+        ) {
+            effectiveStatus = 'generating';
+        }
         return {
             type: this.cliType,
             name: this.cliName,

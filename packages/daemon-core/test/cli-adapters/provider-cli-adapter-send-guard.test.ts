@@ -337,6 +337,29 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.activeModal).toBeNull()
   })
 
+  it('projects startup detectStatus waiting_approval even when parseApproval cannot build buttons', () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'starting'
+    adapter.ready = false
+    adapter.startupParseGate = true
+    adapter.activeModal = null
+    adapter.isWaitingForResponse = false
+    adapter.recentOutputBuffer = 'Do you trust the contents of this directory?\n1. Yes, continue\nPress enter to continue\n'
+    adapter.terminalScreen = { getText: () => adapter.recentOutputBuffer }
+    adapter.runParseApproval = vi.fn(() => null)
+    adapter.runDetectStatus = vi.fn(() => 'waiting_approval')
+
+    expect(adapter.getStatus()).toMatchObject({
+      status: 'waiting_approval',
+      activeModal: null,
+    })
+    expect(adapter.getDebugState()).toMatchObject({
+      status: 'waiting_approval',
+      ready: true,
+      activeModal: null,
+    })
+  })
+
   it('does not synthesize a generic resolveAction prompt when the provider does not supply a resolver script', async () => {
     const adapter = buildAdapter()
     adapter.sendMessage = vi.fn().mockResolvedValue(undefined)
@@ -514,6 +537,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     adapter.lastScreenChangeAt = Date.now() - 3000
     adapter.terminalScreen = { getText: () => '❯\n⏵⏵ accept edits on (shift+tab to cycle)\n' }
     adapter.getStartupConfirmationModal = () => null
+    adapter.runDetectStatus = vi.fn(() => 'idle')
 
     adapter.resolveStartupState('startup_timer')
 
@@ -521,6 +545,33 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ready).toBe(true)
     expect(adapter.currentStatus).toBe('idle')
     expect(adapter.activeModal).toBeNull()
+  })
+
+  it('does not mark startup ready while provider status detection still reports generating', () => {
+    const adapter = buildAdapter()
+    adapter.startupParseGate = true
+    adapter.ready = false
+    adapter.currentStatus = 'starting'
+    adapter.activeModal = null
+    adapter.lastScreenChangeAt = Date.now() - 3000
+    adapter.recentOutputBuffer = '• Starting MCP servers (1/2): codex_apps (11s • esc to interrupt)\n'
+    adapter.terminalScreen = {
+      getText: () => [
+        '• Starting MCP servers (1/2): codex_apps (11s • esc to interrupt)',
+        '',
+        '› Explain this codebase',
+      ].join('\n'),
+    }
+    adapter.runDetectStatus = vi.fn(() => 'generating')
+    adapter.runParseApproval = vi.fn(() => null)
+    adapter.scheduleStartupSettleCheck = vi.fn()
+
+    adapter.resolveStartupState('startup_timer')
+
+    expect(adapter.startupParseGate).toBe(true)
+    expect(adapter.ready).toBe(false)
+    expect(adapter.currentStatus).toBe('starting')
+    expect(adapter.scheduleStartupSettleCheck).toHaveBeenCalled()
   })
 
   it('reports generating from getStatus while a turn is still open even if currentStatus has not caught up yet', () => {
@@ -547,6 +598,28 @@ describe('ProviderCliAdapter sendMessage guard', () => {
       bufferStart: 0,
       rawBufferStart: 0,
     }
+
+    expect(adapter.getDebugState().status).toBe('generating')
+  })
+
+  it('projects parsed generating status from debug state when raw status is idle and no final assistant exists', () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.startupParseGate = false
+    adapter.ready = true
+    adapter.recentOutputBuffer = '• Starting work\n'
+    adapter.accumulatedBuffer = adapter.recentOutputBuffer
+    adapter.accumulatedRawBuffer = adapter.recentOutputBuffer
+    adapter.terminalScreen = { getText: () => '• Starting work\n' }
+    adapter.cliScripts.parseSession = () => ({
+      status: 'generating',
+      messages: [
+        { role: 'user', content: 'create the file' },
+      ],
+      activeModal: null,
+    })
 
     expect(adapter.getDebugState().status).toBe('generating')
   })
