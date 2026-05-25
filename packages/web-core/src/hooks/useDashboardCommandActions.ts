@@ -160,7 +160,7 @@ export function useDashboardCommandActions({
     }
   }, [onOpenSession, sendDaemonCommand, trackPendingLaunch])
 
-  // Cloud override: use cloud REST API for meshes; standalone: local daemon list_meshes
+  // Cloud override: route through the selected daemon; standalone: local daemon list_meshes
   const handleListMachineMeshes = useCallback(async (machineId: string): Promise<MeshLaunchOption[]> => {
     if (meshOverrides?.listMeshes) {
       return meshOverrides.listMeshes(machineId)

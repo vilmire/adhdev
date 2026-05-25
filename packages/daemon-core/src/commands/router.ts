@@ -3933,7 +3933,17 @@ export class DaemonCommandRouter {
                         ...(providerPriority.length ? { providerPriority } : {}),
                     };
                     const role = normalizeMeshDaemonRole(args?.role);
-                    const node = addNode(meshId, { workspace, ...(policy ? { policy } : {}), ...(role ? { role } : {}) });
+                    const daemonId = typeof args?.daemonId === 'string' && args.daemonId.trim() ? args.daemonId.trim() : undefined;
+                    const machineId = typeof args?.machineId === 'string' && args.machineId.trim() ? args.machineId.trim() : undefined;
+                    const repoRoot = typeof args?.repoRoot === 'string' && args.repoRoot.trim() ? args.repoRoot.trim() : undefined;
+                    const node = addNode(meshId, {
+                        workspace,
+                        ...(repoRoot ? { repoRoot } : {}),
+                        ...(daemonId ? { daemonId } : {}),
+                        ...(machineId ? { machineId } : {}),
+                        ...(policy ? { policy } : {}),
+                        ...(role ? { role } : {}),
+                    });
                     if (!node) return { success: false, error: 'Mesh not found' };
                     return { success: true, node };
                 } catch (e: any) {

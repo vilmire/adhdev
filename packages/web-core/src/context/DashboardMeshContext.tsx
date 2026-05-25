@@ -6,8 +6,8 @@
  * Standalone (OSS): no provider → Dashboard falls back to local daemon
  * `list_meshes` commands.
  *
- * Cloud: provides overrides that call the cloud REST API for
- * server-persisted meshes visible across all connected machines.
+ * Cloud: provides overrides that route mesh setup/runtime through the selected
+ * daemon instead of a server-persisted Repo Mesh control plane.
  */
 import { createContext, useContext, type ReactNode } from 'react'
 import type { LaunchResult, MeshLaunchOption } from '../hooks/useDashboardCommandActions'
@@ -15,7 +15,7 @@ import type { LaunchResult, MeshLaunchOption } from '../hooks/useDashboardComman
 export interface DashboardMeshOverrides {
     /**
      * List meshes available in the + session dialog.
-     * Cloud: calls REST API for cloud-persisted meshes.
+     * Cloud: calls the selected daemon for locally persisted meshes.
      * The machineId is provided for context (e.g. which machine will run
      * the coordinator), but cloud meshes are not per-machine.
      */
