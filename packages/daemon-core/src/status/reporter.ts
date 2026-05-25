@@ -51,6 +51,9 @@ export class DaemonStatusReporter {
     private lastStatusSentAt = 0;
     private statusPendingThrottle = false;
     private lastP2PStatusHash = '';
+    private lastP2PStatusSentAt: number = 0;
+    private p2pDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    private lastP2PPayload: any = null;
     private lastServerStatusHash = '';
     private lastStatusSummary = '';
 
@@ -355,8 +358,39 @@ export class DaemonStatusReporter {
             : { ...hashTarget, sessions };
         const h = this.simpleHash(JSON.stringify(hashPayload));
         if (h !== this.lastP2PStatusHash) {
+            const now = Date.now();
+            // Rate limit: max 1 per 500ms
+            if (this.lastP2PStatusSentAt && now - this.lastP2PStatusSentAt < 500) {
+                if (!this.p2pDebounceTimer) {
+                    this.p2pDebounceTimer = setTimeout(() => {
+                        this.p2pDebounceTimer = null;
+                        this.sendUnifiedStatusReport({ reason: 'p2p_debounce' });
+                    }, 500);
+                }
+                return false; // Dropped for now, but will trigger later
+            }
+            
             this.lastP2PStatusHash = h;
-            this.deps.p2p?.sendStatus(payload);
+            this.lastP2PStatusSentAt = now;
+
+            // Compute delta (top-level only)
+            let payloadToSend = payload;
+            if (this.lastP2PPayload) {
+                const delta: any = { _delta: true };
+                let hasChanges = false;
+                for (const key of Object.keys(payload)) {
+                    if (JSON.stringify(this.lastP2PPayload[key]) !== JSON.stringify(payload[key])) {
+                        delta[key] = payload[key];
+                        hasChanges = true;
+                    }
+                }
+                // If there are no changes at the top level, we shouldn't send anything
+                if (!hasChanges) return false;
+                payloadToSend = delta;
+            }
+
+            this.lastP2PPayload = payload;
+            this.deps.p2p?.sendStatus(payloadToSend);
             return true;
         }
         return false;

@@ -320,7 +320,7 @@ export class IdeProviderInstance implements ProviderInstance {
                 if (webviewScript) {
                     const matchText = this.provider.webviewMatchText;
                     const matchFn = matchText ? (body: string) => body.includes(matchText) : undefined;
-                    const webviewRaw = await cdp.evaluateInWebviewFrame(webviewScript, matchFn);
+                    const webviewRaw = await withTimeout(cdp.evaluateInWebviewFrame(webviewScript, matchFn), 30000, 'evaluateInWebviewFrame');
                     if (webviewRaw) {
                         raw = typeof webviewRaw === 'string' ? (() => { try { return JSON.parse(webviewRaw); } catch { return null; } })() : webviewRaw;
                     }
@@ -331,7 +331,7 @@ export class IdeProviderInstance implements ProviderInstance {
             if (!raw) {
                 const readChatScript = this.getReadChatScript();
                 if (!readChatScript) return;
-                raw = await cdp.evaluate(readChatScript, 30000);
+                raw = await withTimeout(cdp.evaluate(readChatScript, 30000), 30000, 'evaluate.readChatScript');
                 if (typeof raw === 'string') {
                     try { raw = JSON.parse(raw); } catch { return; }
                 }
@@ -706,7 +706,7 @@ export class IdeProviderInstance implements ProviderInstance {
             );
 
             LOG.info('IdeInstance', `[IdeInstance:${this.type}] autoApprove: executing resolveAction for "${targetButton}"`);
-            let rawResult = await cdp.evaluate(script, 10000);
+            let rawResult = await withTimeout(cdp.evaluate(script, 10000), 10000, 'evaluate.autoApprove');
             if (typeof rawResult === 'string') {
                 try { rawResult = JSON.parse(rawResult); } catch { }
             }

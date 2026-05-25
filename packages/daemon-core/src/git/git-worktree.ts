@@ -14,10 +14,11 @@ import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import * as os from 'node:os';
 
 const execFileAsync = promisify(execFile);
 
-const WORKTREE_DIR_NAME = '.adhdev-worktrees';
+const WORKTREE_DIR_NAME = 'worktrees';
 const GIT_TIMEOUT_MS = 30_000;
 const GIT_MAX_BUFFER = 4 * 1024 * 1024;
 const SUBMODULE_WORKTREE_REMOVE_RE = /working trees containing submodules cannot be moved or removed/i;
@@ -79,8 +80,8 @@ export function resolveWorktreePath(repoRoot: string, meshName: string, branch: 
     // Sanitize branch name for filesystem (e.g. feat/auth → feat-auth)
     const safeBranch = branch.replace(/[/\\:*?"<>|]/g, '-').replace(/^\.+|\.+$/g, '');
     const safeMeshName = meshName.replace(/[/\\:*?"<>|]/g, '-').replace(/^\.+|\.+$/g, '');
-    const parentDir = path.dirname(repoRoot);
-    return path.join(parentDir, WORKTREE_DIR_NAME, safeMeshName, safeBranch);
+    const adhdevDir = path.join(os.homedir(), '.adhdev');
+    return path.join(adhdevDir, WORKTREE_DIR_NAME, safeMeshName, safeBranch);
 }
 
 // ─── Create ─────────────────────────────────────
