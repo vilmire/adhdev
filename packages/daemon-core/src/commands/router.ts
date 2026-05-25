@@ -1084,6 +1084,24 @@ type MeshRefinePatchEquivalenceSummary = {
     stderr?: string;
 };
 
+type MeshRefineSubmoduleReachabilityEntry = {
+    path: string;
+    commit: string;
+    reachable: boolean;
+    checkedLocal?: boolean;
+    fetchedFromOrigin?: boolean;
+    error?: string;
+};
+
+type MeshRefineSubmoduleReachabilitySummary = {
+    status: MeshRefineStageStatus;
+    checked: number;
+    unreachable: MeshRefineSubmoduleReachabilityEntry[];
+    entries: MeshRefineSubmoduleReachabilityEntry[];
+    durationMs: number;
+    error?: string;
+};
+
 type MeshRefineAsyncJobStatus = 'accepted' | 'completed' | 'failed';
 
 type MeshRefineJobHandle = {
@@ -1212,6 +1230,95 @@ async function runMeshRefinePatchEquivalenceGate(
             error: e?.message || String(e),
             stdout: truncateValidationOutput(e?.stdout),
             stderr: truncateValidationOutput(e?.stderr),
+        };
+    }
+}
+
+async function runMeshRefineSubmoduleReachabilityGate(
+    repoRoot: string,
+    mergedTree: string,
+): Promise<MeshRefineSubmoduleReachabilitySummary> {
+    const startedAt = Date.now();
+    const entries: MeshRefineSubmoduleReachabilityEntry[] = [];
+    try {
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+        const runGit = async (cwd: string, args: string[]): Promise<string> => {
+            const { stdout } = await execFileAsync('git', args, {
+                cwd,
+                encoding: 'utf8',
+                timeout: 30_000,
+                maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+                windowsHide: true,
+            });
+            return String(stdout || '');
+        };
+
+        const treeOutput = await runGit(repoRoot, ['ls-tree', '-r', '-z', mergedTree]);
+        const gitlinks = treeOutput
+            .split('\0')
+            .filter(Boolean)
+            .map(record => {
+                const match = /^160000\s+commit\s+([0-9a-f]{40})\t(.+)$/.exec(record);
+                return match ? { commit: match[1], path: match[2] } : null;
+            })
+            .filter((entry): entry is { commit: string; path: string } => !!entry);
+
+        for (const gitlink of gitlinks) {
+            const submodulePath = pathResolve(repoRoot, gitlink.path);
+            const entry: MeshRefineSubmoduleReachabilityEntry = {
+                path: gitlink.path,
+                commit: gitlink.commit,
+                reachable: false,
+            };
+            try {
+                if (!fs.existsSync(submodulePath)) {
+                    entry.error = `Submodule checkout missing at ${gitlink.path}`;
+                    entries.push(entry);
+                    continue;
+                }
+
+                entry.checkedLocal = true;
+                try {
+                    await runGit(submodulePath, ['cat-file', '-e', `${gitlink.commit}^{commit}`]);
+                    entry.reachable = true;
+                    entries.push(entry);
+                    continue;
+                } catch {
+                    // Probe the submodule remote before allowing cleanup/completion.
+                }
+
+                try {
+                    await runGit(submodulePath, ['fetch', 'origin', gitlink.commit]);
+                    entry.fetchedFromOrigin = true;
+                    await runGit(submodulePath, ['cat-file', '-e', `${gitlink.commit}^{commit}`]);
+                    entry.reachable = true;
+                } catch (e: any) {
+                    entry.error = truncateValidationOutput(e?.stderr || e?.message || String(e));
+                }
+            } catch (e: any) {
+                entry.error = truncateValidationOutput(e?.message || String(e));
+            }
+            entries.push(entry);
+        }
+
+        const unreachable = entries.filter(entry => !entry.reachable);
+        return {
+            status: unreachable.length ? 'failed' : 'passed',
+            checked: entries.length,
+            unreachable,
+            entries,
+            durationMs: Date.now() - startedAt,
+        };
+    } catch (e: any) {
+        return {
+            status: 'failed',
+            checked: entries.length,
+            unreachable: entries.filter(entry => !entry.reachable),
+            entries,
+            durationMs: Date.now() - startedAt,
+            error: truncateValidationOutput(e?.message || String(e)),
         };
     }
 }
@@ -2561,6 +2668,38 @@ export class DaemonCommandRouter {
                 removed: false,
                 validation: 'passed',
                 patchEquivalence: 'failed',
+                status: 'blocked_review',
+                    },
+                };
+            }
+
+            const submoduleReachabilityStarted = Date.now();
+            const submoduleReachability = await runMeshRefineSubmoduleReachabilityGate(repoRoot, patchEquivalence.mergedTree || branchHead);
+            recordMeshRefineStage(refineStages, 'submodule_reachability', submoduleReachability.status, submoduleReachabilityStarted, {
+                checked: submoduleReachability.checked,
+                unreachable: submoduleReachability.unreachable.map(entry => ({ path: entry.path, commit: entry.commit, error: entry.error })),
+                error: submoduleReachability.error,
+            });
+            if (submoduleReachability.status === 'failed') {
+                return {
+                    success: false,
+                    code: 'submodule_reachability_failed',
+                    convergenceStatus: 'blocked_review',
+                    error: 'Refinery submodule reachability preflight failed; merge/refine cleanup was not attempted.',
+                    branch,
+                    into: baseBranch,
+                    validationSummary,
+                    patchEquivalence,
+                    submoduleReachability,
+                    refineStages,
+                    finalBranchConvergenceState: {
+                branch,
+                baseBranch,
+                merged: false,
+                removed: false,
+                validation: 'passed',
+                patchEquivalence: 'passed',
+                submoduleReachability: 'failed',
                 status: 'blocked_review',
                     },
                 };
