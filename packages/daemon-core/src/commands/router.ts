@@ -53,6 +53,7 @@ import {
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
+import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
 import { homedir } from 'os';
 import { join as pathJoin, resolve as pathResolve } from 'path';
@@ -1706,7 +1707,7 @@ export class DaemonCommandRouter {
      *  the mesh doesn't exist in the local meshes.json file. */
     private inlineMeshCache = new Map<string, any>();
     /** Coordinator-owned whole-mesh aggregate status snapshots. Browser callers read this by default. */
-    private aggregateMeshStatusCache = new Map<string, { builtAt: number; snapshot: any }>();
+    private aggregateMeshStatusCache = new Map<string, { builtAt: number; snapshot: any; queueRevision: string }>();
     /** In-memory async Refinery jobs keyed by meshId:nodeId to reject/return duplicate in-flight requests. */
     private runningRefineJobs = new Map<string, MeshRefineJobHandle>();
     /** Terminal async Refinery jobs preserve a clear answer after the worktree node has been removed. */
@@ -1796,6 +1797,7 @@ export class DaemonCommandRouter {
     private getCachedAggregateMeshStatus(meshId: string, mesh?: any, options?: { requireDirectPeerTruth?: boolean }): any | null {
         const cached = this.aggregateMeshStatusCache.get(meshId);
         if (!cached?.snapshot || cached.snapshot.success !== true || !Array.isArray(cached.snapshot.nodes)) return null;
+        if (cached.queueRevision !== getMeshQueueRevision(meshId)) return null;
         let snapshot = this.cloneJsonValue(cached.snapshot);
         snapshot = this.hydrateCachedAggregateMeshStatusFromInline(snapshot, mesh, options);
         if (shouldRefreshStalePendingAggregate(snapshot, options)) return null;
@@ -1840,7 +1842,7 @@ export class DaemonCommandRouter {
                 returnedAt: new Date(builtAt).toISOString(),
             },
         };
-        this.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: this.cloneJsonValue(next) });
+        this.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: this.cloneJsonValue(next), queueRevision: getMeshQueueRevision(meshId) });
         return next;
     }
 
