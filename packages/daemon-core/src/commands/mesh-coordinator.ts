@@ -1,9 +1,6 @@
-import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, readdirSync, realpathSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import * as os from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import type { ProviderModule, MeshCoordinatorMcpConfigFormat } from '../providers/contracts.js'
 
 export interface MeshCoordinatorMcpServerLaunch {
@@ -55,7 +52,7 @@ export interface ResolveMeshCoordinatorSetupOptions {
 }
 
 const DEFAULT_SERVER_NAME = 'adhdev-mesh'
-const DEFAULT_ADHDEV_MCP_COMMAND = 'adhdev-mcp'
+const DEFAULT_ADHDEV_MCP_COMMAND = 'adhdev'
 const HERMES_CLI_TYPE = 'hermes-cli'
 const HERMES_MCP_CONFIG_PATH = '~/.hermes/config.yaml'
 
@@ -67,8 +64,7 @@ function isHermesProvider(provider: ProviderModule | null | undefined, cliType?:
 function resolveHermesMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetupOptions): MeshCoordinatorSetup {
   const mcpServer = resolveAdhdevMcpServerLaunch({
     meshId: options.meshId,
-    nodeExecutable: options.nodeExecutable,
-    adhdevMcpEntryPath: options.adhdevMcpEntryPath,
+    adhdevMcpCommand: options.adhdevMcpCommand,
     adhdevMcpTransport: options.adhdevMcpTransport,
     adhdevMcpPort: options.adhdevMcpPort,
   })
@@ -100,7 +96,7 @@ export function createHermesManualMeshCoordinatorSetup(meshId: string, workspace
     requiresRestart: true,
     instructions: 'Hermes CLI does not auto-import repo-local .mcp.json. Add this MCP server to Hermes config under mcp_servers, then start a fresh Hermes session.',
     template: renderMeshCoordinatorTemplate(
-      'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
+      'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - mcp\n      - --mode\n      - ipc\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
       {
         meshId,
         workspace,
@@ -141,8 +137,7 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
     }
     const mcpServer = resolveAdhdevMcpServerLaunch({
       meshId,
-      nodeExecutable: options.nodeExecutable,
-      adhdevMcpEntryPath: options.adhdevMcpEntryPath,
+      adhdevMcpCommand: options.adhdevMcpCommand,
       adhdevMcpTransport: options.adhdevMcpTransport,
       adhdevMcpPort: options.adhdevMcpPort,
     })
@@ -222,23 +217,23 @@ function resolveMcpConfigPath(configPath: string, workspace: string): string {
 
 function resolveAdhdevMcpServerLaunch(options: {
   meshId: string
-  nodeExecutable?: string
-  adhdevMcpEntryPath?: string
+  adhdevMcpCommand?: string
   adhdevMcpTransport?: 'local' | 'ipc'
   adhdevMcpPort?: number
 }): MeshCoordinatorMcpServerLaunch | null {
-  const entryPath = resolveAdhdevMcpEntryPath(options.adhdevMcpEntryPath)
-  if (!entryPath) return null
-  const nodeExecutable = resolveMcpNodeExecutable(options.nodeExecutable)
-  if (!nodeExecutable) return null
+  const command = resolveAdhdevCommand(options.adhdevMcpCommand)
   const transport = resolveMcpTransport(options.adhdevMcpTransport)
-  const args = [entryPath, '--mode', transport, '--repo-mesh', options.meshId]
+  const args = ['mcp', '--mode', transport, '--repo-mesh', options.meshId]
   const port = resolveMcpPort(options.adhdevMcpPort)
   if (port !== undefined) args.push('--port', String(port))
   return {
-    command: nodeExecutable,
+    command,
     args,
   }
+}
+
+function resolveAdhdevCommand(explicitCommand?: string): string {
+  return explicitCommand?.trim() || process.env.ADHDEV_COORDINATOR_MCP_COMMAND?.trim() || DEFAULT_ADHDEV_MCP_COMMAND
 }
 
 function resolveMcpTransport(explicitTransport?: 'local' | 'ipc'): 'local' | 'ipc' {
@@ -253,129 +248,4 @@ function resolveMcpPort(explicitPort?: number): number | undefined {
   if (!raw) return undefined
   const parsed = Number(raw)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
-}
-
-function resolveMcpNodeExecutable(explicitExecutable?: string): string | null {
-  const explicit = explicitExecutable?.trim()
-  if (explicit) return explicit
-
-  const candidates: string[] = []
-  const addCandidate = (candidate?: string | null) => {
-    const trimmed = candidate?.trim()
-    if (!trimmed) return
-    const normalized = normalizeExistingPath(trimmed) || trimmed
-    if (!candidates.includes(normalized)) candidates.push(normalized)
-  }
-
-  addCandidate(process.env.ADHDEV_MCP_NODE_EXECUTABLE)
-  addCandidate(process.env.ADHDEV_NODE_EXECUTABLE)
-  addCandidate(process.env.npm_node_execpath)
-  addNodeCandidatesFromPath(process.env.PATH, addCandidate)
-  addNodeCandidatesFromNvm(os.homedir(), addCandidate)
-  addCandidate('/opt/homebrew/bin/node')
-  addCandidate('/usr/local/bin/node')
-  addCandidate('/usr/bin/node')
-  addCandidate(process.execPath)
-
-  for (const candidate of candidates) {
-    if (nodeRuntimeSupportsWebSocket(candidate)) return candidate
-  }
-  return null
-}
-
-function addNodeCandidatesFromPath(pathValue: string | undefined, addCandidate: (candidate?: string | null) => void) {
-  for (const entry of (pathValue || '').split(':')) {
-    const dir = entry.trim()
-    if (!dir) continue
-    addCandidate(join(dir, 'node'))
-  }
-}
-
-function addNodeCandidatesFromNvm(homeDir: string, addCandidate: (candidate?: string | null) => void) {
-  const versionsDir = join(homeDir, '.nvm', 'versions', 'node')
-  try {
-    const versionDirs = readdirSync(versionsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort(compareNodeVersionNamesDescending)
-    for (const versionDir of versionDirs) {
-      addCandidate(join(versionsDir, versionDir, 'bin', 'node'))
-    }
-  } catch {
-    // nvm is optional; PATH and process.execPath candidates still cover normal installs.
-  }
-}
-
-function compareNodeVersionNamesDescending(a: string, b: string): number {
-  const parse = (value: string) => value.replace(/^v/, '').split('.').map((part) => Number.parseInt(part, 10) || 0)
-  const left = parse(a)
-  const right = parse(b)
-  for (let i = 0; i < Math.max(left.length, right.length); i++) {
-    const diff = (right[i] || 0) - (left[i] || 0)
-    if (diff !== 0) return diff
-  }
-  return b.localeCompare(a)
-}
-
-function nodeRuntimeSupportsWebSocket(nodeExecutable: string): boolean {
-  try {
-    execFileSync(nodeExecutable, ['-e', "process.exit(typeof WebSocket === 'function' ? 0 : 42)"], {
-      stdio: 'ignore',
-      timeout: 3000,
-    })
-    return true
-  } catch {
-    return false
-  }
-}
-
-function resolveAdhdevMcpEntryPath(explicitPath?: string): string | null {
-  const explicit = explicitPath?.trim()
-  if (explicit) return normalizeExistingPath(explicit) || explicit
-
-  const envPath = process.env.ADHDEV_MCP_SERVER_PATH?.trim()
-  if (envPath) return normalizeExistingPath(envPath) || envPath
-
-  const candidates: string[] = []
-  const addCandidate = (candidate: string) => {
-    if (!candidates.includes(candidate)) candidates.push(candidate)
-  }
-  const addPackagedCandidates = (baseFile?: string) => {
-    if (!baseFile) return
-    const realBase = normalizeExistingPath(baseFile) || baseFile
-    const dir = dirname(realBase)
-    addCandidate(resolve(dir, '../vendor/mcp-server/index.js'))
-    addCandidate(resolve(dir, '../../vendor/mcp-server/index.js'))
-    addCandidate(resolve(dir, '../../../vendor/mcp-server/index.js'))
-    // Source checkout/dev mode does not vendor the MCP server into daemon-standalone.
-    // Resolve the sibling workspace build directly so Repo Mesh auto-import still
-    // writes an absolute Node entrypoint instead of falling back to a PATH bin shim.
-    addCandidate(resolve(dir, '../../mcp-server/dist/index.js'))
-    addCandidate(resolve(dir, '../../../mcp-server/dist/index.js'))
-  }
-
-  addPackagedCandidates(process.argv[1])
-
-  for (const candidate of candidates) {
-    const normalized = normalizeExistingPath(candidate)
-    if (normalized) return normalized
-  }
-
-  try {
-    const requireBase = process.argv[1] ? (normalizeExistingPath(process.argv[1]) || process.argv[1]) : join(process.cwd(), 'adhdev-daemon.js')
-    const req = createRequire(requireBase)
-    const resolvedModule = req.resolve('@adhdev/mcp-server')
-    return normalizeExistingPath(resolvedModule) || resolvedModule
-  } catch {
-    return null
-  }
-}
-
-function normalizeExistingPath(filePath: string): string | null {
-  try {
-    if (!existsSync(filePath)) return null
-    return realpathSync.native(filePath)
-  } catch {
-    return null
-  }
 }

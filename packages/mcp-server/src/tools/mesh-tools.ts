@@ -1688,7 +1688,7 @@ export const MESH_RECONCILE_LEDGER_TOOL = {
 
 export const MESH_REFINE_NODE_TOOL = {
     name: 'mesh_refine_node',
-    description: 'The Refinery: Automatically validate and merge a completed worktree node back into its base branch. This tool automates the validation gate and merge queue step. It will merge the node\'s branch into its base branch and cleanly remove the worktree node and its sessions.',
+    description: 'The Refinery: Accept an async validation/merge/cleanup job for a completed worktree node. The immediate response includes async:true, status:\'accepted\', jobId, interactionId, target node, and startedAt; completion/failure evidence is delivered through pending mesh events and the mesh task ledger.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -3122,7 +3122,7 @@ export async function meshRefineNode(
             nodeId: args.node_id,
             inlineMesh: ctx.mesh,
         });
-        if (result?.success && result.removeResult?.removed !== false) {
+        if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
             const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
             if (idx >= 0) {
                 ctx.mesh.nodes.splice(idx, 1);
@@ -3137,7 +3137,7 @@ export async function meshRefineNode(
                 nodeId: args.node_id,
                 inlineMesh: ctx.mesh,
             });
-            if (res?.success && res.removeResult?.removed !== false) {
+            if (res?.success && res.async !== true && res.removeResult?.removed !== false) {
                 const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
                 if (idx >= 0) {
                     ctx.mesh.nodes.splice(idx, 1);

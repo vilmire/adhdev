@@ -21,13 +21,13 @@ const STANDARD_TOOLS = [
 export function buildMcpHelpText(): string {
   const meshTools = ALL_MESH_TOOLS.map(tool => tool.name);
   return `
-adhdev-mcp — ADHDev MCP Server
+ADHDev MCP Server
 
 Usage:
-  adhdev-mcp                                    Local mode (requires standalone daemon)
-  adhdev-mcp --api-key <key>                    Cloud mode (ADHDev cloud API)
-  adhdev-mcp --mode ipc --repo-mesh <mesh_id>   Cloud daemon IPC mesh mode
-  adhdev-mcp --repo-mesh <mesh_id>              Mesh mode (coordinator-scoped tools)
+  adhdev mcp                                    Local mode (requires standalone daemon)
+  adhdev mcp --api-key <key>                    Cloud mode (ADHDev cloud API)
+  adhdev mcp --mode ipc --repo-mesh <mesh_id>   Cloud daemon IPC mesh mode
+  adhdev-mcp --help                             Compatibility bin (same server, legacy package entrypoint)
 
 Options:
   --mode <mode>           Transport: local, cloud, or ipc
