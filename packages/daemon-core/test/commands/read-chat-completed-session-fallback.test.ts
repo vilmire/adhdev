@@ -108,4 +108,47 @@ describe('read_chat completed runtime provider fallback', () => {
       limit: 20,
     }))
   })
+
+  it('allows read_chat to fall through to history when only targetSessionId is provided for a missing session', async () => {
+    // Regression: mesh coordinator calls read_chat with targetSessionId of a Codex CLI
+    // session that has since been stopped/destroyed. No explicit providerSessionId is
+    // passed. The handler must not hard-fail; it should serve persisted history using
+    // the targetSessionId as the historySessionId key.
+    mocks.readProviderChatHistory.mockReturnValue({
+      messages: [{ role: 'assistant', content: 'final codex answer', receivedAt: 1 }],
+      hasMore: false,
+      providerSessionId: '25e40a0f-2dce-4e5a-9d0d-8fbf63bf7016',
+    })
+
+    const handler = new DaemonCommandHandler({
+      cdpManagers: new Map(),
+      ideType: '',
+      adapters: new Map(),
+      providerLoader: {
+        resolve: vi.fn((type: string) => type === 'codex-cli'
+          ? { type: 'codex-cli', category: 'cli', historyBehavior: {} }
+          : undefined),
+      } as any,
+      instanceManager: {
+        getInstance: () => null,
+        listInstanceIds: () => [],
+      } as any,
+      sessionRegistry: {
+        get: () => undefined,
+      } as any,
+    })
+
+    const result = await handler.handle('read_chat', {
+      targetSessionId: '25e40a0f-2dce-4e5a-9d0d-8fbf63bf7016',
+      agentType: 'codex-cli',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.error).toBeUndefined()
+    expect((result.messages as any[]).length).toBeGreaterThan(0)
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: '25e40a0f-2dce-4e5a-9d0d-8fbf63bf7016',
+    }))
+  })
 })

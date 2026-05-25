@@ -408,12 +408,19 @@ export class DaemonCommandHandler implements CommandHelpers {
             'invoke_provider_script',
         ]);
 
+        // read_chat and get_chat_debug_bundle can serve historical transcript data even
+        // when the live session record is gone (stopped/destroyed). Allow the fallback
+        // when the provider type is known and any session identity hint is present:
+        // an explicit providerSessionId/historySessionId, or the targetSessionId itself
+        // (which getHistorySessionId already uses as a fallback history key).
+        const isReadOrDebugCmd = cmd === 'read_chat' || cmd === 'get_chat_debug_bundle';
         const allowsInactiveReadChatFallback =
-            cmd === 'read_chat'
+            isReadOrDebugCmd
             && !!this._currentRoute.providerType
             && (
                 (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim().length > 0)
                 || (typeof args?.historySessionId === 'string' && args.historySessionId.trim().length > 0)
+                || (typeof args?.targetSessionId === 'string' && args.targetSessionId.trim().length > 0)
             );
 
         if (this._currentRoute.sessionLookupFailed && sessionScopedCommands.has(cmd) && !allowsInactiveReadChatFallback) {
