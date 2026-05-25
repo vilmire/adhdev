@@ -802,7 +802,16 @@ export async function handleCliSend(ctx: DevServerContext, req: http.IncomingMes
   }
 
   try {
-    ctx.instanceManager!.sendEvent(target.instanceId, 'send_message', { text });
+    if (target.category === 'cli') {
+      const bundle = getCliTargetBundle(ctx, type, instanceId);
+      if (!bundle) {
+        ctx.json(res, 404, { error: `No running CLI adapter found for: ${type || instanceId}` });
+        return;
+      }
+      await bundle.adapter.sendMessage(text);
+    } else {
+      ctx.instanceManager!.sendEvent(target.instanceId, 'send_message', { text });
+    }
     ctx.json(res, 200, { sent: true, type: target.type, instanceId: target.instanceId });
   } catch (e: any) {
     ctx.json(res, 500, { error: `Send failed: ${e.message}` });

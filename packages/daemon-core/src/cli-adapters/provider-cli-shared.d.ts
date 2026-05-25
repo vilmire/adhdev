@@ -55,6 +55,8 @@ export interface CliScriptInput {
     rawBuffer: string;
     recentBuffer: string;
     screenText: string;
+    workspace?: string;
+    workingDir?: string;
     screen: CliScreenSnapshot;
     bufferScreen: CliScreenSnapshot;
     recentScreen: CliScreenSnapshot;

@@ -15,6 +15,7 @@ export declare function buildCliParseInput(options: {
     accumulatedRawBuffer: string;
     recentOutputBuffer: string;
     terminalScreenText: string;
+    workingDir?: string;
     baseMessages: CliChatMessage[];
     partialResponse: string;
     isWaitingForResponse?: boolean;

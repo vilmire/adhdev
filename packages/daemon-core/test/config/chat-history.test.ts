@@ -250,6 +250,45 @@ describe('chat-history config helpers', () => {
     ])
   })
 
+  it('allows provider-native history reads to resolve by workspace before a session id is known', async () => {
+    const { readProviderChatHistory } = await import('../../src/config/chat-history.js')
+    const canonicalHistory = {
+      format: 'opaque-provider-native-format',
+      mode: 'native-source' as const,
+      scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+    }
+    const scripts = {
+      readNativeHistory: vi.fn((input: any) => ({
+        sourcePath: '/provider/native/workspace-session.jsonl',
+        sourceMtimeMs: 1_800_000_010_000,
+        messages: [
+          { role: 'system', kind: 'session_start', content: input.workspace, receivedAt: 1_800_000_010_000, workspace: input.workspace, historySessionId: 'resolved-native-session' },
+          { role: 'assistant', content: 'native assistant from workspace lookup', receivedAt: 1_800_000_011_000, historySessionId: 'resolved-native-session' },
+        ],
+      })),
+      listNativeHistory: vi.fn(),
+    }
+
+    const read = readProviderChatHistory('opaque-cli', {
+      canonicalHistory,
+      scripts,
+      workspace: '/workspaces/provider-owned',
+      offset: 0,
+      limit: 20,
+    })
+
+    expect(scripts.readNativeHistory).toHaveBeenCalledWith(expect.objectContaining({
+      historySessionId: '',
+      sessionId: '',
+      workspace: '/workspaces/provider-owned',
+    }))
+    expect(read).toMatchObject({ source: 'provider-native', sourcePath: '/provider/native/workspace-session.jsonl' })
+    expect(read.messages.map(message => message.content)).toEqual([
+      '/workspaces/provider-owned',
+      'native assistant from workspace lookup',
+    ])
+  })
+
   it('persists session-level saved-history aggregates inside the on-disk index', async () => {
     const { ChatHistoryWriter } = await import('../../src/config/chat-history.js')
     const writer = new ChatHistoryWriter()

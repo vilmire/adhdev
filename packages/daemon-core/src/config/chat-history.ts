@@ -1387,22 +1387,23 @@ function callProviderNativeHistoryRead(
     agentType: string,
     canonicalHistory: ProviderCanonicalHistoryConfig | undefined,
     scripts: ProviderNativeHistoryScripts | undefined,
-    historySessionId: string,
+    historySessionId: string | undefined,
     workspace?: string,
 ): ProviderNativeHistoryReadResult | null {
     const fn = getProviderNativeHistoryScript(scripts, canonicalHistory, 'readSession');
     if (!fn) return null;
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
     const result = fn({
         agentType,
-        sessionId: historySessionId,
-        historySessionId,
+        sessionId: normalizedSessionId,
+        historySessionId: normalizedSessionId,
         workspace,
         format: canonicalHistory?.format,
         watchPath: canonicalHistory?.watchPath,
-        args: { sessionId: historySessionId, historySessionId, workspace },
+        args: { sessionId: normalizedSessionId, historySessionId: normalizedSessionId, workspace },
     });
     if (!result || typeof result !== 'object') return null;
-    const records = normalizeProviderNativeHistoryRecords(agentType, historySessionId, (result as any).messages || (result as any).records);
+    const records = normalizeProviderNativeHistoryRecords(agentType, normalizedSessionId, (result as any).messages || (result as any).records);
     if (records.length === 0) return null;
     return {
         records,
@@ -1419,7 +1420,8 @@ function buildNativeHistoryReadResult(
     workspace?: string,
 ): ProviderNativeHistoryReadResult | null {
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
-    if (!canonicalHistory || !normalizedSessionId || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
+    const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
+    if (!canonicalHistory || (!normalizedSessionId && !normalizedWorkspace) || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
     return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace);
 }
 
@@ -1478,7 +1480,7 @@ export function readProviderChatHistory(
         scripts?: ProviderNativeHistoryScripts;
     } = {},
 ): { messages: HistoryMessage[]; hasMore: boolean; source: 'provider-native' | 'adhdev-mirror' | 'native-unavailable'; sourcePath?: string; sourceMtimeMs?: number } {
-    if (isNativeSourceCanonicalHistory(options.canonicalHistory) && options.historySessionId) {
+    if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
         const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace);
         if (!nativeResult) return { messages: [], hasMore: false, source: 'native-unavailable' };
         return {
