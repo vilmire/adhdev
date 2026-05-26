@@ -55,7 +55,7 @@ import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 
@@ -1089,7 +1089,12 @@ type MeshRefineSubmoduleReachabilityEntry = {
     path: string;
     commit: string;
     reachable: boolean;
+    publishRequired?: boolean;
     checkedLocal?: boolean;
+    localReachable?: boolean;
+    remote?: string;
+    remoteUrl?: string;
+    remoteReachable?: boolean;
     fetchedFromOrigin?: boolean;
     error?: string;
 };
@@ -1159,6 +1164,13 @@ function recordMeshRefineStage(
         durationMs: Date.now() - startedAt,
         ...(details || {}),
     });
+}
+
+function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmoduleReachabilityEntry[]): string {
+    const refs = entries
+        .map(entry => `${entry.path}@${entry.commit}`)
+        .join(', ');
+    return `Ask the user for explicit approval to push/publish the unreachable submodule commit(s) (${refs}) to their configured submodule remote(s), then rerun mesh_refine_node. Do not merge the root branch until every submodule gitlink commit is reachable from its configured remote.`;
 }
 
 async function computeGitPatchId(cwd: string, fromRef: string, toRef: string): Promise<string> {
@@ -1255,6 +1267,16 @@ async function runMeshRefineSubmoduleReachabilityGate(
             });
             return String(stdout || '');
         };
+        const verifyRemoteCommitReachable = async (remoteUrl: string, commit: string): Promise<void> => {
+            const probeDir = fs.mkdtempSync(pathJoin(tmpdir(), 'adhdev-submodule-reachability-'));
+            try {
+                await runGit(probeDir, ['init', '-q']);
+                await runGit(probeDir, ['-c', 'protocol.file.allow=always', 'fetch', '--depth=1', remoteUrl, commit]);
+                await runGit(probeDir, ['cat-file', '-e', `${commit}^{commit}`]);
+            } finally {
+                fs.rmSync(probeDir, { recursive: true, force: true });
+            }
+        };
 
         const treeOutput = await runGit(repoRoot, ['ls-tree', '-r', '-z', mergedTree]);
         const gitlinks = treeOutput
@@ -1276,6 +1298,7 @@ async function runMeshRefineSubmoduleReachabilityGate(
             try {
                 if (!fs.existsSync(submodulePath)) {
                     entry.error = `Submodule checkout missing at ${gitlink.path}`;
+                    entry.publishRequired = true;
                     entries.push(entry);
                     continue;
                 }
@@ -1283,23 +1306,38 @@ async function runMeshRefineSubmoduleReachabilityGate(
                 entry.checkedLocal = true;
                 try {
                     await runGit(submodulePath, ['cat-file', '-e', `${gitlink.commit}^{commit}`]);
-                    entry.reachable = true;
-                    entries.push(entry);
-                    continue;
+                    entry.localReachable = true;
                 } catch {
+                    entry.localReachable = false;
                     // Probe the submodule remote before allowing cleanup/completion.
                 }
 
                 try {
-                    await runGit(submodulePath, ['fetch', 'origin', gitlink.commit]);
+                    entry.remote = 'origin';
+                    let remoteUrl = '';
+                    try {
+                        remoteUrl = (await runGit(submodulePath, ['remote', 'get-url', 'origin'])).trim();
+                        if (!remoteUrl) throw new Error('origin remote has no URL');
+                        entry.remoteUrl = remoteUrl;
+                    } catch {
+                        entry.error = 'Submodule remote reachability check failed: no configured origin remote';
+                        entry.publishRequired = true;
+                        entries.push(entry);
+                        continue;
+                    }
+                    await verifyRemoteCommitReachable(remoteUrl, gitlink.commit);
                     entry.fetchedFromOrigin = true;
-                    await runGit(submodulePath, ['cat-file', '-e', `${gitlink.commit}^{commit}`]);
+                    entry.remoteReachable = true;
                     entry.reachable = true;
                 } catch (e: any) {
-                    entry.error = truncateValidationOutput(e?.stderr || e?.message || String(e));
+                    entry.remoteReachable = false;
+                    entry.publishRequired = true;
+                    const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
+                    entry.error = `Submodule remote reachability check failed for origin: ${details}`;
                 }
             } catch (e: any) {
                 entry.error = truncateValidationOutput(e?.message || String(e));
+                entry.publishRequired = true;
             }
             entries.push(entry);
         }
@@ -1308,16 +1346,17 @@ async function runMeshRefineSubmoduleReachabilityGate(
         return {
             status: unreachable.length ? 'failed' : 'passed',
             checked: entries.length,
-            unreachable,
-            entries,
+            unreachable: unreachable.map(entry => ({ ...entry, publishRequired: entry.publishRequired !== false })),
+            entries: entries.map(entry => entry.reachable ? entry : { ...entry, publishRequired: entry.publishRequired !== false }),
             durationMs: Date.now() - startedAt,
         };
     } catch (e: any) {
+        const unreachable = entries.filter(entry => !entry.reachable).map(entry => ({ ...entry, publishRequired: true }));
         return {
             status: 'failed',
             checked: entries.length,
-            unreachable: entries.filter(entry => !entry.reachable),
-            entries,
+            unreachable,
+            entries: entries.map(entry => entry.reachable ? entry : { ...entry, publishRequired: true }),
             durationMs: Date.now() - startedAt,
             error: truncateValidationOutput(e?.message || String(e)),
         };
@@ -2679,15 +2718,41 @@ export class DaemonCommandRouter {
             const submoduleReachability = await runMeshRefineSubmoduleReachabilityGate(repoRoot, patchEquivalence.mergedTree || branchHead);
             recordMeshRefineStage(refineStages, 'submodule_reachability', submoduleReachability.status, submoduleReachabilityStarted, {
                 checked: submoduleReachability.checked,
-                unreachable: submoduleReachability.unreachable.map(entry => ({ path: entry.path, commit: entry.commit, error: entry.error })),
+                unreachable: submoduleReachability.unreachable.map(entry => ({
+                    path: entry.path,
+                    commit: entry.commit,
+                    publishRequired: entry.publishRequired === true,
+                    remote: entry.remote,
+                    remoteUrl: entry.remoteUrl,
+                    remoteReachable: entry.remoteReachable,
+                    error: entry.error,
+                })),
                 error: submoduleReachability.error,
             });
             if (submoduleReachability.status === 'failed') {
+                const nextStep = buildSubmodulePublishRequiredNextStep(submoduleReachability.unreachable);
                 return {
                     success: false,
                     code: 'submodule_reachability_failed',
                     convergenceStatus: 'blocked_review',
-                    error: 'Refinery submodule reachability preflight failed; merge/refine cleanup was not attempted.',
+                    publishRequired: true,
+                    blockedReason: 'submodule_publish_required',
+                    error: 'Refinery submodule reachability preflight failed because one or more submodule gitlink commits are not reachable from their configured remote; merge/refine cleanup was not attempted.',
+                    nextStep,
+                    nextSteps: [
+                        'Ask the user for explicit approval before pushing or publishing any submodule commit.',
+                        'Push/publish each unreachable submodule commit to the configured submodule remote shown in the evidence.',
+                        'Rerun mesh_refine_node after remote reachability is confirmed.',
+                        'Do not merge the root branch until every submodule gitlink commit is reachable from its configured remote.',
+                    ],
+                    unreachableSubmoduleCommits: submoduleReachability.unreachable.map(entry => ({
+                        path: entry.path,
+                        commit: entry.commit,
+                        remote: entry.remote,
+                        remoteUrl: entry.remoteUrl,
+                        remoteReachable: entry.remoteReachable,
+                        error: entry.error,
+                    })),
                     branch,
                     into: baseBranch,
                     validationSummary,
@@ -2703,6 +2768,8 @@ export class DaemonCommandRouter {
                 patchEquivalence: 'passed',
                 submoduleReachability: 'failed',
                 status: 'blocked_review',
+                reason: 'submodule_publish_required',
+                nextStep,
                     },
                 };
             }

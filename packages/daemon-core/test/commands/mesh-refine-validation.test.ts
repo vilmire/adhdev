@@ -44,6 +44,21 @@ function initGitRepo(repo: string) {
   execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: repo })
 }
 
+function initSubmoduleOrigin(repo: string) {
+  mkdirSync(repo, { recursive: true })
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo })
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo })
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo })
+  writeFileSync(join(repo, 'README.md'), 'submodule base\n', 'utf-8')
+  execFileSync('git', ['add', 'README.md'], { cwd: repo })
+  execFileSync('git', ['commit', '-q', '-m', 'submodule init'], { cwd: repo })
+}
+
+function addSubmodule(repo: string, submoduleOrigin: string, path = 'oss') {
+  execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', submoduleOrigin, path], { cwd: repo })
+  execFileSync('git', ['commit', '-q', '-m', `add ${path} submodule`], { cwd: repo })
+}
+
 function createMesh(repo: string, worktree: string, nodeId = 'node-worktree', commands: any = {
   test: [{ command: 'npm run test', sourcePath: 'package.json', confidence: 'high' }],
   typecheck: [{ command: 'npm run typecheck', sourcePath: 'package.json', confidence: 'high' }],
@@ -449,11 +464,26 @@ describe('refine_mesh_node validation gate', () => {
         success: false,
         code: 'submodule_reachability_failed',
         convergenceStatus: 'blocked_review',
+        publishRequired: true,
+        blockedReason: 'submodule_publish_required',
       })
+      expect(result.nextStep).toContain(`oss@${missingCommit}`)
+      expect(result.nextStep).toContain('Ask the user for explicit approval')
+      expect(result.nextStep).toContain('rerun mesh_refine_node')
+      expect(result.nextStep).toContain('Do not merge the root branch')
+      expect(result.nextSteps).toContain('Ask the user for explicit approval before pushing or publishing any submodule commit.')
+      expect(result.unreachableSubmoduleCommits).toEqual([
+        expect.objectContaining({ path: 'oss', commit: missingCommit, error: 'Submodule checkout missing at oss' }),
+      ])
       expect(result.submoduleReachability).toMatchObject({
         status: 'failed',
         checked: 1,
-        unreachable: [{ path: 'oss', commit: missingCommit, reachable: false }],
+        unreachable: [{ path: 'oss', commit: missingCommit, reachable: false, publishRequired: true }],
+      })
+      expect(result.finalBranchConvergenceState).toMatchObject({
+        status: 'blocked_review',
+        reason: 'submodule_publish_required',
+        nextStep: expect.stringContaining('Do not merge the root branch'),
       })
       expect(result.refineStages.map((entry: any) => `${entry.stage}:${entry.status}`)).toContain('submodule_reachability:failed')
       expect(result.refineStages.some((entry: any) => entry.stage === 'merge')).toBe(false)
@@ -463,6 +493,101 @@ describe('refine_mesh_node validation gate', () => {
       const events = drainPendingMeshCoordinatorEvents(mesh.id)
       const failedEvent = events.find(event => event.event === 'refine:failed' && (event.metadataEvent as any).jobId === accepted.jobId)
       expect((failedEvent?.metadataEvent as any)?.result).toMatchObject({ code: 'submodule_reachability_failed' })
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('requires submodule gitlink commits to be reachable from the configured remote, not only local checkout', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-local-only-submodule-'))
+    const repo = join(root, 'repo')
+    const submoduleOrigin = join(root, 'submodule-origin')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initSubmoduleOrigin(submoduleOrigin)
+      initGitRepo(repo)
+      addSubmodule(repo, submoduleOrigin, 'oss')
+      const worktree = createWorktreeWithCommit(root, repo)
+      execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'oss'], { cwd: worktree })
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: join(worktree, 'oss') })
+      writeFileSync(join(worktree, 'oss', 'LOCAL_ONLY.md'), 'not published\n', 'utf-8')
+      execFileSync('git', ['add', 'LOCAL_ONLY.md'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['commit', '-q', '-m', 'local only submodule commit'], { cwd: join(worktree, 'oss') })
+      const localOnlyCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(worktree, 'oss'), encoding: 'utf-8' }).trim()
+      execFileSync('git', ['fetch', join(worktree, 'oss'), localOnlyCommit], { cwd: join(repo, 'oss') })
+      execFileSync('git', ['add', 'oss'], { cwd: worktree })
+      execFileSync('git', ['commit', '-q', '-m', 'point submodule at local-only commit'], { cwd: worktree })
+      const mesh = createMesh(repo, worktree, 'node-local-only-submodule')
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-local-only-submodule',
+        inlineMesh: mesh,
+      })
+
+      expectAccepted(accepted, 'node-local-only-submodule')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_failed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({
+        success: false,
+        code: 'submodule_reachability_failed',
+        convergenceStatus: 'blocked_review',
+        publishRequired: true,
+        blockedReason: 'submodule_publish_required',
+      })
+      expect(result.submoduleReachability.unreachable).toEqual([
+        expect.objectContaining({
+          path: 'oss',
+          commit: localOnlyCommit,
+          reachable: false,
+          localReachable: true,
+          remote: 'origin',
+          remoteUrl: submoduleOrigin,
+          remoteReachable: false,
+          publishRequired: true,
+          error: expect.stringContaining('Submodule remote reachability check failed for origin'),
+        }),
+      ])
+      expect(result.unreachableSubmoduleCommits).toEqual([
+        expect.objectContaining({
+          path: 'oss',
+          commit: localOnlyCommit,
+          remote: 'origin',
+          remoteUrl: submoduleOrigin,
+          remoteReachable: false,
+          error: expect.stringContaining('Submodule remote reachability check failed for origin'),
+        }),
+      ])
+      const reachabilityStage = result.refineStages.find((entry: any) => entry.stage === 'submodule_reachability')
+      expect(reachabilityStage).toMatchObject({
+        status: 'failed',
+        unreachable: [
+          expect.objectContaining({
+            path: 'oss',
+            commit: localOnlyCommit,
+            publishRequired: true,
+            remote: 'origin',
+            remoteUrl: submoduleOrigin,
+            remoteReachable: false,
+            error: expect.stringContaining('Submodule remote reachability check failed for origin'),
+          }),
+        ],
+      })
+      expect(result.nextStep).toContain(`oss@${localOnlyCommit}`)
+      expect(result.nextStep).toContain('explicit approval')
+      expect(result.finalBranchConvergenceState).toMatchObject({
+        status: 'blocked_review',
+        reason: 'submodule_publish_required',
+        nextStep: expect.stringContaining('rerun mesh_refine_node'),
+      })
+      expect(result.refineStages.some((entry: any) => entry.stage === 'merge')).toBe(false)
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
