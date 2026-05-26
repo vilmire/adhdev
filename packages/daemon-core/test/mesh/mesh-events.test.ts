@@ -20,7 +20,7 @@ vi.mock('../../src/detection/cli-detector.js', () => ({
   detectCLI: detectCliMocks.detectCLI,
 }))
 
-import { handleMeshForwardEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetBeadsDBForTests, claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 
@@ -69,10 +69,12 @@ function createComponents(meshId = 'mesh_inline_1') {
 function cleanupMeshFiles(meshId: string) {
   const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
   const ledgerPath = path.join(getLedgerDir(), `${meshId}.jsonl`)
+  const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
   __clearMeshQueueForTests(meshId)
   __resetBeadsDBForTests()
   if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
   if (fs.existsSync(ledgerPath)) fs.unlinkSync(ledgerPath)
+  if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
 }
 
 function createQueueAutoLaunchComponents(args?: {
@@ -409,6 +411,62 @@ describe('setupMeshEventForwarding', () => {
     expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('has stopped')
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('has been generating for a long time')
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('mesh_read_chat once')
+  })
+
+  it('queues stopped failure events with recovery context when no live coordinator session exists', () => {
+    const meshId = `mesh_stopped_pending_recovery_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: { maxTaskRetries: 1 },
+      })
+      const queued = enqueueTask(meshId, 'retryable failed task')
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        payload: { taskId: queued.id, message: 'retryable failed task' },
+      })
+      const components = {
+        instanceManager: {
+          getByCategory: vi.fn((category: string) => category === 'cli' ? [] : []),
+        },
+        cliManager: {
+          handleCliCommand: vi.fn(() => Promise.resolve({ success: true, sessionId: 'retry-session-1' })),
+        },
+      } as any
+
+      const stopped = handleMeshForwardEvent(components, {
+        event: 'agent:stopped',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+      })
+
+      expect(stopped).toEqual({ success: true, forwarded: 0 })
+      const events = drainPendingMeshCoordinatorEvents(meshId)
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        event: 'agent:stopped',
+        meshId,
+        nodeId: 'node_child_1',
+      })
+      expect(events[0].metadataEvent.recoveryContext).toMatchObject({
+        failedNodeId: 'node_child_1',
+        failedSessionId: 'runtime-session-1',
+        failedProviderType: 'hermes-cli',
+        retryRecommended: true,
+        lastTaskMessage: 'retryable failed task',
+      })
+      expect(readLedgerEntries(meshId).some(entry => entry.kind === 'task_failed' && entry.payload.taskId === queued.id)).toBe(true)
+      expect(readLedgerEntries(meshId).some(entry => entry.kind === 'recovery_attempted')).toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
   })
 
   it('suppresses duplicate completion replays from relay/backfill paths for the same logical event', () => {

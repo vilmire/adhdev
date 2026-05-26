@@ -4,8 +4,8 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshEnqueueTask, meshSendTask, meshStatus, meshViewQueue } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, enqueueTask, getLedgerDir, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
+import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHistory, meshViewQueue } from '../src/tools/mesh-tools.js';
+import { appendLedgerEntry, buildTaskCompletionEvidence, enqueueTask, getLedgerDir, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 
 function cleanupMesh(meshId: string): void {
@@ -153,6 +153,191 @@ test('active queue view keeps historical queue rows out while direct work is exp
     assert.equal(activeView.historicalQueue, undefined);
     assert.ok(activeView.activeWork.every((entry: any) => entry.source === 'queue' || entry.source === 'direct'));
     assert.ok(activeView.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === 'direct-ledger-task'));
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('stale direct ledger tasks are separated from active work when queue is empty and sessions are not live', async () => {
+  const meshId = 'mesh-stale-direct-active-work-test';
+  cleanupMesh(meshId);
+  const mesh = {
+    id: meshId,
+    name: 'Stale Direct Work',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [{
+      id: 'node-live',
+      workspace: '/tmp/live-repo',
+      repoRoot: '/tmp/live-repo',
+      daemonId: 'daemon-live',
+      machineLabel: 'Live workspace',
+      userOverrides: {},
+      policy: { providerPriority: ['hermes-cli'] },
+      sessions: [],
+    }],
+  };
+  const transport = new IpcTransport() as any;
+  transport.command = async (command: string) => {
+    if (command === 'get_mesh') return { success: true, mesh };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    return { success: false };
+  };
+  transport.meshCommand = async (_daemonId: string, command: string) => {
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
+    if (command === 'git_status') return { success: false, error: 'not live' };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    return { success: false };
+  };
+  const ctx = { mesh, transport, localDaemonId: 'daemon-coordinator', localMachineId: 'machine-coordinator' };
+
+  try {
+    appendLedgerEntry(meshId, {
+      kind: 'task_dispatched',
+      nodeId: 'node-live',
+      sessionId: 'sess-missing',
+      providerType: 'hermes-cli',
+      payload: { taskId: 'direct-missing-session', message: 'old direct task', source: 'direct', via: 'p2p_direct' },
+    });
+    appendLedgerEntry(meshId, {
+      kind: 'task_approval_needed',
+      nodeId: 'node-live',
+      sessionId: 'sess-missing',
+      providerType: 'hermes-cli',
+      payload: { taskId: 'direct-missing-session' },
+    });
+    appendLedgerEntry(meshId, {
+      kind: 'task_dispatched',
+      nodeId: 'node-removed-worktree',
+      sessionId: 'sess-removed',
+      providerType: 'hermes-cli',
+      payload: { taskId: 'direct-removed-node', message: 'removed worktree direct task', source: 'direct', via: 'p2p_direct' },
+    });
+
+    const activeView = JSON.parse(await meshViewQueue(ctx as any, { view: 'active' }));
+    assert.equal(activeView.activeCount, 0);
+    assert.deepEqual(activeView.queue, []);
+    assert.equal(activeView.activeWorkSummary.totalActiveCount, 0);
+    assert.equal(activeView.activeWorkSummary.directActiveCount, 0);
+    assert.equal(activeView.activeWorkSummary.staleDirectCount, 2);
+    assert.deepEqual(activeView.staleDirectWork.map((entry: any) => entry.taskId).sort(), [
+      'direct-missing-session',
+      'direct-removed-node',
+    ]);
+    assert.equal(activeView.staleDirectWork.find((entry: any) => entry.taskId === 'direct-missing-session')?.status, 'awaiting_approval');
+    assert.match(activeView.staleDirectWork.find((entry: any) => entry.taskId === 'direct-missing-session')?.staleReason, /not present in live session/);
+    assert.match(activeView.staleDirectWork.find((entry: any) => entry.taskId === 'direct-removed-node')?.staleReason, /no longer in the live mesh/);
+
+    const cancel = JSON.parse(await meshQueueCancel(ctx as any, { task_id: 'direct-missing-session' }));
+    assert.equal(cancel.success, false);
+    assert.match(cancel.error, /not found/);
+
+    const status = JSON.parse(await meshStatus(ctx as any));
+    assert.equal(status.activeWorkSummary.totalActiveCount, 0);
+    assert.equal(status.activeWorkSummary.directActiveCount, 0);
+    assert.equal(status.activeWorkSummary.staleDirectCount, 2);
+    assert.deepEqual(status.staleDirectWork.map((entry: any) => entry.taskId).sort(), [
+      'direct-missing-session',
+      'direct-removed-node',
+    ]);
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('mesh_task_history returns pending async refine failure events instead of discarding them', async () => {
+  const meshId = 'mesh-refine-pending-history-test';
+  cleanupMesh(meshId);
+  const mesh = {
+    id: meshId,
+    name: 'Refine Event Surfacing',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [{
+      id: 'node-refine',
+      workspace: '/tmp/refine-worktree',
+      repoRoot: '/tmp/refine-worktree',
+      daemonId: 'daemon-refine',
+      machineLabel: 'Refine worker',
+      userOverrides: {},
+      policy: { providerPriority: ['hermes-cli'] },
+    }],
+  };
+  const ctx = {
+    mesh,
+    transport: {
+      command: async (command: string) => {
+        if (command === 'get_pending_mesh_events') {
+          const { drainPendingMeshCoordinatorEvents } = await import('@adhdev/daemon-core');
+          return { success: true, events: drainPendingMeshCoordinatorEvents(meshId) };
+        }
+        return { success: false };
+      },
+    },
+    localDaemonId: 'daemon-coordinator',
+    localMachineId: 'machine-coordinator',
+  };
+  const jobId = 'refine_ix_mpmavtun_zya19p';
+  const result = {
+    success: false,
+    code: 'validation_failed',
+    convergenceStatus: 'blocked_review',
+    error: 'Refinery validation gate failed; merge/refine was not attempted.',
+    finalBranchConvergenceState: {
+      status: 'blocked_review',
+      nextStep: 'Fix validation, then rerun mesh_refine_node.',
+    },
+  };
+
+  try {
+    appendLedgerEntry(meshId, {
+      kind: 'task_failed',
+      nodeId: 'node-refine',
+      payload: {
+        source: 'refine_mesh_node_async_job',
+        refineJob: { jobId, interactionId: 'ix-test', status: 'failed', meshId, nodeId: 'node-refine' },
+        async: true,
+        success: false,
+        result,
+        finalBranchConvergenceState: result.finalBranchConvergenceState,
+      },
+    });
+    queuePendingMeshCoordinatorEvent({
+      event: 'refine:failed',
+      meshId,
+      nodeLabel: 'node-refine',
+      nodeId: 'node-refine',
+      workspace: '/tmp/refine-worktree',
+      metadataEvent: {
+        source: 'refine_mesh_node_async_job',
+        jobId,
+        interactionId: 'ix-test',
+        meshId,
+        nodeId: 'node-refine',
+        status: 'failed',
+        result,
+      },
+      queuedAt: Date.now(),
+    });
+
+    const first = JSON.parse(await meshTaskHistory(ctx as any, { tail: 5 }));
+    assert.equal(first.entries.length, 1);
+    assert.equal(first.entries[0].kind, 'task_failed');
+    assert.equal(first.entries[0].payload.result.code, 'validation_failed');
+    assert.equal(first.pendingCoordinatorEvents.length, 1);
+    assert.equal(first.pendingCoordinatorEvents[0].event, 'refine:failed');
+    assert.equal(first.pendingCoordinatorEvents[0].metadataEvent.jobId, jobId);
+    assert.equal(first.pendingCoordinatorEvents[0].metadataEvent.result.convergenceStatus, 'blocked_review');
+
+    const second = JSON.parse(await meshTaskHistory(ctx as any, { tail: 5 }));
+    assert.equal(second.pendingCoordinatorEvents, undefined);
+    assert.equal(second.entries.length, 1);
   } finally {
     cleanupMesh(meshId);
   }

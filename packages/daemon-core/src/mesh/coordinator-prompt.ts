@@ -76,7 +76,12 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
 // ─── Section Builders ───────────────────────────
 
 function buildNodeStatusSection(nodes: RepoMeshNodeStatus[]): string {
-    const lines = ['## Current Node Status', ''];
+    const lines = [
+        '## Current Node Status',
+        '',
+        'Node labels are display context, not aliases. Use exact `nodeId` values in mesh tool calls; do not invent shorthand names such as M1/M2 unless they are explicitly configured labels.',
+        '',
+    ];
     for (const n of nodes) {
         const healthIcon = n.health === 'online' ? '🟢' :
             n.health === 'dirty' ? '🟡' :
@@ -85,21 +90,33 @@ function buildNodeStatusSection(nodes: RepoMeshNodeStatus[]): string {
             ? `sessions: ${n.activeSessions.join(', ')}`
             : 'no active sessions';
         const branch = n.git?.branch ? `branch: \`${n.git.branch}\`` : '';
-        lines.push(`- ${healthIcon} **${n.machineLabel}** (${n.nodeId})`);
-        lines.push(`  workspace: \`${n.workspace}\` | ${branch} | ${sessions}`);
+        const context = [
+            n.daemonId ? `daemon: \`${n.daemonId}\`` : '',
+            n.providers?.length ? `providers: ${n.providers.join(', ')}` : '',
+        ].filter(Boolean).join(' | ');
+        lines.push(`- ${healthIcon} **${n.machineLabel}** (nodeId: \`${n.nodeId}\`)`);
+        lines.push(`  workspace: \`${n.workspace}\`${context ? ` | ${context}` : ''} | ${branch} | ${sessions}`);
         if (n.error) lines.push(`  ⚠️ ${n.error}`);
     }
     return lines.join('\n');
 }
 
 function buildNodeConfigSection(mesh: LocalMeshEntry): string {
-    const lines = ['## Configured Nodes', ''];
+    const lines = [
+        '## Configured Nodes',
+        '',
+        'Node labels are display context, not aliases. Use exact `nodeId` values in mesh tool calls; do not invent shorthand names such as M1/M2 unless they are explicitly configured labels.',
+        '',
+    ];
     for (const n of mesh.nodes) {
         const labels: string[] = [];
         if (n.isLocalWorktree) labels.push('worktree');
         if (n.policy?.readOnly) labels.push('read-only');
         const suffix = labels.length ? ` [${labels.join(', ')}]` : '';
-        lines.push(`- **${n.workspace}** (${n.id})${suffix}`);
+        const explicitMachineLabel = typeof (n as any).machineLabel === 'string' ? (n as any).machineLabel : '';
+        const explicitLabel = explicitMachineLabel ? ` label: **${explicitMachineLabel}** |` : '';
+        const providerPriority = n.policy?.providerPriority?.length ? ` | providers: ${n.policy.providerPriority.join(', ')}` : '';
+        lines.push(`- ${explicitLabel} nodeId: \`${n.id}\` | workspace: \`${n.workspace}\`${n.daemonId ? ` | daemon: \`${n.daemonId}\`` : ''}${providerPriority}${suffix}`);
     }
     lines.push('', '_Use `mesh_status` to probe live health before delegating work._');
     return lines.join('\n');
@@ -165,7 +182,7 @@ const WORKFLOW_SECTION = `## Orchestration Workflow
 4. **Monitor** — Prefer event-driven completion/status notifications. Do **not** poll \`mesh_read_chat\` repeatedly. Use \`mesh_view_queue\` to see the status of all pending, assigned, completed, and failed tasks. Do not call \`mesh_read_chat\` again within a few seconds for the same generating session. Use at most one compact \`mesh_read_chat\` check after a completion/approval signal. Handle approvals via \`mesh_approve\`.
 5. **Verify** — When a task reports completion or git work is visible, call \`mesh_git_status\` to verify changes were made.
 6. **Checkpoint** — Call \`mesh_checkpoint\` to save the work.
-7. **Converge branches** — Before marking any task complete, classify every touched node/branch into exactly one final state: \`merged_to_main\`, \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\`. Use \`mesh_status\` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use \`mesh_fast_forward_node\` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use \`mesh_refine_node\` for clean worktree branches when safe. Before/refine merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from its configured remote. If \`mesh_refine_node\` returns \`submodule_reachability_failed\` or publish-required evidence, keep the public convergence bucket as \`blocked_review\`, ask the user for explicit approval to push/publish the unreachable submodule commit(s), then rerun \`mesh_refine_node\`; do not merge the root branch until the submodule commit(s) are reachable. A task that remains on a non-main branch is not fully complete unless the final report names the follow-up state and next step.
+7. **Converge branches** — Before marking any task complete, classify every touched node/branch into exactly one final state: \`merged_to_main\`, \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\`. Use \`mesh_status\` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use \`mesh_fast_forward_node\` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use \`mesh_refine_node\` for clean worktree branches when safe. Before/refine merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. If \`mesh_refine_node\` returns \`submodule_reachability_failed\` or publish-required evidence, keep the public convergence bucket as \`blocked_review\`, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to submodule main, then rerun \`mesh_refine_node\`; do not merge the root branch until the submodule commit(s) are reachable from submodule origin/main. A task that remains on a non-main branch is not fully complete unless the final report names the follow-up state and next step.
 8. **Clean up** — Remove worktree nodes via \`mesh_remove_node\` after their work is merged or no longer needed.
 9. **Report** — Summarize what was done, what changed, any issues, and the branch convergence state.
 
@@ -204,6 +221,6 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Clean up worktree nodes.** After a worktree task completes and its changes are merged or checkpointed, call \`mesh_remove_node\` to free resources.
 - **Do not strand completed branches.** A checkpointed or clean feature/worktree branch is not done by itself. Merge/refine it to the mesh default branch, fast-forward obvious clean behind-only branches with \`mesh_fast_forward_node\`, or explicitly report one of \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\` with the next action.
 - **Keep Refinery validation project-configurable.** \`mesh_refine_node\` must execute validation from repo mesh/refine config (for example \`.adhdev/refine.{json,yaml,yml}\`, \`.adhdev/repo-mesh-refine.*\`, or \`repo-mesh.refine.*\`). Heuristics are suggestions/scaffolding only, not the execution path.
-- **Treat submodule reachability as publish-needed.** A \`submodule_reachability_failed\` refine result means the root gitlink points at a submodule commit that is not reachable from the configured submodule remote. Do not retry validation blindly or start code review first. Classify it as \`blocked_review\`, request user approval to push/publish the submodule commit, then rerun \`mesh_refine_node\`.
+- **Treat submodule main reachability as publish-needed.** A \`submodule_reachability_failed\` refine result means the root gitlink points at a submodule commit that is not reachable from the configured submodule remote main branch. Do not treat feature-branch reachability as complete, retry validation blindly, or start code review first. Classify it as \`blocked_review\`, request user approval to push/publish the submodule commit to submodule main, then rerun \`mesh_refine_node\`.
 - **Name worktree branches meaningfully.** Use descriptive names like \`feat/auth-refactor\` or \`fix/build-123\`.${coordinatorNote}`;
 }

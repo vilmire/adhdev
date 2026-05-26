@@ -54,6 +54,34 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('/reload-mcp')
   })
 
+  it('treats node labels as display context instead of shorthand aliases', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [
+          {
+            id: 'node_1',
+            machineLabel: 'Build host',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: { providerPriority: ['codex-cli'] },
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    expect(prompt).toContain('Node labels are display context, not aliases')
+    expect(prompt).toContain('do not invent shorthand names such as M1/M2')
+    expect(prompt).toContain('nodeId: `node_1`')
+    expect(prompt).toContain('daemon: `daemon_1`')
+    expect(prompt).toContain('providers: codex-cli')
+  })
+
   it('discourages repeated read_chat polling and duplicate workers while delegated tools are active', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
@@ -163,11 +191,11 @@ describe('Repo Mesh coordinator prompt', () => {
       } as any,
     })
 
-    expect(prompt).toContain('require each submodule commit to be reachable from its configured remote')
+    expect(prompt).toContain('require each submodule commit to be reachable from the configured submodule remote main branch')
     expect(prompt).toContain('`submodule_reachability_failed`')
     expect(prompt).toContain('keep the public convergence bucket as `blocked_review`')
-    expect(prompt).toContain('ask the user for explicit approval to push/publish the unreachable submodule commit')
+    expect(prompt).toContain('ask the user for explicit approval to push/publish the unreachable submodule commit(s) to submodule main')
     expect(prompt).toContain('then rerun `mesh_refine_node`')
-    expect(prompt).toContain('Do not retry validation blindly or start code review first')
+    expect(prompt).toContain('Do not treat feature-branch reachability as complete')
   })
 })
