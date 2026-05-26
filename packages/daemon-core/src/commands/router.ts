@@ -2558,28 +2558,51 @@ export class DaemonCommandRouter {
     }
 
     private queueRefineJobEvent(event: 'refine:accepted' | 'refine:completed' | 'refine:failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): void {
-        queuePendingMeshCoordinatorEvent({
+        const metadataEvent = {
+            source: 'refine_mesh_node_async_job',
+            jobId: handle.jobId,
+            interactionId: handle.interactionId,
+            meshId: handle.meshId,
+            nodeId: handle.targetNodeId,
+            targetDaemonId: handle.targetDaemonId,
+            workspace: handle.workspace,
+            status: handle.status,
+            startedAt: handle.startedAt,
+            completedAt: handle.completedAt,
+            retryOfJobId: handle.retryOfJobId,
+            ...(result ? { result } : {}),
+        };
+        const eventPayload = {
             event,
             meshId: handle.meshId,
             nodeLabel: handle.targetNodeId,
             nodeId: handle.targetNodeId,
             workspace: handle.workspace,
-            metadataEvent: {
-                source: 'refine_mesh_node_async_job',
-                jobId: handle.jobId,
-                interactionId: handle.interactionId,
-                meshId: handle.meshId,
-                nodeId: handle.targetNodeId,
-                targetDaemonId: handle.targetDaemonId,
-                workspace: handle.workspace,
-                status: handle.status,
-                startedAt: handle.startedAt,
-                completedAt: handle.completedAt,
-                retryOfJobId: handle.retryOfJobId,
-                ...(result ? { result } : {}),
-            },
+            metadataEvent,
             queuedAt: Date.now(),
-        });
+        };
+        if (typeof this.deps.instanceManager?.getByCategory === 'function') {
+            const forwarded = handleMeshForwardEvent(
+                { instanceManager: this.deps.instanceManager } as any,
+                {
+                    event,
+                    meshId: handle.meshId,
+                    nodeId: handle.targetNodeId,
+                    workspace: handle.workspace,
+                    jobId: handle.jobId,
+                    interactionId: handle.interactionId,
+                    status: handle.status,
+                    targetDaemonId: handle.targetDaemonId,
+                    startedAt: handle.startedAt,
+                    completedAt: handle.completedAt,
+                    retryOfJobId: handle.retryOfJobId,
+                    ...(result ? { result } : {}),
+                },
+            );
+            if (forwarded?.success === true) return;
+            LOG.warn('Mesh', `[Refinery] Failed to forward async refine event ${event}: ${forwarded?.error || 'unknown error'}`);
+        }
+        queuePendingMeshCoordinatorEvent(eventPayload);
     }
 
     private async appendRefineJobLedger(kind: 'task_dispatched' | 'task_completed' | 'task_failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): Promise<void> {

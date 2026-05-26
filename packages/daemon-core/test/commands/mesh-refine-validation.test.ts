@@ -8,7 +8,13 @@ import { DaemonCommandRouter } from '../../src/commands/router'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
 import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../src/mesh/mesh-events'
 
-function createRouter() {
+function createRouter(meshId?: string, messages?: string[]) {
+  const coordinator = meshId && messages
+    ? {
+        getState: () => ({ instanceId: 'coord-refine-test', settings: { meshCoordinatorFor: meshId } }),
+        onEvent: (_event: string, payload: any) => messages.push(payload?.input?.text || ''),
+      }
+    : null
   return new DaemonCommandRouter({
     commandHandler: { handle: async () => ({ success: false }) } as any,
     cliManager: {} as any,
@@ -18,6 +24,7 @@ function createRouter() {
       collectAllStates: () => [],
       listInstanceIds: () => [],
       getInstance: () => null,
+      getByCategory: (category: string) => category === 'cli' && coordinator ? [coordinator] : [],
     } as any,
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
@@ -221,6 +228,9 @@ describe('refine_mesh_node validation gate', () => {
         status: 'completed',
         result: { success: true, merged: true },
       })
+      expect(pending[0].coordinatorMessage).toContain('Refinery async job')
+      expect(pending[0].coordinatorMessage).toContain('job_id=refine_job_pending_completed')
+      expect(pending[0].coordinatorMessage).toContain('merge=merged')
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
@@ -397,7 +407,8 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['add', 'SOURCE_ONLY.md'], { cwd: repo })
       execFileSync('git', ['commit', '-q', '-m', 'source-only change'], { cwd: repo })
       const mesh = createMesh(repo, worktree)
-      const router = createRouter()
+      const messages: string[] = []
+      const router = createRouter(mesh.id, messages)
 
       const accepted: any = await router.execute('refine_mesh_node', {
         meshId: mesh.id,
@@ -429,6 +440,18 @@ describe('refine_mesh_node validation gate', () => {
       expect(readFileSync(join(repo, 'SOURCE_ONLY.md'), 'utf-8')).toBe('source change\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-worktree')).toBe(false)
       expect(result.finalBranchConvergenceState).toMatchObject({ branch: 'main', merged: true, validation: 'passed' })
+      expect(messages.some(message =>
+        message.includes(`job_id=${accepted.jobId}`)
+        && message.includes('validation=passed')
+        && message.includes('patch_equivalence=passed')
+        && message.includes('merge=merged')
+        && message.includes('final_convergence=merged')
+        && message.includes('Next step: Continue from the updated mesh state.')
+      )).toBe(true)
+      expect(drainPendingMeshCoordinatorEvents(mesh.id).some(event =>
+        event.event === 'refine:completed'
+        && (event.metadataEvent as any).jobId === accepted.jobId
+      )).toBe(false)
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
@@ -448,7 +471,8 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['update-index', '--add', '--cacheinfo', '160000', missingCommit, 'oss'], { cwd: worktree })
       execFileSync('git', ['commit', '-q', '-m', 'point submodule at missing commit'], { cwd: worktree })
       const mesh = createMesh(repo, worktree, 'node-missing-submodule')
-      const router = createRouter()
+      const messages: string[] = []
+      const router = createRouter(mesh.id, messages)
 
       const accepted: any = await router.execute('refine_mesh_node', {
         meshId: mesh.id,
@@ -490,9 +514,21 @@ describe('refine_mesh_node validation gate', () => {
       expect(result.refineStages.some((entry: any) => entry.stage === 'cleanup')).toBe(false)
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-missing-submodule')).toBe(true)
-      const events = drainPendingMeshCoordinatorEvents(mesh.id)
-      const failedEvent = events.find(event => event.event === 'refine:failed' && (event.metadataEvent as any).jobId === accepted.jobId)
-      expect((failedEvent?.metadataEvent as any)?.result).toMatchObject({ code: 'submodule_reachability_failed' })
+      expect(messages.some(message =>
+        message.includes(`job_id=${accepted.jobId}`)
+        && message.includes('code=submodule_reachability_failed')
+        && message.includes('validation=passed')
+        && message.includes('patch_equivalence=passed')
+        && message.includes('merge=not_merged')
+        && message.includes('convergence=blocked_review')
+        && message.includes('reason=submodule_publish_required')
+        && message.includes('Next step:')
+        && message.includes(`oss@${missingCommit}`)
+      )).toBe(true)
+      expect(drainPendingMeshCoordinatorEvents(mesh.id).some(event =>
+        event.event === 'refine:failed'
+        && (event.metadataEvent as any).jobId === accepted.jobId
+      )).toBe(false)
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
