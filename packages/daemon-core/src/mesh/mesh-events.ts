@@ -82,6 +82,31 @@ function hasPendingRefineTerminalEventDuplicate(event: PendingMeshCoordinatorEve
     );
 }
 
+function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent): string {
+    const metadata = readRecord(event.metadataEvent) || {};
+    const sessionId = resolveEventSessionId(metadata);
+    const providerSessionId = readNonEmptyString(metadata.providerSessionId);
+    const taskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord(metadata.payload)?.taskId);
+    const jobId = readRefineJobId(event);
+    const timestamp = metadata.timestamp !== undefined && metadata.timestamp !== null ? String(metadata.timestamp) : '';
+    return [
+        event.meshId,
+        event.event,
+        event.nodeId || '',
+        sessionId || '',
+        providerSessionId || '',
+        taskId || '',
+        jobId || '',
+        timestamp || '',
+    ].join('::');
+}
+
+function hasPendingCoordinatorEventDuplicate(event: PendingMeshCoordinatorEvent): boolean {
+    const fingerprint = buildPendingEventFingerprint(event);
+    if (!fingerprint.trim()) return false;
+    return getPendingMeshCoordinatorEvents(event.meshId).some((pending) => buildPendingEventFingerprint(pending) === fingerprint);
+}
+
 function getPendingEventsPath(meshId: string): string {
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
     return join(getLedgerDir(), `${safe}.pending-events.jsonl`);
@@ -91,6 +116,10 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
     try {
         if (hasPendingRefineTerminalEventDuplicate(event)) {
             LOG.info('MeshEvents', `Suppressed duplicate pending ${event.event} for refine job ${readRefineJobId(event)}`);
+            return true;
+        }
+        if (hasPendingCoordinatorEventDuplicate(event)) {
+            LOG.info('MeshEvents', `Suppressed duplicate pending ${event.event} for mesh ${event.meshId}`);
             return true;
         }
         appendFileSync(getPendingEventsPath(event.meshId), JSON.stringify(event) + '\n', 'utf-8');
@@ -1071,23 +1100,25 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return true;
     });
 
+    const queuedForMcp = queuePendingMeshCoordinatorEvent({
+        event: args.event,
+        meshId: args.meshId,
+        nodeLabel: args.nodeLabel,
+        nodeId: args.nodeId || undefined,
+        workspace: readNonEmptyString(args.metadataEvent.workspace),
+        metadataEvent: {
+            ...args.metadataEvent,
+            ...(recoveryContext ? { recoveryContext } : {}),
+        },
+        coordinatorMessage: messageText,
+        queuedAt: Date.now(),
+    });
+    if (queuedForMcp) {
+        LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+    }
+
     if (coordinatorInstances.length === 0) {
-        // No CLI coordinator session found — buffer for MCP-based coordinators.
-        if (queuePendingMeshCoordinatorEvent({
-                event: args.event,
-                meshId: args.meshId,
-                nodeLabel: args.nodeLabel,
-                nodeId: args.nodeId || undefined,
-                workspace: readNonEmptyString(args.metadataEvent.workspace),
-                metadataEvent: {
-                    ...args.metadataEvent,
-                    ...(recoveryContext ? { recoveryContext } : {}),
-                },
-                coordinatorMessage: messageText,
-                queuedAt: Date.now(),
-            })) {
-            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
-        }
+        // No CLI coordinator session found; MCP coordinators will drain the buffered event.
         return { success: true, forwarded: 0 };
     }
 
