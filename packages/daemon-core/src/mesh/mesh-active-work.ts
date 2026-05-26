@@ -36,6 +36,13 @@ export interface MeshActiveWorkSummary {
     sourceCounts: Record<MeshActiveWorkSource, number>;
     statusCounts: Record<MeshActiveWorkStatus, number>;
     staleDirectCount: number;
+    /**
+     * When staleDirectCount > 0, this note clarifies that stale direct records are
+     * historical/recovery evidence — orphaned ledger entries whose original node or session
+     * is no longer present in the live mesh. They are NOT active or unresolved work items.
+     * The active queue (queue source) is the authoritative source for pending/assigned work.
+     */
+    staleDirectNote?: string;
 }
 
 export interface BuildMeshActiveWorkOptions {
@@ -134,6 +141,7 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         sourceCounts[item.source] += 1;
         statusCounts[item.status] += 1;
     }
+    const staleDirectCount = activeWork.filter(item => item.source === 'direct' && item.staleReason).length;
     return {
         totalActiveCount: activeWork.length,
         queueActiveCount: sourceCounts.queue,
@@ -144,11 +152,13 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         idleCount: statusCounts.idle,
         sourceCounts,
         statusCounts,
-        staleDirectCount: activeWork.filter(item => item.source === 'direct' && item.staleReason).length,
+        staleDirectCount,
+        ...(staleDirectCount > 0 ? { staleDirectNote: 'Stale direct records are orphaned ledger entries whose node/session no longer exists. They are historical recovery evidence only — not active or unresolved work. The queue (source: queue) is authoritative for pending/assigned tasks.' } : {}),
     };
 }
 
-export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeWork: MeshActiveWorkRecord[]; staleDirectWork: MeshActiveWorkRecord[]; terminalDirectWork: MeshActiveWorkRecord[]; summary: MeshActiveWorkSummary } {
+
+export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeWork: MeshActiveWorkRecord[]; staleDirectWork: MeshActiveWorkRecord[]; staleDirectWorkNote?: string; terminalDirectWork: MeshActiveWorkRecord[]; summary: MeshActiveWorkSummary } {
     const now = opts.now ?? Date.now();
     const records: MeshActiveWorkRecord[] = [];
     const staleDirectWork: MeshActiveWorkRecord[] = [];
@@ -223,5 +233,11 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
     terminalDirectWork.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     const summary = buildMeshActiveWorkSummary(records);
     summary.staleDirectCount = staleDirectWork.length;
-    return { activeWork: records, staleDirectWork, terminalDirectWork, summary };
+    const staleDirectWorkNote = staleDirectWork.length > 0
+        ? 'These are orphaned ledger entries whose original node or session no longer exists in the live mesh. They are historical/recovery evidence only — not active or unresolved work. Do not treat staleDirectCount as a status mismatch; use the queue (source: queue) as authoritative for pending/assigned tasks.'
+        : undefined;
+    if (staleDirectWorkNote) {
+        summary.staleDirectNote = staleDirectWorkNote;
+    }
+    return { activeWork: records, staleDirectWork, staleDirectWorkNote, terminalDirectWork, summary };
 }
