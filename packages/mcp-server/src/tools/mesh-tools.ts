@@ -1935,6 +1935,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         },
         nodes: results,
         activeWork: activeWorkEvidence.activeWork,
+        staleDirectWork: activeWorkEvidence.staleDirectWork,
         activeWorkSummary: activeWorkEvidence.summary,
         branchConvergenceSummary: summarizeBranchConvergence(results),
     };
@@ -1961,12 +1962,17 @@ export async function meshTaskHistory(
     args: { tail?: number; kind?: string },
 ): Promise<string> {
     const { mesh } = ctx;
-    await drainCoordinatorPendingEvents(ctx);
+    const pendingEvents = await drainCoordinatorPendingEvents(ctx);
     const tail = typeof args.tail === 'number' && args.tail > 0 ? args.tail : 20;
     const kind = typeof args.kind === 'string' && args.kind.trim() ? [args.kind.trim() as any] : undefined;
     const entries = readLedgerEntries(mesh.id, { tail, kind });
     const summary = getLedgerSummary(mesh.id);
-    return JSON.stringify({ meshId: mesh.id, entries, summary }, null, 2);
+    return JSON.stringify({
+        meshId: mesh.id,
+        entries,
+        summary,
+        ...(pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}),
+    }, null, 2);
 }
 
 export async function meshReconcileLedger(
@@ -2188,6 +2194,7 @@ export async function meshViewQueue(
             queue,
             visibleQueue: queue,
             activeWork: activeWorkEvidence.activeWork,
+            staleDirectWork: activeWorkEvidence.staleDirectWork,
             activeWorkSummary: activeWorkEvidence.summary,
             visibleSummary,
             summary,
