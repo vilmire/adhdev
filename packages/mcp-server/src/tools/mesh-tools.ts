@@ -51,6 +51,8 @@ export interface MeshContext {
     localDaemonId?: string;
     /** Machine Registry ID for this local machine */
     localMachineId?: string;
+    /** Hostname of the daemon/MCP coordinator machine. */
+    coordinatorHostname?: string;
 }
 
 type MeshSessionProviderMetadata = {
@@ -992,6 +994,49 @@ function readNodeDaemonId(node: LocalMeshNodeEntry): string | undefined {
     return readString(node.daemonId) || readString((node as any).daemon_id);
 }
 
+function normalizeHostname(value: unknown): string | undefined {
+    const hostname = readString(value);
+    if (!hostname) return undefined;
+    return hostname.toLowerCase().replace(/\.$/, '');
+}
+
+function readNodeHostname(node: LocalMeshNodeEntry): string | undefined {
+    return readString((node as any).hostname)
+        || readString((node as any).machineHostname)
+        || readString((node as any).machine_hostname)
+        || readString((node as any).machineName)
+        || readString((node as any).machine_name)
+        || readString((node as any).lastProbe?.hostname)
+        || readString((node as any).last_probe?.hostname)
+        || readString((node as any).lastProbe?.machine?.hostname)
+        || readString((node as any).last_probe?.machine?.hostname);
+}
+
+function buildNodeMachineIdentity(ctx: MeshContext, node: LocalMeshNodeEntry): Record<string, unknown> {
+    const machineId = readNodeMachineId(node);
+    const daemonId = readNodeDaemonId(node);
+    const hostname = readNodeHostname(node);
+    const coordinatorHostname = readString(ctx.coordinatorHostname);
+    const hostnameMatches = Boolean(
+        normalizeHostname(hostname)
+        && normalizeHostname(coordinatorHostname)
+        && normalizeHostname(hostname) === normalizeHostname(coordinatorHostname),
+    );
+    const sameMachine = isLocalControlPlaneNode(ctx, node) || hostnameMatches;
+    return {
+        daemonId,
+        machineId,
+        hostname,
+        machineName: hostname,
+        coordinatorHostname,
+        sameMachine,
+        locality: sameMachine ? 'same_machine' : 'remote_or_unknown',
+        localityReason: sameMachine
+            ? (isLocalControlPlaneNode(ctx, node) ? 'matched coordinator daemon or machine id' : 'matched coordinator hostname')
+            : 'no coordinator daemon, machine id, or hostname match',
+    };
+}
+
 function isDirectLocalNode(ctx: MeshContext, node: LocalMeshNodeEntry): boolean {
     const machineId = readNodeMachineId(node);
     const daemonId = readNodeDaemonId(node);
@@ -1298,7 +1343,8 @@ async function commandForNode(
     if (isLocalTransport(ctx.transport)) {
         return ctx.transport.command(command, args);
     }
-    throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}'`);
+    const identity = buildNodeMachineIdentity(ctx, node);
+    throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}' (hostname=${identity.hostname || 'unknown'}, coordinatorHostname=${identity.coordinatorHostname || 'unknown'}, sameMachine=${identity.sameMachine})`);
 }
 
 function normalizePendingMeshCoordinatorEvents(value: any): any[] {
@@ -1792,6 +1838,9 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         const entry: any = {
             nodeId: node.id,
             workspace: node.workspace,
+            machine: buildNodeMachineIdentity(ctx, node),
+            daemonId: readNodeDaemonId(node),
+            machineId: readNodeMachineId(node),
             ...getNodeLaunchReadiness(node),
         };
 
@@ -2068,6 +2117,9 @@ export async function meshListNodes(ctx: MeshContext): Promise<string> {
             nodeId: n.id,
             workspace: n.workspace,
             repoRoot: n.repoRoot,
+            daemonId: readNodeDaemonId(n),
+            machineId: readNodeMachineId(n),
+            machine: buildNodeMachineIdentity(ctx, n),
             isLocalWorktree: n.isLocalWorktree,
             policy: n.policy,
             relatedRepos: readRelatedRepos(n),
