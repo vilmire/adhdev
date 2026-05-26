@@ -5,6 +5,7 @@ import { DaemonCliManager } from '../../src/commands/cli-manager.js'
 function createManager(adapterStatus = 'idle', options: {
   parsedStatus?: string
   pending?: boolean
+  parsedMessages?: any[]
 } = {}) {
   const sendMessage = vi.fn(async () => {})
   const adapter = {
@@ -17,7 +18,7 @@ function createManager(adapterStatus = 'idle', options: {
     getScriptParsedStatus: vi.fn(() => ({
       status: options.parsedStatus || adapterStatus,
       activeModal: null,
-      messages: [],
+      messages: options.parsedMessages || [],
     })),
     getPartialResponse: vi.fn(() => ''),
     shutdown: vi.fn(),
@@ -127,6 +128,27 @@ describe('DaemonCliManager agent_command', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('dispatches send_chat when startup status is stale but parser has a final idle assistant', async () => {
+    const { manager, sendMessage } = createManager('starting', {
+      parsedStatus: 'idle',
+      pending: false,
+      parsedMessages: [
+        { role: 'assistant', content: 'ㅇㅇ에 대해 ㅇㅇ. 뭘 도와드릴까요?', bubbleState: 'final' },
+      ],
+    })
+
+    const result = await manager.handleCliCommand('agent_command', {
+      targetSessionId: 'session-1',
+      agentType: 'hermes-cli',
+      cliType: 'hermes-cli',
+      action: 'send_chat',
+      message: 'next task',
+    })
+
+    expect(result).toMatchObject({ success: true, status: 'generating' })
+    expect(sendMessage).toHaveBeenCalledWith('next task')
   })
 
   it('does not deadlock on stale parser busy once adapter idle has no pending evidence', async () => {
