@@ -53,7 +53,10 @@ export interface MeshGraphNode {
     branch: string | null
     upstream: string | null
     upstreamStatus: GitRepoStatus['upstreamStatus'] | null
+    daemonId: string | null
+    machineId: string | null
     machineLabel: string | null
+    locality: 'local' | 'remote' | 'unknown'
     health: RepoMeshNodeHealth
     ahead: number
     behind: number
@@ -116,6 +119,21 @@ export interface MeshGraph {
 }
 
 const STALE_SNAPSHOT_MS = 5 * 60 * 1000
+
+function readNodeDaemonId(node: RepoMeshNodeStatus): string | null {
+    return typeof node.daemonId === 'string' && node.daemonId.trim() ? node.daemonId.trim() : null
+}
+
+function readNodeMachineId(node: RepoMeshNodeStatus): string | null {
+    return typeof node.machineId === 'string' && node.machineId.trim() ? node.machineId.trim() : null
+}
+
+function inferNodeLocality(node: RepoMeshNodeStatus): MeshGraphNode['locality'] {
+    if (node.connection?.state === 'self' || node.isLocalWorktree === true) return 'local'
+    if (node.connection?.transport === 'direct' || node.connection?.transport === 'relay') return 'remote'
+    if (readNodeDaemonId(node) || readNodeMachineId(node)) return 'remote'
+    return 'unknown'
+}
 
 function hasLiveGitEvidence(node: RepoMeshNodeStatus): boolean {
     return repoMeshNodeHasLiveGitEvidence(node)
@@ -488,7 +506,10 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             branch,
             upstream: git?.upstream ?? null,
             upstreamStatus: git?.upstreamStatus ?? null,
+            daemonId: readNodeDaemonId(nodeStatus),
+            machineId: readNodeMachineId(nodeStatus),
             machineLabel: nodeStatus.machineLabel || null,
+            locality: inferNodeLocality(nodeStatus),
             health: pickDominantHealth([nodeStatus.health, submoduleHealth]),
             ahead: git?.ahead ?? 0,
             behind: git?.behind ?? 0,
@@ -529,7 +550,10 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 branch: null,
                 upstream: null,
                 upstreamStatus: null,
+                daemonId: graphNode.daemonId,
+                machineId: graphNode.machineId,
                 machineLabel: graphNode.machineLabel,
+                locality: graphNode.locality,
                 health: getSubmoduleHealth(submodule),
                 ahead: 0,
                 behind: 0,
@@ -603,7 +627,10 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             branch: inferredDefaultBranch,
             upstream: null,
             upstreamStatus: null,
+            daemonId: null,
+            machineId: null,
             machineLabel: 'default branch',
+            locality: 'unknown',
             health: pickDominantHealth(branchNodes.map(node => node.health)),
             ahead: 0,
             behind: 0,

@@ -202,6 +202,54 @@ describe('buildMeshGraph', () => {
         ]))
     })
 
+    it('preserves machine identity and local-vs-remote hints when daemon metadata is present', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_machine_identity',
+            meshName: 'Machine Identity Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-05-16T18:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_local',
+                    daemonId: 'daemon_local',
+                    machineId: 'mach_local',
+                    machineLabel: 'Local Mac',
+                    workspace: '/repo/local',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'self', reported: true, source: 'reported' },
+                    git: baseGit('main'),
+                },
+                {
+                    nodeId: 'node_remote',
+                    daemonId: 'daemon_remote',
+                    machineId: 'mach_remote',
+                    machineLabel: 'Remote Linux',
+                    workspace: '/repo/remote',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'connected', transport: 'relay', reported: true, source: 'reported' },
+                    git: baseGit('main'),
+                },
+            ],
+        } as any)
+
+        expect(graph.nodes.find(node => node.id === 'node_local')).toMatchObject({
+            daemonId: 'daemon_local',
+            machineId: 'mach_local',
+            machineLabel: 'Local Mac',
+            locality: 'local',
+        })
+        expect(graph.nodes.find(node => node.id === 'node_remote')).toMatchObject({
+            daemonId: 'daemon_remote',
+            machineId: 'mach_remote',
+            machineLabel: 'Remote Linux',
+            locality: 'remote',
+        })
+    })
+
     it('surfaces unverified upstream freshness in mesh graph node metadata instead of implying 0/0 certainty', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_freshness',

@@ -238,6 +238,53 @@ export function resolveSelectedGraphNodeForDetail(graph: MeshGraphData, selected
     return graph.nodes.find(node => node.id === selectedNodeId) ?? null
 }
 
+function getRepoMeshStatusGraphFingerprint(status: RepoMeshStatus): string {
+    return [
+        status.meshId,
+        status.refreshedAt,
+        status.nodes.length,
+        status.queue?.summary?.active ?? '',
+        status.ledger?.summary?.recentFailures ?? '',
+        ...status.nodes.map(node => [
+            node.nodeId,
+            node.daemonId ?? '',
+            node.machineId ?? '',
+            node.machineLabel,
+            node.machineStatus ?? '',
+            node.connection?.state ?? '',
+            node.connection?.transport ?? '',
+            node.connection?.source ?? '',
+            node.health,
+            node.gitProbePending ? 1 : 0,
+            node.git?.branch ?? '',
+            node.git?.upstream ?? '',
+            node.git?.upstreamStatus ?? '',
+            node.git?.ahead ?? '',
+            node.git?.behind ?? '',
+            node.git?.headCommit ?? '',
+            node.git?.staged ?? '',
+            node.git?.modified ?? '',
+            node.git?.untracked ?? '',
+            node.git?.deleted ?? '',
+            node.git?.renamed ?? '',
+            node.git?.hasConflicts ? 1 : 0,
+            node.git?.lastCheckedAt ?? '',
+            node.activeSessions?.join(',') ?? '',
+            node.activeSessionDetails?.length ?? '',
+            node.providers?.join(',') ?? '',
+            node.providerPriority?.join(',') ?? '',
+            node.error ?? '',
+            (node.git?.submodules ?? []).map(submodule => [
+                submodule.path,
+                submodule.commit,
+                submodule.dirty ? 1 : 0,
+                submodule.outOfSync ? 1 : 0,
+                submodule.error ?? '',
+            ].join('/')).join(','),
+        ].join('|')),
+    ].join('::')
+}
+
 export default function MeshObservabilitySurface({
     status,
     emptyMessage = 'No live mesh graph is available for this coordinator yet.',
@@ -247,7 +294,8 @@ export default function MeshObservabilitySurface({
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
-    const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [canonicalStatus]) as MeshGraphData
+    const statusGraphFingerprint = useMemo(() => getRepoMeshStatusGraphFingerprint(canonicalStatus), [canonicalStatus])
+    const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [statusGraphFingerprint]) as MeshGraphData
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
     const [gitHistoryByWorkspace, setGitHistoryByWorkspace] = useState<Record<string, GitHistoryState>>({})
@@ -521,6 +569,10 @@ export default function MeshObservabilitySurface({
                                     {selectedNodeSessionEntries.length > 0 && <Badge label={`${selectedNodeSessionEntries.length} sessions`} tone="info" />}
                                 </div>
                                 <div className="grid gap-2 text-xs sm:grid-cols-2">
+                                    <Row label="Machine" value={selectedGraphNode.machineLabel ?? 'not reported'} />
+                                    <Row label="Locality" value={selectedGraphNode.locality} />
+                                    <Row label="Machine id" value={selectedGraphNode.machineId ?? selectedNodeStatus?.machineId ?? 'not reported'} />
+                                    <Row label="Daemon id" value={selectedGraphNode.daemonId ?? selectedNodeStatus?.daemonId ?? 'not reported'} />
                                     <Row label="Workspace" value={selectedNodeStatus?.workspace ?? selectedGraphNode.workspace} />
                                     <Row label="Branch" value={selectedGraphNode.branch ?? 'unknown'} />
                                     <Row label="HEAD" value={selectedHeadSummary ?? (selectedNodeStatus?.gitProbePending ? 'Pending live git probe' : 'not reported')} />

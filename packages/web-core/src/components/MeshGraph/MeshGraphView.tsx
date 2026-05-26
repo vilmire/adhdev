@@ -9,6 +9,7 @@ import {
     Controls,
     Handle,
     MarkerType,
+    MiniMap,
     Position,
     ReactFlow,
     useNodesInitialized,
@@ -36,6 +37,7 @@ import {
     getMeshGraphNodeCardWidth,
     getNodeSummaryForLayout,
 } from './meshGraphLayout'
+import { getMeshGraphDataFingerprint, getMeshGraphLayoutFingerprint } from './meshGraphMemo'
 
 interface MeshGraphViewProps {
     data: MeshGraphData
@@ -153,6 +155,16 @@ function formatHealth(health: MeshGraphNode['health']): string {
     return health.replace(/_/g, ' ')
 }
 
+function formatLocality(locality: MeshGraphNode['locality']): string {
+    if (locality === 'local') return 'local'
+    if (locality === 'remote') return 'remote'
+    return 'machine unknown'
+}
+
+function getLocalityBadgeKind(node: MeshGraphNode): 'meta' | 'health' {
+    return node.locality === 'remote' ? 'meta' : 'health'
+}
+
 function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const meshTheme = useContext(MeshGraphThemeContext)
     const node = data.graphNode
@@ -163,7 +175,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         ? 'default branch anchor'
         : isSubmoduleNode
             ? node.submodulePath || 'submodule checkout'
-            : node.machineLabel || node.workspace
+            : [node.machineLabel, formatLocality(node.locality)].filter(Boolean).join(' · ') || node.workspace
     const shortCommit = node.submoduleCommit ? node.submoduleCommit.slice(0, 7) : null
     const attentionBadge = getMeshGraphAttentionBadge(node)
     const nodeSummary = getNodeSummaryForLayout(node)
@@ -173,6 +185,13 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         <div
             className={`${isSubmoduleNode ? 'w-[228px]' : 'w-[256px]'} rounded-2xl border px-4 py-3.5 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
             style={{ width: getMeshGraphNodeCardWidth(node) }}
+            title={[
+                node.machineLabel ? `Machine: ${node.machineLabel}` : null,
+                node.machineId ? `Machine id: ${node.machineId}` : null,
+                node.daemonId ? `Daemon: ${node.daemonId}` : null,
+                `Locality: ${formatLocality(node.locality)}`,
+                node.workspace ? `Workspace: ${node.workspace}` : null,
+            ].filter(Boolean).join('\n')}
         >
             <Handle
                 type="target"
@@ -205,6 +224,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 {isSubmoduleNode && (
                     <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('submodule', meshTheme.isDark)}`}>
                         submodule
+                    </span>
+                )}
+                {!isDefaultBranchNode && (
+                    <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses(getLocalityBadgeKind(node), meshTheme.isDark)}`}>
+                        {formatLocality(node.locality)}
                     </span>
                 )}
                 {node.branch && !isSubmoduleNode && (
@@ -333,6 +357,24 @@ function edgeColor(edge: MeshGraphEdge): string {
     }
 }
 
+function minimapNodeColor(node: FlowNode): string {
+    const graphNode = node.data.graphNode
+    if (graphNode.locality === 'local') return '#38bdf8'
+    switch (graphNode.health) {
+        case 'online':
+            return '#34d399'
+        case 'dirty':
+            return '#fbbf24'
+        case 'degraded':
+        case 'offline':
+            return '#fb7185'
+        case 'wrong_branch':
+            return '#a78bfa'
+        default:
+            return '#94a3b8'
+    }
+}
+
 function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; viewportKey: string }) {
     const nodesInitialized = useNodesInitialized()
     const reactFlow = useReactFlow<FlowNode, FlowEdge>()
@@ -369,12 +411,14 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
 export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick }: MeshGraphViewProps) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
-    const layout = useMemo(() => buildLayout(data, meshTheme), [data, meshTheme])
+    const dataFingerprint = useMemo(() => getMeshGraphDataFingerprint(data), [data])
+    const layoutFingerprint = useMemo(() => getMeshGraphLayoutFingerprint(data), [data])
+    const layout = useMemo(() => buildLayout(data, meshTheme), [layoutFingerprint, meshTheme])
     const surfaceRef = useRef<HTMLDivElement | null>(null)
     const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 })
     const viewportKey = useMemo(
         () => getMeshGraphViewportKey(data, surfaceSize.width, surfaceSize.height),
-        [data, surfaceSize.height, surfaceSize.width],
+        [dataFingerprint, data, surfaceSize.height, surfaceSize.width],
     )
 
     const nodes = useMemo(
@@ -453,6 +497,14 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                 >
                     <MeshViewportController data={data} viewportKey={viewportKey} />
                     <Controls className={meshTheme.graphControlsClass} position="bottom-left" showZoom showFitView showInteractive={false} />
+                    <MiniMap
+                        position="bottom-right"
+                        pannable
+                        zoomable
+                        nodeColor={minimapNodeColor}
+                        nodeStrokeWidth={3}
+                        className={meshTheme.isDark ? 'overflow-hidden rounded-xl border border-white/10 bg-slate-950/85' : 'overflow-hidden rounded-xl border border-slate-200 bg-white/95'}
+                    />
                     <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color={meshTheme.graphBackgroundDotColor} />
                 </ReactFlow>
             </div>

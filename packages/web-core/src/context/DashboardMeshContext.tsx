@@ -28,7 +28,7 @@ export interface DashboardMeshOverrides {
     loadMeshStatus?: (
         machineId: string,
         meshId: string,
-        options?: { refresh?: boolean },
+        options?: { refresh?: boolean; retryProfile?: 'interactive' | 'settled' },
     ) => Promise<any>
 
     /**

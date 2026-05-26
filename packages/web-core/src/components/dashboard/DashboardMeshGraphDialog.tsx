@@ -44,7 +44,10 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         setError(null)
         try {
             const response = meshOverrides?.loadMeshStatus
-                ? await meshOverrides.loadMeshStatus(daemonId, meshId, { refresh })
+                ? await meshOverrides.loadMeshStatus(daemonId, meshId, {
+                    refresh,
+                    retryProfile: refresh ? 'settled' : 'interactive',
+                })
                 : await sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })
             const status = extractRepoMeshStatus(response)
             if (!status) {
@@ -52,7 +55,11 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 return
             }
             setMeshStatus(status)
+            hasUsableGraphRef.current = true
             setLastLoadedAt(status.refreshedAt || new Date().toISOString())
+            if (!refresh && meshOverrides?.loadMeshStatus) {
+                void loadGraph(true)
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load live mesh status')
         } finally {
