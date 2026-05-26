@@ -24,6 +24,7 @@ import { filterUserFacingChatMessages, normalizeChatMessages } from '../provider
 const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
 const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
+const CODEX_NATIVE_HISTORY_FRESH_MS = 5 * 60_000;
 const recentSendByTarget = new Map<string, number>();
 
 interface ApprovalSelectableInstance extends ProviderInstance {
@@ -221,6 +222,114 @@ function normalizeReadChatMessages(payload: Record<string, any>): ChatMessage[] 
     return normalizeChatMessages(messages);
 }
 
+function getMessageNewestReceivedAt(messages: Array<{ receivedAt?: unknown; timestamp?: unknown }>): number {
+    let newest = 0;
+    for (const message of messages) {
+        const receivedAt = Number(message?.receivedAt ?? message?.timestamp ?? 0);
+        if (Number.isFinite(receivedAt) && receivedAt > newest) newest = receivedAt;
+    }
+    return newest;
+}
+
+function buildCliMessageSourceProvenance(args: {
+    selected: 'native-history' | 'pty-parser';
+    provider: string;
+    nativeHandle?: string;
+    fallbackReason?: string;
+    nativeSource?: string;
+    sourcePath?: string;
+    sourceMtimeMs?: number;
+    nativeMessages?: ChatMessage[];
+    ptyMessages?: ChatMessage[];
+    returnedMessages?: ChatMessage[];
+    safeMapping?: boolean;
+    freshEnough?: boolean;
+    ptyStatusApprovalOnly?: boolean;
+}): Record<string, unknown> {
+    const sourceMtimeMs = Number(args.sourceMtimeMs || 0);
+    const sourceMtimeAgeMs = sourceMtimeMs > 0 ? Math.max(0, Date.now() - sourceMtimeMs) : undefined;
+    const nativeMessages = args.nativeMessages || [];
+    const ptyMessages = args.ptyMessages || [];
+    const returnedMessages = args.returnedMessages || [];
+    return {
+        selected: args.selected,
+        provider: args.provider,
+        ...(args.nativeHandle ? { nativeHandle: args.nativeHandle } : {}),
+        ...(args.fallbackReason ? { fallbackReason: args.fallbackReason } : {}),
+        ...(args.nativeSource ? { nativeSource: args.nativeSource } : {}),
+        ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
+        ptyStatusApprovalOnly: args.ptyStatusApprovalOnly === true,
+        staleness: {
+            sourceMtimeMs: sourceMtimeMs || undefined,
+            sourceMtimeAgeMs,
+            nativeNewestMessageAt: getMessageNewestReceivedAt(nativeMessages),
+            ptyNewestMessageAt: getMessageNewestReceivedAt(ptyMessages),
+            freshEnough: args.freshEnough === true,
+        },
+        coverage: {
+            nativeMessageCount: nativeMessages.length,
+            ptyMessageCount: ptyMessages.length,
+            returnedMessageCount: returnedMessages.length,
+            safeMapping: args.safeMapping === true,
+        },
+    };
+}
+
+function buildNativeHistoryFallbackReason(args: {
+    providerType: string;
+    nativeSource?: string;
+    nativeMessageCount: number;
+    safeMapping: boolean;
+    freshEnough: boolean;
+}): string {
+    if (args.providerType !== 'codex-cli') return 'provider_not_codex_cli';
+    if (args.nativeSource === 'native-unavailable') return 'native_history_unavailable';
+    if (args.nativeSource && args.nativeSource !== 'provider-native') return `native_history_source_${args.nativeSource}`;
+    if (args.nativeMessageCount <= 0) return 'native_history_empty';
+    if (!args.safeMapping) return 'native_history_not_safely_mapped';
+    if (!args.freshEnough) return 'native_history_stale';
+    return 'native_history_not_selected';
+}
+
+function isCodexCliProvider(providerType: string): boolean {
+    return providerType === 'codex-cli';
+}
+
+function hasSafeNativeHistoryMapping(args: {
+    historySessionId?: string;
+    providerSessionId?: string;
+    workspace?: string;
+    nativeMessages: ChatMessage[];
+}): boolean {
+    const explicitSessionId = String(args.historySessionId || args.providerSessionId || '').trim();
+    if (explicitSessionId) {
+        const messageSessionIds = args.nativeMessages
+            .map((message: any) => typeof message?.historySessionId === 'string' ? message.historySessionId.trim() : '')
+            .filter(Boolean);
+        if (messageSessionIds.length === 0) return true;
+        return messageSessionIds.some((id) => id === explicitSessionId);
+    }
+    const workspace = String(args.workspace || '').trim();
+    if (!workspace) return false;
+    return args.nativeMessages.some((message: any) => String(message?.workspace || '').trim() === workspace);
+}
+
+function isNativeHistoryFreshEnough(args: {
+    sourceMtimeMs?: number;
+    nativeMessages: ChatMessage[];
+    ptyMessages: ChatMessage[];
+}): boolean {
+    const nativeNewest = getMessageNewestReceivedAt(args.nativeMessages);
+    const ptyNewest = getMessageNewestReceivedAt(args.ptyMessages);
+    if (nativeNewest > 0 && nativeNewest >= ptyNewest) return true;
+    const sourceMtimeMs = Number(args.sourceMtimeMs || 0);
+    if (sourceMtimeMs > 0 && Date.now() - sourceMtimeMs <= CODEX_NATIVE_HISTORY_FRESH_MS) return true;
+    return ptyNewest === 0 && nativeNewest > 0;
+}
+
+function shouldPreserveReadChatPayloadField(key: string): boolean {
+    return key === 'messageSource' || key === 'transcriptProvenance';
+}
 
 function deriveHistoryDedupKey(message: ChatMessage & { _unitKey?: string; _turnKey?: string }): string | undefined {
     const unitKey = typeof message._unitKey === 'string' ? message._unitKey.trim() : '';
@@ -356,6 +465,7 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
     return {
         success: true,
         ...validatedPayload,
+        ...Object.fromEntries(Object.entries(payload).filter(([key]) => shouldPreserveReadChatPayloadField(key))),
         messages: sync.messages,
         totalMessages: sync.totalMessages,
         ...(returnedDebugReadChat ? { debugReadChat: returnedDebugReadChat } : {}),
@@ -584,6 +694,8 @@ function buildChatDebugBundleSummary(bundle: Record<string, unknown>): Record<st
             adapterStatus: debugReadChat.adapterStatus,
             parsedStatus: debugReadChat.parsedStatus,
             returnedStatus: debugReadChat.returnedStatus,
+            selectedMessageSource: debugReadChat.selectedMessageSource,
+            messageSource: debugReadChat.messageSource,
             parsedMsgCount: debugReadChat.parsedMsgCount,
             returnedMsgCount: debugReadChat.returnedMsgCount,
             shouldPreferAdapterMessages: debugReadChat.shouldPreferAdapterMessages,
@@ -646,6 +758,8 @@ export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Pr
                 providerSessionId: readResult.providerSessionId,
                 transcriptAuthority: readResult.transcriptAuthority,
                 coverage: readResult.coverage,
+                messageSource: readResult.messageSource,
+                transcriptProvenance: readResult.transcriptProvenance,
                 activeModal: readResult.activeModal,
                 messagesTail: Array.isArray(readResult.messages) ? readResult.messages.slice(-20) : [],
                 debugReadChat: readResult.debugReadChat,
@@ -882,25 +996,146 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 && typeof runtimeMessageMerger.mergeRuntimeChatMessages === 'function'
                 ? runtimeMessageMerger.mergeRuntimeChatMessages(parsedMessages)
                 : parsedMessages;
+            const providerType = provider?.type || adapter.cliType;
+            let selectedMessages = returnedMessages;
+            let selectedTitle = title;
+            let selectedProviderSessionId = providerSessionId;
+            let selectedTranscriptAuthority = transcriptAuthority;
+            let selectedCoverage = coverage;
+            let messageSource = buildCliMessageSourceProvenance({
+                selected: 'pty-parser',
+                provider: adapter.cliType,
+                fallbackReason: isCodexCliProvider(providerType) ? 'native_history_not_checked' : 'provider_not_codex_cli',
+                ptyMessages: returnedMessages,
+                returnedMessages,
+                ptyStatusApprovalOnly: false,
+            });
+
+            if (isCodexCliProvider(providerType)) {
+                const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h, adapter.cliType);
+                const workspace = typeof args?.workspace === 'string'
+                    ? args.workspace
+                    : typeof (h.currentSession as any)?.workspace === 'string'
+                        ? (h.currentSession as any).workspace
+                        : typeof adapter.workingDir === 'string'
+                            ? adapter.workingDir
+                            : undefined;
+                const nativeHistoryLimit = Math.max(
+                    normalizeReadChatTailLimit(args) || 0,
+                    returnedMessages.length,
+                    200,
+                );
+                let nativeHistory: ReturnType<typeof readProviderChatHistory> | null = null;
+                try {
+                    nativeHistory = readProviderChatHistory(agentStr, {
+                        canonicalHistory: provider?.canonicalHistory,
+                        historySessionId,
+                        workspace,
+                        offset: 0,
+                        limit: nativeHistoryLimit,
+                        excludeRecentCount: 0,
+                        historyBehavior: provider?.historyBehavior,
+                        scripts: provider?.scripts as any,
+                    });
+                } catch (error: any) {
+                    const fallbackReason = `native_history_error:${error?.message || String(error)}`;
+                    messageSource = buildCliMessageSourceProvenance({
+                        selected: 'pty-parser',
+                        provider: adapter.cliType,
+                        fallbackReason,
+                        ptyMessages: returnedMessages,
+                        returnedMessages,
+                        ptyStatusApprovalOnly: false,
+                    });
+                    nativeHistory = null;
+                }
+
+                if (nativeHistory) {
+                    const nativeMessages = Array.isArray((nativeHistory as any).messages)
+                        ? normalizeChatMessages((nativeHistory as any).messages as ChatMessage[])
+                        : [];
+                    const historyProviderSessionId = typeof (nativeHistory as any)?.providerSessionId === 'string'
+                        ? (nativeHistory as any).providerSessionId
+                        : historySessionId;
+                    const safeMapping = hasSafeNativeHistoryMapping({
+                        historySessionId,
+                        providerSessionId,
+                        workspace,
+                        nativeMessages,
+                    });
+                    const freshEnough = isNativeHistoryFreshEnough({
+                        sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
+                        nativeMessages,
+                        ptyMessages: returnedMessages,
+                    });
+                    if ((nativeHistory as any).source === 'provider-native' && nativeMessages.length > 0 && safeMapping && freshEnough) {
+                        selectedMessages = finalizeStreamingMessagesWhenIdle(nativeMessages, returnedStatus);
+                        selectedProviderSessionId = historyProviderSessionId || providerSessionId;
+                        selectedTranscriptAuthority = 'provider';
+                        selectedCoverage = (nativeHistory as any).hasMore ? 'tail' : 'full';
+                        messageSource = buildCliMessageSourceProvenance({
+                            selected: 'native-history',
+                            provider: adapter.cliType,
+                            nativeHandle: selectedProviderSessionId || historySessionId,
+                            nativeSource: (nativeHistory as any).source,
+                            sourcePath: (nativeHistory as any).sourcePath,
+                            sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
+                            nativeMessages,
+                            ptyMessages: returnedMessages,
+                            returnedMessages: selectedMessages,
+                            safeMapping,
+                            freshEnough,
+                            ptyStatusApprovalOnly: true,
+                        });
+                    } else {
+                        const fallbackReason = buildNativeHistoryFallbackReason({
+                            providerType,
+                            nativeSource: (nativeHistory as any).source,
+                            nativeMessageCount: nativeMessages.length,
+                            safeMapping,
+                            freshEnough,
+                        });
+                        messageSource = buildCliMessageSourceProvenance({
+                            selected: 'pty-parser',
+                            provider: adapter.cliType,
+                            nativeHandle: historyProviderSessionId || historySessionId,
+                            fallbackReason,
+                            nativeSource: (nativeHistory as any).source,
+                            sourcePath: (nativeHistory as any).sourcePath,
+                            sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
+                            nativeMessages,
+                            ptyMessages: returnedMessages,
+                            returnedMessages,
+                            safeMapping,
+                            freshEnough,
+                            ptyStatusApprovalOnly: false,
+                        });
+                    }
+                }
+            }
             LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord.status || '')} parsedMsgCount=${parsedRecord.messages.length} returnedMsgCount=${returnedMessages.length}`);
             return buildReadChatCommandResult({
-                messages: returnedMessages,
+                messages: selectedMessages,
                 status: returnedStatus,
                 activeModal,
+                messageSource,
+                transcriptProvenance: messageSource,
                 debugReadChat: {
                     provider: adapter.cliType,
                     targetSessionId: String(args?.targetSessionId || ''),
                     adapterStatus: String(adapterStatus.status || ''),
                     parsedStatus: String(parsedRecord.status || ''),
                     returnedStatus: String(returnedStatus || ''),
-                    shouldPreferAdapterMessages: false,
+                    selectedMessageSource: (messageSource as any).selected,
+                    messageSource,
+                    shouldPreferAdapterMessages: (messageSource as any).selected !== 'native-history',
                     parsedMsgCount: parsedRecord.messages.length,
-                    returnedMsgCount: returnedMessages.length,
+                    returnedMsgCount: selectedMessages.length,
                 },
-                ...(title ? { title } : {}),
-                ...(providerSessionId ? { providerSessionId } : {}),
-                ...(transcriptAuthority ? { transcriptAuthority } : {}),
-                ...(coverage ? { coverage } : {}),
+                ...(selectedTitle ? { title: selectedTitle } : {}),
+                ...(selectedProviderSessionId ? { providerSessionId: selectedProviderSessionId } : {}),
+                ...(selectedTranscriptAuthority ? { transcriptAuthority: selectedTranscriptAuthority } : {}),
+                ...(selectedCoverage ? { coverage: selectedCoverage } : {}),
             }, args);
         }
         const historyLimit = normalizeReadChatTailLimit(args);
