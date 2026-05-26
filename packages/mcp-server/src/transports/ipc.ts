@@ -8,6 +8,13 @@
 
 const DEFAULT_IPC_PORT = 19222;
 const DEFAULT_IPC_PATH = '/ipc';
+const DEFAULT_IPC_COMMAND_TIMEOUT_MS = 15_000;
+const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
+  mesh_relay_command: 60_000,
+  agent_command: 30_000,
+  git_status: 45_000,
+  mesh_status: 120_000,
+};
 
 export interface IpcTransportOptions {
   port?: number;
@@ -71,9 +78,7 @@ export class IpcTransport {
         fn();
       };
 
-      const timeoutMs = type === 'mesh_relay_command'
-        ? 60_000
-        : 15_000;
+      const timeoutMs = IPC_COMMAND_TIMEOUTS_MS[type] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS;
       const timeout = setTimeout(() => {
         finish(() => reject(new Error(`Daemon IPC command '${type}' timed out after ${Math.round(timeoutMs / 1000)}s`)));
       }, timeoutMs);

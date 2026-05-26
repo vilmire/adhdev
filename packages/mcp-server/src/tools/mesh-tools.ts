@@ -2435,7 +2435,9 @@ export async function meshSendTask(
             });
             const dispatchPayload = unwrapCommandPayload(dispatchResult);
             if (dispatchPayload?.success === false || dispatchResult?.success === false) {
+                const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
                 return JSON.stringify({
+                    ...(source && typeof source === 'object' ? source : {}),
                     success: false,
                     nodeId: args.node_id,
                     sessionId: args.session_id,

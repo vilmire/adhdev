@@ -2493,6 +2493,74 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
   assert.equal(queued.length, 0);
 });
 
+test('local IPC mesh_send_task preserves retryable agent busy diagnostics from direct dispatch', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        status: {
+          sessions: [{ id: 'session-hermes', providerType: 'hermes-cli' }],
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      return {
+        success: false,
+        code: 'agent_runtime_busy',
+        reason: 'agent_runtime_busy',
+        retryable: true,
+        retryRecommended: true,
+        status: 'generating',
+        error: "CLI agent 'hermes-cli' is currently generating; retry after the current turn finishes.",
+      };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+
+  const ctx = {
+    mesh: {
+      id: `mesh-ipc-busy-${Date.now()}`,
+      name: 'IPC Busy Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-local',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+    localDaemonId: 'daemon-local',
+  };
+
+  const result = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-local',
+    session_id: 'session-hermes',
+    message: 'run targeted task',
+  }));
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'agent_runtime_busy');
+  assert.equal(result.retryable, true);
+  assert.equal(result.retryRecommended, true);
+  assert.equal(result.status, 'generating');
+  assert.equal(result.nodeId, 'node-local');
+  assert.equal(result.sessionId, 'session-hermes');
+});
+
 test('mesh queue management tools cancel and requeue stale assignments without deleting entries', async () => {
   const meshId = `mesh-queue-admin-${Date.now()}`;
   const transport = new IpcTransport() as IpcTransport & {

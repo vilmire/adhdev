@@ -433,6 +433,59 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       vi.useRealTimers()
     }
   })
+
+  it('does not use a still-generating parser assistant sentence as final completion evidence', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'hermes-cli',
+        name: 'Hermes Agent',
+        category: 'cli',
+        spawn: { command: 'hermes', args: [] },
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+
+      let status = 'generating'
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({
+          status: 'generating',
+          title: 'Hermes Agent',
+          messages: [
+            { role: 'user', content: 'current prompt', kind: 'standard' },
+            { role: 'assistant', content: 'I am still working through the task.', kind: 'standard' },
+          ],
+        }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+      expect(events.map((event) => event.event)).toContain('agent:generating_started')
+
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(30_000)
+
+      const completed = events.find((event) => event.event === 'agent:generating_completed')
+      expect(completed).toMatchObject({
+        finalSummary: '',
+        completionDiagnostic: {
+          emittedAfterFinalizationTimeout: true,
+          blockReason: 'parsed_status:generating',
+          parsedStatus: 'generating',
+          finalAssistantPresent: true,
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('CliProviderInstance incremental history persistence', () => {

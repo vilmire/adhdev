@@ -891,7 +891,9 @@ export class CliProviderInstance implements ProviderInstance {
                 chatTitle: pending.chatTitle,
                 duration: pending.duration,
                 timestamp: pending.timestamp,
-                finalSummary: extractFinalSummaryFromMessages(this.adapter?.getScriptParsedStatus()?.messages),
+                finalSummary: blockReason.startsWith('parsed_status:')
+                    ? ''
+                    : extractFinalSummaryFromMessages(this.adapter?.getScriptParsedStatus()?.messages),
                 completionDiagnostic,
             });
             this.completedDebouncePending = null;
