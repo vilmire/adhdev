@@ -1816,24 +1816,28 @@ export class DaemonCommandRouter {
             return nextStatus;
         });
 
-        if (!changed && !(options?.requireDirectPeerTruth && unavailableNodeIds.size > 0)) return snapshot;
+        const aggregateDirectTruthSatisfied = sourceOfTruth.coordinatorOwnsLiveTruth === true
+            || directPeerTruth.satisfied === true;
+        if (!changed && !(options?.requireDirectPeerTruth && unavailableNodeIds.size > 0 && !aggregateDirectTruthSatisfied)) return snapshot;
         const nextSourceOfTruth = {
             ...sourceOfTruth,
             ...(Object.keys(directPeerTruth).length ? {
                 directPeerTruth: {
                     ...directPeerTruth,
-                    satisfied: options?.requireDirectPeerTruth === true ? unavailableNodeIds.size === 0 : directPeerTruth.satisfied,
+                    satisfied: options?.requireDirectPeerTruth === true
+                        ? aggregateDirectTruthSatisfied || unavailableNodeIds.size === 0
+                        : directPeerTruth.satisfied,
                     unavailableNodeIds: [...unavailableNodeIds],
                 },
                 ...(options?.requireDirectPeerTruth === true ? {
-                    coordinatorOwnsLiveTruth: unavailableNodeIds.size === 0,
-                    currentStatus: unavailableNodeIds.size === 0 ? 'live_git_and_session_probes' : 'direct_peer_truth_unavailable',
+                    coordinatorOwnsLiveTruth: aggregateDirectTruthSatisfied || unavailableNodeIds.size === 0,
+                    currentStatus: aggregateDirectTruthSatisfied || unavailableNodeIds.size === 0 ? 'live_git_and_session_probes' : 'direct_peer_truth_unavailable',
                 } : {}),
             } : {}),
         };
         return {
             ...snapshot,
-            ...(options?.requireDirectPeerTruth === true && unavailableNodeIds.size > 0 ? {
+            ...(options?.requireDirectPeerTruth === true && unavailableNodeIds.size > 0 && !aggregateDirectTruthSatisfied ? {
                 success: false,
                 code: 'mesh_direct_peer_truth_unavailable',
                 error: 'Selected coordinator could not confirm direct mesh truth for every remote node yet.',
@@ -4851,7 +4855,7 @@ export class DaemonCommandRouter {
                         ? { ...directTruth, unavailableNodeIds: [] as string[] }
                         : directTruth;
                     const directTruthSatisfied = !requireDirectPeerTruth
-                        || (effectiveDirectTruth.directEvidenceCount > 0 && effectiveDirectTruth.unavailableNodeIds.length === 0);
+                        || effectiveDirectTruth.directEvidenceCount > 0;
                     if (requireDirectPeerTruth && !directTruthSatisfied) {
                         const failureResult = {
                             success: false,
@@ -5144,6 +5148,7 @@ export class DaemonCommandRouter {
                                     peerAttemptedCount: effectiveDirectTruth.peerAttemptedCount,
                                     peerConfirmedCount: effectiveDirectTruth.peerConfirmedCount,
                                     unavailableNodeIds: effectiveDirectTruth.unavailableNodeIds,
+                                    partialNodeFailures: effectiveDirectTruth.unavailableNodeIds,
                                 },
                             } : {}),
                             historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary'],
