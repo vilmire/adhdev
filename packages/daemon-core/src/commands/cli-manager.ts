@@ -80,6 +80,12 @@ export interface CliManagerDeps {
 
 type CommandResult = { success: boolean;[key: string]: unknown };
 
+const BUSY_AGENT_STATUSES = new Set(['generating', 'running', 'streaming', 'starting', 'busy', 'waiting', 'waiting_approval', 'long_generating']);
+
+function normalizeAgentStatus(value: unknown): string {
+    return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
 export interface CliTransportFactoryParams {
     runtimeId: string;
     providerType: string;
@@ -1073,6 +1079,19 @@ export class DaemonCliManager {
                 const { adapter, key } = found;
 
                 if (action === 'send_chat') {
+                    const currentStatus = normalizeAgentStatus(adapter.getStatus?.()?.status);
+                    if (BUSY_AGENT_STATUSES.has(currentStatus)) {
+                        return {
+                            success: false,
+                            code: 'agent_runtime_busy',
+                            reason: 'agent_runtime_busy',
+                            retryable: true,
+                            retryRecommended: true,
+                            status: currentStatus,
+                            targetSessionId: args?.targetSessionId,
+                            error: `CLI agent '${agentType}' is currently ${currentStatus}; retry after the current turn finishes.`,
+                        };
+                    }
                     const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
                     const provider = this.providerLoader.resolve(agentType) || this.providerLoader.getMeta(agentType);
                     if (provider?.category === 'acp') {
