@@ -1371,6 +1371,70 @@ describe('mesh_status', () => {
     }
   })
 
+  it('keeps direct mesh truth satisfied when a removed worktree residue cannot be probed', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-missing-worktree-direct-truth-')
+    try {
+      const dispatchMeshCommand = vi.fn(async () => {
+        throw new Error('workspace path no longer exists')
+      })
+      const { router } = createRouter({ dispatchMeshCommand })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_missing_worktree_direct_truth',
+        requireDirectPeerTruth: true,
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh_missing_worktree_direct_truth',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_primary' },
+          policy: {},
+          nodes: [
+            { id: 'node_primary', daemonId: 'daemon_primary', machineLabel: 'Primary', workspace: repoRoot, repoRoot, policy: { providerPriority: ['hermes-cli'] } },
+            {
+              id: 'node_removed_worktree',
+              daemonId: 'daemon_removed',
+              machineLabel: 'Removed worktree',
+              workspace: '/missing/removed/worktree',
+              repoRoot: '/missing/removed/worktree',
+              isLocalWorktree: true,
+              worktreeBranch: 'fix/already-refined',
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.code).not.toBe('mesh_direct_peer_truth_unavailable')
+      expect(result.sourceOfTruth).toMatchObject({
+        coordinatorOwnsLiveTruth: true,
+        currentStatus: 'live_git_and_session_probes',
+        directPeerTruth: expect.objectContaining({
+          required: true,
+          satisfied: true,
+          directEvidenceCount: 1,
+          localConfirmedCount: 1,
+          peerAttemptedCount: 1,
+          peerConfirmedCount: 0,
+          unavailableNodeIds: ['node_removed_worktree'],
+          partialNodeFailures: ['node_removed_worktree'],
+        }),
+      })
+      const removedWorktree = result.nodes.find((node: any) => node.nodeId === 'node_removed_worktree')
+      expect(removedWorktree).toMatchObject({
+        nodeId: 'node_removed_worktree',
+        workspace: '/missing/removed/worktree',
+        isLocalWorktree: true,
+        gitProbePending: true,
+        health: 'unknown',
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('treats local submodule drift as parent dirty health for local workspaces', async () => {
     const { dir, repoRoot } = await createTempGitRepoWithSubmodule('mesh-status-submodule-')
     try {
