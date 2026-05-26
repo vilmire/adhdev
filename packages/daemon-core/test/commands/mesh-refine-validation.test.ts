@@ -637,6 +637,58 @@ describe('refine_mesh_node validation gate', () => {
     }
   }, 60000)
 
+  it('accepts a submodule gitlink commit that is an ancestor of fetched remote main', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-submodule-main-ancestor-'))
+    const repo = join(root, 'repo')
+    const submoduleOrigin = join(root, 'submodule-origin')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initSubmoduleOrigin(submoduleOrigin)
+      writeFileSync(join(submoduleOrigin, 'PUBLISHED_ANCESTOR.md'), 'published ancestor\n', 'utf-8')
+      execFileSync('git', ['add', 'PUBLISHED_ANCESTOR.md'], { cwd: submoduleOrigin })
+      execFileSync('git', ['commit', '-q', '-m', 'published ancestor commit'], { cwd: submoduleOrigin })
+      const ancestorCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: submoduleOrigin, encoding: 'utf-8' }).trim()
+      writeFileSync(join(submoduleOrigin, 'REMOTE_MAIN_TIP.md'), 'newer main tip\n', 'utf-8')
+      execFileSync('git', ['add', 'REMOTE_MAIN_TIP.md'], { cwd: submoduleOrigin })
+      execFileSync('git', ['commit', '-q', '-m', 'advance remote main'], { cwd: submoduleOrigin })
+      initGitRepo(repo)
+      addSubmodule(repo, submoduleOrigin, 'oss')
+      const worktree = createWorktreeWithCommit(root, repo)
+      execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'oss'], { cwd: worktree })
+      execFileSync('git', ['fetch', 'origin', 'main'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['checkout', '-q', ancestorCommit], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['add', 'oss'], { cwd: worktree })
+      execFileSync('git', ['commit', '-q', '-m', 'point submodule at published main ancestor'], { cwd: worktree })
+      const mesh = createMesh(repo, worktree, 'node-submodule-main-ancestor')
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-submodule-main-ancestor',
+        inlineMesh: mesh,
+      })
+
+      expectAccepted(accepted, 'node-submodule-main-ancestor')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({ success: true, merged: true })
+      const reachabilityStage = result.refineStages.find((entry: any) => entry.stage === 'submodule_reachability')
+      expect(reachabilityStage).toMatchObject({
+        status: 'passed',
+        checked: 1,
+        unreachable: [],
+      })
+      expect(result.refineStages.map((entry: any) => `${entry.stage}:${entry.status}`)).toContain('submodule_reachability:passed')
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
   it('does not treat submodule feature-branch reachability as remote main convergence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-feature-submodule-'))
     const repo = join(root, 'repo')
