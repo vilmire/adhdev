@@ -56,7 +56,7 @@ import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDa
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
 import { homedir, tmpdir } from 'os';
-import { join as pathJoin, resolve as pathResolve } from 'path';
+import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 
 type ReleaseChannel = 'stable' | 'preview';
@@ -228,6 +228,18 @@ function readGitSubmodules(value: unknown, parentRepoRoot?: string): GitSubmodul
         })
         .filter((entry): entry is GitSubmoduleStatus => entry !== null);
     return submodules.length > 0 ? submodules : undefined;
+}
+
+function buildMeshNodeDisplayLabel(node: Record<string, unknown>, nodeId: string, providerPriority: string[]): string {
+    const explicit = readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias);
+    if (explicit) return explicit;
+    const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
+    const workspaceName = workspace ? pathBasename(workspace) : undefined;
+    const host = readStringValue(node.hostname, node.host, node.daemonId, node.daemon_id, node.machineId, node.machine_id);
+    const provider = providerPriority[0] || (Array.isArray(node.providers) ? readStringValue(...node.providers) : undefined);
+    const parts = [workspaceName, host, provider].filter(Boolean);
+    if (parts.length > 0) return parts.join(' · ');
+    return nodeId || 'unidentified mesh node';
 }
 
 function normalizeInlineMeshGitStatus(
@@ -1095,6 +1107,8 @@ type MeshRefineSubmoduleReachabilityEntry = {
     remote?: string;
     remoteUrl?: string;
     remoteReachable?: boolean;
+    remoteMainBranch?: string;
+    remoteMainReachable?: boolean;
     fetchedFromOrigin?: boolean;
     error?: string;
 };
@@ -1170,7 +1184,7 @@ function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmoduleReach
     const refs = entries
         .map(entry => `${entry.path}@${entry.commit}`)
         .join(', ');
-    return `Ask the user for explicit approval to push/publish the unreachable submodule commit(s) (${refs}) to their configured submodule remote(s), then rerun mesh_refine_node. Do not merge the root branch until every submodule gitlink commit is reachable from its configured remote.`;
+    return `Ask the user for explicit approval to push/publish the unreachable submodule commit(s) (${refs}) to the configured submodule remote main branch, then rerun mesh_refine_node. Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.`;
 }
 
 async function computeGitPatchId(cwd: string, fromRef: string, toRef: string): Promise<string> {
@@ -1267,12 +1281,13 @@ async function runMeshRefineSubmoduleReachabilityGate(
             });
             return String(stdout || '');
         };
-        const verifyRemoteCommitReachable = async (remoteUrl: string, commit: string): Promise<void> => {
+        const verifyRemoteMainContainsCommit = async (remoteUrl: string, commit: string, branch = 'main'): Promise<void> => {
             const probeDir = fs.mkdtempSync(pathJoin(tmpdir(), 'adhdev-submodule-reachability-'));
             try {
                 await runGit(probeDir, ['init', '-q']);
-                await runGit(probeDir, ['-c', 'protocol.file.allow=always', 'fetch', '--depth=1', remoteUrl, commit]);
+                await runGit(probeDir, ['-c', 'protocol.file.allow=always', 'fetch', '--depth=1', remoteUrl, `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
                 await runGit(probeDir, ['cat-file', '-e', `${commit}^{commit}`]);
+                await runGit(probeDir, ['merge-base', '--is-ancestor', commit, `refs/remotes/origin/${branch}`]);
             } finally {
                 fs.rmSync(probeDir, { recursive: true, force: true });
             }
@@ -1325,15 +1340,18 @@ async function runMeshRefineSubmoduleReachabilityGate(
                         entries.push(entry);
                         continue;
                     }
-                    await verifyRemoteCommitReachable(remoteUrl, gitlink.commit);
+                    entry.remoteMainBranch = 'main';
+                    await verifyRemoteMainContainsCommit(remoteUrl, gitlink.commit, 'main');
                     entry.fetchedFromOrigin = true;
                     entry.remoteReachable = true;
+                    entry.remoteMainReachable = true;
                     entry.reachable = true;
                 } catch (e: any) {
                     entry.remoteReachable = false;
+                    entry.remoteMainReachable = false;
                     entry.publishRequired = true;
                     const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
-                    entry.error = `Submodule remote reachability check failed for origin: ${details}`;
+                    entry.error = `Submodule remote main reachability check failed for origin/main: ${details}`;
                 }
             } catch (e: any) {
                 entry.error = truncateValidationOutput(e?.message || String(e));
@@ -2540,28 +2558,51 @@ export class DaemonCommandRouter {
     }
 
     private queueRefineJobEvent(event: 'refine:accepted' | 'refine:completed' | 'refine:failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): void {
-        queuePendingMeshCoordinatorEvent({
+        const metadataEvent = {
+            source: 'refine_mesh_node_async_job',
+            jobId: handle.jobId,
+            interactionId: handle.interactionId,
+            meshId: handle.meshId,
+            nodeId: handle.targetNodeId,
+            targetDaemonId: handle.targetDaemonId,
+            workspace: handle.workspace,
+            status: handle.status,
+            startedAt: handle.startedAt,
+            completedAt: handle.completedAt,
+            retryOfJobId: handle.retryOfJobId,
+            ...(result ? { result } : {}),
+        };
+        const eventPayload = {
             event,
             meshId: handle.meshId,
             nodeLabel: handle.targetNodeId,
             nodeId: handle.targetNodeId,
             workspace: handle.workspace,
-            metadataEvent: {
-                source: 'refine_mesh_node_async_job',
-                jobId: handle.jobId,
-                interactionId: handle.interactionId,
-                meshId: handle.meshId,
-                nodeId: handle.targetNodeId,
-                targetDaemonId: handle.targetDaemonId,
-                workspace: handle.workspace,
-                status: handle.status,
-                startedAt: handle.startedAt,
-                completedAt: handle.completedAt,
-                retryOfJobId: handle.retryOfJobId,
-                ...(result ? { result } : {}),
-            },
+            metadataEvent,
             queuedAt: Date.now(),
-        });
+        };
+        if (typeof this.deps.instanceManager?.getByCategory === 'function') {
+            const forwarded = handleMeshForwardEvent(
+                { instanceManager: this.deps.instanceManager } as any,
+                {
+                    event,
+                    meshId: handle.meshId,
+                    nodeId: handle.targetNodeId,
+                    workspace: handle.workspace,
+                    jobId: handle.jobId,
+                    interactionId: handle.interactionId,
+                    status: handle.status,
+                    targetDaemonId: handle.targetDaemonId,
+                    startedAt: handle.startedAt,
+                    completedAt: handle.completedAt,
+                    retryOfJobId: handle.retryOfJobId,
+                    ...(result ? { result } : {}),
+                },
+            );
+            if (forwarded?.success === true) return;
+            LOG.warn('Mesh', `[Refinery] Failed to forward async refine event ${event}: ${forwarded?.error || 'unknown error'}`);
+        }
+        queuePendingMeshCoordinatorEvent(eventPayload);
     }
 
     private async appendRefineJobLedger(kind: 'task_dispatched' | 'task_completed' | 'task_failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): Promise<void> {
@@ -2725,6 +2766,8 @@ export class DaemonCommandRouter {
                     remote: entry.remote,
                     remoteUrl: entry.remoteUrl,
                     remoteReachable: entry.remoteReachable,
+                    remoteMainBranch: entry.remoteMainBranch,
+                    remoteMainReachable: entry.remoteMainReachable,
                     error: entry.error,
                 })),
                 error: submoduleReachability.error,
@@ -2737,13 +2780,13 @@ export class DaemonCommandRouter {
                     convergenceStatus: 'blocked_review',
                     publishRequired: true,
                     blockedReason: 'submodule_publish_required',
-                    error: 'Refinery submodule reachability preflight failed because one or more submodule gitlink commits are not reachable from their configured remote; merge/refine cleanup was not attempted.',
+                    error: 'Refinery submodule reachability preflight failed because one or more submodule gitlink commits are not reachable from their configured remote main branch; merge/refine cleanup was not attempted.',
                     nextStep,
                     nextSteps: [
                         'Ask the user for explicit approval before pushing or publishing any submodule commit.',
-                        'Push/publish each unreachable submodule commit to the configured submodule remote shown in the evidence.',
+                        'Push/publish each unreachable submodule commit to the configured submodule remote main branch shown in the evidence.',
                         'Rerun mesh_refine_node after remote reachability is confirmed.',
-                        'Do not merge the root branch until every submodule gitlink commit is reachable from its configured remote.',
+                        'Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.',
                     ],
                     unreachableSubmoduleCommits: submoduleReachability.unreachable.map(entry => ({
                         path: entry.path,
@@ -2751,6 +2794,8 @@ export class DaemonCommandRouter {
                         remote: entry.remote,
                         remoteUrl: entry.remoteUrl,
                         remoteReachable: entry.remoteReachable,
+                        remoteMainBranch: entry.remoteMainBranch,
+                        remoteMainReachable: entry.remoteMainReachable,
                         error: entry.error,
                     })),
                     branch,
@@ -4869,7 +4914,10 @@ export class DaemonCommandRouter {
                         ) || Boolean(meshRecord?.inline && nodeIndex === 0);
                         const status: Record<string, unknown> = {
                             nodeId,
-                            machineLabel: node.machineLabel || node.id || node.nodeId,
+                            machineLabel: buildMeshNodeDisplayLabel(node as Record<string, unknown>, nodeId, providerPriority),
+                            labelSource: readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias)
+                                ? 'explicit_metadata'
+                                : 'workspace_host_provider_context',
                             workspace: node.workspace,
                             repoRoot: node.repoRoot,
                             isLocalWorktree: node.isLocalWorktree,
