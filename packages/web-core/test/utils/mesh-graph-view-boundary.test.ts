@@ -23,14 +23,16 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain('onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}')
     })
 
-    it('uses React Flow controls for zoom and fit while omitting the minimap entirely', () => {
+    it('uses React Flow controls for zoom, fit, and the graph minimap without custom viewport guards', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
         const viewportSource = readSource('utils/mesh-graph-viewport.ts')
         const themeSource = readSource('components/MeshGraph/meshGraphTheme.ts')
 
         expect(source).toContain('Controls,')
         expect(source).toContain('position="bottom-left" showZoom showFitView showInteractive={false}')
-        expect(source).not.toContain('MiniMap')
+        expect(source).toContain('MiniMap,')
+        expect(source).toContain('<MiniMap')
+        expect(source).toContain('nodeColor={minimapNodeColor}')
         expect(source).not.toContain('shouldShowMeshGraphMiniMap')
         expect(viewportSource).not.toContain('shouldShowMeshGraphMiniMap')
         expect(themeSource).not.toContain('graphMiniMapClass')
