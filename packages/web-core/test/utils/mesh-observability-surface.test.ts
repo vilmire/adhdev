@@ -185,6 +185,51 @@ describe('MeshObservabilitySurface', () => {
     expect(html).not.toContain('mesh converged')
   })
 
+  it('renders bootstrap inventory fallback graph nodes with direct-truth warnings', () => {
+    const status = {
+      meshId: 'mesh_fallback',
+      meshName: 'Fallback Mesh',
+      repoIdentity: 'repo',
+      defaultBranch: 'main',
+      refreshedAt: '2026-05-17T00:00:00.000Z',
+      sourceOfTruth: {
+        currentStatus: 'bootstrap_inventory_fallback',
+        directPeerTruth: { required: true, satisfied: false },
+        fallback: {
+          source: 'server_bootstrap_inventory',
+          warning: 'Selected coordinator could not confirm direct mesh truth yet. Showing setup inventory graph until direct mesh_status probes succeed.',
+        },
+      },
+      nodes: [
+        {
+          nodeId: 'node-bootstrap',
+          machineLabel: 'Bootstrap Host',
+          workspace: '/repo/bootstrap',
+          health: 'unknown',
+          machineStatus: 'online',
+          providers: [],
+          activeSessions: [],
+          connection: { state: 'unknown', transport: 'unknown', source: 'server_bootstrap_inventory', reported: false },
+        },
+      ],
+      queue: { tasks: [] },
+      ledger: { entries: [] },
+    }
+
+    const graph = buildMeshGraph(status as any)
+    expect(graph.nodes.find(node => node.id === 'node-bootstrap')).toMatchObject({
+      label: 'Bootstrap Host',
+      snapshotCompleteness: 'missing_git',
+    })
+    expect(graph.stats.totalNodes).toBe(1)
+    expect(graph.warnings).toContain('Selected coordinator could not confirm direct mesh truth yet. Showing setup inventory graph until direct mesh_status probes succeed.')
+
+    const html = renderSurface(status)
+    expect(html).toContain('mesh visibility incomplete')
+    expect(html).toContain('1 no git snapshot')
+    expect(html).toContain('Selected coordinator could not confirm direct mesh truth yet. Showing setup inventory graph until direct mesh_status probes succeed.')
+  })
+
   it('uses live git evidence in detail helpers even when mesh_peer_status still marks gitProbePending', () => {
     const node: any = {
       nodeId: 'node_303',
