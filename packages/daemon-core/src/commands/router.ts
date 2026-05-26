@@ -55,7 +55,7 @@ import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
-import { homedir, tmpdir } from 'os';
+import { homedir } from 'os';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 
@@ -1281,16 +1281,9 @@ async function runMeshRefineSubmoduleReachabilityGate(
             });
             return String(stdout || '');
         };
-        const verifyRemoteMainContainsCommit = async (remoteUrl: string, commit: string, branch = 'main'): Promise<void> => {
-            const probeDir = fs.mkdtempSync(pathJoin(tmpdir(), 'adhdev-submodule-reachability-'));
-            try {
-                await runGit(probeDir, ['init', '-q']);
-                await runGit(probeDir, ['-c', 'protocol.file.allow=always', 'fetch', '--depth=1', remoteUrl, `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
-                await runGit(probeDir, ['cat-file', '-e', `${commit}^{commit}`]);
-                await runGit(probeDir, ['merge-base', '--is-ancestor', commit, `refs/remotes/origin/${branch}`]);
-            } finally {
-                fs.rmSync(probeDir, { recursive: true, force: true });
-            }
+        const verifyRemoteMainContainsCommit = async (submodulePath: string, commit: string, branch = 'main'): Promise<void> => {
+            await runGit(submodulePath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+            await runGit(submodulePath, ['merge-base', '--is-ancestor', commit, `refs/remotes/origin/${branch}`]);
         };
 
         const treeOutput = await runGit(repoRoot, ['ls-tree', '-r', '-z', mergedTree]);
@@ -1341,7 +1334,7 @@ async function runMeshRefineSubmoduleReachabilityGate(
                         continue;
                     }
                     entry.remoteMainBranch = 'main';
-                    await verifyRemoteMainContainsCommit(remoteUrl, gitlink.commit, 'main');
+                    await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, 'main');
                     entry.fetchedFromOrigin = true;
                     entry.remoteReachable = true;
                     entry.remoteMainReachable = true;
