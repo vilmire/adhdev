@@ -347,6 +347,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       const getScriptParsedStatus = vi.fn(() => parsed)
       instance.adapter = {
         getStatus: () => ({ status, activeModal: null, messages: [] }),
+        isProcessing: () => parsed.status === 'generating',
         getScriptParsedStatus,
         getPartialResponse: () => '',
         getRuntimeMetadata: () => null,
@@ -360,7 +361,6 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.detectStatusTransition()
       vi.advanceTimersByTime(3000)
 
-      expect(getScriptParsedStatus).toHaveBeenCalledTimes(1)
       expect(events.map((event) => event.event)).not.toContain('agent:generating_completed')
 
       parsed = {
@@ -434,7 +434,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     }
   })
 
-  it('does not use a still-generating parser assistant sentence as final completion evidence', () => {
+  it('does not emit completion while the parser still says generating', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
     try {
@@ -450,10 +450,12 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.lastStatus = 'idle'
 
       let status = 'generating'
+      let parsedStatus = 'generating'
       instance.adapter = {
         getStatus: () => ({ status, activeModal: null, messages: [] }),
+        isProcessing: () => parsedStatus === 'generating',
         getScriptParsedStatus: () => ({
-          status: 'generating',
+          status: parsedStatus,
           title: 'Hermes Agent',
           messages: [
             { role: 'user', content: 'current prompt', kind: 'standard' },
@@ -472,16 +474,55 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.detectStatusTransition()
       vi.advanceTimersByTime(30_000)
 
-      const completed = events.find((event) => event.event === 'agent:generating_completed')
-      expect(completed).toMatchObject({
-        finalSummary: '',
-        completionDiagnostic: {
-          emittedAfterFinalizationTimeout: true,
-          blockReason: 'parsed_status:generating',
-          parsedStatus: 'generating',
-          finalAssistantPresent: true,
-        },
-      })
+      expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('emits completion after parser-generating evidence settles to idle', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'codex-cli',
+        name: 'Codex CLI',
+        category: 'cli',
+        spawn: { command: 'codex', args: [] },
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+
+      let status = 'generating'
+      let parsedStatus = 'generating'
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        isProcessing: () => parsedStatus === 'generating',
+        getScriptParsedStatus: () => ({
+          status: parsedStatus,
+          title: 'Codex CLI',
+          messages: [
+            { role: 'user', content: 'current prompt', kind: 'standard' },
+            { role: 'assistant', content: 'final answer', kind: 'standard' },
+          ],
+        }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(30_000)
+      expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(0)
+
+      parsedStatus = 'idle'
+      vi.advanceTimersByTime(1000)
+
+      expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(1)
     } finally {
       vi.useRealTimers()
     }

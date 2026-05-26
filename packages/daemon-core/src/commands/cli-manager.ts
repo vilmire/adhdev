@@ -86,6 +86,50 @@ function normalizeAgentStatus(value: unknown): string {
     return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
+function hasNonEmptyModalButtons(activeModal: unknown): boolean {
+    const buttons = (activeModal as any)?.buttons;
+    return Array.isArray(buttons) && buttons.some((button) => String(button || '').trim().length > 0);
+}
+
+function hasAdapterPendingResponse(adapter: any): boolean {
+    if (adapter?.isWaitingForResponse === true) return true;
+    if (adapter?.currentTurnScope) return true;
+    try {
+        if (typeof adapter?.isProcessing === 'function' && adapter.isProcessing()) return true;
+    } catch { /* defensive: send guard should not fail on diagnostics */ }
+    try {
+        const partial = typeof adapter?.getPartialResponse === 'function' ? adapter.getPartialResponse() : '';
+        if (typeof partial === 'string' && partial.trim()) return true;
+    } catch { /* defensive: missing partial means no pending evidence */ }
+    return false;
+}
+
+function shouldSuppressStaleParsedBusyStatus(adapterStatus: string, parsedStatus: any, adapter: any): boolean {
+    const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
+    if (!BUSY_AGENT_STATUSES.has(parsedRawStatus)) return false;
+    if (adapterStatus !== 'idle') return false;
+    if (hasNonEmptyModalButtons(parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
+    return !hasAdapterPendingResponse(adapter);
+}
+
+function getEffectiveAgentSendStatus(adapter: any): string {
+    const adapterStatus = normalizeAgentStatus(adapter?.getStatus?.({ allowParse: false })?.status ?? adapter?.getStatus?.()?.status);
+    if (adapterStatus && adapterStatus !== 'idle') return adapterStatus;
+    if (adapterStatus !== 'idle') return adapterStatus;
+
+    if (typeof adapter?.getScriptParsedStatus !== 'function') return adapterStatus;
+    try {
+        const parsedStatus = adapter.getScriptParsedStatus();
+        const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
+        if (BUSY_AGENT_STATUSES.has(parsedRawStatus) && !shouldSuppressStaleParsedBusyStatus(adapterStatus, parsedStatus, adapter)) {
+            return parsedRawStatus;
+        }
+    } catch {
+        return adapterStatus;
+    }
+    return adapterStatus;
+}
+
 export interface CliTransportFactoryParams {
     runtimeId: string;
     providerType: string;
@@ -1079,7 +1123,7 @@ export class DaemonCliManager {
                 const { adapter, key } = found;
 
                 if (action === 'send_chat') {
-                    const currentStatus = normalizeAgentStatus(adapter.getStatus?.()?.status);
+                    const currentStatus = getEffectiveAgentSendStatus(adapter);
                     if (BUSY_AGENT_STATUSES.has(currentStatus)) {
                         return {
                             success: false,

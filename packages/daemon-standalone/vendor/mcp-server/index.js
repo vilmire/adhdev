@@ -1802,6 +1802,7 @@ async function meshStatus(ctx) {
     },
     nodes: results,
     activeWork: activeWorkEvidence.activeWork,
+    staleDirectWork: activeWorkEvidence.staleDirectWork,
     activeWorkSummary: activeWorkEvidence.summary,
     branchConvergenceSummary: summarizeBranchConvergence(results)
   };
@@ -1820,12 +1821,17 @@ async function meshStatus(ctx) {
 }
 async function meshTaskHistory(ctx, args) {
   const { mesh } = ctx;
-  await drainCoordinatorPendingEvents(ctx);
+  const pendingEvents = await drainCoordinatorPendingEvents(ctx);
   const tail = typeof args.tail === "number" && args.tail > 0 ? args.tail : 20;
   const kind = typeof args.kind === "string" && args.kind.trim() ? [args.kind.trim()] : void 0;
   const entries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail, kind });
   const summary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
-  return JSON.stringify({ meshId: mesh.id, entries, summary }, null, 2);
+  return JSON.stringify({
+    meshId: mesh.id,
+    entries,
+    summary,
+    ...pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}
+  }, null, 2);
 }
 async function meshReconcileLedger(ctx, args) {
   await refreshMeshFromDaemon(ctx);
@@ -2015,6 +2021,7 @@ async function meshViewQueue(ctx, args) {
       queue,
       visibleQueue: queue,
       activeWork: activeWorkEvidence.activeWork,
+      staleDirectWork: activeWorkEvidence.staleDirectWork,
       activeWorkSummary: activeWorkEvidence.summary,
       visibleSummary,
       summary,

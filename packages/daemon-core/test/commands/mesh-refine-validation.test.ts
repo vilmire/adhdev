@@ -8,7 +8,13 @@ import { DaemonCommandRouter } from '../../src/commands/router'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
 import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../src/mesh/mesh-events'
 
-function createRouter() {
+function createRouter(meshId?: string, messages?: string[]) {
+  const coordinator = meshId && messages
+    ? {
+        getState: () => ({ instanceId: 'coord-refine-test', settings: { meshCoordinatorFor: meshId } }),
+        onEvent: (_event: string, payload: any) => messages.push(payload?.input?.text || ''),
+      }
+    : null
   return new DaemonCommandRouter({
     commandHandler: { handle: async () => ({ success: false }) } as any,
     cliManager: {} as any,
@@ -18,6 +24,7 @@ function createRouter() {
       collectAllStates: () => [],
       listInstanceIds: () => [],
       getInstance: () => null,
+      getByCategory: (category: string) => category === 'cli' && coordinator ? [coordinator] : [],
     } as any,
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
@@ -221,6 +228,9 @@ describe('refine_mesh_node validation gate', () => {
         status: 'completed',
         result: { success: true, merged: true },
       })
+      expect(pending[0].coordinatorMessage).toContain('Refinery async job')
+      expect(pending[0].coordinatorMessage).toContain('job_id=refine_job_pending_completed')
+      expect(pending[0].coordinatorMessage).toContain('merge=merged')
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
@@ -397,7 +407,8 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['add', 'SOURCE_ONLY.md'], { cwd: repo })
       execFileSync('git', ['commit', '-q', '-m', 'source-only change'], { cwd: repo })
       const mesh = createMesh(repo, worktree)
-      const router = createRouter()
+      const messages: string[] = []
+      const router = createRouter(mesh.id, messages)
 
       const accepted: any = await router.execute('refine_mesh_node', {
         meshId: mesh.id,
@@ -429,6 +440,18 @@ describe('refine_mesh_node validation gate', () => {
       expect(readFileSync(join(repo, 'SOURCE_ONLY.md'), 'utf-8')).toBe('source change\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-worktree')).toBe(false)
       expect(result.finalBranchConvergenceState).toMatchObject({ branch: 'main', merged: true, validation: 'passed' })
+      expect(messages.some(message =>
+        message.includes(`job_id=${accepted.jobId}`)
+        && message.includes('validation=passed')
+        && message.includes('patch_equivalence=passed')
+        && message.includes('merge=merged')
+        && message.includes('final_convergence=merged')
+        && message.includes('Next step: Continue from the updated mesh state.')
+      )).toBe(true)
+      expect(drainPendingMeshCoordinatorEvents(mesh.id).some(event =>
+        event.event === 'refine:completed'
+        && (event.metadataEvent as any).jobId === accepted.jobId
+      )).toBe(false)
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
@@ -448,7 +471,8 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['update-index', '--add', '--cacheinfo', '160000', missingCommit, 'oss'], { cwd: worktree })
       execFileSync('git', ['commit', '-q', '-m', 'point submodule at missing commit'], { cwd: worktree })
       const mesh = createMesh(repo, worktree, 'node-missing-submodule')
-      const router = createRouter()
+      const messages: string[] = []
+      const router = createRouter(mesh.id, messages)
 
       const accepted: any = await router.execute('refine_mesh_node', {
         meshId: mesh.id,
@@ -490,9 +514,21 @@ describe('refine_mesh_node validation gate', () => {
       expect(result.refineStages.some((entry: any) => entry.stage === 'cleanup')).toBe(false)
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-missing-submodule')).toBe(true)
-      const events = drainPendingMeshCoordinatorEvents(mesh.id)
-      const failedEvent = events.find(event => event.event === 'refine:failed' && (event.metadataEvent as any).jobId === accepted.jobId)
-      expect((failedEvent?.metadataEvent as any)?.result).toMatchObject({ code: 'submodule_reachability_failed' })
+      expect(messages.some(message =>
+        message.includes(`job_id=${accepted.jobId}`)
+        && message.includes('code=submodule_reachability_failed')
+        && message.includes('validation=passed')
+        && message.includes('patch_equivalence=passed')
+        && message.includes('merge=not_merged')
+        && message.includes('convergence=blocked_review')
+        && message.includes('reason=submodule_publish_required')
+        && message.includes('Next step:')
+        && message.includes(`oss@${missingCommit}`)
+      )).toBe(true)
+      expect(drainPendingMeshCoordinatorEvents(mesh.id).some(event =>
+        event.event === 'refine:failed'
+        && (event.metadataEvent as any).jobId === accepted.jobId
+      )).toBe(false)
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
@@ -500,7 +536,7 @@ describe('refine_mesh_node validation gate', () => {
     }
   }, 60000)
 
-  it('requires submodule gitlink commits to be reachable from the configured remote, not only local checkout', async () => {
+  it('requires submodule gitlink commits to be reachable from the configured remote main branch, not only local checkout', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-local-only-submodule-'))
     const repo = join(root, 'repo')
     const submoduleOrigin = join(root, 'submodule-origin')
@@ -550,8 +586,10 @@ describe('refine_mesh_node validation gate', () => {
           remote: 'origin',
           remoteUrl: submoduleOrigin,
           remoteReachable: false,
+          remoteMainBranch: 'main',
+          remoteMainReachable: false,
           publishRequired: true,
-          error: expect.stringContaining('Submodule remote reachability check failed for origin'),
+          error: expect.stringContaining('Submodule remote main reachability check failed for origin/main'),
         }),
       ])
       expect(result.unreachableSubmoduleCommits).toEqual([
@@ -561,7 +599,9 @@ describe('refine_mesh_node validation gate', () => {
           remote: 'origin',
           remoteUrl: submoduleOrigin,
           remoteReachable: false,
-          error: expect.stringContaining('Submodule remote reachability check failed for origin'),
+          remoteMainBranch: 'main',
+          remoteMainReachable: false,
+          error: expect.stringContaining('Submodule remote main reachability check failed for origin/main'),
         }),
       ])
       const reachabilityStage = result.refineStages.find((entry: any) => entry.stage === 'submodule_reachability')
@@ -575,7 +615,9 @@ describe('refine_mesh_node validation gate', () => {
             remote: 'origin',
             remoteUrl: submoduleOrigin,
             remoteReachable: false,
-            error: expect.stringContaining('Submodule remote reachability check failed for origin'),
+            remoteMainBranch: 'main',
+            remoteMainReachable: false,
+            error: expect.stringContaining('Submodule remote main reachability check failed for origin/main'),
           }),
         ],
       })
@@ -588,6 +630,66 @@ describe('refine_mesh_node validation gate', () => {
       })
       expect(result.refineStages.some((entry: any) => entry.stage === 'merge')).toBe(false)
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('does not treat submodule feature-branch reachability as remote main convergence', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-feature-submodule-'))
+    const repo = join(root, 'repo')
+    const submoduleOrigin = join(root, 'submodule-origin')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initSubmoduleOrigin(submoduleOrigin)
+      initGitRepo(repo)
+      addSubmodule(repo, submoduleOrigin, 'oss')
+      const worktree = createWorktreeWithCommit(root, repo)
+      execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'oss'], { cwd: worktree })
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: join(worktree, 'oss') })
+      writeFileSync(join(worktree, 'oss', 'FEATURE_ONLY.md'), 'feature branch only\n', 'utf-8')
+      execFileSync('git', ['add', 'FEATURE_ONLY.md'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['commit', '-q', '-m', 'feature only submodule commit'], { cwd: join(worktree, 'oss') })
+      const featureOnlyCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(worktree, 'oss'), encoding: 'utf-8' }).trim()
+      execFileSync('git', ['push', '-q', 'origin', `HEAD:refs/heads/feature-only`], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['add', 'oss'], { cwd: worktree })
+      execFileSync('git', ['commit', '-q', '-m', 'point submodule at feature branch commit'], { cwd: worktree })
+      const mesh = createMesh(repo, worktree, 'node-feature-only-submodule')
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-feature-only-submodule',
+        inlineMesh: mesh,
+      })
+
+      expectAccepted(accepted, 'node-feature-only-submodule')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_failed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({
+        success: false,
+        code: 'submodule_reachability_failed',
+        blockedReason: 'submodule_publish_required',
+      })
+      expect(result.submoduleReachability.unreachable).toEqual([
+        expect.objectContaining({
+          path: 'oss',
+          commit: featureOnlyCommit,
+          remote: 'origin',
+          remoteUrl: submoduleOrigin,
+          remoteReachable: false,
+          remoteMainBranch: 'main',
+          remoteMainReachable: false,
+          publishRequired: true,
+        }),
+      ])
+      expect(result.nextStep).toContain('submodule remote main branch')
+      expect(result.refineStages.some((entry: any) => entry.stage === 'merge')).toBe(false)
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir

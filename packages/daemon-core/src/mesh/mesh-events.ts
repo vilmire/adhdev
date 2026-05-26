@@ -55,6 +55,7 @@ export interface PendingMeshCoordinatorEvent {
     nodeId?: string;
     workspace?: string;
     metadataEvent: Record<string, unknown>;
+    coordinatorMessage?: string;
     queuedAt: number;
 }
 
@@ -750,23 +751,62 @@ function buildMeshSystemMessage(args: {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
         const result = readRecord(args.metadataEvent.result);
         const validationSummary = readRecord(result?.validationSummary);
+        const patchEquivalence = readRecord(result?.patchEquivalence);
+        const finalConvergence = readRecord(result?.finalBranchConvergenceState);
         const validationStatus = readNonEmptyString(validationSummary?.status);
+        const patchStatus = readNonEmptyString(patchEquivalence?.status)
+            || (patchEquivalence?.equivalent === true ? 'passed' : '');
         const into = readNonEmptyString(result?.into);
         const branch = readNonEmptyString(result?.branch);
+        const mergeStatus = result?.merged === true ? 'merged' : readNonEmptyString(finalConvergence?.status);
+        const convergenceStatus = readNonEmptyString(finalConvergence?.status);
+        const nextStep = readNonEmptyString(result?.nextStep)
+            || readNonEmptyString(finalConvergence?.nextStep)
+            || 'Continue from the updated mesh state.';
         const details = [
             jobId ? `job_id=${jobId}` : '',
             branch && into ? `${branch}→${into}` : '',
             validationStatus ? `validation=${validationStatus}` : '',
+            patchStatus ? `patch_equivalence=${patchStatus}` : '',
+            mergeStatus ? `merge=${mergeStatus}` : '',
+            convergenceStatus ? `final_convergence=${convergenceStatus}` : '',
         ].filter(Boolean).join('; ');
-        return `[System] Refinery async job for ${args.nodeLabel} completed successfully${details ? ` (${details})` : ''}. The worktree was merged and cleanup completed; continue from the updated mesh state.`;
+        return `[System] Refinery async job for ${args.nodeLabel} completed successfully${details ? ` (${details})` : ''}.\nNext step: ${nextStep}`;
     }
     if (args.event === 'refine:failed') {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
         const result = readRecord(args.metadataEvent.result);
+        const validationSummary = readRecord(result?.validationSummary);
+        const patchEquivalence = readRecord(result?.patchEquivalence);
+        const finalConvergence = readRecord(result?.finalBranchConvergenceState);
         const code = readNonEmptyString(result?.code);
         const error = readNonEmptyString(result?.error);
-        const details = [jobId ? `job_id=${jobId}` : '', code ? `code=${code}` : ''].filter(Boolean).join('; ');
-        return `[System] Refinery async job for ${args.nodeLabel} failed${details ? ` (${details})` : ''}${error ? `: ${error}` : '.'} Review the terminal refine event/ledger before retrying.`;
+        const validationStatus = readNonEmptyString(validationSummary?.status);
+        const patchStatus = readNonEmptyString(patchEquivalence?.status)
+            || (patchEquivalence?.equivalent === true ? 'passed' : '');
+        const mergeStatus = result?.merged === true
+            ? 'merged'
+            : finalConvergence?.merged === false
+                ? 'not_merged'
+                : '';
+        const convergenceStatus = readNonEmptyString(result?.convergenceStatus)
+            || readNonEmptyString(finalConvergence?.status);
+        const blockedReason = readNonEmptyString(result?.blockedReason);
+        const nextStep = readNonEmptyString(result?.nextStep) || readNonEmptyString(finalConvergence?.nextStep);
+        const details = [
+            jobId ? `job_id=${jobId}` : '',
+            code ? `code=${code}` : '',
+            validationStatus ? `validation=${validationStatus}` : '',
+            patchStatus ? `patch_equivalence=${patchStatus}` : '',
+            mergeStatus ? `merge=${mergeStatus}` : '',
+            convergenceStatus ? `convergence=${convergenceStatus}` : '',
+            blockedReason ? `reason=${blockedReason}` : '',
+        ].filter(Boolean).join('; ');
+        const parts = [
+            `[System] Refinery async job for ${args.nodeLabel} failed${details ? ` (${details})` : ''}${error ? `: ${error}` : '.'}`,
+            nextStep ? `Next step: ${nextStep}` : 'Review the terminal refine event/ledger before retrying.',
+        ];
+        return parts.join('\n');
     }
     return '';
 }
@@ -904,7 +944,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
         }
         if (sessionId) {
-            updateSessionTaskStatus(args.meshId, sessionId, 'failed');
+            const failedTask = updateSessionTaskStatus(args.meshId, sessionId, 'failed');
+            completedTaskForLedger = failedTask ? { id: failedTask.id } : null;
         }
     }
 
@@ -1015,6 +1056,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
     }
 
+    const messageText = buildMeshSystemMessage({
+        event: args.event,
+        nodeLabel: args.nodeLabel,
+        metadataEvent: args.metadataEvent,
+        recoveryContext,
+    });
+    if (!messageText) return { success: false, error: 'unsupported mesh event' };
+
     const coordinatorInstances = components.instanceManager.getByCategory('cli').filter((inst) => {
         const instState = inst.getState();
         if (instState.settings?.meshCoordinatorFor !== args.meshId) return false;
@@ -1034,20 +1083,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     ...args.metadataEvent,
                     ...(recoveryContext ? { recoveryContext } : {}),
                 },
+                coordinatorMessage: messageText,
                 queuedAt: Date.now(),
             })) {
             LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
         }
         return { success: true, forwarded: 0 };
     }
-
-    const messageText = buildMeshSystemMessage({
-        event: args.event,
-        nodeLabel: args.nodeLabel,
-        metadataEvent: args.metadataEvent,
-        recoveryContext,
-    });
-    if (!messageText) return { success: false, error: 'unsupported mesh event' };
 
     for (const coord of coordinatorInstances) {
         const coordState = coord.getState();

@@ -22,6 +22,7 @@ export interface MeshActiveWorkRecord {
     terminal?: boolean;
     terminalKind?: string;
     terminalAt?: string;
+    staleReason?: string;
 }
 
 export interface MeshActiveWorkSummary {
@@ -34,6 +35,7 @@ export interface MeshActiveWorkSummary {
     idleCount: number;
     sourceCounts: Record<MeshActiveWorkSource, number>;
     statusCounts: Record<MeshActiveWorkStatus, number>;
+    staleDirectCount: number;
 }
 
 export interface BuildMeshActiveWorkOptions {
@@ -64,10 +66,12 @@ function elapsedSince(value: string | undefined, now: number): number {
     return Number.isFinite(started) ? Math.max(0, now - started) : 0;
 }
 
-function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessionId?: string): MeshActiveWorkStatus | undefined {
-    if (!nodeId || !sessionId || !Array.isArray(nodes)) return undefined;
+function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessionId?: string): { status?: MeshActiveWorkStatus; staleReason?: string } {
+    if (!Array.isArray(nodes)) return {};
+    if (!nodeId) return { staleReason: 'direct task has no node id' };
     const node = nodes.find(item => readString(item?.id) === nodeId || readString(item?.nodeId) === nodeId || readString(item?.node_id) === nodeId);
-    if (!node) return undefined;
+    if (!node) return { staleReason: 'direct task node is no longer in the live mesh' };
+    if (!sessionId) return {};
     const candidates: any[] = [];
     for (const value of [node.sessions, node.activeSessions, node.active_sessions, node.lastProbe?.sessions, node.last_probe?.sessions, node.lastProbe?.status?.sessions, node.last_probe?.status?.sessions]) {
         if (Array.isArray(value)) candidates.push(...value);
@@ -76,16 +80,18 @@ function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessi
         if (value && typeof value === 'object') candidates.push(value);
     }
     const session = candidates.find(item => {
+        if (typeof item === 'string') return item === sessionId;
         const id = readString(item?.id) || readString(item?.sessionId) || readString(item?.session_id) || readString(item?.runtimeSessionId) || readString(item?.instanceId);
         return id === sessionId;
     });
-    if (!session) return undefined;
+    if (!session) return { staleReason: 'direct task session is not present in live session records' };
+    if (typeof session === 'string') return {};
     const raw = `${readString(session.status) || ''} ${readString(session.lifecycle) || ''} ${readString(session.state) || ''} ${readString(session.activeChat?.status) || ''}`.toLowerCase();
-    if (raw.includes('approval')) return 'awaiting_approval';
-    if (raw.includes('generating') || raw.includes('running') || raw.includes('busy')) return 'generating';
-    if (raw.includes('failed') || raw.includes('stopped') || raw.includes('terminated') || raw.includes('exited')) return 'failed';
-    if (raw.includes('idle') || raw.includes('waiting_input') || raw.includes('ready')) return 'idle';
-    return undefined;
+    if (raw.includes('approval')) return { status: 'awaiting_approval' };
+    if (raw.includes('generating') || raw.includes('running') || raw.includes('busy')) return { status: 'generating' };
+    if (raw.includes('failed') || raw.includes('stopped') || raw.includes('terminated') || raw.includes('exited')) return { status: 'failed' };
+    if (raw.includes('idle') || raw.includes('waiting_input') || raw.includes('ready')) return { status: 'idle' };
+    return {};
 }
 
 function isDirectDispatch(entry: MeshLedgerEntry): boolean {
@@ -138,12 +144,14 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         idleCount: statusCounts.idle,
         sourceCounts,
         statusCounts,
+        staleDirectCount: activeWork.filter(item => item.source === 'direct' && item.staleReason).length,
     };
 }
 
-export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeWork: MeshActiveWorkRecord[]; summary: MeshActiveWorkSummary } {
+export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeWork: MeshActiveWorkRecord[]; staleDirectWork: MeshActiveWorkRecord[]; summary: MeshActiveWorkSummary } {
     const now = opts.now ?? Date.now();
     const records: MeshActiveWorkRecord[] = [];
+    const staleDirectWork: MeshActiveWorkRecord[] = [];
 
     for (const task of opts.queue || []) {
         if (task.status !== 'pending' && task.status !== 'assigned') continue;
@@ -173,13 +181,13 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
             .find(entry => terminalMatchesDispatch(entry, dispatch, taskId));
         const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
-        const liveStatus = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
-        const status = terminalStatus || liveStatus || 'assigned';
+        const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
+        const status = terminalStatus || live.status || 'assigned';
         const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
         if (terminalRow && opts.includeTerminalDirect !== true) continue;
         const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
         const { title, summary } = summarizeMessage(message);
-        records.push({
+        const record: MeshActiveWorkRecord = {
             taskId,
             source: 'direct',
             status,
@@ -197,9 +205,18 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             terminal: terminalRow,
             terminalKind: terminal?.kind,
             terminalAt: terminal?.timestamp,
-        });
+            staleReason: live.staleReason,
+        };
+        if (live.staleReason && !terminalRow) {
+            staleDirectWork.push(record);
+            continue;
+        }
+        records.push(record);
     }
 
     records.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    return { activeWork: records, summary: buildMeshActiveWorkSummary(records) };
+    staleDirectWork.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const summary = buildMeshActiveWorkSummary(records);
+    summary.staleDirectCount = staleDirectWork.length;
+    return { activeWork: records, staleDirectWork, summary };
 }
