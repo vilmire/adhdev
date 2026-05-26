@@ -43,6 +43,11 @@ type CompletedDebouncePending = {
     loggedBlockReason?: string;
 };
 
+type CompletedFinalizationBlock = {
+    reason: string;
+    terminal?: boolean;
+};
+
 const COMPLETED_FINALIZATION_RETRY_MS = 1000;
 const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
 
@@ -817,29 +822,34 @@ export class CliProviderInstance implements ProviderInstance {
         return !this.hasAdapterPendingResponse();
     }
 
-    private getCompletedFinalizationBlockReason(latestVisibleStatus: string): string | null {
-        if (latestVisibleStatus !== 'idle') return `status:${latestVisibleStatus}`;
+    private getCompletedFinalizationBlock(latestVisibleStatus: string): CompletedFinalizationBlock | null {
+        if (latestVisibleStatus !== 'idle') return { reason: `status:${latestVisibleStatus}`, terminal: true };
 
         const adapterAny = this.adapter as any;
-        if (adapterAny?.isWaitingForResponse === true) return 'adapter_waiting_for_response';
-        if (adapterAny?.currentTurnScope) return 'adapter_turn_scope_active';
+        if (adapterAny?.isWaitingForResponse === true) return { reason: 'adapter_waiting_for_response', terminal: true };
+        if (adapterAny?.currentTurnScope) return { reason: 'adapter_turn_scope_active', terminal: true };
+        if (this.hasAdapterPendingResponse()) return { reason: 'adapter_pending_response', terminal: true };
 
         const partial = typeof this.adapter.getPartialResponse === 'function'
             ? this.adapter.getPartialResponse()
             : '';
-        if (typeof partial === 'string' && partial.trim()) return 'partial_response_pending';
+        if (typeof partial === 'string' && partial.trim()) return { reason: 'partial_response_pending', terminal: true };
 
         let parsed: any;
         try {
             parsed = this.adapter.getScriptParsedStatus();
         } catch (error: any) {
-            return `parse_error:${error?.message || String(error)}`;
+            return { reason: `parse_error:${error?.message || String(error)}` };
         }
 
         const parsedStatus = typeof parsed?.status === 'string' ? parsed.status : 'unknown';
-        if (parsedStatus !== 'idle') return `parsed_status:${parsedStatus}`;
-        if (parsed?.activeModal || parsed?.modal) return 'parsed_modal_active';
-        if (!this.completionHasFinalAssistantMessage(parsed?.messages)) return 'missing_final_assistant';
+        if (parsedStatus !== 'idle') {
+            const adapterStatus = this.adapter.getStatus({ allowParse: false });
+            if (this.shouldSuppressStaleParsedBusyStatus(parsed, adapterStatus)) return null;
+            return { reason: `parsed_status:${parsedStatus}`, terminal: isCliGeneratingLikeStatus(parsedStatus) };
+        }
+        if (parsed?.activeModal || parsed?.modal) return { reason: 'parsed_modal_active', terminal: true };
+        if (!this.completionHasFinalAssistantMessage(parsed?.messages)) return { reason: 'missing_final_assistant' };
 
         return null;
     }
@@ -866,10 +876,11 @@ export class CliProviderInstance implements ProviderInstance {
             return;
         }
 
-        const blockReason = this.getCompletedFinalizationBlockReason(latestVisibleStatus);
-        if (blockReason) {
+        const block = this.getCompletedFinalizationBlock(latestVisibleStatus);
+        if (block) {
+            const blockReason = block.reason;
             const waitedMs = Date.now() - pending.firstObservedAt;
-            if (waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS) {
+            if (block.terminal || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS) {
                 if (pending.loggedBlockReason !== blockReason) {
                     LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
                     pending.loggedBlockReason = blockReason;
