@@ -141,4 +141,33 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('`not_mergeable`')
     expect(prompt).toContain('Do not strand completed branches')
   })
+
+  it('treats submodule reachability failures as publish-needed blocked review', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        defaultBranch: 'main',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    expect(prompt).toContain('require each submodule commit to be reachable from its configured remote')
+    expect(prompt).toContain('`submodule_reachability_failed`')
+    expect(prompt).toContain('keep the public convergence bucket as `blocked_review`')
+    expect(prompt).toContain('ask the user for explicit approval to push/publish the unreachable submodule commit')
+    expect(prompt).toContain('then rerun `mesh_refine_node`')
+    expect(prompt).toContain('Do not retry validation blindly or start code review first')
+  })
 })
