@@ -282,6 +282,24 @@ function readBranchConvergenceFollowUps(status: RepoMeshStatus): unknown[] | nul
     return null
 }
 
+function readSourceOfTruthWarnings(status: RepoMeshStatus): string[] {
+    const sourceOfTruth = (status as unknown as { sourceOfTruth?: { fallback?: { warning?: unknown }; directPeerTruth?: { required?: unknown; satisfied?: unknown }; currentStatus?: unknown } }).sourceOfTruth
+    const warnings: string[] = []
+    const fallbackWarning = sourceOfTruth?.fallback?.warning
+    if (typeof fallbackWarning === 'string' && fallbackWarning.trim()) {
+        warnings.push(fallbackWarning.trim())
+    }
+    if (
+        sourceOfTruth?.currentStatus === 'bootstrap_inventory_fallback'
+        && sourceOfTruth.directPeerTruth?.required === true
+        && sourceOfTruth.directPeerTruth?.satisfied !== true
+        && !warnings.some(warning => warning.includes('direct mesh truth'))
+    ) {
+        warnings.push('Direct mesh truth is not confirmed yet; this graph is drawn from setup inventory only.')
+    }
+    return warnings
+}
+
 function isCleanDefaultBranchMember(node: MeshGraphNode, defaultBranch: string): boolean {
     return node.type !== 'submoduleNode'
         && node.branch === defaultBranch
@@ -447,7 +465,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     )
     const nodes: MeshGraphNode[] = []
     const edges: MeshGraphEdge[] = []
-    const warnings: string[] = []
+    const warnings: string[] = readSourceOfTruthWarnings(canonicalStatus)
     const branchToNodeIds = new Map<string, string[]>()
 
     for (const nodeStatus of canonicalStatus.nodes) {
