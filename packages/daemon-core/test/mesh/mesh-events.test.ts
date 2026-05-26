@@ -139,6 +139,53 @@ describe('setupMeshEventForwarding', () => {
     expect(text).toContain('do not poll repeatedly')
   })
 
+  it('buffers delegated completion events for MCP coordinators even when a CLI coordinator is present', () => {
+    const meshId = `mesh_completion_pending_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit, coordinator } = createComponents(meshId)
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'codex-history-1',
+        finalSummary: 'done',
+        timestamp: 12345,
+      })
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'codex-history-1',
+        finalSummary: 'done',
+        timestamp: 12345,
+      })
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node_child_1',
+        metadataEvent: {
+          targetSessionId: 'runtime-session-1',
+          providerType: 'codex-cli',
+          providerSessionId: 'codex-history-1',
+          finalSummary: 'done',
+        },
+      })
+      expect(pending[0].coordinatorMessage).toContain('has completed its task')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('marks the assigned queue task completed when a completion event only carries instanceId', () => {
     const meshId = `mesh_completion_fallback_${Date.now()}`
     try {

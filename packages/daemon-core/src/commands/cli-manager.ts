@@ -81,6 +81,7 @@ export interface CliManagerDeps {
 type CommandResult = { success: boolean;[key: string]: unknown };
 
 const BUSY_AGENT_STATUSES = new Set(['generating', 'running', 'streaming', 'starting', 'busy', 'waiting', 'waiting_approval', 'long_generating']);
+const ZERO_MESSAGE_STARTING_SEND_WAIT_MS = 2_000;
 
 function normalizeAgentStatus(value: unknown): string {
     return typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -102,6 +103,24 @@ function hasAdapterPendingResponse(adapter: any): boolean {
         if (typeof partial === 'string' && partial.trim()) return true;
     } catch { /* defensive: missing partial means no pending evidence */ }
     return false;
+}
+
+function countMessages(value: unknown): number {
+    return Array.isArray(value) ? value.length : 0;
+}
+
+function hasZeroMessageStartingLaunch(adapter: any): boolean {
+    const adapterStatus = adapter?.getStatus?.({ allowParse: false }) ?? adapter?.getStatus?.() ?? {};
+    const parsedStatus = typeof adapter?.getScriptParsedStatus === 'function'
+        ? adapter.getScriptParsedStatus()
+        : {};
+    const adapterRawStatus = normalizeAgentStatus(adapterStatus?.status);
+    const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
+    if (adapterRawStatus !== 'starting') return false;
+    if (parsedRawStatus && parsedRawStatus !== 'starting' && parsedRawStatus !== 'generating') return false;
+    if (hasNonEmptyModalButtons(adapterStatus?.activeModal ?? adapterStatus?.modal ?? parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
+    if (countMessages(adapterStatus?.messages) > 0 || countMessages(parsedStatus?.messages) > 0) return false;
+    return !hasAdapterPendingResponse(adapter);
 }
 
 function shouldSuppressStaleParsedBusyStatus(adapterStatus: string, parsedStatus: any, adapter: any): boolean {
@@ -128,6 +147,20 @@ function getEffectiveAgentSendStatus(adapter: any): string {
         return adapterStatus;
     }
     return adapterStatus;
+}
+
+async function waitForZeroMessageStartingLaunch(adapter: any): Promise<boolean> {
+    try {
+        if (!hasZeroMessageStartingLaunch(adapter)) return false;
+    } catch {
+        return false;
+    }
+    await new Promise(resolve => setTimeout(resolve, ZERO_MESSAGE_STARTING_SEND_WAIT_MS));
+    try {
+        return hasZeroMessageStartingLaunch(adapter);
+    } catch {
+        return false;
+    }
 }
 
 export interface CliTransportFactoryParams {
@@ -1123,7 +1156,12 @@ export class DaemonCliManager {
                 const { adapter, key } = found;
 
                 if (action === 'send_chat') {
-                    const currentStatus = getEffectiveAgentSendStatus(adapter);
+                    let currentStatus = getEffectiveAgentSendStatus(adapter);
+                    if (currentStatus === 'starting' && await waitForZeroMessageStartingLaunch(adapter)) {
+                        currentStatus = 'idle';
+                    } else if (currentStatus === 'starting') {
+                        currentStatus = getEffectiveAgentSendStatus(adapter);
+                    }
                     if (BUSY_AGENT_STATUSES.has(currentStatus)) {
                         return {
                             success: false,

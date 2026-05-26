@@ -102,6 +102,33 @@ describe('DaemonCliManager agent_command', () => {
     expect(sendMessage).not.toHaveBeenCalled()
   })
 
+  it('does not reject the first task for a zero-message starting launch state', async () => {
+    vi.useFakeTimers()
+    try {
+      const { manager, sendMessage } = createManager('starting', {
+        parsedStatus: 'generating',
+        pending: false,
+      })
+
+      const resultPromise = manager.handleCliCommand('agent_command', {
+        targetSessionId: 'session-1',
+        agentType: 'hermes-cli',
+        cliType: 'hermes-cli',
+        action: 'send_chat',
+        message: 'first task',
+      })
+
+      await Promise.resolve()
+      expect(sendMessage).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      await expect(resultPromise).resolves.toMatchObject({ success: true, status: 'generating' })
+      expect(sendMessage).toHaveBeenCalledWith('first task')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not deadlock on stale parser busy once adapter idle has no pending evidence', async () => {
     const { manager, sendMessage } = createManager('idle', {
       parsedStatus: 'generating',
