@@ -109,6 +109,15 @@ function countMessages(value: unknown): number {
     return Array.isArray(value) ? value.length : 0;
 }
 
+function hasFinalAssistantMessage(value: unknown): boolean {
+    const messages = Array.isArray(value) ? value : [];
+    const last = messages[messages.length - 1] as any;
+    if (!last || last.role !== 'assistant') return false;
+    if (last.bubbleState === 'streaming') return false;
+    if (last.meta?.streaming === true) return false;
+    return typeof last.content === 'string' && last.content.trim().length > 0;
+}
+
 function hasZeroMessageStartingLaunch(adapter: any): boolean {
     const adapterStatus = adapter?.getStatus?.({ allowParse: false }) ?? adapter?.getStatus?.() ?? {};
     const parsedStatus = typeof adapter?.getScriptParsedStatus === 'function'
@@ -123,6 +132,21 @@ function hasZeroMessageStartingLaunch(adapter: any): boolean {
     return !hasAdapterPendingResponse(adapter);
 }
 
+function hasCompletedStartingLaunch(adapter: any): boolean {
+    const adapterStatus = adapter?.getStatus?.({ allowParse: false }) ?? adapter?.getStatus?.() ?? {};
+    const adapterRawStatus = normalizeAgentStatus(adapterStatus?.status);
+    if (adapterRawStatus !== 'starting') return false;
+    if (hasAdapterPendingResponse(adapter)) return false;
+
+    const parsedStatus = typeof adapter?.getScriptParsedStatus === 'function'
+        ? adapter.getScriptParsedStatus()
+        : {};
+    const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
+    if (parsedRawStatus !== 'idle') return false;
+    if (hasNonEmptyModalButtons(adapterStatus?.activeModal ?? adapterStatus?.modal ?? parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
+    return hasFinalAssistantMessage(parsedStatus?.messages);
+}
+
 function shouldSuppressStaleParsedBusyStatus(adapterStatus: string, parsedStatus: any, adapter: any): boolean {
     const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
     if (!BUSY_AGENT_STATUSES.has(parsedRawStatus)) return false;
@@ -133,6 +157,7 @@ function shouldSuppressStaleParsedBusyStatus(adapterStatus: string, parsedStatus
 
 function getEffectiveAgentSendStatus(adapter: any): string {
     const adapterStatus = normalizeAgentStatus(adapter?.getStatus?.({ allowParse: false })?.status ?? adapter?.getStatus?.()?.status);
+    if (adapterStatus === 'starting' && hasCompletedStartingLaunch(adapter)) return 'idle';
     if (adapterStatus && adapterStatus !== 'idle') return adapterStatus;
     if (adapterStatus !== 'idle') return adapterStatus;
 
