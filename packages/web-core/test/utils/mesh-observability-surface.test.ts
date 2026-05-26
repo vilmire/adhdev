@@ -279,7 +279,8 @@ describe('MeshObservabilitySurface', () => {
       path.join(process.cwd(), 'src/components/MeshGraph/MeshObservabilitySurface.tsx'),
       'utf8',
     )
-    expect(source).toContain('const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [canonicalStatus])')
+    expect(source).toContain('const statusGraphFingerprint = useMemo(() => getRepoMeshStatusGraphFingerprint(canonicalStatus), [canonicalStatus])')
+    expect(source).toContain('const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [statusGraphFingerprint])')
     expect(source).toContain('const selectedGraphNode = resolveSelectedGraphNodeForDetail(canonicalGraph, selectedNodeId)')
     expect(source).toContain('role="dialog"')
     expect(source).toContain('onClick={closeGraphDetail}')
