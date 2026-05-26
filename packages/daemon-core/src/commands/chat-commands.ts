@@ -24,7 +24,8 @@ import { filterUserFacingChatMessages, normalizeChatMessages } from '../provider
 const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
 const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
-const CODEX_NATIVE_HISTORY_FRESH_MS = 5 * 60_000;
+const CLI_NATIVE_HISTORY_FRESH_MS = 5 * 60_000;
+const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli']);
 const recentSendByTarget = new Map<string, number>();
 
 interface ApprovalSelectableInstance extends ProviderInstance {
@@ -152,7 +153,17 @@ function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
     const instance = h.ctx.instanceManager?.getInstance(targetSessionId);
     const state = instance?.getState?.();
     const providerSessionId = typeof state?.providerSessionId === 'string' ? state.providerSessionId.trim() : '';
-    return providerSessionId || targetSessionId;
+    if (providerSessionId) return providerSessionId;
+
+    const currentSession = h.currentSession as any;
+    if (currentSession?.sessionId === targetSessionId) {
+        const currentProviderSessionId = typeof currentSession.providerSessionId === 'string'
+            ? currentSession.providerSessionId.trim()
+            : '';
+        if (currentProviderSessionId) return currentProviderSessionId;
+    }
+
+    return targetSessionId;
 }
 
 function getInteractionId(args: any): string | undefined {
@@ -254,7 +265,9 @@ function buildCliMessageSourceProvenance(args: {
     return {
         selected: args.selected,
         provider: args.provider,
+        providerType: args.provider,
         ...(args.nativeHandle ? { nativeHandle: args.nativeHandle } : {}),
+        ...(args.nativeHandle ? { nativeSessionId: args.nativeHandle } : {}),
         ...(args.fallbackReason ? { fallbackReason: args.fallbackReason } : {}),
         ...(args.nativeSource ? { nativeSource: args.nativeSource } : {}),
         ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
@@ -282,7 +295,7 @@ function buildNativeHistoryFallbackReason(args: {
     safeMapping: boolean;
     freshEnough: boolean;
 }): string {
-    if (args.providerType !== 'codex-cli') return 'provider_not_codex_cli';
+    if (!supportsCliNativeTranscript(args.providerType)) return 'provider_native_transcript_not_supported';
     if (args.nativeSource === 'native-unavailable') return 'native_history_unavailable';
     if (args.nativeSource && args.nativeSource !== 'provider-native') return `native_history_source_${args.nativeSource}`;
     if (args.nativeMessageCount <= 0) return 'native_history_empty';
@@ -291,8 +304,8 @@ function buildNativeHistoryFallbackReason(args: {
     return 'native_history_not_selected';
 }
 
-function isCodexCliProvider(providerType: string): boolean {
-    return providerType === 'codex-cli';
+function supportsCliNativeTranscript(providerType: string): boolean {
+    return CLI_NATIVE_TRANSCRIPT_PROVIDERS.has(providerType);
 }
 
 function hasSafeNativeHistoryMapping(args: {
@@ -323,7 +336,7 @@ function isNativeHistoryFreshEnough(args: {
     const ptyNewest = getMessageNewestReceivedAt(args.ptyMessages);
     if (nativeNewest > 0 && nativeNewest >= ptyNewest) return true;
     const sourceMtimeMs = Number(args.sourceMtimeMs || 0);
-    if (sourceMtimeMs > 0 && Date.now() - sourceMtimeMs <= CODEX_NATIVE_HISTORY_FRESH_MS) return true;
+    if (sourceMtimeMs > 0 && Date.now() - sourceMtimeMs <= CLI_NATIVE_HISTORY_FRESH_MS) return true;
     return ptyNewest === 0 && nativeNewest > 0;
 }
 
@@ -1016,13 +1029,13 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             let messageSource = buildCliMessageSourceProvenance({
                 selected: 'pty-parser',
                 provider: adapter.cliType,
-                fallbackReason: isCodexCliProvider(providerType) ? 'native_history_not_checked' : 'provider_not_codex_cli',
+                fallbackReason: supportsCliNativeTranscript(providerType) ? 'native_history_not_checked' : 'provider_native_transcript_not_supported',
                 ptyMessages: returnedMessages,
                 returnedMessages,
                 ptyStatusApprovalOnly: false,
             });
 
-            if (isCodexCliProvider(providerType)) {
+            if (supportsCliNativeTranscript(providerType)) {
                 const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h, adapter.cliType);
                 const workspace = typeof args?.workspace === 'string'
                     ? args.workspace
@@ -1139,7 +1152,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     returnedStatus: String(returnedStatus || ''),
                     selectedMessageSource: (messageSource as any).selected,
                     messageSource,
-                    shouldPreferAdapterMessages: false,
+                    shouldPreferAdapterMessages: supportsCliNativeTranscript(providerType) && (messageSource as any).selected !== 'native-history',
                     parsedMsgCount: parsedRecord.messages.length,
                     returnedMsgCount: selectedMessages.length,
                 },
@@ -1170,9 +1183,48 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const historyProviderSessionId = typeof (history as any)?.providerSessionId === 'string'
                 ? (history as any).providerSessionId
                 : historySessionId;
+            const historyMessages = Array.isArray((history as any)?.messages)
+                ? normalizeChatMessages((history as any).messages as ChatMessage[])
+                : [];
+            const safeMapping = supportsCliNativeTranscript(agentStr)
+                ? hasSafeNativeHistoryMapping({
+                    historySessionId,
+                    providerSessionId: historyProviderSessionId,
+                    workspace,
+                    nativeMessages: historyMessages,
+                })
+                : false;
+            const nativeSelected = supportsCliNativeTranscript(agentStr)
+                && (history as any).source === 'provider-native'
+                && historyMessages.length > 0
+                && safeMapping;
+            const messageSource = buildCliMessageSourceProvenance({
+                selected: nativeSelected ? 'native-history' : 'pty-parser',
+                provider: agentStr,
+                nativeHandle: historyProviderSessionId || historySessionId,
+                fallbackReason: nativeSelected
+                    ? undefined
+                    : buildNativeHistoryFallbackReason({
+                        providerType: agentStr,
+                        nativeSource: (history as any).source,
+                        nativeMessageCount: historyMessages.length,
+                        safeMapping,
+                        freshEnough: true,
+                    }),
+                nativeSource: (history as any).source,
+                sourcePath: (history as any).sourcePath,
+                sourceMtimeMs: (history as any).sourceMtimeMs,
+                nativeMessages: historyMessages,
+                returnedMessages: historyMessages,
+                safeMapping,
+                freshEnough: true,
+                ptyStatusApprovalOnly: false,
+            });
             return buildReadChatCommandResult({
-                messages: Array.isArray((history as any)?.messages) ? (history as any).messages : [],
+                messages: historyMessages,
                 status: 'idle',
+                messageSource,
+                transcriptProvenance: messageSource,
                 ...(typeof (history as any)?.title === 'string' ? { title: (history as any).title } : {}),
                 ...(historyProviderSessionId ? { providerSessionId: historyProviderSessionId } : {}),
                 ...(((provider?.historyBehavior as any)?.transcriptAuthority === 'provider' || (provider?.historyBehavior as any)?.transcriptAuthority === 'daemon')
