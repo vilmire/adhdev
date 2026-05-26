@@ -765,8 +765,20 @@ function buildMeshSystemMessage(args: {
         const result = readRecord(args.metadataEvent.result);
         const code = readNonEmptyString(result?.code);
         const error = readNonEmptyString(result?.error);
-        const details = [jobId ? `job_id=${jobId}` : '', code ? `code=${code}` : ''].filter(Boolean).join('; ');
-        return `[System] Refinery async job for ${args.nodeLabel} failed${details ? ` (${details})` : ''}${error ? `: ${error}` : '.'} Review the terminal refine event/ledger before retrying.`;
+        const convergenceStatus = readNonEmptyString(result?.convergenceStatus);
+        const blockedReason = readNonEmptyString(result?.blockedReason);
+        const nextStep = readNonEmptyString(result?.nextStep) || readNonEmptyString(readRecord(result?.finalBranchConvergenceState)?.nextStep);
+        const details = [
+            jobId ? `job_id=${jobId}` : '',
+            code ? `code=${code}` : '',
+            convergenceStatus ? `convergence=${convergenceStatus}` : '',
+            blockedReason ? `reason=${blockedReason}` : '',
+        ].filter(Boolean).join('; ');
+        const parts = [
+            `[System] Refinery async job for ${args.nodeLabel} failed${details ? ` (${details})` : ''}${error ? `: ${error}` : '.'}`,
+            nextStep ? `Next step: ${nextStep}` : 'Review the terminal refine event/ledger before retrying.',
+        ];
+        return parts.join('\n');
     }
     return '';
 }
@@ -904,7 +916,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
         }
         if (sessionId) {
-            updateSessionTaskStatus(args.meshId, sessionId, 'failed');
+            const failedTask = updateSessionTaskStatus(args.meshId, sessionId, 'failed');
+            completedTaskForLedger = failedTask ? { id: failedTask.id } : null;
         }
     }
 
