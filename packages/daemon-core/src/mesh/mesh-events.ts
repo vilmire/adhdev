@@ -1100,26 +1100,52 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return true;
     });
 
-    const queuedForMcp = queuePendingMeshCoordinatorEvent({
-        event: args.event,
-        meshId: args.meshId,
-        nodeLabel: args.nodeLabel,
-        nodeId: args.nodeId || undefined,
-        workspace: readNonEmptyString(args.metadataEvent.workspace),
-        metadataEvent: {
-            ...args.metadataEvent,
-            ...(recoveryContext ? { recoveryContext } : {}),
-        },
-        coordinatorMessage: messageText,
-        queuedAt: Date.now(),
-    });
-    if (queuedForMcp) {
-        LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
-    }
+    // Refine terminal events (refine:completed, refine:failed) are coordinator-delivered
+    // synchronously; only buffer them for MCP when no CLI coordinator is present.
+    // Agent runtime events (agent:*) use dual delivery so both CLI and MCP coordinators
+    // receive them regardless of whether a live CLI coordinator session is active.
+    const isRefineTerminalEvent = REFINE_TERMINAL_EVENTS.has(args.event);
 
     if (coordinatorInstances.length === 0) {
-        // No CLI coordinator session found; MCP coordinators will drain the buffered event.
+        // No CLI coordinator session found — buffer for MCP-based coordinators.
+        if (queuePendingMeshCoordinatorEvent({
+                event: args.event,
+                meshId: args.meshId,
+                nodeLabel: args.nodeLabel,
+                nodeId: args.nodeId || undefined,
+                workspace: readNonEmptyString(args.metadataEvent.workspace),
+                metadataEvent: {
+                    ...args.metadataEvent,
+                    ...(recoveryContext ? { recoveryContext } : {}),
+                },
+                coordinatorMessage: messageText,
+                queuedAt: Date.now(),
+            })) {
+            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+        }
         return { success: true, forwarded: 0 };
+    }
+
+    // CLI coordinator is present. For non-refine events, also buffer for MCP coordinators
+    // that poll via get_pending_mesh_events (dual delivery). Refine terminal events are
+    // forwarded directly only — they must not accumulate in the pending queue when a live
+    // coordinator already received them.
+    if (!isRefineTerminalEvent) {
+        if (queuePendingMeshCoordinatorEvent({
+                event: args.event,
+                meshId: args.meshId,
+                nodeLabel: args.nodeLabel,
+                nodeId: args.nodeId || undefined,
+                workspace: readNonEmptyString(args.metadataEvent.workspace),
+                metadataEvent: {
+                    ...args.metadataEvent,
+                    ...(recoveryContext ? { recoveryContext } : {}),
+                },
+                coordinatorMessage: messageText,
+                queuedAt: Date.now(),
+            })) {
+            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+        }
     }
 
     for (const coord of coordinatorInstances) {
