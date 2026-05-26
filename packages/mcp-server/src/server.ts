@@ -10,6 +10,7 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import os from 'node:os';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -187,6 +188,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
     let localDaemonId: string | undefined;
     let localMachineId: string | undefined;
+    let coordinatorHostname: string | undefined = os.hostname();
 
     if (transport instanceof LocalTransport || transport instanceof IpcTransport) {
       try {
@@ -200,11 +202,17 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       try {
         const statusResult = await transport.getStatus();
         const instanceId = typeof statusResult?.status?.instanceId === 'string' ? statusResult.status.instanceId.trim() : '';
+        const hostname = typeof statusResult?.status?.hostname === 'string'
+          ? statusResult.status.hostname.trim()
+          : typeof statusResult?.status?.machine?.hostname === 'string'
+            ? statusResult.status.machine.hostname.trim()
+            : '';
         if (instanceId) localDaemonId = instanceId;
+        if (hostname) coordinatorHostname = hostname;
       } catch { /* best-effort metadata for remote completion forwarding */ }
     }
 
-    const meshCtx: MeshContext = { mesh, transport, ...(localDaemonId ? { localDaemonId } : {}), ...(localMachineId ? { localMachineId } : {}) };
+    const meshCtx: MeshContext = { mesh, transport, ...(localDaemonId ? { localDaemonId } : {}), ...(localMachineId ? { localMachineId } : {}), ...(coordinatorHostname ? { coordinatorHostname } : {}) };
 
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
 
