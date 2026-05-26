@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMeshActiveWork } from '../../src/mesh/mesh-active-work.js';
+import { buildMeshActiveWork, buildMeshActiveWorkSummary } from '../../src/mesh/mesh-active-work.js';
 import type { MeshLedgerEntry } from '../../src/mesh/mesh-ledger.js';
 
 function dispatch(overrides: Partial<MeshLedgerEntry> = {}): MeshLedgerEntry {
@@ -89,5 +89,59 @@ describe('buildMeshActiveWork direct task classification', () => {
             terminalKind: 'task_completed',
         });
         expect(result.summary.totalActiveCount).toBe(0);
+    });
+});
+
+describe('buildMeshActiveWork — staleDirectNote / staleDirectWorkNote', () => {
+    it('staleDirectWorkNote is present when stale records exist', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch({ nodeId: 'node-gone' })],
+            nodes: [],
+        });
+
+        expect(result.staleDirectWorkNote).toBeDefined();
+        expect(typeof result.staleDirectWorkNote).toBe('string');
+        expect(result.staleDirectWorkNote).toMatch(/historical/i);
+    });
+
+    it('staleDirectWorkNote is absent when no stale records exist', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [],
+            nodes: [],
+        });
+
+        expect(result.staleDirectWorkNote).toBeUndefined();
+    });
+
+    it('summary.staleDirectNote is set when staleDirectCount > 0', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch({ nodeId: 'node-gone' })],
+            nodes: [],
+        });
+
+        expect(result.summary.staleDirectNote).toBeDefined();
+        expect(result.summary.staleDirectNote).toMatch(/historical/i);
+    });
+
+    it('summary.staleDirectNote is absent when staleDirectCount is 0', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [],
+            nodes: [],
+        });
+        expect(result.summary.staleDirectNote).toBeUndefined();
+    });
+
+    it('buildMeshActiveWorkSummary staleDirectNote set for stale items in passed array', () => {
+        const summary = buildMeshActiveWorkSummary([
+            { taskId: 't1', source: 'direct', status: 'assigned', taskTitle: 'x', taskSummary: 'x', createdAt: '', updatedAt: '', elapsedMs: 0, staleReason: 'node gone' },
+            { taskId: 't2', source: 'queue', status: 'pending', taskTitle: 'y', taskSummary: 'y', createdAt: '', updatedAt: '', elapsedMs: 0 },
+        ]);
+        expect(summary.staleDirectCount).toBe(1);
+        expect(summary.staleDirectNote).toBeDefined();
+        expect(summary.staleDirectNote).toMatch(/historical/i);
     });
 });
