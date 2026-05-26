@@ -148,10 +148,11 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
     };
 }
 
-export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeWork: MeshActiveWorkRecord[]; staleDirectWork: MeshActiveWorkRecord[]; summary: MeshActiveWorkSummary } {
+export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeWork: MeshActiveWorkRecord[]; staleDirectWork: MeshActiveWorkRecord[]; terminalDirectWork: MeshActiveWorkRecord[]; summary: MeshActiveWorkSummary } {
     const now = opts.now ?? Date.now();
     const records: MeshActiveWorkRecord[] = [];
     const staleDirectWork: MeshActiveWorkRecord[] = [];
+    const terminalDirectWork: MeshActiveWorkRecord[] = [];
 
     for (const task of opts.queue || []) {
         if (task.status !== 'pending' && task.status !== 'assigned') continue;
@@ -184,7 +185,6 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
         const status = terminalStatus || live.status || 'assigned';
         const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
-        if (terminalRow && opts.includeTerminalDirect !== true) continue;
         const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
         const { title, summary } = summarizeMessage(message);
         const record: MeshActiveWorkRecord = {
@@ -207,6 +207,10 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             terminalAt: terminal?.timestamp,
             staleReason: live.staleReason,
         };
+        if (terminalRow) {
+            terminalDirectWork.push(record);
+            if (opts.includeTerminalDirect !== true) continue;
+        }
         if (live.staleReason && !terminalRow) {
             staleDirectWork.push(record);
             continue;
@@ -216,7 +220,8 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
 
     records.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     staleDirectWork.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    terminalDirectWork.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     const summary = buildMeshActiveWorkSummary(records);
     summary.staleDirectCount = staleDirectWork.length;
-    return { activeWork: records, staleDirectWork, summary };
+    return { activeWork: records, staleDirectWork, terminalDirectWork, summary };
 }

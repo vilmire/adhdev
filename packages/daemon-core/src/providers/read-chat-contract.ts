@@ -2,7 +2,7 @@ import type { MessagePart, ModalInfo, ReadChatResult } from './contracts.js'
 import { normalizeMessageParts } from './contracts.js'
 import type { ChatBubbleState, ChatMessage } from '../types.js'
 
-const VALID_STATUSES = ['idle', 'generating', 'waiting_approval', 'error', 'panel_hidden', 'streaming', 'long_generating'] as const
+const VALID_STATUSES = ['idle', 'generating', 'waiting_approval', 'error', 'panel_hidden', 'starting', 'streaming', 'long_generating'] as const
 const VALID_ROLES = ['user', 'assistant', 'system', 'human'] as const
 const VALID_BUBBLE_STATES = ['draft', 'streaming', 'final', 'removed'] as const
 const VALID_TURN_STATUSES = ['open', 'waiting_approval', 'complete', 'error'] as const

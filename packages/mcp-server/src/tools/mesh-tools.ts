@@ -1182,6 +1182,15 @@ function getNodeLaunchReadiness(node: LocalMeshNodeEntry): Record<string, unknow
     };
 }
 
+async function collectLiveStatusSessions(ctx: MeshContext, node: LocalMeshNodeEntry): Promise<any[]> {
+    try {
+        const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
+        return extractStatusMetadataSessions(statusResult);
+    } catch {
+        return [];
+    }
+}
+
 function readNumeric(value: unknown, fallback = 0): number {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
@@ -1960,6 +1969,11 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
         if (relatedRepos.length) entry.relatedRepos = relatedRepos;
 
+        const liveSessions = await collectLiveStatusSessions(ctx, node);
+        if (liveSessions.length > 0) {
+            entry.sessions = liveSessions;
+        }
+
         results.push(entry);
     }
 
@@ -1967,7 +1981,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         meshId: mesh.id,
         queue: getQueue(mesh.id),
         ledgerEntries: readLedgerEntries(mesh.id, { tail: 500 }),
-        nodes: mesh.nodes,
+        nodes: results,
     });
 
     const response: Record<string, unknown> = {
@@ -1985,6 +1999,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         nodes: results,
         activeWork: activeWorkEvidence.activeWork,
         staleDirectWork: activeWorkEvidence.staleDirectWork,
+        terminalDirectWork: activeWorkEvidence.terminalDirectWork,
         activeWorkSummary: activeWorkEvidence.summary,
         branchConvergenceSummary: summarizeBranchConvergence(results),
     };

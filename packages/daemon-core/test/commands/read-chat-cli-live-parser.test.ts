@@ -365,11 +365,60 @@ describe('handleReadChat for CLI adapters', () => {
     } as any, { agentType: 'hermes-cli' })
 
     expect(result.success).toBe(true)
-    expect(result.status).toBe('generating')
+    expect(result.status).toBe('starting')
     expect(result.messages).toEqual([
       expect.objectContaining({ role: 'user', content: 'earlier prompt' }),
       expect.objectContaining({ role: 'assistant', content: 'earlier answer' }),
     ])
+  })
+
+  it('keeps zero-message starting Codex sessions as starting instead of parser-generating', async () => {
+    const adapter = {
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/tmp/project',
+      spawn: async () => {},
+      sendMessage: async () => {},
+      getStatus: () => ({
+        status: 'starting',
+        messages: [],
+        activeModal: null,
+      }),
+      getScriptParsedStatus: () => ({
+        status: 'generating',
+        messages: [],
+        activeModal: null,
+        title: 'Codex CLI',
+      }),
+      getPartialResponse: () => '',
+      shutdown: () => {},
+      cancel: () => {},
+      isProcessing: () => false,
+      isReady: () => false,
+      setOnStatusChange: () => {},
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'codex-cli', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {},
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { agentType: 'codex-cli' })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('starting')
+    expect(result.messages).toEqual([])
+    expect((result as any).debugReadChat?.adapterStatus).toBe('starting')
+    expect((result as any).debugReadChat?.parsedStatus).toBe('generating')
+    expect((result as any).debugReadChat?.returnedStatus).toBe('starting')
   })
 
   it('fails closed when the parsed transcript violates the read_chat contract', async () => {

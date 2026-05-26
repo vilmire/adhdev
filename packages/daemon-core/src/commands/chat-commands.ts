@@ -390,7 +390,7 @@ function normalizeReadChatCommandStatus(status: unknown, activeModal: unknown): 
     }
     switch (raw) {
         case 'starting':
-            return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'generating';
+            return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'starting';
         case 'stopped':
         case 'disconnected':
         case 'not_monitored':
@@ -413,7 +413,18 @@ function shouldTrustCliAdapterTerminalStatus(parsedStatus: unknown, activeModal:
     return true;
 }
 
-function normalizeCliReadChatStatus(parsedStatus: unknown, activeModal: unknown, adapter: CliAdapter, adapterStatus: any): string {
+function normalizeCliReadChatStatus(parsedStatus: unknown, activeModal: unknown, adapter: CliAdapter, adapterStatus: any, parsedMessages?: unknown[]): string {
+    const adapterRawStatus = typeof adapterStatus?.status === 'string' ? adapterStatus.status.trim() : '';
+    if (adapterRawStatus === 'starting'
+        && isGeneratingLikeStatus(parsedStatus)
+        && !hasNonEmptyModalButtons(activeModal)
+        && Array.isArray(parsedMessages)
+        && parsedMessages.length === 0
+        && Array.isArray(adapterStatus?.messages)
+        && adapterStatus.messages.length === 0
+        && !(typeof adapter.isProcessing === 'function' && adapter.isProcessing())) {
+        return 'starting';
+    }
     if (shouldTrustCliAdapterTerminalStatus(parsedStatus, activeModal, adapter, adapterStatus)) return 'idle';
     return typeof parsedStatus === 'string' && parsedStatus.trim() ? parsedStatus : 'idle';
 }
@@ -988,7 +999,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ? parsedRecord.coverage
                 : undefined;
             const activeModal = parsedRecord.activeModal ?? parsedRecord.modal ?? null;
-            const returnedStatus = normalizeCliReadChatStatus(parsedRecord.status, activeModal, adapter, adapterStatus);
+            const returnedStatus = normalizeCliReadChatStatus(parsedRecord.status, activeModal, adapter, adapterStatus, parsedRecord.messages);
             const runtimeMessageMerger = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
             const parsedMessages = finalizeStreamingMessagesWhenIdle(parsedRecord.messages as ChatMessage[], returnedStatus);
             const returnedMessages = runtimeMessageMerger?.category === 'cli'
@@ -1128,7 +1139,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     returnedStatus: String(returnedStatus || ''),
                     selectedMessageSource: (messageSource as any).selected,
                     messageSource,
-                    shouldPreferAdapterMessages: (messageSource as any).selected !== 'native-history',
+                    shouldPreferAdapterMessages: false,
                     parsedMsgCount: parsedRecord.messages.length,
                     returnedMsgCount: selectedMessages.length,
                 },
