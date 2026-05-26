@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { writeFileSync, readFileSync } from 'node:fs';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 import { appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue } from '@adhdev/daemon-core';
 import { clearPendingMeshCoordinatorEvents, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../daemon-core/src/mesh/mesh-events.js';
 
@@ -183,6 +183,108 @@ test('mesh_clone_node keeps cloned worktrees visible after list/status refresh b
   const listed = JSON.parse(await meshListNodes(ctx));
   assert.ok(listed.nodes.some((node: { nodeId: string }) => node.nodeId === 'node-worktree'));
   assert.ok(localGetMeshCalls.some(call => call && typeof call === 'object' && 'inlineMesh' in call));
+});
+
+test('mesh_list_nodes exposes explicit machine identity without treating matching usernames or paths as local', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const mesh = {
+    id: 'mesh-machine-identity',
+    name: 'Machine Identity',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [
+      {
+        id: 'node-m4',
+        workspace: '/Users/vilmire/Work/repo',
+        repoRoot: '/Users/vilmire/Work/repo',
+        daemonId: 'daemon-m4',
+        machineId: 'machine-m4',
+        hostname: 'M4',
+        userOverrides: {},
+        policy: {},
+      },
+      {
+        id: 'node-m1',
+        workspace: '/Users/vilmire/Work/remote/repo',
+        repoRoot: '/Users/vilmire/Work/remote/repo',
+        daemonId: 'daemon-m1',
+        machineId: 'machine-m1',
+        hostname: 'M1',
+        userOverrides: {},
+        policy: {},
+      },
+    ],
+  };
+  transport.command = async (command, args = {}) => {
+    if (command !== 'get_mesh') throw new Error(`unexpected direct command: ${command}`);
+    return { success: true, mesh: args.inlineMesh || mesh };
+  };
+
+  const listed = JSON.parse(await meshListNodes({
+    mesh,
+    transport,
+    localDaemonId: 'daemon-m4',
+    localMachineId: 'machine-m4',
+    coordinatorHostname: 'M4',
+  }));
+
+  const m4 = listed.nodes.find((node: any) => node.nodeId === 'node-m4');
+  const m1 = listed.nodes.find((node: any) => node.nodeId === 'node-m1');
+  assert.equal(m4.machine.sameMachine, true);
+  assert.equal(m4.machine.hostname, 'M4');
+  assert.equal(m4.machine.coordinatorHostname, 'M4');
+  assert.equal(m1.machine.sameMachine, false);
+  assert.equal(m1.machine.hostname, 'M1');
+  assert.equal(m1.machine.locality, 'remote_or_unknown');
+});
+
+test('mesh_fast_forward_node includes node identity in local IPC command args for timeout diagnostics', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const mesh = {
+    id: 'mesh-ff-diagnostics',
+    name: 'FF Diagnostics',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [{
+      id: 'node-local',
+      workspace: '/repo-local',
+      repoRoot: '/repo-local',
+      daemonId: 'daemon-local',
+      machineId: 'machine-local',
+      userOverrides: {},
+      policy: {},
+    }],
+  };
+  transport.command = async (command, args = {}) => {
+    calls.push({ command, args });
+    if (command === 'get_mesh') return { success: true, mesh };
+    if (command === 'fast_forward_mesh_node') return { success: true, allowed: true, dryRun: true };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+
+  const result = JSON.parse(await meshFastForwardNode({
+    mesh,
+    transport,
+    localDaemonId: 'daemon-local',
+    localMachineId: 'machine-local',
+    coordinatorHostname: 'M4',
+  }, { node_id: 'node-local' }));
+
+  assert.equal(result.success, true);
+  const ffCall = calls.find(call => call.command === 'fast_forward_mesh_node');
+  assert.equal(ffCall?.args.nodeId, 'node-local');
+  assert.equal(ffCall?.args.workspace, '/repo-local');
 });
 
 test('mesh_launch_session stamps delegated sessions hidden when mesh policy requests hidden spawned session visibility', async () => {

@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { CloudTransport } from '../src/transports/cloud.js';
 import { LocalTransport } from '../src/transports/local.js';
 import { isLocalTransport } from '../src/transports/mode.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 test('isLocalTransport treats IPC transport as command-routed and keeps cloud separate', () => {
   assert.equal(isLocalTransport(new LocalTransport()), true);
@@ -144,4 +149,14 @@ test('IpcTransport.meshCommand sends daemon mesh relay command over local IPC we
     if (previousWebSocket === undefined) delete (globalThis as any).WebSocket;
     else (globalThis as any).WebSocket = previousWebSocket;
   }
+});
+
+test('IpcTransport gives ff-only and relayed mesh commands long timeouts with diagnostic context', () => {
+  const source = readFileSync(join(__dirname, '../src/transports/ipc.ts'), 'utf8');
+
+  assert.match(source, /fast_forward_mesh_node:\s*120_000/);
+  assert.match(source, /mesh_relay_command:\s*120_000/);
+  assert.match(source, /relayedCommand=/);
+  assert.match(source, /targetDaemonId=/);
+  assert.match(source, /requestId=/);
 });

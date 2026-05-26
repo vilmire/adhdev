@@ -10,9 +10,11 @@ const DEFAULT_IPC_PORT = 19222;
 const DEFAULT_IPC_PATH = '/ipc';
 const DEFAULT_IPC_COMMAND_TIMEOUT_MS = 15_000;
 const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
-  mesh_relay_command: 60_000,
+  mesh_relay_command: 120_000,
   agent_command: 30_000,
   git_status: 45_000,
+  git_diff_summary: 45_000,
+  fast_forward_mesh_node: 120_000,
   mesh_status: 120_000,
 };
 
@@ -78,9 +80,22 @@ export class IpcTransport {
         fn();
       };
 
-      const timeoutMs = IPC_COMMAND_TIMEOUTS_MS[type] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS;
+      const nestedCommand = typeof args?.command === 'string' ? args.command : '';
+      const targetDaemonId = typeof args?.targetDaemonId === 'string' ? args.targetDaemonId : '';
+      const effectiveType = type === 'mesh_relay_command' && nestedCommand ? nestedCommand : type;
+      const timeoutMs = Math.max(
+        IPC_COMMAND_TIMEOUTS_MS[type] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
+        IPC_COMMAND_TIMEOUTS_MS[effectiveType] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
+      );
+      const diagnosticParts = [
+        `command='${type}'`,
+        ...(nestedCommand ? [`relayedCommand='${nestedCommand}'`] : []),
+        ...(targetDaemonId ? [`targetDaemonId='${targetDaemonId.slice(0, 12)}'`] : []),
+        ...(typeof args?.nodeId === 'string' ? [`nodeId='${args.nodeId}'`] : []),
+        ...(typeof args?.workspace === 'string' ? [`workspace='${args.workspace}'`] : []),
+      ];
       const timeout = setTimeout(() => {
-        finish(() => reject(new Error(`Daemon IPC command '${type}' timed out after ${Math.round(timeoutMs / 1000)}s`)));
+        finish(() => reject(new Error(`Daemon IPC ${diagnosticParts.join(' ')} timed out after ${Math.round(timeoutMs / 1000)}s (requestId=${requestId})`)));
       }, timeoutMs);
 
       let commandSent = false;
