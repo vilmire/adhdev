@@ -395,18 +395,26 @@ function queueAssignmentStaleReason(task: any, liveness: QueueLivenessIndex): st
 
 function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
     const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
+    let staleAssigned = 0;
     for (const task of queue) {
         const status = typeof task?.status === 'string' ? task.status : undefined;
         if (status && Object.prototype.hasOwnProperty.call(counts, status)) {
             counts[status as keyof typeof counts] += 1;
         }
+        if (status === 'assigned' && task?.staleAssigned === true) staleAssigned += 1;
     }
+    const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
     return {
         totalCount: queue.length,
-        activeCount: counts.pending + counts.assigned,
+        activeCount: counts.pending + liveAssigned,
         historicalCount: counts.completed + counts.failed + counts.cancelled,
         counts,
         activeCounts: {
+            pending: counts.pending,
+            assigned: liveAssigned,
+        },
+        staleAssignedCount: staleAssigned,
+        rawActiveCounts: {
             pending: counts.pending,
             assigned: counts.assigned,
         },
