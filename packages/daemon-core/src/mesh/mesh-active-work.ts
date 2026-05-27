@@ -80,7 +80,19 @@ function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessi
     if (!node) return { staleReason: 'direct task node is no longer in the live mesh' };
     if (!sessionId) return {};
     const candidates: any[] = [];
-    for (const value of [node.sessions, node.activeSessions, node.active_sessions, node.lastProbe?.sessions, node.last_probe?.sessions, node.lastProbe?.status?.sessions, node.last_probe?.status?.sessions]) {
+    for (const value of [
+        node.sessions,
+        node.activeSessions,
+        node.active_sessions,
+        node.activeSessionDetails,
+        node.active_session_details,
+        node.sessionDetails,
+        node.session_details,
+        node.lastProbe?.sessions,
+        node.last_probe?.sessions,
+        node.lastProbe?.status?.sessions,
+        node.last_probe?.status?.sessions,
+    ]) {
         if (Array.isArray(value)) candidates.push(...value);
     }
     for (const value of [node.activeSession, node.active_session, node.currentSession, node.current_session, node.runtimeSession, node.runtime_session, node.session]) {

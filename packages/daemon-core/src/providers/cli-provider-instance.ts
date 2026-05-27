@@ -521,6 +521,7 @@ export class CliProviderInstance implements ProviderInstance {
         }
         const runtime = this.adapter.getRuntimeMetadata();
         this.maybeAppendRuntimeRecoveryMessage(runtime);
+        const activeChatId = this.providerSessionId || runtime?.runtimeId || this.instanceId;
         let parsedMessages = Array.isArray(parsedStatus?.messages)
             ? parsedStatus.messages
             : [];
@@ -597,7 +598,7 @@ export class CliProviderInstance implements ProviderInstance {
             status: visibleStatus,
             mode: this.presentationMode,
             activeChat: {
-                id: `${this.type}_${this.workingDir}`,
+                id: activeChatId,
                 title: parsedStatus?.title || dirName,
                 status: activeChatStatus,
                 messages: mergedMessages,

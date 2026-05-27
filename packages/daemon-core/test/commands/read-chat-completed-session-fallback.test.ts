@@ -9,6 +9,10 @@ vi.mock('../../src/config/chat-history.js', () => ({
     appendNewMessages() {}
   },
   readProviderChatHistory: mocks.readProviderChatHistory,
+  isNativeSourceCanonicalHistory: (canonicalHistory: any) => {
+    if (!canonicalHistory) return false
+    return canonicalHistory.mode !== 'disabled' && canonicalHistory.mode !== 'materialized-mirror'
+  },
 }))
 
 import { handleReadChat } from '../../src/commands/chat-commands.js'

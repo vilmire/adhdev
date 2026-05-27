@@ -20,17 +20,10 @@ export function extractFinalSummaryFromMessages(
     }
   }
 
-  // Fallback: last user-facing message of any role
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg) continue;
-    const classification = classifyChatMessageVisibility(msg);
-    if (classification.isUserFacing) {
-      const text = flattenContent(msg.content).trim();
-      if (text) return text.slice(0, maxChars);
-    }
-  }
-
+  // Completion summaries must describe the assistant/model result. If no
+  // user-facing assistant/model message exists yet (for example, only the
+  // dispatched user prompt is visible), return empty instead of echoing the
+  // prompt as a misleading finalSummary.
   return '';
 }
 
