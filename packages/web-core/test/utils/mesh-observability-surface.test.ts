@@ -409,7 +409,7 @@ describe('MeshObservabilitySurface', () => {
     })).toBeNull()
   })
 
-  it('keeps deterministic layout boxes separated for long labels and stacked submodules', () => {
+  it('keeps deterministic layout boxes separated for long labels and sibling submodules', () => {
     const graph = buildMeshGraph({
       meshId: 'mesh_spacing',
       meshName: 'Spacing Mesh',
@@ -520,14 +520,15 @@ describe('MeshObservabilitySurface', () => {
     const parentChildren = [
       boxes.get('node_coordinator::submodule::oss/packages/web-core-with-long-path')!,
       boxes.get('node_coordinator::submodule::vendor/extremely-long-submodule-name')!,
-    ].sort((a, b) => a.top - b.top)
+    ].sort((a, b) => a.left - b.left)
     const child = parentChildren[0]
     const secondChild = parentChildren[1]
     const peer = boxes.get('node_peer')!
 
+    expect(peer.top).toBe(parent.top)
     expect(child.top - parent.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.parentToSubmoduleGap)
-    expect(secondChild.top - child.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.submoduleStackGap)
-    expect(peer.top - secondChild.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.worktreeStackGap)
+    expect(secondChild.top).toBe(child.top)
+    expect(secondChild.left - child.right).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.siblingGapX)
   })
 
 })

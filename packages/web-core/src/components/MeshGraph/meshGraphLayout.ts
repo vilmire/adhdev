@@ -199,6 +199,12 @@ function getSiblingRowWidth(nodes: MeshGraphNode[]): number {
         + Math.max(0, nodes.length - 1) * MESH_GRAPH_LAYOUT.siblingGapX
 }
 
+function getSpacedRowWidth(widths: number[]): number {
+    if (widths.length === 0) return 0
+    return widths.reduce((total, width) => total + width, 0)
+        + Math.max(0, widths.length - 1) * MESH_GRAPH_LAYOUT.siblingGapX
+}
+
 function placeSiblingRows(args: {
     nodes: MeshGraphNode[]
     centerX: number
@@ -305,10 +311,24 @@ export function buildMeshGraphLayout(data: MeshGraphData): MeshGraphLayoutResult
         orderedGroups.push(['__nodes__', []])
     }
 
+    const getNodeSubtreeWidth = (node: MeshGraphNode): number => {
+        const submoduleRows = chunkSiblings([...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes), 3)
+        const widestSubmoduleRow = submoduleRows.reduce((widest, row) => Math.max(widest, getSiblingRowWidth(row)), 0)
+        return Math.max(getMeshGraphNodeCardWidth(node), widestSubmoduleRow)
+    }
+
+    const getWorktreeRowWidth = (nodes: MeshGraphNode[]): number => getSpacedRowWidth(nodes.map(getNodeSubtreeWidth))
+
+    const getGroupWidth = (nodes: MeshGraphNode[]): number => {
+        const rows = chunkSiblings(nodes, 3)
+        return rows.reduce((widest, row) => Math.max(widest, getWorktreeRowWidth(row)), 0)
+    }
+
     const flowNodes: MeshGraphLayoutNode[] = []
     const bounds: MeshGraphLayoutBounds[] = []
     const groupCount = orderedGroups.length
-    const columnGap = computeColumnGap(data)
+    const widestGroup = orderedGroups.reduce((widest, [, groupNodes]) => Math.max(widest, getGroupWidth(groupNodes)), 0)
+    const columnGap = Math.max(computeColumnGap(data), widestGroup + MESH_GRAPH_LAYOUT.edgeLabelBuffer)
     const totalWidth = Math.max(1, groupCount - 1) * columnGap
     const topRowY = defaultAnchor ? 0 : 96
     const defaultAnchorHeight = defaultAnchor ? estimateMeshGraphNodeHeight(defaultAnchor) : 0
@@ -333,14 +353,17 @@ export function buildMeshGraphLayout(data: MeshGraphData): MeshGraphLayoutResult
         const worktreeRows = chunkSiblings(nodesForColumn, 3)
 
         for (const row of worktreeRows) {
-            const rowWidth = getSiblingRowWidth(row)
-            let cursorX = groupCenterX - rowWidth / 2
+            const rowWidth = getWorktreeRowWidth(row)
+            let subtreeCursorX = groupCenterX - rowWidth / 2
             const rowY = cursorY
-            let deepestY = rowY + maxRowHeight(row)
+            const rowBottomY = rowY + maxRowHeight(row)
+            let deepestY = rowBottomY
 
             for (const node of row) {
-                const nodeX = cursorX
-                const nodeHeight = estimateMeshGraphNodeHeight(node)
+                const nodeWidth = getMeshGraphNodeCardWidth(node)
+                const subtreeWidth = getNodeSubtreeWidth(node)
+                const subtreeCenterX = subtreeCursorX + subtreeWidth / 2
+                const nodeX = subtreeCenterX - nodeWidth / 2
                 flowNodes.push(toLayoutNode(node, nodeX, rowY))
                 bounds.push(makeBounds(node, nodeX, rowY))
 
@@ -348,8 +371,8 @@ export function buildMeshGraphLayout(data: MeshGraphData): MeshGraphLayoutResult
                 if (submoduleNodes.length > 0) {
                     const submoduleEndY = placeSiblingRows({
                         nodes: submoduleNodes,
-                        centerX: nodeX + getMeshGraphNodeCardWidth(node) / 2,
-                        startY: rowY + nodeHeight + MESH_GRAPH_LAYOUT.parentToSubmoduleGap,
+                        centerX: subtreeCenterX,
+                        startY: rowBottomY + MESH_GRAPH_LAYOUT.parentToSubmoduleGap,
                         maxPerRow: 3,
                         flowNodes,
                         bounds,
@@ -357,7 +380,7 @@ export function buildMeshGraphLayout(data: MeshGraphData): MeshGraphLayoutResult
                     deepestY = Math.max(deepestY, submoduleEndY - MESH_GRAPH_LAYOUT.siblingRowGap)
                 }
 
-                cursorX += getMeshGraphNodeCardWidth(node) + MESH_GRAPH_LAYOUT.siblingGapX
+                subtreeCursorX += subtreeWidth + MESH_GRAPH_LAYOUT.siblingGapX
             }
 
             cursorY = deepestY + MESH_GRAPH_LAYOUT.worktreeStackGap
