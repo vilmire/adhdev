@@ -354,6 +354,35 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('does not complete an assigned code_change task from agent:ready without assistant or summary evidence', () => {
+    const meshId = `mesh_ready_no_evidence_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued code change task', { taskMode: 'code_change' })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:ready',
+        instanceId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'provider-history-ready-no-evidence',
+      })
+
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('assigned')
+      expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('does not inject completion event when the completed session is a coordinator (meshCoordinatorFor set)', () => {
     // This reproduces the bug: a coordinator session completing on the same workspace
     // must not be forwarded back into another coordinator session.
