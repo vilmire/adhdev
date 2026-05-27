@@ -156,13 +156,13 @@ describe('chat message normalization', () => {
     expect(extractFinalSummaryFromMessages(messages)).toBe('final answer');
   });
 
-  it('extractFinalSummaryFromMessages falls back to last user-facing message of any role', () => {
+  it('extractFinalSummaryFromMessages returns empty instead of echoing a user prompt when no assistant result exists', () => {
     const messages = [
       { role: 'user', content: 'prompt' },
       { role: 'assistant', content: 'answer', meta: { hidden: true } },
       { role: 'user', content: 'follow-up', meta: { userFacing: true } },
     ] as any;
-    expect(extractFinalSummaryFromMessages(messages)).toBe('follow-up');
+    expect(extractFinalSummaryFromMessages(messages)).toBe('');
   });
 
   it('extractFinalSummaryFromMessages keeps ordinary completion summaries under the default cap', () => {

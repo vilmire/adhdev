@@ -72,6 +72,28 @@ describe('buildMeshActiveWork direct task classification', () => {
         expect(result.summary.staleDirectCount).toBe(1);
     });
 
+    it('does not mark direct work stale when exact session is live in activeSessionDetails', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch()],
+            nodes: [{
+                id: 'node-1',
+                activeSessionDetails: [{ id: 'session-1', providerType: 'codex-cli', status: 'generating' }],
+            }],
+        });
+
+        expect(result.activeWork).toHaveLength(1);
+        expect(result.activeWork[0]).toMatchObject({
+            taskId: 'task-1',
+            source: 'direct',
+            status: 'generating',
+            nodeId: 'node-1',
+            sessionId: 'session-1',
+        });
+        expect(result.staleDirectWork).toHaveLength(0);
+        expect(result.summary.staleDirectCount).toBe(0);
+    });
+
     it('surfaces completed direct tasks as terminalDirectWork without counting them active by default', () => {
         const result = buildMeshActiveWork({
             meshId: 'mesh-1',
