@@ -18,6 +18,13 @@ export interface RepoMeshRefineValidationCommandConfig {
 
 export interface RepoMeshRefineConfig {
     version: 1;
+    /**
+     * Narrow Refinery opt-in for monorepos with submodule gitlinks.
+     * When true, Refinery may non-force publish unreachable submodule gitlink
+     * commits to the submodule remote main branch after validation and
+     * patch-equivalence pass, then verify remote-main reachability.
+     */
+    allowAutoPublishSubmoduleMainCommits?: boolean;
     validation?: {
         required?: boolean;
         commands?: RepoMeshRefineValidationCommandConfig[];
@@ -73,6 +80,11 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
     required: ['version'],
     properties: {
         version: { const: 1 },
+        allowAutoPublishSubmoduleMainCommits: {
+            type: 'boolean',
+            default: false,
+            description: 'When true, Refinery may non-force publish submodule gitlink commits referenced by the refined root tree to each submodule origin/main after validation and patch-equivalence pass, then verify reachability.',
+        },
         validation: {
             type: 'object',
             additionalProperties: false,
@@ -179,6 +191,9 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
 
     if (!isRecord(config)) return { valid: false, errors: ['config must be an object'], commands, rejectedCommands };
     if (config.version !== 1) errors.push('version must be 1');
+    if (config.allowAutoPublishSubmoduleMainCommits !== undefined && typeof config.allowAutoPublishSubmoduleMainCommits !== 'boolean') {
+        errors.push('allowAutoPublishSubmoduleMainCommits must be a boolean when provided');
+    }
     const validation = config.validation;
     if (validation !== undefined && !isRecord(validation)) errors.push('validation must be an object');
     const rawCommands = isRecord(validation) ? validation.commands : undefined;

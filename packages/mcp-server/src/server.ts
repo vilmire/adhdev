@@ -131,6 +131,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
               requirePreTaskCheckpoint: false,
               requirePostTaskCheckpoint: true,
               requireApprovalForPush: true,
+              allowAutoPublishSubmoduleMainCommits: false,
               requireApprovalForDestructiveGit: true,
               dirtyWorkspaceBehavior: 'warn',
               maxParallelTasks: 2,

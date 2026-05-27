@@ -1102,6 +1102,11 @@ type MeshRefineSubmoduleReachabilityEntry = {
     commit: string;
     reachable: boolean;
     publishRequired?: boolean;
+    autoPublishAllowed?: boolean;
+    autoPublishAttempted?: boolean;
+    autoPublishSucceeded?: boolean;
+    autoPublishVerified?: boolean;
+    autoPublishRefspec?: string;
     checkedLocal?: boolean;
     localReachable?: boolean;
     remote?: string;
@@ -1111,6 +1116,8 @@ type MeshRefineSubmoduleReachabilityEntry = {
     remoteMainReachable?: boolean;
     fetchedFromOrigin?: boolean;
     error?: string;
+    publishStdout?: string;
+    publishStderr?: string;
 };
 
 type MeshRefineSubmoduleReachabilitySummary = {
@@ -1119,6 +1126,8 @@ type MeshRefineSubmoduleReachabilitySummary = {
     unreachable: MeshRefineSubmoduleReachabilityEntry[];
     entries: MeshRefineSubmoduleReachabilityEntry[];
     durationMs: number;
+    autoPublishAllowed?: boolean;
+    autoPublishPolicySource?: string;
     error?: string;
 };
 
@@ -1185,6 +1194,17 @@ function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmoduleReach
         .map(entry => `${entry.path}@${entry.commit}`)
         .join(', ');
     return `Ask the user for explicit approval to push/publish the unreachable submodule commit(s) (${refs}) to the configured submodule remote main branch, then rerun mesh_refine_node. Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.`;
+}
+
+function resolveRefineryAutoPublishSubmoduleMainCommits(mesh: any, workspace: string): { enabled: boolean; source?: string } {
+    if (mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true) {
+        return { enabled: true, source: 'mesh.policy.allowAutoPublishSubmoduleMainCommits' };
+    }
+    const loaded = loadMeshRefineConfig(mesh, workspace);
+    if (loaded.config?.allowAutoPublishSubmoduleMainCommits === true) {
+        return { enabled: true, source: loaded.path || loaded.source };
+    }
+    return { enabled: false };
 }
 
 async function computeGitPatchId(cwd: string, fromRef: string, toRef: string): Promise<string> {
@@ -1264,6 +1284,7 @@ async function runMeshRefinePatchEquivalenceGate(
 async function runMeshRefineSubmoduleReachabilityGate(
     repoRoot: string,
     mergedTree: string,
+    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string } = {},
 ): Promise<MeshRefineSubmoduleReachabilitySummary> {
     const startedAt = Date.now();
     const entries: MeshRefineSubmoduleReachabilityEntry[] = [];
@@ -1284,6 +1305,17 @@ async function runMeshRefineSubmoduleReachabilityGate(
         const verifyRemoteMainContainsCommit = async (submodulePath: string, commit: string, branch = 'main'): Promise<void> => {
             await runGit(submodulePath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
             await runGit(submodulePath, ['merge-base', '--is-ancestor', commit, `refs/remotes/origin/${branch}`]);
+        };
+        const publishCommitToRemoteMain = async (submodulePath: string, commit: string, branch = 'main'): Promise<{ stdout: string; stderr: string; refspec: string }> => {
+            const refspec = `${commit}:refs/heads/${branch}`;
+            const { stdout, stderr } = await execFileAsync('git', ['push', 'origin', refspec], {
+                cwd: submodulePath,
+                encoding: 'utf8',
+                timeout: 30_000,
+                maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+                windowsHide: true,
+            });
+            return { stdout: String(stdout || ''), stderr: String(stderr || ''), refspec };
         };
 
         const treeOutput = await runGit(repoRoot, ['ls-tree', '-r', '-z', mergedTree]);
@@ -1334,11 +1366,43 @@ async function runMeshRefineSubmoduleReachabilityGate(
                         continue;
                     }
                     entry.remoteMainBranch = 'main';
-                    await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, 'main');
-                    entry.fetchedFromOrigin = true;
-                    entry.remoteReachable = true;
-                    entry.remoteMainReachable = true;
-                    entry.reachable = true;
+                    try {
+                        await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, 'main');
+                        entry.fetchedFromOrigin = true;
+                        entry.remoteReachable = true;
+                        entry.remoteMainReachable = true;
+                        entry.reachable = true;
+                    } catch (e: any) {
+                        entry.remoteReachable = false;
+                        entry.remoteMainReachable = false;
+                        entry.publishRequired = true;
+                        const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
+                        entry.error = `Submodule remote main reachability check failed for origin/main: ${details}`;
+                        if (options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true) {
+                            entry.autoPublishAllowed = true;
+                            entry.autoPublishAttempted = true;
+                            try {
+                                const publish = await publishCommitToRemoteMain(submodulePath, gitlink.commit, 'main');
+                                entry.autoPublishRefspec = publish.refspec;
+                                entry.publishStdout = truncateValidationOutput(publish.stdout);
+                                entry.publishStderr = truncateValidationOutput(publish.stderr);
+                                entry.autoPublishSucceeded = true;
+                                await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, 'main');
+                                entry.fetchedFromOrigin = true;
+                                entry.remoteReachable = true;
+                                entry.remoteMainReachable = true;
+                                entry.autoPublishVerified = true;
+                                entry.publishRequired = false;
+                                entry.reachable = true;
+                                entry.error = undefined;
+                            } catch (publishError: any) {
+                                entry.autoPublishSucceeded = false;
+                                entry.autoPublishVerified = false;
+                                const publishDetails = truncateValidationOutput(publishError?.stderr || publishError?.message || String(publishError));
+                                entry.error = `Submodule auto-publish to origin/main failed or could not be verified: ${publishDetails}`;
+                            }
+                        }
+                    }
                 } catch (e: any) {
                     entry.remoteReachable = false;
                     entry.remoteMainReachable = false;
@@ -1360,6 +1424,8 @@ async function runMeshRefineSubmoduleReachabilityGate(
             unreachable: unreachable.map(entry => ({ ...entry, publishRequired: entry.publishRequired !== false })),
             entries: entries.map(entry => entry.reachable ? entry : { ...entry, publishRequired: entry.publishRequired !== false }),
             durationMs: Date.now() - startedAt,
+            autoPublishAllowed: options.allowAutoPublishSubmoduleMainCommits === true,
+            autoPublishPolicySource: options.autoPublishPolicySource,
         };
     } catch (e: any) {
         const unreachable = entries.filter(entry => !entry.reachable).map(entry => ({ ...entry, publishRequired: true }));
@@ -1369,6 +1435,8 @@ async function runMeshRefineSubmoduleReachabilityGate(
             unreachable,
             entries: entries.map(entry => entry.reachable ? entry : { ...entry, publishRequired: true }),
             durationMs: Date.now() - startedAt,
+            autoPublishAllowed: options.allowAutoPublishSubmoduleMainCommits === true,
+            autoPublishPolicySource: options.autoPublishPolicySource,
             error: truncateValidationOutput(e?.message || String(e)),
         };
     }
@@ -2753,13 +2821,38 @@ export class DaemonCommandRouter {
             }
 
             const submoduleReachabilityStarted = Date.now();
-            const submoduleReachability = await runMeshRefineSubmoduleReachabilityGate(repoRoot, patchEquivalence.mergedTree || branchHead);
+            const autoPublishSubmoduleMainCommits = resolveRefineryAutoPublishSubmoduleMainCommits(mesh, node.workspace);
+            const submoduleReachability = await runMeshRefineSubmoduleReachabilityGate(repoRoot, patchEquivalence.mergedTree || branchHead, {
+                allowAutoPublishSubmoduleMainCommits: autoPublishSubmoduleMainCommits.enabled,
+                autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
+            });
             recordMeshRefineStage(refineStages, 'submodule_reachability', submoduleReachability.status, submoduleReachabilityStarted, {
                 checked: submoduleReachability.checked,
+                autoPublishAllowed: submoduleReachability.autoPublishAllowed,
+                autoPublishPolicySource: submoduleReachability.autoPublishPolicySource,
+                autoPublished: submoduleReachability.entries
+                    .filter(entry => entry.autoPublishAttempted)
+                    .map(entry => ({
+                        path: entry.path,
+                        commit: entry.commit,
+                        remote: entry.remote,
+                        remoteUrl: entry.remoteUrl,
+                        remoteMainBranch: entry.remoteMainBranch,
+                        refspec: entry.autoPublishRefspec,
+                        succeeded: entry.autoPublishSucceeded,
+                        verified: entry.autoPublishVerified,
+                        remoteMainReachable: entry.remoteMainReachable,
+                        error: entry.error,
+                    })),
                 unreachable: submoduleReachability.unreachable.map(entry => ({
                     path: entry.path,
                     commit: entry.commit,
                     publishRequired: entry.publishRequired === true,
+                    autoPublishAllowed: entry.autoPublishAllowed,
+                    autoPublishAttempted: entry.autoPublishAttempted,
+                    autoPublishSucceeded: entry.autoPublishSucceeded,
+                    autoPublishVerified: entry.autoPublishVerified,
+                    autoPublishRefspec: entry.autoPublishRefspec,
                     remote: entry.remote,
                     remoteUrl: entry.remoteUrl,
                     remoteReachable: entry.remoteReachable,
@@ -2793,6 +2886,11 @@ export class DaemonCommandRouter {
                         remoteReachable: entry.remoteReachable,
                         remoteMainBranch: entry.remoteMainBranch,
                         remoteMainReachable: entry.remoteMainReachable,
+                        autoPublishAllowed: entry.autoPublishAllowed,
+                        autoPublishAttempted: entry.autoPublishAttempted,
+                        autoPublishSucceeded: entry.autoPublishSucceeded,
+                        autoPublishVerified: entry.autoPublishVerified,
+                        autoPublishRefspec: entry.autoPublishRefspec,
                         error: entry.error,
                     })),
                     branch,
@@ -2870,7 +2968,7 @@ export class DaemonCommandRouter {
                 appendLedgerEntry(meshId, {
                     kind: 'node_removed',
                     nodeId,
-                    payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary, patchEquivalence },
+                    payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary, patchEquivalence, submoduleReachability },
                 });
                 recordMeshRefineStage(refineStages, 'ledger', 'passed', ledgerStarted);
             } catch (e: any) {
@@ -2900,6 +2998,7 @@ export class DaemonCommandRouter {
                     removeResult,
                     validationSummary,
                     patchEquivalence,
+                    submoduleReachability,
                     mergeResult,
                     refineStages,
                     ...(ledgerError ? { ledgerError } : {}),
@@ -2915,6 +3014,7 @@ export class DaemonCommandRouter {
                 removeResult,
                 validationSummary,
                 patchEquivalence,
+                submoduleReachability,
                 mergeResult,
                 refineStages,
                 ...(ledgerError ? { ledgerError } : {}),

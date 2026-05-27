@@ -630,6 +630,101 @@ describe('refine_mesh_node validation gate', () => {
       })
       expect(result.refineStages.some((entry: any) => entry.stage === 'merge')).toBe(false)
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
+      expect(() => execFileSync('git', ['merge-base', '--is-ancestor', localOnlyCommit, 'main'], { cwd: submoduleOrigin })).toThrow()
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('auto-publishes unreachable submodule gitlink commits only when repo refine config opts in, then verifies origin/main reachability', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-auto-publish-submodule-'))
+    const repo = join(root, 'repo')
+    const submoduleOrigin = join(root, 'submodule-origin')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initSubmoduleOrigin(submoduleOrigin)
+      execFileSync('git', ['config', 'receive.denyCurrentBranch', 'updateInstead'], { cwd: submoduleOrigin })
+      initGitRepo(repo)
+      addSubmodule(repo, submoduleOrigin, 'oss')
+      const worktree = createWorktreeWithCommit(root, repo)
+      mkdirSync(join(worktree, '.adhdev'), { recursive: true })
+      writeFileSync(join(worktree, '.adhdev', 'refine.json'), JSON.stringify({
+        version: 1,
+        allowAutoPublishSubmoduleMainCommits: true,
+        validation: {
+          required: true,
+          commands: [
+            { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck' },
+            { command: 'npm', args: ['run', 'test'], category: 'test' },
+          ],
+        },
+      }, null, 2), 'utf-8')
+      execFileSync('git', ['add', '.adhdev/refine.json'], { cwd: worktree })
+      execFileSync('git', ['commit', '-q', '-m', 'opt in to submodule auto publish'], { cwd: worktree })
+      execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'oss'], { cwd: worktree })
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: join(worktree, 'oss') })
+      writeFileSync(join(worktree, 'oss', 'AUTO_PUBLISHED.md'), 'published by refinery\n', 'utf-8')
+      execFileSync('git', ['add', 'AUTO_PUBLISHED.md'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['commit', '-q', '-m', 'auto publish submodule commit'], { cwd: join(worktree, 'oss') })
+      const autoPublishedCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(worktree, 'oss'), encoding: 'utf-8' }).trim()
+      execFileSync('git', ['fetch', join(worktree, 'oss'), autoPublishedCommit], { cwd: join(repo, 'oss') })
+      execFileSync('git', ['add', 'oss'], { cwd: worktree })
+      execFileSync('git', ['commit', '-q', '-m', 'point submodule at auto-published commit'], { cwd: worktree })
+      const mesh = createMesh(repo, worktree, 'node-auto-publish-submodule', undefined, false)
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-auto-publish-submodule',
+        inlineMesh: mesh,
+      })
+
+      expectAccepted(accepted, 'node-auto-publish-submodule')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({ success: true, merged: true })
+      const entry = result.submoduleReachability.entries.find((candidate: any) => candidate.path === 'oss')
+      expect(entry).toMatchObject({
+        path: 'oss',
+        commit: autoPublishedCommit,
+        reachable: true,
+        remote: 'origin',
+        remoteUrl: submoduleOrigin,
+        remoteMainBranch: 'main',
+        remoteMainReachable: true,
+        autoPublishAllowed: true,
+        autoPublishAttempted: true,
+        autoPublishSucceeded: true,
+        autoPublishVerified: true,
+        autoPublishRefspec: `${autoPublishedCommit}:refs/heads/main`,
+      })
+      expect(entry.autoPublishRefspec.startsWith('+')).toBe(false)
+      const reachabilityStage = result.refineStages.find((stage: any) => stage.stage === 'submodule_reachability')
+      expect(reachabilityStage).toMatchObject({
+        status: 'passed',
+        autoPublishAllowed: true,
+        autoPublishPolicySource: expect.stringContaining('.adhdev/refine.json'),
+        autoPublished: [
+          expect.objectContaining({
+            path: 'oss',
+            commit: autoPublishedCommit,
+            remote: 'origin',
+            remoteUrl: submoduleOrigin,
+            remoteMainBranch: 'main',
+            refspec: `${autoPublishedCommit}:refs/heads/main`,
+            succeeded: true,
+            verified: true,
+            remoteMainReachable: true,
+          }),
+        ],
+      })
+      expect(execFileSync('git', ['merge-base', '--is-ancestor', autoPublishedCommit, 'main'], { cwd: submoduleOrigin }).toString()).toBe('')
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
