@@ -50,6 +50,16 @@ function getTargetedCliAdapter(h: CommandHelpers, args: any, providerType?: stri
     return h.getCliAdapter(args?.targetSessionId || providerType || h.currentSession?.providerType || h.currentManagerKey);
 }
 
+function getExplicitHistorySessionId(args: any): string | undefined {
+    const explicit = typeof args?.historySessionId === 'string' ? args.historySessionId.trim() : '';
+    if (explicit) return explicit;
+
+    const explicitProviderSessionId = typeof args?.providerSessionId === 'string' ? args.providerSessionId.trim() : '';
+    if (explicitProviderSessionId) return explicitProviderSessionId;
+
+    return undefined;
+}
+
 function getTargetInstance(h: CommandHelpers, args: any): ApprovalSelectableInstance | null {
     const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     const sessionId = targetSessionId || h.currentSession?.sessionId || '';
@@ -141,16 +151,17 @@ async function waitOnceForFreshHermesCliStart(adapter: CliAdapter, log: (msg: st
 }
 
 function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
-    const explicit = typeof args?.historySessionId === 'string' ? args.historySessionId.trim() : '';
+    const explicit = getExplicitHistorySessionId(args);
     if (explicit) return explicit;
-
-    const explicitProviderSessionId = typeof args?.providerSessionId === 'string' ? args.providerSessionId.trim() : '';
-    if (explicitProviderSessionId) return explicitProviderSessionId;
 
     const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     if (!targetSessionId) return undefined;
 
-    const instance = h.ctx.instanceManager?.getInstance(targetSessionId);
+    const session = h.ctx.sessionRegistry?.get(targetSessionId) as any;
+    const registeredProviderSessionId = typeof session?.providerSessionId === 'string' ? session.providerSessionId.trim() : '';
+    if (registeredProviderSessionId) return registeredProviderSessionId;
+
+    const instance = getTargetInstance(h, args);
     const state = instance?.getState?.();
     const providerSessionId = typeof state?.providerSessionId === 'string' ? state.providerSessionId.trim() : '';
     if (providerSessionId) return providerSessionId;
@@ -164,6 +175,23 @@ function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
     }
 
     return targetSessionId;
+}
+
+function resolveCliNativeHistorySessionId(args: any, currentHistorySessionId: string | undefined, parsedProviderSessionId: string | undefined): string | undefined {
+    const explicit = getExplicitHistorySessionId(args);
+    if (explicit) return explicit;
+
+    const parsed = typeof parsedProviderSessionId === 'string' ? parsedProviderSessionId.trim() : '';
+    const current = typeof currentHistorySessionId === 'string' ? currentHistorySessionId.trim() : '';
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+
+    // getHistorySessionId falls back to the runtime session id when no native
+    // handle has been registered yet. For live CLI adapters the parser may
+    // already know the provider-native handle; prefer it over the runtime id so
+    // exact native reads do not miss the worker transcript and fall back to PTY
+    // or same-workspace history.
+    if (parsed && (!current || current === targetSessionId)) return parsed;
+    return current || parsed || undefined;
 }
 
 function getInteractionId(args: any): string | undefined {
@@ -368,11 +396,38 @@ function supportsCliNativeTranscript(providerType: string, provider?: ProviderMo
     return provider?.category === 'cli' && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
 }
 
+function getComparableVisibleText(message: ChatMessage | undefined): string {
+    if (!message) return '';
+    const role = String((message as any).role || '').trim().toLowerCase();
+    if (role !== 'user' && role !== 'assistant') return '';
+    const kind = String((message as any).kind || 'standard').trim().toLowerCase();
+    if (kind && kind !== 'standard') return '';
+    const content = flattenContent((message as any).content).replace(/\s+/g, ' ').trim();
+    return content;
+}
+
+function hasOverlappingVisibleConversationText(nativeMessages: ChatMessage[], ptyMessages: ChatMessage[]): boolean {
+    const nativeTexts = nativeMessages.map(getComparableVisibleText).filter(Boolean);
+    const ptyTexts = ptyMessages.map(getComparableVisibleText).filter(Boolean);
+    if (nativeTexts.length === 0 || ptyTexts.length === 0) return false;
+    for (const nativeText of nativeTexts) {
+        for (const ptyText of ptyTexts) {
+            if (nativeText === ptyText) return true;
+            const shorter = nativeText.length <= ptyText.length ? nativeText : ptyText;
+            const longer = nativeText.length <= ptyText.length ? ptyText : nativeText;
+            if (shorter.length >= 32 && longer.includes(shorter)) return true;
+        }
+    }
+    return false;
+}
+
 function hasSafeNativeHistoryMapping(args: {
     historySessionId?: string;
     providerSessionId?: string;
     workspace?: string;
     nativeMessages: ChatMessage[];
+    ptyMessages?: ChatMessage[];
+    requireWorkspaceContentOverlap?: boolean;
 }): boolean {
     const explicitSessionId = String(args.historySessionId || args.providerSessionId || '').trim();
     if (explicitSessionId) {
@@ -384,7 +439,10 @@ function hasSafeNativeHistoryMapping(args: {
     }
     const workspace = String(args.workspace || '').trim();
     if (!workspace) return false;
-    return args.nativeMessages.some((message: any) => String(message?.workspace || '').trim() === workspace);
+    const workspaceMatches = args.nativeMessages.some((message: any) => String(message?.workspace || '').trim() === workspace);
+    if (!workspaceMatches) return false;
+    if (!args.requireWorkspaceContentOverlap) return true;
+    return hasOverlappingVisibleConversationText(args.nativeMessages, args.ptyMessages || []);
 }
 
 function readCliProviderNativeHistory(agentStr: string, args: {
@@ -443,6 +501,22 @@ function isNativeHistoryFreshEnough(args: {
 
 function shouldPreserveReadChatPayloadField(key: string): boolean {
     return key === 'messageSource' || key === 'transcriptProvenance';
+}
+
+function updateMessageSourceReturnedCount(value: unknown, returnedMessageCount: number): unknown {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const record = value as Record<string, unknown>;
+    const coverage = record.coverage && typeof record.coverage === 'object' && !Array.isArray(record.coverage)
+        ? record.coverage as Record<string, unknown>
+        : undefined;
+    if (!coverage) return value;
+    return {
+        ...record,
+        coverage: {
+            ...coverage,
+            returnedMessageCount,
+        },
+    };
 }
 
 function deriveHistoryDedupKey(message: ChatMessage & { _unitKey?: string; _turnKey?: string }): string | undefined {
@@ -594,6 +668,13 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
     const visibleMessages = filterUserFacingChatMessages(messages);
     const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
     const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
+    const preservedPayloadFields = Object.fromEntries(Object.entries(payload).filter(([key]) => shouldPreserveReadChatPayloadField(key)));
+    if (preservedPayloadFields.messageSource) {
+        preservedPayloadFields.messageSource = updateMessageSourceReturnedCount(preservedPayloadFields.messageSource, sync.messages.length);
+    }
+    if (preservedPayloadFields.transcriptProvenance) {
+        preservedPayloadFields.transcriptProvenance = updateMessageSourceReturnedCount(preservedPayloadFields.transcriptProvenance, sync.messages.length);
+    }
     const returnedDebugReadChat = debugReadChat
         ? {
             ...debugReadChat,
@@ -608,7 +689,7 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
     return {
         success: true,
         ...validatedPayload,
-        ...Object.fromEntries(Object.entries(payload).filter(([key]) => shouldPreserveReadChatPayloadField(key))),
+        ...preservedPayloadFields,
         messages: sync.messages,
         totalMessages: sync.totalMessages,
         ...(returnedDebugReadChat ? { debugReadChat: returnedDebugReadChat } : {}),
@@ -1168,17 +1249,20 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     returnedMessages.length,
                     200,
                 );
+                const nativeHistorySessionId = resolveCliNativeHistorySessionId(args, historySessionId, providerSessionId);
+                const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
                 const exactNativeHistoryScope = Boolean(
                     (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
                     || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
                     || providerSessionId
+                    || (nativeHistorySessionId && nativeHistorySessionId !== targetSessionId)
                     || ((h.currentSession as any)?.sessionId === args?.targetSessionId && typeof (h.currentSession as any)?.providerSessionId === 'string' && (h.currentSession as any).providerSessionId.trim())
                 );
                 let nativeHistory: (ReturnType<typeof readProviderChatHistory> & { lookup?: 'session' | 'workspace' }) | null = null;
                 try {
                     nativeHistory = readCliProviderNativeHistory(agentStr, {
                         canonicalHistory: provider?.canonicalHistory,
-                        historySessionId,
+                        historySessionId: nativeHistorySessionId,
                         workspace,
                         offset: 0,
                         limit: nativeHistoryLimit,
@@ -1206,13 +1290,15 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         : [];
                     const historyProviderSessionId = typeof (nativeHistory as any)?.providerSessionId === 'string'
                         ? (nativeHistory as any).providerSessionId
-                        : readHistorySessionIdFromMessages(nativeMessages) || historySessionId;
+                        : readHistorySessionIdFromMessages(nativeMessages) || nativeHistorySessionId || historySessionId;
                     const lookup = (nativeHistory as any).lookup === 'workspace' ? 'workspace' : 'session';
                     const safeMapping = hasSafeNativeHistoryMapping({
-                        historySessionId: lookup === 'workspace' ? undefined : historySessionId,
-                        providerSessionId: lookup === 'workspace' ? undefined : providerSessionId,
+                        historySessionId: lookup === 'workspace' ? undefined : nativeHistorySessionId,
+                        providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId || providerSessionId,
                         workspace,
                         nativeMessages,
+                        ptyMessages: returnedMessages,
+                        requireWorkspaceContentOverlap: lookup === 'workspace' && !exactNativeHistoryScope,
                     });
                     const freshEnough = isNativeHistoryFreshEnough({
                         sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
@@ -1227,7 +1313,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         messageSource = buildCliMessageSourceProvenance({
                             selected: 'native-history',
                             provider: adapter.cliType,
-                            nativeHandle: selectedProviderSessionId || historySessionId,
+                            nativeHandle: selectedProviderSessionId || nativeHistorySessionId || historySessionId,
                             nativeSource: (nativeHistory as any).source,
                             sourcePath: (nativeHistory as any).sourcePath,
                             sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
@@ -1250,7 +1336,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         messageSource = buildCliMessageSourceProvenance({
                             selected: 'pty-parser',
                             provider: adapter.cliType,
-                            nativeHandle: historyProviderSessionId || historySessionId,
+                            nativeHandle: historyProviderSessionId || nativeHistorySessionId || historySessionId,
                             fallbackReason,
                             nativeSource: (nativeHistory as any).source,
                             sourcePath: (nativeHistory as any).sourcePath,
