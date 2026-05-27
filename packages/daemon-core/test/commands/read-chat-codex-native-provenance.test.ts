@@ -161,6 +161,33 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     })
   })
 
+  it('fails closed for inactive Codex sessions when provider-native history is not safely mapped', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.codex/sessions/other-session.jsonl',
+      sourceMtimeMs: Date.now(),
+      hasMore: false,
+      messages: [
+        { role: 'assistant', content: 'wrong native assistant', receivedAt: 4_000, historySessionId: 'other-session' },
+      ],
+    })
+
+    const result = await handleReadChat(createHelpers(null) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'native-session',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('native_history_not_safely_available')
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      fallbackReason: 'native_history_not_safely_mapped',
+    })
+    expect((result as any).messages).toBeUndefined()
+  })
+
   it('includes selected transcript provenance in chat debug bundles', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       source: 'provider-native',
