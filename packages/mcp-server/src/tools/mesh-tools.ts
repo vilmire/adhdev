@@ -2230,6 +2230,7 @@ export async function meshViewQueue(
     args: { status?: string[]; view?: QueueViewMode },
 ): Promise<string> {
     try {
+        await refreshMeshFromDaemon(ctx);
         const statusFilter = sanitizeQueueStatusFilter(args.status);
         const view = normalizeQueueViewMode(args.view);
         const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(getQueue(ctx.mesh.id), ctx.mesh));

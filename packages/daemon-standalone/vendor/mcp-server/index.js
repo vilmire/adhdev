@@ -1990,6 +1990,7 @@ async function meshEnqueueTask(ctx, args) {
 }
 async function meshViewQueue(ctx, args) {
   try {
+    await refreshMeshFromDaemon(ctx);
     const statusFilter = sanitizeQueueStatusFilter(args.status);
     const view = normalizeQueueViewMode(args.view);
     const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness((0, import_daemon_core.getQueue)(ctx.mesh.id), ctx.mesh));

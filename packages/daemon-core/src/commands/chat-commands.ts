@@ -417,6 +417,16 @@ function isGeneratingLikeStatus(status: unknown): boolean {
     return status === 'generating' || status === 'streaming' || status === 'long_generating' || status === 'starting';
 }
 
+function hasVisibleAssistantMessage(messages: unknown[] | undefined): boolean {
+    if (!Array.isArray(messages)) return false;
+    return messages.some((message: any) => {
+        if (!message || message.role !== 'assistant') return false;
+        const kind = typeof message.kind === 'string' ? message.kind : 'standard';
+        if (kind !== 'standard') return false;
+        return String(message.content || '').trim().length > 0;
+    });
+}
+
 function shouldTrustCliAdapterTerminalStatus(parsedStatus: unknown, activeModal: unknown, adapter: CliAdapter, adapterStatus: any): boolean {
     if (!isGeneratingLikeStatus(parsedStatus)) return false;
     if (hasNonEmptyModalButtons(activeModal)) return false;
@@ -437,6 +447,14 @@ function normalizeCliReadChatStatus(parsedStatus: unknown, activeModal: unknown,
         && adapterStatus.messages.length === 0
         && !(typeof adapter.isProcessing === 'function' && adapter.isProcessing())) {
         return 'starting';
+    }
+    if (
+        isGeneratingLikeStatus(adapterRawStatus)
+        && parsedStatus === 'idle'
+        && !hasNonEmptyModalButtons(activeModal)
+        && !hasVisibleAssistantMessage(parsedMessages)
+    ) {
+        return adapterRawStatus;
     }
     if (shouldTrustCliAdapterTerminalStatus(parsedStatus, activeModal, adapter, adapterStatus)) return 'idle';
     return typeof parsedStatus === 'string' && parsedStatus.trim() ? parsedStatus : 'idle';
