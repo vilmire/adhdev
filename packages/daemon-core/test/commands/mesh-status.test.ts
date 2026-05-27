@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
+import { drainPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../../src/mesh/mesh-events'
 
 const execFileAsync = promisify(execFile)
 
@@ -870,6 +871,66 @@ describe('mesh_status', () => {
     } finally {
       const { __resetBeadsDBForTests } = await import('../../src/mesh/mesh-work-queue.js')
       __resetBeadsDBForTests()
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await rm(configDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('surfaces and drains pending coordinator events through mesh_status instead of requiring chat polling', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-status-pending-events-'))
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-pending-events-')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh, addNode } = await import('../../src/config/mesh-config.js')
+      const mesh = createMesh({
+        name: 'Pending Event Mesh',
+        repoIdentity: 'github.com/acme/pending-events',
+        defaultBranch: 'master',
+      })
+      addNode(mesh.id, { workspace: repoRoot, repoRoot })
+      const { router, sessionHostControl } = createRouter()
+
+      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
+      expect(initial.success).toBe(true)
+      expect(initial.pendingCoordinatorEvents).toBeUndefined()
+
+      queuePendingMeshCoordinatorEvent({
+        event: 'refine:completed',
+        meshId: mesh.id,
+        nodeLabel: 'node-pending',
+        nodeId: 'node-pending',
+        workspace: repoRoot,
+        metadataEvent: {
+          source: 'refine_mesh_node_async_job',
+          jobId: 'refine_status_visible',
+          status: 'completed',
+          result: { success: true, merged: true },
+        },
+        queuedAt: Date.now(),
+      })
+
+      sessionHostControl.listSessions.mockClear()
+      const withEvent = await router.execute('mesh_status', { meshId: mesh.id }) as any
+      expect(withEvent.success).toBe(true)
+      expect(withEvent.sourceOfTruth.aggregateSnapshot.refreshReason).toBe('pending_coordinator_events')
+      expect(withEvent.pendingCoordinatorEvents).toEqual([
+        expect.objectContaining({
+          event: 'refine:completed',
+          meshId: mesh.id,
+          nodeId: 'node-pending',
+        }),
+      ])
+      expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
+      expect(drainPendingMeshCoordinatorEvents(mesh.id)).toEqual([])
+
+      const cachedAfterDrain = await router.execute('mesh_status', { meshId: mesh.id }) as any
+      expect(cachedAfterDrain.success).toBe(true)
+      expect(cachedAfterDrain.pendingCoordinatorEvents).toBeUndefined()
+    } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       await rm(configDir, { recursive: true, force: true })

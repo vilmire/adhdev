@@ -277,6 +277,95 @@ describe('refine_mesh_node validation gate', () => {
     }
   }, 60000)
 
+  it('classifies missing package dependencies before running package-manager validation when no bootstrap is configured', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-missing-deps-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      writeFileSync(join(repo, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: {} }, null, 2), 'utf-8')
+      execFileSync('git', ['add', 'package-lock.json'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'add lockfile'], { cwd: repo })
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-missing-deps')
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-missing-deps',
+        inlineMesh: mesh,
+      })
+
+      expectAccepted(accepted, 'node-missing-deps')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_failed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({
+        success: false,
+        code: 'missing_dependencies',
+        convergenceStatus: 'blocked_review',
+      })
+      expect(result.validationSummary).toMatchObject({
+        status: 'failed',
+        failureKind: 'missing_dependencies',
+        failureCode: 'missing_dependencies',
+        bootstrapCommandsRun: [],
+      })
+      expect(result.validationSummary.commandsRun[0]).toMatchObject({
+        displayCommand: 'npm run typecheck',
+        passed: false,
+        skipped: true,
+        failureKind: 'missing_dependencies',
+      })
+      expect(result.refineStages.some((entry: any) => entry.stage === 'patch_equivalence')).toBe(false)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('runs configured bootstrap commands before package-manager validation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-bootstrap-deps-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      writeFileSync(join(repo, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: {} }, null, 2), 'utf-8')
+      execFileSync('git', ['add', 'package-lock.json'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'add lockfile'], { cwd: repo })
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-bootstrap-deps')
+      mesh.policy.refineConfig.validation.bootstrapCommands = [
+        { command: 'node', args: ['-e', 'require("fs").mkdirSync("node_modules", { recursive: true })'], category: 'custom' },
+      ]
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-bootstrap-deps',
+        inlineMesh: mesh,
+      })
+
+      expectAccepted(accepted, 'node-bootstrap-deps')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({ success: true, merged: true })
+      expect(result.validationSummary.bootstrapCommandsRun[0]).toMatchObject({
+        displayCommand: 'node -e require("fs").mkdirSync("node_modules", { recursive: true })',
+        passed: true,
+      })
+      expect(result.validationSummary.commandsRun.map((entry: any) => entry.displayCommand)).toEqual(['npm run typecheck', 'npm run test'])
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
   it('returns before long validation completes and reuses the in-flight job for duplicate refine requests', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-async-duplicate-'))
     const repo = join(root, 'repo')
@@ -471,6 +560,7 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['update-index', '--add', '--cacheinfo', '160000', missingCommit, 'oss'], { cwd: worktree })
       execFileSync('git', ['commit', '-q', '-m', 'point submodule at missing commit'], { cwd: worktree })
       const mesh = createMesh(repo, worktree, 'node-missing-submodule')
+      mesh.policy.allowAutoPublishSubmoduleMainCommits = true
       const messages: string[] = []
       const router = createRouter(mesh.id, messages)
 
@@ -497,7 +587,14 @@ describe('refine_mesh_node validation gate', () => {
       expect(result.nextStep).toContain('Do not merge the root branch')
       expect(result.nextSteps).toContain('Ask the user for explicit approval before pushing or publishing any submodule commit.')
       expect(result.unreachableSubmoduleCommits).toEqual([
-        expect.objectContaining({ path: 'oss', commit: missingCommit, error: 'Submodule checkout missing at oss' }),
+        expect.objectContaining({
+          path: 'oss',
+          commit: missingCommit,
+          autoPublishAllowed: true,
+          autoPublishAttempted: false,
+          autoPublishSkippedReason: expect.stringContaining('submodule checkout missing'),
+          error: 'Submodule checkout missing at oss',
+        }),
       ])
       expect(result.submoduleReachability).toMatchObject({
         status: 'failed',
@@ -510,6 +607,19 @@ describe('refine_mesh_node validation gate', () => {
         nextStep: expect.stringContaining('Do not merge the root branch'),
       })
       expect(result.refineStages.map((entry: any) => `${entry.stage}:${entry.status}`)).toContain('submodule_reachability:failed')
+      const reachabilityStage = result.refineStages.find((entry: any) => entry.stage === 'submodule_reachability')
+      expect(reachabilityStage).toMatchObject({
+        autoPublishAllowed: true,
+        autoPublishPolicySource: 'mesh.policy.allowAutoPublishSubmoduleMainCommits',
+        autoPublished: [],
+        autoPublishSkipped: [
+          expect.objectContaining({
+            path: 'oss',
+            commit: missingCommit,
+            reason: expect.stringContaining('submodule checkout missing'),
+          }),
+        ],
+      })
       expect(result.refineStages.some((entry: any) => entry.stage === 'merge')).toBe(false)
       expect(result.refineStages.some((entry: any) => entry.stage === 'cleanup')).toBe(false)
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
@@ -671,7 +781,6 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['add', 'AUTO_PUBLISHED.md'], { cwd: join(worktree, 'oss') })
       execFileSync('git', ['commit', '-q', '-m', 'auto publish submodule commit'], { cwd: join(worktree, 'oss') })
       const autoPublishedCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(worktree, 'oss'), encoding: 'utf-8' }).trim()
-      execFileSync('git', ['fetch', join(worktree, 'oss'), autoPublishedCommit], { cwd: join(repo, 'oss') })
       execFileSync('git', ['add', 'oss'], { cwd: worktree })
       execFileSync('git', ['commit', '-q', '-m', 'point submodule at auto-published commit'], { cwd: worktree })
       const mesh = createMesh(repo, worktree, 'node-auto-publish-submodule', undefined, false)
@@ -702,6 +811,7 @@ describe('refine_mesh_node validation gate', () => {
         autoPublishSucceeded: true,
         autoPublishVerified: true,
         autoPublishRefspec: `${autoPublishedCommit}:refs/heads/main`,
+        importedFromWorktree: true,
       })
       expect(entry.autoPublishRefspec.startsWith('+')).toBe(false)
       const reachabilityStage = result.refineStages.find((stage: any) => stage.stage === 'submodule_reachability')

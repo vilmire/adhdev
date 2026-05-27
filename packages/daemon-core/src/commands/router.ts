@@ -38,7 +38,7 @@ import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../l
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
 import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
 import { buildSessionEntries } from '../status/builders.js';
-import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
+import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import {
@@ -1070,8 +1070,11 @@ type MeshRefineValidationSummary = {
     status: MeshRefineValidationStatus;
     required: true;
     commandsRun: Array<Record<string, unknown>>;
+    bootstrapCommandsRun: Array<Record<string, unknown>>;
     rejectedCommands: Array<Record<string, unknown>>;
     skippedReason?: string;
+    failureKind?: string;
+    failureCode?: string;
     timeoutMs: number;
     outputLimitBytes: number;
     configSource?: string;
@@ -1107,6 +1110,8 @@ type MeshRefineSubmoduleReachabilityEntry = {
     autoPublishSucceeded?: boolean;
     autoPublishVerified?: boolean;
     autoPublishRefspec?: string;
+    autoPublishSkippedReason?: string;
+    importedFromWorktree?: boolean;
     checkedLocal?: boolean;
     localReachable?: boolean;
     remote?: string;
@@ -1284,7 +1289,7 @@ async function runMeshRefinePatchEquivalenceGate(
 async function runMeshRefineSubmoduleReachabilityGate(
     repoRoot: string,
     mergedTree: string,
-    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string } = {},
+    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string; worktreeRoot?: string } = {},
 ): Promise<MeshRefineSubmoduleReachabilitySummary> {
     const startedAt = Date.now();
     const entries: MeshRefineSubmoduleReachabilityEntry[] = [];
@@ -1317,6 +1322,17 @@ async function runMeshRefineSubmoduleReachabilityGate(
             });
             return { stdout: String(stdout || ''), stderr: String(stderr || ''), refspec };
         };
+        const importCommitFromWorktreeSubmodule = async (submodulePath: string, worktreeSubmodulePath: string, commit: string): Promise<boolean> => {
+            if (!fs.existsSync(worktreeSubmodulePath)) return false;
+            try {
+                await runGit(worktreeSubmodulePath, ['cat-file', '-e', `${commit}^{commit}`]);
+            } catch {
+                return false;
+            }
+            await runGit(submodulePath, ['-c', 'protocol.file.allow=always', 'fetch', worktreeSubmodulePath, commit]);
+            await runGit(submodulePath, ['cat-file', '-e', `${commit}^{commit}`]);
+            return true;
+        };
 
         const treeOutput = await runGit(repoRoot, ['ls-tree', '-r', '-z', mergedTree]);
         const gitlinks = treeOutput
@@ -1339,6 +1355,11 @@ async function runMeshRefineSubmoduleReachabilityGate(
                 if (!fs.existsSync(submodulePath)) {
                     entry.error = `Submodule checkout missing at ${gitlink.path}`;
                     entry.publishRequired = true;
+                    if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                        entry.autoPublishAllowed = true;
+                        entry.autoPublishAttempted = false;
+                        entry.autoPublishSkippedReason = `submodule checkout missing at ${gitlink.path}; cannot perform non-force push to origin/main`;
+                    }
                     entries.push(entry);
                     continue;
                 }
@@ -1349,6 +1370,21 @@ async function runMeshRefineSubmoduleReachabilityGate(
                     entry.localReachable = true;
                 } catch {
                     entry.localReachable = false;
+                    if (options.allowAutoPublishSubmoduleMainCommits === true && options.worktreeRoot) {
+                        try {
+                            const imported = await importCommitFromWorktreeSubmodule(
+                                submodulePath,
+                                pathResolve(options.worktreeRoot, gitlink.path),
+                                gitlink.commit,
+                            );
+                            if (imported) {
+                                entry.localReachable = true;
+                                entry.importedFromWorktree = true;
+                            }
+                        } catch (importError: any) {
+                            entry.autoPublishSkippedReason = `candidate commit was not present in the source checkout and could not be imported from worktree submodule: ${truncateValidationOutput(importError?.stderr || importError?.message || String(importError))}`;
+                        }
+                    }
                     // Probe the submodule remote before allowing cleanup/completion.
                 }
 
@@ -1362,6 +1398,11 @@ async function runMeshRefineSubmoduleReachabilityGate(
                     } catch {
                         entry.error = 'Submodule remote reachability check failed: no configured origin remote';
                         entry.publishRequired = true;
+                        if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                            entry.autoPublishAllowed = true;
+                            entry.autoPublishAttempted = false;
+                            entry.autoPublishSkippedReason = 'submodule origin remote is not configured; cannot perform non-force push to origin/main';
+                        }
                         entries.push(entry);
                         continue;
                     }
@@ -1401,6 +1442,11 @@ async function runMeshRefineSubmoduleReachabilityGate(
                                 const publishDetails = truncateValidationOutput(publishError?.stderr || publishError?.message || String(publishError));
                                 entry.error = `Submodule auto-publish to origin/main failed or could not be verified: ${publishDetails}`;
                             }
+                        } else if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                            entry.autoPublishAllowed = true;
+                            entry.autoPublishAttempted = false;
+                            entry.autoPublishSkippedReason = entry.autoPublishSkippedReason
+                                || 'candidate commit is not reachable in the source checkout or worktree submodule, so Refinery cannot push it to origin/main';
                         }
                     }
                 } catch (e: any) {
@@ -1444,16 +1490,18 @@ async function runMeshRefineSubmoduleReachabilityGate(
 
 function buildMeshRefineValidationPlan(mesh: any, workspace: string): Record<string, unknown> {
     const plan = resolveMeshRefineValidationPlan(mesh, workspace);
+    const mapCommand = (command: MeshRefineValidationCommandPlan) => ({
+        displayCommand: command.displayCommand,
+        category: command.category,
+        source: command.source,
+        cwd: command.cwd,
+        timeoutMs: command.timeoutMs,
+    });
     return {
         source: plan.source,
         sourceType: plan.sourceType,
-        commands: plan.commands.map(command => ({
-            displayCommand: command.displayCommand,
-            category: command.category,
-            source: command.source,
-            cwd: command.cwd,
-            timeoutMs: command.timeoutMs,
-        })),
+        bootstrapCommands: plan.bootstrapCommands.map(mapCommand),
+        commands: plan.commands.map(mapCommand),
         unavailableReason: plan.unavailableReason,
         rejectedCommands: plan.rejectedCommands,
         suggestions: plan.suggestions,
@@ -1473,6 +1521,7 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
         status: 'skipped',
         required: true,
         commandsRun: [],
+        bootstrapCommandsRun: [],
         rejectedCommands: selection.rejectedCommands,
         skippedReason: undefined,
         timeoutMs: REFINE_VALIDATION_TIMEOUT_MS,
@@ -1488,7 +1537,32 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
         return summary;
     }
 
-    for (const candidate of selection.commands) {
+    const commandRecord = (candidate: MeshRefineValidationCommand, cwd: string, startedAt: number, result: any, passed: boolean, extras: Record<string, unknown> = {}) => ({
+        command: candidate.command,
+        args: candidate.args,
+        displayCommand: candidate.displayCommand,
+        category: candidate.category,
+        source: candidate.source,
+        cwd,
+        passed,
+        durationMs: Date.now() - startedAt,
+        stdout: truncateValidationOutput(result?.stdout),
+        stderr: truncateValidationOutput(result?.stderr || result?.message),
+        ...extras,
+    });
+    const isPackageManagerValidation = (candidate: MeshRefineValidationCommand): boolean => {
+        const command = pathBasename(candidate.command).replace(/\.(?:cmd|exe)$/i, '');
+        return ['npm', 'pnpm', 'yarn', 'bun'].includes(command)
+            && candidate.args.some(arg => arg === 'run' || arg === 'test' || arg === 'exec');
+    };
+    const dependenciesLikelyMissing = (cwd: string): boolean => {
+        if (!fs.existsSync(pathJoin(cwd, 'package.json'))) return false;
+        if (fs.existsSync(pathJoin(cwd, 'node_modules'))) return false;
+        return ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock']
+            .some(lock => fs.existsSync(pathJoin(cwd, lock)));
+    };
+
+    for (const candidate of selection.bootstrapCommands) {
         const startedAt = Date.now();
         const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
         const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
@@ -1500,36 +1574,61 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
                 maxBuffer: REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
                 env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
             });
-            summary.commandsRun.push({
-                command: candidate.command,
-                args: candidate.args,
-                displayCommand: candidate.displayCommand,
-                category: candidate.category,
-                source: candidate.source,
-                cwd,
-                passed: true,
-                exitCode: 0,
-                durationMs: Date.now() - startedAt,
-                stdout: truncateValidationOutput(result.stdout),
-                stderr: truncateValidationOutput(result.stderr),
-            });
+            summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
         } catch (error: any) {
-            summary.commandsRun.push({
-                command: candidate.command,
-                args: candidate.args,
-                displayCommand: candidate.displayCommand,
-                category: candidate.category,
-                source: candidate.source,
-                cwd,
-                passed: false,
+            summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, error, false, {
                 exitCode: typeof error?.code === 'number' ? error.code : null,
                 signal: typeof error?.signal === 'string' ? error.signal : null,
                 timedOut: error?.killed === true || /timed out/i.test(String(error?.message || '')),
-                durationMs: Date.now() - startedAt,
-                stdout: truncateValidationOutput(error?.stdout),
-                stderr: truncateValidationOutput(error?.stderr || error?.message),
-            });
+                failureKind: 'dependency_bootstrap_failed',
+            }));
             summary.status = 'failed';
+            summary.failureKind = 'dependency_bootstrap_failed';
+            summary.failureCode = 'dependency_bootstrap_failed';
+            return summary;
+        }
+    }
+
+    for (const candidate of selection.commands) {
+        const startedAt = Date.now();
+        const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
+        const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
+        if (selection.bootstrapCommands.length === 0 && isPackageManagerValidation(candidate) && dependenciesLikelyMissing(cwd)) {
+            summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, {
+                stderr: 'Dependencies appear to be missing: package.json and a lockfile are present, but node_modules is absent. Configure validation.bootstrapCommands in repo mesh/refine config if Refinery should install/bootstrap before validation.',
+            }, false, {
+                exitCode: null,
+                skipped: true,
+                failureKind: 'missing_dependencies',
+            }));
+            summary.status = 'failed';
+            summary.failureKind = 'missing_dependencies';
+            summary.failureCode = 'missing_dependencies';
+            return summary;
+        }
+        try {
+            const result = await execFileAsync(candidate.command, candidate.args, {
+                cwd,
+                encoding: 'utf8',
+                timeout,
+                maxBuffer: REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
+                env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
+            });
+            summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
+        } catch (error: any) {
+            const stderr = truncateValidationOutput(error?.stderr || error?.message);
+            const missingDependencyFailure = /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
+            summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, error, false, {
+                exitCode: typeof error?.code === 'number' ? error.code : null,
+                signal: typeof error?.signal === 'string' ? error.signal : null,
+                timedOut: error?.killed === true || /timed out/i.test(String(error?.message || '')),
+                ...(missingDependencyFailure ? { failureKind: 'missing_dependencies' } : {}),
+            }));
+            summary.status = 'failed';
+            if (missingDependencyFailure) {
+                summary.failureKind = 'missing_dependencies';
+                summary.failureCode = 'missing_dependencies';
+            }
             return summary;
         }
     }
@@ -2751,9 +2850,13 @@ export class DaemonCommandRouter {
             if (validationSummary.status === 'failed') {
                 return {
                     success: false,
-                    code: 'validation_failed',
+                    code: validationSummary.failureCode || 'validation_failed',
                     convergenceStatus: 'blocked_review',
-                    error: 'Refinery validation gate failed; merge/refine was not attempted.',
+                    error: validationSummary.failureCode === 'missing_dependencies'
+                        ? 'Refinery validation dependencies are missing; merge/refine was not attempted. Configure validation.bootstrapCommands if Refinery should bootstrap dependencies before validation.'
+                        : validationSummary.failureCode === 'dependency_bootstrap_failed'
+                            ? 'Refinery dependency/bootstrap command failed; merge/refine was not attempted.'
+                            : 'Refinery validation gate failed; merge/refine was not attempted.',
                     branch,
                     into: baseBranch,
                     validationSummary,
@@ -2825,6 +2928,7 @@ export class DaemonCommandRouter {
             const submoduleReachability = await runMeshRefineSubmoduleReachabilityGate(repoRoot, patchEquivalence.mergedTree || branchHead, {
                 allowAutoPublishSubmoduleMainCommits: autoPublishSubmoduleMainCommits.enabled,
                 autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
+                worktreeRoot: node.workspace,
             });
             recordMeshRefineStage(refineStages, 'submodule_reachability', submoduleReachability.status, submoduleReachabilityStarted, {
                 checked: submoduleReachability.checked,
@@ -2844,6 +2948,16 @@ export class DaemonCommandRouter {
                         remoteMainReachable: entry.remoteMainReachable,
                         error: entry.error,
                     })),
+                autoPublishSkipped: submoduleReachability.entries
+                    .filter(entry => entry.autoPublishAllowed === true && entry.autoPublishAttempted !== true)
+                    .map(entry => ({
+                        path: entry.path,
+                        commit: entry.commit,
+                        remote: entry.remote,
+                        remoteUrl: entry.remoteUrl,
+                        remoteMainBranch: entry.remoteMainBranch,
+                        reason: entry.autoPublishSkippedReason || entry.error || 'auto-publish was allowed but no publish attempt was possible',
+                    })),
                 unreachable: submoduleReachability.unreachable.map(entry => ({
                     path: entry.path,
                     commit: entry.commit,
@@ -2851,9 +2965,10 @@ export class DaemonCommandRouter {
                     autoPublishAllowed: entry.autoPublishAllowed,
                     autoPublishAttempted: entry.autoPublishAttempted,
                     autoPublishSucceeded: entry.autoPublishSucceeded,
-                    autoPublishVerified: entry.autoPublishVerified,
-                    autoPublishRefspec: entry.autoPublishRefspec,
-                    remote: entry.remote,
+                        autoPublishVerified: entry.autoPublishVerified,
+                        autoPublishRefspec: entry.autoPublishRefspec,
+                        autoPublishSkippedReason: entry.autoPublishSkippedReason,
+                        remote: entry.remote,
                     remoteUrl: entry.remoteUrl,
                     remoteReachable: entry.remoteReachable,
                     remoteMainBranch: entry.remoteMainBranch,
@@ -2891,6 +3006,7 @@ export class DaemonCommandRouter {
                         autoPublishSucceeded: entry.autoPublishSucceeded,
                         autoPublishVerified: entry.autoPublishVerified,
                         autoPublishRefspec: entry.autoPublishRefspec,
+                        autoPublishSkippedReason: entry.autoPublishSkippedReason,
                         error: entry.error,
                     })),
                     branch,
@@ -4897,8 +5013,9 @@ export class DaemonCommandRouter {
                     const meshHost = resolveMeshHostStatus(mesh);
 
                     const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
+                    const pendingCoordinatorEventCount = getPendingMeshCoordinatorEvents(meshId).length;
                     const hadAggregateCache = this.aggregateMeshStatusCache.has(meshId);
-                    if (!refreshRequested) {
+                    if (!refreshRequested && pendingCoordinatorEventCount === 0) {
                         const cachedStatus = this.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
                         if (cachedStatus) {
                             logRepoMeshStatusDebug('return_cached', {
@@ -4912,6 +5029,8 @@ export class DaemonCommandRouter {
                     }
                     const refreshReason = refreshRequested
                         ? 'explicit_refresh'
+                        : pendingCoordinatorEventCount > 0
+                            ? 'pending_coordinator_events'
                         : hadAggregateCache
                             ? 'stale_pending_cache_refresh'
                             : 'cold_cache_miss';
@@ -4954,8 +5073,14 @@ export class DaemonCommandRouter {
                     const effectiveDirectTruth = passivePeerTruthNotAttempted
                         ? { ...directTruth, unavailableNodeIds: [] as string[] }
                         : directTruth;
+                    const unavailableDirectTruthNodeIds = new Set(effectiveDirectTruth.unavailableNodeIds);
+                    const unavailableNodesAreOnlyRemovedWorktrees = unavailableDirectTruthNodeIds.size > 0
+                        && Array.isArray(mesh.nodes)
+                        && mesh.nodes
+                            .filter((node: any) => unavailableDirectTruthNodeIds.has(String(node.id || node.nodeId || '')))
+                            .every((node: any) => node?.isLocalWorktree === true);
                     const directTruthSatisfied = !requireDirectPeerTruth
-                        || effectiveDirectTruth.directEvidenceCount > 0;
+                        || (effectiveDirectTruth.directEvidenceCount > 0 && (effectiveDirectTruth.unavailableNodeIds.length === 0 || unavailableNodesAreOnlyRemovedWorktrees));
                     if (requireDirectPeerTruth && !directTruthSatisfied) {
                         const failureResult = {
                             success: false,
@@ -5216,6 +5341,7 @@ export class DaemonCommandRouter {
                         nodeStatuses.push(status);
                     }
 
+                    const pendingCoordinatorEvents = drainPendingMeshCoordinatorEvents(meshId);
                     const statusResult = {
                         success: true,
                         meshId: mesh.id,
@@ -5257,8 +5383,13 @@ export class DaemonCommandRouter {
                         nodes: nodeStatuses,
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
+                        ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
                     };
-                    const rememberedStatus = this.rememberAggregateMeshStatus(meshId, statusResult, refreshReason);
+                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, ...cacheableStatusResult } = statusResult as any;
+                    const rememberedStatus = this.rememberAggregateMeshStatus(meshId, cacheableStatusResult, refreshReason);
+                    const returnedStatus = pendingCoordinatorEvents.length > 0
+                        ? { ...rememberedStatus, pendingCoordinatorEvents }
+                        : rememberedStatus;
                     logRepoMeshStatusDebug('return_live', {
                         meshId,
                         command: 'mesh_status',
@@ -5266,9 +5397,9 @@ export class DaemonCommandRouter {
                         refreshReason,
                         meshSource: meshRecord.source,
                         directTruth,
-                        summary: summarizeRepoMeshStatusDebug(rememberedStatus),
+                        summary: summarizeRepoMeshStatusDebug(returnedStatus),
                     });
-                    return rememberedStatus;
+                    return returnedStatus;
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
