@@ -62,6 +62,94 @@ describe('CLI read_chat native history hydration', () => {
     }))
   })
 
+  it('selects Hermes provider-native history over parsed PTY messages when canonical history is native-source', async () => {
+    const adapter = {
+      cliType: 'hermes-cli',
+      cliName: 'Hermes Agent',
+      workingDir: '/workspaces/adhdev',
+      getStatus: vi.fn(() => ({ status: 'idle', messages: [{ role: 'assistant', content: 'pty assistant' }] })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        providerSessionId: 'session_hermes_native_42',
+        title: 'Hermes Agent',
+        transcriptAuthority: 'provider',
+        coverage: 'full',
+        messages: [
+          { role: 'user', content: 'pty user', receivedAt: 1_000 },
+          { role: 'assistant', content: 'pty assistant', receivedAt: 2_000 },
+        ],
+      })),
+      isProcessing: vi.fn(() => false),
+      isReady: vi.fn(() => true),
+    }
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.hermes/sessions/session_hermes_native_42.json',
+      sourceMtimeMs: Date.now(),
+      providerSessionId: 'session_hermes_native_42',
+      messages: [
+        { role: 'user', content: 'native hermes user', receivedAt: 3_000, historySessionId: 'session_hermes_native_42' },
+        { role: 'assistant', content: 'native hermes assistant', receivedAt: 4_000, historySessionId: 'session_hermes_native_42' },
+      ],
+      hasMore: false,
+    })
+
+    const result = await handleReadChat(createHelpers({
+      adapter,
+      provider: {
+        type: 'hermes-cli',
+        category: 'cli',
+        historyBehavior: { transcriptAuthority: 'provider' },
+        canonicalHistory: {
+          format: 'hermes-provider-native',
+          mode: 'native-source',
+          scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+        },
+        scripts: { readNativeHistory: () => null },
+      },
+      currentSession: {
+        sessionId: 'runtime-session',
+        providerType: 'hermes-cli',
+        providerName: 'Hermes Agent',
+        providerSessionId: 'session_hermes_native_42',
+        transport: 'pty',
+        adapterKey: 'runtime-session',
+        workspace: '/workspaces/adhdev',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'runtime-session', instanceKey: 'runtime-session' }) },
+        instanceManager: { getInstance: () => null },
+      },
+    }) as any, {
+      agentType: 'hermes-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'session_hermes_native_42',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.messages as any[]).map((message: any) => message.content)).toEqual([
+      'native hermes user',
+      'native hermes assistant',
+    ])
+    expect(result.messageSource).toMatchObject({
+      selected: 'native-history',
+      provider: 'hermes-cli',
+      nativeHandle: 'session_hermes_native_42',
+      ptyStatusApprovalOnly: true,
+      coverage: {
+        nativeMessageCount: 2,
+        ptyMessageCount: 2,
+        returnedMessageCount: 2,
+        safeMapping: true,
+      },
+    })
+    expect(result.debugReadChat).toMatchObject({
+      selectedMessageSource: 'native-history',
+      shouldPreferAdapterMessages: false,
+    })
+  })
+
   it('keeps a generating Codex direct task readable when only the dispatched user turn is visible', async () => {
     const prompt = 'Diagnose why mesh_read_chat returned zero messages for this Codex task.'
     const adapter = {
