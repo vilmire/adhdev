@@ -202,6 +202,43 @@ describe('buildMeshGraph', () => {
         ]))
     })
 
+    it('links sibling submodules directly to their repo node instead of chaining them together', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_submodules',
+            meshName: 'Submodule Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-05-16T18:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_parent',
+                    machineLabel: 'Parent',
+                    workspace: '/repo/parent',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: {
+                        ...baseGit('main'),
+                        submodules: [
+                            { path: 'modules/a', repoPath: '/repo/parent/modules/a', commit: 'aaa111', dirty: false, outOfSync: false },
+                            { path: 'modules/b', repoPath: '/repo/parent/modules/b', commit: 'bbb222', dirty: false, outOfSync: false },
+                            { path: 'modules/c', repoPath: '/repo/parent/modules/c', commit: 'ccc333', dirty: false, outOfSync: false },
+                        ],
+                    },
+                },
+            ],
+        } as any)
+
+        const submoduleEdges = graph.edges.filter(edge => edge.type === 'submoduleLink')
+
+        expect(submoduleEdges).toHaveLength(3)
+        expect(new Set(submoduleEdges.map(edge => edge.source))).toEqual(new Set(['node_parent']))
+        expect(submoduleEdges.map(edge => edge.target).sort()).toEqual([
+            'node_parent::submodule::modules/a',
+            'node_parent::submodule::modules/b',
+            'node_parent::submodule::modules/c',
+        ])
+    })
+
     it('preserves machine identity and local-vs-remote hints when daemon metadata is present', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_machine_identity',

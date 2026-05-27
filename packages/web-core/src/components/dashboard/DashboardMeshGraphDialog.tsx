@@ -15,29 +15,58 @@ interface DashboardMeshGraphDialogProps {
     onClose: () => void
 }
 
+const dashboardMeshGraphStatusCache = new Map<string, RepoMeshStatus>()
+
+function dashboardMeshGraphStatusCacheKey(daemonId: string | null, meshId: string | null): string | null {
+    if (!daemonId || !meshId) return null
+    return `${daemonId}::${meshId}`
+}
+
 export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand, onClose }: DashboardMeshGraphDialogProps) {
     const meshId = typeof activeConv.settings?.meshCoordinatorFor === 'string'
         ? activeConv.settings.meshCoordinatorFor
         : null
     const daemonId = activeConv.daemonId ?? null
+    const cacheKey = dashboardMeshGraphStatusCacheKey(daemonId, meshId)
+    const initialMeshStatus = cacheKey ? dashboardMeshGraphStatusCache.get(cacheKey) ?? null : null
     const meshOverrides = useDashboardMeshOverrides()
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
-    const [meshStatus, setMeshStatus] = useState<RepoMeshStatus | null>(null)
+    const [meshStatus, setMeshStatus] = useState<RepoMeshStatus | null>(initialMeshStatus)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null)
-    const hasUsableGraphRef = useRef(false)
+    const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(initialMeshStatus?.refreshedAt ?? null)
+    const hasUsableGraphRef = useRef(initialMeshStatus !== null)
 
     useEffect(() => {
         hasUsableGraphRef.current = meshStatus !== null
     }, [meshStatus])
+
+    useEffect(() => {
+        const cachedStatus = cacheKey ? dashboardMeshGraphStatusCache.get(cacheKey) ?? null : null
+        setMeshStatus(cachedStatus)
+        setLastLoadedAt(cachedStatus?.refreshedAt ?? null)
+        hasUsableGraphRef.current = cachedStatus !== null
+        setError(null)
+    }, [cacheKey])
 
     const loadGraph = useCallback(async (refresh = false) => {
         if (!daemonId || !meshId) {
             setError('This coordinator does not expose a live mesh id.')
             setMeshStatus(null)
             return
+        }
+
+        if (!refresh && cacheKey) {
+            const cachedStatus = dashboardMeshGraphStatusCache.get(cacheKey)
+            if (cachedStatus) {
+                setMeshStatus(cachedStatus)
+                setLastLoadedAt(cachedStatus.refreshedAt || null)
+                hasUsableGraphRef.current = true
+                setLoading(false)
+                setError(null)
+                return
+            }
         }
 
         setLoading(!hasUsableGraphRef.current)
@@ -54,18 +83,16 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 setError('mesh_status returned an unexpected payload.')
                 return
             }
+            if (cacheKey) dashboardMeshGraphStatusCache.set(cacheKey, status)
             setMeshStatus(status)
             hasUsableGraphRef.current = true
             setLastLoadedAt(status.refreshedAt || new Date().toISOString())
-            if (!refresh && meshOverrides?.loadMeshStatus) {
-                void loadGraph(true)
-            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load live mesh status')
         } finally {
             setLoading(false)
         }
-    }, [daemonId, meshId, meshOverrides, sendDaemonCommand])
+    }, [cacheKey, daemonId, meshId, meshOverrides, sendDaemonCommand])
 
     useEffect(() => {
         loadGraph(false)
