@@ -141,7 +141,7 @@ describe('Codex CLI read_chat native transcript provenance', () => {
         status: 'idle',
         title: 'Codex CLI',
         messages: [
-          { role: 'user', content: 'pty parser prompt', receivedAt: 1_000 },
+          { role: 'user', content: 'native prompt', receivedAt: 1_000 },
           { role: 'assistant', content: 'parser-level artifact', receivedAt: 2_000 },
         ],
       })),
@@ -194,7 +194,7 @@ describe('Codex CLI read_chat native transcript provenance', () => {
       coverage: {
         nativeMessageCount: 4,
         ptyMessageCount: 2,
-        returnedMessageCount: 4,
+        returnedMessageCount: 2,
         safeMapping: true,
       },
     })
@@ -204,6 +204,60 @@ describe('Codex CLI read_chat native transcript provenance', () => {
       visibleMsgCount: 2,
       hiddenMsgCount: 2,
       returnedMsgCount: 2,
+    })
+  })
+
+  it('does not route a same-workspace Codex worker read_chat to an unrelated workspace-native transcript', async () => {
+    const runtimeId = 'worker-runtime-session'
+    const coordinatorHistoryId = 'coordinator-native-session'
+    const adapter = createCodexAdapter({
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        title: 'Codex CLI',
+        messages: [
+          { role: 'user', content: 'worker-specific prompt', receivedAt: 1_000 },
+          { role: 'assistant', content: 'worker-specific pty answer', receivedAt: 2_000 },
+        ],
+      })),
+    })
+    mocks.readProviderChatHistory
+      .mockReturnValueOnce({
+        source: 'native-unavailable',
+        hasMore: false,
+        messages: [],
+      })
+      .mockReturnValueOnce({
+        source: 'provider-native',
+        sourcePath: `/Users/test/.codex/sessions/${coordinatorHistoryId}.jsonl`,
+        sourceMtimeMs: Date.now(),
+        hasMore: false,
+        messages: [
+          { role: 'user', content: 'coordinator prompt', receivedAt: 3_000, historySessionId: coordinatorHistoryId, workspace: '/workspaces/adhdev' },
+          { role: 'assistant', content: 'coordinator answer', receivedAt: 4_000, historySessionId: coordinatorHistoryId, workspace: '/workspaces/adhdev' },
+        ],
+      })
+
+    const result = await handleReadChat(createHelpers(adapter) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeId,
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.messages as any[]).map(message => message.content)).toEqual([
+      'worker-specific prompt',
+      'worker-specific pty answer',
+    ])
+    expect(result.providerSessionId).toBeUndefined()
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      fallbackReason: 'native_history_not_safely_mapped',
+      coverage: {
+        nativeMessageCount: 2,
+        ptyMessageCount: 2,
+        returnedMessageCount: 2,
+        safeMapping: false,
+      },
     })
   })
 
