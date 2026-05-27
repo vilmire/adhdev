@@ -94,6 +94,13 @@ export interface RepoMeshPolicy {
     requirePreTaskCheckpoint: boolean;
     requirePostTaskCheckpoint: boolean;
     requireApprovalForPush: boolean;
+    /**
+     * Narrow Refinery opt-in: when validation and patch-equivalence have passed,
+     * allow Refinery to publish submodule gitlink commits to each submodule's
+     * configured remote main branch with a non-force push, then verify reachability.
+     * Defaults to false; root branch pushes/merges are not affected.
+     */
+    allowAutoPublishSubmoduleMainCommits?: boolean;
     requireApprovalForDestructiveGit: boolean;
     dirtyWorkspaceBehavior: 'block' | 'warn' | 'checkpoint_then_continue';
     maxParallelTasks: number;
@@ -158,6 +165,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     requirePreTaskCheckpoint: false,
     requirePostTaskCheckpoint: true,
     requireApprovalForPush: true,
+    allowAutoPublishSubmoduleMainCommits: false,
     requireApprovalForDestructiveGit: true,
     dirtyWorkspaceBehavior: 'warn',
     maxParallelTasks: 2,

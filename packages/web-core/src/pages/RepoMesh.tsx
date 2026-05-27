@@ -123,6 +123,7 @@ const DEFAULT_MESH_POLICY: Record<string, any> = {
     requirePreTaskCheckpoint: false,
     requirePostTaskCheckpoint: true,
     requireApprovalForPush: true,
+    allowAutoPublishSubmoduleMainCommits: false,
     requireApprovalForDestructiveGit: true,
     dirtyWorkspaceBehavior: 'warn',
     maxParallelTasks: 2,
@@ -787,6 +788,17 @@ export default function RepoMesh() {
                         >
                             <option value="required">Require approval before push</option>
                             <option value="not_required">Do not require approval</option>
+                        </select>
+                    </FormField>
+                    <FormField label="Submodule main auto-publish">
+                        <select
+                            className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={policy.allowAutoPublishSubmoduleMainCommits ? 'enabled' : 'disabled'}
+                            onChange={e => handleUpdatePolicy({ allowAutoPublishSubmoduleMainCommits: e.target.value === 'enabled' })}
+                            disabled={savingPolicy}
+                        >
+                            <option value="disabled">Require explicit approval</option>
+                            <option value="enabled">Allow Refinery non-force publish</option>
                         </select>
                     </FormField>
                     <FormField label="Destructive git approval">

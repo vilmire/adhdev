@@ -87,6 +87,7 @@ function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMe
     }
     const maxParallelTasks = Number(policy.maxParallelTasks);
     policy.maxParallelTasks = Number.isFinite(maxParallelTasks) ? Math.max(1, Math.min(8, Math.floor(maxParallelTasks))) : 2;
+    policy.allowAutoPublishSubmoduleMainCommits = policy.allowAutoPublishSubmoduleMainCommits === true;
     if (!SESSION_CLEANUP_MODES.has(String(policy.sessionCleanupOnNodeRemove))) {
         policy.sessionCleanupOnNodeRemove = 'preserve';
     }

@@ -229,6 +229,30 @@ Provider roots use a category-based layout:
 - `~/.adhdev/providers/.upstream/<category>/<type>/` for downloaded upstream providers
 - bundled providers ship with the same `category/type` layout inside the installed packages
 
+## Repo Mesh Refinery Submodule Publishing
+
+Refinery requires every submodule gitlink in the refined root tree to be reachable from that submodule's configured `origin/main`. By default, an unreachable submodule commit keeps convergence in `blocked_review` and asks for explicit approval before anything is published.
+
+Repositories that intentionally use submodule gitlinks as part of the same delivery flow can opt in with:
+
+```json
+{
+  "version": 1,
+  "allowAutoPublishSubmoduleMainCommits": true,
+  "validation": {
+    "required": true,
+    "commands": [
+      { "command": "npm", "args": ["run", "typecheck"], "category": "typecheck" },
+      { "command": "npm", "args": ["run", "test"], "category": "test" }
+    ]
+  }
+}
+```
+
+Save that as `.adhdev/refine.json`, `.adhdev/repo-mesh-refine.json`, or another supported repo mesh/refine config path. Mesh policy can also set `allowAutoPublishSubmoduleMainCommits: true`.
+
+The opt-in is narrow: Refinery only considers submodule commits already referenced by the root gitlinks being refined, only after validation and patch-equivalence pass, and only pushes a non-force `<commit>:refs/heads/main` refspec to the submodule `origin`. It then fetches and verifies that the commit is an ancestor of `origin/main`. Refinery does not push root `main`, force push, rewrite history, or publish arbitrary submodule commits. If publishing or verification fails, the refine result stays `blocked_review` with the submodule path, commit, remote, branch, refspec, and error evidence.
+
 ## Repo Mesh With Hermes Agent
 
 Hermes Agent can use self-hosted Repo Mesh tools through ADHDev's MCP server, but Hermes does not auto-import repo-local `.mcp.json`. For Hermes, add a YAML entry to the Hermes config under `mcp_servers`, then start a fresh Hermes session.
