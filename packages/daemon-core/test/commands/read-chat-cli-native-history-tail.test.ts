@@ -191,6 +191,196 @@ describe('CLI read_chat native history hydration', () => {
     ])
   })
 
+  it('does not fall back to workspace-native history when an exact runtime/provider session read is requested', async () => {
+    const adapter = {
+      cliType: 'hermes-cli',
+      cliName: 'Hermes Agent',
+      workingDir: '/workspaces/shared',
+      getStatus: vi.fn(() => ({ status: 'idle', messages: [{ role: 'assistant', content: 'pty exact answer' }] })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        providerSessionId: 'session_exact_1',
+        messages: [
+          { role: 'user', content: 'exact prompt', receivedAt: 1_000 },
+          { role: 'assistant', content: 'pty exact answer', receivedAt: 2_000 },
+        ],
+      })),
+      isProcessing: vi.fn(() => false),
+    }
+    mocks.readProviderChatHistory
+      .mockReturnValueOnce({
+        source: 'native-unavailable',
+        messages: [],
+        hasMore: false,
+      })
+      .mockReturnValueOnce({
+        source: 'provider-native',
+        sourceMtimeMs: Date.now(),
+        providerSessionId: 'session_other_workspace_latest',
+        messages: [
+          { role: 'user', content: 'wrong workspace prompt', receivedAt: 3_000, historySessionId: 'session_other_workspace_latest', workspace: '/workspaces/shared' },
+          { role: 'assistant', content: 'wrong workspace answer', receivedAt: 4_000, historySessionId: 'session_other_workspace_latest', workspace: '/workspaces/shared' },
+        ],
+        hasMore: false,
+      })
+
+    const result = await handleReadChat(createHelpers({
+      provider: {
+        type: 'hermes-cli',
+        category: 'cli',
+        historyBehavior: { transcriptAuthority: 'provider' },
+        canonicalHistory: {
+          format: 'hermes-provider-native',
+          scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+        },
+      },
+      adapter,
+      currentSession: {
+        sessionId: 'runtime-exact-1',
+        providerType: 'hermes-cli',
+        providerName: 'Hermes Agent',
+        providerSessionId: 'session_exact_1',
+        transport: 'pty',
+        adapterKey: 'runtime-exact-1',
+        workspace: '/workspaces/shared',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'runtime-exact-1', instanceKey: 'runtime-exact-1' }) },
+        instanceManager: { getInstance: () => null },
+      },
+    }) as any, {
+      agentType: 'hermes-cli',
+      targetSessionId: 'runtime-exact-1',
+      providerSessionId: 'session_exact_1',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      fallbackReason: 'native_history_unavailable',
+    })
+    expect((result.messages as any[]).map((message: any) => message.content)).toEqual([
+      'exact prompt',
+      'pty exact answer',
+    ])
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledTimes(1)
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
+      historySessionId: 'session_exact_1',
+      workspace: '/workspaces/shared',
+    }))
+  })
+
+  it('keeps two same-provider same-workspace read_chat calls isolated by provider session id', async () => {
+    mocks.readProviderChatHistory.mockImplementation((_agent: string, options: any) => {
+      const historySessionId = options?.historySessionId
+      return {
+        source: 'provider-native',
+        sourceMtimeMs: Date.now(),
+        providerSessionId: historySessionId,
+        messages: [
+          { role: 'user', content: `prompt for ${historySessionId}`, receivedAt: 1_000, historySessionId, workspace: '/workspaces/shared' },
+          { role: 'assistant', content: `answer for ${historySessionId}`, receivedAt: 2_000, historySessionId, workspace: '/workspaces/shared' },
+        ],
+        hasMore: false,
+      }
+    })
+
+    const makeAdapter = (providerSessionId: string) => ({
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/workspaces/shared',
+      getStatus: vi.fn(() => ({ status: 'idle', messages: [] })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        providerSessionId,
+        messages: [
+          { role: 'user', content: `pty prompt ${providerSessionId}`, receivedAt: 100 },
+          { role: 'assistant', content: `pty answer ${providerSessionId}`, receivedAt: 200 },
+        ],
+      })),
+      isProcessing: vi.fn(() => false),
+      isReady: vi.fn(() => true),
+    })
+    const provider = {
+      type: 'codex-cli',
+      category: 'cli',
+      historyBehavior: { transcriptAuthority: 'provider' },
+      canonicalHistory: { mode: 'native-source', format: 'codex-native' },
+    }
+
+    const first = await handleReadChat(createHelpers({
+      provider,
+      adapter: makeAdapter('provider-session-a'),
+      currentSession: { sessionId: 'runtime-a', providerType: 'codex-cli', providerSessionId: 'provider-session-a', transport: 'pty', workspace: '/workspaces/shared' },
+      ctx: { sessionRegistry: { get: () => ({ sessionId: 'runtime-a', instanceKey: 'runtime-a' }) }, instanceManager: { getInstance: () => null } },
+    }) as any, { agentType: 'codex-cli', targetSessionId: 'runtime-a', providerSessionId: 'provider-session-a', tailLimit: 20 })
+
+    const second = await handleReadChat(createHelpers({
+      provider,
+      adapter: makeAdapter('provider-session-b'),
+      currentSession: { sessionId: 'runtime-b', providerType: 'codex-cli', providerSessionId: 'provider-session-b', transport: 'pty', workspace: '/workspaces/shared' },
+      ctx: { sessionRegistry: { get: () => ({ sessionId: 'runtime-b', instanceKey: 'runtime-b' }) }, instanceManager: { getInstance: () => null } },
+    }) as any, { agentType: 'codex-cli', targetSessionId: 'runtime-b', providerSessionId: 'provider-session-b', tailLimit: 20 })
+
+    expect((first.messages as any[]).map((message: any) => message.content)).toEqual(['prompt for provider-session-a', 'answer for provider-session-a'])
+    expect((second.messages as any[]).map((message: any) => message.content)).toEqual(['prompt for provider-session-b', 'answer for provider-session-b'])
+    expect(first.providerSessionId).toBe('provider-session-a')
+    expect(second.providerSessionId).toBe('provider-session-b')
+  })
+
+  it('shows an auto-launched queue session prompt instead of the workspace-native current chat when exact native history is absent', async () => {
+    const queuedPrompt = 'queue validation task prompt'
+    const adapter = {
+      cliType: 'gemini-cli',
+      cliName: 'Gemini CLI',
+      workingDir: '/workspaces/shared',
+      getStatus: vi.fn(() => ({ status: 'generating', messages: [] })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'generating',
+        providerSessionId: 'queue-provider-session',
+        messages: [{ role: 'user', content: queuedPrompt, receivedAt: 1_000 }],
+      })),
+      isProcessing: vi.fn(() => true),
+    }
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'native-unavailable',
+      messages: [],
+      hasMore: false,
+    })
+
+    const result = await handleReadChat(createHelpers({
+      provider: {
+        type: 'gemini-cli',
+        category: 'cli',
+        historyBehavior: { transcriptAuthority: 'provider' },
+        canonicalHistory: { mode: 'native-source', format: 'gemini-native' },
+      },
+      adapter,
+      currentSession: {
+        sessionId: 'auto-launched-runtime',
+        providerType: 'gemini-cli',
+        providerSessionId: 'queue-provider-session',
+        transport: 'pty',
+        workspace: '/workspaces/shared',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'auto-launched-runtime', instanceKey: 'auto-launched-runtime' }) },
+        instanceManager: { getInstance: () => null },
+      },
+    }) as any, {
+      agentType: 'gemini-cli',
+      targetSessionId: 'auto-launched-runtime',
+      providerSessionId: 'queue-provider-session',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.messages as any[]).map((message: any) => message.content)).toEqual([queuedPrompt])
+    expect(result.messageSource).toMatchObject({ selected: 'pty-parser', fallbackReason: 'native_history_unavailable' })
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledTimes(1)
+  })
+
   it('uses providerSessionId for chat_history pagination too', async () => {
     mocks.readProviderChatHistory.mockReturnValue({ messages: [], hasMore: false })
 

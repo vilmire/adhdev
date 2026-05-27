@@ -396,6 +396,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     excludeRecentCount: number;
     historyBehavior?: ProviderModule['historyBehavior'];
     scripts?: ProviderScripts;
+    exactSessionScoped?: boolean;
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
     const sessionHistory = readProviderChatHistory(agentStr, {
         canonicalHistory: args.canonicalHistory,
@@ -407,8 +408,12 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         historyBehavior: args.historyBehavior,
         scripts: args.scripts as any,
     });
-    if ((sessionHistory as any).source !== 'native-unavailable' || !args.historySessionId || !args.workspace) {
-        return { ...(sessionHistory as any), lookup: 'session' };
+    // Exact runtime/provider transcript reads must not silently fall back to the
+    // workspace's active or most recent native transcript: multiple Hermes/Gemini/
+    // Codex sessions can run in the same workspace, and workspace fallback can make
+    // read_chat/completion evidence point at a different runtime's prompt.
+    if ((sessionHistory as any).source !== 'native-unavailable' || args.exactSessionScoped || !args.historySessionId || !args.workspace) {
+        return { ...(sessionHistory as any), lookup: args.historySessionId ? 'session' : 'workspace' };
     }
     const workspaceHistory = readProviderChatHistory(agentStr, {
         canonicalHistory: args.canonicalHistory,
@@ -1163,6 +1168,12 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     returnedMessages.length,
                     200,
                 );
+                const exactNativeHistoryScope = Boolean(
+                    (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
+                    || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
+                    || providerSessionId
+                    || ((h.currentSession as any)?.sessionId === args?.targetSessionId && typeof (h.currentSession as any)?.providerSessionId === 'string' && (h.currentSession as any).providerSessionId.trim())
+                );
                 let nativeHistory: (ReturnType<typeof readProviderChatHistory> & { lookup?: 'session' | 'workspace' }) | null = null;
                 try {
                     nativeHistory = readCliProviderNativeHistory(agentStr, {
@@ -1174,6 +1185,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         excludeRecentCount: 0,
                         historyBehavior: provider?.historyBehavior,
                         scripts: provider?.scripts as any,
+                        exactSessionScoped: exactNativeHistoryScope,
                     });
                 } catch (error: any) {
                     const fallbackReason = `native_history_error:${error?.message || String(error)}`;
@@ -1286,6 +1298,11 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 : typeof (h.currentSession as any)?.workspace === 'string'
                     ? (h.currentSession as any).workspace
                     : undefined;
+            const exactNativeHistoryScope = Boolean(
+                (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
+                || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
+                || ((h.currentSession as any)?.sessionId === args?.targetSessionId && typeof (h.currentSession as any)?.providerSessionId === 'string' && (h.currentSession as any).providerSessionId.trim())
+            );
             const history = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)
                 ? readCliProviderNativeHistory(agentStr, {
                     canonicalHistory: provider?.canonicalHistory,
@@ -1296,6 +1313,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     excludeRecentCount: 0,
                     historyBehavior: provider?.historyBehavior,
                     scripts: provider?.scripts as any,
+                    exactSessionScoped: exactNativeHistoryScope,
                 })
                 : readProviderChatHistory(agentStr, {
                 canonicalHistory: provider?.canonicalHistory,
