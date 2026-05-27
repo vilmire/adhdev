@@ -914,7 +914,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const providerSessionId = readNonEmptyString(args.metadataEvent.providerSessionId) || undefined;
         const finalSummary = readNonEmptyString(args.metadataEvent.finalSummary) || undefined;
         const workerResult = readWorkerResultMetadata(args.metadataEvent);
-        const completedTask = sessionId
+        const hasCompletionEvidence = !!finalSummary || !!workerResult;
+        const completedTask = sessionId && hasCompletionEvidence
             ? updateSessionTaskStatus(args.meshId, sessionId, 'completed')
             : null;
         if (completedTask) {

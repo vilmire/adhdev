@@ -1035,7 +1035,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ptyStatusApprovalOnly: false,
             });
 
-            if (supportsCliNativeTranscript(providerType)) {
+            if (supportsCliNativeTranscript(providerType) && (provider?.canonicalHistory as any)?.mode === 'native-source') {
                 const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h, adapter.cliType);
                 const workspace = typeof args?.workspace === 'string'
                     ? args.workspace
@@ -1220,6 +1220,18 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 freshEnough: true,
                 ptyStatusApprovalOnly: false,
             });
+            const requiresNativeSource = supportsCliNativeTranscript(agentStr)
+                && (provider?.canonicalHistory as any)?.mode === 'native-source';
+            if (requiresNativeSource && !nativeSelected) {
+                return {
+                    success: false,
+                    code: 'native_history_not_safely_available',
+                    error: 'Provider-native history was not safely available for the requested CLI session.',
+                    providerSessionId: historyProviderSessionId,
+                    messageSource,
+                    transcriptProvenance: messageSource,
+                };
+            }
             return buildReadChatCommandResult({
                 messages: historyMessages,
                 status: 'idle',
