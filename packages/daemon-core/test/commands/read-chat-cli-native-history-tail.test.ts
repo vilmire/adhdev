@@ -6,6 +6,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../src/config/chat-history.js', () => ({
   readProviderChatHistory: mocks.readProviderChatHistory,
+  isNativeSourceCanonicalHistory: (canonicalHistory: any) => {
+    if (!canonicalHistory) return false
+    return canonicalHistory.mode !== 'disabled' && canonicalHistory.mode !== 'materialized-mirror'
+  },
 }))
 
 import { handleReadChat, handleChatHistory } from '../../src/commands/chat-commands.js'
@@ -62,7 +66,7 @@ describe('CLI read_chat native history hydration', () => {
     }))
   })
 
-  it('selects Hermes provider-native history over parsed PTY messages when canonical history is native-source', async () => {
+  it('selects Hermes provider-native history over parsed PTY messages when canonical history omits mode', async () => {
     const adapter = {
       cliType: 'hermes-cli',
       cliName: 'Hermes Agent',
@@ -102,7 +106,6 @@ describe('CLI read_chat native history hydration', () => {
         historyBehavior: { transcriptAuthority: 'provider' },
         canonicalHistory: {
           format: 'hermes-provider-native',
-          mode: 'native-source',
           scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
         },
         scripts: { readNativeHistory: () => null },
