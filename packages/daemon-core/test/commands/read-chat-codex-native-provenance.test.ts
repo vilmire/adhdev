@@ -133,6 +133,80 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     })
   })
 
+  it('retries Codex native history by workspace when PTY runtime id is not the Codex JSONL session id', async () => {
+    const runtimeId = '0eae4e76-4980-4d99-b54c-9c6a1cfce5dd'
+    const codexHistoryId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
+    const adapter = createCodexAdapter({
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        title: 'Codex CLI',
+        messages: [
+          { role: 'user', content: 'pty parser prompt', receivedAt: 1_000 },
+          { role: 'assistant', content: 'parser-level artifact', receivedAt: 2_000 },
+        ],
+      })),
+    })
+    mocks.readProviderChatHistory
+      .mockReturnValueOnce({
+        source: 'native-unavailable',
+        hasMore: false,
+        messages: [],
+      })
+      .mockReturnValueOnce({
+        source: 'provider-native',
+        sourcePath: `/Users/test/.codex/sessions/${codexHistoryId}.jsonl`,
+        sourceMtimeMs: Date.now(),
+        hasMore: false,
+        messages: [
+          { role: 'system', kind: 'session_start', content: '/workspaces/adhdev', receivedAt: 900, historySessionId: codexHistoryId, workspace: '/workspaces/adhdev' },
+          { role: 'user', content: 'native prompt', receivedAt: 3_000, historySessionId: codexHistoryId },
+          { role: 'assistant', content: 'native answer', receivedAt: 4_000, historySessionId: codexHistoryId },
+          { role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'shell: npm test', receivedAt: 4_100, historySessionId: codexHistoryId },
+        ],
+      })
+
+    const result = await handleReadChat(createHelpers(adapter) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeId,
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(mocks.readProviderChatHistory).toHaveBeenNthCalledWith(1, 'codex-cli', expect.objectContaining({
+      historySessionId: runtimeId,
+      workspace: '/workspaces/adhdev',
+    }))
+    expect(mocks.readProviderChatHistory).toHaveBeenNthCalledWith(2, 'codex-cli', expect.objectContaining({
+      historySessionId: undefined,
+      workspace: '/workspaces/adhdev',
+    }))
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['native prompt', 'native answer'])
+    expect((result.messages as any[]).every(message => message.providerUnitKey && message.bubbleId && message.bubbleState === 'final')).toBe(true)
+    expect((result.messages as any[]).map(message => message.source)).toEqual([undefined, 'assistant_text'])
+    expect(result.providerSessionId).toBe(codexHistoryId)
+    expect(result.messageSource).toMatchObject({
+      selected: 'native-history',
+      provider: 'codex-cli',
+      nativeHandle: codexHistoryId,
+      nativeSessionId: codexHistoryId,
+      nativeSource: 'provider-native',
+      ptyStatusApprovalOnly: true,
+      coverage: {
+        nativeMessageCount: 4,
+        ptyMessageCount: 2,
+        returnedMessageCount: 4,
+        safeMapping: true,
+      },
+    })
+    expect(result.debugReadChat).toMatchObject({
+      selectedMessageSource: 'native-history',
+      fullMsgCount: 4,
+      visibleMsgCount: 2,
+      hiddenMsgCount: 2,
+      returnedMsgCount: 2,
+    })
+  })
+
   it('falls back to PTY parser messages with an explicit stale native-history reason', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       source: 'provider-native',

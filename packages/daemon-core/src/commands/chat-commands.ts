@@ -242,6 +242,64 @@ function getMessageNewestReceivedAt(messages: Array<{ receivedAt?: unknown; time
     return newest;
 }
 
+function readHistorySessionIdFromMessages(messages: ChatMessage[]): string | undefined {
+    for (const message of messages as Array<ChatMessage & { historySessionId?: unknown }>) {
+        const historySessionId = typeof message?.historySessionId === 'string' ? message.historySessionId.trim() : '';
+        if (historySessionId) return historySessionId;
+    }
+    return undefined;
+}
+
+function normalizeNativeHistoryMessages(providerType: string, messages: ChatMessage[]): ChatMessage[] {
+    let turnIndex = 0;
+    return normalizeChatMessages(messages).map((message, index) => {
+        const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
+        const kind = typeof message.kind === 'string' && message.kind.trim() ? message.kind.trim() : (role === 'system' ? 'system' : 'standard');
+        if ((role === 'user' || role === 'human') && index > 0) turnIndex += 1;
+        const historySessionId = typeof (message as any).historySessionId === 'string'
+            ? (message as any).historySessionId.trim()
+            : '';
+        const contentHash = hashSignatureParts([
+            providerType,
+            historySessionId,
+            String(message.receivedAt || message.timestamp || index),
+            role,
+            kind,
+            flattenContent(message.content),
+        ]).slice(0, 12);
+        const providerUnitKey = typeof message.providerUnitKey === 'string' && message.providerUnitKey.trim()
+            ? message.providerUnitKey.trim()
+            : `${providerType}:native:${historySessionId || 'workspace'}:${index}:${role || 'message'}:${kind}:${contentHash}`;
+        const meta = message.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : undefined;
+        const isSystemSessionStart = role === 'system' || kind === 'system' || kind === 'session_start';
+        const isActivity = role === 'assistant' && (kind === 'tool' || kind === 'terminal' || kind === 'thought');
+        return {
+            ...message,
+            role: role === 'human' ? 'user' : (role || 'assistant'),
+            kind: isSystemSessionStart ? 'system' : kind,
+            providerUnitKey,
+            bubbleId: typeof message.bubbleId === 'string' && message.bubbleId.trim()
+                ? message.bubbleId.trim()
+                : `bubble:${providerUnitKey}`,
+            _turnKey: typeof message._turnKey === 'string' && message._turnKey.trim()
+                ? message._turnKey.trim()
+                : `${providerType}:native-turn:${historySessionId || 'workspace'}:${turnIndex}`,
+            bubbleState: message.bubbleState || 'final',
+            ...(isSystemSessionStart ? {
+                visibility: message.visibility || 'hidden',
+                transcriptVisibility: message.transcriptVisibility || 'hidden',
+                audience: message.audience || 'internal',
+                source: message.source || 'runtime_status',
+            } : isActivity ? {
+                source: message.source || (kind === 'terminal' ? 'terminal_command' : 'tool_call'),
+                meta: { ...meta, label: message.senderName || meta?.label || (kind === 'terminal' ? 'Terminal' : 'Tool') },
+            } : {
+                source: message.source || (role === 'assistant' ? 'assistant_text' : undefined),
+            }),
+        } as ChatMessage;
+    });
+}
+
 function buildCliMessageSourceProvenance(args: {
     selected: 'native-history' | 'pty-parser';
     provider: string;
@@ -327,6 +385,42 @@ function hasSafeNativeHistoryMapping(args: {
     const workspace = String(args.workspace || '').trim();
     if (!workspace) return false;
     return args.nativeMessages.some((message: any) => String(message?.workspace || '').trim() === workspace);
+}
+
+function readCliProviderNativeHistory(agentStr: string, args: {
+    canonicalHistory?: ProviderModule['canonicalHistory'];
+    historySessionId?: string;
+    workspace?: string;
+    offset: number;
+    limit: number;
+    excludeRecentCount: number;
+    historyBehavior?: ProviderModule['historyBehavior'];
+    scripts?: ProviderScripts;
+}): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
+    const sessionHistory = readProviderChatHistory(agentStr, {
+        canonicalHistory: args.canonicalHistory,
+        historySessionId: args.historySessionId,
+        workspace: args.workspace,
+        offset: args.offset,
+        limit: args.limit,
+        excludeRecentCount: args.excludeRecentCount,
+        historyBehavior: args.historyBehavior,
+        scripts: args.scripts as any,
+    });
+    if ((sessionHistory as any).source !== 'native-unavailable' || !args.historySessionId || !args.workspace) {
+        return { ...(sessionHistory as any), lookup: 'session' };
+    }
+    const workspaceHistory = readProviderChatHistory(agentStr, {
+        canonicalHistory: args.canonicalHistory,
+        historySessionId: undefined,
+        workspace: args.workspace,
+        offset: args.offset,
+        limit: args.limit,
+        excludeRecentCount: args.excludeRecentCount,
+        historyBehavior: args.historyBehavior,
+        scripts: args.scripts as any,
+    });
+    return { ...(workspaceHistory as any), lookup: 'workspace' };
 }
 
 function isNativeHistoryFreshEnough(args: {
@@ -1069,9 +1163,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     returnedMessages.length,
                     200,
                 );
-                let nativeHistory: ReturnType<typeof readProviderChatHistory> | null = null;
+                let nativeHistory: (ReturnType<typeof readProviderChatHistory> & { lookup?: 'session' | 'workspace' }) | null = null;
                 try {
-                    nativeHistory = readProviderChatHistory(agentStr, {
+                    nativeHistory = readCliProviderNativeHistory(agentStr, {
                         canonicalHistory: provider?.canonicalHistory,
                         historySessionId,
                         workspace,
@@ -1096,14 +1190,15 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
 
                 if (nativeHistory) {
                     const nativeMessages = Array.isArray((nativeHistory as any).messages)
-                        ? normalizeChatMessages((nativeHistory as any).messages as ChatMessage[])
+                        ? normalizeNativeHistoryMessages(agentStr, (nativeHistory as any).messages as ChatMessage[])
                         : [];
                     const historyProviderSessionId = typeof (nativeHistory as any)?.providerSessionId === 'string'
                         ? (nativeHistory as any).providerSessionId
-                        : historySessionId;
+                        : readHistorySessionIdFromMessages(nativeMessages) || historySessionId;
+                    const lookup = (nativeHistory as any).lookup === 'workspace' ? 'workspace' : 'session';
                     const safeMapping = hasSafeNativeHistoryMapping({
-                        historySessionId,
-                        providerSessionId,
+                        historySessionId: lookup === 'workspace' ? undefined : historySessionId,
+                        providerSessionId: lookup === 'workspace' ? undefined : providerSessionId,
                         workspace,
                         nativeMessages,
                     });
@@ -1191,7 +1286,18 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 : typeof (h.currentSession as any)?.workspace === 'string'
                     ? (h.currentSession as any).workspace
                     : undefined;
-            const history = readProviderChatHistory(agentStr, {
+            const history = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)
+                ? readCliProviderNativeHistory(agentStr, {
+                    canonicalHistory: provider?.canonicalHistory,
+                    historySessionId,
+                    workspace,
+                    offset: 0,
+                    limit: historyLimit,
+                    excludeRecentCount: 0,
+                    historyBehavior: provider?.historyBehavior,
+                    scripts: provider?.scripts as any,
+                })
+                : readProviderChatHistory(agentStr, {
                 canonicalHistory: provider?.canonicalHistory,
                 historySessionId,
                 workspace,
@@ -1201,16 +1307,17 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 historyBehavior: provider?.historyBehavior,
                 scripts: provider?.scripts as any,
             });
+            const lookup = (history as any).lookup === 'workspace' ? 'workspace' : 'session';
+            const historyMessages = Array.isArray((history as any)?.messages)
+                ? normalizeNativeHistoryMessages(agentStr, (history as any).messages as ChatMessage[])
+                : [];
             const historyProviderSessionId = typeof (history as any)?.providerSessionId === 'string'
                 ? (history as any).providerSessionId
-                : historySessionId;
-            const historyMessages = Array.isArray((history as any)?.messages)
-                ? normalizeChatMessages((history as any).messages as ChatMessage[])
-                : [];
+                : readHistorySessionIdFromMessages(historyMessages) || historySessionId;
             const safeMapping = supportsCliNativeTranscript(agentStr, provider)
                 ? hasSafeNativeHistoryMapping({
-                    historySessionId,
-                    providerSessionId: historyProviderSessionId,
+                    historySessionId: lookup === 'workspace' ? undefined : historySessionId,
+                    providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
                     workspace,
                     nativeMessages: historyMessages,
                 })
