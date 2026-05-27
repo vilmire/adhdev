@@ -10,19 +10,20 @@ vi.mock('../../src/config/chat-history.js', () => ({
 
 import { handleReadChat, handleChatHistory } from '../../src/commands/chat-commands.js'
 
-function createHelpers() {
+function createHelpers(overrides: Record<string, any> = {}) {
+  const provider = overrides.provider || { type: 'hermes-cli', category: 'cli', historyBehavior: { transcriptAuthority: 'provider' } }
   return {
     getCdp: () => null,
-    getProvider: () => ({ type: 'hermes-cli', category: 'cli', historyBehavior: { transcriptAuthority: 'provider' } }),
+    getProvider: () => provider,
     getProviderScript: () => null,
     evaluateProviderScript: async () => null,
-    getCliAdapter: () => null,
+    getCliAdapter: () => overrides.adapter || null,
     currentManagerKey: undefined,
     currentIdeType: undefined,
-    currentProviderType: undefined,
-    currentSession: undefined,
+    currentProviderType: provider.type,
+    currentSession: overrides.currentSession,
     agentStream: null,
-    ctx: { instanceManager: { getInstance: () => null } },
+    ctx: { instanceManager: { getInstance: () => null }, ...(overrides.ctx || {}) },
     historyWriter: { appendNewMessages: () => {} },
   }
 }
@@ -59,6 +60,44 @@ describe('CLI read_chat native history hydration', () => {
       offset: 0,
       limit: 50,
     }))
+  })
+
+  it('keeps a generating Codex direct task readable when only the dispatched user turn is visible', async () => {
+    const prompt = 'Diagnose why mesh_read_chat returned zero messages for this Codex task.'
+    const adapter = {
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/tmp/adhdev-codex-live',
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        title: 'Codex CLI',
+        messages: [{ role: 'user', kind: 'standard', content: prompt }],
+      })),
+      getStatus: vi.fn(() => ({ status: 'generating', messages: [] })),
+      isProcessing: vi.fn(() => true),
+    }
+
+    const result = await handleReadChat(createHelpers({
+      provider: { type: 'codex-cli', category: 'cli' },
+      adapter,
+      currentSession: {
+        sessionId: 'codex-live-session',
+        providerType: 'codex-cli',
+        transport: 'pty',
+        workspace: '/tmp/adhdev-codex-live',
+      },
+    }) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'codex-live-session',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('generating')
+    expect(result.totalMessages).toBe(1)
+    expect((result.messages as any[]).map((message: any) => [message.role, message.content])).toEqual([
+      ['user', prompt],
+    ])
   })
 
   it('uses providerSessionId for chat_history pagination too', async () => {

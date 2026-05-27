@@ -123,6 +123,41 @@ test('direct mesh_send_task is visible as source=direct active work in status an
   }
 });
 
+test('mesh_view_queue refreshes live mesh sessions before classifying direct work', async () => {
+  const meshId = 'mesh-view-queue-refresh-direct-test';
+  cleanupMesh(meshId);
+  const { ctx, calls } = createRemoteCtx(meshId);
+  const staleCtx = {
+    ...ctx,
+    mesh: {
+      ...(ctx as any).mesh,
+      nodes: (ctx as any).mesh.nodes.map((node: any) => ({ ...node, sessions: [] })),
+    },
+  };
+
+  try {
+    appendLedgerEntry(meshId, {
+      kind: 'task_dispatched',
+      nodeId: 'node-remote',
+      sessionId: 'sess-direct',
+      providerType: 'hermes-cli',
+      payload: {
+        taskId: 'direct-refresh-task',
+        message: 'Keep direct work active after coordinator refresh',
+        source: 'direct',
+        via: 'p2p_direct',
+      },
+    });
+
+    const activeView = JSON.parse(await meshViewQueue(staleCtx as any, { view: 'active' }));
+    assert.ok(calls.some(call => call.command === 'get_mesh'), 'mesh_view_queue should refresh mesh state before active/stale classification');
+    assert.ok(activeView.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === 'direct-refresh-task'));
+    assert.equal(activeView.staleDirectWork.some((entry: any) => entry.taskId === 'direct-refresh-task'), false);
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
 test('active queue view keeps historical queue rows out while direct work is exposed separately', async () => {
   const meshId = 'mesh-active-only-separation-test';
   cleanupMesh(meshId);
