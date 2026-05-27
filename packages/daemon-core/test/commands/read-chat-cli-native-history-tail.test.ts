@@ -153,6 +153,150 @@ describe('CLI read_chat native history hydration', () => {
     })
   })
 
+  it('uses the parser native providerSessionId for exact Codex native reads when the runtime id is not the JSONL handle', async () => {
+    const adapter = {
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/workspaces/adhdev',
+      getStatus: vi.fn(() => ({ status: 'idle', messages: [] })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'generating',
+        providerSessionId: 'codex-native-worker-42',
+        title: 'Codex CLI',
+        messages: [
+          { role: 'user', content: 'pty degraded prompt', receivedAt: 1_000 },
+          { role: 'assistant', content: 'cli-bubble:cli-unit malformed PTY artifact', receivedAt: 2_000 },
+        ],
+      })),
+      isProcessing: vi.fn(() => false),
+      isReady: vi.fn(() => true),
+    }
+    mocks.readProviderChatHistory.mockImplementation((_agent: string, options: any) => {
+      if (options?.historySessionId !== 'codex-native-worker-42') {
+        return { source: 'native-unavailable', messages: [], hasMore: false }
+      }
+      return {
+        source: 'provider-native',
+        sourceMtimeMs: Date.now(),
+        providerSessionId: 'codex-native-worker-42',
+        messages: [
+          { role: 'user', content: 'native prompt', receivedAt: 3_000, historySessionId: 'codex-native-worker-42' },
+          { role: 'assistant', content: 'native answer', receivedAt: 4_000, historySessionId: 'codex-native-worker-42' },
+        ],
+        hasMore: false,
+      }
+    })
+
+    const result = await handleReadChat(createHelpers({
+      provider: {
+        type: 'codex-cli',
+        category: 'cli',
+        historyBehavior: { transcriptAuthority: 'provider' },
+        canonicalHistory: { mode: 'native-source', format: 'codex-native' },
+      },
+      adapter,
+      currentSession: {
+        sessionId: 'runtime-worker-42',
+        providerType: 'codex-cli',
+        transport: 'pty',
+        workspace: '/workspaces/adhdev',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'runtime-worker-42', instanceKey: 'runtime-worker-42' }) },
+        instanceManager: { getInstance: () => null },
+      },
+    }) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-worker-42',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('idle')
+    expect((result.messages as any[]).map((message: any) => message.content)).toEqual([
+      'native prompt',
+      'native answer',
+    ])
+    expect((result.messages as any[]).some((message: any) => String(message.content).includes('cli-bubble'))).toBe(false)
+    expect(result.providerSessionId).toBe('codex-native-worker-42')
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledTimes(1)
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: 'codex-native-worker-42',
+      workspace: '/workspaces/adhdev',
+    }))
+    expect(result.messageSource).toMatchObject({
+      selected: 'native-history',
+      nativeHandle: 'codex-native-worker-42',
+      ptyStatusApprovalOnly: true,
+      coverage: {
+        nativeMessageCount: 2,
+        ptyMessageCount: 2,
+        returnedMessageCount: 2,
+        safeMapping: true,
+      },
+    })
+    expect(result.debugReadChat).toMatchObject({
+      selectedMessageSource: 'native-history',
+      parsedStatus: 'generating',
+      returnedStatus: 'idle',
+      shouldPreferAdapterMessages: false,
+    })
+  })
+
+  it('resolves native history through the session registry adapter key before falling back to the runtime id', async () => {
+    const instance = {
+      category: 'cli',
+      type: 'codex-cli',
+      getState: vi.fn(() => ({ providerSessionId: 'codex-native-from-instance' })),
+    }
+    const getInstance = vi.fn((key: string) => key === 'codex-adapter-key' ? instance : null)
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourceMtimeMs: Date.now(),
+      providerSessionId: 'codex-native-from-instance',
+      messages: [
+        { role: 'user', content: 'mapped native prompt', receivedAt: 1_000, historySessionId: 'codex-native-from-instance' },
+        { role: 'assistant', content: 'mapped native answer', receivedAt: 2_000, historySessionId: 'codex-native-from-instance' },
+      ],
+      hasMore: false,
+    })
+
+    const result = await handleReadChat(createHelpers({
+      provider: {
+        type: 'codex-cli',
+        category: 'cli',
+        historyBehavior: { transcriptAuthority: 'provider' },
+        canonicalHistory: { mode: 'native-source', format: 'codex-native' },
+      },
+      adapter: null,
+      currentSession: {
+        sessionId: 'runtime-worker-mapped',
+        providerType: 'codex-cli',
+        transport: 'pty',
+        workspace: '/workspaces/adhdev',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'runtime-worker-mapped', adapterKey: 'codex-adapter-key' }) },
+        instanceManager: { getInstance },
+      },
+    }) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-worker-mapped',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(getInstance).toHaveBeenCalledWith('codex-adapter-key')
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: 'codex-native-from-instance',
+    }))
+    expect((result.messages as any[]).map((message: any) => message.content)).toEqual([
+      'mapped native prompt',
+      'mapped native answer',
+    ])
+    expect(result.providerSessionId).toBe('codex-native-from-instance')
+  })
+
   it('keeps a generating Codex direct task readable when only the dispatched user turn is visible', async () => {
     const prompt = 'Diagnose why mesh_read_chat returned zero messages for this Codex task.'
     const adapter = {
