@@ -13,7 +13,7 @@ import { flattenContent, normalizeInputEnvelope, type InputEnvelope, type Provid
 import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
-import { readProviderChatHistory } from '../config/chat-history.js';
+import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../config/chat-history.js';
 import { LOG, getRecentLogs } from '../logging/logger.js';
 import { getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { buildChatMessageSignature, hashSignatureParts } from '../chat/chat-signatures.js';
@@ -307,7 +307,7 @@ function buildNativeHistoryFallbackReason(args: {
 
 function supportsCliNativeTranscript(providerType: string, provider?: ProviderModule): boolean {
     if (CLI_NATIVE_TRANSCRIPT_PROVIDERS.has(providerType)) return true;
-    return provider?.category === 'cli' && (provider?.canonicalHistory as any)?.mode === 'native-source';
+    return provider?.category === 'cli' && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
 }
 
 function hasSafeNativeHistoryMapping(args: {
@@ -1055,7 +1055,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ptyStatusApprovalOnly: false,
             });
 
-            if (supportsCliNativeTranscript(providerType, provider) && (provider?.canonicalHistory as any)?.mode === 'native-source') {
+            if (supportsCliNativeTranscript(providerType, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)) {
                 const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h, adapter.cliType);
                 const workspace = typeof args?.workspace === 'string'
                     ? args.workspace
@@ -1243,7 +1243,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ptyStatusApprovalOnly: false,
             });
             const requiresNativeSource = supportsCliNativeTranscript(agentStr, provider)
-                && (provider?.canonicalHistory as any)?.mode === 'native-source';
+                && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
             if (requiresNativeSource && !nativeSelected) {
                 return {
                     success: false,

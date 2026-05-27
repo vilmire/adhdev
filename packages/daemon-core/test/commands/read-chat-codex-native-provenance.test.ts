@@ -6,6 +6,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../src/config/chat-history.js', () => ({
   readProviderChatHistory: mocks.readProviderChatHistory,
+  isNativeSourceCanonicalHistory: (canonicalHistory: any) => {
+    if (!canonicalHistory) return false
+    return canonicalHistory.mode !== 'disabled' && canonicalHistory.mode !== 'materialized-mirror'
+  },
 }))
 
 import { handleGetChatDebugBundle, handleReadChat } from '../../src/commands/chat-commands.js'
