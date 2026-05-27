@@ -26,7 +26,8 @@ export const MESH_GRAPH_LAYOUT = {
     worktreeStackGap: 82,
     parentToSubmoduleGap: 48,
     submoduleStackGap: 36,
-    submoduleIndentX: 72,
+    siblingGapX: 56,
+    siblingRowGap: 72,
     placeholderTopOffset: 0,
 } as const
 
@@ -180,6 +181,46 @@ function makeBounds(node: MeshGraphNode, x: number, y: number): MeshGraphLayoutB
     }
 }
 
+function chunkSiblings(nodes: MeshGraphNode[], maxPerRow: number): MeshGraphNode[][] {
+    const rows: MeshGraphNode[][] = []
+    for (let index = 0; index < nodes.length; index += maxPerRow) {
+        rows.push(nodes.slice(index, index + maxPerRow))
+    }
+    return rows
+}
+
+function maxRowHeight(nodes: MeshGraphNode[]): number {
+    return nodes.reduce((height, node) => Math.max(height, estimateMeshGraphNodeHeight(node)), 0)
+}
+
+function getSiblingRowWidth(nodes: MeshGraphNode[]): number {
+    if (nodes.length === 0) return 0
+    return nodes.reduce((width, node) => width + getMeshGraphNodeCardWidth(node), 0)
+        + Math.max(0, nodes.length - 1) * MESH_GRAPH_LAYOUT.siblingGapX
+}
+
+function placeSiblingRows(args: {
+    nodes: MeshGraphNode[]
+    centerX: number
+    startY: number
+    maxPerRow: number
+    flowNodes: MeshGraphLayoutNode[]
+    bounds: MeshGraphLayoutBounds[]
+}): number {
+    let cursorY = args.startY
+    for (const row of chunkSiblings(args.nodes, args.maxPerRow)) {
+        const rowWidth = getSiblingRowWidth(row)
+        let cursorX = args.centerX - rowWidth / 2
+        for (const node of row) {
+            args.flowNodes.push(toLayoutNode(node, cursorX, cursorY))
+            args.bounds.push(makeBounds(node, cursorX, cursorY))
+            cursorX += getMeshGraphNodeCardWidth(node) + MESH_GRAPH_LAYOUT.siblingGapX
+        }
+        cursorY += maxRowHeight(row) + MESH_GRAPH_LAYOUT.siblingRowGap
+    }
+    return cursorY
+}
+
 function createPlaceholderNode(defaultAnchor: MeshGraphNode, data: MeshGraphData): MeshGraphNode {
     return {
         id: `${defaultAnchor.id}__placeholder`,
@@ -282,41 +323,51 @@ export function buildMeshGraphLayout(data: MeshGraphData): MeshGraphLayoutResult
     }
 
     orderedGroups.forEach(([groupKey, groupNodes], columnIndex) => {
-        const x = columnIndex * columnGap
+        const groupCenterX = columnIndex * columnGap
         const nodesForColumn = groupNodes.length > 0
             ? groupNodes
             : nonDefaultNodes.length > 0
                 ? nonDefaultNodes
                 : []
         let cursorY = contentRowStartY
+        const worktreeRows = chunkSiblings(nodesForColumn, 3)
 
-        nodesForColumn.forEach(node => {
-            const nodeHeight = estimateMeshGraphNodeHeight(node)
-            flowNodes.push(toLayoutNode(node, x, cursorY))
-            bounds.push(makeBounds(node, x, cursorY))
+        for (const row of worktreeRows) {
+            const rowWidth = getSiblingRowWidth(row)
+            let cursorX = groupCenterX - rowWidth / 2
+            const rowY = cursorY
+            let deepestY = rowY + maxRowHeight(row)
 
-            const submoduleNodes = [...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes)
-            if (submoduleNodes.length > 0) {
-                let submoduleY = cursorY + nodeHeight + MESH_GRAPH_LAYOUT.parentToSubmoduleGap
-                submoduleNodes.forEach(submoduleNode => {
-                    const submoduleX = x + MESH_GRAPH_LAYOUT.submoduleIndentX
-                    const submoduleHeight = estimateMeshGraphNodeHeight(submoduleNode)
-                    flowNodes.push(toLayoutNode(submoduleNode, submoduleX, submoduleY))
-                    bounds.push(makeBounds(submoduleNode, submoduleX, submoduleY))
-                    submoduleY += submoduleHeight + MESH_GRAPH_LAYOUT.submoduleStackGap
-                })
-                cursorY = submoduleY + MESH_GRAPH_LAYOUT.worktreeStackGap - MESH_GRAPH_LAYOUT.submoduleStackGap
-                return
+            for (const node of row) {
+                const nodeX = cursorX
+                const nodeHeight = estimateMeshGraphNodeHeight(node)
+                flowNodes.push(toLayoutNode(node, nodeX, rowY))
+                bounds.push(makeBounds(node, nodeX, rowY))
+
+                const submoduleNodes = [...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes)
+                if (submoduleNodes.length > 0) {
+                    const submoduleEndY = placeSiblingRows({
+                        nodes: submoduleNodes,
+                        centerX: nodeX + getMeshGraphNodeCardWidth(node) / 2,
+                        startY: rowY + nodeHeight + MESH_GRAPH_LAYOUT.parentToSubmoduleGap,
+                        maxPerRow: 3,
+                        flowNodes,
+                        bounds,
+                    })
+                    deepestY = Math.max(deepestY, submoduleEndY - MESH_GRAPH_LAYOUT.siblingRowGap)
+                }
+
+                cursorX += getMeshGraphNodeCardWidth(node) + MESH_GRAPH_LAYOUT.siblingGapX
             }
 
-            cursorY += nodeHeight + MESH_GRAPH_LAYOUT.worktreeStackGap
-        })
+            cursorY = deepestY + MESH_GRAPH_LAYOUT.worktreeStackGap
+        }
 
         if (groupKey === '__nodes__' && nonDefaultNodes.length === 0 && defaultAnchor) {
             const placeholder = createPlaceholderNode(defaultAnchor, data)
             const y = contentRowStartY + MESH_GRAPH_LAYOUT.placeholderTopOffset
-            flowNodes.push(toLayoutNode(placeholder, x, y, false))
-            bounds.push(makeBounds(placeholder, x, y))
+            flowNodes.push(toLayoutNode(placeholder, groupCenterX, y, false))
+            bounds.push(makeBounds(placeholder, groupCenterX, y))
         }
     })
 
