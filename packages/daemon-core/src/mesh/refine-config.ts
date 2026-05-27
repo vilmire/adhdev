@@ -27,6 +27,11 @@ export interface RepoMeshRefineConfig {
     allowAutoPublishSubmoduleMainCommits?: boolean;
     validation?: {
         required?: boolean;
+        /**
+         * Optional dependency/bootstrap commands that Refinery runs before
+         * validation commands. Refinery never infers installs on its own.
+         */
+        bootstrapCommands?: RepoMeshRefineValidationCommandConfig[];
         commands?: RepoMeshRefineValidationCommandConfig[];
     };
 }
@@ -53,6 +58,7 @@ export interface MeshRefineConfigLoadResult {
 export interface MeshRefineValidationPlan {
     source: string;
     sourceType: MeshRefineConfigLoadResult['sourceType'];
+    bootstrapCommands: MeshRefineValidationCommandPlan[];
     commands: MeshRefineValidationCommandPlan[];
     rejectedCommands: Array<Record<string, unknown>>;
     suggestions: RepoMeshRefineValidationCommandConfig[];
@@ -94,6 +100,23 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                     type: 'array',
                     minItems: 1,
                     maxItems: 8,
+                    items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['command'],
+                        properties: {
+                            command: { type: 'string', minLength: 1 },
+                            args: { type: 'array', items: { type: 'string' } },
+                            category: { enum: [...MESH_REFINE_VALIDATION_CATEGORIES, 'custom'] },
+                            cwd: { type: 'string' },
+                            timeoutMs: { type: 'number', minimum: 1000, maximum: 600000 },
+                            env: { type: 'object', additionalProperties: { type: 'string' } },
+                        },
+                    },
+                },
+                bootstrapCommands: {
+                    type: 'array',
+                    maxItems: 4,
                     items: {
                         type: 'object',
                         additionalProperties: false,
@@ -184,12 +207,13 @@ function normalizeCommandConfig(entry: unknown, source: string): { command?: Mes
     };
 }
 
-export function validateMeshRefineConfig(config: unknown, source = 'inline'): { valid: boolean; errors: string[]; commands: MeshRefineValidationCommandPlan[]; rejectedCommands: Array<Record<string, unknown>> } {
+export function validateMeshRefineConfig(config: unknown, source = 'inline'): { valid: boolean; errors: string[]; bootstrapCommands: MeshRefineValidationCommandPlan[]; commands: MeshRefineValidationCommandPlan[]; rejectedCommands: Array<Record<string, unknown>> } {
     const errors: string[] = [];
+    const bootstrapCommands: MeshRefineValidationCommandPlan[] = [];
     const commands: MeshRefineValidationCommandPlan[] = [];
     const rejectedCommands: Array<Record<string, unknown>> = [];
 
-    if (!isRecord(config)) return { valid: false, errors: ['config must be an object'], commands, rejectedCommands };
+    if (!isRecord(config)) return { valid: false, errors: ['config must be an object'], bootstrapCommands, commands, rejectedCommands };
     if (config.version !== 1) errors.push('version must be 1');
     if (config.allowAutoPublishSubmoduleMainCommits !== undefined && typeof config.allowAutoPublishSubmoduleMainCommits !== 'boolean') {
         errors.push('allowAutoPublishSubmoduleMainCommits must be a boolean when provided');
@@ -197,7 +221,16 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
     const validation = config.validation;
     if (validation !== undefined && !isRecord(validation)) errors.push('validation must be an object');
     const rawCommands = isRecord(validation) ? validation.commands : undefined;
+    const rawBootstrapCommands = isRecord(validation) ? validation.bootstrapCommands : undefined;
     if (rawCommands !== undefined && !Array.isArray(rawCommands)) errors.push('validation.commands must be an array');
+    if (rawBootstrapCommands !== undefined && !Array.isArray(rawBootstrapCommands)) errors.push('validation.bootstrapCommands must be an array');
+    if (Array.isArray(rawBootstrapCommands)) {
+        rawBootstrapCommands.forEach((entry, index) => {
+            const normalized = normalizeCommandConfig(entry, `${source}:validation.bootstrapCommands[${index}]`);
+            if (normalized.command) bootstrapCommands.push(normalized.command);
+            if (normalized.rejected) rejectedCommands.push(normalized.rejected);
+        });
+    }
     if (Array.isArray(rawCommands)) {
         rawCommands.forEach((entry, index) => {
             const normalized = normalizeCommandConfig(entry, `${source}:validation.commands[${index}]`);
@@ -206,7 +239,7 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
         });
     }
     if (rejectedCommands.length) errors.push('one or more validation commands are invalid');
-    return { valid: errors.length === 0, errors, commands, rejectedCommands };
+    return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands };
 }
 
 function parseConfigText(path: string, text: string): unknown {
@@ -300,6 +333,7 @@ export function resolveMeshRefineValidationPlan(mesh: any, workspace: string): M
         return {
             source: loaded.source,
             sourceType: loaded.sourceType,
+            bootstrapCommands: [],
             commands: [],
             rejectedCommands: loaded.error ? [{ source: loaded.source, reason: loaded.error }] : [],
             suggestions: suggestion.suggestions,
@@ -312,6 +346,7 @@ export function resolveMeshRefineValidationPlan(mesh: any, workspace: string): M
     return {
         source: loaded.path || loaded.source,
         sourceType: loaded.sourceType,
+        bootstrapCommands: validation.bootstrapCommands,
         commands: validation.commands,
         rejectedCommands: validation.rejectedCommands,
         suggestions: suggestion.suggestions,
