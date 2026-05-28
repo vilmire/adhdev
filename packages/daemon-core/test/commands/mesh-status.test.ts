@@ -46,7 +46,7 @@ async function createTempGitRepoWithSubmodule(prefix: string) {
 }
 
 function createRouter(overrides: Record<string, unknown> = {}) {
-  const { getMeshPeerConnectionStatus, dispatchMeshCommand, ...sessionHostOverrides } = overrides as Record<string, unknown>
+  const { getMeshPeerConnectionStatus, dispatchMeshCommand, statusInstanceId, ...sessionHostOverrides } = overrides as Record<string, unknown>
   const sessionHostControl = {
     listSessions: vi.fn(async () => []),
     ...sessionHostOverrides,
@@ -71,6 +71,7 @@ function createRouter(overrides: Record<string, unknown> = {}) {
     getMeshPeerConnectionStatus: typeof getMeshPeerConnectionStatus === 'function'
       ? getMeshPeerConnectionStatus as (daemonId: string) => Record<string, unknown> | null
       : undefined,
+    statusInstanceId: typeof statusInstanceId === 'string' ? statusInstanceId : undefined,
   })
 
   return { router, sessionHostControl }
@@ -292,6 +293,73 @@ describe('mesh_status', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+
+  it('surfaces machine identity locality evidence in mesh_status nodes', async () => {
+    const { router } = createRouter({ statusInstanceId: 'daemon-local' })
+
+    const result = await router.execute('mesh_status', {
+      meshId: 'mesh-machine-identity-status',
+      inlineMesh: {
+        id: 'mesh-machine-identity-status',
+        name: 'Machine Identity Status',
+        repoIdentity: 'repo',
+        policy: {},
+        coordinator: { preferredNodeId: 'node-local' },
+        nodes: [
+          {
+            id: 'node-local',
+            daemonId: 'daemon-local',
+            machineId: 'machine-local',
+            machineName: 'Local Developer Mac',
+            workspace: '/missing/local',
+            providers: ['hermes-cli'],
+            policy: { providerPriority: ['hermes-cli'] },
+          },
+          {
+            id: 'node-remote',
+            daemonId: 'daemon-remote',
+            machineName: 'Remote Build Box',
+            workspace: '/missing/remote',
+            providers: ['claude-cli'],
+            policy: { providerPriority: ['claude-cli'] },
+          },
+          {
+            id: 'node-unknown',
+            workspace: '/missing/unknown',
+            providers: ['codex-cli'],
+            policy: { providerPriority: ['codex-cli'] },
+          },
+        ],
+      },
+    }) as any
+
+    expect(result.success).toBe(true)
+    const local = result.nodes.find((node: any) => node.nodeId === 'node-local')
+    const remote = result.nodes.find((node: any) => node.nodeId === 'node-remote')
+    const unknown = result.nodes.find((node: any) => node.nodeId === 'node-unknown')
+
+    expect(local.machine).toEqual(expect.objectContaining({
+      daemonId: 'daemon-local',
+      machineId: 'machine-local',
+      machineName: 'Local Developer Mac',
+      sameMachine: true,
+      locality: 'same_machine',
+      localityReason: 'matched coordinator daemon id',
+    }))
+    expect(remote.machine).toEqual(expect.objectContaining({
+      daemonId: 'daemon-remote',
+      machineName: 'Remote Build Box',
+      sameMachine: false,
+      locality: 'remote_known',
+    }))
+    expect(remote.machine.localityReason).toContain('known remote/other machine identity')
+    expect(remote.machine.identityEvidence).toContain('machineName:Remote Build Box')
+    expect(unknown.machine).toEqual(expect.objectContaining({
+      sameMachine: false,
+      locality: 'remote_or_unknown',
+      localityReason: 'no useful machine identity evidence available',
+    }))
   })
 
   it('blocks coordinator launch from explicit member daemons', async () => {

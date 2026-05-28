@@ -995,11 +995,29 @@ function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefine
 }
 
 function readNodeMachineId(node: LocalMeshNodeEntry): string | undefined {
-    return readString((node as any).machineId) || readString((node as any).machine_id);
+    return readString((node as any).machineId)
+        || readString((node as any).machine_id)
+        || readString((node as any).machine?.id)
+        || readString((node as any).machine?.machineId)
+        || readString((node as any).lastProbe?.machineId)
+        || readString((node as any).last_probe?.machine_id)
+        || readString((node as any).lastProbe?.machine?.id)
+        || readString((node as any).lastProbe?.machine?.machineId)
+        || readString((node as any).last_probe?.machine?.id)
+        || readString((node as any).last_probe?.machine?.machine_id);
 }
 
 function readNodeDaemonId(node: LocalMeshNodeEntry): string | undefined {
-    return readString(node.daemonId) || readString((node as any).daemon_id);
+    return readString(node.daemonId)
+        || readString((node as any).daemon_id)
+        || readString((node as any).machine?.daemonId)
+        || readString((node as any).machine?.daemon_id)
+        || readString((node as any).lastProbe?.daemonId)
+        || readString((node as any).last_probe?.daemon_id)
+        || readString((node as any).lastProbe?.machine?.daemonId)
+        || readString((node as any).lastProbe?.machine?.daemon_id)
+        || readString((node as any).last_probe?.machine?.daemonId)
+        || readString((node as any).last_probe?.machine?.daemon_id);
 }
 
 function normalizeHostname(value: unknown): string | undefined {
@@ -1010,38 +1028,80 @@ function normalizeHostname(value: unknown): string | undefined {
 
 function readNodeHostname(node: LocalMeshNodeEntry): string | undefined {
     return readString((node as any).hostname)
+        || readString((node as any).host)
         || readString((node as any).machineHostname)
         || readString((node as any).machine_hostname)
-        || readString((node as any).machineName)
-        || readString((node as any).machine_name)
+        || readString((node as any).machine?.hostname)
+        || readString((node as any).machine?.host)
         || readString((node as any).lastProbe?.hostname)
         || readString((node as any).last_probe?.hostname)
         || readString((node as any).lastProbe?.machine?.hostname)
         || readString((node as any).last_probe?.machine?.hostname);
 }
 
+function readNodeDisplayMachineName(node: LocalMeshNodeEntry): string | undefined {
+    return readString((node as any).machineName)
+        || readString((node as any).machine_name)
+        || readString((node as any).machineLabel)
+        || readString((node as any).machine_label)
+        || readString((node as any).machineNickname)
+        || readString((node as any).machine_nickname)
+        || readString((node as any).alias)
+        || readString((node as any).machine?.name)
+        || readString((node as any).machine?.displayName)
+        || readString((node as any).machine?.display_name)
+        || readString((node as any).lastProbe?.machineName)
+        || readString((node as any).last_probe?.machine_name)
+        || readString((node as any).lastProbe?.machine?.name)
+        || readString((node as any).last_probe?.machine?.name)
+        || readNodeHostname(node);
+}
+
+function compactIdentityEvidence(value: string | undefined): string | undefined {
+    if (!value) return undefined;
+    return value.length > 24 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value;
+}
+
+function pushIdentityEvidence(evidence: string[], label: string, value: string | undefined): void {
+    const compact = compactIdentityEvidence(value);
+    if (compact) evidence.push(`${label}:${compact}`);
+}
+
 function buildNodeMachineIdentity(ctx: MeshContext, node: LocalMeshNodeEntry): Record<string, unknown> {
     const machineId = readNodeMachineId(node);
     const daemonId = readNodeDaemonId(node);
     const hostname = readNodeHostname(node);
+    const machineName = readNodeDisplayMachineName(node);
     const coordinatorHostname = readString(ctx.coordinatorHostname);
+    const directLocal = isLocalControlPlaneNode(ctx, node);
     const hostnameMatches = Boolean(
         normalizeHostname(hostname)
         && normalizeHostname(coordinatorHostname)
         && normalizeHostname(hostname) === normalizeHostname(coordinatorHostname),
     );
-    const sameMachine = isLocalControlPlaneNode(ctx, node) || hostnameMatches;
+    const sameMachine = directLocal || hostnameMatches;
+    const evidence: string[] = [];
+    pushIdentityEvidence(evidence, 'machineName', machineName);
+    pushIdentityEvidence(evidence, 'hostname', hostname);
+    pushIdentityEvidence(evidence, 'machineId', machineId);
+    pushIdentityEvidence(evidence, 'daemonId', daemonId);
+    const locality = sameMachine ? 'same_machine' : (evidence.length > 0 ? 'remote_known' : 'remote_or_unknown');
+    const localityReason = sameMachine
+        ? (directLocal ? 'matched coordinator daemon or machine id' : 'matched coordinator hostname')
+        : evidence.length > 0
+            ? `known remote/other machine identity; no local coordinator match (${evidence.join(', ')})`
+            : 'no useful machine identity evidence available';
     return {
         daemonId,
         machineId,
         hostname,
-        machineName: hostname,
+        machineName,
+        displayName: machineName || hostname || daemonId || machineId,
         coordinatorHostname,
         sameMachine,
-        locality: sameMachine ? 'same_machine' : 'remote_or_unknown',
-        localityReason: sameMachine
-            ? (isLocalControlPlaneNode(ctx, node) ? 'matched coordinator daemon or machine id' : 'matched coordinator hostname')
-            : 'no coordinator daemon, machine id, or hostname match',
+        locality,
+        localityReason,
+        identityEvidence: evidence,
     };
 }
 
