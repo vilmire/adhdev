@@ -1252,8 +1252,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 const nativeHistorySessionId = resolveCliNativeHistorySessionId(args, historySessionId, providerSessionId);
                 const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
                 const exactNativeHistoryScope = Boolean(
-                    targetSessionId
-                    || (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
+                    (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
                     || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
                     || providerSessionId
                     || (nativeHistorySessionId && nativeHistorySessionId !== targetSessionId)

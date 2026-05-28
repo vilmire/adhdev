@@ -1012,6 +1012,75 @@ test('mesh_send_task fails closed when explicitly targeting a remote live sessio
   assert.equal(relayCalls[0].command, 'get_status_metadata');
 });
 
+test('mesh_send_task rejects remote coordinator session before worker relay dispatch', async () => {
+  const meshId = `mesh-remote-coordinator-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const relayCalls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  const ctx = {
+    mesh: {
+      id: meshId,
+      name: 'Remote Coordinator Guard Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-worker',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['codex-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    relayCalls.push({ daemonId, command, args });
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{
+              id: 'coordinator-session',
+              providerType: 'codex-cli',
+              status: 'idle',
+              settings: { meshCoordinatorFor: meshId },
+            }],
+          },
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      throw new Error('coordinator session must not receive worker task');
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const send = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-remote-worker',
+    session_id: 'coordinator-session',
+    message: 'run validation',
+    task_mode: 'validation',
+  }));
+
+  assert.equal(send.success, false);
+  assert.equal(send.code, 'mesh_target_session_is_coordinator');
+  assert.equal(send.sessionId, 'coordinator-session');
+  assert.deepEqual(relayCalls.map(call => call.command), ['get_status_metadata']);
+});
+
 test('mesh_remove_node falls back to local control-plane cleanup for degraded local worktree nodes when P2P relay is unavailable', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -2710,6 +2779,71 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
 
   const queued = getQueue(meshId);
   assert.equal(queued.length, 0);
+});
+
+test('local IPC mesh_send_task rejects coordinator session as worker target', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const directCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    directCalls.push({ command, args });
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        status: {
+          sessions: [{
+            id: 'coordinator-session',
+            providerType: 'codex-cli',
+            settings: { meshCoordinatorFor: 'mesh-coordinator-guard' },
+          }],
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      throw new Error('coordinator session must not receive worker task');
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-coordinator-guard',
+      name: 'Coordinator Guard Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-local',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+    localDaemonId: 'daemon-local',
+  };
+
+  const result = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-local',
+    session_id: 'coordinator-session',
+    message: 'implement a code change',
+    task_mode: 'code_change',
+  }));
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'mesh_target_session_is_coordinator');
+  assert.equal(result.sessionId, 'coordinator-session');
+  assert.match(result.error, /visible worker session/);
+  assert.deepEqual(directCalls.map(call => call.command), ['get_status_metadata']);
 });
 
 test('local IPC mesh_send_task preserves retryable agent busy diagnostics from direct dispatch', async () => {
