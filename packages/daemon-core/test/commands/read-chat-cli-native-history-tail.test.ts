@@ -415,6 +415,62 @@ describe('CLI read_chat native history hydration', () => {
     }))
   })
 
+  it('fails closed instead of falling back to a same-workspace Codex coordinator transcript for a worker session', async () => {
+    const workerSessionId = 'e76fdbbf-2a65-4498-a925-d2ffe881a433'
+    const coordinatorProviderSessionId = '019e6dcc-9aae-7dc2-97bd-c5223e111199'
+    mocks.readProviderChatHistory
+      .mockReturnValueOnce({
+        source: 'native-unavailable',
+        messages: [],
+        hasMore: false,
+      })
+      .mockReturnValueOnce({
+        source: 'provider-native',
+        sourceMtimeMs: Date.now(),
+        providerSessionId: coordinatorProviderSessionId,
+        messages: [
+          { role: 'user', content: 'coordinator prompt', receivedAt: 1_000, historySessionId: coordinatorProviderSessionId, workspace: '/workspaces/shared' },
+          { role: 'assistant', content: 'coordinator/root transcript', receivedAt: 2_000, historySessionId: coordinatorProviderSessionId, workspace: '/workspaces/shared' },
+        ],
+        hasMore: false,
+      })
+
+    const result = await handleReadChat(createHelpers({
+      provider: {
+        type: 'codex-cli',
+        category: 'cli',
+        historyBehavior: { transcriptAuthority: 'provider' },
+        canonicalHistory: { mode: 'native-source', format: 'codex-native' },
+      },
+      adapter: null,
+      currentSession: {
+        sessionId: 'coordinator-runtime-session',
+        providerType: 'codex-cli',
+        providerSessionId: coordinatorProviderSessionId,
+        transport: 'pty',
+        workspace: '/workspaces/shared',
+      },
+      ctx: {
+        sessionRegistry: { get: (id: string) => id === workerSessionId ? { sessionId: workerSessionId, instanceKey: workerSessionId } : undefined },
+        instanceManager: { getInstance: () => null },
+      },
+    }) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: workerSessionId,
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('native_history_not_safely_available')
+    expect(result.providerSessionId).toBe(workerSessionId)
+    expect(JSON.stringify(result)).not.toContain('coordinator/root transcript')
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledTimes(1)
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: workerSessionId,
+      workspace: '/workspaces/shared',
+    }))
+  })
+
   it('keeps two same-provider same-workspace read_chat calls isolated by provider session id', async () => {
     mocks.readProviderChatHistory.mockImplementation((_agent: string, options: any) => {
       const historySessionId = options?.historySessionId

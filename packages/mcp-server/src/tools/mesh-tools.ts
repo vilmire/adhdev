@@ -1161,6 +1161,88 @@ function meshSessionCacheKey(nodeId: string, runtimeSessionId: string): string {
     return `${nodeId}:${runtimeSessionId}`;
 }
 
+function rememberMeshSessionProviderMetadata(
+    nodeId: string | undefined,
+    runtimeSessionId: string | undefined,
+    metadata: MeshSessionProviderMetadata,
+): void {
+    const keyNodeId = readString(nodeId);
+    const keySessionId = readString(runtimeSessionId);
+    if (!keyNodeId || !keySessionId) return;
+    const providerType = readString(metadata.providerType);
+    const providerSessionId = readString(metadata.providerSessionId);
+    if (!providerType && !providerSessionId) return;
+    const existing = meshSessionProviderMetadata.get(meshSessionCacheKey(keyNodeId, keySessionId)) || { providerType: '' };
+    meshSessionProviderMetadata.set(meshSessionCacheKey(keyNodeId, keySessionId), {
+        providerType: providerType || existing.providerType,
+        providerSessionId: providerSessionId || existing.providerSessionId,
+    });
+}
+
+function rememberMeshSessionProviderMetadataFromEvent(event: any): void {
+    const metadataEvent = event?.metadataEvent && typeof event.metadataEvent === 'object'
+        ? event.metadataEvent as Record<string, unknown>
+        : event && typeof event === 'object'
+            ? event as Record<string, unknown>
+            : {};
+    const nodeId = readString(event?.nodeId) || readString(metadataEvent.nodeId) || readString(metadataEvent.meshNodeId);
+    const sessionId = readString(metadataEvent.targetSessionId)
+        || readString(metadataEvent.sessionId)
+        || readString(metadataEvent.instanceId)
+        || readString(event?.sessionId);
+    rememberMeshSessionProviderMetadata(nodeId, sessionId, {
+        providerType: readString(metadataEvent.providerType) || readString(event?.providerType) || '',
+        providerSessionId: readString(metadataEvent.providerSessionId) || readString(event?.providerSessionId),
+    });
+}
+
+function resolveMeshSessionProviderMetadataFromLedger(
+    ctx: MeshContext,
+    nodeId: string,
+    runtimeSessionId: string,
+): MeshSessionProviderMetadata | undefined {
+    const entries = readLedgerEntries(ctx.mesh.id, { tail: 500 });
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const entry = entries[i];
+        const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
+            ? entry.payload as Record<string, unknown>
+            : {};
+        const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
+        if (entryNodeId && entryNodeId !== nodeId) continue;
+        const entrySessionId = readString(entry.sessionId)
+            || readString(payload.targetSessionId)
+            || readString(payload.sessionId)
+            || readString(payload.instanceId);
+        if (entrySessionId !== runtimeSessionId) continue;
+        const providerType = readString(entry.providerType) || readString(payload.providerType);
+        const completionDiagnostic = payload.completionDiagnostic && typeof payload.completionDiagnostic === 'object' && !Array.isArray(payload.completionDiagnostic)
+            ? payload.completionDiagnostic as Record<string, unknown>
+            : {};
+        const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === 'object' && !Array.isArray(payload.metadataEvent)
+            ? payload.metadataEvent as Record<string, unknown>
+            : {};
+        const providerSessionId = readString(payload.providerSessionId)
+            || readString(completionDiagnostic.providerSessionId)
+            || readString(metadataEvent.providerSessionId);
+        if (providerType || providerSessionId) {
+            return { providerType: providerType || '', providerSessionId };
+        }
+    }
+    return undefined;
+}
+
+function resolveMeshSessionProviderMetadata(
+    ctx: MeshContext,
+    nodeId: string,
+    runtimeSessionId: string,
+): MeshSessionProviderMetadata | undefined {
+    const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(nodeId, runtimeSessionId));
+    if (cached?.providerType || cached?.providerSessionId) return cached;
+    const fromLedger = resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId);
+    if (fromLedger) rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, fromLedger);
+    return fromLedger;
+}
+
 function countUncommittedChanges(status: any): number {
     if (typeof status?.uncommittedChanges === 'number') return status.uncommittedChanges;
     const keys = ['staged', 'modified', 'untracked', 'deleted', 'renamed'];
@@ -1503,6 +1585,7 @@ async function drainCoordinatorPendingEvents(
                 ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', { meshId: ctx.mesh.id }) as any)
                     .filter(matchesCurrentMesh),
             );
+            surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);
         } catch {
             // Non-fatal: pending events are best-effort.
         }
@@ -1521,6 +1604,7 @@ async function drainCoordinatorPendingEvents(
                     const payload = buildMeshForwardPayloadFromPendingEvent(event);
                     if (!payload.event || !payload.meshId) continue;
                     await ctx.transport.command('mesh_forward_event', payload);
+                    rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
                 }
             } catch {
                 // Non-fatal: remote pending-event recovery is best-effort.
@@ -1532,6 +1616,7 @@ async function drainCoordinatorPendingEvents(
                 ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', { meshId: ctx.mesh.id }) as any)
                     .filter(matchesCurrentMesh),
             );
+            surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);
         } catch {
             // Non-fatal: pending events are best-effort.
         }
@@ -1540,7 +1625,9 @@ async function drainCoordinatorPendingEvents(
     }
 
     if (isLocalTransport(ctx.transport)) {
-        return (drainPendingMeshCoordinatorEvents(ctx.mesh.id) as any[]).filter(matchesCurrentMesh);
+        const events = (drainPendingMeshCoordinatorEvents(ctx.mesh.id) as any[]).filter(matchesCurrentMesh);
+        events.forEach(rememberMeshSessionProviderMetadataFromEvent);
+        return events;
     }
 
     return [];
@@ -2678,7 +2765,7 @@ export async function meshReadChat(
     }
 
     if (isLocalTransport(ctx.transport)) {
-        const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+        const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
         const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
             ? args.provider_session_id.trim()
             : cached?.providerSessionId;
@@ -2731,7 +2818,7 @@ export async function meshReadDebug(
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
     if (isLocalTransport(ctx.transport)) {
-        const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+        const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
         const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
             ? args.provider_session_id.trim()
             : cached?.providerSessionId;

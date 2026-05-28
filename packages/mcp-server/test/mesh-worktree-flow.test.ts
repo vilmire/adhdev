@@ -1745,6 +1745,105 @@ test('mesh_read_chat forwards cached provider metadata after launch', async () =
   assert.equal(readCalls[1].args.providerSessionId, 'provider-explicit-read');
 });
 
+test('mesh_read_chat resolves a completed Codex worker provider transcript instead of same-workspace coordinator history', async () => {
+  const meshId = `mesh-codex-worker-transcript-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const workerSessionId = 'e76fdbbf-2a65-4498-a925-d2ffe881a433';
+  const workerProviderSessionId = '019e6dcf-7e35-7c22-be8d-b230f182f7e8';
+  const coordinatorSessionId = 'coordinator-root-runtime-session';
+  const coordinatorProviderSessionId = '019e6dcc-9aae-7dc2-97bd-c5223e111199';
+
+  appendLedgerEntry(meshId, {
+    kind: 'task_completed',
+    nodeId: 'node-codex',
+    sessionId: workerSessionId,
+    providerType: 'codex-cli',
+    payload: {
+      providerSessionId: workerProviderSessionId,
+      finalSummary: 'worker summary',
+    },
+  });
+  appendLedgerEntry(meshId, {
+    kind: 'task_completed',
+    nodeId: 'node-codex',
+    sessionId: coordinatorSessionId,
+    providerType: 'codex-cli',
+    payload: {
+      providerSessionId: coordinatorProviderSessionId,
+      finalSummary: 'coordinator/root transcript',
+    },
+  });
+
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'read_chat') {
+      if (args.providerSessionId !== workerProviderSessionId) {
+        return {
+          success: true,
+          result: {
+            success: true,
+            status: 'idle',
+            providerSessionId: coordinatorProviderSessionId,
+            messages: [{ role: 'assistant', content: 'coordinator/root transcript' }],
+          },
+        };
+      }
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: 'idle',
+          providerSessionId: workerProviderSessionId,
+          messages: [{ role: 'assistant', content: 'worker summary' }],
+        },
+      };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: meshId,
+      name: 'Codex Worker Transcript',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-codex',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-source',
+        userOverrides: {},
+        policy: { providerPriority: ['codex-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  const readText = await meshReadChat(ctx as any, { node_id: 'node-codex', session_id: workerSessionId, compact: true });
+  const readPayload = JSON.parse(readText);
+  const readCall = calls.find((call) => call.command === 'read_chat');
+
+  assert.ok(readCall);
+  assert.equal(readCall.args.targetSessionId, workerSessionId);
+  assert.equal(readCall.args.providerSessionId, workerProviderSessionId);
+  assert.equal(readCall.args.agentType, 'codex-cli');
+  assert.equal(readCall.args.providerType, 'codex-cli');
+  assert.equal(readPayload.providerSessionId, workerProviderSessionId);
+  assert.equal(readPayload.summary, 'worker summary');
+  assert.doesNotMatch(readText, /coordinator\/root transcript/);
+});
+
 test('mesh_read_chat compact mode filters tool/internal chatter and returns the final assistant summary', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
