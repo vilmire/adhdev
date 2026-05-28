@@ -22,7 +22,7 @@ import { isLocalTransport } from '../transports/mode.js';
 import type { McpTransport } from '../transports/mode.js';
 import { compactChatPayload } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
-import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
+import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
     appendLedgerEntry,
     appendRemoteLedgerEntries,
@@ -61,6 +61,29 @@ type MeshSessionProviderMetadata = {
 };
 
 const meshSessionProviderMetadata = new Map<string, MeshSessionProviderMetadata>();
+
+const ACTIVE_WORK_POLLING_BACKOFF_MS = 60_000;
+
+interface MeshPollingGuidance {
+    activeGeneratingWork: true;
+    generatingCount: number;
+    doNotPollBefore: string;
+    eventSurface: 'pendingCoordinatorEvents';
+    nextRecommendedAction: string;
+    message: string;
+}
+
+function buildActiveWorkPollingGuidance(summary: MeshActiveWorkSummary, now = Date.now()): MeshPollingGuidance | undefined {
+    if (!summary || summary.generatingCount <= 0) return undefined;
+    return {
+        activeGeneratingWork: true,
+        generatingCount: summary.generatingCount,
+        doNotPollBefore: new Date(now + ACTIVE_WORK_POLLING_BACKOFF_MS).toISOString(),
+        eventSurface: 'pendingCoordinatorEvents',
+        nextRecommendedAction: 'Wait for pendingCoordinatorEvents/completion events or an explicit user status request. After a terminal signal, call mesh_read_chat once with compact=true, then verify git state if repository changes were expected.',
+        message: 'Do not repeatedly poll mesh_status/mesh_view_queue/mesh_read_chat while delegated work is generating; these snapshots rarely change until the worker emits a completion/status event.',
+    };
+}
 
 // ─── Helpers ────────────────────────────────────
 
@@ -1540,7 +1563,7 @@ function buildRemoveNodeArgs(ctx: MeshContext, nodeId: string, sessionCleanupMod
 
 export const MESH_STATUS_TOOL = {
     name: 'mesh_status',
-    description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures.',
+    description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -1576,7 +1599,7 @@ export const MESH_ENQUEUE_TASK_TOOL = {
 
 export const MESH_VIEW_QUEUE_TOOL = {
     name: 'mesh_view_queue',
-    description: 'View the mesh work queue with source-of-truth active counts separated from historical completed/failed/cancelled records.',
+    description: 'View the mesh work queue with source-of-truth active counts separated from historical completed/failed/cancelled records. Do not repeatedly call this to wait for generating assigned work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -2052,6 +2075,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         nodes: results,
     });
 
+    const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
     const response: Record<string, unknown> = {
         meshId: mesh.id,
         meshName: mesh.name,
@@ -2069,6 +2093,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         staleDirectWork: activeWorkEvidence.staleDirectWork,
         terminalDirectWork: activeWorkEvidence.terminalDirectWork,
         activeWorkSummary: activeWorkEvidence.summary,
+        ...(pollingGuidance ? { pollingGuidance } : {}),
         branchConvergenceSummary: summarizeBranchConvergence(results),
     };
 
@@ -2314,6 +2339,7 @@ export async function meshViewQueue(
         });
         const staleAssignedTasks = (maintenance as any).staleAssignedTasks || [];
         const requestedHistoricalRows = queue.some((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
+        const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
         return JSON.stringify({
             success: true,
             sourceOfTruth: {
@@ -2332,6 +2358,7 @@ export async function meshViewQueue(
             activeWork: activeWorkEvidence.activeWork,
             staleDirectWork: activeWorkEvidence.staleDirectWork,
             activeWorkSummary: activeWorkEvidence.summary,
+            ...(pollingGuidance ? { pollingGuidance } : {}),
             visibleSummary,
             summary,
             activeCounts: (summary as any).activeCounts,

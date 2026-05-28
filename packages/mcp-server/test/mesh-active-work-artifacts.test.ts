@@ -113,10 +113,22 @@ test('direct mesh_send_task is visible as source=direct active work in status an
     assert.equal(direct.taskTitle, 'Implement direct active work visibility');
     assert.equal(typeof direct.elapsedMs, 'number');
     assert.equal(status.activeWorkSummary.directActiveCount, 1);
+    assert.equal(status.pollingGuidance.activeGeneratingWork, true);
+    assert.equal(status.pollingGuidance.generatingCount, 1);
+    assert.match(status.pollingGuidance.message, /Do not repeatedly poll mesh_status\/mesh_view_queue\/mesh_read_chat/i);
+    assert.match(status.pollingGuidance.nextRecommendedAction, /wait for pendingCoordinatorEvents|completion events/i);
+    assert.equal(status.pollingGuidance.eventSurface, 'pendingCoordinatorEvents');
+    assert.equal(typeof status.pollingGuidance.doNotPollBefore, 'string');
 
     const activeView = JSON.parse(await meshViewQueue(ctx as any, { view: 'active' }));
     assert.equal(activeView.visibleHistoricalCount, 0);
     assert.ok(activeView.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === send.taskId));
+    assert.equal(activeView.pollingGuidance.activeGeneratingWork, true);
+    assert.equal(activeView.pollingGuidance.generatingCount, 1);
+    assert.match(activeView.pollingGuidance.message, /Do not repeatedly poll mesh_status\/mesh_view_queue\/mesh_read_chat/i);
+    assert.match(activeView.pollingGuidance.nextRecommendedAction, /wait for pendingCoordinatorEvents|completion events/i);
+    assert.equal(activeView.pollingGuidance.eventSurface, 'pendingCoordinatorEvents');
+    assert.equal(typeof activeView.pollingGuidance.doNotPollBefore, 'string');
     assert.ok(calls.some(call => call.command === 'agent_command'));
   } finally {
     cleanupMesh(meshId);
@@ -258,6 +270,7 @@ test('stale direct ledger tasks are separated from active work when queue is emp
     assert.equal(activeView.activeWorkSummary.totalActiveCount, 0);
     assert.equal(activeView.activeWorkSummary.directActiveCount, 0);
     assert.equal(activeView.activeWorkSummary.staleDirectCount, 2);
+    assert.equal(activeView.pollingGuidance, undefined);
     assert.deepEqual(activeView.staleDirectWork.map((entry: any) => entry.taskId).sort(), [
       'direct-missing-session',
       'direct-removed-node',
@@ -274,6 +287,7 @@ test('stale direct ledger tasks are separated from active work when queue is emp
     assert.equal(status.activeWorkSummary.totalActiveCount, 0);
     assert.equal(status.activeWorkSummary.directActiveCount, 0);
     assert.equal(status.activeWorkSummary.staleDirectCount, 2);
+    assert.equal(status.pollingGuidance, undefined);
     assert.deepEqual(status.staleDirectWork.map((entry: any) => entry.taskId).sort(), [
       'direct-missing-session',
       'direct-removed-node',
