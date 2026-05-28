@@ -880,4 +880,54 @@ describe('handleReadChat for CLI adapters', () => {
       returnedMsgCount: 1,
     }))
   })
+
+  it('preserves provider parser error status for CLI auth blockers', async () => {
+    const getScriptParsedStatus = vi.fn(() => ({
+      status: 'error',
+      errorReason: 'auth_failed',
+      errorMessage: 'Your account does not have access to Claude Code. Please run /login.',
+      messages: [
+        { role: 'user', content: 'verify transcript' },
+        { role: 'assistant', content: 'Your account does not have access to Claude Code. Please run /login.' },
+      ],
+      activeModal: null,
+      title: 'Claude Code',
+    }))
+    const adapter = {
+      cliType: 'claude-cli',
+      cliName: 'Claude Code',
+      workingDir: '/tmp/project',
+      getStatus: () => ({ status: 'idle', messages: [], activeModal: null }),
+      getScriptParsedStatus,
+      getPartialResponse: () => '',
+      isProcessing: () => false,
+      isReady: () => true,
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'claude-cli', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {},
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { agentType: 'claude-cli' })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('error')
+    expect((result as any).debugReadChat).toEqual(expect.objectContaining({
+      parsedStatus: 'error',
+      returnedStatus: 'error',
+    }))
+    expect(result.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'verify transcript' }),
+      expect.objectContaining({ role: 'assistant', content: 'Your account does not have access to Claude Code. Please run /login.' }),
+    ])
+  })
 })

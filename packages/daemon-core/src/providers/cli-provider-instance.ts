@@ -497,8 +497,14 @@ export class CliProviderInstance implements ProviderInstance {
         if (typeof this.adapter.getScriptParsedStatus === 'function') {
             try {
                 parsedStatus = this.adapter.getScriptParsedStatus() || null;
-                this.errorMessage = undefined;
-                this.errorReason = undefined;
+                const parsedErrorMessage = typeof parsedStatus?.errorMessage === 'string' && parsedStatus.errorMessage.trim()
+                    ? parsedStatus.errorMessage.trim()
+                    : undefined;
+                const parsedErrorReason = typeof parsedStatus?.errorReason === 'string' && parsedStatus.errorReason.trim()
+                    ? parsedStatus.errorReason.trim() as ProviderErrorReason
+                    : undefined;
+                this.errorMessage = parsedErrorMessage;
+                this.errorReason = parsedErrorReason;
             } catch (error: any) {
                 parseErrorMessage = error?.message || String(error);
                 this.errorMessage = parseErrorMessage;
@@ -509,7 +515,7 @@ export class CliProviderInstance implements ProviderInstance {
             this.errorReason = undefined;
         }
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, Date.now());
-        const visibleStatus = parseErrorMessage
+        const visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
             ? 'error'
             : (autoApproveActive ? 'generating' : adapterStatus.status);
         const parsedProviderSessionId = normalizeProviderSessionId(

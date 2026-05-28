@@ -1726,6 +1726,12 @@ export class ProviderCliAdapter implements CliAdapter {
             }),
             activeModal,
             providerSessionId: typeof (parsed as any).providerSessionId === 'string' ? (parsed as any).providerSessionId : undefined,
+            errorMessage: typeof (parsed as any).errorMessage === 'string' && (parsed as any).errorMessage.trim()
+                ? (parsed as any).errorMessage.trim()
+                : undefined,
+            errorReason: typeof (parsed as any).errorReason === 'string' && (parsed as any).errorReason.trim()
+                ? (parsed as any).errorReason.trim()
+                : undefined,
             ...(bufferState ? { bufferState } : {}),
             ...((parsed as any).transcriptAuthority === 'provider' || (parsed as any).transcriptAuthority === 'daemon'
                 ? { transcriptAuthority: (parsed as any).transcriptAuthority }
@@ -2596,6 +2602,9 @@ export class ProviderCliAdapter implements CliAdapter {
         const parsedDebugState = this.getParsedDebugState();
         const parsedMessages = Array.isArray(parsedDebugState?.messages) ? parsedDebugState.messages : [];
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
+        if (parsedDebugState?.status === 'error') {
+            effectiveStatus = 'error';
+        }
         if (startupDetectedStatus === 'waiting_approval') {
             effectiveStatus = 'waiting_approval';
         }
@@ -2627,6 +2636,8 @@ export class ProviderCliAdapter implements CliAdapter {
                 providerSessionId: parsedDebugState.providerSessionId,
                 transcriptAuthority: parsedDebugState.transcriptAuthority,
                 coverage: parsedDebugState.coverage,
+                errorMessage: parsedDebugState.errorMessage,
+                errorReason: parsedDebugState.errorReason,
                 activeModal: parsedDebugState.activeModal,
                 messageCount: parsedMessages.length,
             } : null,
