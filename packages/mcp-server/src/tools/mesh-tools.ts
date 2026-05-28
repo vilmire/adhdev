@@ -343,6 +343,19 @@ function resolveSessionProviderType(session: any): string {
         || '';
 }
 
+function isMeshCoordinatorSessionRecord(session: any): boolean {
+    return Boolean(
+        readString(session?.settings?.meshCoordinatorFor)
+        || readString(session?.meta?.meshCoordinatorFor)
+        || readString(session?.metadata?.meshCoordinatorFor)
+        || readString(session?.meshCoordinatorFor),
+    );
+}
+
+function isWorkerTaskMode(taskMode: string | undefined): boolean {
+    return taskMode !== 'live_debug_readonly';
+}
+
 function addSessionRecord(target: Set<string>, session: any): void {
     if (!session || typeof session !== 'object' || isTerminalSessionRecord(session)) return;
     const sessionId = readSessionRecordId(session);
@@ -874,7 +887,7 @@ function buildCoordinatorP2pRelayFailure(
 async function ipcDispatchToRemoteAgent(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
-    args: { session_id?: string; message: string; providerType?: string },
+    args: { session_id?: string; message: string; providerType?: string; verifiedSession?: any },
 ): Promise<RemoteAgentDispatchResult> {
     const transport = ctx.transport as IpcTransport;
     const daemonId = node.daemonId!;
@@ -889,7 +902,20 @@ async function ipcDispatchToRemoteAgent(
     // Ask the remote daemon for live session truth when we need to auto-pick a
     // delegate session, or when an explicit session_id must be verified as a
     // relay-safe mesh-owned worker before we dispatch into it.
-    if (!sessionId || args.session_id) {
+    if (sessionId && args.verifiedSession) {
+        const explicitSession = args.verifiedSession;
+        if (!isMeshOwnedDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
+            return buildRelayUnsafeRemoteSessionFailure(
+                ctx,
+                node,
+                sessionId,
+                resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
+            );
+        }
+        if (!resolvedProviderType) {
+            resolvedProviderType = resolveSessionProviderType(explicitSession);
+        }
+    } else if (!sessionId || args.session_id) {
         try {
             const relayResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
             const sessions = extractStatusMetadataSessions(relayResult);
@@ -2555,6 +2581,30 @@ export async function meshSendTask(
         return JSON.stringify({ error: `Node '${args.node_id}' is read-only` });
     }
 
+    let explicitTargetSession: any | undefined;
+    if (args.session_id && isWorkerTaskMode(taskMode) && (ctx.transport instanceof IpcTransport || isLocalTransport(ctx.transport))) {
+        try {
+            const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
+            const sessions = extractStatusMetadataSessions(statusResult);
+            explicitTargetSession = sessions.find(session => readSessionRecordId(session) === args.session_id);
+            if (explicitTargetSession && isMeshCoordinatorSessionRecord(explicitTargetSession)) {
+                return JSON.stringify({
+                    success: false,
+                    recoverable: true,
+                    code: 'mesh_target_session_is_coordinator',
+                    reason: 'mesh_target_session_is_coordinator',
+                    nodeId: args.node_id,
+                    sessionId: args.session_id,
+                    taskMode: taskMode || 'unspecified',
+                    error: `Session '${args.session_id}' is a Repo Mesh coordinator session, not a visible worker session. Launch or use a visible worker session before dispatching this task.`,
+                    nextAction: `Call mesh_launch_session for node '${args.node_id}' and then retry mesh_send_task with that worker session_id, or use mesh_enqueue_task for queue-based worker assignment.`,
+                });
+            }
+        } catch {
+            explicitTargetSession = undefined;
+        }
+    }
+
     // Avoid duplicate side effects when an MCP/tool call is interrupted after
     // the daemon already accepted the send and the coordinator retries the
     // exact same node/session/message immediately.
@@ -2604,6 +2654,7 @@ export async function meshSendTask(
                 session_id: args.session_id,
                 message: args.message,
                 providerType: cached?.providerType,
+                verifiedSession: explicitTargetSession,
             });
             if (result.success) {
                 // Record dispatch in ledger so task_history is accurate
@@ -2643,9 +2694,12 @@ export async function meshSendTask(
             const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
             let resolvedProviderType = cached?.providerType || '';
             if (!resolvedProviderType) {
-                const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
-                const sessions = extractStatusMetadataSessions(statusResult);
-                const explicitSession = sessions.find(session => readSessionRecordId(session) === args.session_id);
+                let explicitSession = explicitTargetSession;
+                if (!explicitSession) {
+                    const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
+                    const sessions = extractStatusMetadataSessions(statusResult);
+                    explicitSession = sessions.find(session => readSessionRecordId(session) === args.session_id);
+                }
                 if (!explicitSession) {
                     return JSON.stringify({
                         success: false,
