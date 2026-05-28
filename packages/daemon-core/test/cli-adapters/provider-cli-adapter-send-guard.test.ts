@@ -615,6 +615,48 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.scheduleStartupSettleCheck).toHaveBeenCalled()
   })
 
+  it('projects startup as idle when Codex shows a visible idle prompt before the internal startup state settles', () => {
+    const adapter = buildAdapter()
+    adapter.cliType = 'codex-cli'
+    adapter.cliName = 'Codex CLI'
+    adapter.startupParseGate = true
+    adapter.ready = false
+    adapter.currentStatus = 'starting'
+    adapter.activeModal = null
+    adapter.recentOutputBuffer = 'OpenAI Codex\n› gpt-5.1 codex · /model\n'
+    adapter.terminalScreen = {
+      getText: () => 'OpenAI Codex\n› gpt-5.1 codex · /model\n',
+    }
+    adapter.runDetectStatus = vi.fn(() => 'idle')
+    adapter.runParseApproval = vi.fn(() => null)
+
+    expect(adapter.getStatus().status).toBe('idle')
+  })
+
+  it('recovers Codex send readiness when the idle prompt is visible but internal status is still starting', async () => {
+    const adapter = buildAdapter()
+    adapter.cliType = 'codex-cli'
+    adapter.cliName = 'Codex CLI'
+    adapter.startupParseGate = false
+    adapter.ready = false
+    adapter.currentStatus = 'starting'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.activeModal = null
+    adapter.recentOutputBuffer = 'OpenAI Codex\n› gpt-5.1 codex · /model\n'
+    adapter.terminalScreen = {
+      getText: () => 'OpenAI Codex\n› gpt-5.1 codex · /model\n',
+    }
+    adapter.runDetectStatus = vi.fn(() => 'idle')
+    adapter.runParseApproval = vi.fn(() => null)
+
+    await expect(adapter.sendMessage('continue previous checks')).resolves.toBeUndefined()
+    expect(adapter.ready).toBe(true)
+    expect(adapter.currentStatus).toBe('idle')
+    expect(adapter.currentTurnScope?.prompt).toBe('continue previous checks')
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('continue previous checks\r')
+  })
+
   it('reports generating from getStatus while a turn is still open even if currentStatus has not caught up yet', () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'idle'

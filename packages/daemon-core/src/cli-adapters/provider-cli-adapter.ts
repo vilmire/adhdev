@@ -1637,6 +1637,8 @@ export class ProviderCliAdapter implements CliAdapter {
         let effectiveModal = startupModal || this.activeModal;
         if (startupDetectedStatus === 'waiting_approval') {
             effectiveStatus = 'waiting_approval';
+        } else if (startupDetectedStatus === 'idle' && !startupModal && !effectiveModal) {
+            effectiveStatus = 'idle';
         }
         if (allowParse && !startupModal && !effectiveModal) {
             const parsed = this.getFreshParsedStatusCache();
@@ -2148,9 +2150,10 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         if (!this.ready) {
             this.resolveStartupState('send_precheck');
-            if (this.runDetectStatus(this.recentOutputBuffer) === 'idle' && this.currentStatus === 'idle') {
+            if (this.runDetectStatus(this.recentOutputBuffer) === 'idle') {
                 this.ready = true;
                 this.startupParseGate = false;
+                this.setStatus('idle', 'send_message_idle_prompt_recovery');
                 LOG.info('CLI', `[${this.cliType}] sendMessage recovered idle prompt readiness`);
             }
         }
