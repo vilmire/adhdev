@@ -1671,7 +1671,8 @@ export class ProviderCliAdapter implements CliAdapter {
         const cached = this.parsedStatusCache;
         const accumulatedRawBufferKey = this.getAccumulatedRawBufferCacheKey();
         if (
-            cached
+            !this.providerOwnsTranscript()
+            && cached
             && cached.responseBuffer === this.responseBuffer
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
