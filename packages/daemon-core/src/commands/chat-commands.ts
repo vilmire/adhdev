@@ -1310,8 +1310,14 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         ? (nativeHistory as any).unavailableReason
                         : undefined;
                     const lookup = (nativeHistory as any).lookup === 'workspace' ? 'workspace' : 'session';
+                    const nativeHistorySessionForMapping = adapter.cliType === 'antigravity-cli'
+                        && historyProviderSessionId
+                        && nativeHistorySessionId
+                        && historyProviderSessionId !== nativeHistorySessionId
+                        ? undefined
+                        : nativeHistorySessionId;
                     const safeMapping = hasSafeNativeHistoryMapping({
-                        historySessionId: lookup === 'workspace' ? undefined : nativeHistorySessionId,
+                        historySessionId: lookup === 'workspace' ? undefined : nativeHistorySessionForMapping,
                         providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId || providerSessionId,
                         workspace,
                         nativeMessages,
