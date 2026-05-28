@@ -128,7 +128,7 @@ describe('Claude CLI read_chat native transcript provenance', () => {
       coverage: {
         nativeMessageCount: 3,
         ptyMessageCount: 1,
-        returnedMessageCount: 3,
+        returnedMessageCount: 2,
         safeMapping: true,
       },
     })

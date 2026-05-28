@@ -110,6 +110,14 @@ interface SendMessageCompletion {
     rejectOnce: (error: unknown) => void;
 }
 
+interface PendingOutboundMessage {
+    id: string;
+    role: 'user';
+    content: string;
+    queuedAt: number;
+    source: 'sendMessage';
+}
+
 export function appendBoundedText(current: string, chunk: string, maxChars: number): string {
     if (!chunk) return current.length <= maxChars ? current : current.slice(-maxChars);
     if (maxChars <= 0) return '';
@@ -186,6 +194,9 @@ export class ProviderCliAdapter implements CliAdapter {
     private idleFinishCandidate: IdleFinishCandidate | null = null;
     private finishRetryTimer: NodeJS.Timeout | null = null;
     private finishRetryCount = 0;
+    private pendingOutboundQueue: PendingOutboundMessage[] = [];
+    private pendingOutboundFlushTimer: NodeJS.Timeout | null = null;
+    private pendingOutboundFlushInFlight = false;
 
  // Resize redraw suppression
     private resizeSuppressUntil: number = 0;
@@ -1415,6 +1426,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.activeModal = null;
         this.setStatus('idle', 'response_finished');
         this.onStatusChange?.();
+        this.schedulePendingOutboundFlush();
     }
 
     private maybeCommitVisibleIdleTranscript(session: ParsedSession, parsedMessages: CliChatMessage[]): boolean {
@@ -1445,6 +1457,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.activeModal = null;
         this.setStatus('idle', 'script_idle_commit');
         this.onStatusChange?.();
+        this.schedulePendingOutboundFlush();
         this.recordTrace('script_idle_commit', {
             messageCount: parsedMessages.length,
             lastAssistant: summarizeCliTraceText(visibleAssistant.content, 320),
@@ -1654,6 +1667,14 @@ export class ProviderCliAdapter implements CliAdapter {
             messages: [],
             workingDir: this.workingDir,
             activeModal: effectiveModal,
+            pendingOutboundCount: this.pendingOutboundQueue.length,
+            pendingOutboundMessages: this.pendingOutboundQueue.map((message) => ({
+                id: message.id,
+                role: message.role,
+                content: message.content,
+                queuedAt: message.queuedAt,
+                source: message.source,
+            })),
             errorMessage: this.parseErrorMessage || undefined,
             errorReason: this.parseErrorMessage ? 'parse_error' : undefined,
             ...(bufferState ? { bufferState } : {}),
@@ -1998,6 +2019,104 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     async sendMessage(text: string): Promise<void> {
+        await this.sendMessageNow(text, true);
+    }
+
+    private enqueuePendingOutboundMessage(text: string, reason: string): void {
+        const content = String(text || '');
+        const duplicate = this.pendingOutboundQueue.some((message) => message.content === content);
+        if (duplicate) {
+            this.recordTrace('send_message_queued_duplicate_suppressed', {
+                reason,
+                queueLength: this.pendingOutboundQueue.length,
+                text: summarizeCliTraceText(content, 500),
+            });
+            return;
+        }
+        const queuedAt = Date.now();
+        const message: PendingOutboundMessage = {
+            id: `${queuedAt}:${this.pendingOutboundQueue.length}:${Math.random().toString(36).slice(2, 10)}`,
+            role: 'user',
+            content,
+            queuedAt,
+            source: 'sendMessage',
+        };
+        this.pendingOutboundQueue.push(message);
+        this.recordTrace('send_message_queued', {
+            reason,
+            queueLength: this.pendingOutboundQueue.length,
+            queuedAt,
+            text: summarizeCliTraceText(content, 500),
+        });
+        LOG.info('CLI', `[${this.cliType}] queued outbound message while busy (${reason}); queue=${this.pendingOutboundQueue.length}`);
+        this.onStatusChange?.();
+    }
+
+    private shouldQueuePendingOutboundMessage(parsedStatusBeforeSend: any | null = null): string | null {
+        if (this.provider.allowInputDuringGeneration === true) return null;
+        if (this.hasActionableApproval()) return null;
+        const parsedSessionStatus = typeof parsedStatusBeforeSend?.status === 'string'
+            ? String(parsedStatusBeforeSend.status)
+            : '';
+        if (parsedSessionStatus === 'idle' && this.parsedStatusHasFinalAssistantMessage(parsedStatusBeforeSend)) return null;
+        if (this.currentStatus === 'generating') return 'current_status_generating';
+        if (parsedSessionStatus === 'generating' || parsedSessionStatus === 'long_generating') {
+            const parsedModal = parsedStatusBeforeSend?.activeModal ?? parsedStatusBeforeSend?.modal ?? null;
+            const parsedHasActionableModal = Boolean(
+                parsedModal
+                && Array.isArray(parsedModal.buttons)
+                && parsedModal.buttons.some((candidate: unknown) => typeof candidate === 'string' && candidate.trim()),
+            );
+            const terminalLooksIdle = this.currentStatus === 'idle'
+                && this.runDetectStatus(this.recentOutputBuffer) === 'idle'
+                && !this.isWaitingForResponse
+                && !this.currentTurnScope
+                && !this.hasActionableApproval()
+                && !parsedHasActionableModal;
+            return terminalLooksIdle ? null : `parsed_status_${parsedSessionStatus}`;
+        }
+        if (this.isWaitingForResponse && this.currentTurnScope) return 'active_turn_in_progress';
+        return null;
+    }
+
+    private schedulePendingOutboundFlush(delayMs = 0): void {
+        if (this.pendingOutboundFlushTimer) clearTimeout(this.pendingOutboundFlushTimer);
+        this.pendingOutboundFlushTimer = setTimeout(() => {
+            this.pendingOutboundFlushTimer = null;
+            void this.flushPendingOutboundQueue();
+        }, Math.max(0, delayMs));
+    }
+
+    private async flushPendingOutboundQueue(): Promise<void> {
+        if (this.pendingOutboundFlushInFlight || this.pendingOutboundQueue.length === 0) return;
+        if (this.currentStatus !== 'idle' || this.isWaitingForResponse || this.hasActionableApproval()) return;
+        this.pendingOutboundFlushInFlight = true;
+        try {
+            while (this.pendingOutboundQueue.length > 0) {
+                if (this.currentStatus !== 'idle' || this.isWaitingForResponse || this.hasActionableApproval()) break;
+                const next = this.pendingOutboundQueue[0];
+                this.recordTrace('send_message_queue_flush', {
+                    id: next.id,
+                    queuedAt: next.queuedAt,
+                    queueLength: this.pendingOutboundQueue.length,
+                    text: summarizeCliTraceText(next.content, 500),
+                });
+                try {
+                    await this.sendMessageNow(next.content, false);
+                    this.pendingOutboundQueue.shift();
+                    this.onStatusChange?.();
+                } catch (error: any) {
+                    LOG.warn('CLI', `[${this.cliType}] queued outbound flush failed: ${error?.message || error}`);
+                    this.schedulePendingOutboundFlush(1000);
+                    break;
+                }
+            }
+        } finally {
+            this.pendingOutboundFlushInFlight = false;
+        }
+    }
+
+    private async sendMessageNow(text: string, allowQueue: boolean): Promise<void> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
         const allowInputDuringGeneration = this.provider.allowInputDuringGeneration === true;
         const allowInterventionPrompt = allowInputDuringGeneration
@@ -2009,6 +2128,20 @@ export class ProviderCliAdapter implements CliAdapter {
                 this.resolveStartupState('send_wait');
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
+        }
+        const parsedStatusBeforeSend = !allowInputDuringGeneration
+            ? (() => {
+                try {
+                    return this.getScriptParsedStatus?.() || null;
+                } catch {
+                    return null;
+                }
+            })()
+            : null;
+        const queueReason = this.shouldQueuePendingOutboundMessage(parsedStatusBeforeSend);
+        if (allowQueue && queueReason) {
+            this.enqueuePendingOutboundMessage(text, queueReason);
+            return;
         }
         if (!allowInterventionPrompt) {
             await this.waitForInteractivePrompt();
@@ -2022,15 +2155,6 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         }
         if (!this.ready) throw new Error(`${this.cliName} not ready (status: ${this.currentStatus})`);
-        const parsedStatusBeforeSend = !allowInputDuringGeneration
-            ? (() => {
-                try {
-                    return this.getScriptParsedStatus?.() || null;
-                } catch {
-                    return null;
-                }
-            })()
-            : null;
         const parsedSessionStatus = typeof parsedStatusBeforeSend?.status === 'string'
             ? String(parsedStatusBeforeSend.status)
             : '';
@@ -2048,6 +2172,10 @@ export class ProviderCliAdapter implements CliAdapter {
                 && !this.hasActionableApproval()
                 && !parsedHasActionableModal;
             if (!terminalLooksIdle) {
+                if (allowQueue) {
+                    this.enqueuePendingOutboundMessage(text, `parsed_status_${parsedSessionStatus}`);
+                    return;
+                }
                 throw new Error(`${this.cliName} is still processing the previous prompt`);
             }
         }
@@ -2056,6 +2184,10 @@ export class ProviderCliAdapter implements CliAdapter {
                 !this.clearStaleIdleResponseGuard('send_message_guard')
                 && !this.clearParsedIdleResponseGuard('send_message_parsed_idle_guard', parsedStatusBeforeSend)
             ) {
+                if (allowQueue) {
+                    this.enqueuePendingOutboundMessage(text, 'waiting_for_response');
+                    return;
+                }
                 throw new Error(`${this.cliName} is still processing the previous prompt`);
             }
         }
@@ -2306,6 +2438,9 @@ export class ProviderCliAdapter implements CliAdapter {
         this.pendingTerminalQueryTail = '';
         this.ptyOutputChunks = [];
         this.finishRetryCount = 0;
+        if (this.pendingOutboundFlushTimer) { clearTimeout(this.pendingOutboundFlushTimer); this.pendingOutboundFlushTimer = null; }
+        this.pendingOutboundQueue = [];
+        this.pendingOutboundFlushInFlight = false;
         if (this.ptyProcess) {
             this.ptyProcess.write('\x03');
             setTimeout(() => {
@@ -2327,6 +2462,9 @@ export class ProviderCliAdapter implements CliAdapter {
         this.pendingTerminalQueryTail = '';
         this.ptyOutputChunks = [];
         this.finishRetryCount = 0;
+        if (this.pendingOutboundFlushTimer) { clearTimeout(this.pendingOutboundFlushTimer); this.pendingOutboundFlushTimer = null; }
+        this.pendingOutboundQueue = [];
+        this.pendingOutboundFlushInFlight = false;
         if (this.ptyProcess) {
             try {
                 if (typeof this.ptyProcess.detach === 'function') {
@@ -2357,6 +2495,9 @@ export class ProviderCliAdapter implements CliAdapter {
         this.ptyOutputChunks = [];
         if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
         this.finishRetryCount = 0;
+        if (this.pendingOutboundFlushTimer) { clearTimeout(this.pendingOutboundFlushTimer); this.pendingOutboundFlushTimer = null; }
+        this.pendingOutboundQueue = [];
+        this.pendingOutboundFlushInFlight = false;
         this.resetTerminalScreen();
         this.ptyProcess?.clearBuffer?.();
         this.onStatusChange?.();
@@ -2496,6 +2637,14 @@ export class ProviderCliAdapter implements CliAdapter {
             rawBufferPreview: this.accumulatedRawBuffer.slice(-1000),
             sanitizedRawPreview: sanitizeTerminalText(this.accumulatedRawBuffer).slice(-1000),
             responseBuffer: this.responseBuffer.slice(-1000),
+            pendingOutboundQueue: this.pendingOutboundQueue.map((message) => ({
+                id: message.id,
+                role: message.role,
+                content: message.content,
+                queuedAt: message.queuedAt,
+                source: message.source,
+            })),
+            pendingOutboundCount: this.pendingOutboundQueue.length,
             lastOutputAt: this.lastOutputAt,
             lastNonEmptyOutputAt: this.lastNonEmptyOutputAt,
             lastScreenChangeAt: this.lastScreenChangeAt,

@@ -27,6 +27,6 @@ describe('dashboard command utils send-state helpers', () => {
 
   it('normalizes PTY busy errors into friendly inline copy', () => {
     expect(getInlineSendFailureMessage('pty send failed: Hermes Agent is still processing the previous prompt'))
-      .toBe('Wait for the current reply to finish before sending another message.')
+      .toBe('Message queued and will send after the current reply finishes.')
   })
 })

@@ -42,7 +42,7 @@ function createManager(adapterStatus = 'idle', options: {
 }
 
 describe('DaemonCliManager agent_command', () => {
-  it('returns retryable busy instead of blocking send_chat while the runtime is generating', async () => {
+  it('accepts send_chat while the runtime is generating and leaves queueing to the adapter', async () => {
     const { manager, sendMessage } = createManager('generating')
 
     const result = await manager.handleCliCommand('agent_command', {
@@ -54,16 +54,13 @@ describe('DaemonCliManager agent_command', () => {
     })
 
     expect(result).toMatchObject({
-      success: false,
-      code: 'agent_runtime_busy',
-      reason: 'agent_runtime_busy',
-      retryable: true,
-      retryRecommended: true,
+      success: true,
       status: 'generating',
-      targetSessionId: 'session-1',
+      queued: true,
+      queuedReason: 'agent_runtime_busy',
     })
-    expect(String(result?.error)).toContain('retry after the current turn finishes')
-    expect(sendMessage).not.toHaveBeenCalled()
+    expect(String(result?.error || '')).not.toContain('retry after the current turn finishes')
+    expect(sendMessage).toHaveBeenCalledWith('next task')
   })
 
   it('dispatches send_chat when the target runtime is idle', async () => {
@@ -81,7 +78,7 @@ describe('DaemonCliManager agent_command', () => {
     expect(sendMessage).toHaveBeenCalledWith('next task')
   })
 
-  it('returns retryable busy when read_chat parser status is still generating', async () => {
+  it('accepts send_chat when read_chat parser status is still generating', async () => {
     const { manager, sendMessage } = createManager('idle', {
       parsedStatus: 'generating',
       pending: true,
@@ -96,11 +93,12 @@ describe('DaemonCliManager agent_command', () => {
     })
 
     expect(result).toMatchObject({
-      success: false,
-      code: 'agent_runtime_busy',
+      success: true,
       status: 'generating',
+      queued: true,
+      queuedReason: 'agent_runtime_busy',
     })
-    expect(sendMessage).not.toHaveBeenCalled()
+    expect(sendMessage).toHaveBeenCalledWith('next task')
   })
 
   it('does not reject the first task for a zero-message starting launch state', async () => {
