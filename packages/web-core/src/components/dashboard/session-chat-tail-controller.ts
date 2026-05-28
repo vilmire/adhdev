@@ -106,6 +106,34 @@ function buildChatSnapshotSignature(messages: DashboardMessage[], status?: strin
   ].join('|')
 }
 
+function flattenMessageContent(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (content === null || content === undefined) return ''
+  if (Array.isArray(content)) {
+    return content.map(flattenMessageContent).join('\n')
+  }
+  if (typeof content === 'object') {
+    const record = content as Record<string, unknown>
+    return flattenMessageContent(record.text ?? record.content ?? record.value ?? '')
+  }
+  return String(content)
+}
+
+function isNonSubstantiveChatMessage(message: DashboardMessage): boolean {
+  const text = flattenMessageContent((message as { content?: unknown }).content)
+  const withoutChrome = text.replace(/[─━═│┃┄┅┈┉┌┐└┘├┤┬┴┼╭╮╰╯╴╶╷╵\s]+/g, '')
+  return withoutChrome.length === 0
+}
+
+function isTransientNonSubstantiveTail(messages: DashboardMessage[]): boolean {
+  return messages.length === 0 || messages.every(isNonSubstantiveChatMessage)
+}
+
+function isBusyChatTailStatus(status: unknown): boolean {
+  const value = typeof status === 'string' ? status.toLowerCase() : ''
+  return value === 'generating' || value === 'long_generating' || value === 'streaming' || value === 'working' || value === 'starting'
+}
+
 export class SessionChatTailController {
   private manager: SubscriptionManager
   private sendData?: (daemonId: string, data: any) => boolean
@@ -281,6 +309,13 @@ export class SessionChatTailController {
     if (update.error) return
 
     const nextMessages = Array.isArray(update.messages) ? update.messages as DashboardMessage[] : []
+    if (
+      isTransientNonSubstantiveTail(nextMessages)
+      && (this.fallbackRecentCount > 0 || this.snapshot.liveMessages.length > 0)
+      && (!this.snapshot.hasLiveSnapshot || isBusyChatTailStatus(update.status))
+    ) {
+      return
+    }
     const nextCursor: SessionChatTailCursor = { tailLimit: this.snapshot.cursor.tailLimit }
     const unchanged = buildChatSnapshotSignature(this.snapshot.liveMessages)
       === buildChatSnapshotSignature(nextMessages)
