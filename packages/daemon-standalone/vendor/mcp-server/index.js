@@ -41,6 +41,15 @@ var import_node_crypto = require("crypto");
 // src/transports/ipc.ts
 var DEFAULT_IPC_PORT = 19222;
 var DEFAULT_IPC_PATH = "/ipc";
+var DEFAULT_IPC_COMMAND_TIMEOUT_MS = 15e3;
+var IPC_COMMAND_TIMEOUTS_MS = {
+  mesh_relay_command: 12e4,
+  agent_command: 3e4,
+  git_status: 45e3,
+  git_diff_summary: 45e3,
+  fast_forward_mesh_node: 12e4,
+  mesh_status: 12e4
+};
 var IpcTransport = class {
   port;
   path;
@@ -88,9 +97,22 @@ var IpcTransport = class {
         }
         fn();
       };
-      const timeoutMs = type === "mesh_relay_command" ? 6e4 : 15e3;
+      const nestedCommand = typeof args?.command === "string" ? args.command : "";
+      const targetDaemonId = typeof args?.targetDaemonId === "string" ? args.targetDaemonId : "";
+      const effectiveType = type === "mesh_relay_command" && nestedCommand ? nestedCommand : type;
+      const timeoutMs = Math.max(
+        IPC_COMMAND_TIMEOUTS_MS[type] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
+        IPC_COMMAND_TIMEOUTS_MS[effectiveType] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS
+      );
+      const diagnosticParts = [
+        `command='${type}'`,
+        ...nestedCommand ? [`relayedCommand='${nestedCommand}'`] : [],
+        ...targetDaemonId ? [`targetDaemonId='${targetDaemonId.slice(0, 12)}'`] : [],
+        ...typeof args?.nodeId === "string" ? [`nodeId='${args.nodeId}'`] : [],
+        ...typeof args?.workspace === "string" ? [`workspace='${args.workspace}'`] : []
+      ];
       const timeout = setTimeout(() => {
-        finish(() => reject(new Error(`Daemon IPC command '${type}' timed out after ${Math.round(timeoutMs / 1e3)}s`)));
+        finish(() => reject(new Error(`Daemon IPC ${diagnosticParts.join(" ")} timed out after ${Math.round(timeoutMs / 1e3)}s (requestId=${requestId})`)));
       }, timeoutMs);
       let commandSent = false;
       const send = () => {
@@ -245,6 +267,18 @@ function annotateRapidReadChatAdvisory(payload, options) {
 // src/tools/mesh-tools.ts
 var import_daemon_core = require("@adhdev/daemon-core");
 var meshSessionProviderMetadata = /* @__PURE__ */ new Map();
+var ACTIVE_WORK_POLLING_BACKOFF_MS = 6e4;
+function buildActiveWorkPollingGuidance(summary, now = Date.now()) {
+  if (!summary || summary.generatingCount <= 0) return void 0;
+  return {
+    activeGeneratingWork: true,
+    generatingCount: summary.generatingCount,
+    doNotPollBefore: new Date(now + ACTIVE_WORK_POLLING_BACKOFF_MS).toISOString(),
+    eventSurface: "pendingCoordinatorEvents",
+    nextRecommendedAction: "Wait for pendingCoordinatorEvents/completion events or an explicit user status request. After a terminal signal, call mesh_read_chat once with compact=true, then verify git state if repository changes were expected.",
+    message: "Do not repeatedly poll mesh_status/mesh_view_queue/mesh_read_chat while delegated work is generating; these snapshots rarely change until the worker emits a completion/status event."
+  };
+}
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : void 0;
 }
@@ -439,6 +473,14 @@ function extractStatusMetadataSessions(value) {
 function resolveSessionProviderType(session) {
   return readString(session?.providerType) || readString(session?.cliType) || readString(session?.agentType) || "";
 }
+function isMeshCoordinatorSessionRecord(session) {
+  return Boolean(
+    readString(session?.settings?.meshCoordinatorFor) || readString(session?.meta?.meshCoordinatorFor) || readString(session?.metadata?.meshCoordinatorFor) || readString(session?.meshCoordinatorFor)
+  );
+}
+function isWorkerTaskMode(taskMode) {
+  return taskMode !== "live_debug_readonly";
+}
 function addSessionRecord(target, session) {
   if (!session || typeof session !== "object" || isTerminalSessionRecord(session)) return;
   const sessionId = readSessionRecordId(session);
@@ -507,18 +549,26 @@ function queueAssignmentStaleReason(task, liveness) {
 }
 function buildQueueStatusSummary(queue) {
   const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
+  let staleAssigned = 0;
   for (const task of queue) {
     const status = typeof task?.status === "string" ? task.status : void 0;
     if (status && Object.prototype.hasOwnProperty.call(counts, status)) {
       counts[status] += 1;
     }
+    if (status === "assigned" && task?.staleAssigned === true) staleAssigned += 1;
   }
+  const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
   return {
     totalCount: queue.length,
-    activeCount: counts.pending + counts.assigned,
+    activeCount: counts.pending + liveAssigned,
     historicalCount: counts.completed + counts.failed + counts.cancelled,
     counts,
     activeCounts: {
+      pending: counts.pending,
+      assigned: liveAssigned
+    },
+    staleAssignedCount: staleAssigned,
+    rawActiveCounts: {
       pending: counts.pending,
       assigned: counts.assigned
     },
@@ -877,7 +927,20 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
   let sessionId = args.session_id?.trim() || "";
   const providerPriorityList = Array.isArray(node.policy?.providerPriority) ? node.policy.providerPriority : [];
   let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || "";
-  if (!sessionId || args.session_id) {
+  if (sessionId && args.verifiedSession) {
+    const explicitSession = args.verifiedSession;
+    if (!isMeshOwnedDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
+      return buildRelayUnsafeRemoteSessionFailure(
+        ctx,
+        node,
+        sessionId,
+        resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
+      );
+    }
+    if (!resolvedProviderType) {
+      resolvedProviderType = resolveSessionProviderType(explicitSession);
+    }
+  } else if (!sessionId || args.session_id) {
     try {
       const relayResult = await transport.meshCommand(daemonId, "get_status_metadata", {});
       const sessions = extractStatusMetadataSessions(relayResult);
@@ -993,10 +1056,60 @@ function resolveCoordinatorNode(ctx) {
   return void 0;
 }
 function readNodeMachineId(node) {
-  return readString(node.machineId) || readString(node.machine_id);
+  return readString(node.machineId) || readString(node.machine_id) || readString(node.machine?.id) || readString(node.machine?.machineId) || readString(node.lastProbe?.machineId) || readString(node.last_probe?.machine_id) || readString(node.lastProbe?.machine?.id) || readString(node.lastProbe?.machine?.machineId) || readString(node.last_probe?.machine?.id) || readString(node.last_probe?.machine?.machine_id);
 }
 function readNodeDaemonId(node) {
-  return readString(node.daemonId) || readString(node.daemon_id);
+  return readString(node.daemonId) || readString(node.daemon_id) || readString(node.machine?.daemonId) || readString(node.machine?.daemon_id) || readString(node.lastProbe?.daemonId) || readString(node.last_probe?.daemon_id) || readString(node.lastProbe?.machine?.daemonId) || readString(node.lastProbe?.machine?.daemon_id) || readString(node.last_probe?.machine?.daemonId) || readString(node.last_probe?.machine?.daemon_id);
+}
+function normalizeHostname(value) {
+  const hostname = readString(value);
+  if (!hostname) return void 0;
+  return hostname.toLowerCase().replace(/\.$/, "");
+}
+function readNodeHostname(node) {
+  return readString(node.hostname) || readString(node.host) || readString(node.machineHostname) || readString(node.machine_hostname) || readString(node.machine?.hostname) || readString(node.machine?.host) || readString(node.lastProbe?.hostname) || readString(node.last_probe?.hostname) || readString(node.lastProbe?.machine?.hostname) || readString(node.last_probe?.machine?.hostname);
+}
+function readNodeDisplayMachineName(node) {
+  return readString(node.machineName) || readString(node.machine_name) || readString(node.machineLabel) || readString(node.machine_label) || readString(node.machineNickname) || readString(node.machine_nickname) || readString(node.alias) || readString(node.machine?.name) || readString(node.machine?.displayName) || readString(node.machine?.display_name) || readString(node.lastProbe?.machineName) || readString(node.last_probe?.machine_name) || readString(node.lastProbe?.machine?.name) || readString(node.last_probe?.machine?.name) || readNodeHostname(node);
+}
+function compactIdentityEvidence(value) {
+  if (!value) return void 0;
+  return value.length > 24 ? `${value.slice(0, 12)}\u2026${value.slice(-8)}` : value;
+}
+function pushIdentityEvidence(evidence, label, value) {
+  const compact = compactIdentityEvidence(value);
+  if (compact) evidence.push(`${label}:${compact}`);
+}
+function buildNodeMachineIdentity(ctx, node) {
+  const machineId = readNodeMachineId(node);
+  const daemonId = readNodeDaemonId(node);
+  const hostname = readNodeHostname(node);
+  const machineName = readNodeDisplayMachineName(node);
+  const coordinatorHostname = readString(ctx.coordinatorHostname);
+  const directLocal = isLocalControlPlaneNode(ctx, node);
+  const hostnameMatches = Boolean(
+    normalizeHostname(hostname) && normalizeHostname(coordinatorHostname) && normalizeHostname(hostname) === normalizeHostname(coordinatorHostname)
+  );
+  const sameMachine = directLocal || hostnameMatches;
+  const evidence = [];
+  pushIdentityEvidence(evidence, "machineName", machineName);
+  pushIdentityEvidence(evidence, "hostname", hostname);
+  pushIdentityEvidence(evidence, "machineId", machineId);
+  pushIdentityEvidence(evidence, "daemonId", daemonId);
+  const locality = sameMachine ? "same_machine" : evidence.length > 0 ? "remote_known" : "remote_or_unknown";
+  const localityReason = sameMachine ? directLocal ? "matched coordinator daemon or machine id" : "matched coordinator hostname" : evidence.length > 0 ? `known remote/other machine identity; no local coordinator match (${evidence.join(", ")})` : "no useful machine identity evidence available";
+  return {
+    daemonId,
+    machineId,
+    hostname,
+    machineName,
+    displayName: machineName || hostname || daemonId || machineId,
+    coordinatorHostname,
+    sameMachine,
+    locality,
+    localityReason,
+    identityEvidence: evidence
+  };
 }
 function isDirectLocalNode(ctx, node) {
   const machineId = readNodeMachineId(node);
@@ -1020,6 +1133,54 @@ function isLocalControlPlaneNode(ctx, node) {
 }
 function meshSessionCacheKey(nodeId, runtimeSessionId) {
   return `${nodeId}:${runtimeSessionId}`;
+}
+function rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, metadata) {
+  const keyNodeId = readString(nodeId);
+  const keySessionId = readString(runtimeSessionId);
+  if (!keyNodeId || !keySessionId) return;
+  const providerType = readString(metadata.providerType);
+  const providerSessionId = readString(metadata.providerSessionId);
+  if (!providerType && !providerSessionId) return;
+  const existing = meshSessionProviderMetadata.get(meshSessionCacheKey(keyNodeId, keySessionId)) || { providerType: "" };
+  meshSessionProviderMetadata.set(meshSessionCacheKey(keyNodeId, keySessionId), {
+    providerType: providerType || existing.providerType,
+    providerSessionId: providerSessionId || existing.providerSessionId
+  });
+}
+function rememberMeshSessionProviderMetadataFromEvent(event) {
+  const metadataEvent = event?.metadataEvent && typeof event.metadataEvent === "object" ? event.metadataEvent : event && typeof event === "object" ? event : {};
+  const nodeId = readString(event?.nodeId) || readString(metadataEvent.nodeId) || readString(metadataEvent.meshNodeId);
+  const sessionId = readString(metadataEvent.targetSessionId) || readString(metadataEvent.sessionId) || readString(metadataEvent.instanceId) || readString(event?.sessionId);
+  rememberMeshSessionProviderMetadata(nodeId, sessionId, {
+    providerType: readString(metadataEvent.providerType) || readString(event?.providerType) || "",
+    providerSessionId: readString(metadataEvent.providerSessionId) || readString(event?.providerSessionId)
+  });
+}
+function resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId) {
+  const entries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
+    const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
+    if (entryNodeId && entryNodeId !== nodeId) continue;
+    const entrySessionId = readString(entry.sessionId) || readString(payload.targetSessionId) || readString(payload.sessionId) || readString(payload.instanceId);
+    if (entrySessionId !== runtimeSessionId) continue;
+    const providerType = readString(entry.providerType) || readString(payload.providerType);
+    const completionDiagnostic = payload.completionDiagnostic && typeof payload.completionDiagnostic === "object" && !Array.isArray(payload.completionDiagnostic) ? payload.completionDiagnostic : {};
+    const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === "object" && !Array.isArray(payload.metadataEvent) ? payload.metadataEvent : {};
+    const providerSessionId = readString(payload.providerSessionId) || readString(completionDiagnostic.providerSessionId) || readString(metadataEvent.providerSessionId);
+    if (providerType || providerSessionId) {
+      return { providerType: providerType || "", providerSessionId };
+    }
+  }
+  return void 0;
+}
+function resolveMeshSessionProviderMetadata(ctx, nodeId, runtimeSessionId) {
+  const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(nodeId, runtimeSessionId));
+  if (cached?.providerType || cached?.providerSessionId) return cached;
+  const fromLedger = resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId);
+  if (fromLedger) rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, fromLedger);
+  return fromLedger;
 }
 function countUncommittedChanges(status) {
   if (typeof status?.uncommittedChanges === "number") return status.uncommittedChanges;
@@ -1104,6 +1265,14 @@ function getNodeLaunchReadiness(node) {
     launchBlockedReason: "missing_provider_priority",
     launchBlockedMessage: missingProviderPriorityMessage(node.id)
   };
+}
+async function collectLiveStatusSessions(ctx, node) {
+  try {
+    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+    return extractStatusMetadataSessions(statusResult);
+  } catch {
+    return [];
+  }
 }
 function readNumeric(value, fallback = 0) {
   const parsed = Number(value);
@@ -1240,7 +1409,8 @@ async function commandForNode(ctx, node, command, args = {}) {
   if (isLocalTransport(ctx.transport)) {
     return ctx.transport.command(command, args);
   }
-  throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}'`);
+  const identity = buildNodeMachineIdentity(ctx, node);
+  throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}' (hostname=${identity.hostname || "unknown"}, coordinatorHostname=${identity.coordinatorHostname || "unknown"}, sameMachine=${identity.sameMachine})`);
 }
 function normalizePendingMeshCoordinatorEvents(value) {
   const payload = unwrapCommandPayload(value);
@@ -1284,6 +1454,7 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
       surfacedEvents.push(
         ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", { meshId: ctx.mesh.id })).filter(matchesCurrentMesh)
       );
+      surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);
     } catch {
     }
     for (const node of ctx.mesh.nodes) {
@@ -1298,6 +1469,7 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
           const payload = buildMeshForwardPayloadFromPendingEvent(event);
           if (!payload.event || !payload.meshId) continue;
           await ctx.transport.command("mesh_forward_event", payload);
+          rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
         }
       } catch {
       }
@@ -1306,12 +1478,15 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
       surfacedEvents.push(
         ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", { meshId: ctx.mesh.id })).filter(matchesCurrentMesh)
       );
+      surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);
     } catch {
     }
     return surfacedEvents;
   }
   if (isLocalTransport(ctx.transport)) {
-    return (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id).filter(matchesCurrentMesh);
+    const events = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id).filter(matchesCurrentMesh);
+    events.forEach(rememberMeshSessionProviderMetadataFromEvent);
+    return events;
   }
   return [];
 }
@@ -1328,7 +1503,7 @@ function buildRemoveNodeArgs(ctx, nodeId, sessionCleanupMode) {
 }
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
-  description: "Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures.",
+  description: "Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1361,7 +1536,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
 };
 var MESH_VIEW_QUEUE_TOOL = {
   name: "mesh_view_queue",
-  description: "View the mesh work queue with source-of-truth active counts separated from historical completed/failed/cancelled records.",
+  description: "View the mesh work queue with source-of-truth active counts separated from historical completed/failed/cancelled records. Do not repeatedly call this to wait for generating assigned work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1673,6 +1848,9 @@ async function meshStatus(ctx) {
     const entry = {
       nodeId: node.id,
       workspace: node.workspace,
+      machine: buildNodeMachineIdentity(ctx, node),
+      daemonId: readNodeDaemonId(node),
+      machineId: readNodeMachineId(node),
       ...getNodeLaunchReadiness(node)
     };
     try {
@@ -1780,14 +1958,19 @@ async function meshStatus(ctx) {
     }
     const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
     if (relatedRepos.length) entry.relatedRepos = relatedRepos;
+    const liveSessions = await collectLiveStatusSessions(ctx, node);
+    if (liveSessions.length > 0) {
+      entry.sessions = liveSessions;
+    }
     results.push(entry);
   }
   const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
     meshId: mesh.id,
     queue: (0, import_daemon_core.getQueue)(mesh.id),
     ledgerEntries: (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail: 500 }),
-    nodes: mesh.nodes
+    nodes: results
   });
+  const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
   const response = {
     meshId: mesh.id,
     meshName: mesh.name,
@@ -1803,7 +1986,9 @@ async function meshStatus(ctx) {
     nodes: results,
     activeWork: activeWorkEvidence.activeWork,
     staleDirectWork: activeWorkEvidence.staleDirectWork,
+    terminalDirectWork: activeWorkEvidence.terminalDirectWork,
     activeWorkSummary: activeWorkEvidence.summary,
+    ...pollingGuidance ? { pollingGuidance } : {},
     branchConvergenceSummary: summarizeBranchConvergence(results)
   };
   try {
@@ -1921,6 +2106,9 @@ async function meshListNodes(ctx) {
       nodeId: n.id,
       workspace: n.workspace,
       repoRoot: n.repoRoot,
+      daemonId: readNodeDaemonId(n),
+      machineId: readNodeMachineId(n),
+      machine: buildNodeMachineIdentity(ctx, n),
       isLocalWorktree: n.isLocalWorktree,
       policy: n.policy,
       relatedRepos: readRelatedRepos(n),
@@ -2006,6 +2194,7 @@ async function meshViewQueue(ctx, args) {
     });
     const staleAssignedTasks = maintenance.staleAssignedTasks || [];
     const requestedHistoricalRows = queue.some((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
+    const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
     return JSON.stringify({
       success: true,
       sourceOfTruth: {
@@ -2024,6 +2213,7 @@ async function meshViewQueue(ctx, args) {
       activeWork: activeWorkEvidence.activeWork,
       staleDirectWork: activeWorkEvidence.staleDirectWork,
       activeWorkSummary: activeWorkEvidence.summary,
+      ...pollingGuidance ? { pollingGuidance } : {},
       visibleSummary,
       summary,
       activeCounts: summary.activeCounts,
@@ -2108,6 +2298,29 @@ async function meshSendTask(ctx, args) {
   if (node.policy?.readOnly) {
     return JSON.stringify({ error: `Node '${args.node_id}' is read-only` });
   }
+  let explicitTargetSession;
+  if (args.session_id && isWorkerTaskMode(taskMode) && (ctx.transport instanceof IpcTransport || isLocalTransport(ctx.transport))) {
+    try {
+      const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+      const sessions = extractStatusMetadataSessions(statusResult);
+      explicitTargetSession = sessions.find((session) => readSessionRecordId(session) === args.session_id);
+      if (explicitTargetSession && isMeshCoordinatorSessionRecord(explicitTargetSession)) {
+        return JSON.stringify({
+          success: false,
+          recoverable: true,
+          code: "mesh_target_session_is_coordinator",
+          reason: "mesh_target_session_is_coordinator",
+          nodeId: args.node_id,
+          sessionId: args.session_id,
+          taskMode: taskMode || "unspecified",
+          error: `Session '${args.session_id}' is a Repo Mesh coordinator session, not a visible worker session. Launch or use a visible worker session before dispatching this task.`,
+          nextAction: `Call mesh_launch_session for node '${args.node_id}' and then retry mesh_send_task with that worker session_id, or use mesh_enqueue_task for queue-based worker assignment.`
+        });
+      }
+    } catch {
+      explicitTargetSession = void 0;
+    }
+  }
   const duplicate = hasRecentDuplicateDispatch(ctx, args);
   if (duplicate.duplicate) {
     return JSON.stringify({
@@ -2143,7 +2356,8 @@ async function meshSendTask(ctx, args) {
       const result2 = await ipcDispatchToRemoteAgent(ctx, node, {
         session_id: args.session_id,
         message: args.message,
-        providerType: cached?.providerType
+        providerType: cached?.providerType,
+        verifiedSession: explicitTargetSession
       });
       if (result2.success) {
         const dispatchedSessionId = args.session_id || result2.sessionId;
@@ -2178,9 +2392,12 @@ async function meshSendTask(ctx, args) {
       const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
       let resolvedProviderType = cached?.providerType || "";
       if (!resolvedProviderType) {
-        const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
-        const sessions = extractStatusMetadataSessions(statusResult);
-        const explicitSession = sessions.find((session) => readSessionRecordId(session) === args.session_id);
+        let explicitSession = explicitTargetSession;
+        if (!explicitSession) {
+          const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+          const sessions = extractStatusMetadataSessions(statusResult);
+          explicitSession = sessions.find((session) => readSessionRecordId(session) === args.session_id);
+        }
         if (!explicitSession) {
           return JSON.stringify({
             success: false,
@@ -2227,7 +2444,9 @@ async function meshSendTask(ctx, args) {
       });
       const dispatchPayload = unwrapCommandPayload(dispatchResult);
       if (dispatchPayload?.success === false || dispatchResult?.success === false) {
+        const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
         return JSON.stringify({
+          ...source && typeof source === "object" ? source : {},
           success: false,
           nodeId: args.node_id,
           sessionId: args.session_id,
@@ -2286,7 +2505,7 @@ async function meshReadChat(ctx, args) {
     await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
   }
   if (isLocalTransport(ctx.transport)) {
-    const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
     const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached?.providerSessionId;
     const result = await commandForNode(ctx, node, "read_chat", {
       sessionId: args.session_id,
@@ -2332,7 +2551,7 @@ async function meshReadChat(ctx, args) {
 async function meshReadDebug(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   if (isLocalTransport(ctx.transport)) {
-    const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
     const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached?.providerSessionId;
     const delivery = args.delivery === "inline" ? void 0 : "daemon_file";
     const result = await commandForNode(ctx, node, "get_chat_debug_bundle", {
@@ -2910,6 +3129,7 @@ Mesh tools:       ${meshTools.join(", ")}
 // src/server.ts
 var import_server = require("@modelcontextprotocol/sdk/server/index.js");
 var import_stdio = require("@modelcontextprotocol/sdk/server/stdio.js");
+var import_node_os = __toESM(require("os"));
 var import_types = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
@@ -4443,6 +4663,7 @@ async function startMcpServer(opts) {
               requirePreTaskCheckpoint: false,
               requirePostTaskCheckpoint: true,
               requireApprovalForPush: true,
+              allowAutoPublishSubmoduleMainCommits: false,
               requireApprovalForDestructiveGit: true,
               dirtyWorkspaceBehavior: "warn",
               maxParallelTasks: 2,
@@ -4499,6 +4720,7 @@ async function startMcpServer(opts) {
     }
     let localDaemonId;
     let localMachineId;
+    let coordinatorHostname = import_node_os.default.hostname();
     if (transport instanceof LocalTransport || transport instanceof IpcTransport) {
       try {
         const { loadConfig } = await import("@adhdev/daemon-core");
@@ -4511,11 +4733,13 @@ async function startMcpServer(opts) {
       try {
         const statusResult = await transport.getStatus();
         const instanceId = typeof statusResult?.status?.instanceId === "string" ? statusResult.status.instanceId.trim() : "";
+        const hostname = typeof statusResult?.status?.hostname === "string" ? statusResult.status.hostname.trim() : typeof statusResult?.status?.machine?.hostname === "string" ? statusResult.status.machine.hostname.trim() : "";
         if (instanceId) localDaemonId = instanceId;
+        if (hostname) coordinatorHostname = hostname;
       } catch {
       }
     }
-    const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {} };
+    const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {}, ...coordinatorHostname ? { coordinatorHostname } : {} };
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
     const server2 = new import_server.Server(
       { name: "adhdev-mcp-server", version: "0.9.81" },
