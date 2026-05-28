@@ -212,6 +212,51 @@ describe('Antigravity CLI read_chat native transcript provenance', () => {
     })
   })
 
+  it('prefers Antigravity CLI brain transcript when runtime id differs from resolved native conversation id', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.gemini/antigravity-cli/brain/agy-resolved-conversation/.system_generated/logs/transcript.jsonl',
+      sourceMtimeMs: Date.now(),
+      providerSessionId: 'agy-resolved-conversation',
+      nativeHistoryCoverage: 'full',
+      hasMore: false,
+      messages: [
+        { role: 'user', content: 'runtime prompt', receivedAt: 1_000, historySessionId: 'agy-resolved-conversation', workspace: '/workspaces/adhdev' },
+        { role: 'assistant', content: 'clean native answer', receivedAt: 2_000, historySessionId: 'agy-resolved-conversation', workspace: '/workspaces/adhdev' },
+      ],
+    })
+
+    const result = await handleReadChat(createHelpers(createAntigravityAdapter({
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        title: 'Antigravity CLI',
+        messages: [
+          { role: 'user', content: 'runtime prompt', receivedAt: 1_000 },
+          { role: 'assistant', content: 'noisy pty answer', receivedAt: 2_000 },
+        ],
+      })),
+    })) as any, {
+      agentType: 'antigravity-cli',
+      targetSessionId: 'runtime-session',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['runtime prompt', 'clean native answer'])
+    expect(result.providerSessionId).toBe('agy-resolved-conversation')
+    expect(result.messageSource).toMatchObject({
+      selected: 'native-history',
+      nativeHandle: 'agy-resolved-conversation',
+      nativeHistoryCoverage: 'full',
+      coverage: {
+        nativeMessageCount: 2,
+        ptyMessageCount: 2,
+        returnedMessageCount: 2,
+        safeMapping: true,
+      },
+    })
+  })
+
   it('includes Antigravity fallback provenance in chat debug bundles', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       source: 'native-unavailable',
