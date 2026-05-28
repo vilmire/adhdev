@@ -541,6 +541,15 @@ export class CliProviderInstance implements ProviderInstance {
         }
         const mergedMessages = this.mergeConversationMessages(parsedMessages);
         const canonicalBackedHistory = this.syncCanonicalSavedHistoryIfNeeded();
+        const statusMessages = canonicalBackedHistory && this.lastPersistedHistoryMessages.length > 0
+            ? this.lastPersistedHistoryMessages.map((message) => ({
+                role: message.role,
+                content: message.content,
+                kind: message.kind,
+                senderName: message.senderName,
+                receivedAt: message.receivedAt,
+            }))
+            : mergedMessages;
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
         const parsedChatStatus = typeof parsedStatus?.status === 'string' && parsedStatus.status.trim()
@@ -607,7 +616,7 @@ export class CliProviderInstance implements ProviderInstance {
                 id: activeChatId,
                 title: parsedStatus?.title || dirName,
                 status: activeChatStatus,
-                messages: mergedMessages,
+                messages: statusMessages,
                 activeModal: autoApproveActive ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
                 inputContent: '',
             },
