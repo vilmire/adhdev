@@ -68,6 +68,14 @@ describe('resolveCliSessionBinding', () => {
     expect(binding.cliArgs).toEqual(['resume', 'sess_456'])
   })
 
+  it('keeps explicit resume subcommands without a positional session id in resume mode', () => {
+    const binding = resolveCliSessionBinding(codexLikeProvider, 'codex-cli', ['resume', '--last'], undefined)
+
+    expect(binding.launchMode).toBe('resume')
+    expect(binding.providerSessionId).toBeUndefined()
+    expect(binding.cliArgs).toEqual(['resume', '--last'])
+  })
+
   it('treats --session-id as manual when the provider declares it as a new-session flag by default', () => {
     const binding = resolveCliSessionBinding(gooseLikeProvider, 'goose-cli', ['--session-id', 'sess_newish'], undefined)
 

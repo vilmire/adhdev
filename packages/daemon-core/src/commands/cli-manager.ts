@@ -363,9 +363,13 @@ function detectExplicitProviderSessionId(
 
     const subcommands = resume?.sessionIdFromSubcommand;
     if (Array.isArray(subcommands) && subcommands.length > 0) {
+        const hasResumeSubcommand = args.some((arg) => subcommands.includes(arg));
         const subcommandSessionId = readSubcommandSessionId(args, subcommands);
         if (subcommandSessionId) {
             return { providerSessionId: subcommandSessionId, launchMode: 'resume' };
+        }
+        if (hasResumeSubcommand) {
+            return { launchMode: 'resume' };
         }
     }
 
@@ -398,6 +402,12 @@ export function resolveCliSessionBinding(
             cliArgs: baseArgs,
             providerSessionId: explicit.providerSessionId,
             launchMode: explicit.launchMode,
+        };
+    }
+    if (explicit.launchMode === 'resume') {
+        return {
+            cliArgs: baseArgs,
+            launchMode: 'resume',
         };
     }
     if (explicit.launchMode === 'manual' && hasArg(baseArgs || [], ['--session-id'])) {

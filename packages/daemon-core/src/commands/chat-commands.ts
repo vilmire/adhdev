@@ -1366,7 +1366,13 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     returnedStatus: String(returnedStatus || ''),
                     selectedMessageSource: (messageSource as any).selected,
                     messageSource,
-                    shouldPreferAdapterMessages: supportsCliNativeTranscript(providerType, provider) && (messageSource as any).selected !== 'native-history',
+                    shouldPreferAdapterMessages: supportsCliNativeTranscript(providerType, provider)
+                        && isNativeSourceCanonicalHistory(provider?.canonicalHistory)
+                        && (messageSource as any).selected !== 'native-history'
+                        && typeof (messageSource as any).fallbackReason === 'string'
+                        && (messageSource as any).fallbackReason.startsWith('native_history_')
+                        && (messageSource as any).fallbackReason !== 'native_history_not_checked'
+                        && !(selectedTranscriptAuthority === 'provider' && selectedCoverage === 'full'),
                     parsedMsgCount: parsedRecord.messages.length,
                     returnedMsgCount: selectedMessages.length,
                 },
