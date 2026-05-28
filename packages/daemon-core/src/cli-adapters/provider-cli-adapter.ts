@@ -1372,6 +1372,11 @@ export class ProviderCliAdapter implements CliAdapter {
         this.idleTimeout = setTimeout(() => {
             if (this.isWaitingForResponse && !this.hasActionableApproval()) {
                 if (this.shouldDeferIdleTimeoutFinish()) return;
+                const parsed = this.runParseSession();
+                if (this.shouldKeepCodexTurnOpenForFinish(parsed)) {
+                    this.rescheduleCodexFinishCheck('codex_idle_timeout_not_final');
+                    return;
+                }
                 this.clearIdleFinishCandidate('idle_timeout_finish');
                 this.finishResponse();
             }
@@ -1381,6 +1386,11 @@ export class ProviderCliAdapter implements CliAdapter {
     private finishResponse(): void {
         if (this.submitPendingUntil > Date.now()) return;
         if (this.responseSettleIgnoreUntil > Date.now()) return;
+        const parsedBeforeFinish = this.runParseSession();
+        if (this.shouldKeepCodexTurnOpenForFinish(parsedBeforeFinish)) {
+            this.rescheduleCodexFinishCheck('codex_finish_not_final');
+            return;
+        }
         this.clearIdleFinishCandidate('finish_response_enter');
         this.recordTrace('finish_response', {
             ...buildCliTraceParseSnapshot({
@@ -1616,6 +1626,49 @@ export class ProviderCliAdapter implements CliAdapter {
             return typeof message.content === 'string' && message.content.trim().length > 0;
         });
         return !!lastAssistant;
+    }
+
+    private parsedStatusHasFinalStandardAssistantMessage(parsed: any): boolean {
+        const messages = Array.isArray(parsed?.messages) ? parsed.messages : [];
+        const lastAssistant = [...messages].reverse().find((message: any) => {
+            if (!message || message.role !== 'assistant') return false;
+            return typeof message.content === 'string' && message.content.trim().length > 0;
+        });
+        if (!lastAssistant) return false;
+        const kind = typeof lastAssistant.kind === 'string' && lastAssistant.kind.trim()
+            ? lastAssistant.kind.trim()
+            : 'standard';
+        return kind === 'standard' && lastAssistant.meta?.streaming !== true;
+    }
+
+    private shouldKeepCodexTurnOpenForFinish(parsed: any): boolean {
+        if (this.cliType !== 'codex-cli') return false;
+        if (!this.isWaitingForResponse || !this.currentTurnScope || this.hasActionableApproval()) return false;
+        const parsedStatus = typeof parsed?.status === 'string' ? parsed.status.trim() : '';
+        if (parsedStatus !== 'idle') return true;
+        if (parsed?.activeModal || parsed?.modal) return true;
+        return !this.parsedStatusHasFinalStandardAssistantMessage(parsed);
+    }
+
+    private rescheduleCodexFinishCheck(reason: string): void {
+        this.clearIdleFinishCandidate(reason);
+        this.setStatus('generating', reason);
+        if (this.idleTimeout) clearTimeout(this.idleTimeout);
+        this.idleTimeout = setTimeout(() => {
+            if (!this.isWaitingForResponse || this.hasActionableApproval()) return;
+            this.settledBuffer = this.recentOutputBuffer;
+            this.evaluateSettled();
+        }, this.getIdleFinishConfirmMs());
+        this.recordTrace('codex_finish_deferred', {
+            reason,
+            ...buildCliTraceParseSnapshot({
+                accumulatedBuffer: this.accumulatedBuffer,
+                accumulatedRawBuffer: this.accumulatedRawBuffer,
+                responseBuffer: this.responseBuffer,
+                partialResponse: this.responseBuffer,
+                scope: this.currentTurnScope,
+            }),
+        });
     }
 
     private projectEffectiveStatus(startupModal: { message: string; buttons: string[] } | null = null): CliSessionStatus['status'] {

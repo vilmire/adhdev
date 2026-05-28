@@ -706,4 +706,62 @@ describe('ProviderCliAdapter sendMessage guard', () => {
 
     expect(adapter.getDebugState().status).toBe('generating')
   })
+
+  it('keeps Codex generating when finish is attempted on tool-call activity instead of a final answer', () => {
+    const adapter = buildAdapter()
+    adapter.cliType = 'codex-cli'
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'continue validation',
+      startedAt: Date.now() - 30_000,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.runParseSession = vi.fn(() => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'continue validation' },
+        { role: 'assistant', kind: 'tool', content: 'functions.write_stdin({"session_id":123,"yield_time_ms":30000})' },
+      ],
+      activeModal: null,
+    }))
+    adapter.commitCurrentTranscript = vi.fn(() => ({ hasAssistant: true, assistantContent: 'tool activity' }))
+
+    adapter.finishResponse()
+
+    expect(adapter.isWaitingForResponse).toBe(true)
+    expect(adapter.currentTurnScope?.prompt).toBe('continue validation')
+    expect(adapter.currentStatus).toBe('generating')
+    expect(adapter.commitCurrentTranscript).not.toHaveBeenCalled()
+  })
+
+  it('allows Codex finish once parsed idle has a final standard assistant answer', () => {
+    const adapter = buildAdapter()
+    adapter.cliType = 'codex-cli'
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'finish validation',
+      startedAt: Date.now() - 30_000,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.runParseSession = vi.fn(() => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'finish validation' },
+        { role: 'assistant', kind: 'standard', content: 'Validation is complete.' },
+      ],
+      activeModal: null,
+    }))
+    adapter.commitCurrentTranscript = vi.fn(() => ({ hasAssistant: true, assistantContent: 'Validation is complete.' }))
+
+    adapter.finishResponse()
+
+    expect(adapter.isWaitingForResponse).toBe(false)
+    expect(adapter.currentTurnScope).toBe(null)
+    expect(adapter.currentStatus).toBe('idle')
+    expect(adapter.commitCurrentTranscript).toHaveBeenCalled()
+  })
 })
