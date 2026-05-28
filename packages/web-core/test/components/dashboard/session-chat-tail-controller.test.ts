@@ -872,6 +872,54 @@ describe('SessionChatTailController registry', () => {
     expect(controller.getSnapshot().liveMessages[2]).toMatchObject({ id: 'msg-3', content: 'plan update 1 task(s)' })
   })
 
+  it('keeps fallback bubbles visible through transient empty generating updates', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'assistant', content: '────────────', id: 'chrome-1', timestamp: 1 } as any,
+      ],
+      status: 'generating',
+      totalMessages: 1,
+      lastMessageSignature: 'sig-chrome',
+    }))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: false,
+    })
+
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'real prompt', id: 'msg-1', timestamp: 2 } as any,
+        { role: 'assistant', content: 'real answer', id: 'msg-2', timestamp: 3 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-real',
+    }))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      hasLiveSnapshot: true,
+    })
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'real prompt',
+      'real answer',
+    ])
+  })
+
   it('exposes historyOffset=0 after a truncated live tail update before any history page is loaded', () => {
     // Regression guard for long Hermes/CLI chat invisibility: when a session has 100
     // total messages and the subscription fires with a 20-msg tail window, the snapshot
