@@ -47,9 +47,9 @@ function createHelpers(adapter: any = createAntigravityAdapter(), overrides: Rec
     name: 'Antigravity CLI',
     category: 'cli',
     canonicalHistory: {
-      format: 'antigravity-opaque-protobuf',
+      format: 'antigravity-cli-history-jsonl-partial',
       mode: 'native-source',
-      watchPath: '~/.gemini/antigravity/conversations/*.pb',
+      watchPath: '~/.gemini/antigravity-cli/history.jsonl;~/.gemini/antigravity/conversations/*.pb',
       scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
     },
     scripts: { readNativeHistory: () => null },
@@ -104,7 +104,7 @@ describe('Antigravity CLI read_chat native transcript provenance', () => {
     expect(result.success).toBe(true)
     expect((result.messages as any[]).map(message => message.content)).toEqual(['pty user', 'pty assistant'])
     expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('antigravity-cli', expect.objectContaining({
-      canonicalHistory: expect.objectContaining({ format: 'antigravity-opaque-protobuf' }),
+      canonicalHistory: expect.objectContaining({ format: 'antigravity-cli-history-jsonl-partial' }),
       historySessionId: 'agy-native-conversation',
       workspace: '/workspaces/adhdev',
     }))
@@ -124,6 +124,51 @@ describe('Antigravity CLI read_chat native transcript provenance', () => {
     expect(result.debugReadChat).toMatchObject({
       selectedMessageSource: 'pty-parser',
       shouldPreferAdapterMessages: true,
+    })
+  })
+
+  it('keeps PTY source when Antigravity native history is partial user-prompt metadata only', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.gemini/antigravity-cli/history.jsonl',
+      sourceMtimeMs: Date.now(),
+      providerSessionId: 'agy-native-conversation',
+      nativeHistoryCoverage: 'partial',
+      partialReason: 'antigravity_cli_history_jsonl_contains_user_prompts_only',
+      unavailableReason: 'opaque_antigravity_protobuf_without_stable_schema',
+      hasMore: false,
+      messages: [
+        { role: 'system', kind: 'session_start', content: '/workspaces/adhdev', receivedAt: 900, historySessionId: 'agy-native-conversation', workspace: '/workspaces/adhdev' },
+        { role: 'user', content: 'pty user', receivedAt: 1_000, historySessionId: 'agy-native-conversation', workspace: '/workspaces/adhdev' },
+      ],
+    })
+
+    const result = await handleReadChat(createHelpers() as any, {
+      agentType: 'antigravity-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'agy-native-conversation',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['pty user', 'pty assistant'])
+    expect(result.providerSessionId).toBe('agy-native-conversation')
+    expect(result.transcriptAuthority).toBeUndefined()
+    expect(result.coverage).toBeUndefined()
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      nativeHandle: 'agy-native-conversation',
+      fallbackReason: 'native_history_partial',
+      nativeSource: 'provider-native',
+      nativeHistoryCoverage: 'partial',
+      partialReason: 'antigravity_cli_history_jsonl_contains_user_prompts_only',
+      unavailableReason: 'opaque_antigravity_protobuf_without_stable_schema',
+      coverage: {
+        nativeMessageCount: 2,
+        ptyMessageCount: 2,
+        returnedMessageCount: 2,
+        safeMapping: true,
+      },
     })
   })
 

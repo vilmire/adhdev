@@ -1345,7 +1345,15 @@ function rewriteCanonicalSavedHistory(agentType: string, historySessionId: strin
 
 export type ProviderNativeHistoryScripts = Record<string, ((input: any) => any) | undefined>;
 
-type ProviderNativeHistoryReadResult = { records: HistoryMessage[]; sourcePath: string; sourceMtimeMs: number };
+type ProviderNativeHistoryReadResult = {
+    records: HistoryMessage[];
+    sourcePath: string;
+    sourceMtimeMs: number;
+    providerSessionId?: string;
+    nativeHistoryCoverage?: string;
+    partialReason?: string;
+    unavailableReason?: string;
+};
 
 function getNativeHistoryScriptName(canonicalHistory: ProviderCanonicalHistoryConfig | undefined, key: 'readSession' | 'listSessions'): string {
     const configured = canonicalHistory?.scripts?.[key];
@@ -1409,6 +1417,10 @@ function callProviderNativeHistoryRead(
         records,
         sourcePath: typeof (result as any).sourcePath === 'string' ? (result as any).sourcePath : '',
         sourceMtimeMs: Number((result as any).sourceMtimeMs) || 0,
+        providerSessionId: typeof (result as any).providerSessionId === 'string' ? (result as any).providerSessionId.trim() : undefined,
+        nativeHistoryCoverage: typeof (result as any).nativeHistoryCoverage === 'string' ? (result as any).nativeHistoryCoverage.trim() : undefined,
+        partialReason: typeof (result as any).partialReason === 'string' ? (result as any).partialReason.trim() : undefined,
+        unavailableReason: typeof (result as any).unavailableReason === 'string' ? (result as any).unavailableReason.trim() : undefined,
     };
 }
 
@@ -1479,7 +1491,17 @@ export function readProviderChatHistory(
         historyBehavior?: ProviderHistoryBehavior;
         scripts?: ProviderNativeHistoryScripts;
     } = {},
-): { messages: HistoryMessage[]; hasMore: boolean; source: 'provider-native' | 'adhdev-mirror' | 'native-unavailable'; sourcePath?: string; sourceMtimeMs?: number } {
+): {
+    messages: HistoryMessage[];
+    hasMore: boolean;
+    source: 'provider-native' | 'adhdev-mirror' | 'native-unavailable';
+    sourcePath?: string;
+    sourceMtimeMs?: number;
+    providerSessionId?: string;
+    nativeHistoryCoverage?: string;
+    partialReason?: string;
+    unavailableReason?: string;
+} {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
         const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace);
         if (!nativeResult) return { messages: [], hasMore: false, source: 'native-unavailable' };
@@ -1488,6 +1510,10 @@ export function readProviderChatHistory(
             source: 'provider-native',
             sourcePath: nativeResult.sourcePath,
             sourceMtimeMs: nativeResult.sourceMtimeMs,
+            providerSessionId: nativeResult.providerSessionId,
+            nativeHistoryCoverage: nativeResult.nativeHistoryCoverage,
+            partialReason: nativeResult.partialReason,
+            unavailableReason: nativeResult.unavailableReason,
         };
     }
     return {
