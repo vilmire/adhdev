@@ -336,6 +336,9 @@ function buildCliMessageSourceProvenance(args: {
     nativeSource?: string;
     sourcePath?: string;
     sourceMtimeMs?: number;
+    nativeHistoryCoverage?: string;
+    partialReason?: string;
+    unavailableReason?: string;
     nativeMessages?: ChatMessage[];
     ptyMessages?: ChatMessage[];
     returnedMessages?: ChatMessage[];
@@ -357,6 +360,9 @@ function buildCliMessageSourceProvenance(args: {
         ...(args.fallbackReason ? { fallbackReason: args.fallbackReason } : {}),
         ...(args.nativeSource ? { nativeSource: args.nativeSource } : {}),
         ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
+        ...(args.nativeHistoryCoverage ? { nativeHistoryCoverage: args.nativeHistoryCoverage } : {}),
+        ...(args.partialReason ? { partialReason: args.partialReason } : {}),
+        ...(args.unavailableReason ? { unavailableReason: args.unavailableReason } : {}),
         ptyStatusApprovalOnly: args.ptyStatusApprovalOnly === true,
         staleness: {
             sourceMtimeMs: sourceMtimeMs || undefined,
@@ -378,12 +384,15 @@ function buildNativeHistoryFallbackReason(args: {
     providerType: string;
     provider?: ProviderModule;
     nativeSource?: string;
+    nativeHistoryCoverage?: string;
     nativeMessageCount: number;
     safeMapping: boolean;
     freshEnough: boolean;
 }): string {
     if (!supportsCliNativeTranscript(args.providerType, args.provider)) return 'provider_native_transcript_not_supported';
     if (args.nativeSource === 'native-unavailable') return 'native_history_unavailable';
+    if (args.nativeHistoryCoverage === 'partial') return 'native_history_partial';
+    if (args.nativeHistoryCoverage === 'unavailable') return 'native_history_unavailable';
     if (args.nativeSource && args.nativeSource !== 'provider-native') return `native_history_source_${args.nativeSource}`;
     if (args.nativeMessageCount <= 0) return 'native_history_empty';
     if (!args.safeMapping) return 'native_history_not_safely_mapped';
@@ -1291,6 +1300,15 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     const historyProviderSessionId = typeof (nativeHistory as any)?.providerSessionId === 'string'
                         ? (nativeHistory as any).providerSessionId
                         : readHistorySessionIdFromMessages(nativeMessages) || nativeHistorySessionId || historySessionId;
+                    const nativeHistoryCoverage = typeof (nativeHistory as any)?.nativeHistoryCoverage === 'string'
+                        ? (nativeHistory as any).nativeHistoryCoverage
+                        : undefined;
+                    const partialReason = typeof (nativeHistory as any)?.partialReason === 'string'
+                        ? (nativeHistory as any).partialReason
+                        : undefined;
+                    const unavailableReason = typeof (nativeHistory as any)?.unavailableReason === 'string'
+                        ? (nativeHistory as any).unavailableReason
+                        : undefined;
                     const lookup = (nativeHistory as any).lookup === 'workspace' ? 'workspace' : 'session';
                     const safeMapping = hasSafeNativeHistoryMapping({
                         historySessionId: lookup === 'workspace' ? undefined : nativeHistorySessionId,
@@ -1305,7 +1323,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         nativeMessages,
                         ptyMessages: returnedMessages,
                     });
-                    if ((nativeHistory as any).source === 'provider-native' && nativeMessages.length > 0 && safeMapping && freshEnough) {
+                    if ((nativeHistory as any).source === 'provider-native' && nativeMessages.length > 0 && nativeHistoryCoverage !== 'partial' && nativeHistoryCoverage !== 'unavailable' && safeMapping && freshEnough) {
                         selectedMessages = finalizeStreamingMessagesWhenIdle(nativeMessages, returnedStatus);
                         selectedProviderSessionId = historyProviderSessionId || providerSessionId;
                         selectedTranscriptAuthority = 'provider';
@@ -1317,6 +1335,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             nativeSource: (nativeHistory as any).source,
                             sourcePath: (nativeHistory as any).sourcePath,
                             sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
+                            nativeHistoryCoverage,
+                            partialReason,
+                            unavailableReason,
                             nativeMessages,
                             ptyMessages: returnedMessages,
                             returnedMessages: selectedMessages,
@@ -1329,6 +1350,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             providerType,
                             provider,
                             nativeSource: (nativeHistory as any).source,
+                            nativeHistoryCoverage,
                             nativeMessageCount: nativeMessages.length,
                             safeMapping,
                             freshEnough,
@@ -1341,6 +1363,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             nativeSource: (nativeHistory as any).source,
                             sourcePath: (nativeHistory as any).sourcePath,
                             sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
+                            nativeHistoryCoverage,
+                            partialReason,
+                            unavailableReason,
                             nativeMessages,
                             ptyMessages: returnedMessages,
                             returnedMessages,
@@ -1425,6 +1450,15 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const historyProviderSessionId = typeof (history as any)?.providerSessionId === 'string'
                 ? (history as any).providerSessionId
                 : readHistorySessionIdFromMessages(historyMessages) || historySessionId;
+            const nativeHistoryCoverage = typeof (history as any)?.nativeHistoryCoverage === 'string'
+                ? (history as any).nativeHistoryCoverage
+                : undefined;
+            const partialReason = typeof (history as any)?.partialReason === 'string'
+                ? (history as any).partialReason
+                : undefined;
+            const unavailableReason = typeof (history as any)?.unavailableReason === 'string'
+                ? (history as any).unavailableReason
+                : undefined;
             const safeMapping = supportsCliNativeTranscript(agentStr, provider)
                 ? hasSafeNativeHistoryMapping({
                     historySessionId: lookup === 'workspace' ? undefined : historySessionId,
@@ -1436,6 +1470,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const nativeSelected = supportsCliNativeTranscript(agentStr, provider)
                 && (history as any).source === 'provider-native'
                 && historyMessages.length > 0
+                && nativeHistoryCoverage !== 'partial'
+                && nativeHistoryCoverage !== 'unavailable'
                 && safeMapping;
             const messageSource = buildCliMessageSourceProvenance({
                 selected: nativeSelected ? 'native-history' : 'pty-parser',
@@ -1447,6 +1483,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         providerType: agentStr,
                         provider,
                         nativeSource: (history as any).source,
+                        nativeHistoryCoverage,
                         nativeMessageCount: historyMessages.length,
                         safeMapping,
                         freshEnough: true,
@@ -1454,6 +1491,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 nativeSource: (history as any).source,
                 sourcePath: (history as any).sourcePath,
                 sourceMtimeMs: (history as any).sourceMtimeMs,
+                nativeHistoryCoverage,
+                partialReason,
+                unavailableReason,
                 nativeMessages: historyMessages,
                 returnedMessages: historyMessages,
                 safeMapping,
