@@ -134,6 +134,31 @@ function isBusyChatTailStatus(status: unknown): boolean {
   return value === 'generating' || value === 'long_generating' || value === 'streaming' || value === 'working' || value === 'starting'
 }
 
+function getExistingVisibleMessageCount(snapshot: SessionChatTailSnapshot, fallbackRecentCount: number): number {
+  return Math.max(
+    Math.max(0, fallbackRecentCount),
+    Array.isArray(snapshot.liveMessages) ? snapshot.liveMessages.length : 0,
+  )
+}
+
+function shouldDeferBusyTailUpdate(
+  snapshot: SessionChatTailSnapshot,
+  fallbackRecentCount: number,
+  nextMessages: DashboardMessage[],
+  status: unknown,
+): boolean {
+  if (!isBusyChatTailStatus(status)) return false
+  const existingCount = getExistingVisibleMessageCount(snapshot, fallbackRecentCount)
+  if (existingCount <= 0) return false
+
+  if (isTransientNonSubstantiveTail(nextMessages)) return true
+
+  // During generation, some CLI providers briefly publish a tiny PTY-derived
+  // current-turn tail before provider-native history catches up. Do not let it
+  // replace a richer visible transcript and make the pane appear to lose history.
+  return nextMessages.length < existingCount
+}
+
 export class SessionChatTailController {
   private manager: SubscriptionManager
   private sendData?: (daemonId: string, data: any) => boolean
@@ -309,11 +334,7 @@ export class SessionChatTailController {
     if (update.error) return
 
     const nextMessages = Array.isArray(update.messages) ? update.messages as DashboardMessage[] : []
-    if (
-      isTransientNonSubstantiveTail(nextMessages)
-      && (this.fallbackRecentCount > 0 || this.snapshot.liveMessages.length > 0)
-      && (!this.snapshot.hasLiveSnapshot || isBusyChatTailStatus(update.status))
-    ) {
+    if (shouldDeferBusyTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status)) {
       return
     }
     const nextCursor: SessionChatTailCursor = { tailLimit: this.snapshot.cursor.tailLimit }

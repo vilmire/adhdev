@@ -920,6 +920,63 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
+  it('keeps fallback bubbles visible through short busy current-turn tails', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 8,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'new prompt', id: 'msg-new-user', timestamp: 10 } as any,
+        { role: 'assistant', content: 'Thinking...', id: 'msg-new-assistant', timestamp: 11 } as any,
+      ],
+      status: 'generating',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-short-busy',
+    }))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: false,
+    })
+
+    manager.publish(createUpdate({
+      messages: Array.from({ length: 10 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `full-${index + 1}`,
+        id: `full-${index + 1}`,
+        timestamp: index + 1,
+      })) as any,
+      status: 'idle',
+      totalMessages: 10,
+      lastMessageSignature: 'sig-full',
+    }))
+
+    expect(controller.getSnapshot().hasLiveSnapshot).toBe(true)
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'full-1',
+      'full-2',
+      'full-3',
+      'full-4',
+      'full-5',
+      'full-6',
+      'full-7',
+      'full-8',
+      'full-9',
+      'full-10',
+    ])
+  })
+
   it('exposes historyOffset=0 after a truncated live tail update before any history page is loaded', () => {
     // Regression guard for long Hermes/CLI chat invisibility: when a session has 100
     // total messages and the subscription fires with a 20-msg tail window, the snapshot
