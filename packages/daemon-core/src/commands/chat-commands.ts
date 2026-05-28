@@ -12,6 +12,7 @@ import type { CliAdapter } from '../cli-adapter-types.js';
 import { flattenContent, normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
 import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
+import { pickApprovalButton } from '../providers/approval-utils.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../config/chat-history.js';
 import { LOG, getRecentLogs } from '../logging/logger.js';
@@ -2337,6 +2338,9 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         }
         if (buttonIndex < 0 && (action === 'always' || /always/i.test(button))) {
             buttonIndex = buttons.findIndex(b => /always/i.test(b));
+        }
+        if (buttonIndex < 0 && (action === 'approve' || action === 'accept')) {
+            buttonIndex = pickApprovalButton(buttons, provider).index;
         }
         if (buttonIndex < 0) {
             return { success: false, error: 'Approval action did not match any visible button' };
