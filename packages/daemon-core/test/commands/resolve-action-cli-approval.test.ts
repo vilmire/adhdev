@@ -90,6 +90,42 @@ describe('handleResolveAction for CLI approval state', () => {
     expect(resolveModal).toHaveBeenCalledWith(1)
   })
 
+  it('maps generic approve actions to the provider-positive button hints', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Do you want to proceed?',
+          buttons: ['Yes', "Yes, don't ask again for this command", 'No, and tell agy what to do differently'],
+        },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'antigravity-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'antigravity-cli', sessionId: 'sess-1' },
+      currentProviderType: 'antigravity-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'antigravity-cli',
+      action: 'approve',
+    })
+
+    expect(result).toEqual({ success: true, buttonIndex: 0, button: 'Yes' })
+    expect(resolveModal).toHaveBeenCalledWith(0)
+  })
+
   it('fails closed when action mapping cannot identify a matching button', async () => {
     const resolveModal = vi.fn()
     const adapter = {
