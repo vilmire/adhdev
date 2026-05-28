@@ -55,7 +55,7 @@ import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
-import { homedir } from 'os';
+import { homedir, hostname as osHostname } from 'os';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 
@@ -235,11 +235,134 @@ function buildMeshNodeDisplayLabel(node: Record<string, unknown>, nodeId: string
     if (explicit) return explicit;
     const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
     const workspaceName = workspace ? pathBasename(workspace) : undefined;
-    const host = readStringValue(node.hostname, node.host, node.daemonId, node.daemon_id, node.machineId, node.machine_id);
+    const host = readStringValue(node.machineName, node.machine_name, node.hostname, node.host, node.daemonId, node.daemon_id, node.machineId, node.machine_id);
     const provider = providerPriority[0] || (Array.isArray(node.providers) ? readStringValue(...node.providers) : undefined);
     const parts = [workspaceName, host, provider].filter(Boolean);
     if (parts.length > 0) return parts.join(' · ');
     return nodeId || 'unidentified mesh node';
+}
+
+function normalizeMeshHostname(value: unknown): string | undefined {
+    const hostname = readStringValue(value);
+    if (!hostname) return undefined;
+    return hostname.toLowerCase().replace(/\.$/, '');
+}
+
+function readMeshNodeMachineId(node: Record<string, unknown>): string | undefined {
+    return readStringValue(
+        node.machineId,
+        node.machine_id,
+        readObjectRecord(node.machine)?.id,
+        readObjectRecord(node.machine)?.machineId,
+        readObjectRecord(node.lastProbe)?.machineId,
+        readObjectRecord(node.last_probe)?.machine_id,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.id,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.machineId,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.id,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.machine_id,
+    );
+}
+
+function readMeshNodeDaemonId(node: Record<string, unknown>): string | undefined {
+    return readStringValue(
+        node.daemonId,
+        node.daemon_id,
+        readObjectRecord(node.machine)?.daemonId,
+        readObjectRecord(node.machine)?.daemon_id,
+        readObjectRecord(node.lastProbe)?.daemonId,
+        readObjectRecord(node.last_probe)?.daemon_id,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.daemonId,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.daemon_id,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.daemonId,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.daemon_id,
+    );
+}
+
+function readMeshNodeHostname(node: Record<string, unknown>): string | undefined {
+    return readStringValue(
+        node.hostname,
+        node.host,
+        node.machineHostname,
+        node.machine_hostname,
+        readObjectRecord(node.machine)?.hostname,
+        readObjectRecord(node.machine)?.host,
+        readObjectRecord(node.lastProbe)?.hostname,
+        readObjectRecord(node.last_probe)?.hostname,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.hostname,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.hostname,
+    );
+}
+
+function readMeshNodeDisplayMachineName(node: Record<string, unknown>): string | undefined {
+    return readStringValue(
+        node.machineName,
+        node.machine_name,
+        node.machineLabel,
+        node.machine_label,
+        node.machineNickname,
+        node.machine_nickname,
+        node.alias,
+        readObjectRecord(node.machine)?.name,
+        readObjectRecord(node.machine)?.displayName,
+        readObjectRecord(node.machine)?.display_name,
+        readObjectRecord(node.lastProbe)?.machineName,
+        readObjectRecord(node.last_probe)?.machine_name,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.name,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.name,
+        readMeshNodeHostname(node),
+    );
+}
+
+function compactMeshIdentityEvidence(value: string | undefined): string | undefined {
+    if (!value) return undefined;
+    return value.length > 24 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value;
+}
+
+function buildMeshNodeMachineIdentity(node: Record<string, unknown>, opts: {
+    localMachineId?: string;
+    localDaemonId?: string;
+    coordinatorHostname?: string;
+    isSelfNode?: boolean;
+}): Record<string, unknown> {
+    const machineId = readMeshNodeMachineId(node);
+    const daemonId = readMeshNodeDaemonId(node);
+    const hostname = readMeshNodeHostname(node);
+    const machineName = readMeshNodeDisplayMachineName(node);
+    const coordinatorHostname = readStringValue(opts.coordinatorHostname);
+    const machineIdMatches = Boolean(opts.localMachineId && machineId && opts.localMachineId === machineId);
+    const daemonIdMatches = Boolean(opts.localDaemonId && daemonId && opts.localDaemonId === daemonId);
+    const hostnameMatches = Boolean(
+        normalizeMeshHostname(hostname)
+        && normalizeMeshHostname(coordinatorHostname)
+        && normalizeMeshHostname(hostname) === normalizeMeshHostname(coordinatorHostname),
+    );
+    const sameMachine = opts.isSelfNode === true || machineIdMatches || daemonIdMatches || hostnameMatches;
+    const evidence: string[] = [];
+    for (const [label, value] of [['machineName', machineName], ['hostname', hostname], ['machineId', machineId], ['daemonId', daemonId]] as const) {
+        const compact = compactMeshIdentityEvidence(value);
+        if (compact) evidence.push(`${label}:${compact}`);
+    }
+    const locality = sameMachine ? 'same_machine' : (evidence.length > 0 ? 'remote_known' : 'remote_or_unknown');
+    const localityReason = sameMachine
+        ? (machineIdMatches ? 'matched coordinator machine id'
+            : daemonIdMatches ? 'matched coordinator daemon id'
+                : hostnameMatches ? 'matched coordinator hostname'
+                    : 'selected coordinator node')
+        : evidence.length > 0
+            ? `known remote/other machine identity; no local coordinator match (${evidence.join(', ')})`
+            : 'no useful machine identity evidence available';
+    return {
+        daemonId,
+        machineId,
+        hostname,
+        machineName,
+        displayName: machineName || hostname || daemonId || machineId,
+        coordinatorHostname,
+        sameMachine,
+        locality,
+        localityReason,
+        identityEvidence: evidence,
+    };
 }
 
 function normalizeInlineMeshGitStatus(
@@ -5115,6 +5238,7 @@ export class DaemonCommandRouter {
                         return failureResult;
                     }
                     const directTruthUnavailableNodeIds = new Set(effectiveDirectTruth.unavailableNodeIds);
+                    const coordinatorHostname = osHostname();
                     const selectedCoordinatorNodeId = readStringValue(
                         mesh.coordinator?.preferredNodeId,
                         (mesh.nodes?.[0] as any)?.id,
@@ -5134,6 +5258,12 @@ export class DaemonCommandRouter {
                         ) || Boolean(
                             daemonId && (daemonId === localMachineId || daemonId === this.deps.statusInstanceId),
                         ) || Boolean(meshRecord?.inline && nodeIndex === 0);
+                        const machineIdentity = buildMeshNodeMachineIdentity(node as Record<string, unknown>, {
+                            localMachineId,
+                            localDaemonId: this.deps.statusInstanceId,
+                            coordinatorHostname,
+                            isSelfNode,
+                        });
                         const status: Record<string, unknown> = {
                             nodeId,
                             machineLabel: buildMeshNodeDisplayLabel(node as Record<string, unknown>, nodeId, providerPriority),
@@ -5146,7 +5276,8 @@ export class DaemonCommandRouter {
                             worktreeBranch: node.worktreeBranch,
                             role: normalizeMeshDaemonRole(node.role) || (meshHost.hostNodeId && nodeId === meshHost.hostNodeId ? 'host' : undefined),
                             daemonId,
-                            machineId: node.machineId,
+                            machineId: readMeshNodeMachineId(node as Record<string, unknown>) || node.machineId,
+                            machine: machineIdentity,
                             machineStatus: node.machineStatus,
                             health: 'unknown',
                             providers: node.providers || [],

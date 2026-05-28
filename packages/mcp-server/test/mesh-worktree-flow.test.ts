@@ -215,6 +215,14 @@ test('mesh_list_nodes exposes explicit machine identity without treating matchin
         daemonId: 'daemon-m1',
         machineId: 'machine-m1',
         hostname: 'M1',
+        machineName: 'Remote M1',
+        userOverrides: {},
+        policy: {},
+      },
+      {
+        id: 'node-unknown',
+        workspace: '/unknown/repo',
+        repoRoot: '/unknown/repo',
         userOverrides: {},
         policy: {},
       },
@@ -235,12 +243,21 @@ test('mesh_list_nodes exposes explicit machine identity without treating matchin
 
   const m4 = listed.nodes.find((node: any) => node.nodeId === 'node-m4');
   const m1 = listed.nodes.find((node: any) => node.nodeId === 'node-m1');
+  const unknown = listed.nodes.find((node: any) => node.nodeId === 'node-unknown');
   assert.equal(m4.machine.sameMachine, true);
   assert.equal(m4.machine.hostname, 'M4');
+  assert.equal(m4.machine.locality, 'same_machine');
   assert.equal(m4.machine.coordinatorHostname, 'M4');
+  assert.match(m4.machine.localityReason, /matched coordinator/);
   assert.equal(m1.machine.sameMachine, false);
   assert.equal(m1.machine.hostname, 'M1');
-  assert.equal(m1.machine.locality, 'remote_or_unknown');
+  assert.equal(m1.machine.machineName, 'Remote M1');
+  assert.equal(m1.machine.locality, 'remote_known');
+  assert.match(m1.machine.localityReason, /known remote\/other machine identity/);
+  assert.deepEqual(m1.machine.identityEvidence, ['machineName:Remote M1', 'hostname:M1', 'machineId:machine-m1', 'daemonId:daemon-m1']);
+  assert.equal(unknown.machine.sameMachine, false);
+  assert.equal(unknown.machine.locality, 'remote_or_unknown');
+  assert.equal(unknown.machine.localityReason, 'no useful machine identity evidence available');
 });
 
 test('mesh_fast_forward_node includes node identity in local IPC command args for timeout diagnostics', async () => {
