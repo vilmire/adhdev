@@ -42,10 +42,16 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     vi.useRealTimers()
   })
 
-  it('rejects a new prompt while a response is still in progress for providers that do not allow intervention', async () => {
+  it('queues a new prompt while a response is still in progress for providers that do not allow intervention', async () => {
     const adapter = buildAdapter()
 
-    await expect(adapter.sendMessage('second prompt')).rejects.toThrow('still processing')
+    await expect(adapter.sendMessage('second prompt')).resolves.toBeUndefined()
+    expect(adapter.pendingOutboundQueue).toHaveLength(1)
+    expect(adapter.pendingOutboundQueue[0]).toMatchObject({
+      role: 'user',
+      content: 'second prompt',
+      source: 'sendMessage',
+    })
     expect(adapter.ptyProcess.write).not.toHaveBeenCalled()
   })
 
@@ -61,7 +67,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('next prompt\r')
   })
 
-  it('rejects a second prompt when parsed status still says generating during an active turn', async () => {
+  it('queues a second prompt when parsed status still says generating during an active turn', async () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'idle'
     adapter.isWaitingForResponse = true
@@ -80,7 +86,42 @@ describe('ProviderCliAdapter sendMessage guard', () => {
       ],
     }))
 
-    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).rejects.toThrow('still processing')
+    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).resolves.toBeUndefined()
+    expect(adapter.pendingOutboundQueue.map((message: any) => message.content)).toEqual([
+      'Reply with exactly TURN-TWO and nothing else.',
+    ])
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalled()
+  })
+
+  it('flushes queued prompts in order after the active turn finishes', async () => {
+    const adapter = buildAdapter()
+
+    await adapter.sendMessage('second prompt')
+    await adapter.sendMessage('third prompt')
+    expect(adapter.pendingOutboundQueue.map((message: any) => message.content)).toEqual(['second prompt', 'third prompt'])
+
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.recentOutputBuffer = '❯\n'
+    adapter.runDetectStatus = vi.fn(() => 'idle')
+    adapter.terminalScreen = { getText: () => '❯\n' }
+
+    await adapter.flushPendingOutboundQueue()
+
+    expect(adapter.pendingOutboundQueue.map((message: any) => message.content)).toEqual(['third prompt'])
+    expect(adapter.currentTurnScope?.prompt).toBe('second prompt')
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('second prompt\r')
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('third prompt\r')
+  })
+
+  it('does not duplicate identical queued prompts from repeated sends', async () => {
+    const adapter = buildAdapter()
+
+    await adapter.sendMessage('same prompt')
+    await adapter.sendMessage('same prompt')
+
+    expect(adapter.pendingOutboundQueue.map((message: any) => message.content)).toEqual(['same prompt'])
     expect(adapter.ptyProcess.write).not.toHaveBeenCalled()
   })
 

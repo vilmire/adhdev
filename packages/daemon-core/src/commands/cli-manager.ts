@@ -1187,18 +1187,6 @@ export class DaemonCliManager {
                     } else if (currentStatus === 'starting') {
                         currentStatus = getEffectiveAgentSendStatus(adapter);
                     }
-                    if (BUSY_AGENT_STATUSES.has(currentStatus)) {
-                        return {
-                            success: false,
-                            code: 'agent_runtime_busy',
-                            reason: 'agent_runtime_busy',
-                            retryable: true,
-                            retryRecommended: true,
-                            status: currentStatus,
-                            targetSessionId: args?.targetSessionId,
-                            error: `CLI agent '${agentType}' is currently ${currentStatus}; retry after the current turn finishes.`,
-                        };
-                    }
                     const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
                     const provider = this.providerLoader.resolve(agentType) || this.providerLoader.getMeta(agentType);
                     if (provider?.category === 'acp') {
@@ -1209,7 +1197,11 @@ export class DaemonCliManager {
                     const message = input.textFallback;
                     if (!message) throw new Error('message required for send_chat');
                     await adapter.sendMessage(message);
-                    return { success: true, status: 'generating' };
+                    return {
+                        success: true,
+                        status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : 'generating',
+                        ...(BUSY_AGENT_STATUSES.has(currentStatus) ? { queued: true, queuedReason: 'agent_runtime_busy' } : {}),
+                    };
                 } else if (action === 'clear_history') {
                     if (typeof adapter.clearHistory === 'function') adapter.clearHistory();
                     return { success: true, cleared: true };

@@ -25,7 +25,7 @@ const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
 const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
 const CLI_NATIVE_HISTORY_FRESH_MS = 5 * 60_000;
-const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli']);
+const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli', 'hermes-cli']);
 const recentSendByTarget = new Map<string, number>();
 
 interface ApprovalSelectableInstance extends ProviderInstance {

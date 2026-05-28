@@ -54,7 +54,7 @@ export function getInlineSendFailureMessage(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error || '')
     const normalized = message.toLowerCase()
     if (normalized.includes('still processing the previous prompt')) {
-        return 'Wait for the current reply to finish before sending another message.'
+        return 'Message queued and will send after the current reply finishes.'
     }
     if (normalized.includes('awaiting confirmation')) {
         return 'Resolve the pending approval prompt before sending another message.'

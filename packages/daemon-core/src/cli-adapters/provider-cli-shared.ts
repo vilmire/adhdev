@@ -28,6 +28,14 @@ export interface CliSessionStatus {
     messages: CliChatMessage[];
     workingDir: string;
     activeModal: { message: string; buttons: string[] } | null;
+    pendingOutboundCount?: number;
+    pendingOutboundMessages?: Array<{
+        id: string;
+        role: 'user';
+        content: string;
+        queuedAt: number;
+        source: string;
+    }>;
     errorMessage?: string;
     errorReason?: string;
     bufferState?: {

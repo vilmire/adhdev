@@ -30,14 +30,14 @@ describe('ChatInputBar send-state copy', () => {
         panelLabel: 'Hermes Agent',
         isSending: false,
         isBusy: true,
-        statusMessage: 'Wait for the current reply to finish before sending another message.',
+        statusMessage: 'Message queued and will send after the current reply finishes.',
         onSend: vi.fn(async () => true),
         isActive: true,
       }),
     )
 
-    expect(html).toContain('Wait for the current reply to finish before sending another message.')
-    expect(html).toContain('placeholder="Wait for the current reply to finish before sending another message."')
+    expect(html).toContain('Message queued and will send after the current reply finishes.')
+    expect(html).toContain('placeholder="Message queued and will send after the current reply finishes."')
     expect(html).not.toContain('Send failed')
   })
 
