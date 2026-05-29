@@ -159,6 +159,12 @@ function shouldDeferBusyTailUpdate(
   return nextMessages.length < existingCount
 }
 
+function readChatTailUpdateMessages(update: SessionChatTailUpdate): DashboardMessage[] {
+  if (Array.isArray(update.messages)) return update.messages as DashboardMessage[]
+  const tailMessages = (update as SessionChatTailUpdate & { messagesTail?: unknown }).messagesTail
+  return Array.isArray(tailMessages) ? tailMessages as DashboardMessage[] : []
+}
+
 export class SessionChatTailController {
   private manager: SubscriptionManager
   private sendData?: (daemonId: string, data: any) => boolean
@@ -333,7 +339,7 @@ export class SessionChatTailController {
   private handleUpdate(update: SessionChatTailUpdate): void {
     if (update.error) return
 
-    const nextMessages = Array.isArray(update.messages) ? update.messages as DashboardMessage[] : []
+    const nextMessages = readChatTailUpdateMessages(update)
     if (shouldDeferBusyTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status)) {
       return
     }

@@ -429,6 +429,60 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
+  it('renders tail-only Codex native-history updates during generation instead of clearing the live transcript', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'codex-runtime-session',
+      historySessionId: '019e71fb-3cd1-76f1-9500-a7977eb2b374',
+      subscriptionKey: 'daemon:daemon-1:session:codex-runtime-session',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+    manager.publish({
+      topic: 'session.chat_tail',
+      key: 'daemon:daemon-1:session:codex-runtime-session',
+      sessionId: 'codex-runtime-session',
+      historySessionId: '019e71fb-3cd1-76f1-9500-a7977eb2b374',
+      seq: 1,
+      timestamp: 1,
+      status: 'generating',
+      messagesTail: [
+        {
+          role: 'user',
+          kind: 'standard',
+          content: '추가 범위',
+          id: 'native-user-119',
+          bubbleId: 'bubble:codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374:119:user:standard:19486670',
+          providerUnitKey: 'codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374:119:user:standard:19486670',
+          _turnKey: 'codex-cli:native-turn:019e71fb-3cd1-76f1-9500-a7977eb2b374:17',
+        },
+        {
+          role: 'assistant',
+          kind: 'standard',
+          source: 'assistant_text',
+          content: '조사하겠습니다.',
+          id: 'native-assistant-120',
+          bubbleId: 'bubble:codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374:120:assistant:standard:7bbaf6c4',
+          providerUnitKey: 'codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374:120:assistant:standard:7bbaf6c4',
+          _turnKey: 'codex-cli:native-turn:019e71fb-3cd1-76f1-9500-a7977eb2b374:17',
+        },
+      ],
+    } as any)
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.hasLiveSnapshot).toBe(true)
+    expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
+      '추가 범위',
+      '조사하겠습니다.',
+    ])
+    expect((snapshot.liveMessages[0] as any).providerUnitKey).toContain('codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374')
+  })
+
   it('treats legacy append payloads as complete parser tails instead of appending locally', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
