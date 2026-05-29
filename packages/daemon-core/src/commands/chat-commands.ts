@@ -402,11 +402,13 @@ function buildNativeHistoryFallbackReason(args: {
     provider?: ProviderModule;
     nativeSource?: string;
     nativeHistoryCoverage?: string;
+    unavailableReason?: string;
     nativeMessageCount: number;
     safeMapping: boolean;
     freshEnough: boolean;
 }): string {
     if (!supportsCliNativeTranscript(args.providerType, args.provider)) return 'provider_native_transcript_not_supported';
+    if (args.unavailableReason) return `native_history_unavailable:${args.unavailableReason}`;
     if (args.nativeSource === 'native-unavailable') return 'native_history_unavailable';
     if (args.nativeHistoryCoverage === 'partial') return 'native_history_partial';
     if (args.nativeHistoryCoverage === 'unavailable') return 'native_history_unavailable';
@@ -509,6 +511,15 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     scripts?: ProviderScripts;
     exactSessionScoped?: boolean;
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
+    if (!args.historySessionId) {
+        return {
+            messages: [],
+            hasMore: false,
+            source: 'native-unavailable',
+            unavailableReason: 'native_history_workspace_only_lookup_unsafe',
+            lookup: 'session',
+        } as ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' };
+    }
     const sessionHistory = readProviderChatHistory(agentStr, {
         canonicalHistory: args.canonicalHistory,
         historySessionId: args.historySessionId,
@@ -519,24 +530,10 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         historyBehavior: args.historyBehavior,
         scripts: args.scripts as any,
     });
-    // Exact runtime/provider transcript reads must not silently fall back to the
-    // workspace's active or most recent native transcript: multiple Hermes/Gemini/
-    // Codex sessions can run in the same workspace, and workspace fallback can make
-    // read_chat/completion evidence point at a different runtime's prompt.
-    if ((sessionHistory as any).source !== 'native-unavailable' || args.exactSessionScoped || !args.historySessionId || !args.workspace) {
-        return { ...(sessionHistory as any), lookup: args.historySessionId ? 'session' : 'workspace' };
-    }
-    const workspaceHistory = readProviderChatHistory(agentStr, {
-        canonicalHistory: args.canonicalHistory,
-        historySessionId: undefined,
-        workspace: args.workspace,
-        offset: args.offset,
-        limit: args.limit,
-        excludeRecentCount: args.excludeRecentCount,
-        historyBehavior: args.historyBehavior,
-        scripts: args.scripts as any,
-    });
-    return { ...(workspaceHistory as any), lookup: 'workspace' };
+    // Native transcripts are keyed by provider/runtime session identity. Falling
+    // back to workspace makes concurrent local Codex/Hermes sessions alias each
+    // other when they share the same cwd.
+    return { ...(sessionHistory as any), lookup: 'session' };
 }
 
 function isNativeHistoryFreshEnough(args: {
@@ -1446,11 +1443,12 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         const fallbackReason = buildNativeHistoryFallbackReason({
                             providerType,
                             provider,
-                            nativeSource: (nativeHistory as any).source,
-                            nativeHistoryCoverage,
-                            nativeMessageCount: nativeMessages.length,
-                            safeMapping,
-                            freshEnough,
+                        nativeSource: (nativeHistory as any).source,
+                        nativeHistoryCoverage,
+                        unavailableReason,
+                        nativeMessageCount: nativeMessages.length,
+                        safeMapping,
+                        freshEnough,
                         });
                         messageSource = buildCliMessageSourceProvenance({
                             selected: 'pty-parser',
@@ -1581,6 +1579,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         provider,
                         nativeSource: (history as any).source,
                         nativeHistoryCoverage,
+                        unavailableReason,
                         nativeMessageCount: historyMessages.length,
                         safeMapping,
                         freshEnough: true,

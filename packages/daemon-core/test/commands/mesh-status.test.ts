@@ -654,6 +654,71 @@ describe('mesh_status', () => {
     }
   })
 
+  it('does not attach a live session to an unrelated or nonexistent worktree node by stale node id', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-stale-node-session-')
+    const missingWorktree = join(dir, 'missing-worktree')
+    try {
+      const { router } = createRouter({
+        listSessions: vi.fn(async () => [
+          {
+            sessionId: 'sess-root-runtime',
+            workspace: repoRoot,
+            lifecycle: 'running',
+            providerType: 'codex-cli',
+            meta: { meshNodeId: 'node-missing', meshNodeFor: 'mesh-1' },
+          },
+        ]),
+      })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-1',
+        inlineMesh: {
+          id: 'mesh-1',
+          name: 'Mesh',
+          repoIdentity: 'repo',
+          policy: {},
+          nodes: [
+            {
+              id: 'node-root',
+              daemonId: 'machine-local',
+              machineLabel: 'Root',
+              workspace: repoRoot,
+              providers: ['codex-cli'],
+              policy: { providerPriority: ['codex-cli'] },
+            },
+            {
+              id: 'node-missing',
+              daemonId: 'machine-local',
+              machineLabel: 'Missing worktree',
+              workspace: missingWorktree,
+              isLocalWorktree: true,
+              providers: ['codex-cli'],
+              policy: { providerPriority: ['codex-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      const rootNode = result.nodes.find((node: any) => node.nodeId === 'node-root')
+      const missingNode = result.nodes.find((node: any) => node.nodeId === 'node-missing')
+      expect(rootNode.activeSessions).toEqual([])
+      expect(missingNode.activeSessions).toEqual([])
+      expect(result.historicalSessions).toEqual(expect.objectContaining({
+        count: 1,
+        sessions: [
+          expect.objectContaining({
+            sessionId: 'sess-root-runtime',
+            historical: true,
+            meshNodeId: 'node-missing',
+          }),
+        ],
+      }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('surfaces selected-coordinator mesh connection telemetry when reported', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-telemetry-')
     try {

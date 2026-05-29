@@ -1079,9 +1079,12 @@ function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
     };
 }
 
-function liveSessionRecordMatchesMeshNode(record: any, meshId: string, nodeId: string): boolean {
+function liveSessionRecordMatchesMeshNode(record: any, meshId: string, nodeId: string, nodeWorkspace = '', nodeIsMissingLocalWorktree = false): boolean {
     const recordNodeId = readStringValue(record?.meta?.meshNodeId);
     if (!recordNodeId || recordNodeId !== nodeId) return false;
+    if (nodeIsMissingLocalWorktree) return false;
+    const recordWorkspace = readStringValue(record?.workspace);
+    if (nodeWorkspace && recordWorkspace && recordWorkspace !== nodeWorkspace) return false;
     const recordMeshId = readStringValue(record?.meta?.meshNodeFor);
     return !recordMeshId || recordMeshId === meshId;
 }
@@ -1130,9 +1133,15 @@ function collectLiveMeshSessionRecords(args: {
     liveSessionRecords: any[];
     allowCoordinatorSession?: boolean;
 }): any[] {
+    const nodeWorkspace = readStringValue(args.node?.workspace);
+    const nodeIsMissingLocalWorktree = args.node?.isLocalWorktree === true
+        && !!nodeWorkspace
+        && !fs.existsSync(nodeWorkspace);
     const matches = args.liveSessionRecords.filter((record) => {
-        const nodeWorkspace = readStringValue(args.node?.workspace);
-        if (liveSessionRecordMatchesMeshNode(record, args.meshId, args.nodeId)) return true;
+        const recordNodeId = readStringValue(record?.meta?.meshNodeId);
+        if (recordNodeId && recordNodeId !== args.nodeId) return false;
+        if (liveSessionRecordMatchesMeshNode(record, args.meshId, args.nodeId, nodeWorkspace || '', nodeIsMissingLocalWorktree)) return true;
+        if (nodeIsMissingLocalWorktree) return false;
         return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record, args.meshId, nodeWorkspace);
     });
 
@@ -1155,11 +1164,15 @@ function buildHistoricalMeshSessions(args: {
 }): { count: number; sessions: Record<string, unknown>[]; instruction: string } | undefined {
     const liveNodeIds = new Set<string>();
     const liveWorkspaces = new Set<string>();
+    const missingLocalWorktreeNodeIds = new Set<string>();
     for (const node of args.nodes || []) {
         const nodeId = readStringValue(node?.id, node?.nodeId);
         const workspace = readStringValue(node?.workspace);
         if (nodeId) liveNodeIds.add(nodeId);
         if (workspace) liveWorkspaces.add(workspace);
+        if (nodeId && node?.isLocalWorktree === true && workspace && !fs.existsSync(workspace)) {
+            missingLocalWorktreeNodeIds.add(nodeId);
+        }
     }
 
     const sessions: Record<string, unknown>[] = [];
@@ -1169,7 +1182,7 @@ function buildHistoricalMeshSessions(args: {
         if (recordMeshId !== args.meshId) continue;
         const recordNodeId = readStringValue(meta.meshNodeId);
         const workspace = readStringValue(record?.workspace);
-        const removedNode = !!recordNodeId && !liveNodeIds.has(recordNodeId);
+        const removedNode = !!recordNodeId && (!liveNodeIds.has(recordNodeId) || missingLocalWorktreeNodeIds.has(recordNodeId));
         const orphanedWorkspace = !!workspace && !liveWorkspaces.has(workspace) && meta.meshCoordinatorFor !== args.meshId;
         if (!removedNode && !orphanedWorkspace) continue;
         sessions.push({
