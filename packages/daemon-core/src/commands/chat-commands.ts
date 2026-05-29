@@ -1165,16 +1165,55 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
             : typeof (h.currentSession as any)?.workspace === 'string'
                 ? (h.currentSession as any).workspace
                 : undefined;
-        const result = readProviderChatHistory(agentStr, {
-            canonicalHistory: provider?.canonicalHistory,
-            historySessionId,
-            workspace,
-            offset: offset || 0,
-            limit: limit || 30,
-            excludeRecentCount,
-            historyBehavior: provider?.historyBehavior,
-            scripts: provider?.scripts as any,
-        });
+        const exactNativeHistoryScope = Boolean(
+            (typeof args?.targetSessionId === 'string' && args.targetSessionId.trim())
+            || (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
+            || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
+        );
+        const result = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)
+            ? readCliProviderNativeHistory(agentStr, {
+                canonicalHistory: provider?.canonicalHistory,
+                historySessionId,
+                workspace,
+                offset: offset || 0,
+                limit: limit || 30,
+                excludeRecentCount,
+                historyBehavior: provider?.historyBehavior,
+                scripts: provider?.scripts as any,
+                exactSessionScoped: exactNativeHistoryScope,
+            })
+            : readProviderChatHistory(agentStr, {
+                canonicalHistory: provider?.canonicalHistory,
+                historySessionId,
+                workspace,
+                offset: offset || 0,
+                limit: limit || 30,
+                excludeRecentCount,
+                historyBehavior: provider?.historyBehavior,
+                scripts: provider?.scripts as any,
+            });
+        if (supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)) {
+            const lookup = (result as any).lookup === 'workspace' ? 'workspace' : 'session';
+            const messages = Array.isArray((result as any).messages) ? normalizeNativeHistoryMessages(agentStr, (result as any).messages as ChatMessage[]) : [];
+            const historyProviderSessionId = typeof (result as any)?.providerSessionId === 'string'
+                ? (result as any).providerSessionId
+                : readHistorySessionIdFromMessages(messages) || historySessionId;
+            const safeMapping = hasSafeNativeHistoryMapping({
+                historySessionId: lookup === 'workspace' ? undefined : historySessionId,
+                providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
+                workspace,
+                nativeMessages: messages,
+            });
+            if ((result as any).source === 'provider-native' && messages.length > 0 && !safeMapping) {
+                return {
+                    success: true,
+                    messages: [],
+                    hasMore: false,
+                    source: 'native-unavailable',
+                    agent: agentStr,
+                };
+            }
+        }
         return { success: true, ...result, agent: agentStr };
     } catch (e: any) {
         return { success: false, error: e.message };

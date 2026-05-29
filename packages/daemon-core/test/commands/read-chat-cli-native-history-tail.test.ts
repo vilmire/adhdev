@@ -599,4 +599,50 @@ describe('CLI read_chat native history hydration', () => {
       limit: 25,
     }))
   })
+
+  it('does not let chat_history hydrate a fresh runtime from another same-workspace native session', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourceMtimeMs: Date.now(),
+      providerSessionId: 'previous-workspace-session',
+      messages: [
+        { role: 'user', content: 'old prompt', receivedAt: 1_000, historySessionId: 'previous-workspace-session', workspace: '/workspaces/shared' },
+        { role: 'assistant', content: 'old answer', receivedAt: 2_000, historySessionId: 'previous-workspace-session', workspace: '/workspaces/shared' },
+      ],
+      hasMore: false,
+    })
+
+    const result = await handleChatHistory(createHelpers({
+      provider: {
+        type: 'codex-cli',
+        category: 'cli',
+        historyBehavior: { transcriptAuthority: 'provider' },
+        canonicalHistory: { mode: 'native-source', format: 'codex-native' },
+      },
+      currentSession: {
+        sessionId: 'fresh-runtime-session',
+        providerType: 'codex-cli',
+        transport: 'pty',
+        workspace: '/workspaces/shared',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'fresh-runtime-session', instanceKey: 'fresh-runtime-session' }) },
+        instanceManager: { getInstance: () => null },
+      },
+    }) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'fresh-runtime-session',
+      offset: 0,
+      limit: 30,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.messages).toEqual([])
+    expect(JSON.stringify(result)).not.toContain('old answer')
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledTimes(1)
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: 'fresh-runtime-session',
+      workspace: '/workspaces/shared',
+    }))
+  })
 })

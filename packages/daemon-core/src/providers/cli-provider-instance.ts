@@ -43,6 +43,18 @@ type CompletedDebouncePending = {
     loggedBlockReason?: string;
 };
 
+function isIdleStatus(value: unknown): boolean {
+    const status = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return !status || status === 'idle' || status === 'ready';
+}
+
+function getMessageTime(message: unknown): number {
+    if (!message || typeof message !== 'object') return 0;
+    const record = message as { receivedAt?: unknown; timestamp?: unknown };
+    const value = Number(record.receivedAt ?? record.timestamp ?? 0);
+    return Number.isFinite(value) ? value : 0;
+}
+
 type CompletedFinalizationBlock = {
     reason: string;
     terminal?: boolean;
@@ -417,7 +429,7 @@ export class CliProviderInstance implements ProviderInstance {
         await this.adapter.spawn();
         await this.enforceFreshSessionLaunchIfNeeded();
         this.maybeAppendRuntimeRecoveryMessage(this.adapter.getRuntimeMetadata());
-        if (this.providerSessionId) {
+        if (this.providerSessionId && this.shouldHydrateExistingProviderHistory()) {
             this.restorePersistedHistoryFromCurrentSession();
         }
         if (this.providerSessionId && this.launchMode === 'resume') {
@@ -518,26 +530,35 @@ export class CliProviderInstance implements ProviderInstance {
             this.provider,
             typeof adapterStatus?.providerSessionId === 'string' ? adapterStatus.providerSessionId : '',
         );
-        if (adapterProviderSessionId) {
-            this.promoteProviderSessionId(adapterProviderSessionId);
-        }
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, Date.now());
         const visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
             ? 'error'
             : (autoApproveActive ? 'generating' : adapterStatus.status);
+        const runtime = this.adapter.getRuntimeMetadata();
+        this.maybeAppendRuntimeRecoveryMessage(runtime);
+        let parsedMessages = Array.isArray(parsedStatus?.messages)
+            ? parsedStatus.messages
+            : [];
         const parsedProviderSessionId = normalizeProviderSessionId(
             this.provider,
             typeof parsedStatus?.providerSessionId === 'string' ? parsedStatus.providerSessionId : '',
         );
-        if (parsedProviderSessionId) {
+        const suppressFreshLaunchStartupReplay = this.shouldSuppressFreshLaunchStartupReplay(
+            parsedMessages,
+            parsedStatus,
+            adapterStatus,
+            parsedProviderSessionId,
+        );
+        if (adapterProviderSessionId && !suppressFreshLaunchStartupReplay) {
+            this.promoteProviderSessionId(adapterProviderSessionId);
+        }
+        if (parsedProviderSessionId && !suppressFreshLaunchStartupReplay) {
             this.promoteProviderSessionId(parsedProviderSessionId);
         }
-        const runtime = this.adapter.getRuntimeMetadata();
-        this.maybeAppendRuntimeRecoveryMessage(runtime);
+        if (suppressFreshLaunchStartupReplay) {
+            parsedMessages = [];
+        }
         const activeChatId = this.providerSessionId || runtime?.runtimeId || this.instanceId;
-        let parsedMessages = Array.isArray(parsedStatus?.messages)
-            ? parsedStatus.messages
-            : [];
         const historyMessageCount = Number.isFinite(parsedStatus?.historyMessageCount)
             ? Math.max(0, Number(parsedStatus.historyMessageCount))
             : null;
@@ -547,7 +568,9 @@ export class CliProviderInstance implements ProviderInstance {
                 : [];
         }
         const mergedMessages = this.mergeConversationMessages(parsedMessages);
-        const canonicalBackedHistory = this.syncCanonicalSavedHistoryIfNeeded();
+        const canonicalBackedHistory = this.shouldHydrateExistingProviderHistory()
+            ? this.syncCanonicalSavedHistoryIfNeeded()
+            : false;
         const statusMessages = canonicalBackedHistory && this.lastPersistedHistoryMessages.length > 0
             ? this.lastPersistedHistoryMessages.map((message) => ({
                 role: message.role,
@@ -600,7 +623,12 @@ export class CliProviderInstance implements ProviderInstance {
             }
         }
 
-        this.applyProviderResponse(parsedStatus, { phase: 'immediate' });
+        this.applyProviderResponse(
+            suppressFreshLaunchStartupReplay && parsedStatus && typeof parsedStatus === 'object'
+                ? { ...parsedStatus, providerSessionId: undefined }
+                : parsedStatus,
+            { phase: 'immediate' },
+        );
         const surface = resolveProviderStateSurface({
             summaryMetadata: this.summaryMetadata as any,
             controlValues: this.controlValues,
@@ -1466,7 +1494,9 @@ export class CliProviderInstance implements ProviderInstance {
         this.providerSessionId = nextSessionId;
         this.historyWriter.promoteHistorySession(this.type, previousHistorySessionId, nextSessionId);
         this.historyWriter.writeSessionStart(this.type, nextSessionId, this.workingDir, this.instanceId);
-        this.restorePersistedHistoryFromCurrentSession();
+        if (this.shouldHydrateExistingProviderHistory()) {
+            this.restorePersistedHistoryFromCurrentSession();
+        }
         this.adapter.updateRuntimeMeta({ providerSessionId: nextSessionId });
         this.onProviderSessionResolved?.({
             instanceId: this.instanceId,
@@ -1477,6 +1507,24 @@ export class CliProviderInstance implements ProviderInstance {
             previousProviderSessionId,
         });
         LOG.info('CLI', `[${this.type}] discovered provider session id: ${nextSessionId}`);
+    }
+
+    private shouldHydrateExistingProviderHistory(): boolean {
+        return this.launchMode === 'resume' || this.launchMode === 'manual';
+    }
+
+    private shouldSuppressFreshLaunchStartupReplay(parsedMessages: unknown[], parsedStatus: any, adapterStatus: any, parsedProviderSessionId = ''): boolean {
+        if (this.launchMode !== 'new') return false;
+        if (this.providerSessionId) return false;
+        if (!Array.isArray(parsedMessages) || parsedMessages.length === 0) return false;
+        if (!isIdleStatus(adapterStatus?.status) || !isIdleStatus(parsedStatus?.status)) return false;
+        if (parsedProviderSessionId) return true;
+
+        const newestMessageAt = parsedMessages.reduce<number>((newest, message) => Math.max(newest, getMessageTime(message)), 0);
+
+        // Untimestamped idle parser output during a fresh launch is usually the
+        // provider's last workspace transcript before a new turn exists.
+        return newestMessageAt === 0;
     }
 
     private syncCanonicalSavedHistoryIfNeeded(): boolean {
