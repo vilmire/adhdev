@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -499,6 +499,55 @@ describe('mesh_status', () => {
           reported: false,
         }),
       }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('surfaces preview freshness from the local deploy record', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-preview-freshness-')
+    try {
+      const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim()
+      await mkdir(join(repoRoot, '.adhdev'))
+      await writeFile(join(repoRoot, '.adhdev', 'preview-deploy.json'), JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: '2026-05-29T00:00:00.000Z',
+        lastPreviewCommit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        target: 'all',
+      }))
+      const { router } = createRouter()
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-preview',
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh-preview',
+          name: 'Preview Mesh',
+          repoIdentity: 'repo',
+          policy: {},
+          nodes: [
+            {
+              id: 'node-local',
+              daemonId: 'machine-local',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.previewFreshness).toEqual(expect.objectContaining({
+        status: 'stale',
+        lastPreviewCommit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        currentMainCommit: head,
+        currentMainCommitSource: 'HEAD',
+        recordPath: '.adhdev/preview-deploy.json',
+        lastTarget: 'all',
+      }))
+      expect(result.deployFreshness).toEqual(result.previewFreshness)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
