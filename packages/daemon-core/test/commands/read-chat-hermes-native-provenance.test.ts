@@ -131,6 +131,96 @@ describe('Hermes CLI read_chat native transcript provenance', () => {
     }
   })
 
+  it('relabels stale Hermes parser identities when native history is selected', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.hermes/sessions/session_20260529_143433_31e43f.json',
+      sourceMtimeMs: Date.now(),
+      providerSessionId: '20260529_143433_31e43f',
+      nativeHistoryCoverage: 'full',
+      hasMore: false,
+      messages: [
+        { role: 'system', kind: 'session_start', content: '/Users/vilmire/Work/adhdev', receivedAt: 900, historySessionId: '20260529_143433_31e43f', workspace: '/Users/vilmire/Work/adhdev' },
+        {
+          role: 'user',
+          kind: 'standard',
+          content: 'HERMES_NATIVE_SMOKE_OK\n/Users/vilmire/Work/adhdev',
+          receivedAt: 1_000,
+          historySessionId: '20260529_143433_31e43f',
+          workspace: '/Users/vilmire/Work/adhdev',
+          providerUnitKey: 'hermes-cli:turn_1_fkw2sq:user:fkw2sq',
+          _turnKey: 'turn_1_fkw2sq',
+          bubbleId: 'hermes_hfw2yr',
+        },
+        {
+          role: 'assistant',
+          kind: 'standard',
+          content: '예, 프롬프트를 정상적으로 읽고 응답할 수 있습니다.\n아니요, 이 새 세션의 이전 대화 기록은 보이지 않았습니다.',
+          receivedAt: 2_000,
+          historySessionId: '20260529_143433_31e43f',
+          workspace: '/Users/vilmire/Work/adhdev',
+          providerUnitKey: 'hermes-cli:turn_1_fkw2sq:assistant:standard:0',
+          _turnKey: 'turn_1_fkw2sq',
+          bubbleId: 'hermes_stale',
+        },
+      ],
+    })
+    const adapter = createHermesAdapter({
+      workingDir: '/Users/vilmire/Work/adhdev',
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        providerSessionId: '20260529_143433_31e43f',
+        title: 'Hermes Agent',
+        messages: [
+          {
+            role: 'user',
+            content: 'HERMES_NATIVE_SMOKE_OK\n/Users/vilmire/Work/adhdev',
+            providerUnitKey: 'hermes-cli:turn_1_fkw2sq:user:fkw2sq',
+            _turnKey: 'turn_1_fkw2sq',
+            bubbleId: 'hermes_hfw2yr',
+            receivedAt: 1_000,
+          },
+          { role: 'assistant', content: '예, 프롬프트를 정상적으로 읽고 응답할 수 있습니다.', receivedAt: 2_000 },
+        ],
+      })),
+    })
+    const helpers = createHelpers(adapter, {
+      currentSession: {
+        sessionId: '05dd786e-1560-4691-af63-b10c4b58152f',
+        providerType: 'hermes-cli',
+        providerName: 'Hermes Agent',
+        providerSessionId: '20260529_143433_31e43f',
+        transport: 'pty',
+        adapterKey: '05dd786e-1560-4691-af63-b10c4b58152f',
+        workspace: '/Users/vilmire/Work/adhdev',
+      },
+    })
+
+    const readArgs = {
+      agentType: 'hermes-cli',
+      targetSessionId: '05dd786e-1560-4691-af63-b10c4b58152f',
+      providerSessionId: '20260529_143433_31e43f',
+      tailLimit: 20,
+    }
+    const first = await handleReadChat(helpers as any, readArgs)
+    const second = await handleReadChat(helpers as any, readArgs)
+
+    expect(first.success).toBe(true)
+    expect(first.messageSource).toMatchObject({ selected: 'native-history', nativeHandle: '20260529_143433_31e43f' })
+    expect((first.messages as any[]).map(message => message.role)).toEqual(['user', 'assistant'])
+    expect((first.messages as any[]).filter(message => message.role === 'user')).toHaveLength(1)
+    for (const message of first.messages as any[]) {
+      expect(message.providerUnitKey).toContain('hermes-cli:native:20260529_143433_31e43f:')
+      expect(message.providerUnitKey).not.toContain('hermes-cli:turn_')
+      expect(message._turnKey).toContain('hermes-cli:native-turn:20260529_143433_31e43f:')
+      expect(message._turnKey).not.toMatch(/^turn_/)
+      expect(message.bubbleId).toBe(`bubble:${message.providerUnitKey}`)
+    }
+    expect((second.messages as any[]).map(message => message.providerUnitKey)).toEqual((first.messages as any[]).map(message => message.providerUnitKey))
+    expect((second.messages as any[]).map(message => message._turnKey)).toEqual((first.messages as any[]).map(message => message._turnKey))
+    expect((second.messages as any[]).map(message => message.bubbleId)).toEqual((first.messages as any[]).map(message => message.bubbleId))
+  })
+
   it('uses workspace-scoped Hermes native history for fresh sessions without replaying prior PTY duplicates', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       lookup: 'workspace',

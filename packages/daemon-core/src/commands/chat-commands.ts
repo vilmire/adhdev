@@ -279,7 +279,18 @@ function readHistorySessionIdFromMessages(messages: ChatMessage[]): string | und
     return undefined;
 }
 
-function normalizeNativeHistoryMessages(providerType: string, messages: ChatMessage[]): ChatMessage[] {
+function shouldPreserveNativeIdentity(providerType: string, sessionId: string, message: ChatMessage): boolean {
+    const providerUnitKey = typeof message.providerUnitKey === 'string' ? message.providerUnitKey.trim() : '';
+    const turnKey = typeof message._turnKey === 'string' ? message._turnKey.trim() : '';
+    if (!providerUnitKey || !turnKey) return false;
+    if (providerType === 'hermes-cli' && sessionId) {
+        return providerUnitKey.startsWith(`${providerType}:native:${sessionId}:`)
+            && turnKey.startsWith(`${providerType}:native-turn:${sessionId}:`);
+    }
+    return true;
+}
+
+function normalizeNativeHistoryMessages(providerType: string, messages: ChatMessage[], nativeSessionId?: string): ChatMessage[] {
     let turnIndex = 0;
     return normalizeChatMessages(messages).map((message, index) => {
         const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
@@ -296,9 +307,13 @@ function normalizeNativeHistoryMessages(providerType: string, messages: ChatMess
             kind,
             flattenContent(message.content),
         ]).slice(0, 12);
-        const providerUnitKey = typeof message.providerUnitKey === 'string' && message.providerUnitKey.trim()
-            ? message.providerUnitKey.trim()
-            : `${providerType}:native:${historySessionId || 'workspace'}:${index}:${role || 'message'}:${kind}:${contentHash}`;
+        const nativeIdentitySessionId = historySessionId || (typeof nativeSessionId === 'string' ? nativeSessionId.trim() : '');
+        const preserveNativeIdentity = shouldPreserveNativeIdentity(providerType, nativeIdentitySessionId, message);
+        const existingProviderUnitKey = typeof message.providerUnitKey === 'string' ? message.providerUnitKey.trim() : '';
+        const existingTurnKey = typeof message._turnKey === 'string' ? message._turnKey.trim() : '';
+        const providerUnitKey = preserveNativeIdentity
+            ? existingProviderUnitKey
+            : `${providerType}:native:${nativeIdentitySessionId || 'workspace'}:${index}:${role || 'message'}:${kind}:${contentHash}`;
         const meta = message.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : undefined;
         const isSystemSessionStart = role === 'system' || kind === 'system' || kind === 'session_start';
         const isActivity = role === 'assistant' && (kind === 'tool' || kind === 'terminal' || kind === 'thought');
@@ -308,11 +323,12 @@ function normalizeNativeHistoryMessages(providerType: string, messages: ChatMess
             kind: isSystemSessionStart ? 'system' : kind,
             providerUnitKey,
             bubbleId: typeof message.bubbleId === 'string' && message.bubbleId.trim()
+                && preserveNativeIdentity
                 ? message.bubbleId.trim()
                 : `bubble:${providerUnitKey}`,
-            _turnKey: typeof message._turnKey === 'string' && message._turnKey.trim()
-                ? message._turnKey.trim()
-                : `${providerType}:native-turn:${historySessionId || 'workspace'}:${turnIndex}`,
+            _turnKey: preserveNativeIdentity
+                ? existingTurnKey
+                : `${providerType}:native-turn:${nativeIdentitySessionId || 'workspace'}:${turnIndex}`,
             bubbleState: message.bubbleState || 'final',
             ...(isSystemSessionStart ? {
                 visibility: message.visibility || 'hidden',
@@ -1194,7 +1210,9 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
             });
         if (supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)) {
             const lookup = (result as any).lookup === 'workspace' ? 'workspace' : 'session';
-            const messages = Array.isArray((result as any).messages) ? normalizeNativeHistoryMessages(agentStr, (result as any).messages as ChatMessage[]) : [];
+            const messages = Array.isArray((result as any).messages)
+                ? normalizeNativeHistoryMessages(agentStr, (result as any).messages as ChatMessage[], (result as any)?.providerSessionId)
+                : [];
             const historyProviderSessionId = typeof (result as any)?.providerSessionId === 'string'
                 ? (result as any).providerSessionId
                 : readHistorySessionIdFromMessages(messages) || historySessionId;
@@ -1335,7 +1353,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
 
                 if (nativeHistory) {
                     const nativeMessages = Array.isArray((nativeHistory as any).messages)
-                        ? normalizeNativeHistoryMessages(agentStr, (nativeHistory as any).messages as ChatMessage[])
+                        ? normalizeNativeHistoryMessages(agentStr, (nativeHistory as any).messages as ChatMessage[], (nativeHistory as any)?.providerSessionId)
                         : [];
                     const historyProviderSessionId = typeof (nativeHistory as any)?.providerSessionId === 'string'
                         ? (nativeHistory as any).providerSessionId
@@ -1497,7 +1515,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             });
             const lookup = (history as any).lookup === 'workspace' ? 'workspace' : 'session';
             const historyMessages = Array.isArray((history as any)?.messages)
-                ? normalizeNativeHistoryMessages(agentStr, (history as any).messages as ChatMessage[])
+                ? normalizeNativeHistoryMessages(agentStr, (history as any).messages as ChatMessage[], (history as any)?.providerSessionId)
                 : [];
             const historyProviderSessionId = typeof (history as any)?.providerSessionId === 'string'
                 ? (history as any).providerSessionId
