@@ -428,6 +428,7 @@ export interface AddNodeOptions {
     isLocalWorktree?: boolean;
     worktreeBranch?: string;
     clonedFromNodeId?: string;
+    worktreeBootstrap?: LocalMeshNodeEntry['worktreeBootstrap'];
     role?: RepoMeshDaemonRole;
 }
 
@@ -456,6 +457,7 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
         isLocalWorktree: opts.isLocalWorktree,
         worktreeBranch: opts.worktreeBranch,
         clonedFromNodeId: opts.clonedFromNodeId,
+        worktreeBootstrap: opts.worktreeBootstrap,
         role: opts.role,
     };
 
@@ -482,7 +484,7 @@ export function removeNode(meshId: string, nodeId: string): boolean {
 export function updateNode(
     meshId: string,
     nodeId: string,
-    opts: { userOverrides?: Partial<RepoMeshNodeCapabilities>; policy?: RepoMeshNodePolicy },
+    opts: { userOverrides?: Partial<RepoMeshNodeCapabilities>; policy?: RepoMeshNodePolicy; worktreeBootstrap?: LocalMeshNodeEntry['worktreeBootstrap'] },
 ): LocalMeshNodeEntry | undefined {
     const config = loadMeshConfig();
     const mesh = config.meshes.find(m => m.id === meshId);
@@ -493,6 +495,7 @@ export function updateNode(
 
     if (opts.userOverrides) node.userOverrides = { ...node.userOverrides, ...opts.userOverrides };
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
+    if (opts.worktreeBootstrap) node.worktreeBootstrap = opts.worktreeBootstrap;
     mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(config);
     return node;

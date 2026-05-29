@@ -290,6 +290,20 @@ export interface LocalMeshNodeEntry {
     worktreeBranch?: string;
     /** Node ID this worktree was cloned from */
     clonedFromNodeId?: string;
+    /** Repo-local preparation result for ADHDev-created worktree nodes. */
+    worktreeBootstrap?: {
+        status: 'ready' | 'running' | 'failed' | 'not_configured' | 'disabled' | 'stale';
+        required?: boolean;
+        configSource?: string;
+        configSourceType?: string;
+        startedAt?: string;
+        completedAt?: string;
+        lastCommand?: string;
+        exitCode?: number | null;
+        error?: string;
+        commandsRun?: Array<Record<string, unknown>>;
+        staleInputs?: string[];
+    };
     /** Optional associated/external repos configured as node metadata. */
     relatedRepos?: RepoMeshRelatedRepo[];
     role?: RepoMeshDaemonRole;
@@ -361,6 +375,9 @@ export interface RepoMeshNodeStatus {
     activeSessionDetails?: RepoMeshSessionStatus[];
     providerPriority?: string[];
     launchReady?: boolean;
+    worktreeBootstrap?: LocalMeshNodeEntry['worktreeBootstrap'];
+    launchBlockedReason?: string;
+    launchBlockedMessage?: string;
     lastSeenAt?: string;
     updatedAt?: string;
     connection?: RepoMeshPeerConnectionStatus;

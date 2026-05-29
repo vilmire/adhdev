@@ -50,6 +50,12 @@ import {
     validateMeshRefineConfig,
     type MeshRefineValidationCommandPlan,
 } from '../mesh/refine-config.js';
+import {
+    MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS,
+    MESH_WORKTREE_BOOTSTRAP_CONFIG_SCHEMA,
+    runMeshWorktreeBootstrap,
+    type WorktreeBootstrapState,
+} from '../mesh/worktree-bootstrap-config.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
@@ -915,6 +921,17 @@ function finalizeMeshNodeStatus(args: {
         if (machineStatus) status.machineStatus = machineStatus;
     }
     synthesizeMeshNodeFreshnessFromConnection(status);
+    const bootstrap = readObjectRecord(node?.worktreeBootstrap);
+    if (node?.isLocalWorktree && readStringValue(bootstrap.status)) {
+        status.worktreeBootstrap = bootstrap;
+        if (bootstrap.status === 'failed' && bootstrap.required !== false) {
+            status.launchReady = false;
+            status.launchBlockedReason = 'worktree_bootstrap_failed';
+            status.launchBlockedMessage = readStringValue(bootstrap.error)
+                || 'Required worktree bootstrap failed; resolve it before launching an agent into this node.';
+            return;
+        }
+    }
     const connectionState = readStringValue(readObjectRecord(status.connection).state);
     status.launchReady = !!daemonId && (
         readStringValue(status.machineStatus) === 'online'
@@ -1694,7 +1711,7 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
                 cwd,
                 encoding: 'utf8',
                 timeout,
-                maxBuffer: REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
+                maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
                 env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
             });
             summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
@@ -1734,7 +1751,7 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
                 cwd,
                 encoding: 'utf8',
                 timeout,
-                maxBuffer: REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
+                maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
                 env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
             });
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
@@ -4465,6 +4482,12 @@ export class DaemonCommandRouter {
                     success: true,
                     schema: MESH_REFINE_CONFIG_SCHEMA,
                     locations: MESH_REFINE_CONFIG_LOCATIONS,
+                    worktreeBootstrap: {
+                        schema: MESH_WORKTREE_BOOTSTRAP_CONFIG_SCHEMA,
+                        locations: MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS,
+                        sourceOfTruth: 'repo worktree bootstrap config',
+                        runBehavior: 'When present and enabled, clone_mesh_node runs commands after submodule initialization and records status on the worktree node.',
+                    },
                     sourceOfTruth: 'repo mesh/refine config',
                     heuristicRole: 'suggestions_only_not_execution_path',
                 };
@@ -4695,13 +4718,36 @@ export class DaemonCommandRouter {
                         }
                     }
 
+                    const bootstrapState: WorktreeBootstrapState = await runMeshWorktreeBootstrap(mesh, result.worktreePath);
+                    node.worktreeBootstrap = bootstrapState;
+                    if (!meshRecord.inline) {
+                        try {
+                            const { updateNode } = await import('../config/mesh-config.js');
+                            updateNode(meshId, node.id, { worktreeBootstrap: bootstrapState });
+                            this.invalidateAggregateMeshStatus(meshId);
+                        } catch { /* bootstrap status persistence is best-effort */ }
+                    }
+
                     // Record in task ledger
                     try {
                         const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
                         appendLedgerEntry(meshId, {
                             kind: 'node_cloned',
                             nodeId: node.id,
-                            payload: { sourceNodeId, branch: result.branch, worktreePath: result.worktreePath, submodulesInitialized: initSubmodules },
+                            payload: {
+                                sourceNodeId,
+                                branch: result.branch,
+                                worktreePath: result.worktreePath,
+                                submodulesInitialized: initSubmodules,
+                                worktreeBootstrap: {
+                                    status: bootstrapState.status,
+                                    required: bootstrapState.required,
+                                    configSource: bootstrapState.configSource,
+                                    configSourceType: bootstrapState.configSourceType,
+                                    lastCommand: bootstrapState.lastCommand,
+                                    exitCode: bootstrapState.exitCode,
+                                },
+                            },
                         });
                     } catch { /* ledger append is best-effort */ }
 
@@ -4710,6 +4756,7 @@ export class DaemonCommandRouter {
                         node,
                         worktreePath: result.worktreePath,
                         branch: result.branch,
+                        worktreeBootstrap: bootstrapState,
                     };
                 } catch (e: any) {
                     return { success: false, error: e.message };

@@ -167,6 +167,15 @@ export {
   suggestMeshRefineConfig,
   validateMeshRefineConfig,
 } from './mesh/refine-config.js';
+export {
+  MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS,
+  MESH_WORKTREE_BOOTSTRAP_CONFIG_SCHEMA,
+  loadMeshWorktreeBootstrapConfig,
+  runMeshWorktreeBootstrap,
+  validateMeshWorktreeBootstrapConfig,
+  type RepoMeshWorktreeBootstrapConfig,
+  type WorktreeBootstrapState,
+} from './mesh/worktree-bootstrap-config.js';
 export type {
   MeshRefineValidationCategory,
   MeshRefineValidationCommandPlan,
