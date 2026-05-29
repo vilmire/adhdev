@@ -65,6 +65,7 @@ import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
 import { homedir, hostname as osHostname } from 'os';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
+import { execFileSync } from 'node:child_process';
 
 type ReleaseChannel = 'stable' | 'preview';
 const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
@@ -1281,6 +1282,32 @@ type MeshRefinePatchEquivalenceSummary = {
     error?: string;
     stdout?: string;
     stderr?: string;
+    actionableHint?: MeshRefineSubmoduleConflictHint;
+};
+
+type MeshRefineSubmoduleConflictHint = {
+    kind: 'submodule_conflict';
+    message: string;
+    conflicts: Array<{
+        path: string;
+        baseCommit?: string;
+        branchCommit?: string;
+    }>;
+    nextSteps: string[];
+};
+
+type MeshRefineSubmoduleAlignmentSummary = {
+    status: 'passed' | 'failed' | 'skipped';
+    changedGitlinkPaths: string[];
+    outOfSyncPaths: string[];
+    updatedPaths: string[];
+    verifiedPaths: string[];
+    durationMs: number;
+    reason?: string;
+    command?: string;
+    error?: string;
+    stdout?: string;
+    stderr?: string;
 };
 
 type MeshRefineSubmoduleReachabilityEntry = {
@@ -1462,6 +1489,154 @@ async function runMeshRefinePatchEquivalenceGate(
             baseHead,
             branchHead,
             durationMs: Date.now() - startedAt,
+            error: e?.message || String(e),
+            stdout: truncateValidationOutput(e?.stdout),
+            stderr: truncateValidationOutput(e?.stderr),
+            actionableHint: buildPatchEquivalenceSubmoduleConflictHint(
+                repoRoot,
+                baseHead,
+                branchHead,
+                `${e?.message || ''}\n${e?.stdout || ''}\n${e?.stderr || ''}`,
+            ),
+        };
+    }
+}
+
+function buildPatchEquivalenceSubmoduleConflictHint(
+    repoRoot: string,
+    baseHead: string,
+    branchHead: string,
+    output: string,
+): MeshRefineSubmoduleConflictHint | undefined {
+    if (!/(submodule|160000)/i.test(output) || !/(conflict|failed to merge)/i.test(output)) return undefined;
+    const conflicts = readChangedGitlinkPaths(repoRoot, baseHead, branchHead)
+        .map(path => ({
+            path,
+            baseCommit: readTreeObject(repoRoot, baseHead, path),
+            branchCommit: readTreeObject(repoRoot, branchHead, path),
+        }));
+    if (conflicts.length === 0) return undefined;
+    return {
+        kind: 'submodule_conflict',
+        message: 'Refinery could not synthesize a safe merge tree because the branch and base point the same submodule path at different commits.',
+        conflicts,
+        nextSteps: [
+            'Inspect the listed submodule path in both base and branch: baseCommit is the commit currently recorded by the base workspace, branchCommit is the commit recorded by the worktree branch.',
+            'Resolve the submodule first by checking out or creating the intended submodule commit, then commit the chosen gitlink in the root branch.',
+            'Ensure the chosen submodule commit is reachable from the configured submodule remote main branch, then rerun mesh_refine_node.',
+        ],
+    };
+}
+
+function readChangedGitlinkPaths(repoRoot: string, fromRef: string, toRef: string): string[] {
+    try {
+        const output = execFileSync('git', ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+        });
+        const paths = new Set<string>();
+        for (const line of output.split('\n')) {
+            if (!line.trim()) continue;
+            const metaAndPath = line.split('\t');
+            const meta = metaAndPath[0] || '';
+            const path = metaAndPath[metaAndPath.length - 1]?.trim();
+            if (!path) continue;
+            const parts = meta.split(/\s+/);
+            if (parts[0]?.includes('160000') || parts[1]?.includes('160000')) {
+                paths.add(path);
+            }
+        }
+        return [...paths].sort();
+    } catch {
+        return [];
+    }
+}
+
+function readTreeObject(repoRoot: string, ref: string, path: string): string | undefined {
+    try {
+        const output = execFileSync('git', ['ls-tree', ref, '--', path], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: 1024 * 1024,
+        }).trim();
+        const match = output.match(/\bcommit\s+([0-9a-f]{40})\b/i);
+        return match?.[1];
+    } catch {
+        return undefined;
+    }
+}
+
+async function alignRefinerySubmodulesAfterMerge(
+    repoRoot: string,
+    previousBaseHead: string,
+    currentHead: string,
+    options: { submoduleIgnorePaths?: string[] } = {},
+): Promise<MeshRefineSubmoduleAlignmentSummary> {
+    const startedAt = Date.now();
+    const changedGitlinkPaths = readChangedGitlinkPaths(repoRoot, previousBaseHead, currentHead)
+        .filter(path => !(options.submoduleIgnorePaths || []).includes(path));
+    const preStatus = await getGitRepoStatus(repoRoot, {
+        includeSubmodules: true,
+        submoduleIgnorePaths: options.submoduleIgnorePaths,
+        timeoutMs: 15_000,
+    });
+    const outOfSyncPaths = (preStatus.submodules || [])
+        .filter(submodule => submodule.dirty || submodule.outOfSync || !!submodule.error)
+        .map(submodule => submodule.path);
+    const updatePaths = [...new Set([...changedGitlinkPaths, ...outOfSyncPaths])].sort();
+
+    if (updatePaths.length === 0) {
+        return {
+            status: 'skipped',
+            changedGitlinkPaths,
+            outOfSyncPaths,
+            updatedPaths: [],
+            verifiedPaths: [],
+            durationMs: Date.now() - startedAt,
+            reason: 'no_changed_or_out_of_sync_submodules',
+        };
+    }
+
+    const commandArgs = ['submodule', 'update', '--init', '--recursive', '--', ...updatePaths];
+    try {
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+        const result = await execFileAsync('git', commandArgs, {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+            timeout: 60_000,
+        });
+        const postStatus = await getGitRepoStatus(repoRoot, {
+            includeSubmodules: true,
+            submoduleIgnorePaths: options.submoduleIgnorePaths,
+            timeoutMs: 15_000,
+        });
+        const remaining = (postStatus.submodules || [])
+            .filter(submodule => updatePaths.includes(submodule.path) && (submodule.dirty || submodule.outOfSync || !!submodule.error));
+        return {
+            status: remaining.length === 0 ? 'passed' : 'failed',
+            changedGitlinkPaths,
+            outOfSyncPaths,
+            updatedPaths: updatePaths,
+            verifiedPaths: updatePaths.filter(path => !remaining.some(submodule => submodule.path === path)),
+            durationMs: Date.now() - startedAt,
+            command: `git ${commandArgs.join(' ')}`,
+            stdout: truncateValidationOutput(result.stdout),
+            stderr: truncateValidationOutput(result.stderr),
+            ...(remaining.length > 0 ? { error: `Submodule checkout remained out of sync after update: ${remaining.map(entry => entry.path).join(', ')}` } : {}),
+        };
+    } catch (e: any) {
+        return {
+            status: 'failed',
+            changedGitlinkPaths,
+            outOfSyncPaths,
+            updatedPaths: updatePaths,
+            verifiedPaths: [],
+            durationMs: Date.now() - startedAt,
+            command: `git ${commandArgs.join(' ')}`,
             error: e?.message || String(e),
             stdout: truncateValidationOutput(e?.stdout),
             stderr: truncateValidationOutput(e?.stderr),
@@ -3082,6 +3257,7 @@ export class DaemonCommandRouter {
                 expectedPatchId: patchEquivalence.expectedPatchId,
                 actualPatchId: patchEquivalence.actualPatchId,
                 error: patchEquivalence.error,
+                actionableHint: patchEquivalence.actionableHint,
             });
             if (!patchEquivalence.equivalent) {
                 return {
@@ -3247,6 +3423,52 @@ export class DaemonCommandRouter {
                 };
             }
 
+            const submoduleAlignmentStarted = Date.now();
+            const submoduleAlignment = await alignRefinerySubmodulesAfterMerge(repoRoot, baseHead, 'HEAD', {
+                submoduleIgnorePaths: Array.isArray(sourceNode?.policy?.submoduleIgnorePaths)
+                    ? sourceNode.policy.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string')
+                    : undefined,
+            });
+            if (submoduleAlignment.status !== 'skipped') {
+                recordMeshRefineStage(refineStages, 'submodule_alignment', submoduleAlignment.status, submoduleAlignmentStarted, {
+                    changedGitlinkPaths: submoduleAlignment.changedGitlinkPaths,
+                    outOfSyncPaths: submoduleAlignment.outOfSyncPaths,
+                    updatedPaths: submoduleAlignment.updatedPaths,
+                    verifiedPaths: submoduleAlignment.verifiedPaths,
+                    command: submoduleAlignment.command,
+                    error: submoduleAlignment.error,
+                });
+            }
+            if (submoduleAlignment.status === 'failed') {
+                return {
+                    success: false,
+                    code: 'post_merge_submodule_alignment_failed',
+                    error: 'Refinery merge completed but post-merge submodule checkout alignment failed; run the reported git submodule update command and re-check base workspace status.',
+                    merged: true,
+                    branch,
+                    into: baseBranch,
+                    validationSummary,
+                    patchEquivalence,
+                    submoduleReachability,
+                    submoduleAlignment,
+                    mergeResult,
+                    refineStages,
+                    finalBranchConvergenceState: {
+                branch: baseBranch,
+                mergedBranch: branch,
+                baseBranch,
+                merged: true,
+                removed: false,
+                validation: 'passed',
+                patchEquivalence: 'passed',
+                submoduleReachability: 'passed',
+                submoduleAlignment: 'failed',
+                status: 'post_merge_alignment_failed',
+                nextStep: submoduleAlignment.command || 'Run git submodule update --init --recursive for the reported path(s), then re-check base workspace status.',
+                    },
+                };
+            }
+
             const cleanupStarted = Date.now();
             const removeResult = await this.execute('remove_mesh_node', {
                 meshId,
@@ -3267,7 +3489,7 @@ export class DaemonCommandRouter {
                 appendLedgerEntry(meshId, {
                     kind: 'node_removed',
                     nodeId,
-                    payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary, patchEquivalence, submoduleReachability },
+                    payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment },
                 });
                 recordMeshRefineStage(refineStages, 'ledger', 'passed', ledgerStarted);
             } catch (e: any) {
@@ -3283,6 +3505,7 @@ export class DaemonCommandRouter {
                 removed: removeResult?.success !== false,
                 validation: 'passed',
                 patchEquivalence: 'passed',
+                submoduleAlignment: submoduleAlignment.status,
                 status: removeResult?.success === false ? 'merged_cleanup_failed' : 'merged',
             };
 
@@ -3298,6 +3521,7 @@ export class DaemonCommandRouter {
                     validationSummary,
                     patchEquivalence,
                     submoduleReachability,
+                    submoduleAlignment,
                     mergeResult,
                     refineStages,
                     ...(ledgerError ? { ledgerError } : {}),
@@ -3314,6 +3538,7 @@ export class DaemonCommandRouter {
                 validationSummary,
                 patchEquivalence,
                 submoduleReachability,
+                submoduleAlignment,
                 mergeResult,
                 refineStages,
                 ...(ledgerError ? { ledgerError } : {}),

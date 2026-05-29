@@ -61,7 +61,7 @@ describe('git checkpoint integration', () => {
     expect(git(repo, ['status', '--short'])).toBe('');
   });
 
-  it('returns a typed no-op result for a clean worktree', async () => {
+  it('returns a successful typed no-op result for a clean worktree', async () => {
     const repo = initRepo('checkpoint-clean');
 
     const result = await handleGitCommand('git_checkpoint', {
@@ -71,9 +71,17 @@ describe('git checkpoint integration', () => {
     });
 
     expect(result).toMatchObject({
-      success: false,
-      reason: 'nothing_to_commit',
-      error: 'Nothing to commit — working tree is clean.',
+      success: true,
+      checkpoint: {
+        isGitRepo: true,
+        repoRoot: repo,
+        message: 'adhdev: checkpoint checkpoint: clean smoke',
+        status: 'skipped',
+        skipped: true,
+        noop: true,
+        reason: 'nothing_to_commit',
+      },
     });
+    expect(git(repo, ['log', '--oneline'])).toContain('initial commit');
   });
 });

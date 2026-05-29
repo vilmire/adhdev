@@ -3240,7 +3240,13 @@ export async function meshCheckpoint(
             appendLedgerEntry(ctx.mesh.id, {
                 kind: 'checkpoint_created',
                 nodeId: args.node_id,
-                payload: { message: args.message, commit: (result as any)?.checkpoint?.commit },
+                payload: {
+                    message: args.message,
+                    commit: (result as any)?.checkpoint?.commit,
+                    outcome: (result as any)?.checkpoint?.status || ((result as any)?.checkpoint?.noop ? 'skipped' : undefined),
+                    noop: (result as any)?.checkpoint?.noop === true,
+                    reason: (result as any)?.checkpoint?.reason,
+                },
             });
         } catch { /* ledger append is best-effort */ }
 
@@ -3256,7 +3262,13 @@ export async function meshCheckpoint(
                 appendLedgerEntry(ctx.mesh.id, {
                     kind: 'checkpoint_created',
                     nodeId: args.node_id,
-                    payload: { message: args.message, commit: (res as any)?.checkpoint?.commit },
+                    payload: {
+                        message: args.message,
+                        commit: (res as any)?.checkpoint?.commit,
+                        outcome: (res as any)?.checkpoint?.status || ((res as any)?.checkpoint?.noop ? 'skipped' : undefined),
+                        noop: (res as any)?.checkpoint?.noop === true,
+                        reason: (res as any)?.checkpoint?.reason,
+                    },
                 });
             } catch { /* best-effort */ }
             return JSON.stringify(res, null, 2);

@@ -894,6 +894,133 @@ describe('refine_mesh_node validation gate', () => {
     }
   }, 60000)
 
+  it('aligns the base submodule checkout after merging a changed gitlink', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-submodule-align-'))
+    const repo = join(root, 'repo')
+    const submoduleOrigin = join(root, 'submodule-origin')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initSubmoduleOrigin(submoduleOrigin)
+      initGitRepo(repo)
+      addSubmodule(repo, submoduleOrigin, 'oss')
+      const baseSubmoduleCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(repo, 'oss'), encoding: 'utf-8' }).trim()
+
+      writeFileSync(join(submoduleOrigin, 'PUBLISHED_UPDATE.md'), 'published update\n', 'utf-8')
+      execFileSync('git', ['add', 'PUBLISHED_UPDATE.md'], { cwd: submoduleOrigin })
+      execFileSync('git', ['commit', '-q', '-m', 'published update'], { cwd: submoduleOrigin })
+      const updatedSubmoduleCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: submoduleOrigin, encoding: 'utf-8' }).trim()
+
+      const worktree = createWorktreeWithCommit(root, repo)
+      execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'oss'], { cwd: worktree })
+      execFileSync('git', ['fetch', 'origin', 'main'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['checkout', '-q', updatedSubmoduleCommit], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['add', 'oss'], { cwd: worktree })
+      execFileSync('git', ['commit', '-q', '-m', 'point submodule at published update'], { cwd: worktree })
+
+      execFileSync('git', ['fetch', 'origin', 'main'], { cwd: join(repo, 'oss') })
+      expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(repo, 'oss'), encoding: 'utf-8' }).trim()).toBe(baseSubmoduleCommit)
+
+      const mesh = createMesh(repo, worktree, 'node-submodule-align')
+      const router = createRouter()
+      const accepted: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-submodule-align',
+        inlineMesh: mesh,
+      })
+
+      expectAccepted(accepted, 'node-submodule-align')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({ success: true, merged: true })
+      expect(result.submoduleAlignment).toMatchObject({
+        status: 'passed',
+        changedGitlinkPaths: ['oss'],
+        updatedPaths: ['oss'],
+        verifiedPaths: ['oss'],
+      })
+      expect(result.refineStages.map((entry: any) => `${entry.stage}:${entry.status}`)).toContain('submodule_alignment:passed')
+      expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(repo, 'oss'), encoding: 'utf-8' }).trim()).toBe(updatedSubmoduleCommit)
+      expect(execFileSync('git', ['status', '--short'], { cwd: repo, encoding: 'utf-8' }).trim()).toBe('')
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('adds an actionable hint when patch equivalence fails on a submodule conflict', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-submodule-conflict-hint-'))
+    const repo = join(root, 'repo')
+    const submoduleOrigin = join(root, 'submodule-origin')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initSubmoduleOrigin(submoduleOrigin)
+      initGitRepo(repo)
+      addSubmodule(repo, submoduleOrigin, 'oss')
+      const worktree = createWorktreeWithCommit(root, repo)
+
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: join(repo, 'oss') })
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: join(repo, 'oss') })
+      writeFileSync(join(repo, 'oss', 'BASE_SIDE.md'), 'base side\n', 'utf-8')
+      execFileSync('git', ['add', 'BASE_SIDE.md'], { cwd: join(repo, 'oss') })
+      execFileSync('git', ['commit', '-q', '-m', 'base side submodule commit'], { cwd: join(repo, 'oss') })
+      const baseSideCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(repo, 'oss'), encoding: 'utf-8' }).trim()
+      execFileSync('git', ['add', 'oss'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'point base at base-side submodule commit'], { cwd: repo })
+
+      execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'oss'], { cwd: worktree })
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: join(worktree, 'oss') })
+      writeFileSync(join(worktree, 'oss', 'BRANCH_SIDE.md'), 'branch side\n', 'utf-8')
+      execFileSync('git', ['add', 'BRANCH_SIDE.md'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['commit', '-q', '-m', 'branch side submodule commit'], { cwd: join(worktree, 'oss') })
+      const branchSideCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(worktree, 'oss'), encoding: 'utf-8' }).trim()
+      execFileSync('git', ['add', 'oss'], { cwd: worktree })
+      execFileSync('git', ['commit', '-q', '-m', 'point branch at branch-side submodule commit'], { cwd: worktree })
+
+      const mesh = createMesh(repo, worktree, 'node-submodule-conflict-hint')
+      const router = createRouter()
+      const accepted: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-submodule-conflict-hint',
+        inlineMesh: mesh,
+      })
+
+      expectAccepted(accepted, 'node-submodule-conflict-hint')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_failed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({
+        success: false,
+        code: 'patch_equivalence_failed',
+        convergenceStatus: 'blocked_review',
+      })
+      expect(result.patchEquivalence.actionableHint).toMatchObject({
+        kind: 'submodule_conflict',
+        conflicts: [
+          expect.objectContaining({
+            path: 'oss',
+            baseCommit: baseSideCommit,
+            branchCommit: branchSideCommit,
+          }),
+        ],
+      })
+      expect(result.patchEquivalence.actionableHint.nextSteps.join('\n')).toContain('rerun mesh_refine_node')
+      expect(result.refineStages.find((entry: any) => entry.stage === 'patch_equivalence')).toMatchObject({
+        status: 'failed',
+        actionableHint: expect.objectContaining({ kind: 'submodule_conflict' }),
+      })
+      expect(result.refineStages.some((entry: any) => entry.stage === 'merge')).toBe(false)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
   it('does not treat submodule feature-branch reachability as remote main convergence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-feature-submodule-'))
     const repo = join(root, 'repo')
