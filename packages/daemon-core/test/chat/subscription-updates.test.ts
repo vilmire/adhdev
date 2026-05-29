@@ -72,6 +72,64 @@ describe('chat subscription update helpers', () => {
     expect(prepared.cursor).toEqual({ tailLimit: 25 })
   })
 
+  it('publishes tail-only native-history results instead of treating them as an empty generating transcript', () => {
+    const prepared = prepareSessionChatTailUpdate({
+      key: 'sub-codex-native',
+      sessionId: 'codex-runtime-session',
+      historySessionId: '019e71fb-3cd1-76f1-9500-a7977eb2b374',
+      seq: 11,
+      timestamp: 1234,
+      cursor: { tailLimit: 40 },
+      lastDeliveredSignature: '',
+      result: {
+        success: true,
+        status: 'generating',
+        messagesTail: [
+          {
+            id: 'native-user-119',
+            role: 'user',
+            kind: 'standard',
+            content: '추가 범위',
+            bubbleId: 'bubble:codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374:119:user:standard:19486670',
+            providerUnitKey: 'codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374:119:user:standard:19486670',
+            _turnKey: 'codex-cli:native-turn:019e71fb-3cd1-76f1-9500-a7977eb2b374:17',
+          },
+          {
+            id: 'native-assistant-120',
+            role: 'assistant',
+            kind: 'standard',
+            source: 'assistant_text',
+            content: '조사하겠습니다.',
+            bubbleId: 'bubble:codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374:120:assistant:standard:7bbaf6c4',
+            providerUnitKey: 'codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374:120:assistant:standard:7bbaf6c4',
+            _turnKey: 'codex-cli:native-turn:019e71fb-3cd1-76f1-9500-a7977eb2b374:17',
+          },
+        ],
+      } as any,
+    })
+
+    expect(prepared.update).toMatchObject({
+      topic: 'session.chat_tail',
+      sessionId: 'codex-runtime-session',
+      historySessionId: '019e71fb-3cd1-76f1-9500-a7977eb2b374',
+      status: 'generating',
+      messages: [
+        expect.objectContaining({
+          role: 'user',
+          kind: 'standard',
+          providerUnitKey: expect.stringContaining('codex-cli:native:019e71fb-3cd1-76f1-9500-a7977eb2b374'),
+          _turnKey: 'codex-cli:native-turn:019e71fb-3cd1-76f1-9500-a7977eb2b374:17',
+        }),
+        expect.objectContaining({
+          role: 'assistant',
+          kind: 'standard',
+          source: 'assistant_text',
+          content: '조사하겠습니다.',
+        }),
+      ],
+    })
+  })
+
   it('preserves activity rows in chat-tail updates so the dashboard Activity toggle can reveal them', () => {
     const arbitraryTerminalContent = '$ arbitrary-tool --flag=not-a-blacklist-example'
     const arbitraryToolContent = 'custom_tool_name payload={"anything":true}'

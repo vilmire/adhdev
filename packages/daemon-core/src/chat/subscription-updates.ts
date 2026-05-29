@@ -17,6 +17,7 @@ export interface ChatTailSubscriptionCursor {
 export type SessionChatTailCommandResult = Partial<Omit<ReadChatSyncResult, 'activeModal'>> & {
   success?: boolean
   activeModal?: unknown
+  messagesTail?: unknown
 }
 
 export interface PrepareSessionChatTailUpdateInput {
@@ -102,7 +103,10 @@ export function prepareSessionChatTailUpdate(
     }
   }
 
-  const fullMessages = normalizeChatMessages(Array.isArray(result.messages) ? result.messages as any[] : [])
+  const rawMessages = Array.isArray(result.messages)
+    ? result.messages as any[]
+    : (Array.isArray(result.messagesTail) ? result.messagesTail as any[] : [])
+  const fullMessages = normalizeChatMessages(rawMessages)
   const messages = fullMessages
   const title = typeof result.title === 'string' ? result.title : undefined
   const activeModal = normalizeChatTailActiveModal(result.activeModal)
