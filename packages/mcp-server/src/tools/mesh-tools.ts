@@ -1390,6 +1390,16 @@ async function collectLiveStatusSessions(ctx: MeshContext, node: LocalMeshNodeEn
     }
 }
 
+async function collectMeshViewQueueNodesWithLiveSessions(ctx: MeshContext): Promise<any[]> {
+    const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
+        const liveSessions = await collectLiveStatusSessions(ctx, node);
+        return liveSessions.length > 0
+            ? { ...node, sessions: liveSessions }
+            : node;
+    }));
+    return nodes;
+}
+
 function readNumeric(value: unknown, fallback = 0): number {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
@@ -2444,11 +2454,12 @@ export async function meshViewQueue(
         const summary = buildQueueStatusSummary(fullQueue);
         const visibleSummary = buildQueueStatusSummary(queue);
         const maintenance = buildQueueMaintenanceReport(fullQueue);
+        const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
         const activeWorkEvidence = buildMeshActiveWork({
             meshId: ctx.mesh.id,
             queue: fullQueue,
             ledgerEntries: readLedgerEntries(ctx.mesh.id, { tail: 500 }),
-            nodes: ctx.mesh.nodes,
+            nodes: liveNodes,
         });
         const staleAssignedTasks = (maintenance as any).staleAssignedTasks || [];
         const requestedHistoricalRows = queue.some((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
