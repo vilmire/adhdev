@@ -1365,6 +1365,19 @@ function missingProviderPriorityMessage(nodeId: string): string {
 }
 
 function getNodeLaunchReadiness(node: LocalMeshNodeEntry): Record<string, unknown> {
+    const bootstrap = (node as any).worktreeBootstrap;
+    if ((node as any).isLocalWorktree && bootstrap?.status === 'failed' && bootstrap?.required !== false) {
+        return {
+            providerPriority: readProviderPriority(node.policy),
+            launchReady: false,
+            launchBlockedReason: 'worktree_bootstrap_failed',
+            launchBlockedMessage: typeof bootstrap.error === 'string' && bootstrap.error.trim()
+                ? bootstrap.error.trim()
+                : 'Required worktree bootstrap failed; resolve it before launching an agent into this node.',
+            worktreeBootstrap: bootstrap,
+        };
+    }
+
     const providerPriority = readProviderPriority(node.policy);
     if (providerPriority.length) {
         return {
@@ -1378,6 +1391,21 @@ function getNodeLaunchReadiness(node: LocalMeshNodeEntry): Record<string, unknow
         launchReady: false,
         launchBlockedReason: 'missing_provider_priority',
         launchBlockedMessage: missingProviderPriorityMessage(node.id),
+    };
+}
+
+function getWorktreeBootstrapLaunchBlock(node: LocalMeshNodeEntry): Record<string, unknown> | undefined {
+    const bootstrap = (node as any).worktreeBootstrap;
+    if (!(node as any).isLocalWorktree || bootstrap?.status !== 'failed' || bootstrap?.required === false) return undefined;
+    return {
+        success: false,
+        code: 'worktree_bootstrap_failed',
+        error: typeof bootstrap.error === 'string' && bootstrap.error.trim()
+            ? bootstrap.error.trim()
+            : `Node '${node.id}' has a failed required worktree bootstrap.`,
+        nodeId: node.id,
+        worktreeBootstrap: bootstrap,
+        recoveryHint: 'Fix the configured worktree bootstrap command or remove/recreate the worktree node before launching an agent.',
     };
 }
 
@@ -2921,6 +2949,8 @@ export async function meshLaunchSession(
     args: { node_id: string; type?: string },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
+    const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node);
+    if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
 
     if (isLocalTransport(ctx.transport)) {
         let resolvedProviderType = typeof args.type === 'string' && args.type.trim() ? args.type : '';

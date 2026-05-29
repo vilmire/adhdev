@@ -13,6 +13,7 @@ export interface RepoMeshRefineValidationCommandConfig {
     category?: MeshRefineValidationCategory;
     cwd?: string;
     timeoutMs?: number;
+    outputLimitBytes?: number;
     env?: Record<string, string>;
 }
 
@@ -44,6 +45,7 @@ export interface MeshRefineValidationCommandPlan {
     source: string;
     cwd?: string;
     timeoutMs?: number;
+    outputLimitBytes?: number;
     env?: Record<string, string>;
 }
 
@@ -110,6 +112,7 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                             category: { enum: [...MESH_REFINE_VALIDATION_CATEGORIES, 'custom'] },
                             cwd: { type: 'string' },
                             timeoutMs: { type: 'number', minimum: 1000, maximum: 600000 },
+                            outputLimitBytes: { type: 'number', minimum: 1024, maximum: 1048576 },
                             env: { type: 'object', additionalProperties: { type: 'string' } },
                         },
                     },
@@ -127,6 +130,7 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                             category: { enum: [...MESH_REFINE_VALIDATION_CATEGORIES, 'custom'] },
                             cwd: { type: 'string' },
                             timeoutMs: { type: 'number', minimum: 1000, maximum: 600000 },
+                            outputLimitBytes: { type: 'number', minimum: 1024, maximum: 1048576 },
                             env: { type: 'object', additionalProperties: { type: 'string' } },
                         },
                     },
@@ -136,7 +140,7 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
     },
 } as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isMeshConfigRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
@@ -158,8 +162,8 @@ function validateCategory(value: unknown): MeshRefineValidationCategory | 'custo
         : 'custom';
 }
 
-function normalizeCommandConfig(entry: unknown, source: string): { command?: MeshRefineValidationCommandPlan; rejected?: Record<string, unknown> } {
-    if (!isRecord(entry) || typeof entry.command !== 'string') {
+export function normalizeMeshCommandConfig(entry: unknown, source: string): { command?: MeshRefineValidationCommandPlan; rejected?: Record<string, unknown> } {
+    if (!isMeshConfigRecord(entry) || typeof entry.command !== 'string') {
         return { rejected: { source, reason: 'validation command must be an object with a command string' } };
     }
 
@@ -189,7 +193,10 @@ function normalizeCommandConfig(entry: unknown, source: string): { command?: Mes
     if (entry.timeoutMs !== undefined && (typeof entry.timeoutMs !== 'number' || !Number.isFinite(entry.timeoutMs) || entry.timeoutMs < 1000 || entry.timeoutMs > 600000)) {
         return { rejected: { source, command: commandText, reason: 'timeoutMs must be between 1000 and 600000' } };
     }
-    if (entry.env !== undefined && (!isRecord(entry.env) || !Object.values(entry.env).every(value => typeof value === 'string'))) {
+    if (entry.outputLimitBytes !== undefined && (typeof entry.outputLimitBytes !== 'number' || !Number.isFinite(entry.outputLimitBytes) || entry.outputLimitBytes < 1024 || entry.outputLimitBytes > 1048576)) {
+        return { rejected: { source, command: commandText, reason: 'outputLimitBytes must be between 1024 and 1048576' } };
+    }
+    if (entry.env !== undefined && (!isMeshConfigRecord(entry.env) || !Object.values(entry.env).every(value => typeof value === 'string'))) {
         return { rejected: { source, command: commandText, reason: 'env must be an object of string values' } };
     }
 
@@ -202,10 +209,13 @@ function normalizeCommandConfig(entry: unknown, source: string): { command?: Mes
             source,
             ...(typeof entry.cwd === 'string' && entry.cwd.trim() ? { cwd: entry.cwd.trim() } : {}),
             ...(typeof entry.timeoutMs === 'number' ? { timeoutMs: entry.timeoutMs } : {}),
-            ...(isRecord(entry.env) ? { env: entry.env as Record<string, string> } : {}),
+            ...(typeof entry.outputLimitBytes === 'number' ? { outputLimitBytes: entry.outputLimitBytes } : {}),
+            ...(isMeshConfigRecord(entry.env) ? { env: entry.env as Record<string, string> } : {}),
         },
     };
 }
+
+const isRecord = isMeshConfigRecord;
 
 export function validateMeshRefineConfig(config: unknown, source = 'inline'): { valid: boolean; errors: string[]; bootstrapCommands: MeshRefineValidationCommandPlan[]; commands: MeshRefineValidationCommandPlan[]; rejectedCommands: Array<Record<string, unknown>> } {
     const errors: string[] = [];
@@ -226,14 +236,14 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
     if (rawBootstrapCommands !== undefined && !Array.isArray(rawBootstrapCommands)) errors.push('validation.bootstrapCommands must be an array');
     if (Array.isArray(rawBootstrapCommands)) {
         rawBootstrapCommands.forEach((entry, index) => {
-            const normalized = normalizeCommandConfig(entry, `${source}:validation.bootstrapCommands[${index}]`);
+            const normalized = normalizeMeshCommandConfig(entry, `${source}:validation.bootstrapCommands[${index}]`);
             if (normalized.command) bootstrapCommands.push(normalized.command);
             if (normalized.rejected) rejectedCommands.push(normalized.rejected);
         });
     }
     if (Array.isArray(rawCommands)) {
         rawCommands.forEach((entry, index) => {
-            const normalized = normalizeCommandConfig(entry, `${source}:validation.commands[${index}]`);
+            const normalized = normalizeMeshCommandConfig(entry, `${source}:validation.commands[${index}]`);
             if (normalized.command) commands.push(normalized.command);
             if (normalized.rejected) rejectedCommands.push(normalized.rejected);
         });
