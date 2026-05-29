@@ -280,4 +280,216 @@ describe('Hermes CLI read_chat native transcript provenance', () => {
       nativeHandle: '20260529_140000_fresh',
     })
   })
+
+  it('keeps two Codex sessions in the same workspace on independent provider transcripts', async () => {
+    mocks.readProviderChatHistory.mockImplementation((_agent: string, options: any) => {
+      const id = options.historySessionId
+      return {
+        source: 'provider-native',
+        sourcePath: `/Users/test/.codex/sessions/${id}.jsonl`,
+        sourceMtimeMs: Date.now(),
+        providerSessionId: id,
+        nativeHistoryCoverage: 'full',
+        hasMore: false,
+        messages: [
+          { role: 'system', kind: 'session_start', content: '/workspaces/adhdev', receivedAt: 900, historySessionId: id, workspace: '/workspaces/adhdev' },
+          { role: 'user', kind: 'standard', content: `prompt ${id}`, receivedAt: 1_000, historySessionId: id, workspace: '/workspaces/adhdev' },
+          { role: 'assistant', kind: 'standard', content: `answer ${id}`, receivedAt: 2_000, historySessionId: id, workspace: '/workspaces/adhdev' },
+        ],
+      }
+    })
+    const makeHarness = (runtimeSessionId: string, providerSessionId: string) => {
+      const adapter = createHermesAdapter({
+        cliType: 'codex-cli',
+        workingDir: '/workspaces/adhdev',
+        getScriptParsedStatus: vi.fn(() => ({
+          status: 'idle',
+          providerSessionId,
+          messages: [
+            { role: 'user', content: `prompt ${providerSessionId}`, receivedAt: 1_000 },
+            { role: 'assistant', content: `answer ${providerSessionId}`, receivedAt: 2_000 },
+          ],
+        })),
+      })
+      return createHelpers(adapter, {
+        getProvider: () => ({
+          type: 'codex-cli',
+          name: 'Codex',
+          category: 'cli',
+          canonicalHistory: { format: 'codex-jsonl', mode: 'native-source', scripts: { readSession: 'readNativeHistory' } },
+          scripts: { readNativeHistory: () => null },
+        }),
+        currentProviderType: 'codex-cli',
+        currentSession: {
+          sessionId: runtimeSessionId,
+          providerType: 'codex-cli',
+          providerName: 'Codex',
+          providerSessionId,
+          transport: 'pty',
+          adapterKey: runtimeSessionId,
+          workspace: '/workspaces/adhdev',
+        },
+        ctx: {
+          sessionRegistry: { get: () => ({ sessionId: runtimeSessionId, instanceKey: runtimeSessionId, providerSessionId }) },
+          instanceManager: { getInstance: () => null },
+        },
+      })
+    }
+
+    const first = await handleReadChat(makeHarness('runtime-a', 'codex-a') as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-a',
+      tailLimit: 20,
+    })
+    const second = await handleReadChat(makeHarness('runtime-b', 'codex-b') as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-b',
+      tailLimit: 20,
+    })
+
+    expect(first.success).toBe(true)
+    expect(second.success).toBe(true)
+    expect((first.messages as any[]).map(message => message.content)).toEqual(['prompt codex-a', 'answer codex-a'])
+    expect((second.messages as any[]).map(message => message.content)).toEqual(['prompt codex-b', 'answer codex-b'])
+    expect(mocks.readProviderChatHistory).toHaveBeenNthCalledWith(1, 'codex-cli', expect.objectContaining({ historySessionId: 'codex-a', workspace: '/workspaces/adhdev' }))
+    expect(mocks.readProviderChatHistory).toHaveBeenNthCalledWith(2, 'codex-cli', expect.objectContaining({ historySessionId: 'codex-b', workspace: '/workspaces/adhdev' }))
+  })
+
+  it('does not hydrate provider-native history from workspace-only lookup', async () => {
+    const helpers = createHelpers(null, {
+      currentSession: {
+        sessionId: 'runtime-no-native-id',
+        providerType: 'hermes-cli',
+        providerName: 'Hermes Agent',
+        transport: 'pty',
+        adapterKey: 'runtime-no-native-id',
+        workspace: '/workspaces/adhdev',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'runtime-no-native-id', instanceKey: 'runtime-no-native-id' }) },
+        instanceManager: { getInstance: () => null },
+      },
+    })
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'hermes-cli',
+      workspace: '/workspaces/adhdev',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('native_history_not_safely_available')
+    expect(mocks.readProviderChatHistory).not.toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
+      historySessionId: undefined,
+      workspace: '/workspaces/adhdev',
+    }))
+    expect((result as any).messageSource).toMatchObject({
+      fallbackReason: expect.stringContaining('native_history_workspace_only_lookup_unsafe'),
+    })
+  })
+
+  it('does not show a coordinator native transcript for a worker session in the same workspace', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.codex/sessions/coordinator.jsonl',
+      sourceMtimeMs: Date.now(),
+      providerSessionId: 'coordinator-native',
+      nativeHistoryCoverage: 'full',
+      hasMore: false,
+      messages: [
+        { role: 'system', kind: 'session_start', content: '/workspaces/adhdev', receivedAt: 900, historySessionId: 'coordinator-native', workspace: '/workspaces/adhdev' },
+        { role: 'user', kind: 'standard', content: 'mesh_status then mesh_send_task', receivedAt: 1_000, historySessionId: 'coordinator-native', workspace: '/workspaces/adhdev' },
+        { role: 'assistant', kind: 'standard', content: 'coordinator answer', receivedAt: 2_000, historySessionId: 'coordinator-native', workspace: '/workspaces/adhdev' },
+      ],
+    })
+    const adapter = createHermesAdapter({
+      cliType: 'codex-cli',
+      workingDir: '/workspaces/adhdev',
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        providerSessionId: 'worker-native',
+        messages: [
+          { role: 'user', content: 'worker prompt', receivedAt: 1_000 },
+          { role: 'assistant', content: 'worker answer', receivedAt: 2_000 },
+        ],
+      })),
+    })
+    const helpers = createHelpers(adapter, {
+      getProvider: () => ({
+        type: 'codex-cli',
+        name: 'Codex',
+        category: 'cli',
+        canonicalHistory: { format: 'codex-jsonl', mode: 'native-source', scripts: { readSession: 'readNativeHistory' } },
+        scripts: { readNativeHistory: () => null },
+      }),
+      currentProviderType: 'codex-cli',
+      currentSession: {
+        sessionId: 'worker-runtime',
+        providerType: 'codex-cli',
+        providerName: 'Codex',
+        providerSessionId: 'worker-native',
+        transport: 'pty',
+        adapterKey: 'worker-runtime',
+        workspace: '/workspaces/adhdev',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'worker-runtime', instanceKey: 'worker-runtime', providerSessionId: 'worker-native' }) },
+        instanceManager: { getInstance: () => null },
+      },
+    })
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'worker-runtime',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.providerSessionId).toBe('worker-native')
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['worker prompt', 'worker answer'])
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      fallbackReason: expect.stringContaining('not_safely_mapped'),
+    })
+  })
+
+  it('still allows explicit resume to hydrate the selected provider conversation', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.codex/sessions/selected-resume.jsonl',
+      sourceMtimeMs: Date.now(),
+      providerSessionId: 'selected-resume',
+      nativeHistoryCoverage: 'full',
+      hasMore: false,
+      messages: [
+        { role: 'system', kind: 'session_start', content: '/workspaces/adhdev', receivedAt: 900, historySessionId: 'selected-resume', workspace: '/workspaces/adhdev' },
+        { role: 'user', kind: 'standard', content: 'resume prompt', receivedAt: 1_000, historySessionId: 'selected-resume', workspace: '/workspaces/adhdev' },
+        { role: 'assistant', kind: 'standard', content: 'resume answer', receivedAt: 2_000, historySessionId: 'selected-resume', workspace: '/workspaces/adhdev' },
+      ],
+    })
+
+    const result = await handleReadChat(createHelpers(null, {
+      currentSession: {
+        sessionId: 'runtime-resume',
+        providerType: 'hermes-cli',
+        providerName: 'Hermes Agent',
+        transport: 'pty',
+        adapterKey: 'runtime-resume',
+        workspace: '/workspaces/adhdev',
+      },
+    }) as any, {
+      agentType: 'hermes-cli',
+      providerSessionId: 'selected-resume',
+      workspace: '/workspaces/adhdev',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.providerSessionId).toBe('selected-resume')
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['resume prompt', 'resume answer'])
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
+      historySessionId: 'selected-resume',
+      workspace: '/workspaces/adhdev',
+    }))
+  })
 })
