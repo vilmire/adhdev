@@ -455,18 +455,45 @@ function hasSafeNativeHistoryMapping(args: {
     ptyMessages?: ChatMessage[];
     requireWorkspaceContentOverlap?: boolean;
 }): boolean {
+    const isCoordinatorTranscript = args.nativeMessages.some((m: any) => {
+        const text = typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || '');
+        return text.includes('mesh_send_task') || text.includes('mesh_status') || text.includes('mesh_read_chat') || text.includes('mesh_launch_session');
+    });
+
     const explicitSessionId = String(args.historySessionId || args.providerSessionId || '').trim();
     if (explicitSessionId) {
         const messageSessionIds = args.nativeMessages
             .map((message: any) => typeof message?.historySessionId === 'string' ? message.historySessionId.trim() : '')
             .filter(Boolean);
-        if (messageSessionIds.length === 0) return true;
-        return messageSessionIds.some((id) => id === explicitSessionId);
+        if (messageSessionIds.length > 0) {
+            return messageSessionIds.some((id) => id === explicitSessionId);
+        }
+
+        if (isCoordinatorTranscript && args.ptyMessages && args.ptyMessages.length > 0) {
+            const ptyHasCoordinator = args.ptyMessages.some((m: any) => {
+                const text = typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || '');
+                return text.includes('mesh_send_task') || text.includes('mesh_status') || text.includes('mesh_read_chat');
+            });
+            if (!ptyHasCoordinator) {
+                return false;
+            }
+        }
     }
     const workspace = String(args.workspace || '').trim();
     if (!workspace) return false;
     const workspaceMatches = args.nativeMessages.some((message: any) => String(message?.workspace || '').trim() === workspace);
     if (!workspaceMatches) return false;
+
+    if (isCoordinatorTranscript && args.ptyMessages && args.ptyMessages.length > 0) {
+        const ptyHasCoordinator = args.ptyMessages.some((m: any) => {
+            const text = typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || '');
+            return text.includes('mesh_send_task') || text.includes('mesh_status') || text.includes('mesh_read_chat');
+        });
+        if (!ptyHasCoordinator) {
+            return false;
+        }
+    }
+
     if (!args.requireWorkspaceContentOverlap) return true;
     return hasOverlappingVisibleConversationText(args.nativeMessages, args.ptyMessages || []);
 }
