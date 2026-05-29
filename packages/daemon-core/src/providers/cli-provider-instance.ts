@@ -514,6 +514,13 @@ export class CliProviderInstance implements ProviderInstance {
             this.errorMessage = undefined;
             this.errorReason = undefined;
         }
+        const adapterProviderSessionId = normalizeProviderSessionId(
+            this.provider,
+            typeof adapterStatus?.providerSessionId === 'string' ? adapterStatus.providerSessionId : '',
+        );
+        if (adapterProviderSessionId) {
+            this.promoteProviderSessionId(adapterProviderSessionId);
+        }
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, Date.now());
         const visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
             ? 'error'
@@ -970,6 +977,13 @@ export class CliProviderInstance implements ProviderInstance {
         // during long-running CLI sessions. Keep this path on adapter-owned light
         // state only; rich provider parsing is reserved for getState/read_chat.
         const adapterStatus = this.adapter.getStatus({ allowParse: false });
+        const adapterProviderSessionId = normalizeProviderSessionId(
+            this.provider,
+            typeof adapterStatus?.providerSessionId === 'string' ? adapterStatus.providerSessionId : '',
+        );
+        if (adapterProviderSessionId) {
+            this.promoteProviderSessionId(adapterProviderSessionId);
+        }
         const parsedStatus = null;
         const rawStatus = adapterStatus.status;
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, now);
@@ -1051,6 +1065,23 @@ export class CliProviderInstance implements ProviderInstance {
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {
                 this.pushEvent({ event: 'agent:ready', chatTitle, timestamp: now });
+            } else if (newStatus === 'error') {
+                if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }
+                this.generatingDebouncePending = null;
+                if (this.completedDebounceTimer) { clearTimeout(this.completedDebounceTimer); this.completedDebounceTimer = null; }
+                this.completedDebouncePending = null;
+                this.errorMessage = adapterStatus.errorMessage || this.errorMessage;
+                this.errorReason = (adapterStatus.errorReason as ProviderErrorReason) || this.errorReason;
+                this.pushEvent({
+                    event: 'agent:stopped',
+                    chatTitle,
+                    timestamp: now,
+                    finalSummary: adapterStatus.errorMessage || adapterStatus.errorReason || 'Provider reported an error',
+                    completionDiagnostic: {
+                        reason: adapterStatus.errorReason || 'provider_error',
+                        errorMessage: adapterStatus.errorMessage || undefined,
+                    },
+                });
             } else if (newStatus === 'stopped') {
                 // Cancel any pending debounce
                 if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }

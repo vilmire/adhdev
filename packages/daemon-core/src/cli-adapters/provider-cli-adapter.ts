@@ -145,6 +145,9 @@ export class ProviderCliAdapter implements CliAdapter {
     private isWaitingForResponse = false;
     private activeModal: { message: string; buttons: string[] } | null = null;
     private parseErrorMessage: string | null = null;
+    private providerSessionId: string | null = null;
+    private providerErrorMessage: string | null = null;
+    private providerErrorReason: string | null = null;
     private responseTimeout: NodeJS.Timeout | null = null;
     private idleTimeout: NodeJS.Timeout | null = null;
     private ready = false;
@@ -1151,6 +1154,7 @@ export class ProviderCliAdapter implements CliAdapter {
             && !(parsedStatus === 'idle' && !!lastParsedAssistant);
 
         if (shouldHoldGenerating) { this.applyHoldGenerating(ctx, recentInteractiveActivity); return; }
+        if (status === 'error') { this.applyError(ctx, session); return; }
         if (status === 'waiting_approval') { this.applyWaitingApproval(ctx); return; }
         if (status === 'generating') { this.applyGenerating(ctx); return; }
         if (status === 'idle') { this.applyIdle(ctx, now); }
@@ -1291,6 +1295,41 @@ export class ProviderCliAdapter implements CliAdapter {
                 this.finishResponse();
             }
         }, this.timeouts.generatingIdle);
+        this.onStatusChange?.();
+    }
+
+    private applyError(ctx: SettledEvalContext, session: ParsedSession): void {
+        this.clearIdleFinishCandidate('provider_error');
+        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
+        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
+        if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+        this.isWaitingForResponse = false;
+        this.responseSettleIgnoreUntil = 0;
+        this.submitRetryUsed = false;
+        this.submitRetryPromptSnippet = '';
+        this.finishRetryCount = 0;
+        this.currentTurnScope = null;
+        this.activeModal = null;
+        this.providerErrorMessage = typeof session.errorMessage === 'string' && session.errorMessage.trim()
+            ? session.errorMessage.trim()
+            : 'Provider reported an error';
+        this.providerErrorReason = typeof session.errorReason === 'string' && session.errorReason.trim()
+            ? session.errorReason.trim()
+            : 'provider_error';
+        this.setStatus('error', this.providerErrorReason);
+        this.recordTrace('provider_error', {
+            errorMessage: this.providerErrorMessage,
+            errorReason: this.providerErrorReason,
+            parsedStatus: ctx.parsedStatus || ctx.status,
+            messageCount: ctx.parsedMessages.length,
+            ...buildCliTraceParseSnapshot({
+                accumulatedBuffer: this.accumulatedBuffer,
+                accumulatedRawBuffer: this.accumulatedRawBuffer,
+                responseBuffer: this.responseBuffer,
+                partialResponse: this.responseBuffer,
+                scope: this.currentTurnScope,
+            }),
+        });
         this.onStatusChange?.();
     }
 
@@ -1567,6 +1606,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 { ...input, tail, tailScreen: buildCliScreenSnapshot(tail) },
             );
             this.parseErrorMessage = null;
+            if (session && typeof session === 'object') this.applyParsedSessionMetadata(session);
             return session && typeof session === 'object' ? session : null;
         } catch (e: any) {
             const message = e?.message || String(e);
@@ -1626,6 +1666,22 @@ export class ProviderCliAdapter implements CliAdapter {
             return typeof message.content === 'string' && message.content.trim().length > 0;
         });
         return !!lastAssistant;
+    }
+
+    private applyParsedSessionMetadata(parsed: any): void {
+        const providerSessionId = typeof parsed?.providerSessionId === 'string' && parsed.providerSessionId.trim()
+            ? parsed.providerSessionId.trim()
+            : '';
+        if (providerSessionId) {
+            this.providerSessionId = providerSessionId;
+            this.updateRuntimeMeta({ providerSessionId });
+        }
+        this.providerErrorMessage = typeof parsed?.errorMessage === 'string' && parsed.errorMessage.trim()
+            ? parsed.errorMessage.trim()
+            : null;
+        this.providerErrorReason = typeof parsed?.errorReason === 'string' && parsed.errorReason.trim()
+            ? parsed.errorReason.trim()
+            : null;
     }
 
     private parsedStatusHasFinalStandardAssistantMessage(parsed: any): boolean {
@@ -1730,8 +1786,9 @@ export class ProviderCliAdapter implements CliAdapter {
                 queuedAt: message.queuedAt,
                 source: message.source,
             })),
-            errorMessage: this.parseErrorMessage || undefined,
-            errorReason: this.parseErrorMessage ? 'parse_error' : undefined,
+            errorMessage: this.parseErrorMessage || this.providerErrorMessage || undefined,
+            errorReason: this.parseErrorMessage ? 'parse_error' : (this.providerErrorReason || undefined),
+            providerSessionId: this.providerSessionId || undefined,
             ...(bufferState ? { bufferState } : {}),
         };
     }
@@ -1778,7 +1835,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 lastOutputAt: this.lastOutputAt,
             }),
             activeModal,
-            providerSessionId: typeof (parsed as any).providerSessionId === 'string' ? (parsed as any).providerSessionId : undefined,
+            providerSessionId: this.providerSessionId || (typeof (parsed as any).providerSessionId === 'string' ? (parsed as any).providerSessionId : undefined),
             errorMessage: typeof (parsed as any).errorMessage === 'string' && (parsed as any).errorMessage.trim()
                 ? (parsed as any).errorMessage.trim()
                 : undefined,
