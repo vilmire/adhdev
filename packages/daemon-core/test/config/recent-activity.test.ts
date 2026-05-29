@@ -139,6 +139,16 @@ describe('recent-activity', () => {
     expect(second.sessionReadMarkers['session-1']).toBe('done-1');
   });
 
+  it('uses the newest seen marker across runtime and provider session keys', () => {
+    const state = createState();
+    const staleProviderRead = markSessionSeen(state, 'runtime-a', 100, 'turn:claude-cli:native-turn:provider-1:0', 'provider-1');
+    const freshRuntimeRead = markSessionSeen(staleProviderRead, 'runtime-a', 200, 'turn:claude-cli:native-turn:provider-1:1');
+
+    expect(getSessionSeenAt(freshRuntimeRead, 'runtime-b', 'provider-1')).toBe(100);
+    expect(getSessionSeenAt(freshRuntimeRead, 'runtime-a', 'provider-1')).toBe(200);
+    expect(getSessionSeenMarker(freshRuntimeRead, 'runtime-a', 'provider-1')).toBe('turn:claude-cli:native-turn:provider-1:1');
+  });
+
   it('reuses providerSessionId notification dismissals across runtime session id churn', () => {
     const state = createState();
     const next = dismissSessionNotification(state, 'runtime-a', 'task_complete|provider-1|hash-1|100', 'provider-1');

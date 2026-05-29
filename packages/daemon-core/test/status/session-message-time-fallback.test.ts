@@ -1,11 +1,29 @@
-import { describe, expect, it } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { buildStatusSnapshot, getSessionCompletionMarker } from '../../src/status/snapshot.js'
+import { markSessionSeen } from '../../src/config/recent-activity.js'
+import { saveState } from '../../src/config/state-store.js'
 import {
   classifyHotChatSessionsForSubscriptionFlush,
   DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
 } from '../../src/status/chat-tail-hot-sessions.js'
 
 describe('status snapshot message time fallbacks', () => {
+  const originalConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+  afterEach(() => {
+    if (process.env.ADHDEV_CONFIG_DIR && process.env.ADHDEV_CONFIG_DIR !== originalConfigDir) {
+      fs.rmSync(process.env.ADHDEV_CONFIG_DIR, { recursive: true, force: true })
+    }
+    if (originalConfigDir === undefined) {
+      delete process.env.ADHDEV_CONFIG_DIR
+    } else {
+      process.env.ADHDEV_CONFIG_DIR = originalConfigDir
+    }
+  })
+
   it('preserves machine provider activation fields in availableProviders', () => {
     const lastDetection = {
       ok: true,
@@ -195,6 +213,78 @@ describe('status snapshot message time fallbacks', () => {
     expect(session?.seenCompletionMarker).toBe('')
     expect(session?.unread).toBe(true)
     expect(session?.inboxBucket).toBe('task_complete')
+  })
+
+  it('clears Claude native unread state when a newer runtime-key read marker exists', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-claude-native-read-'))
+    process.env.ADHDEV_CONFIG_DIR = configDir
+    const runtimeSessionId = '330164ef-b511-48ef-8f69-fed95f9cd626'
+    const providerSessionId = 'f2e2db91-79a1-49e4-b9bf-26a3c5fb6774'
+    const staleProviderMarker = `turn:claude-cli:native-turn:${providerSessionId}:0`
+    const freshRuntimeMarker = `turn:claude-cli:native-turn:${providerSessionId}:1`
+    const initialState = {
+      recentActivity: [],
+      savedProviderSessions: [],
+      sessionReads: {},
+      sessionReadMarkers: {},
+      sessionNotificationDismissals: {},
+      sessionNotificationUnreadOverrides: {},
+    }
+    const staleProviderRead = markSessionSeen(initialState, runtimeSessionId, 100, staleProviderMarker, providerSessionId)
+    saveState(markSessionSeen(staleProviderRead, runtimeSessionId, 200, freshRuntimeMarker))
+
+    const snapshot = buildStatusSnapshot({
+      instanceId: 'daemon-1',
+      version: '0.9.82',
+      allStates: [
+        {
+          instanceId: runtimeSessionId,
+          type: 'claude-cli',
+          name: 'Claude Code',
+          category: 'cli',
+          status: 'idle',
+          activeChat: {
+            id: 'chat-1',
+            title: 'Claude Code',
+            status: 'idle',
+            messages: [
+              {
+                role: 'user',
+                content: 'smoke prompt',
+                receivedAt: 100,
+                providerUnitKey: `claude-cli:native:${providerSessionId}:0:user:standard:d5b905ac`,
+                bubbleId: `bubble:claude-cli:native:${providerSessionId}:0:user:standard:d5b905ac`,
+                _turnKey: `claude-cli:native-turn:${providerSessionId}:0`,
+              },
+              {
+                role: 'assistant',
+                content: 'smoke answer',
+                receivedAt: 200,
+                providerUnitKey: `claude-cli:native:${providerSessionId}:1:assistant:standard:4e5c0b9a`,
+                bubbleId: `bubble:claude-cli:native:${providerSessionId}:1:assistant:standard:4e5c0b9a`,
+                _turnKey: `claude-cli:native-turn:${providerSessionId}:1`,
+              },
+            ],
+            activeModal: null,
+          },
+          lastUpdated: 200,
+          workspace: '/repo',
+          providerSessionId,
+        } as any,
+      ],
+      cdpManagers: new Map(),
+      providerLoader: {
+        getAll: () => [],
+      },
+      detectedIdes: [],
+      profile: 'live',
+    })
+
+    const session = snapshot.sessions.find((entry) => entry.id === runtimeSessionId)
+    expect(session?.completionMarker).toBe(freshRuntimeMarker)
+    expect(session?.seenCompletionMarker).toBe(freshRuntimeMarker)
+    expect(session?.unread).toBe(false)
+    expect(session?.inboxBucket).toBe('idle')
   })
 
   it('carries runtime recovery metadata into live snapshots so restored stopped sessions are excluded from hot polling', () => {
