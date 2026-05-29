@@ -55,6 +55,7 @@ import {
 import {
     MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS,
     MESH_WORKTREE_BOOTSTRAP_CONFIG_SCHEMA,
+    loadMeshWorktreeBootstrapConfig,
     runMeshWorktreeBootstrap,
     type WorktreeBootstrapState,
 } from '../mesh/worktree-bootstrap-config.js';
@@ -932,6 +933,12 @@ function finalizeMeshNodeStatus(args: {
             status.launchBlockedReason = 'worktree_bootstrap_failed';
             status.launchBlockedMessage = readStringValue(bootstrap.error)
                 || 'Required worktree bootstrap failed; resolve it before launching an agent into this node.';
+            return;
+        }
+        if (bootstrap.status === 'running' && bootstrap.required !== false) {
+            status.launchReady = false;
+            status.launchBlockedReason = 'worktree_bootstrap_running';
+            status.launchBlockedMessage = 'Required worktree bootstrap is still running; wait for it to finish before launching an agent into this node.';
             return;
         }
     }
@@ -4971,60 +4978,120 @@ export class DaemonCommandRouter {
                         this.invalidateAggregateMeshStatus(meshId);
                     }
 
-                    // Initialize submodules if policy allows (default: true)
-                    const initSubmodules = (sourceNode.policy as any)?.initSubmodulesOnClone !== false;
-                    if (initSubmodules) {
-                        try {
-                            const { runGit } = await import('../git/git-executor.js');
-                            await runGit(
-                                { workspace: result.worktreePath, repoRoot: result.worktreePath, isGitRepo: true },
-                                ['submodule', 'update', '--init', '--recursive'],
-                                { timeoutMs: 120000 },
-                            );
-                        } catch (subErr: any) {
-                            // Submodule init is best-effort; don't fail the clone
-                            console.warn('[mesh] Submodule init failed for worktree:', subErr.message);
+                    const persistWorktreeSetupState = async (bootstrapState: WorktreeBootstrapState): Promise<void> => {
+                        node.worktreeBootstrap = bootstrapState;
+                        if (meshRecord.inline) {
+                            this.updateInlineMeshNode(meshId, mesh, node);
+                            return;
                         }
-                    }
-
-                    const bootstrapState: WorktreeBootstrapState = await runMeshWorktreeBootstrap(mesh, result.worktreePath);
-                    node.worktreeBootstrap = bootstrapState;
-                    if (!meshRecord.inline) {
                         try {
                             const { updateNode } = await import('../config/mesh-config.js');
                             updateNode(meshId, node.id, { worktreeBootstrap: bootstrapState });
                             this.invalidateAggregateMeshStatus(meshId);
                         } catch { /* bootstrap status persistence is best-effort */ }
+                    };
+
+                    const appendCloneLedger = async (initSubmodules: boolean, bootstrapState: WorktreeBootstrapState): Promise<void> => {
+                        try {
+                            const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+                            appendLedgerEntry(meshId, {
+                                kind: 'node_cloned',
+                                nodeId: node.id,
+                                payload: {
+                                    sourceNodeId,
+                                    branch: result.branch,
+                                    worktreePath: result.worktreePath,
+                                    submodulesInitialized: initSubmodules,
+                                    worktreeBootstrap: {
+                                        status: bootstrapState.status,
+                                        required: bootstrapState.required,
+                                        configSource: bootstrapState.configSource,
+                                        configSourceType: bootstrapState.configSourceType,
+                                        lastCommand: bootstrapState.lastCommand,
+                                        exitCode: bootstrapState.exitCode,
+                                    },
+                                },
+                            });
+                        } catch { /* ledger append is best-effort */ }
+                    };
+
+                    const initSubmodules = (sourceNode.policy as any)?.initSubmodulesOnClone !== false;
+                    const loadedBootstrap = loadMeshWorktreeBootstrapConfig(mesh, result.worktreePath);
+                    const runningBootstrapState: WorktreeBootstrapState = {
+                        status: 'running',
+                        required: loadedBootstrap.config?.required !== false,
+                        configSource: loadedBootstrap.path || loadedBootstrap.source,
+                        configSourceType: loadedBootstrap.sourceType,
+                        startedAt: new Date().toISOString(),
+                    };
+                    await persistWorktreeSetupState(runningBootstrapState);
+
+                    const finishWorktreeSetup = async (): Promise<{ submodulesInitialized: boolean; bootstrapState: WorktreeBootstrapState }> => {
+                        let submodulesInitialized = false;
+                        if (initSubmodules) {
+                            try {
+                                const { runGit } = await import('../git/git-executor.js');
+                                await runGit(
+                                    { workspace: result.worktreePath, repoRoot: result.worktreePath, isGitRepo: true },
+                                    ['submodule', 'update', '--init', '--recursive'],
+                                    { timeoutMs: 120000 },
+                                );
+                                submodulesInitialized = true;
+                            } catch (subErr: any) {
+                                // Submodule init is best-effort; don't fail the clone
+                                console.warn('[mesh] Submodule init failed for worktree:', subErr.message);
+                            }
+                        }
+                        const bootstrapState: WorktreeBootstrapState = await runMeshWorktreeBootstrap(mesh, result.worktreePath);
+                        await persistWorktreeSetupState(bootstrapState);
+                        await appendCloneLedger(submodulesInitialized, bootstrapState);
+                        return { submodulesInitialized, bootstrapState };
+                    };
+
+                    const requestedSetupWaitMs = Number(args?.setupWaitMs ?? args?.bootstrapWaitMs ?? 8000);
+                    const setupWaitMs = Number.isFinite(requestedSetupWaitMs)
+                        ? Math.min(Math.max(requestedSetupWaitMs, 0), 14000)
+                        : 8000;
+                    const setupPromise = finishWorktreeSetup();
+                    const setupResult = await Promise.race([
+                        setupPromise.then((value) => ({ completed: true as const, value })),
+                        new Promise<{ completed: false }>((resolve) => setTimeout(() => resolve({ completed: false }), setupWaitMs)),
+                    ]);
+
+                    if (!setupResult.completed) {
+                        setupPromise.catch((error: any) => {
+                            const failedState: WorktreeBootstrapState = {
+                                ...runningBootstrapState,
+                                status: 'failed',
+                                completedAt: new Date().toISOString(),
+                                error: error?.message || String(error),
+                            };
+                            void persistWorktreeSetupState(failedState);
+                            void appendCloneLedger(false, failedState);
+                        });
+                        return {
+                            success: true,
+                            async: true,
+                            status: 'accepted',
+                            node,
+                            worktreePath: result.worktreePath,
+                            branch: result.branch,
+                            worktreeBootstrap: runningBootstrapState,
+                            worktreeSetup: {
+                                status: 'running',
+                                setupWaitMs,
+                                message: 'Worktree node is registered; submodule/bootstrap setup is continuing in the background.',
+                            },
+                        };
                     }
 
-                    // Record in task ledger
-                    try {
-                        const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
-                        appendLedgerEntry(meshId, {
-                            kind: 'node_cloned',
-                            nodeId: node.id,
-                            payload: {
-                                sourceNodeId,
-                                branch: result.branch,
-                                worktreePath: result.worktreePath,
-                                submodulesInitialized: initSubmodules,
-                                worktreeBootstrap: {
-                                    status: bootstrapState.status,
-                                    required: bootstrapState.required,
-                                    configSource: bootstrapState.configSource,
-                                    configSourceType: bootstrapState.configSourceType,
-                                    lastCommand: bootstrapState.lastCommand,
-                                    exitCode: bootstrapState.exitCode,
-                                },
-                            },
-                        });
-                    } catch { /* ledger append is best-effort */ }
-
+                    const { submodulesInitialized, bootstrapState } = setupResult.value;
                     return {
                         success: true,
                         node,
                         worktreePath: result.worktreePath,
                         branch: result.branch,
+                        submodulesInitialized,
                         worktreeBootstrap: bootstrapState,
                     };
                 } catch (e: any) {

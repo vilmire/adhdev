@@ -13,6 +13,7 @@ import {
 } from '../../src/mesh/worktree-bootstrap-config'
 
 const execFileAsync = promisify(execFile)
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 function createRouter() {
   return new DaemonCommandRouter({
@@ -118,6 +119,56 @@ describe('mesh worktree bootstrap', () => {
       expect(result.node.worktreeBootstrap.status).toBe('ready')
       expect(existsSync(join(result.worktreePath, 'node_modules', '.bin', 'vitest'))).toBe(true)
       expect(readFileSync(join(result.worktreePath, 'node_modules', '.adhdev-bootstrap-ran'), 'utf-8')).toBe('ready\n')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns a registered worktree node before slow bootstrap exceeds IPC deadlines', async () => {
+    const { dir, repoRoot } = await createRepo('adhdev-worktree-bootstrap-async-')
+    try {
+      await writeFile(join(repoRoot, 'scripts', 'bootstrap.mjs'), [
+        "import { mkdirSync, writeFileSync } from 'node:fs';",
+        "await new Promise(resolve => setTimeout(resolve, 200));",
+        "mkdirSync('node_modules/.bin', { recursive: true });",
+        "writeFileSync('node_modules/.bin/vitest', '#!/usr/bin/env node\\n', { mode: 0o755 });",
+        "writeFileSync('node_modules/.adhdev-bootstrap-ran', 'ready\\n');",
+        '',
+      ].join('\n'))
+      await execFileAsync('git', ['add', 'scripts/bootstrap.mjs'], { cwd: repoRoot })
+      await execFileAsync('git', ['commit', '-q', '-m', 'slow bootstrap'], { cwd: repoRoot })
+
+      const router = createRouter()
+      const inlineMesh: any = {
+        id: 'mesh-bootstrap-async',
+        name: 'Bootstrap Async Mesh',
+        repoIdentity: 'example/bootstrap-async',
+        defaultBranch: 'main',
+        policy: {},
+        coordinator: {},
+        nodes: [
+          { id: 'node-source', workspace: repoRoot, repoRoot, daemonId: 'daemon-local', userOverrides: {}, policy: { providerPriority: ['codex-cli'], initSubmodulesOnClone: false } },
+        ],
+      }
+
+      const result: any = await router.execute('clone_mesh_node', {
+        meshId: inlineMesh.id,
+        sourceNodeId: 'node-source',
+        branch: 'feat/bootstrap-async',
+        inlineMesh,
+        setupWaitMs: 10,
+      })
+
+      expect(result.success).toBe(true)
+      expect(result.async).toBe(true)
+      expect(result.node.worktreeBootstrap.status).toBe('running')
+      expect(inlineMesh.nodes.some((node: any) => node.id === result.node.id)).toBe(true)
+
+      for (let i = 0; i < 20 && !existsSync(join(result.worktreePath, 'node_modules', '.adhdev-bootstrap-ran')); i += 1) {
+        await delay(50)
+      }
+      expect(readFileSync(join(result.worktreePath, 'node_modules', '.adhdev-bootstrap-ran'), 'utf-8')).toBe('ready\n')
+      expect(result.node.worktreeBootstrap.status).toBe('ready')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -24,6 +24,13 @@ function normalizeApprovalLabel(value: string): string {
         .trim();
 }
 
+function isNegativeApprovalLabel(value: string): boolean {
+    const label = normalizeApprovalLabel(value);
+    return /^(no|deny|reject|cancel|skip|exit|stop)\b/.test(label)
+        || /\bwithout\b/.test(label)
+        || /\bdo not\b/.test(label);
+}
+
 export function getApprovalPositiveHints(provider?: Pick<ProviderModule, 'approvalPositiveHints'> | null): string[] {
     const customHints = Array.isArray(provider?.approvalPositiveHints)
         ? provider.approvalPositiveHints
@@ -39,24 +46,24 @@ export function pickApprovalButton(
 ): { index: number; label: string } {
     const labels = (buttons || []).map((button) => String(button || '').trim()).filter(Boolean);
     if (labels.length === 0) {
-        return { index: 0, label: 'Approve' };
+        return { index: -1, label: '' };
     }
 
     const normalizedButtons = labels.map((label) => normalizeApprovalLabel(label));
     const hints = getApprovalPositiveHints(provider);
 
     for (const hint of hints) {
-        const exactIndex = normalizedButtons.findIndex((label) => label === hint);
+        const exactIndex = normalizedButtons.findIndex((label, index) => label === hint && !isNegativeApprovalLabel(labels[index]));
         if (exactIndex >= 0) return { index: exactIndex, label: labels[exactIndex] };
 
-        const prefixIndex = normalizedButtons.findIndex((label) => label.startsWith(hint));
+        const prefixIndex = normalizedButtons.findIndex((label, index) => label.startsWith(hint) && !isNegativeApprovalLabel(labels[index]));
         if (prefixIndex >= 0) return { index: prefixIndex, label: labels[prefixIndex] };
 
-        const includeIndex = normalizedButtons.findIndex((label) => label.includes(hint));
+        const includeIndex = normalizedButtons.findIndex((label, index) => label.includes(hint) && !isNegativeApprovalLabel(labels[index]));
         if (includeIndex >= 0) return { index: includeIndex, label: labels[includeIndex] };
     }
 
-    return { index: 0, label: labels[0] };
+    return { index: -1, label: '' };
 }
 
 export function formatAutoApprovalMessage(modalMessage?: string, buttonLabel?: string): string {
