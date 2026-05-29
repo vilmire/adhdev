@@ -38,6 +38,7 @@ export interface CliSessionStatus {
     }>;
     errorMessage?: string;
     errorReason?: string;
+    providerSessionId?: string;
     bufferState?: {
         responseBuffer?: { truncated: boolean; droppedChars: number; maxChars: number };
         recentOutputBuffer?: { truncated: boolean; droppedChars: number; maxChars: number };
@@ -51,6 +52,9 @@ export interface ParsedSession {
     messages: any[];
     modal: { message: string; buttons: string[] } | null;
     parsedStatus: string | null;
+    errorMessage?: string;
+    errorReason?: string;
+    providerSessionId?: string;
     transcriptAuthority?: 'provider' | 'daemon';
     coverage?: 'full' | 'tail' | 'current-turn';
 }

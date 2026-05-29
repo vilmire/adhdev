@@ -218,4 +218,50 @@ describe('ProviderCliAdapter Hermes parser-authority status handling', () => {
     expect(adapter.isWaitingForResponse).toBe(true)
     expect(adapter.responseTimeout).toBeTruthy()
   })
+
+  it('turns parser error status into terminal adapter error state', () => {
+    const adapter = buildAdapter('antigravity-cli', () => ({
+      status: 'error',
+      parsedStatus: 'error',
+      modal: null,
+      messages: [{ role: 'user', content: 'hello' }],
+      errorReason: 'provider_unavailable_high_traffic',
+      errorMessage: 'Antigravity CLI reported server high traffic. Retry later.',
+    }))
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'hello',
+      startedAt: Date.now() - 10_000,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+
+    adapter.evaluateSettled()
+    const status = adapter.getStatus({ allowParse: false })
+
+    expect(status.status).toBe('error')
+    expect(status.errorReason).toBe('provider_unavailable_high_traffic')
+    expect(status.errorMessage).toMatch(/high traffic/i)
+    expect(adapter.isWaitingForResponse).toBe(false)
+    expect(adapter.currentTurnScope).toBeNull()
+  })
+
+  it('caches parser providerSessionId for light status events', () => {
+    const adapter = buildAdapter('antigravity-cli', () => ({
+      status: 'idle',
+      parsedStatus: 'idle',
+      modal: null,
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'done' },
+      ],
+      providerSessionId: '30631f7c-068e-4885-bedb-11e7a6f46a09',
+    }))
+
+    adapter.evaluateSettled()
+    const status = adapter.getStatus({ allowParse: false })
+
+    expect(status.providerSessionId).toBe('30631f7c-068e-4885-bedb-11e7a6f46a09')
+  })
 })
