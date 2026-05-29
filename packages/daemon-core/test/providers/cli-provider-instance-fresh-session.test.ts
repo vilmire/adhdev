@@ -171,6 +171,83 @@ describe('CliProviderInstance provider session recovery', () => {
 
     expect(instance.getState().providerSessionId).toBeUndefined()
   })
+
+  it('does not expose idle parser replay from a previous workspace conversation during a fresh launch', () => {
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+      resume: { supported: true },
+    } as any, '/tmp/project', [], 'runtime-fresh', undefined, { launchMode: 'new' }) as any
+
+    instance.historyWriter = {
+      appendNewMessages: vi.fn(),
+      promoteHistorySession: vi.fn(),
+      writeSessionStart: vi.fn(),
+      seedSessionHistory: vi.fn(),
+      compactHistorySession: vi.fn(),
+    }
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        providerSessionId: 'previous-workspace-session',
+        title: 'Hermes Agent',
+        messages: [
+          { role: 'user', content: 'old workspace prompt' },
+          { role: 'assistant', content: 'old workspace answer' },
+        ],
+      }),
+      getRuntimeMetadata: () => ({ runtimeId: 'runtime-fresh' }),
+      updateRuntimeMeta: vi.fn(),
+    }
+
+    const state = instance.getState()
+
+    expect(state.providerSessionId).toBeUndefined()
+    expect(state.activeChat?.id).toBe('runtime-fresh')
+    expect(state.activeChat?.messages).toEqual([])
+    expect(instance.historyWriter.appendNewMessages).not.toHaveBeenCalled()
+    expect(instance.historyWriter.promoteHistorySession).not.toHaveBeenCalled()
+  })
+
+  it('keeps explicit resume history visible for resumed launches', () => {
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+      resume: { supported: true },
+    } as any, '/tmp/project', [], 'runtime-resume', undefined, {
+      providerSessionId: 'saved-session-1',
+      launchMode: 'resume',
+    }) as any
+
+    instance.historyWriter = { appendNewMessages: vi.fn() }
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        providerSessionId: 'saved-session-1',
+        title: 'Hermes Agent',
+        messages: [
+          { role: 'user', content: 'saved prompt' },
+          { role: 'assistant', content: 'saved answer' },
+        ],
+      }),
+      getRuntimeMetadata: () => ({ runtimeId: 'runtime-resume' }),
+    }
+
+    const state = instance.getState()
+
+    expect(state.providerSessionId).toBe('saved-session-1')
+    expect(state.activeChat?.id).toBe('saved-session-1')
+    expect(state.activeChat?.messages.map((message: any) => message.content)).toEqual([
+      'saved prompt',
+      'saved answer',
+    ])
+  })
 })
 
 describe('CliProviderInstance lightweight hot chat state', () => {
