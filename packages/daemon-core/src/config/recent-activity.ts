@@ -92,12 +92,18 @@ export function buildSessionReadStateKey(sessionId: string, providerSessionId?: 
 
 export function getSessionSeenAt(state: DaemonState, sessionId: string, providerSessionId?: string | null): number {
     const providerKey = buildSessionReadStateKey(sessionId, providerSessionId);
-    return state.sessionReads?.[providerKey] || state.sessionReads?.[sessionId] || 0;
+    return Math.max(state.sessionReads?.[providerKey] || 0, state.sessionReads?.[sessionId] || 0);
 }
 
 export function getSessionSeenMarker(state: DaemonState, sessionId: string, providerSessionId?: string | null): string {
     const providerKey = buildSessionReadStateKey(sessionId, providerSessionId);
-    return state.sessionReadMarkers?.[providerKey] || state.sessionReadMarkers?.[sessionId] || '';
+    const providerSeenAt = state.sessionReads?.[providerKey] || 0;
+    const sessionSeenAt = state.sessionReads?.[sessionId] || 0;
+    const providerMarker = state.sessionReadMarkers?.[providerKey] || '';
+    const sessionMarker = state.sessionReadMarkers?.[sessionId] || '';
+    if (sessionSeenAt > providerSeenAt && sessionMarker) return sessionMarker;
+    if (providerSeenAt > sessionSeenAt && providerMarker) return providerMarker;
+    return providerMarker || sessionMarker;
 }
 
 export function getSessionNotificationDismissal(state: DaemonState, sessionId: string, providerSessionId?: string | null): string {
