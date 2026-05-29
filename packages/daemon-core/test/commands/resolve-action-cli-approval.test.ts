@@ -126,6 +126,122 @@ describe('handleResolveAction for CLI approval state', () => {
     expect(resolveModal).toHaveBeenCalledWith(0)
   })
 
+  it('maps generic approve to the visible positive choice when later choices are negative variants', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Do you want to proceed?',
+          buttons: ['Yes', 'No', 'No, and tell agy what to do differently', 'No, and stop asking for this command'],
+        },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'antigravity-cli', category: 'cli', approvalPositiveHints: ['yes', 'continue'] }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'antigravity-cli', sessionId: 'sess-1' },
+      currentProviderType: 'antigravity-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'antigravity-cli',
+      action: 'approve',
+    })
+
+    expect(result).toEqual({ success: true, buttonIndex: 0, button: 'Yes' })
+    expect(resolveModal).toHaveBeenCalledWith(0)
+  })
+
+  it('fails closed instead of approving a non-approval prompt with no positive visible choice', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: "How's the CLI experience so far?",
+          buttons: ['Good', 'Fine', 'Bad', 'Skip'],
+        },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'antigravity-cli', category: 'cli', approvalPositiveHints: ['yes', 'continue'] }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'antigravity-cli', sessionId: 'sess-1' },
+      currentProviderType: 'antigravity-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'antigravity-cli',
+      action: 'approve',
+    })
+
+    expect(result).toEqual({ success: false, error: 'Approval action did not match any visible button' })
+    expect(resolveModal).not.toHaveBeenCalled()
+  })
+
+  it('does not treat a negative continue-without choice as approval', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'New MCP server found in this project: adhdev-mesh',
+          buttons: [
+            'Use this MCP server',
+            'Use this and all future MCP servers in this project',
+            'Continue without using this MCP server',
+          ],
+        },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({
+        type: 'claude-cli',
+        category: 'cli',
+        approvalPositiveHints: ['continue', 'use this mcp server', 'use this'],
+      }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'claude-cli', sessionId: 'sess-1' },
+      currentProviderType: 'claude-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'claude-cli',
+      action: 'approve',
+    })
+
+    expect(result).toEqual({ success: true, buttonIndex: 0, button: 'Use this MCP server' })
+    expect(resolveModal).toHaveBeenCalledWith(0)
+  })
+
   it('fails closed when action mapping cannot identify a matching button', async () => {
     const resolveModal = vi.fn()
     const adapter = {
