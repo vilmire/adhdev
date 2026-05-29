@@ -1,20 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const readProviderChatHistoryMock = vi.fn()
+const mocks = vi.hoisted(() => ({
+  readProviderChatHistory: vi.fn(),
+}))
 
 vi.mock('../../src/config/chat-history.js', () => ({
-  readProviderChatHistory: readProviderChatHistoryMock,
+  readProviderChatHistory: mocks.readProviderChatHistory,
+  isNativeSourceCanonicalHistory: (canonicalHistory: any) => {
+    if (!canonicalHistory) return false
+    return canonicalHistory.mode !== 'disabled' && canonicalHistory.mode !== 'materialized-mirror'
+  },
 }))
 
 describe('handleChatHistory', () => {
   beforeEach(() => {
-    readProviderChatHistoryMock.mockReset()
+    mocks.readProviderChatHistory.mockReset()
   })
 
   it('does not infer CLI history exclusion from adapter status messages', async () => {
     const { handleChatHistory } = await import('../../src/commands/chat-commands.js')
 
-    readProviderChatHistoryMock.mockReturnValue({
+    mocks.readProviderChatHistory.mockReturnValue({
       messages: [{ role: 'user', content: 'older message' }],
       hasMore: true,
     })
@@ -42,7 +48,7 @@ describe('handleChatHistory', () => {
       limit: 30,
     })
 
-    expect(readProviderChatHistoryMock).toHaveBeenCalledWith('hermes-cli', {
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', {
       canonicalHistory: undefined,
       historySessionId: 'history-1',
       workspace: undefined,
@@ -63,7 +69,7 @@ describe('handleChatHistory', () => {
   it('honors the frontend live-tail exclude count instead of skipping the full adapter transcript', async () => {
     const { handleChatHistory } = await import('../../src/commands/chat-commands.js')
 
-    readProviderChatHistoryMock.mockReturnValue({
+    mocks.readProviderChatHistory.mockReturnValue({
       messages: [{ role: 'assistant', content: 'older than visible tail' }],
       hasMore: true,
     })
@@ -92,7 +98,7 @@ describe('handleChatHistory', () => {
       excludeRecentCount: 1000,
     })
 
-    expect(readProviderChatHistoryMock).toHaveBeenCalledWith('hermes-cli', {
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', {
       canonicalHistory: undefined,
       historySessionId: 'history-1',
       workspace: undefined,
@@ -113,7 +119,7 @@ describe('handleChatHistory', () => {
   it('falls back to the provider-authoritative parsed transcript length for CLI history exclusion', async () => {
     const { handleChatHistory } = await import('../../src/commands/chat-commands.js')
 
-    readProviderChatHistoryMock.mockReturnValue({
+    mocks.readProviderChatHistory.mockReturnValue({
       messages: [{ role: 'assistant', content: 'older parsed history' }],
       hasMore: true,
     })
@@ -142,7 +148,7 @@ describe('handleChatHistory', () => {
       historySessionId: 'history-1',
     })
 
-    expect(readProviderChatHistoryMock).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
       excludeRecentCount: 125,
     }))
   })
@@ -150,7 +156,7 @@ describe('handleChatHistory', () => {
   it('treats a malformed frontend exclude count as zero instead of poisoning pagination with NaN', async () => {
     const { handleChatHistory } = await import('../../src/commands/chat-commands.js')
 
-    readProviderChatHistoryMock.mockReturnValue({ messages: [], hasMore: false })
+    mocks.readProviderChatHistory.mockReturnValue({ messages: [], hasMore: false })
 
     await handleChatHistory({
       getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
@@ -164,7 +170,7 @@ describe('handleChatHistory', () => {
       excludeRecentCount: 'not-a-number',
     })
 
-    expect(readProviderChatHistoryMock).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
       excludeRecentCount: 0,
     }))
   })
