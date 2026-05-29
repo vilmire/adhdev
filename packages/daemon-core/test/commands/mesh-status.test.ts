@@ -363,6 +363,48 @@ describe('mesh_status', () => {
     }))
   })
 
+  it('treats sparse configured coordinator node as same-machine in mesh_status', async () => {
+    const { router } = createRouter({ statusInstanceId: 'daemon-local' })
+
+    const result = await router.execute('mesh_status', {
+      meshId: 'mesh-sparse-local-coordinator',
+      inlineMesh: {
+        id: 'mesh-sparse-local-coordinator',
+        name: 'Sparse Local Coordinator',
+        repoIdentity: 'repo',
+        policy: {},
+        coordinator: {},
+        nodes: [
+          {
+            id: 'node-local',
+            workspace: '/missing/local',
+            providers: ['codex-cli'],
+            policy: { providerPriority: ['codex-cli'] },
+          },
+          {
+            id: 'node-unknown',
+            workspace: '/missing/unknown',
+            providers: ['codex-cli'],
+            policy: { providerPriority: ['codex-cli'] },
+          },
+        ],
+      },
+    }) as any
+
+    expect(result.success).toBe(true)
+    const local = result.nodes.find((node: any) => node.nodeId === 'node-local')
+    const unknown = result.nodes.find((node: any) => node.nodeId === 'node-unknown')
+    expect(local.machine).toEqual(expect.objectContaining({
+      sameMachine: true,
+      locality: 'same_machine',
+      localityReason: 'selected coordinator node',
+    }))
+    expect(unknown.machine).toEqual(expect.objectContaining({
+      sameMachine: false,
+      locality: 'remote_or_unknown',
+    }))
+  })
+
   it('blocks coordinator launch from explicit member daemons', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-coordinator-member-block-')
     try {

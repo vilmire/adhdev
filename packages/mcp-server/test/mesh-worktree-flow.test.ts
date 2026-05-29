@@ -260,6 +260,62 @@ test('mesh_list_nodes exposes explicit machine identity without treating matchin
   assert.equal(unknown.machine.localityReason, 'no useful machine identity evidence available');
 });
 
+test('mesh_list_nodes treats configured local coordinator node as same-machine when persisted mesh lacks identity fields', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const mesh = {
+    id: 'mesh-local-coordinator-no-identity',
+    name: 'Local Coordinator No Identity',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [
+      {
+        id: 'node-local',
+        workspace: '/Users/vilmire/Work/adhdev',
+        repoRoot: '/Users/vilmire/Work/adhdev',
+        userOverrides: {},
+        policy: {},
+      },
+      {
+        id: 'node-remote',
+        workspace: '/Users/remote/Work/adhdev',
+        repoRoot: '/Users/remote/Work/adhdev',
+        userOverrides: {},
+        policy: {},
+      },
+    ],
+  };
+  transport.command = async (command, args = {}) => {
+    if (command !== 'get_mesh') throw new Error(`unexpected direct command: ${command}`);
+    return { success: true, mesh: args.inlineMesh || mesh };
+  };
+
+  const listed = JSON.parse(await meshListNodes({
+    mesh,
+    transport,
+    localDaemonId: 'daemon_mach_local',
+    localMachineId: 'mach_local',
+    coordinatorHostname: 'M4',
+  }));
+
+  const local = listed.nodes.find((node: any) => node.nodeId === 'node-local');
+  const remote = listed.nodes.find((node: any) => node.nodeId === 'node-remote');
+  assert.equal(local.machine.sameMachine, true);
+  assert.equal(local.machine.locality, 'same_machine');
+  assert.equal(local.machine.localityReason, 'matched configured coordinator node');
+  assert.deepEqual(local.machine.identityEvidence, [
+    'localMatch:matched conf…tor node',
+    'localMachineId:mach_local',
+    'localDaemonId:daemon_mach_local',
+  ]);
+  assert.equal(remote.machine.sameMachine, false);
+  assert.equal(remote.machine.locality, 'remote_or_unknown');
+});
+
 test('mesh_fast_forward_node includes node identity in local IPC command args for timeout diagnostics', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;

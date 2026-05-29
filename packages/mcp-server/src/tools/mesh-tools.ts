@@ -1124,7 +1124,8 @@ function buildNodeMachineIdentity(ctx: MeshContext, node: LocalMeshNodeEntry): R
     const hostname = readNodeHostname(node);
     const machineName = readNodeDisplayMachineName(node);
     const coordinatorHostname = readString(ctx.coordinatorHostname);
-    const directLocal = isLocalControlPlaneNode(ctx, node);
+    const localControlPlaneReason = getLocalControlPlaneMatchReason(ctx, node);
+    const directLocal = !!localControlPlaneReason;
     const hostnameMatches = Boolean(
         normalizeHostname(hostname)
         && normalizeHostname(coordinatorHostname)
@@ -1136,9 +1137,14 @@ function buildNodeMachineIdentity(ctx: MeshContext, node: LocalMeshNodeEntry): R
     pushIdentityEvidence(evidence, 'hostname', hostname);
     pushIdentityEvidence(evidence, 'machineId', machineId);
     pushIdentityEvidence(evidence, 'daemonId', daemonId);
+    if (localControlPlaneReason) {
+        pushIdentityEvidence(evidence, 'localMatch', localControlPlaneReason);
+        pushIdentityEvidence(evidence, 'localMachineId', ctx.localMachineId);
+        pushIdentityEvidence(evidence, 'localDaemonId', ctx.localDaemonId);
+    }
     const locality = sameMachine ? 'same_machine' : (evidence.length > 0 ? 'remote_known' : 'remote_or_unknown');
     const localityReason = sameMachine
-        ? (directLocal ? 'matched coordinator daemon or machine id' : 'matched coordinator hostname')
+        ? (localControlPlaneReason || 'matched coordinator hostname')
         : evidence.length > 0
             ? `known remote/other machine identity; no local coordinator match (${evidence.join(', ')})`
             : 'no useful machine identity evidence available';
@@ -1211,6 +1217,29 @@ function isDirectLocalNode(ctx: MeshContext, node: LocalMeshNodeEntry): boolean 
     );
 }
 
+function isConfiguredCoordinatorNode(ctx: MeshContext, node: LocalMeshNodeEntry): boolean {
+    if (!ctx.localMachineId && !ctx.localDaemonId) return false;
+    const nodeId = readString(node.id) || readString((node as any).nodeId) || readString((node as any).node_id);
+    if (!nodeId) return false;
+    const preferredNodeId = readString(ctx.mesh.coordinator?.preferredNodeId)
+        || readString((ctx.mesh.coordinator as any)?.preferred_node_id);
+    if (preferredNodeId) return nodeId === preferredNodeId;
+    const first = ctx.mesh.nodes?.[0] as any;
+    const firstNodeId = readString(first?.id) || readString(first?.nodeId) || readString(first?.node_id);
+    return !!firstNodeId && nodeId === firstNodeId;
+}
+
+function getLocalControlPlaneMatchReason(ctx: MeshContext, node: LocalMeshNodeEntry): string | undefined {
+    if (isDirectLocalNode(ctx, node)) return 'matched coordinator daemon or machine id';
+    if (isConfiguredCoordinatorNode(ctx, node)) return 'matched configured coordinator node';
+    if (node.isLocalWorktree === true) {
+        const sourceNode = findClonedFromNode(ctx, node);
+        if (sourceNode && isDirectLocalNode(ctx, sourceNode)) return 'matched local cloned-from node';
+        if (sourceNode && isConfiguredCoordinatorNode(ctx, sourceNode)) return 'matched configured coordinator source node';
+    }
+    return undefined;
+}
+
 function findClonedFromNode(ctx: MeshContext, node: LocalMeshNodeEntry): LocalMeshNodeEntry | undefined {
     const clonedFromNodeId = readString(node.clonedFromNodeId) || readString((node as any).cloned_from_node_id);
     if (!clonedFromNodeId) return undefined;
@@ -1218,17 +1247,7 @@ function findClonedFromNode(ctx: MeshContext, node: LocalMeshNodeEntry): LocalMe
 }
 
 function isLocalControlPlaneNode(ctx: MeshContext, node: LocalMeshNodeEntry): boolean {
-    if (isDirectLocalNode(ctx, node)) return true;
-
-    // Worktree nodes created by the local daemon may be persisted without their
-    // own machineId. In that case, preserve locality from the cloned source node
-    // rather than incorrectly routing local workspace commands through P2P.
-    if (node.isLocalWorktree === true) {
-        const sourceNode = findClonedFromNode(ctx, node);
-        if (sourceNode && isDirectLocalNode(ctx, sourceNode)) return true;
-    }
-
-    return false;
+    return !!getLocalControlPlaneMatchReason(ctx, node);
 }
 
 function meshSessionCacheKey(nodeId: string, runtimeSessionId: string): string {

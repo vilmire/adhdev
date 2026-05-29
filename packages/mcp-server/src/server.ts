@@ -195,7 +195,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       try {
         const { loadConfig } = await import('@adhdev/daemon-core');
         const cfg = loadConfig();
-        if (cfg.registeredMachineId) localMachineId = cfg.registeredMachineId;
+        if (cfg.machineId) localMachineId = cfg.machineId;
+        else if (cfg.registeredMachineId) localMachineId = cfg.registeredMachineId;
       } catch { /* best-effort */ }
     }
 
