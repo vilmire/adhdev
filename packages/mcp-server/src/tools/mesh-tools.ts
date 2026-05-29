@@ -1156,12 +1156,58 @@ function buildNodeMachineIdentity(ctx: MeshContext, node: LocalMeshNodeEntry): R
     };
 }
 
+function nodeHasLocalDaemonEvidence(ctx: MeshContext, node: any): boolean {
+    const isLocal = (session: any) => {
+        if (!session || typeof session !== 'object') return false;
+        if (ctx.localDaemonId && session.settings?.meshCoordinatorDaemonId === ctx.localDaemonId) return true;
+        if (session.launchedByCoordinator === true) return true;
+        if (ctx.localDaemonId && session.runtime?.owner === ctx.localDaemonId) return true;
+        if (ctx.localDaemonId && session.daemonClient?.daemonId === ctx.localDaemonId) return true;
+        return false;
+    };
+
+    const sessionArrays = [
+        node?.sessions,
+        node?.activeSessions,
+        node?.active_sessions,
+        node?.lastProbe?.sessions,
+        node?.last_probe?.sessions,
+        node?.lastProbe?.status?.sessions,
+        node?.last_probe?.status?.sessions,
+    ];
+    for (const arr of sessionArrays) {
+        if (Array.isArray(arr) && arr.some(isLocal)) return true;
+    }
+
+    const sessionRecords = [
+        node?.activeSession,
+        node?.active_session,
+        node?.currentSession,
+        node?.current_session,
+        node?.runtimeSession,
+        node?.runtime_session,
+        node?.session,
+        node?.lastProbe?.activeSession,
+        node?.last_probe?.active_session,
+        node?.lastProbe?.currentSession,
+        node?.last_probe?.current_session,
+        node?.lastProbe?.session,
+        node?.last_probe?.session,
+    ];
+    for (const session of sessionRecords) {
+        if (isLocal(session)) return true;
+    }
+    
+    return false;
+}
+
 function isDirectLocalNode(ctx: MeshContext, node: LocalMeshNodeEntry): boolean {
     const machineId = readNodeMachineId(node);
     const daemonId = readNodeDaemonId(node);
     return Boolean(
         (ctx.localMachineId && machineId === ctx.localMachineId)
-        || (ctx.localDaemonId && daemonId === ctx.localDaemonId),
+        || (ctx.localDaemonId && daemonId === ctx.localDaemonId)
+        || nodeHasLocalDaemonEvidence(ctx, node)
     );
 }
 
