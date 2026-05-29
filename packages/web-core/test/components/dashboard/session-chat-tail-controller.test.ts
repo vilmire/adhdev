@@ -4,6 +4,7 @@ import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   buildLastMessageSignature,
   buildWarmSessionChatTailDescriptorState,
+  clearSessionChatTailControllerSnapshot,
   getOrCreateSessionChatTailController,
   getWarmSessionChatTailDescriptorRefreshMs,
   resetSessionChatTailControllersForTest,
@@ -379,6 +380,72 @@ describe('SessionChatTailController registry', () => {
         cursor: { tailLimit: 60 },
       }),
     )
+  })
+
+  it('keeps chat-tail snapshots isolated by active history session id', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const sendData = vi.fn().mockReturnValue(true)
+    const oldController = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'runtime-1',
+      historySessionId: 'chat-old',
+      subscriptionKey: 'daemon:daemon-1:session:runtime-1',
+      tailLimit: 60,
+    })
+
+    oldController.retain()
+    manager.publish(createUpdate({
+      sessionId: 'runtime-1',
+      key: 'daemon:daemon-1:session:runtime-1',
+      messages: [{ role: 'assistant', content: 'old transcript', id: 'old-1', timestamp: 1 } as any],
+    }))
+
+    const newController = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'runtime-1',
+      historySessionId: 'chat-new',
+      subscriptionKey: 'daemon:daemon-1:session:runtime-1',
+      tailLimit: 60,
+    })
+
+    expect(newController).not.toBe(oldController)
+    expect(newController.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: false,
+    })
+  })
+
+  it('can clear retained chat-tail snapshots immediately after an explicit new chat action', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'runtime-1',
+      historySessionId: 'chat-old',
+      subscriptionKey: 'daemon:daemon-1:session:runtime-1',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      sessionId: 'runtime-1',
+      key: 'daemon:daemon-1:session:runtime-1',
+      messages: [{ role: 'assistant', content: 'old transcript', id: 'old-1', timestamp: 1 } as any],
+    }))
+
+    clearSessionChatTailControllerSnapshot('daemon-1', 'runtime-1', 'chat-old')
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: true,
+    })
   })
 
   it('does not expose a conversation hydrate API that can overwrite chat-tail topic authority', () => {

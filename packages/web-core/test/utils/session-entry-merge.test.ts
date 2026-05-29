@@ -128,6 +128,30 @@ describe('session entry merge helpers', () => {
     ])
   })
 
+  it('does not carry the previous transcript into a different active chat when messages are omitted', () => {
+    const merged = mergeActiveChatData(
+      {
+        id: 'chat-new',
+        title: '',
+        status: 'idle',
+        activeModal: null,
+      } as any,
+      {
+        id: 'chat-old',
+        title: 'Old conversation',
+        status: 'idle',
+        messages: [
+          { role: 'user', content: 'old prompt', id: 'msg-old-user', receivedAt: 1000 },
+          { role: 'assistant', content: 'old answer', id: 'msg-old-assistant', receivedAt: 2000 },
+        ],
+        activeModal: null,
+      } as any,
+    )
+
+    expect(merged?.id).toBe('chat-new')
+    expect(merged?.messages).toEqual([])
+  })
+
   it('uses the incoming transcript as-is when the incoming update explicitly provides messages', () => {
     const fullTail = `Intro\n${'x'.repeat(5200)}\nTAIL_MARKER_VISIBLE`
     const truncatedTail = `Intro\n${'x'.repeat(5000)}`

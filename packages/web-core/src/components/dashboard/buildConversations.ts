@@ -129,6 +129,7 @@ export function buildIdeConversations(
         sessionId?: string;
         instanceId?: string;
         providerSessionId?: string;
+        activeChatId?: string;
         transport?: string;
         sessionCapabilities?: string[];
         agentType: string;
@@ -155,6 +156,7 @@ export function buildIdeConversations(
             sessionId: child.id,
             instanceId: child.id,
             providerSessionId: child.providerSessionId,
+            activeChatId: child.activeChat?.id,
             transport: child.transport,
             sessionCapabilities: child.capabilities,
             agentType: child.providerType,
@@ -210,10 +212,14 @@ export function buildIdeConversations(
             ? ''
             : title;
         const nativeServerMsgs = chat.messages || [];
+        const nativeHistorySessionId = (typeof activeId === 'string' && activeId.trim())
+            ? activeId
+            : ide.providerSessionId;
         results.push({
             routeId: ide.id,
             sessionId: nativeSessionId,
             providerSessionId: ide.providerSessionId,
+            historySessionId: nativeHistorySessionId,
             nativeSessionId,
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
@@ -279,6 +285,7 @@ export function buildIdeConversations(
             routeId: ide.id,
             sessionId: stream.sessionId || stream.instanceId,
             providerSessionId: stream.providerSessionId,
+            historySessionId: stream.activeChatId || stream.providerSessionId,
             nativeSessionId: ide.sessionId || ide.instanceId,
             transport: (stream.transport || 'cdp-webview') as import('../../types').SessionTransport,
             daemonId: ide.daemonId || undefined,
