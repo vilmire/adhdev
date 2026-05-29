@@ -1,5 +1,6 @@
 export interface ConversationTarget {
   providerSessionId?: string
+  historySessionId?: string
   sessionId?: string
   tabKey?: string
   routeId?: string
@@ -55,9 +56,10 @@ export function getConversationTargetValue(target: ConversationTarget): string |
 }
 
 export function getConversationHistoryLookupIds(
-  conversation: Pick<ConversationTarget, 'providerSessionId' | 'sessionId'>,
+  conversation: Pick<ConversationTarget, 'historySessionId' | 'providerSessionId' | 'sessionId'>,
 ): string[] {
   return dedupeKeys([
+    normalizeKeyPart(conversation.historySessionId),
     normalizeKeyPart(conversation.providerSessionId),
     normalizeKeyPart(conversation.sessionId),
   ])
@@ -104,7 +106,7 @@ export function buildConversationTargetKey(target: ConversationTarget): string {
 }
 
 export function getConversationHistorySessionId(
-  conversation: Pick<ConversationTarget, 'providerSessionId' | 'sessionId'>,
+  conversation: Pick<ConversationTarget, 'historySessionId' | 'providerSessionId' | 'sessionId'>,
 ): string | undefined {
   return getConversationHistoryLookupIds(conversation)[0]
 }

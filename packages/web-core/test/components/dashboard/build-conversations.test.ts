@@ -246,6 +246,34 @@ describe('build conversations shared context', () => {
         expect(firstConversation?.tabKey).not.toBe(secondConversation?.tabKey)
     })
 
+    it('uses the active chat id as the native conversation history target without replacing provider identity', () => {
+        const cli = createIdeEntry({
+            id: 'machine-1:cli:runtime-1',
+            sessionId: 'runtime-1',
+            providerSessionId: 'chat-old',
+            type: 'hermes-cli',
+            transport: 'pty',
+            cliName: 'Hermes Agent',
+            mode: 'chat',
+            activeChat: {
+                id: 'chat-new',
+                title: '',
+                status: 'idle',
+                messages: [],
+                activeModal: null,
+            },
+        })
+
+        const conversation = buildScopedIdeConversations(cli)[0]
+
+        expect(conversation).toMatchObject({
+            sessionId: 'runtime-1',
+            providerSessionId: 'chat-old',
+            historySessionId: 'chat-new',
+            messages: [],
+        })
+    })
+
     it('renders only daemon-provided native CLI transcript messages without frontend local message overlays', () => {
         const cli = createIdeEntry({
             id: 'cli-2',
@@ -277,4 +305,3 @@ describe('build conversations shared context', () => {
         ])
     })
 })
-

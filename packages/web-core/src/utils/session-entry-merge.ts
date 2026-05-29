@@ -37,6 +37,9 @@ export function mergeActiveChatData(
 
   const incomingHasMessages = Object.prototype.hasOwnProperty.call(incoming, 'messages')
   const incomingHasActiveModal = Object.prototype.hasOwnProperty.call(incoming, 'activeModal')
+  const incomingId = typeof incoming.id === 'string' ? incoming.id.trim() : ''
+  const existingId = typeof existing?.id === 'string' ? existing.id.trim() : ''
+  const switchedConversation = !!incomingId && !!existingId && incomingId !== existingId
 
   if (!existing) {
     return {
@@ -49,7 +52,11 @@ export function mergeActiveChatData(
   return {
     ...existing,
     ...incoming,
-    messages: incomingHasMessages ? cloneActiveChatMessages(incoming.messages) : existing.messages,
+    messages: incomingHasMessages
+      ? cloneActiveChatMessages(incoming.messages)
+      : switchedConversation
+        ? []
+        : existing.messages,
     activeModal: incomingHasActiveModal ? (incoming.activeModal ?? null) : existing.activeModal,
     inputContent: incoming.inputContent ?? existing.inputContent,
   }

@@ -61,8 +61,8 @@ const WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES = new Set([
 ])
 const controllerRegistry = new Map<string, SessionChatTailController>()
 
-function getControllerKey(daemonId: string, sessionId: string): string {
-  return `${daemonId}::${sessionId}`
+function getControllerKey(daemonId: string, sessionId: string, historySessionId?: string): string {
+  return `${daemonId}::${sessionId}::${historySessionId || sessionId}`
 }
 
 function buildEmptySnapshot(tailLimit = DEFAULT_TAIL_LIMIT): SessionChatTailSnapshot {
@@ -217,6 +217,14 @@ export class SessionChatTailController {
     return this.snapshot
   }
 
+  clearLiveSnapshot(): void {
+    this.snapshot = {
+      ...buildEmptySnapshot(this.snapshot.cursor.tailLimit),
+      hasLiveSnapshot: true,
+    }
+    this.emit()
+  }
+
   subscribe(listener: (snapshot: SessionChatTailSnapshot) => void): () => void {
     this.listeners.add(listener)
     listener(this.snapshot)
@@ -359,7 +367,7 @@ export class SessionChatTailController {
 }
 
 export function getOrCreateSessionChatTailController(options: SessionChatTailControllerOptions): SessionChatTailController {
-  const key = getControllerKey(options.daemonId, options.sessionId)
+  const key = getControllerKey(options.daemonId, options.sessionId, options.historySessionId)
   const existing = controllerRegistry.get(key)
   if (existing) {
     existing.updateOptions(options)
@@ -368,6 +376,21 @@ export function getOrCreateSessionChatTailController(options: SessionChatTailCon
   const controller = new SessionChatTailController(options)
   controllerRegistry.set(key, controller)
   return controller
+}
+
+export function clearSessionChatTailControllerSnapshot(
+  daemonId: string | undefined,
+  sessionId: string | undefined,
+  historySessionId?: string,
+): void {
+  if (!daemonId || !sessionId) return
+  const prefix = `${daemonId}::${sessionId}::`
+  const exactKey = getControllerKey(daemonId, sessionId, historySessionId)
+  for (const [key, controller] of controllerRegistry.entries()) {
+    if (key === exactKey || key.startsWith(prefix)) {
+      controller.clearLiveSnapshot()
+    }
+  }
 }
 
 export function resetSessionChatTailControllersForTest(): void {
@@ -434,10 +457,10 @@ export function buildWarmSessionChatTailDescriptorState(
     const daemonId = getConversationDaemonRouteId(conversation)
     const sessionId = conversation.sessionId || ''
     if (!daemonId || !sessionId) continue
-    const key = getControllerKey(daemonId, sessionId)
+    const historySessionId = getConversationHistorySessionId(conversation)
+    const key = getControllerKey(daemonId, sessionId, historySessionId || sessionId)
     if (seen.has(key)) continue
     seen.add(key)
-    const historySessionId = getConversationHistorySessionId(conversation)
     descriptors.push({
       daemonId,
       sessionId,

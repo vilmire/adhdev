@@ -12,6 +12,7 @@ export interface ActiveConversation {
     routeId: string;
     sessionId?: string;
     providerSessionId?: string;
+    historySessionId?: string;
     nativeSessionId?: string;
     transport?: SessionTransport;
     /** Daemon DO ID — actual server connection ID for command routing */
