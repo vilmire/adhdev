@@ -133,9 +133,8 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     })
   })
 
-  it('retries Codex native history by workspace when PTY runtime id is not the Codex JSONL session id', async () => {
+  it('does not retry Codex native history by workspace when PTY runtime id is not the Codex JSONL session id', async () => {
     const runtimeId = '0eae4e76-4980-4d99-b54c-9c6a1cfce5dd'
-    const codexHistoryId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
     const adapter = createCodexAdapter({
       getScriptParsedStatus: vi.fn(() => ({
         status: 'idle',
@@ -152,18 +151,6 @@ describe('Codex CLI read_chat native transcript provenance', () => {
         hasMore: false,
         messages: [],
       })
-      .mockReturnValueOnce({
-        source: 'provider-native',
-        sourcePath: `/Users/test/.codex/sessions/${codexHistoryId}.jsonl`,
-        sourceMtimeMs: Date.now(),
-        hasMore: false,
-        messages: [
-          { role: 'system', kind: 'session_start', content: '/workspaces/adhdev', receivedAt: 900, historySessionId: codexHistoryId, workspace: '/workspaces/adhdev' },
-          { role: 'user', content: 'native prompt', receivedAt: 3_000, historySessionId: codexHistoryId },
-          { role: 'assistant', content: 'native answer', receivedAt: 4_000, historySessionId: codexHistoryId },
-          { role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'shell: npm test', receivedAt: 4_100, historySessionId: codexHistoryId },
-        ],
-      })
 
     const result = await handleReadChat(createHelpers(adapter) as any, {
       agentType: 'codex-cli',
@@ -176,33 +163,28 @@ describe('Codex CLI read_chat native transcript provenance', () => {
       historySessionId: runtimeId,
       workspace: '/workspaces/adhdev',
     }))
-    expect(mocks.readProviderChatHistory).toHaveBeenNthCalledWith(2, 'codex-cli', expect.objectContaining({
-      historySessionId: undefined,
-      workspace: '/workspaces/adhdev',
-    }))
-    expect((result.messages as any[]).map(message => message.content)).toEqual(['native prompt', 'native answer'])
-    expect((result.messages as any[]).every(message => message.providerUnitKey && message.bubbleId && message.bubbleState === 'final')).toBe(true)
-    expect((result.messages as any[]).map(message => message.source)).toEqual([undefined, 'assistant_text'])
-    expect(result.providerSessionId).toBe(codexHistoryId)
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledTimes(1)
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['native prompt', 'parser-level artifact'])
+    expect(result.providerSessionId).toBeUndefined()
     expect(result.messageSource).toMatchObject({
-      selected: 'native-history',
+      selected: 'pty-parser',
       provider: 'codex-cli',
-      nativeHandle: codexHistoryId,
-      nativeSessionId: codexHistoryId,
-      nativeSource: 'provider-native',
-      ptyStatusApprovalOnly: true,
+      nativeHandle: runtimeId,
+      nativeSource: 'native-unavailable',
+      fallbackReason: 'native_history_unavailable',
+      ptyStatusApprovalOnly: false,
       coverage: {
-        nativeMessageCount: 4,
+        nativeMessageCount: 0,
         ptyMessageCount: 2,
         returnedMessageCount: 2,
-        safeMapping: true,
+        safeMapping: false,
       },
     })
     expect(result.debugReadChat).toMatchObject({
-      selectedMessageSource: 'native-history',
-      fullMsgCount: 4,
+      selectedMessageSource: 'pty-parser',
+      fullMsgCount: 2,
       visibleMsgCount: 2,
-      hiddenMsgCount: 2,
+      hiddenMsgCount: 0,
       returnedMsgCount: 2,
     })
   })
@@ -251,9 +233,9 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     expect(result.providerSessionId).toBeUndefined()
     expect(result.messageSource).toMatchObject({
       selected: 'pty-parser',
-      fallbackReason: 'native_history_not_safely_mapped',
+      fallbackReason: 'native_history_unavailable',
       coverage: {
-        nativeMessageCount: 2,
+        nativeMessageCount: 0,
         ptyMessageCount: 2,
         returnedMessageCount: 2,
         safeMapping: false,
