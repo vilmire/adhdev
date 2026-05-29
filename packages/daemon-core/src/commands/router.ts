@@ -41,6 +41,7 @@ import { buildSessionEntries } from '../status/builders.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
+import { buildPreviewFreshness } from '../mesh/preview-freshness.js';
 import {
     MESH_REFINE_CONFIG_LOCATIONS,
     MESH_REFINE_CONFIG_SCHEMA,
@@ -5520,6 +5521,12 @@ export class DaemonCommandRouter {
                     }
 
                     const pendingCoordinatorEvents = drainPendingMeshCoordinatorEvents(meshId);
+                    const previewFreshness = (() => {
+                        const localRepoRoot = nodeStatuses
+                            .map((node: any) => readStringValue(node?.git?.repoRoot, node?.repoRoot, node?.workspace))
+                            .find((candidate: string | undefined) => !!candidate && fs.existsSync(candidate));
+                        return localRepoRoot ? buildPreviewFreshness(localRepoRoot) : undefined;
+                    })();
                     const statusResult = {
                         success: true,
                         meshId: mesh.id,
@@ -5558,6 +5565,7 @@ export class DaemonCommandRouter {
                             historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary'],
                         },
                         branchConvergenceSummary: summarizeInlineMeshBranchConvergence(nodeStatuses),
+                        ...(previewFreshness ? { previewFreshness, deployFreshness: previewFreshness } : {}),
                         nodes: nodeStatuses,
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
