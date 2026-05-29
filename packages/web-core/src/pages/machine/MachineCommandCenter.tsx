@@ -2,14 +2,13 @@ import type { ReactNode } from 'react'
 
 import type { DaemonData } from '../../types'
 import { formatRelativeTime } from '../../utils/time'
-import { isVersionUpdateRequired } from '../../utils/version-update'
 import { IconChat, IconClock, IconRefresh, IconWarning } from '../../components/Icons'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { MachineRecentLaunch, ProviderInfo } from './types'
 import { getConversationActivityAt } from '../../components/dashboard/conversation-sort'
 import { getConversationMetaText, getConversationTitle } from '../../components/dashboard/conversation-presenters'
 import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
-import { getDaemonUpdateChannel, getDaemonUpdateTargetVersion } from '../../utils/daemon-update-policy'
+import { buildDaemonUpdateStatusView } from '../../utils/daemon-update-status'
 
 declare const __APP_VERSION__: string
 
@@ -52,10 +51,7 @@ export default function MachineCommandCenter({
     const topCurrentConversations = currentConversations.slice(0, 6)
     const topRecentLaunches = recentLaunches.slice(0, 4)
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
-    const updateChannel = getDaemonUpdateChannel(machineEntry)
-    const updateTargetVersion = getDaemonUpdateTargetVersion(machineEntry, appVersion)
-    const requiresUpdate = isVersionUpdateRequired(machineEntry, updateTargetVersion)
-    const updateButtonLabel = updateChannel === 'preview' ? 'Update to preview' : 'Update daemon'
+    const updateStatus = buildDaemonUpdateStatusView(machineEntry, appVersion)
 
     return (
         <div className="flex flex-col gap-4 md:min-w-[300px] md:max-w-[360px] shrink-0 md:h-full overflow-y-auto">
@@ -129,34 +125,36 @@ export default function MachineCommandCenter({
                 </div>
             )}
 
-            {machineEntry.versionMismatch && (
+            {updateStatus.visible && (
                 <div className="flex flex-col gap-2">
                     <SectionTitle icon={<IconWarning size={13} />}>Daemon Update</SectionTitle>
-                    <SectionCard className="border-amber-500/20 bg-amber-500/5">
+                    <SectionCard className={updateStatus.tone === 'good' ? 'border-emerald-500/20 bg-emerald-500/5' : updateStatus.tone === 'info' ? 'border-sky-500/20 bg-sky-500/5' : 'border-amber-500/20 bg-amber-500/5'}>
                         <div className="flex flex-col gap-3">
                             <div className="text-sm font-semibold text-text-primary">
-                                {requiresUpdate ? 'Daemon update required' : 'Version mismatch detected'}
+                                {updateStatus.title}
                             </div>
                             <div className="text-xs text-text-secondary leading-relaxed">
-                                {requiresUpdate
-                                    ? 'This machine is on an incompatible daemon version. Update it before starting more sessions.'
-                                    : updateChannel === 'preview'
-                                        ? 'This machine can be upgraded to the current preview daemon without opening a remote shell.'
-                                        : 'This machine is running a different daemon version than the current app. Update it before starting more sessions.'}
-                                {updateTargetVersion && (
+                                {updateStatus.description}
+                                {updateStatus.targetVersion && (
                                     <span className="block mt-1 text-text-muted">
-                                        Target: v{updateTargetVersion}{updateChannel ? ` (${updateChannel})` : ''}
+                                        Target: v{updateStatus.targetVersion}{updateStatus.channel ? ` (${updateStatus.channel})` : ''}
                                     </span>
                                 )}
                             </div>
-                            <button
-                                type="button"
-                                className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-300 hover:bg-amber-500/18 transition-colors"
-                                onClick={onUpgradeDaemon}
-                            >
-                                <IconRefresh size={13} />
-                                <span className="text-sm font-medium">{updateButtonLabel}</span>
-                            </button>
+                            {updateStatus.showButton ? (
+                                <button
+                                    type="button"
+                                    className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-300 hover:bg-amber-500/18 transition-colors"
+                                    onClick={onUpgradeDaemon}
+                                >
+                                    <IconRefresh size={13} />
+                                    <span className="text-sm font-medium">{updateStatus.buttonLabel}</span>
+                                </button>
+                            ) : (
+                                <div className={updateStatus.tone === 'good' ? 'text-xs font-medium text-emerald-300' : 'text-xs font-medium text-sky-300'}>
+                                    No preview update action is needed.
+                                </div>
+                            )}
                         </div>
                     </SectionCard>
                 </div>
