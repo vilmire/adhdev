@@ -5636,12 +5636,22 @@ export class DaemonCommandRouter {
                     for (const [nodeIndex, node] of (mesh.nodes || []).entries()) {
                         const nodeId = String(node.id || node.nodeId || '');
                         const daemonId = readStringValue(node.daemonId);
+                        const nodeMachineId = readMeshNodeMachineId(node as Record<string, unknown>);
+                        const nodeHostname = readMeshNodeHostname(node as Record<string, unknown>);
                         const providerPriority = readProviderPriorityFromPolicy(node.policy);
+                        const configuredCoordinatorNode = Boolean(
+                            nodeId && selectedCoordinatorNodeId && nodeId === selectedCoordinatorNodeId,
+                        );
+                        const sparseConfiguredCoordinatorNode = configuredCoordinatorNode
+                            && !daemonId
+                            && !nodeMachineId
+                            && !nodeHostname;
                         const isSelfNode = Boolean(
                             nodeId && inlineCoordinatorNodeId && nodeId === inlineCoordinatorNodeId,
                         ) || Boolean(
                             daemonId && (daemonId === localMachineId || daemonId === this.deps.statusInstanceId),
-                        ) || Boolean(meshRecord?.inline && nodeIndex === 0);
+                        ) || Boolean(meshRecord?.inline && nodeIndex === 0)
+                            || sparseConfiguredCoordinatorNode;
                         const machineIdentity = buildMeshNodeMachineIdentity(node as Record<string, unknown>, {
                             localMachineId,
                             localDaemonId: this.deps.statusInstanceId,
@@ -5660,7 +5670,7 @@ export class DaemonCommandRouter {
                             worktreeBranch: node.worktreeBranch,
                             role: normalizeMeshDaemonRole(node.role) || (meshHost.hostNodeId && nodeId === meshHost.hostNodeId ? 'host' : undefined),
                             daemonId,
-                            machineId: readMeshNodeMachineId(node as Record<string, unknown>) || node.machineId,
+                            machineId: nodeMachineId || node.machineId,
                             machine: machineIdentity,
                             machineStatus: node.machineStatus,
                             health: 'unknown',
