@@ -288,7 +288,15 @@ test('stale direct ledger tasks are separated from active work when queue is emp
     assert.equal(status.activeWorkSummary.directActiveCount, 0);
     assert.equal(status.activeWorkSummary.staleDirectCount, 2);
     assert.equal(status.pollingGuidance, undefined);
-    assert.deepEqual(status.staleDirectWork.map((entry: any) => entry.taskId).sort(), [
+    assert.equal(status.staleDirectWork, undefined);
+    assert.equal(status.staleDirectWorkSummary.count, 2);
+    assert.deepEqual(status.staleDirectWorkSummary.sample.map((entry: any) => entry.taskId).sort(), [
+      'direct-missing-session',
+      'direct-removed-node',
+    ]);
+
+    const detailedStatus = JSON.parse(await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true }));
+    assert.deepEqual(detailedStatus.staleDirectWork.map((entry: any) => entry.taskId).sort(), [
       'direct-missing-session',
       'direct-removed-node',
     ]);

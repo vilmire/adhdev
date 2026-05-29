@@ -45,6 +45,15 @@ export interface MeshActiveWorkSummary {
     staleDirectNote?: string;
 }
 
+export interface MeshStaleDirectWorkSummary {
+    count: number;
+    sampleLimit: number;
+    sample: Array<Pick<MeshActiveWorkRecord, 'taskId' | 'status' | 'nodeId' | 'sessionId' | 'taskTitle' | 'createdAt' | 'staleReason'>>;
+    reasonCounts: Record<string, number>;
+    detailHint: string;
+    note?: string;
+}
+
 export interface BuildMeshActiveWorkOptions {
     meshId: string;
     queue?: MeshWorkQueueEntry[];
@@ -252,4 +261,32 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         summary.staleDirectNote = staleDirectWorkNote;
     }
     return { activeWork: records, staleDirectWork, staleDirectWorkNote, terminalDirectWork, summary };
+}
+
+export function buildCompactStaleDirectWorkSummary(
+    staleDirectWork: MeshActiveWorkRecord[],
+    opts: { sampleLimit?: number; detailHint?: string; note?: string } = {},
+): MeshStaleDirectWorkSummary {
+    const sampleLimit = Math.max(0, Math.min(10, Math.floor(opts.sampleLimit ?? 3)));
+    const reasonCounts: Record<string, number> = {};
+    for (const entry of staleDirectWork) {
+        const reason = entry.staleReason || 'unknown';
+        reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+    }
+    return {
+        count: staleDirectWork.length,
+        sampleLimit,
+        sample: staleDirectWork.slice(0, sampleLimit).map(entry => ({
+            taskId: entry.taskId,
+            status: entry.status,
+            nodeId: entry.nodeId,
+            sessionId: entry.sessionId,
+            taskTitle: entry.taskTitle,
+            createdAt: entry.createdAt,
+            staleReason: entry.staleReason,
+        })),
+        reasonCounts,
+        detailHint: opts.detailHint || 'Stale direct records are historical recovery evidence only. Use mesh_task_history for full ledger details, or request includeStaleDirectWorkDetails when supported by the caller.',
+        ...(opts.note ? { note: opts.note } : {}),
+    };
 }

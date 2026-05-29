@@ -41,6 +41,7 @@ import { buildSessionEntries } from '../status/builders.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
+import { buildMeshAsyncRefineJobs } from '../mesh/mesh-refine-status.js';
 import {
     MESH_REFINE_CONFIG_LOCATIONS,
     MESH_REFINE_CONFIG_SCHEMA,
@@ -1136,6 +1137,48 @@ function collectLiveMeshSessionRecords(args: {
     }
 
     return matches;
+}
+
+function buildHistoricalMeshSessions(args: {
+    meshId: string;
+    nodes: any[];
+    liveSessionRecords: any[];
+}): { count: number; sessions: Record<string, unknown>[]; instruction: string } | undefined {
+    const liveNodeIds = new Set<string>();
+    const liveWorkspaces = new Set<string>();
+    for (const node of args.nodes || []) {
+        const nodeId = readStringValue(node?.id, node?.nodeId);
+        const workspace = readStringValue(node?.workspace);
+        if (nodeId) liveNodeIds.add(nodeId);
+        if (workspace) liveWorkspaces.add(workspace);
+    }
+
+    const sessions: Record<string, unknown>[] = [];
+    for (const record of args.liveSessionRecords || []) {
+        const meta = readObjectRecord(record?.meta);
+        const recordMeshId = readStringValue(meta.meshNodeFor, meta.meshCoordinatorFor);
+        if (recordMeshId !== args.meshId) continue;
+        const recordNodeId = readStringValue(meta.meshNodeId);
+        const workspace = readStringValue(record?.workspace);
+        const removedNode = !!recordNodeId && !liveNodeIds.has(recordNodeId);
+        const orphanedWorkspace = !!workspace && !liveWorkspaces.has(workspace) && meta.meshCoordinatorFor !== args.meshId;
+        if (!removedNode && !orphanedWorkspace) continue;
+        sessions.push({
+            ...summarizeMeshSessionRecord(record),
+            classification: removedNode ? 'removedNode' : 'orphanedSession',
+            historical: true,
+            meshNodeId: recordNodeId || null,
+            reason: removedNode
+                ? 'Session is tagged to a mesh node that is no longer in live membership.'
+                : 'Session workspace is no longer attached to a live mesh node.',
+        });
+    }
+    if (sessions.length === 0) return undefined;
+    return {
+        count: sessions.length,
+        sessions: sessions.slice(0, 5),
+        instruction: 'These sessions are separated from normal node activeSessions because their mesh node/workspace is no longer live. Use mesh_cleanup_sessions only if cleanup is intended.',
+    };
 }
 
 function applyCachedInlineMeshNodeStatus(
@@ -5211,6 +5254,7 @@ export class DaemonCommandRouter {
 
                     const { readLedgerEntries, getLedgerSummary } = await import('../mesh/mesh-ledger.js');
                     const ledgerEntries = readLedgerEntries(meshId, { tail: 20 });
+                    const asyncRefineLedgerEntries = readLedgerEntries(meshId, { tail: 100 });
                     const ledgerSummary = getLedgerSummary(meshId);
                     const sessionHostRecords = this.deps.sessionHostControl?.listSessions
                         ? await this.deps.sessionHostControl.listSessions().catch(() => [])
@@ -5520,6 +5564,16 @@ export class DaemonCommandRouter {
                     }
 
                     const pendingCoordinatorEvents = drainPendingMeshCoordinatorEvents(meshId);
+                    const asyncRefineJobs = buildMeshAsyncRefineJobs({
+                        meshId,
+                        ledgerEntries: asyncRefineLedgerEntries,
+                        pendingEvents: pendingCoordinatorEvents,
+                    });
+                    const historicalSessions = buildHistoricalMeshSessions({
+                        meshId,
+                        nodes: mesh.nodes || [],
+                        liveSessionRecords: liveMeshSessions,
+                    });
                     const statusResult = {
                         success: true,
                         meshId: mesh.id,
@@ -5555,12 +5609,14 @@ export class DaemonCommandRouter {
                                     partialNodeFailures: effectiveDirectTruth.unavailableNodeIds,
                                 },
                             } : {}),
-                            historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary'],
+                            historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary', 'historicalSessions'],
                         },
                         branchConvergenceSummary: summarizeInlineMeshBranchConvergence(nodeStatuses),
                         nodes: nodeStatuses,
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
+                        ...(asyncRefineJobs.length > 0 ? { asyncRefineJobs } : {}),
+                        ...(historicalSessions ? { historicalSessions } : {}),
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
                     };
                     const { pendingCoordinatorEvents: _pendingCoordinatorEvents, ...cacheableStatusResult } = statusResult as any;

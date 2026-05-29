@@ -197,8 +197,10 @@ export type { MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshL
 // ── Mesh Work Queue (GUPP) ──
 export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest } from './mesh/mesh-work-queue.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshWorkQueueStats, MeshQueueMutationOptions, MeshTaskModeValidationResult } from './mesh/mesh-work-queue.js';
-export { buildMeshActiveWork, buildMeshActiveWorkSummary } from './mesh/mesh-active-work.js';
-export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource } from './mesh/mesh-active-work.js';
+export { buildCompactStaleDirectWorkSummary, buildMeshActiveWork, buildMeshActiveWorkSummary } from './mesh/mesh-active-work.js';
+export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource, MeshStaleDirectWorkSummary } from './mesh/mesh-active-work.js';
+export { buildMeshAsyncRefineJobs } from './mesh/mesh-refine-status.js';
+export type { MeshAsyncRefineJobStatus, MeshAsyncRefineJobSummary } from './mesh/mesh-refine-status.js';
 
 // ── Mesh Host Ownership ──
 export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHostOwner, normalizeMeshDaemonRole, requireMeshHostQueueOwner, resolveMeshHostStatus } from './mesh/mesh-host-ownership.js';

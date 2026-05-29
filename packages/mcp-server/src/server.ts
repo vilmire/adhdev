@@ -247,7 +247,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       try {
         let text: string;
         switch (name) {
-          case 'mesh_status': text = await meshStatus(meshCtx); break;
+          case 'mesh_status': text = await meshStatus(meshCtx, a as any); break;
           case 'mesh_list_nodes': text = await meshListNodes(meshCtx); break;
           case 'mesh_enqueue_task': text = await meshEnqueueTask(meshCtx, a as any); break;
           case 'mesh_view_queue': text = await meshViewQueue(meshCtx, a as any); break;
