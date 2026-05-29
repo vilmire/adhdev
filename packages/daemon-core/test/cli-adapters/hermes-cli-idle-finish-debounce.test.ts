@@ -247,6 +247,43 @@ describe('ProviderCliAdapter Hermes parser-authority status handling', () => {
     expect(adapter.currentTurnScope).toBeNull()
   })
 
+  it('schedules provider-requested retry before terminal error state', async () => {
+    vi.useFakeTimers()
+    const adapter = buildAdapter('antigravity-cli', () => ({
+      status: 'error',
+      parsedStatus: 'error',
+      modal: null,
+      messages: [{ role: 'user', content: 'hello' }],
+      errorReason: 'provider_unavailable_high_traffic',
+      errorMessage: 'Antigravity CLI reported server high traffic. Retry later.',
+      retryPrompt: 'continue',
+      retryDelayMs: 3000,
+      retryAttempt: 1,
+      retryMaxAttempts: 3,
+    }))
+    adapter.ptyProcess = { write: vi.fn() }
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'hello',
+      startedAt: Date.now() - 10_000,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+
+    adapter.evaluateSettled()
+
+    expect(adapter.currentStatus).toBe('generating')
+    expect(adapter.isWaitingForResponse).toBe(true)
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(3000)
+
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('continue\r')
+    expect(adapter.isWaitingForResponse).toBe(true)
+    expect(adapter.currentTurnScope?.prompt).toBe('hello')
+  })
+
   it('caches parser providerSessionId for light status events', () => {
     const adapter = buildAdapter('antigravity-cli', () => ({
       status: 'idle',

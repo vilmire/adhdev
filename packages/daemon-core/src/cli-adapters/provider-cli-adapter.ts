@@ -200,6 +200,8 @@ export class ProviderCliAdapter implements CliAdapter {
     private pendingOutboundQueue: PendingOutboundMessage[] = [];
     private pendingOutboundFlushTimer: NodeJS.Timeout | null = null;
     private pendingOutboundFlushInFlight = false;
+    private providerErrorRetryTimer: NodeJS.Timeout | null = null;
+    private providerErrorRetryKey = '';
 
  // Resize redraw suppression
     private resizeSuppressUntil: number = 0;
@@ -959,6 +961,8 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
         if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
+        if (this.providerErrorRetryTimer) { clearTimeout(this.providerErrorRetryTimer); this.providerErrorRetryTimer = null; }
+        this.providerErrorRetryKey = '';
     }
 
     private clearStaleIdleResponseGuard(reason: string): boolean {
@@ -1154,7 +1158,11 @@ export class ProviderCliAdapter implements CliAdapter {
             && !(parsedStatus === 'idle' && !!lastParsedAssistant);
 
         if (shouldHoldGenerating) { this.applyHoldGenerating(ctx, recentInteractiveActivity); return; }
-        if (status === 'error') { this.applyError(ctx, session); return; }
+        if (status === 'error') {
+            if (this.maybeScheduleProviderErrorRetry(ctx, session)) return;
+            this.applyError(ctx, session);
+            return;
+        }
         if (status === 'waiting_approval') { this.applyWaitingApproval(ctx); return; }
         if (status === 'generating') { this.applyGenerating(ctx); return; }
         if (status === 'idle') { this.applyIdle(ctx, now); }
@@ -1331,6 +1339,72 @@ export class ProviderCliAdapter implements CliAdapter {
             }),
         });
         this.onStatusChange?.();
+    }
+
+    private maybeScheduleProviderErrorRetry(ctx: SettledEvalContext, session: ParsedSession): boolean {
+        const retryPrompt = typeof (session as any).retryPrompt === 'string'
+            ? String((session as any).retryPrompt).trim()
+            : '';
+        const retryDelayMs = typeof (session as any).retryDelayMs === 'number'
+            ? Number((session as any).retryDelayMs)
+            : NaN;
+        if (!retryPrompt || !Number.isFinite(retryDelayMs) || retryDelayMs < 0) return false;
+        if (!this.ptyProcess) return false;
+
+        const retryAttempt = typeof (session as any).retryAttempt === 'number'
+            ? Number((session as any).retryAttempt)
+            : 0;
+        const retryMaxAttempts = typeof (session as any).retryMaxAttempts === 'number'
+            ? Number((session as any).retryMaxAttempts)
+            : 0;
+        const errorReason = typeof session.errorReason === 'string' && session.errorReason.trim()
+            ? session.errorReason.trim()
+            : 'provider_error';
+        const retryKey = `${errorReason}:${retryAttempt}:${retryPrompt}`;
+        if (this.providerErrorRetryTimer && this.providerErrorRetryKey === retryKey) return true;
+
+        if (this.providerErrorRetryTimer) clearTimeout(this.providerErrorRetryTimer);
+        this.providerErrorRetryKey = retryKey;
+        this.clearIdleFinishCandidate('provider_error_retry');
+        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
+        if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+        this.providerErrorMessage = typeof session.errorMessage === 'string' && session.errorMessage.trim()
+            ? session.errorMessage.trim()
+            : 'Provider reported an error';
+        this.providerErrorReason = errorReason;
+        this.activeModal = null;
+        this.responseSettleIgnoreUntil = Date.now() + retryDelayMs + this.timeouts.outputSettle + 400;
+        this.setStatus('generating', 'provider_error_retry_scheduled');
+        this.recordTrace('provider_error_retry_scheduled', {
+            retryPrompt,
+            retryDelayMs,
+            retryAttempt,
+            retryMaxAttempts,
+            errorReason,
+            parsedStatus: ctx.parsedStatus || ctx.status,
+        });
+        this.onStatusChange?.();
+        this.providerErrorRetryTimer = setTimeout(() => {
+            this.providerErrorRetryTimer = null;
+            this.providerErrorRetryKey = '';
+            if (!this.ptyProcess) return;
+            this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
+            this.submitRetryUsed = false;
+            this.recordTrace('provider_error_retry_write', {
+                retryPrompt,
+                retryAttempt,
+                retryMaxAttempts,
+                errorReason,
+            });
+            this.ptyProcess.write(`${retryPrompt}\r`);
+            if (this.settleTimer) clearTimeout(this.settleTimer);
+            this.settleTimer = setTimeout(() => {
+                this.settleTimer = null;
+                this.settledBuffer = this.recentOutputBuffer;
+                this.evaluateSettled();
+            }, this.timeouts.outputSettle + 150);
+        }, retryDelayMs);
+        return true;
     }
 
     private applyIdle(ctx: SettledEvalContext, now: number): void {
