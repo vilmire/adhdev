@@ -1330,7 +1330,13 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         nativeMessages,
                         ptyMessages: returnedMessages,
                     });
-                    if ((nativeHistory as any).source === 'provider-native' && nativeMessages.length > 0 && nativeHistoryCoverage !== 'partial' && nativeHistoryCoverage !== 'unavailable' && safeMapping && freshEnough) {
+                    const nativeUsableForChatMessages = (nativeHistory as any).source === 'provider-native'
+                        && nativeMessages.length > 0
+                        && nativeHistoryCoverage !== 'partial'
+                        && nativeHistoryCoverage !== 'unavailable'
+                        && safeMapping;
+                    const allowStaleNativeChatMessages = adapter.cliType === 'antigravity-cli' && nativeUsableForChatMessages;
+                    if (nativeUsableForChatMessages && (freshEnough || allowStaleNativeChatMessages)) {
                         selectedMessages = finalizeStreamingMessagesWhenIdle(nativeMessages, returnedStatus);
                         selectedProviderSessionId = historyProviderSessionId || providerSessionId;
                         selectedTranscriptAuthority = 'provider';

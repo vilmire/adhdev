@@ -257,6 +257,60 @@ describe('Antigravity CLI read_chat native transcript provenance', () => {
     })
   })
 
+  it('keeps Antigravity chat bubbles on native history instead of exposing stale PTY parser output while generating', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.gemini/antigravity-cli/brain/agy-native-conversation/.system_generated/logs/transcript.jsonl',
+      sourceMtimeMs: 1,
+      providerSessionId: 'agy-native-conversation',
+      nativeHistoryCoverage: 'full',
+      hasMore: false,
+      messages: [
+        { role: 'user', content: 'previous prompt', receivedAt: 1_000, historySessionId: 'agy-native-conversation', workspace: '/workspaces/adhdev' },
+        { role: 'assistant', content: 'previous clean answer', receivedAt: 2_000, historySessionId: 'agy-native-conversation', workspace: '/workspaces/adhdev' },
+      ],
+    })
+
+    const result = await handleReadChat(createHelpers(createAntigravityAdapter({
+      getStatus: vi.fn(() => ({
+        status: 'generating',
+        activeModal: null,
+        messages: [],
+      })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'generating',
+        providerSessionId: 'agy-native-conversation',
+        title: 'Antigravity CLI',
+        messages: [
+          { role: 'user', content: 'new prompt', receivedAt: 3_000 },
+          { role: 'assistant', content: '▸ Thought for 5s noisy PTY output', receivedAt: 4_000 },
+        ],
+      })),
+      isProcessing: () => true,
+    })) as any, {
+      agentType: 'antigravity-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'agy-native-conversation',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('generating')
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['previous prompt', 'previous clean answer'])
+    expect(result.messageSource).toMatchObject({
+      selected: 'native-history',
+      nativeHandle: 'agy-native-conversation',
+      nativeHistoryCoverage: 'full',
+      staleness: { freshEnough: false },
+      coverage: {
+        nativeMessageCount: 2,
+        ptyMessageCount: 2,
+        returnedMessageCount: 2,
+        safeMapping: true,
+      },
+    })
+  })
+
   it('includes Antigravity fallback provenance in chat debug bundles', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       source: 'native-unavailable',
