@@ -42,8 +42,12 @@ export interface GitLogResult extends GitRepoIdentity {
 }
 
 export interface GitCheckpointResult extends GitRepoIdentity {
-  commit: string;
+  commit?: string;
   message: string;
+  status?: 'created' | 'skipped';
+  skipped?: boolean;
+  noop?: boolean;
+  reason?: 'nothing_to_commit';
   lastCheckedAt: number;
 }
 
@@ -455,10 +459,17 @@ async function gitCheckpoint(
   } catch (err: any) {
     const output = (err?.stdout || '') + (err?.stderr || '');
     if (/nothing to commit/i.test(output)) {
-      throw new GitCommandError('nothing_to_commit', 'Nothing to commit — working tree is clean.', {
-        stdout: err?.stdout,
-        stderr: err?.stderr,
-      });
+      return {
+        workspace: repo.workspace,
+        repoRoot,
+        isGitRepo: true,
+        message: fullMsg,
+        status: 'skipped',
+        skipped: true,
+        noop: true,
+        reason: 'nothing_to_commit',
+        lastCheckedAt: Date.now(),
+      };
     }
     throw err;
   }
@@ -469,6 +480,7 @@ async function gitCheckpoint(
     isGitRepo: true,
     commit: commitSha,
     message: fullMsg,
+    status: 'created',
     lastCheckedAt: Date.now(),
   };
 }

@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { drainPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../../src/mesh/mesh-events'
+import { appendLedgerEntry } from '../../src/mesh/mesh-ledger'
 
 const execFileAsync = promisify(execFile)
 
@@ -1029,6 +1030,23 @@ describe('mesh_status', () => {
         },
         queuedAt: Date.now(),
       })
+      appendLedgerEntry(mesh.id, {
+        kind: 'task_dispatched',
+        nodeId: 'node-pending',
+        payload: {
+          source: 'refine_mesh_node_async_job',
+          refineJob: {
+            jobId: 'refine_status_visible',
+            interactionId: 'ix-status-visible',
+            status: 'accepted',
+            meshId: mesh.id,
+            nodeId: 'node-pending',
+            workspace: repoRoot,
+            startedAt: '2026-05-29T00:00:00.000Z',
+          },
+          async: true,
+        },
+      })
 
       sessionHostControl.listSessions.mockClear()
       const withEvent = await router.execute('mesh_status', { meshId: mesh.id }) as any
@@ -1041,12 +1059,76 @@ describe('mesh_status', () => {
           nodeId: 'node-pending',
         }),
       ])
+      expect(withEvent.asyncRefineJobs).toEqual([
+        expect.objectContaining({
+          jobId: 'refine_status_visible',
+          interactionId: 'ix-status-visible',
+          status: 'completed',
+          targetNodeId: 'node-pending',
+          workspace: repoRoot,
+          instruction: expect.stringContaining('completed'),
+        }),
+      ])
       expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
       expect(drainPendingMeshCoordinatorEvents(mesh.id)).toEqual([])
 
       const cachedAfterDrain = await router.execute('mesh_status', { meshId: mesh.id }) as any
       expect(cachedAfterDrain.success).toBe(true)
       expect(cachedAfterDrain.pendingCoordinatorEvents).toBeUndefined()
+      expect(cachedAfterDrain.asyncRefineJobs).toEqual(withEvent.asyncRefineJobs)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await rm(configDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('separates live session-host records for removed mesh nodes from normal node active sessions', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-status-removed-sessions-'))
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-removed-sessions-')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh, addNode } = await import('../../src/config/mesh-config.js')
+      const mesh = createMesh({
+        name: 'Removed Session Mesh',
+        repoIdentity: 'github.com/acme/removed-session',
+        defaultBranch: 'master',
+      })
+      addNode(mesh.id, { workspace: repoRoot, repoRoot })
+      const { router } = createRouter({
+        listSessions: vi.fn(async () => [
+          {
+            sessionId: 'sess-removed-node',
+            providerType: 'hermes-cli',
+            lifecycle: 'running',
+            workspace: join(dir, 'removed-worktree'),
+            updatedAt: Date.now(),
+            meta: {
+              meshNodeFor: mesh.id,
+              meshNodeId: 'node-removed-worktree',
+            },
+          },
+        ]),
+      })
+
+      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
+      expect(result.success).toBe(true)
+      expect(result.nodes).toHaveLength(1)
+      expect(result.nodes[0].activeSessions).toEqual([])
+      expect(result.historicalSessions).toMatchObject({
+        count: 1,
+        sessions: [
+          {
+            sessionId: 'sess-removed-node',
+            classification: 'removedNode',
+            historical: true,
+            meshNodeId: 'node-removed-worktree',
+          },
+        ],
+      })
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir

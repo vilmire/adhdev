@@ -42,6 +42,7 @@ import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMe
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { buildPreviewFreshness } from '../mesh/preview-freshness.js';
+import { buildMeshAsyncRefineJobs } from '../mesh/mesh-refine-status.js';
 import {
     MESH_REFINE_CONFIG_LOCATIONS,
     MESH_REFINE_CONFIG_SCHEMA,
@@ -65,6 +66,7 @@ import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
 import { homedir, hostname as osHostname } from 'os';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
+import { execFileSync } from 'node:child_process';
 
 type ReleaseChannel = 'stable' | 'preview';
 const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
@@ -1139,6 +1141,48 @@ function collectLiveMeshSessionRecords(args: {
     return matches;
 }
 
+function buildHistoricalMeshSessions(args: {
+    meshId: string;
+    nodes: any[];
+    liveSessionRecords: any[];
+}): { count: number; sessions: Record<string, unknown>[]; instruction: string } | undefined {
+    const liveNodeIds = new Set<string>();
+    const liveWorkspaces = new Set<string>();
+    for (const node of args.nodes || []) {
+        const nodeId = readStringValue(node?.id, node?.nodeId);
+        const workspace = readStringValue(node?.workspace);
+        if (nodeId) liveNodeIds.add(nodeId);
+        if (workspace) liveWorkspaces.add(workspace);
+    }
+
+    const sessions: Record<string, unknown>[] = [];
+    for (const record of args.liveSessionRecords || []) {
+        const meta = readObjectRecord(record?.meta);
+        const recordMeshId = readStringValue(meta.meshNodeFor, meta.meshCoordinatorFor);
+        if (recordMeshId !== args.meshId) continue;
+        const recordNodeId = readStringValue(meta.meshNodeId);
+        const workspace = readStringValue(record?.workspace);
+        const removedNode = !!recordNodeId && !liveNodeIds.has(recordNodeId);
+        const orphanedWorkspace = !!workspace && !liveWorkspaces.has(workspace) && meta.meshCoordinatorFor !== args.meshId;
+        if (!removedNode && !orphanedWorkspace) continue;
+        sessions.push({
+            ...summarizeMeshSessionRecord(record),
+            classification: removedNode ? 'removedNode' : 'orphanedSession',
+            historical: true,
+            meshNodeId: recordNodeId || null,
+            reason: removedNode
+                ? 'Session is tagged to a mesh node that is no longer in live membership.'
+                : 'Session workspace is no longer attached to a live mesh node.',
+        });
+    }
+    if (sessions.length === 0) return undefined;
+    return {
+        count: sessions.length,
+        sessions: sessions.slice(0, 5),
+        instruction: 'These sessions are separated from normal node activeSessions because their mesh node/workspace is no longer live. Use mesh_cleanup_sessions only if cleanup is intended.',
+    };
+}
+
 function applyCachedInlineMeshNodeStatus(
     status: Record<string, unknown>,
     node: any,
@@ -1236,6 +1280,32 @@ type MeshRefinePatchEquivalenceSummary = {
     expectedPatchId?: string;
     actualPatchId?: string;
     durationMs: number;
+    error?: string;
+    stdout?: string;
+    stderr?: string;
+    actionableHint?: MeshRefineSubmoduleConflictHint;
+};
+
+type MeshRefineSubmoduleConflictHint = {
+    kind: 'submodule_conflict';
+    message: string;
+    conflicts: Array<{
+        path: string;
+        baseCommit?: string;
+        branchCommit?: string;
+    }>;
+    nextSteps: string[];
+};
+
+type MeshRefineSubmoduleAlignmentSummary = {
+    status: 'passed' | 'failed' | 'skipped';
+    changedGitlinkPaths: string[];
+    outOfSyncPaths: string[];
+    updatedPaths: string[];
+    verifiedPaths: string[];
+    durationMs: number;
+    reason?: string;
+    command?: string;
     error?: string;
     stdout?: string;
     stderr?: string;
@@ -1420,6 +1490,154 @@ async function runMeshRefinePatchEquivalenceGate(
             baseHead,
             branchHead,
             durationMs: Date.now() - startedAt,
+            error: e?.message || String(e),
+            stdout: truncateValidationOutput(e?.stdout),
+            stderr: truncateValidationOutput(e?.stderr),
+            actionableHint: buildPatchEquivalenceSubmoduleConflictHint(
+                repoRoot,
+                baseHead,
+                branchHead,
+                `${e?.message || ''}\n${e?.stdout || ''}\n${e?.stderr || ''}`,
+            ),
+        };
+    }
+}
+
+function buildPatchEquivalenceSubmoduleConflictHint(
+    repoRoot: string,
+    baseHead: string,
+    branchHead: string,
+    output: string,
+): MeshRefineSubmoduleConflictHint | undefined {
+    if (!/(submodule|160000)/i.test(output) || !/(conflict|failed to merge)/i.test(output)) return undefined;
+    const conflicts = readChangedGitlinkPaths(repoRoot, baseHead, branchHead)
+        .map(path => ({
+            path,
+            baseCommit: readTreeObject(repoRoot, baseHead, path),
+            branchCommit: readTreeObject(repoRoot, branchHead, path),
+        }));
+    if (conflicts.length === 0) return undefined;
+    return {
+        kind: 'submodule_conflict',
+        message: 'Refinery could not synthesize a safe merge tree because the branch and base point the same submodule path at different commits.',
+        conflicts,
+        nextSteps: [
+            'Inspect the listed submodule path in both base and branch: baseCommit is the commit currently recorded by the base workspace, branchCommit is the commit recorded by the worktree branch.',
+            'Resolve the submodule first by checking out or creating the intended submodule commit, then commit the chosen gitlink in the root branch.',
+            'Ensure the chosen submodule commit is reachable from the configured submodule remote main branch, then rerun mesh_refine_node.',
+        ],
+    };
+}
+
+function readChangedGitlinkPaths(repoRoot: string, fromRef: string, toRef: string): string[] {
+    try {
+        const output = execFileSync('git', ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+        });
+        const paths = new Set<string>();
+        for (const line of output.split('\n')) {
+            if (!line.trim()) continue;
+            const metaAndPath = line.split('\t');
+            const meta = metaAndPath[0] || '';
+            const path = metaAndPath[metaAndPath.length - 1]?.trim();
+            if (!path) continue;
+            const parts = meta.split(/\s+/);
+            if (parts[0]?.includes('160000') || parts[1]?.includes('160000')) {
+                paths.add(path);
+            }
+        }
+        return [...paths].sort();
+    } catch {
+        return [];
+    }
+}
+
+function readTreeObject(repoRoot: string, ref: string, path: string): string | undefined {
+    try {
+        const output = execFileSync('git', ['ls-tree', ref, '--', path], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: 1024 * 1024,
+        }).trim();
+        const match = output.match(/\bcommit\s+([0-9a-f]{40})\b/i);
+        return match?.[1];
+    } catch {
+        return undefined;
+    }
+}
+
+async function alignRefinerySubmodulesAfterMerge(
+    repoRoot: string,
+    previousBaseHead: string,
+    currentHead: string,
+    options: { submoduleIgnorePaths?: string[] } = {},
+): Promise<MeshRefineSubmoduleAlignmentSummary> {
+    const startedAt = Date.now();
+    const changedGitlinkPaths = readChangedGitlinkPaths(repoRoot, previousBaseHead, currentHead)
+        .filter(path => !(options.submoduleIgnorePaths || []).includes(path));
+    const preStatus = await getGitRepoStatus(repoRoot, {
+        includeSubmodules: true,
+        submoduleIgnorePaths: options.submoduleIgnorePaths,
+        timeoutMs: 15_000,
+    });
+    const outOfSyncPaths = (preStatus.submodules || [])
+        .filter(submodule => submodule.dirty || submodule.outOfSync || !!submodule.error)
+        .map(submodule => submodule.path);
+    const updatePaths = [...new Set([...changedGitlinkPaths, ...outOfSyncPaths])].sort();
+
+    if (updatePaths.length === 0) {
+        return {
+            status: 'skipped',
+            changedGitlinkPaths,
+            outOfSyncPaths,
+            updatedPaths: [],
+            verifiedPaths: [],
+            durationMs: Date.now() - startedAt,
+            reason: 'no_changed_or_out_of_sync_submodules',
+        };
+    }
+
+    const commandArgs = ['submodule', 'update', '--init', '--recursive', '--', ...updatePaths];
+    try {
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+        const result = await execFileAsync('git', commandArgs, {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+            timeout: 60_000,
+        });
+        const postStatus = await getGitRepoStatus(repoRoot, {
+            includeSubmodules: true,
+            submoduleIgnorePaths: options.submoduleIgnorePaths,
+            timeoutMs: 15_000,
+        });
+        const remaining = (postStatus.submodules || [])
+            .filter(submodule => updatePaths.includes(submodule.path) && (submodule.dirty || submodule.outOfSync || !!submodule.error));
+        return {
+            status: remaining.length === 0 ? 'passed' : 'failed',
+            changedGitlinkPaths,
+            outOfSyncPaths,
+            updatedPaths: updatePaths,
+            verifiedPaths: updatePaths.filter(path => !remaining.some(submodule => submodule.path === path)),
+            durationMs: Date.now() - startedAt,
+            command: `git ${commandArgs.join(' ')}`,
+            stdout: truncateValidationOutput(result.stdout),
+            stderr: truncateValidationOutput(result.stderr),
+            ...(remaining.length > 0 ? { error: `Submodule checkout remained out of sync after update: ${remaining.map(entry => entry.path).join(', ')}` } : {}),
+        };
+    } catch (e: any) {
+        return {
+            status: 'failed',
+            changedGitlinkPaths,
+            outOfSyncPaths,
+            updatedPaths: updatePaths,
+            verifiedPaths: [],
+            durationMs: Date.now() - startedAt,
+            command: `git ${commandArgs.join(' ')}`,
             error: e?.message || String(e),
             stdout: truncateValidationOutput(e?.stdout),
             stderr: truncateValidationOutput(e?.stderr),
@@ -3040,6 +3258,7 @@ export class DaemonCommandRouter {
                 expectedPatchId: patchEquivalence.expectedPatchId,
                 actualPatchId: patchEquivalence.actualPatchId,
                 error: patchEquivalence.error,
+                actionableHint: patchEquivalence.actionableHint,
             });
             if (!patchEquivalence.equivalent) {
                 return {
@@ -3205,6 +3424,52 @@ export class DaemonCommandRouter {
                 };
             }
 
+            const submoduleAlignmentStarted = Date.now();
+            const submoduleAlignment = await alignRefinerySubmodulesAfterMerge(repoRoot, baseHead, 'HEAD', {
+                submoduleIgnorePaths: Array.isArray(sourceNode?.policy?.submoduleIgnorePaths)
+                    ? sourceNode.policy.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string')
+                    : undefined,
+            });
+            if (submoduleAlignment.status !== 'skipped') {
+                recordMeshRefineStage(refineStages, 'submodule_alignment', submoduleAlignment.status, submoduleAlignmentStarted, {
+                    changedGitlinkPaths: submoduleAlignment.changedGitlinkPaths,
+                    outOfSyncPaths: submoduleAlignment.outOfSyncPaths,
+                    updatedPaths: submoduleAlignment.updatedPaths,
+                    verifiedPaths: submoduleAlignment.verifiedPaths,
+                    command: submoduleAlignment.command,
+                    error: submoduleAlignment.error,
+                });
+            }
+            if (submoduleAlignment.status === 'failed') {
+                return {
+                    success: false,
+                    code: 'post_merge_submodule_alignment_failed',
+                    error: 'Refinery merge completed but post-merge submodule checkout alignment failed; run the reported git submodule update command and re-check base workspace status.',
+                    merged: true,
+                    branch,
+                    into: baseBranch,
+                    validationSummary,
+                    patchEquivalence,
+                    submoduleReachability,
+                    submoduleAlignment,
+                    mergeResult,
+                    refineStages,
+                    finalBranchConvergenceState: {
+                branch: baseBranch,
+                mergedBranch: branch,
+                baseBranch,
+                merged: true,
+                removed: false,
+                validation: 'passed',
+                patchEquivalence: 'passed',
+                submoduleReachability: 'passed',
+                submoduleAlignment: 'failed',
+                status: 'post_merge_alignment_failed',
+                nextStep: submoduleAlignment.command || 'Run git submodule update --init --recursive for the reported path(s), then re-check base workspace status.',
+                    },
+                };
+            }
+
             const cleanupStarted = Date.now();
             const removeResult = await this.execute('remove_mesh_node', {
                 meshId,
@@ -3225,7 +3490,7 @@ export class DaemonCommandRouter {
                 appendLedgerEntry(meshId, {
                     kind: 'node_removed',
                     nodeId,
-                    payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary, patchEquivalence, submoduleReachability },
+                    payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment },
                 });
                 recordMeshRefineStage(refineStages, 'ledger', 'passed', ledgerStarted);
             } catch (e: any) {
@@ -3241,6 +3506,7 @@ export class DaemonCommandRouter {
                 removed: removeResult?.success !== false,
                 validation: 'passed',
                 patchEquivalence: 'passed',
+                submoduleAlignment: submoduleAlignment.status,
                 status: removeResult?.success === false ? 'merged_cleanup_failed' : 'merged',
             };
 
@@ -3256,6 +3522,7 @@ export class DaemonCommandRouter {
                     validationSummary,
                     patchEquivalence,
                     submoduleReachability,
+                    submoduleAlignment,
                     mergeResult,
                     refineStages,
                     ...(ledgerError ? { ledgerError } : {}),
@@ -3272,6 +3539,7 @@ export class DaemonCommandRouter {
                 validationSummary,
                 patchEquivalence,
                 submoduleReachability,
+                submoduleAlignment,
                 mergeResult,
                 refineStages,
                 ...(ledgerError ? { ledgerError } : {}),
@@ -5212,6 +5480,7 @@ export class DaemonCommandRouter {
 
                     const { readLedgerEntries, getLedgerSummary } = await import('../mesh/mesh-ledger.js');
                     const ledgerEntries = readLedgerEntries(meshId, { tail: 20 });
+                    const asyncRefineLedgerEntries = readLedgerEntries(meshId, { tail: 100 });
                     const ledgerSummary = getLedgerSummary(meshId);
                     const sessionHostRecords = this.deps.sessionHostControl?.listSessions
                         ? await this.deps.sessionHostControl.listSessions().catch(() => [])
@@ -5527,6 +5796,16 @@ export class DaemonCommandRouter {
                             .find((candidate: string | undefined) => !!candidate && fs.existsSync(candidate));
                         return localRepoRoot ? buildPreviewFreshness(localRepoRoot) : undefined;
                     })();
+                    const asyncRefineJobs = buildMeshAsyncRefineJobs({
+                        meshId,
+                        ledgerEntries: asyncRefineLedgerEntries,
+                        pendingEvents: pendingCoordinatorEvents,
+                    });
+                    const historicalSessions = buildHistoricalMeshSessions({
+                        meshId,
+                        nodes: mesh.nodes || [],
+                        liveSessionRecords: liveMeshSessions,
+                    });
                     const statusResult = {
                         success: true,
                         meshId: mesh.id,
@@ -5562,13 +5841,15 @@ export class DaemonCommandRouter {
                                     partialNodeFailures: effectiveDirectTruth.unavailableNodeIds,
                                 },
                             } : {}),
-                            historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary'],
+                            historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary', 'historicalSessions'],
                         },
                         branchConvergenceSummary: summarizeInlineMeshBranchConvergence(nodeStatuses),
                         ...(previewFreshness ? { previewFreshness, deployFreshness: previewFreshness } : {}),
                         nodes: nodeStatuses,
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
+                        ...(asyncRefineJobs.length > 0 ? { asyncRefineJobs } : {}),
+                        ...(historicalSessions ? { historicalSessions } : {}),
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
                     };
                     const { pendingCoordinatorEvents: _pendingCoordinatorEvents, ...cacheableStatusResult } = statusResult as any;

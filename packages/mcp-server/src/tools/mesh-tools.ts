@@ -26,7 +26,9 @@ import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMes
 import {
     appendLedgerEntry,
     appendRemoteLedgerEntries,
+    buildCompactStaleDirectWorkSummary,
     buildMeshActiveWork,
+    buildMeshAsyncRefineJobs,
     buildMeshLedgerReconciliationEvidence,
     buildMeshLedgerReplicaEvidence,
     buildP2pRelayFailurePayload,
@@ -1719,6 +1721,7 @@ export const MESH_STATUS_TOOL = {
         type: 'object' as const,
         properties: {
             _gemini_compat: { type: 'string', description: 'Dummy property for Gemini compatibility. Ignore this.' },
+            includeStaleDirectWorkDetails: { type: 'boolean', description: 'Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only.' },
         },
     },
 };
@@ -2078,7 +2081,7 @@ export const ALL_MESH_TOOLS = [
 
 // ─── Tool Implementations ───────────────────────
 
-export async function meshStatus(ctx: MeshContext): Promise<string> {
+export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean } = {}): Promise<string> {
     await refreshMeshFromDaemon(ctx);
     const { mesh, transport } = ctx;
     const results: any[] = [];
@@ -2219,14 +2222,19 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         results.push(entry);
     }
 
+    const ledgerEntries = readLedgerEntries(mesh.id, { tail: 500 });
     const activeWorkEvidence = buildMeshActiveWork({
         meshId: mesh.id,
         queue: getQueue(mesh.id),
-        ledgerEntries: readLedgerEntries(mesh.id, { tail: 500 }),
+        ledgerEntries,
         nodes: results,
     });
 
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
+    const staleDirectWorkSummary = buildCompactStaleDirectWorkSummary(activeWorkEvidence.staleDirectWork, {
+        note: activeWorkEvidence.staleDirectWorkNote,
+        detailHint: 'Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail.',
+    });
     const response: Record<string, unknown> = {
         meshId: mesh.id,
         meshName: mesh.name,
@@ -2241,7 +2249,8 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         },
         nodes: results,
         activeWork: activeWorkEvidence.activeWork,
-        staleDirectWork: activeWorkEvidence.staleDirectWork,
+        staleDirectWorkSummary,
+        ...(args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {}),
         terminalDirectWork: activeWorkEvidence.terminalDirectWork,
         activeWorkSummary: activeWorkEvidence.summary,
         ...(pollingGuidance ? { pollingGuidance } : {}),
@@ -2255,6 +2264,14 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
 
     try {
         const pendingEvents = await drainCoordinatorPendingEvents(ctx);
+        const asyncRefineJobs = buildMeshAsyncRefineJobs({
+            meshId: mesh.id,
+            ledgerEntries,
+            pendingEvents,
+        });
+        if (asyncRefineJobs.length > 0) {
+            response.asyncRefineJobs = asyncRefineJobs;
+        }
         if (pendingEvents.length > 0) {
             response.pendingCoordinatorEvents = pendingEvents;
         }
@@ -3223,7 +3240,13 @@ export async function meshCheckpoint(
             appendLedgerEntry(ctx.mesh.id, {
                 kind: 'checkpoint_created',
                 nodeId: args.node_id,
-                payload: { message: args.message, commit: (result as any)?.checkpoint?.commit },
+                payload: {
+                    message: args.message,
+                    commit: (result as any)?.checkpoint?.commit,
+                    outcome: (result as any)?.checkpoint?.status || ((result as any)?.checkpoint?.noop ? 'skipped' : undefined),
+                    noop: (result as any)?.checkpoint?.noop === true,
+                    reason: (result as any)?.checkpoint?.reason,
+                },
             });
         } catch { /* ledger append is best-effort */ }
 
@@ -3239,7 +3262,13 @@ export async function meshCheckpoint(
                 appendLedgerEntry(ctx.mesh.id, {
                     kind: 'checkpoint_created',
                     nodeId: args.node_id,
-                    payload: { message: args.message, commit: (res as any)?.checkpoint?.commit },
+                    payload: {
+                        message: args.message,
+                        commit: (res as any)?.checkpoint?.commit,
+                        outcome: (res as any)?.checkpoint?.status || ((res as any)?.checkpoint?.noop ? 'skipped' : undefined),
+                        noop: (res as any)?.checkpoint?.noop === true,
+                        reason: (res as any)?.checkpoint?.reason,
+                    },
                 });
             } catch { /* best-effort */ }
             return JSON.stringify(res, null, 2);
