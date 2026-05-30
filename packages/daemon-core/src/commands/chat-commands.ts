@@ -354,6 +354,9 @@ function buildCliMessageSourceProvenance(args: {
     selected: 'native-history' | 'pty-parser';
     provider: string;
     nativeHandle?: string;
+    sessionWorkspace?: string;
+    intendedWorkspace?: string;
+    transcriptWorkspace?: string;
     fallbackReason?: string;
     nativeSource?: string;
     sourcePath?: string;
@@ -373,12 +376,23 @@ function buildCliMessageSourceProvenance(args: {
     const nativeMessages = args.nativeMessages || [];
     const ptyMessages = args.ptyMessages || [];
     const returnedMessages = args.returnedMessages || [];
+    const identityStatus = args.selected === 'native-history'
+        ? 'safe'
+        : args.fallbackReason === 'native_history_not_safely_mapped'
+            ? 'ambiguous_session_identity'
+            : args.fallbackReason?.startsWith('native_history_unavailable')
+                ? 'transcript_unmapped'
+                : undefined;
     return {
         selected: args.selected,
         provider: args.provider,
         providerType: args.provider,
+        ...(identityStatus ? { identityStatus } : {}),
         ...(args.nativeHandle ? { nativeHandle: args.nativeHandle } : {}),
         ...(args.nativeHandle ? { nativeSessionId: args.nativeHandle } : {}),
+        ...(args.sessionWorkspace ? { sessionWorkspace: args.sessionWorkspace } : {}),
+        ...(args.intendedWorkspace ? { intendedWorkspace: args.intendedWorkspace } : {}),
+        ...(args.transcriptWorkspace ? { transcriptWorkspace: args.transcriptWorkspace } : {}),
         ...(args.fallbackReason ? { fallbackReason: args.fallbackReason } : {}),
         ...(args.nativeSource ? { nativeSource: args.nativeSource } : {}),
         ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
@@ -1052,7 +1066,14 @@ export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Pr
                 messagesTail: Array.isArray(readResult.messages) ? readResult.messages.slice(-20) : [],
                 debugReadChat: readResult.debugReadChat,
             }
-            : { success: false, error: readResult.error };
+            : {
+                success: false,
+                error: readResult.error,
+                code: readResult.code,
+                messageSource: readResult.messageSource,
+                transcriptProvenance: readResult.transcriptProvenance,
+                debugReadChat: readResult.debugReadChat,
+            };
     } catch (error: any) {
         readChat = { success: false, error: error?.message || String(error) };
     }
@@ -1330,10 +1351,18 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             let selectedProviderSessionId = providerSessionId;
             let selectedTranscriptAuthority = transcriptAuthority;
             let selectedCoverage = coverage;
+            const sessionWorkspace = typeof (h.currentSession as any)?.workspace === 'string'
+                ? (h.currentSession as any).workspace
+                : typeof adapter.workingDir === 'string'
+                    ? adapter.workingDir
+                    : undefined;
+            const intendedWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
             let messageSource = buildCliMessageSourceProvenance({
                 selected: 'pty-parser',
                 provider: adapter.cliType,
                 fallbackReason: supportsCliNativeTranscript(providerType, provider) ? 'native_history_not_checked' : 'provider_native_transcript_not_supported',
+                sessionWorkspace,
+                intendedWorkspace,
                 ptyMessages: returnedMessages,
                 returnedMessages,
                 ptyStatusApprovalOnly: false,
@@ -1341,13 +1370,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
 
             if (supportsCliNativeTranscript(providerType, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)) {
                 const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h, adapter.cliType);
-                const workspace = typeof args?.workspace === 'string'
-                    ? args.workspace
-                    : typeof (h.currentSession as any)?.workspace === 'string'
-                        ? (h.currentSession as any).workspace
-                        : typeof adapter.workingDir === 'string'
-                            ? adapter.workingDir
-                            : undefined;
+                const workspace = sessionWorkspace;
                 const nativeHistoryLimit = Math.max(
                     normalizeReadChatTailLimit(args) || 0,
                     returnedMessages.length,
@@ -1380,6 +1403,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         selected: 'pty-parser',
                         provider: adapter.cliType,
                         fallbackReason,
+                        sessionWorkspace,
+                        intendedWorkspace,
                         ptyMessages: returnedMessages,
                         returnedMessages,
                         ptyStatusApprovalOnly: false,
@@ -1404,6 +1429,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         ? (nativeHistory as any).unavailableReason
                         : undefined;
                     const lookup = (nativeHistory as any).lookup === 'workspace' ? 'workspace' : 'session';
+                    const transcriptWorkspace = typeof (nativeHistory as any)?.workspace === 'string'
+                        ? (nativeHistory as any).workspace
+                        : nativeMessages.map((message: any) => typeof message?.workspace === 'string' ? message.workspace.trim() : '').find(Boolean);
                     const nativeHistorySessionForMapping = adapter.cliType === 'antigravity-cli'
                         && historyProviderSessionId
                         && nativeHistorySessionId
@@ -1438,6 +1466,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             selected: 'native-history',
                             provider: adapter.cliType,
                             nativeHandle: selectedProviderSessionId || nativeHistorySessionId || historySessionId,
+                            sessionWorkspace,
+                            intendedWorkspace,
+                            transcriptWorkspace,
                             nativeSource: (nativeHistory as any).source,
                             sourcePath: (nativeHistory as any).sourcePath,
                             sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
@@ -1466,6 +1497,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             selected: 'pty-parser',
                             provider: adapter.cliType,
                             nativeHandle: historyProviderSessionId || nativeHistorySessionId || historySessionId,
+                            sessionWorkspace,
+                            intendedWorkspace,
+                            transcriptWorkspace,
                             fallbackReason,
                             nativeSource: (nativeHistory as any).source,
                             sourcePath: (nativeHistory as any).sourcePath,
@@ -1517,11 +1551,10 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
         const historyLimit = normalizeReadChatTailLimit(args);
         try {
             const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h);
-            const workspace = typeof args?.workspace === 'string'
-                ? args.workspace
-                : typeof (h.currentSession as any)?.workspace === 'string'
-                    ? (h.currentSession as any).workspace
-                    : undefined;
+            const workspace = typeof (h.currentSession as any)?.workspace === 'string'
+                ? (h.currentSession as any).workspace
+                : undefined;
+            const intendedWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
             const exactNativeHistoryScope = Boolean(
                 (typeof args?.targetSessionId === 'string' && args.targetSessionId.trim())
                 || (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
@@ -1565,6 +1598,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const unavailableReason = typeof (history as any)?.unavailableReason === 'string'
                 ? (history as any).unavailableReason
                 : undefined;
+            const transcriptWorkspace = typeof (history as any)?.workspace === 'string'
+                ? (history as any).workspace
+                : historyMessages.map((message: any) => typeof message?.workspace === 'string' ? message.workspace.trim() : '').find(Boolean);
             const safeMapping = supportsCliNativeTranscript(agentStr, provider)
                 ? hasSafeNativeHistoryMapping({
                     historySessionId: lookup === 'workspace' ? undefined : historySessionId,
@@ -1583,6 +1619,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 selected: nativeSelected ? 'native-history' : 'pty-parser',
                 provider: agentStr,
                 nativeHandle: historyProviderSessionId || historySessionId,
+                sessionWorkspace: workspace,
+                intendedWorkspace,
+                transcriptWorkspace,
                 fallbackReason: nativeSelected
                     ? undefined
                     : buildNativeHistoryFallbackReason({

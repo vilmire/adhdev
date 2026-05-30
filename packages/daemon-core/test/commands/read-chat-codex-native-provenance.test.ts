@@ -451,4 +451,71 @@ describe('Codex CLI read_chat native transcript provenance', () => {
       },
     })
   })
+
+  it('keeps session workspace separate from intended mesh target workspace', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.codex/sessions/native-session.jsonl',
+      sourceMtimeMs: Date.now(),
+      hasMore: false,
+      providerSessionId: 'native-session',
+      workspace: '/workspaces/adhdev',
+      messages: [
+        { role: 'user', content: 'root session user', receivedAt: 3_000, historySessionId: 'native-session', workspace: '/workspaces/adhdev' },
+        { role: 'assistant', content: 'root session assistant', receivedAt: 4_000, historySessionId: 'native-session', workspace: '/workspaces/adhdev' },
+      ],
+    })
+
+    const result = await handleReadChat(createHelpers() as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'native-session',
+      workspace: '/workspaces/adhdev/.adhdev-worktrees/worktree-a',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.messageSource).toMatchObject({
+      selected: 'native-history',
+      sessionWorkspace: '/workspaces/adhdev',
+      intendedWorkspace: '/workspaces/adhdev/.adhdev-worktrees/worktree-a',
+      transcriptWorkspace: '/workspaces/adhdev',
+    })
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: 'native-session',
+      workspace: '/workspaces/adhdev',
+    }))
+  })
+
+  it('debug bundle surfaces unsafe identity state clearly without synthetic bubbles', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.codex/sessions/other-session.jsonl',
+      sourceMtimeMs: Date.now(),
+      hasMore: false,
+      providerSessionId: 'other-session',
+      messages: [
+        { role: 'assistant', content: 'wrong native assistant', receivedAt: 4_000, historySessionId: 'other-session' },
+      ],
+    })
+
+    const result = await handleGetChatDebugBundle(createHelpers(null) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'native-session',
+      delivery: 'inline',
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.bundle as any).readChat).toMatchObject({
+      success: false,
+      error: 'Provider-native history was not safely available for the requested CLI session.',
+      messageSource: {
+        selected: 'pty-parser',
+        identityStatus: 'ambiguous_session_identity',
+        fallbackReason: 'native_history_not_safely_mapped',
+      },
+    })
+    expect((result.bundle as any).readChat.messagesTail).toBeUndefined()
+  })
 })
