@@ -452,7 +452,12 @@ export class SessionHostServer extends EventEmitter {
     const record = this.registry.getSession(sessionId);
     if (!record) return;
     const snapshot = this.getSnapshot(sessionId);
-    this.storage.save(record, snapshot);
+    try {
+      this.storage.save(record, snapshot);
+    } catch (error: any) {
+      const code = typeof error?.code === 'string' ? error.code : 'persist_failed';
+      console.error(`[session-host] Persist failed for ${sessionId}: ${code}: ${error?.message || error}`);
+    }
   }
 
   private getSessionHostRecoveryLabel(record: SessionHostRecord): string | null {

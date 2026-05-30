@@ -85,4 +85,15 @@ describe('RepoMesh graph detail affordances', () => {
     expect(source).toContain('sendDaemonCommand={sendCommand}')
     expect(source).toContain('queue activity, sessions, node drift, and mesh topology from this standalone daemon')
   })
+
+  it('preserves provider priority when provider inventory is unavailable and marks worktree-local policy', () => {
+    const source = readSource('pages/RepoMesh.tsx')
+
+    expect(source).toContain('const requestedPriority = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)')
+    expect(source).toContain('availableCliProviders.length > 0')
+    expect(source).toContain('normalizeProviderPriority(requestedPriority)')
+    expect(source).toContain('providerPriority,')
+    expect(source).toContain('function isWorktreeNode(node: MeshNode): boolean')
+    expect(source).toContain('Provider priority saved here is node-local and disappears when this worktree node is removed.')
+  })
 })

@@ -216,6 +216,9 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
         const status = terminalStatus || live.status || 'assigned';
         const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
+        const ledgerOnlyStaleReason = !terminalRow && (status === 'idle' || (!terminalStatus && !live.status))
+            ? 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition'
+            : undefined;
         const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
         const { title, summary } = summarizeMessage(message);
         const record: MeshActiveWorkRecord = {
@@ -236,13 +239,13 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             terminal: terminalRow,
             terminalKind: terminal?.kind,
             terminalAt: terminal?.timestamp,
-            staleReason: live.staleReason,
+            staleReason: live.staleReason || ledgerOnlyStaleReason,
         };
         if (terminalRow) {
             terminalDirectWork.push(record);
             if (opts.includeTerminalDirect !== true) continue;
         }
-        if (live.staleReason && !terminalRow) {
+        if ((live.staleReason || ledgerOnlyStaleReason) && !terminalRow) {
             staleDirectWork.push(record);
             continue;
         }
