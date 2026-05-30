@@ -248,3 +248,27 @@ test('getHostDiagnostics applies limit to recovery and inactive session groups w
   assert.deepEqual(diagnostics.inactiveRecords.map((record: SessionHostRecord) => record.sessionId), ['inactive-1'])
   assert.deepEqual(diagnostics.sessions.map((record: SessionHostRecord) => record.sessionId), ['live-1', 'live-2', 'recovery-1', 'inactive-1'])
 })
+
+test('persistNow reports storage failures without throwing out of the session host', () => {
+  const server = new SessionHostServer({ appName: 'adhdev-test-persist-failure' }) as any
+  const record = buildRecord({ sessionId: 'persist-failure', lifecycle: 'running' })
+  server.registry.restoreSession(record)
+  server.storage.save = () => {
+    const error = new Error('no space left on device') as NodeJS.ErrnoException
+    error.code = 'ENOSPC'
+    throw error
+  }
+
+  const originalError = console.error
+  const messages: string[] = []
+  console.error = (message?: unknown) => { messages.push(String(message)) }
+  try {
+    assert.doesNotThrow(() => server.persistNow(record.sessionId))
+  } finally {
+    console.error = originalError
+  }
+
+  assert.equal(messages.length, 1)
+  assert.match(messages[0], /Persist failed/)
+  assert.match(messages[0], /ENOSPC/)
+})
