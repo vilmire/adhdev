@@ -94,6 +94,26 @@ describe('buildMeshActiveWork direct task classification', () => {
         expect(result.summary.staleDirectCount).toBe(0);
     });
 
+    it('does not treat ledger-only direct dispatch to an idle session as active work', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch()],
+            nodes: [{
+                id: 'node-1',
+                sessions: [{ id: 'session-1', providerType: 'codex-cli', status: 'idle' }],
+            }],
+        });
+
+        expect(result.activeWork).toHaveLength(0);
+        expect(result.staleDirectWork).toHaveLength(1);
+        expect(result.staleDirectWork[0]).toMatchObject({
+            taskId: 'task-1',
+            status: 'idle',
+            staleReason: 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition',
+        });
+        expect(result.summary.totalActiveCount).toBe(0);
+    });
+
     it('surfaces completed direct tasks as terminalDirectWork without counting them active by default', () => {
         const result = buildMeshActiveWork({
             meshId: 'mesh-1',
