@@ -146,7 +146,7 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     expect(result.status).toBe('generating')
   })
 
-  it('marks ptyMessagesSuppressed false when PTY parser is the selected source', async () => {
+  it('suppresses PTY message bodies when Codex native transcript is unavailable', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       source: 'native-unavailable',
       hasMore: false,
@@ -161,10 +161,15 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     })
 
     expect(result.success).toBe(true)
+    expect(result.status).toBe('idle')
+    expect(result.messages).toEqual([])
     expect(result.messageSource).toMatchObject({
       selected: 'pty-parser',
+      identityStatus: 'transcript_unmapped',
+      ptyStatusApprovalOnly: true,
       coverage: {
-        ptyMessagesSuppressed: false,
+        returnedMessageCount: 0,
+        ptyMessagesSuppressed: true,
       },
     })
   })
@@ -250,7 +255,8 @@ describe('Codex CLI read_chat native transcript provenance', () => {
       workspace: '/workspaces/adhdev',
     }))
     expect(mocks.readProviderChatHistory).toHaveBeenCalledTimes(1)
-    expect((result.messages as any[]).map(message => message.content)).toEqual(['native prompt', 'parser-level artifact'])
+    expect(result.status).toBe('idle')
+    expect(result.messages).toEqual([])
     expect(result.providerSessionId).toBeUndefined()
     expect(result.messageSource).toMatchObject({
       selected: 'pty-parser',
@@ -258,20 +264,22 @@ describe('Codex CLI read_chat native transcript provenance', () => {
       nativeHandle: runtimeId,
       nativeSource: 'native-unavailable',
       fallbackReason: 'native_history_unavailable',
-      ptyStatusApprovalOnly: false,
+      identityStatus: 'transcript_unmapped',
+      ptyStatusApprovalOnly: true,
       coverage: {
         nativeMessageCount: 0,
         ptyMessageCount: 2,
-        returnedMessageCount: 2,
+        returnedMessageCount: 0,
         safeMapping: false,
+        ptyMessagesSuppressed: true,
       },
     })
     expect(result.debugReadChat).toMatchObject({
       selectedMessageSource: 'pty-parser',
-      fullMsgCount: 2,
-      visibleMsgCount: 2,
+      fullMsgCount: 0,
+      visibleMsgCount: 0,
       hiddenMsgCount: 0,
-      returnedMsgCount: 2,
+      returnedMsgCount: 0,
     })
   })
 
@@ -312,24 +320,25 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     })
 
     expect(result.success).toBe(true)
-    expect((result.messages as any[]).map(message => message.content)).toEqual([
-      'worker-specific prompt',
-      'worker-specific pty answer',
-    ])
+    expect(result.status).toBe('idle')
+    expect(result.messages).toEqual([])
     expect(result.providerSessionId).toBeUndefined()
     expect(result.messageSource).toMatchObject({
       selected: 'pty-parser',
       fallbackReason: 'native_history_unavailable',
+      identityStatus: 'transcript_unmapped',
+      ptyStatusApprovalOnly: true,
       coverage: {
         nativeMessageCount: 0,
         ptyMessageCount: 2,
-        returnedMessageCount: 2,
+        returnedMessageCount: 0,
         safeMapping: false,
+        ptyMessagesSuppressed: true,
       },
     })
   })
 
-  it('falls back to PTY parser messages with an explicit stale native-history reason', async () => {
+  it('suppresses PTY parser messages with an explicit stale native-history reason', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       source: 'provider-native',
       sourcePath: '/Users/test/.codex/sessions/native-session.jsonl',
@@ -348,16 +357,21 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     })
 
     expect(result.success).toBe(true)
-    expect((result.messages as any[]).map(message => message.content)).toEqual(['pty user', 'pty assistant'])
+    expect(result.status).toBe('idle')
+    expect(result.messages).toEqual([])
     expect(result.messageSource).toMatchObject({
       selected: 'pty-parser',
       fallbackReason: 'native_history_stale',
-      ptyStatusApprovalOnly: false,
+      ptyStatusApprovalOnly: true,
       staleness: { freshEnough: false },
+      coverage: {
+        returnedMessageCount: 0,
+        ptyMessagesSuppressed: true,
+      },
     })
     expect(result.debugReadChat).toMatchObject({
       selectedMessageSource: 'pty-parser',
-      shouldPreferAdapterMessages: true,
+      shouldPreferAdapterMessages: false,
     })
   })
 
@@ -502,7 +516,7 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     })
   })
 
-  it('falls back to PTY with identityStatus=transcript_unmapped when providerSessionId is empty and runtime uuid has no matching native file', async () => {
+  it('suppresses PTY bubbles with identityStatus=transcript_unmapped when providerSessionId is empty and runtime uuid has no matching native file', async () => {
     // Regression: exact reproduction of debug bundle
     //   chat-debug-20260530T101044444Z-18bb4c98-4ff0-4641-ad3f-25ff49ad9efd-239138b9.json
     // The runtime session ID (18bb4c98-...) was passed as historySessionId to native lookup,
@@ -515,10 +529,11 @@ describe('Codex CLI read_chat native transcript provenance', () => {
       role: i % 2 === 0 ? 'user' : 'assistant',
       content: `pty message ${i}`,
       receivedAt: (i + 1) * 1_000,
+      ...(i === 16 ? { bubbleState: 'streaming', meta: { streaming: true } } : {}),
     }))
     const adapter = createCodexAdapter({
       getScriptParsedStatus: vi.fn(() => ({
-        status: 'idle',
+        status: 'generating',
         title: 'Codex CLI',
         // No providerSessionId — parser didn't extract one (simulates v7 UUID regex miss)
         messages: PTY_MESSAGES,
@@ -551,31 +566,95 @@ describe('Codex CLI read_chat native transcript provenance', () => {
       tailLimit: 40,
     })
 
-    // Current (pre-fix) behavior: falls back to PTY with transcript_unmapped
-    // Expected (post-fix): when providerSessionId is correctly extracted from
-    // the TUI (now possible for v7 UUIDs after SESSION_ID_RE fix), native history
-    // is used; this test documents the fallback path that still triggers when
-    // the TUI has not yet rendered the session id line.
+    // When the TUI has not yet rendered a providerSessionId, native history is
+    // unmapped. PTY may still contribute screen/status evidence, but must not
+    // synthesize normal chat bubbles or active/generating state.
     expect(result.success).toBe(true)
+    expect(result.status).toBe('idle')
     expect(result.messageSource).toMatchObject({
       selected: 'pty-parser',
       provider: 'codex-cli',
       nativeHandle: RUNTIME_SESSION_ID,
       nativeSource: 'native-unavailable',
       identityStatus: 'transcript_unmapped',
-      ptyStatusApprovalOnly: false,
+      ptyStatusApprovalOnly: true,
       coverage: {
         nativeMessageCount: 0,
         ptyMessageCount: 17,
+        returnedMessageCount: 0,
         safeMapping: false,
-        ptyMessagesSuppressed: false,
+        ptyMessagesSuppressed: true,
       },
     })
-    expect((result.messages as any[]).length).toBe(17)
+    expect(result.messages).toEqual([])
     // fallbackReason must start with native_history_unavailable (may carry a sub-code)
     expect((result.messageSource as any).fallbackReason).toMatch(/^native_history_unavailable/)
     // identityStatus must distinguish unmapped from ambiguous
     expect((result.messageSource as any).identityStatus).toBe('transcript_unmapped')
+  })
+
+  it('debug bundle reports transcript_unmapped without PTY bubbles or generating state', async () => {
+    const runtimeSessionId = '079cd8c6-742f-458c-b45d-ceec533c6eef'
+    const adapter = createCodexAdapter({
+      getStatus: vi.fn(() => ({ status: 'generating', activeModal: null, messages: [] })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'generating',
+        title: 'Codex CLI',
+        messages: [
+          { role: 'user', content: 'refinery accepted async job', receivedAt: 1_000 },
+          { role: 'assistant', content: 'pty streaming assistant', receivedAt: 2_000, bubbleState: 'streaming', meta: { streaming: true } },
+        ],
+      })),
+      getPartialResponse: vi.fn(() => 'pty streaming assistant'),
+    })
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'native-unavailable',
+      hasMore: false,
+      messages: [],
+      unavailableReason: 'native_history_workspace_only_lookup_unsafe',
+    })
+
+    const helpers = {
+      ...createHelpers(adapter),
+      currentSession: {
+        sessionId: runtimeSessionId,
+        providerType: 'codex-cli',
+        providerName: 'Codex CLI',
+        transport: 'pty',
+        adapterKey: runtimeSessionId,
+        workspace: '/Users/vilmire/Work/adhdev',
+      },
+    }
+
+    const result = await handleGetChatDebugBundle(helpers as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      delivery: 'inline',
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.bundle as any).readChat).toMatchObject({
+      success: true,
+      status: 'idle',
+      totalMessages: 0,
+      messageSource: {
+        selected: 'pty-parser',
+        identityStatus: 'transcript_unmapped',
+        ptyStatusApprovalOnly: true,
+        coverage: {
+          nativeMessageCount: 0,
+          ptyMessageCount: 2,
+          returnedMessageCount: 0,
+          ptyMessagesSuppressed: true,
+        },
+      },
+      debugReadChat: {
+        returnedStatus: 'idle',
+        returnedMsgCount: 0,
+        shouldPreferAdapterMessages: false,
+      },
+    })
+    expect((result.bundle as any).readChat.messagesTail).toEqual([])
   })
 
   it('selects native history when providerSessionId is the Codex v7 native UUID (not the ADHDev runtime UUID)', async () => {
