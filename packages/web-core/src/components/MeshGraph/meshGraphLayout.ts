@@ -29,7 +29,11 @@ export const MESH_GRAPH_LAYOUT = {
     siblingGapX: 56,
     siblingRowGap: 72,
     placeholderTopOffset: 0,
+    peerColGap: 400,
+    siblingColGap: 380,
 } as const
+
+export const MESH_GRAPH_LAYOUT_DIRECTION = 'LR' as const
 
 type MeshGraphLayoutNodeKind = 'meshNode'
 
@@ -144,19 +148,6 @@ function compareNodes(a: MeshGraphNode, b: MeshGraphNode): number {
     if (a.branch && !b.branch) return -1
     if (!a.branch && b.branch) return 1
     return a.label.localeCompare(b.label)
-}
-
-function estimateEdgeLabelWidth(label: string | null | undefined): number {
-    if (!label) return 0
-    return Math.min(260, Math.max(72, label.length * 7 + 26))
-}
-
-function computeColumnGap(data: MeshGraphData): number {
-    const widestEdgeLabel = data.edges.reduce((widest, edge) => Math.max(widest, estimateEdgeLabelWidth(edge.label)), 0)
-    return Math.max(
-        MESH_GRAPH_LAYOUT.columnGap,
-        MESH_GRAPH_LAYOUT.worktreeCardWidth + widestEdgeLabel + MESH_GRAPH_LAYOUT.edgeLabelBuffer,
-    )
 }
 
 function toLayoutNode(node: MeshGraphNode, x: number, y: number, selectable = true): MeshGraphLayoutNode {
@@ -311,76 +302,96 @@ export function buildMeshGraphLayout(data: MeshGraphData): MeshGraphLayoutResult
         orderedGroups.push(['__nodes__', []])
     }
 
+    const getNodeSubtreeHeight = (node: MeshGraphNode): number => {
+        const nodeHeight = estimateMeshGraphNodeHeight(node)
+        const submoduleNodes = [...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes)
+        if (submoduleNodes.length === 0) return nodeHeight
+        const submoduleRows = chunkSiblings(submoduleNodes, 3)
+        const submoduleHeight = submoduleRows.reduce((total, row) => total + maxRowHeight(row) + MESH_GRAPH_LAYOUT.siblingRowGap, 0)
+        return nodeHeight + MESH_GRAPH_LAYOUT.parentToSubmoduleGap + submoduleHeight
+    }
+
     const getNodeSubtreeWidth = (node: MeshGraphNode): number => {
         const submoduleRows = chunkSiblings([...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes), 3)
         const widestSubmoduleRow = submoduleRows.reduce((widest, row) => Math.max(widest, getSiblingRowWidth(row)), 0)
         return Math.max(getMeshGraphNodeCardWidth(node), widestSubmoduleRow)
     }
 
+    const getGroupTotalHeight = (nodes: MeshGraphNode[]): number => {
+        if (nodes.length === 0) return MESH_GRAPH_LAYOUT.minWorktreeCardHeight
+        return nodes.reduce((total, node, index) =>
+            total + getNodeSubtreeHeight(node) + (index < nodes.length - 1 ? MESH_GRAPH_LAYOUT.worktreeStackGap : 0),
+            0,
+        )
+    }
+
     const getWorktreeRowWidth = (nodes: MeshGraphNode[]): number => getSpacedRowWidth(nodes.map(getNodeSubtreeWidth))
 
-    const getGroupWidth = (nodes: MeshGraphNode[]): number => {
-        const rows = chunkSiblings(nodes, 3)
-        return rows.reduce((widest, row) => Math.max(widest, getWorktreeRowWidth(row)), 0)
-    }
+    const anchorCardWidth = defaultAnchor ? getMeshGraphNodeCardWidth(defaultAnchor) : MESH_GRAPH_LAYOUT.worktreeCardWidth
+
+    // For vertical centering of anchor: center it against the first peer group height
+    const firstGroupNodes = orderedGroups[0]?.[1] ?? []
+    const firstGroupHeight = getGroupTotalHeight(firstGroupNodes)
+    const anchorHeight = defaultAnchor ? estimateMeshGraphNodeHeight(defaultAnchor) : 0
+    const anchorCenterY = Math.max(0, (firstGroupHeight - anchorHeight) / 2)
 
     const flowNodes: MeshGraphLayoutNode[] = []
     const bounds: MeshGraphLayoutBounds[] = []
-    const groupCount = orderedGroups.length
-    const widestGroup = orderedGroups.reduce((widest, [, groupNodes]) => Math.max(widest, getGroupWidth(groupNodes)), 0)
-    const columnGap = Math.max(computeColumnGap(data), widestGroup + MESH_GRAPH_LAYOUT.edgeLabelBuffer)
-    const totalWidth = Math.max(1, groupCount - 1) * columnGap
-    const topRowY = defaultAnchor ? 0 : 96
-    const defaultAnchorHeight = defaultAnchor ? estimateMeshGraphNodeHeight(defaultAnchor) : 0
-    const contentRowStartY = defaultAnchor
-        ? topRowY + defaultAnchorHeight + MESH_GRAPH_LAYOUT.defaultToContentGap
-        : 0
 
+    // Place anchor at (0, anchorCenterY) — LR layout: anchor is leftmost
     if (defaultAnchor) {
-        const x = totalWidth / 2
-        flowNodes.push(toLayoutNode(defaultAnchor, x, topRowY))
-        bounds.push(makeBounds(defaultAnchor, x, topRowY))
+        flowNodes.push(toLayoutNode(defaultAnchor, 0, anchorCenterY))
+        bounds.push(makeBounds(defaultAnchor, 0, anchorCenterY))
     }
 
-    orderedGroups.forEach(([groupKey, groupNodes], columnIndex) => {
-        const groupCenterX = columnIndex * columnGap
-        const nodesForColumn = groupNodes.length > 0
+    // Place peer groups to the right, stacking vertically within each group column.
+    // LR layout: anchor left, groups expand right. Each group gets its own column x.
+    const horizontalColumnGap = anchorCardWidth + MESH_GRAPH_LAYOUT.peerColGap
+    // groupColumnX[i] = left x for group i
+    const groupColumnXList: number[] = []
+    {
+        let cursor = anchorCardWidth + MESH_GRAPH_LAYOUT.peerColGap
+        for (let i = 0; i < orderedGroups.length; i++) {
+            groupColumnXList.push(cursor)
+            const groupNodes = orderedGroups[i][1]
+            const nodesForWidth = groupNodes.length > 0 ? groupNodes : (nonDefaultNodes.length > 0 ? nonDefaultNodes : [])
+            const groupColumnWidth = nodesForWidth.reduce<number>((widest, node) => Math.max(widest, getWorktreeRowWidth([node])), MESH_GRAPH_LAYOUT.worktreeCardWidth)
+            cursor += groupColumnWidth + MESH_GRAPH_LAYOUT.siblingColGap
+        }
+    }
+
+    orderedGroups.forEach(([groupKey, groupNodes], groupIndex) => {
+        const nodesForGroup = groupNodes.length > 0
             ? groupNodes
             : nonDefaultNodes.length > 0
                 ? nonDefaultNodes
                 : []
-        let cursorY = contentRowStartY
-        const worktreeRows = chunkSiblings(nodesForColumn, 3)
 
-        for (const row of worktreeRows) {
-            const rowWidth = getWorktreeRowWidth(row)
-            let subtreeCursorX = groupCenterX - rowWidth / 2
-            const rowY = cursorY
-            const rowBottomY = rowY + maxRowHeight(row)
-            let deepestY = rowBottomY
+        const groupX = groupColumnXList[groupIndex] ?? (anchorCardWidth + MESH_GRAPH_LAYOUT.peerColGap)
 
-            for (const node of row) {
-                const nodeWidth = getMeshGraphNodeCardWidth(node)
-                const subtreeWidth = getNodeSubtreeWidth(node)
-                const subtreeCenterX = subtreeCursorX + subtreeWidth / 2
-                const nodeX = subtreeCenterX - nodeWidth / 2
-                flowNodes.push(toLayoutNode(node, nodeX, rowY))
-                bounds.push(makeBounds(node, nodeX, rowY))
+        let cursorY = 0
 
-                const submoduleNodes = [...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes)
-                if (submoduleNodes.length > 0) {
-                    const submoduleEndY = placeSiblingRows({
-                        nodes: submoduleNodes,
-                        centerX: subtreeCenterX,
-                        startY: rowBottomY + MESH_GRAPH_LAYOUT.parentToSubmoduleGap,
-                        maxPerRow: 3,
-                        flowNodes,
-                        bounds,
-                    })
-                    deepestY = Math.max(deepestY, submoduleEndY - MESH_GRAPH_LAYOUT.siblingRowGap)
-                }
+        for (const node of nodesForGroup) {
+            const nodeWidth = getMeshGraphNodeCardWidth(node)
+            const subtreeWidth = getNodeSubtreeWidth(node)
+            const subtreeCenterX = groupX + subtreeWidth / 2
+            const nodeX = subtreeCenterX - nodeWidth / 2
+            const nodeHeight = estimateMeshGraphNodeHeight(node)
+            flowNodes.push(toLayoutNode(node, nodeX, cursorY))
+            bounds.push(makeBounds(node, nodeX, cursorY))
 
-                subtreeCursorX += subtreeWidth + MESH_GRAPH_LAYOUT.siblingGapX
+            const submoduleNodes = [...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes)
+            let deepestY = cursorY + nodeHeight
+            if (submoduleNodes.length > 0) {
+                const submoduleEndY = placeSiblingRows({
+                    nodes: submoduleNodes,
+                    centerX: subtreeCenterX,
+                    startY: cursorY + nodeHeight + MESH_GRAPH_LAYOUT.parentToSubmoduleGap,
+                    maxPerRow: 3,
+                    flowNodes,
+                    bounds,
+                })
+                deepestY = Math.max(deepestY, submoduleEndY - MESH_GRAPH_LAYOUT.siblingRowGap)
             }
 
             cursorY = deepestY + MESH_GRAPH_LAYOUT.worktreeStackGap
@@ -388,11 +399,10 @@ export function buildMeshGraphLayout(data: MeshGraphData): MeshGraphLayoutResult
 
         if (groupKey === '__nodes__' && nonDefaultNodes.length === 0 && defaultAnchor) {
             const placeholder = createPlaceholderNode(defaultAnchor, data)
-            const y = contentRowStartY + MESH_GRAPH_LAYOUT.placeholderTopOffset
-            flowNodes.push(toLayoutNode(placeholder, groupCenterX, y, false))
-            bounds.push(makeBounds(placeholder, groupCenterX, y))
+            flowNodes.push(toLayoutNode(placeholder, groupX, MESH_GRAPH_LAYOUT.placeholderTopOffset, false))
+            bounds.push(makeBounds(placeholder, groupX, MESH_GRAPH_LAYOUT.placeholderTopOffset))
         }
     })
 
-    return { nodes: flowNodes, bounds, columnGap }
+    return { nodes: flowNodes, bounds, columnGap: horizontalColumnGap }
 }

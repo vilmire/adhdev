@@ -195,7 +195,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         >
             <Handle
                 type="target"
-                position={Position.Top}
+                position={Position.Left}
                 isConnectable={false}
                 style={{ opacity: 0, pointerEvents: 'none' }}
             />
@@ -279,7 +279,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             )}
             <Handle
                 type="source"
-                position={Position.Bottom}
+                position={Position.Right}
                 isConnectable={false}
                 style={{ opacity: 0, pointerEvents: 'none' }}
             />
@@ -308,7 +308,7 @@ function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark'))
         source: edge.source,
         target: edge.target,
         label: edge.label,
-        type: edge.type === 'worktreeLink' || edge.type === 'submoduleLink' ? 'smoothstep' : 'bezier',
+        type: edge.type === 'parentBranch' ? 'straight' : edge.type === 'worktreeLink' || edge.type === 'submoduleLink' ? 'smoothstep' : 'bezier',
         animated: edge.type === 'orphanLink',
         markerEnd: edge.direction === 'directed'
             ? {
