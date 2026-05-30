@@ -752,6 +752,34 @@ export class CliProviderInstance implements ProviderInstance {
         }
     }
 
+    recordAcknowledgedUserInput(input: InputEnvelope | string): void {
+        const content = typeof input === 'string'
+            ? input.trim()
+            : buildCliStructuredInputPrompt(input).trim();
+        if (!content) return;
+
+        const receivedAt = Date.now();
+        const dedupKey = `user_input_ack:${crypto
+            .createHash('sha256')
+            .update(`${this.instanceId}:${content}:${receivedAt}`)
+            .digest('hex')
+            .slice(0, 24)}`;
+        this.appendRuntimeMessage(buildChatMessage({
+            role: 'user',
+            senderName: 'User',
+            kind: 'standard',
+            content,
+            receivedAt,
+            timestamp: receivedAt,
+            source: 'runtime_input_ack',
+            meta: {
+                runtimeInputAck: true,
+                provider: this.type,
+                workspace: this.workingDir,
+            },
+        } as ChatMessage), dedupKey);
+    }
+
     dispose(): void {
         this.adapter.shutdown();
         this.monitor.reset();
@@ -1450,12 +1478,28 @@ export class CliProviderInstance implements ProviderInstance {
             index,
             source: 'parsed',
         }));
+        const getRole = (message: ChatMessage): string => typeof message.role === 'string'
+            ? message.role.trim().toLowerCase()
+            : '';
         const runtimeEntries: MergeEntry[] = this.runtimeMessages.map((entry, index) => ({
             message: entry.message,
             index: parsedMessages.length + index,
-            source: 'runtime',
+            source: 'runtime' as const,
             runtimeKey: entry.key,
-        }));
+        })).filter((entry) => {
+            const meta = entry.message.meta && typeof entry.message.meta === 'object' && !Array.isArray(entry.message.meta)
+                ? entry.message.meta as Record<string, unknown>
+                : {};
+            if (meta.runtimeInputAck !== true) return true;
+            const runtimeText = flattenContent(entry.message.content).replace(/\s+/g, ' ').trim();
+            if (!runtimeText) return false;
+            return !parsedEntries.some((parsedEntry) => {
+                const parsedRole = getRole(parsedEntry.message);
+                if (parsedRole !== 'user' && parsedRole !== 'human') return false;
+                const parsedText = flattenContent(parsedEntry.message.content).replace(/\s+/g, ' ').trim();
+                return parsedText === runtimeText;
+            });
+        });
         const getTime = (message: ChatMessage): number => {
             const value = typeof message.receivedAt === 'number'
                 ? message.receivedAt
@@ -1465,9 +1509,6 @@ export class CliProviderInstance implements ProviderInstance {
             return Number.isFinite(value) && value > 0 ? value : 0;
         };
 
-        const getRole = (message: ChatMessage): string => typeof message.role === 'string'
-            ? message.role.trim().toLowerCase()
-            : '';
         const isRuntimeOverlay = (entry: MergeEntry): boolean => {
             if (entry.source !== 'runtime') return false;
             const key = typeof entry.runtimeKey === 'string' ? entry.runtimeKey.trim().toLowerCase() : '';

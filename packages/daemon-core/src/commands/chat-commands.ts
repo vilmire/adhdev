@@ -14,7 +14,7 @@ import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../pro
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import { pickApprovalButton } from '../providers/approval-utils.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
-import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../config/chat-history.js';
+import { isNativeSourceCanonicalHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
 import { LOG, getRecentLogs } from '../logging/logger.js';
 import { getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { buildChatMessageSignature, hashSignatureParts } from '../chat/chat-signatures.js';
@@ -40,6 +40,7 @@ interface ApprovalSelectableInstance extends ProviderInstance {
 
 interface RuntimeChatMessageMerger extends ProviderInstance {
     mergeRuntimeChatMessages?(messages: ChatMessage[]): ChatMessage[];
+    recordAcknowledgedUserInput?(input: InputEnvelope | string): void;
 }
 
 type LegacyStringScript = (params?: Record<string, unknown> | string) => string;
@@ -452,6 +453,45 @@ function isUnsafeNativeTranscriptFallback(reason?: string): boolean {
 function coerceUnsafeNativeFallbackStatus(status: string, activeModal: unknown): string {
     if (status === 'waiting_approval' && activeModal) return status;
     return 'idle';
+}
+
+function isRuntimeInputAckMessage(message: ChatMessage | undefined): boolean {
+    if (!message || typeof message !== 'object') return false;
+    const role = String((message as any).role || '').trim().toLowerCase();
+    if (role !== 'user' && role !== 'human') return false;
+    const meta = (message as any).meta;
+    return !!meta && typeof meta === 'object' && !Array.isArray(meta) && meta.runtimeInputAck === true;
+}
+
+function selectRuntimeInputAckMessages(messages: ChatMessage[]): ChatMessage[] {
+    return messages.filter((message) => isRuntimeInputAckMessage(message));
+}
+
+function readExactRuntimeMirrorMessages(args: {
+    providerType: string;
+    targetSessionId?: string;
+    currentSessionId?: string;
+    tailLimit: number;
+    historyBehavior?: ProviderModule['historyBehavior'];
+}): ChatMessage[] {
+    const targetSessionId = String(args.targetSessionId || '').trim();
+    const currentSessionId = String(args.currentSessionId || '').trim();
+    if (!targetSessionId || targetSessionId !== currentSessionId) return [];
+
+    const history = readChatHistory(
+        args.providerType,
+        0,
+        Math.max(args.tailLimit || 0, 200),
+        targetSessionId,
+        0,
+        args.historyBehavior,
+    );
+    return normalizeChatMessages((history.messages || []) as ChatMessage[])
+        .filter((message) => {
+            const historySessionId = String((message as any).historySessionId || '').trim();
+            const instanceId = String((message as any).instanceId || '').trim();
+            return historySessionId === targetSessionId || instanceId === targetSessionId;
+        });
 }
 
 function supportsCliNativeTranscript(providerType: string, provider?: ProviderModule): boolean {
@@ -1512,10 +1552,26 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         });
                         const unsafeNativeFallback = adapter.cliType === 'codex-cli'
                             && isUnsafeNativeTranscriptFallback(fallbackReason);
+                        const safeRuntimeAckMessages = unsafeNativeFallback
+                            ? selectRuntimeInputAckMessages(returnedMessages)
+                            : [];
+                        const exactRuntimeMirrorMessages = unsafeNativeFallback
+                            && safeRuntimeAckMessages.length === 0
+                            ? readExactRuntimeMirrorMessages({
+                                providerType,
+                                targetSessionId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
+                                currentSessionId: typeof (h.currentSession as any)?.sessionId === 'string' ? (h.currentSession as any).sessionId : undefined,
+                                tailLimit: nativeHistoryLimit,
+                                historyBehavior: provider?.historyBehavior,
+                            })
+                            : [];
+                        const safeDaemonMessages = safeRuntimeAckMessages.length > 0
+                            ? safeRuntimeAckMessages
+                            : exactRuntimeMirrorMessages;
                         if (unsafeNativeFallback) {
-                            selectedMessages = [];
-                            selectedTranscriptAuthority = undefined;
-                            selectedCoverage = undefined;
+                            selectedMessages = safeDaemonMessages;
+                            selectedTranscriptAuthority = safeDaemonMessages.length > 0 ? 'daemon' : undefined;
+                            selectedCoverage = safeDaemonMessages.length > 0 ? 'tail' : undefined;
                             selectedStatus = coerceUnsafeNativeFallbackStatus(returnedStatus, activeModal);
                         }
                         messageSource = buildCliMessageSourceProvenance({
@@ -1534,11 +1590,15 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             unavailableReason,
                             nativeMessages,
                             ptyMessages: returnedMessages,
-                            returnedMessages: unsafeNativeFallback ? [] : returnedMessages,
+                            returnedMessages: unsafeNativeFallback ? safeDaemonMessages : returnedMessages,
                             safeMapping,
                             freshEnough,
                             ptyStatusApprovalOnly: unsafeNativeFallback,
                         });
+                        if (unsafeNativeFallback && exactRuntimeMirrorMessages.length > 0) {
+                            (messageSource as any).selectedDaemonSource = 'exact-runtime-mirror';
+                            (messageSource as any).transcriptAuthority = 'daemon';
+                        }
                     }
                 }
             }
@@ -1953,6 +2013,12 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                     await adapter.sendMessage(text, { force: true });
                 } else {
                     await adapter.sendMessage(text);
+                }
+                const target = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
+                if (target?.category === 'cli'
+                    && target.type === adapter.cliType
+                    && typeof target.recordAcknowledgedUserInput === 'function') {
+                    target.recordAcknowledgedUserInput(input);
                 }
                 return {
                     ..._logSendSuccess(`${transport}-adapter`, adapter.cliType),
