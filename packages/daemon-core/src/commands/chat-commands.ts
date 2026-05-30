@@ -471,15 +471,20 @@ function hasSafeNativeHistoryMapping(args: {
             return messageSessionIds.some((id) => id === explicitSessionId);
         }
 
+        // Messages carry no historySessionId — cannot confirm they belong to the requested session.
+        // Only allow a coordinator transcript that is also confirmed by the PTY side; otherwise
+        // fail closed so a same-workspace session's history is never silently accepted.
         if (isCoordinatorTranscript && args.ptyMessages && args.ptyMessages.length > 0) {
             const ptyHasCoordinator = args.ptyMessages.some((m: any) => {
                 const text = typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || '');
                 return text.includes('mesh_send_task') || text.includes('mesh_status') || text.includes('mesh_read_chat');
             });
-            if (!ptyHasCoordinator) {
-                return false;
-            }
+            return ptyHasCoordinator;
         }
+
+        // No historySessionId in messages and no coordinator cross-check: fail closed.
+        // Workspace-only matching must not override an explicit session identity.
+        return false;
     }
     const workspace = String(args.workspace || '').trim();
     if (!workspace) return false;
