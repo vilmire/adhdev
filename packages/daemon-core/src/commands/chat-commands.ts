@@ -412,9 +412,9 @@ function buildCliMessageSourceProvenance(args: {
             ptyMessageCount: ptyMessages.length,
             returnedMessageCount: returnedMessages.length,
             safeMapping: args.safeMapping === true,
-            // true when native-history was selected: PTY message bodies are suppressed and
-            // must not be treated as chat content. PTY only contributes status/approval/screen evidence.
-            ptyMessagesSuppressed: args.selected === 'native-history',
+            // true when PTY message bodies are suppressed and must not be treated as
+            // chat content. PTY may still contribute status/approval/screen evidence.
+            ptyMessagesSuppressed: args.selected === 'native-history' || args.ptyStatusApprovalOnly === true,
         },
     };
 }
@@ -439,6 +439,19 @@ function buildNativeHistoryFallbackReason(args: {
     if (!args.safeMapping) return 'native_history_not_safely_mapped';
     if (!args.freshEnough) return 'native_history_stale';
     return 'native_history_not_selected';
+}
+
+function isUnsafeNativeTranscriptFallback(reason?: string): boolean {
+    const value = String(reason || '').trim();
+    return value.startsWith('native_history_unavailable')
+        || value === 'native_history_not_safely_mapped'
+        || value === 'native_history_stale'
+        || value === 'native_history_partial';
+}
+
+function coerceUnsafeNativeFallbackStatus(status: string, activeModal: unknown): string {
+    if (status === 'waiting_approval' && activeModal) return status;
+    return 'idle';
 }
 
 function supportsCliNativeTranscript(providerType: string, provider?: ProviderModule): boolean {
@@ -1354,6 +1367,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             let selectedProviderSessionId = providerSessionId;
             let selectedTranscriptAuthority = transcriptAuthority;
             let selectedCoverage = coverage;
+            let selectedStatus = returnedStatus;
             const sessionWorkspace = typeof (h.currentSession as any)?.workspace === 'string'
                 ? (h.currentSession as any).workspace
                 : typeof adapter.workingDir === 'string'
@@ -1496,6 +1510,14 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         safeMapping,
                         freshEnough,
                         });
+                        const unsafeNativeFallback = adapter.cliType === 'codex-cli'
+                            && isUnsafeNativeTranscriptFallback(fallbackReason);
+                        if (unsafeNativeFallback) {
+                            selectedMessages = [];
+                            selectedTranscriptAuthority = undefined;
+                            selectedCoverage = undefined;
+                            selectedStatus = coerceUnsafeNativeFallbackStatus(returnedStatus, activeModal);
+                        }
                         messageSource = buildCliMessageSourceProvenance({
                             selected: 'pty-parser',
                             provider: adapter.cliType,
@@ -1512,10 +1534,10 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             unavailableReason,
                             nativeMessages,
                             ptyMessages: returnedMessages,
-                            returnedMessages,
+                            returnedMessages: unsafeNativeFallback ? [] : returnedMessages,
                             safeMapping,
                             freshEnough,
-                            ptyStatusApprovalOnly: false,
+                            ptyStatusApprovalOnly: unsafeNativeFallback,
                         });
                     }
                 }
@@ -1523,7 +1545,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord.status || '')} parsedMsgCount=${parsedRecord.messages.length} returnedMsgCount=${returnedMessages.length}`);
             return buildReadChatCommandResult({
                 messages: selectedMessages,
-                status: returnedStatus,
+                status: selectedStatus,
                 activeModal,
                 messageSource,
                 transcriptProvenance: messageSource,
@@ -1532,7 +1554,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     targetSessionId: String(args?.targetSessionId || ''),
                     adapterStatus: String(adapterStatus.status || ''),
                     parsedStatus: String(parsedRecord.status || ''),
-                    returnedStatus: String(returnedStatus || ''),
+                    returnedStatus: String(selectedStatus || ''),
                     selectedMessageSource: (messageSource as any).selected,
                     messageSource,
                     shouldPreferAdapterMessages: supportsCliNativeTranscript(providerType, provider)
@@ -1541,6 +1563,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         && typeof (messageSource as any).fallbackReason === 'string'
                         && (messageSource as any).fallbackReason.startsWith('native_history_')
                         && (messageSource as any).fallbackReason !== 'native_history_not_checked'
+                        && !isUnsafeNativeTranscriptFallback((messageSource as any).fallbackReason)
                         && !(selectedTranscriptAuthority === 'provider' && selectedCoverage === 'full'),
                     parsedMsgCount: parsedRecord.messages.length,
                     returnedMsgCount: selectedMessages.length,
