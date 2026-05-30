@@ -38,7 +38,8 @@ export interface CliAdapter {
     workingDir: string;
     _acpInstance?: AcpAdapterHandle;
     spawn(): Promise<void>;
-    sendMessage(text: string): Promise<void>;
+    sendMessage(text: string, options?: { force?: boolean }): Promise<void>;
+    forceSendMessage?(text: string): Promise<void>;
     getStatus(): CliAdapterStatus;
     getScriptParsedStatus?(): unknown;
     getDebugSnapshot?(): unknown;

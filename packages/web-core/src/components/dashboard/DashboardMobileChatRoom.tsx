@@ -30,6 +30,7 @@ interface DashboardMobileChatRoomProps {
     cliViewMode: CliConversationViewMode | null
     onSetCliViewMode: (mode: CliConversationViewMode) => void
     handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
+    handleForceSendChat?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
     handleFocusAgent: () => Promise<void>
     handleModalButton: (button: string) => void
     handleRelaunch: () => void
@@ -55,6 +56,7 @@ export default function DashboardMobileChatRoom({
     cliViewMode,
     onSetCliViewMode,
     handleSendChat,
+    handleForceSendChat,
     handleFocusAgent,
     handleModalButton,
     handleRelaunch,
@@ -144,6 +146,7 @@ export default function DashboardMobileChatRoom({
                     handleModalButton={handleModalButton}
                     handleRelaunch={handleRelaunch}
                     handleSendChat={handleSendChat}
+                    handleForceSendChat={handleForceSendChat}
                     isSendingChat={isSendingChat}
                     sendFeedbackMessage={sendFeedbackMessage}
                     handleFocusAgent={handleFocusAgent}
