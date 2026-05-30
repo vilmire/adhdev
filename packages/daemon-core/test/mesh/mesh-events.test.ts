@@ -111,32 +111,37 @@ function createQueueAutoLaunchComponents(args?: {
 
 describe('setupMeshEventForwarding', () => {
   it('forwards delegated completion to the matching coordinator using runtime mesh settings without local mesh config', () => {
-    meshConfigMocks.getMesh.mockReturnValue(undefined)
-    meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
-    const { components, emit, coordinator } = createComponents()
+    const meshId = `mesh_inline_forward_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit, coordinator } = createComponents(meshId)
 
-    setupMeshEventForwarding(components)
-    emit({
-      event: 'agent:generating_completed',
-      instanceId: 'runtime-session-1',
-      targetSessionId: 'runtime-session-1',
-      providerType: 'hermes-cli',
-      providerSessionId: 'provider-history-1',
-      duration: 7,
-      timestamp: 123,
-    })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'provider-history-1',
+        duration: 7,
+        timestamp: 123,
+      })
 
-    expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-    const [eventName, payload] = coordinator.onEvent.mock.calls[0]
-    expect(eventName).toBe('send_message')
-    const text = payload.input.textFallback
-    expect(text).toContain("Node 'node_child_1'")
-    expect(text).toContain('session_id=runtime-session-1')
-    expect(text).toContain('provider_session_id=provider-history-1')
-    expect(text).toContain('provider=hermes-cli')
-    expect(text).toContain('status event path')
-    expect(text).toContain('mesh_read_chat once')
-    expect(text).toContain('do not poll repeatedly')
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [eventName, payload] = coordinator.onEvent.mock.calls[0]
+      expect(eventName).toBe('send_message')
+      const text = payload.input.textFallback
+      expect(text).toContain("Node 'node_child_1'")
+      expect(text).toContain('session_id=runtime-session-1')
+      expect(text).toContain('provider_session_id=provider-history-1')
+      expect(text).toContain('provider=hermes-cli')
+      expect(text).toContain('status event path')
+      expect(text).toContain('mesh_read_chat once')
+      expect(text).toContain('do not poll repeatedly')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
   })
 
   it('buffers delegated completion events for MCP coordinators even when a CLI coordinator is present', () => {

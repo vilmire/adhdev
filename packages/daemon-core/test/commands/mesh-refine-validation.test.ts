@@ -537,8 +537,13 @@ describe('refine_mesh_node validation gate', () => {
         && message.includes('final_convergence=merged')
         && message.includes('Next step: Continue from the updated mesh state.')
       )).toBe(true)
-      expect(drainPendingMeshCoordinatorEvents(mesh.id).some(event =>
+      const pendingEvents = drainPendingMeshCoordinatorEvents(mesh.id)
+      expect(pendingEvents.some(event =>
         event.event === 'refine:completed'
+        && (event.metadataEvent as any).jobId === accepted.jobId
+      )).toBe(true)
+      expect(pendingEvents.some(event =>
+        event.event === 'refine:accepted'
         && (event.metadataEvent as any).jobId === accepted.jobId
       )).toBe(false)
     } finally {
@@ -635,8 +640,13 @@ describe('refine_mesh_node validation gate', () => {
         && message.includes('Next step:')
         && message.includes(`oss@${missingCommit}`)
       )).toBe(true)
-      expect(drainPendingMeshCoordinatorEvents(mesh.id).some(event =>
+      const pendingEvents = drainPendingMeshCoordinatorEvents(mesh.id)
+      expect(pendingEvents.some(event =>
         event.event === 'refine:failed'
+        && (event.metadataEvent as any).jobId === accepted.jobId
+      )).toBe(true)
+      expect(pendingEvents.some(event =>
+        event.event === 'refine:accepted'
         && (event.metadataEvent as any).jobId === accepted.jobId
       )).toBe(false)
     } finally {
