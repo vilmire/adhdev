@@ -70,6 +70,8 @@ export function getConversationViewStates(conversation: { status?: string, conne
     const isReconnecting = conversation.connectionState === 'failed' || conversation.connectionState === 'closed'
     const isConnecting = conversation.connectionState === 'connecting' || conversation.connectionState === 'new'
     const isGenerating = conversation.status === 'generating'
+        || conversation.status === 'long_generating'
+        || conversation.status === 'streaming'
     const isWaiting = conversation.status === 'waiting_approval'
     return { isReconnecting, isConnecting, isGenerating, isWaiting }
 }
