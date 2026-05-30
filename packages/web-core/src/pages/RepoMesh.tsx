@@ -23,6 +23,7 @@ import MeshCoordinatorManualSetupPanel from '../components/MeshCoordinatorManual
 import {
     defaultProviderPriorityFromInventory,
     normalizeAvailableCliProviders,
+    normalizeProviderPriority,
     normalizeProviderPriorityForInventory,
     type AvailableCliProviderOption,
 } from '../utils/provider-priority'
@@ -43,6 +44,9 @@ export interface MeshNode {
         providerPriority?: string[]
         readOnly?: boolean
     }
+    isLocalWorktree?: boolean
+    worktreeBranch?: string
+    clonedFromNodeId?: string
 }
 
 interface MeshEntry {
@@ -157,6 +161,10 @@ function describeNodeProviderPriority(node: MeshNode): { configured: boolean; la
         }
     }
     return { configured: true, label: providerPriority.join(' → ') }
+}
+
+function isWorktreeNode(node: MeshNode): boolean {
+    return node.isLocalWorktree === true
 }
 
 export function getNodeActiveAssignments(node: MeshNode, queue: MeshQueueEntry[]): MeshQueueEntry[] {
@@ -546,10 +554,10 @@ export default function RepoMesh() {
 
     async function handleUpdateNodeProviderPriority(node: MeshNode) {
         if (!daemonId || !selectedMeshId) return
-        const providerPriority = normalizeProviderPriorityForInventory(
-            nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node),
-            availableCliProviders,
-        )
+        const requestedPriority = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)
+        const providerPriority = availableCliProviders.length > 0
+            ? normalizeProviderPriorityForInventory(requestedPriority, availableCliProviders)
+            : normalizeProviderPriority(requestedPriority)
         const nextPolicy = { ...(node.policy || {}) }
         delete (nextPolicy as any).provider_priority
         if (providerPriority.length) {
@@ -564,6 +572,7 @@ export default function RepoMesh() {
                 meshId: selectedMeshId,
                 nodeId: node.id,
                 policy: nextPolicy,
+                providerPriority,
             })
             if (res?.success === false) {
                 setError(res.error || 'Node policy update failed')
@@ -947,6 +956,7 @@ export default function RepoMesh() {
                             const activeAssignments = getNodeActiveAssignments(node, meshQueue)
                             const activeSessions = getNodeActiveSessions(node, daemon)
                             const isSelected = selectedNodeId === node.id
+                            const worktreeNode = isWorktreeNode(node)
                             return (
                             <div
                                 key={node.id}
@@ -970,12 +980,24 @@ export default function RepoMesh() {
                                                     {activeAssignments.length} active task{activeAssignments.length === 1 ? '' : 's'}
                                                 </span>
                                             )}
+                                            {worktreeNode && (
+                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/25">
+                                                    worktree
+                                                </span>
+                                            )}
                                         </div>
                                         <div className="text-[10px] text-text-muted font-mono">{node.workspace}</div>
+                                        {worktreeNode && (
+                                            <div className="mt-2 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-200">
+                                                Worktree node{node.worktreeBranch ? ` · ${node.worktreeBranch}` : ''}. Provider priority saved here is node-local and disappears when this worktree node is removed.
+                                            </div>
+                                        )}
                                         <div className="mt-3 max-w-2xl" onClick={event => event.stopPropagation()}>
                                             <FormField
                                                 label="Provider priority"
-                                                hint="Used when launches omit an explicit provider. Empty keeps fail-closed behavior until a provider is selected manually."
+                                                hint={worktreeNode
+                                                    ? 'Worktree-local launch defaults. Configure the source node for durable defaults.'
+                                                    : 'Used when launches omit an explicit provider. Empty keeps fail-closed behavior until a provider is selected manually.'}
                                             >
                                                 <ProviderPriorityEditor
                                                     value={nodeProviderPriorityDrafts[node.id] ?? providerPriority}
