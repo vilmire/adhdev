@@ -26,6 +26,11 @@ const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
 const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
 const CLI_NATIVE_HISTORY_FRESH_MS = 5 * 60_000;
+// Fallback list for supportsCliNativeTranscript() when the ProviderModule is
+// unavailable (e.g. provider config not yet loaded). The authoritative check is
+// provider.canonicalHistory via isNativeSourceCanonicalHistory(). New providers
+// with native transcripts should set canonicalHistory in their provider.json
+// rather than adding entries here.
 const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli', 'hermes-cli', 'antigravity-cli']);
 const recentSendByTarget = new Map<string, number>();
 
@@ -505,6 +510,11 @@ function hasSafeNativeHistoryMapping(args: {
     return hasOverlappingVisibleConversationText(args.nativeMessages, args.ptyMessages || []);
 }
 
+// Provenance boundary: workspace-only native history lookup is never safe
+// because multiple concurrent sessions sharing the same cwd would alias each
+// other. historySessionId (the provider-native session key) is required to
+// establish ownership. hasSafeNativeHistoryMapping() enforces the same
+// invariant after the read; both guards must hold for native history to be used.
 function readCliProviderNativeHistory(agentStr: string, args: {
     canonicalHistory?: ProviderModule['canonicalHistory'];
     historySessionId?: string;
@@ -514,7 +524,6 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     excludeRecentCount: number;
     historyBehavior?: ProviderModule['historyBehavior'];
     scripts?: ProviderScripts;
-    exactSessionScoped?: boolean;
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
     if (!args.historySessionId) {
         return {
@@ -1225,7 +1234,6 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 excludeRecentCount,
                 historyBehavior: provider?.historyBehavior,
                 scripts: provider?.scripts as any,
-                exactSessionScoped: exactNativeHistoryScope,
             })
             : readProviderChatHistory(agentStr, {
                 canonicalHistory: provider?.canonicalHistory,
@@ -1365,7 +1373,6 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         excludeRecentCount: 0,
                         historyBehavior: provider?.historyBehavior,
                         scripts: provider?.scripts as any,
-                        exactSessionScoped: exactNativeHistoryScope,
                     });
                 } catch (error: any) {
                     const fallbackReason = `native_history_error:${error?.message || String(error)}`;
@@ -1531,7 +1538,6 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     excludeRecentCount: 0,
                     historyBehavior: provider?.historyBehavior,
                     scripts: provider?.scripts as any,
-                    exactSessionScoped: exactNativeHistoryScope,
                 })
                 : readProviderChatHistory(agentStr, {
                 canonicalHistory: provider?.canonicalHistory,
