@@ -33,6 +33,8 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain('MiniMap,')
         expect(source).toContain('<MiniMap')
         expect(source).toContain('nodeColor={minimapNodeColor}')
+        expect(source).toContain('nodeClassName={minimapNodeClassName}')
+        expect(source).toContain('mesh-minimap-node--${graphNode.type}')
         expect(source).not.toContain('shouldShowMeshGraphMiniMap')
         expect(viewportSource).not.toContain('shouldShowMeshGraphMiniMap')
         expect(themeSource).not.toContain('graphMiniMapClass')
@@ -49,7 +51,11 @@ describe('mesh graph view interaction boundaries', () => {
     it('renders submodule links as dedicated graph edges instead of leaving submodule status hidden in node data only', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 
-        expect(source).toContain("edge.type === 'worktreeLink' || edge.type === 'submoduleLink' ? 'smoothstep' : 'bezier'")
+        expect(source).toContain('edgeTypes={edgeTypes}')
+        expect(source).toContain('meshEdge: MeshGraphEdgeLine')
+        expect(source).toContain("graphEdge.type === 'worktreeLink' || graphEdge.type === 'submoduleLink'")
+        expect(source).toContain('<BaseEdge')
+        expect(source).toContain('<EdgeLabelRenderer>')
         expect(source).toContain("case 'submoduleLink':")
         expect(source).toContain("return '#c084fc'")
     })

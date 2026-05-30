@@ -6,15 +6,22 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import {
     Background,
     BackgroundVariant,
+    BaseEdge,
     Controls,
+    EdgeLabelRenderer,
     Handle,
     MarkerType,
     MiniMap,
     Position,
     ReactFlow,
+    getBezierPath,
+    getSmoothStepPath,
+    getStraightPath,
     useNodesInitialized,
     useReactFlow,
     type Edge,
+    type EdgeProps,
+    type EdgeTypes,
     type Node,
     type NodeProps,
     type NodeTypes,
@@ -49,8 +56,12 @@ type FlowNodeData = Record<string, unknown> & {
     graphNode: MeshGraphNode
 }
 
+type FlowEdgeData = Record<string, unknown> & {
+    graphEdge: MeshGraphEdge
+}
+
 type FlowNode = Node<FlowNodeData, 'meshNode'>
-type FlowEdge = Edge
+type FlowEdge = Edge<FlowEdgeData, 'meshEdge'>
 
 const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
 
@@ -291,6 +302,80 @@ const nodeTypes: NodeTypes = {
     meshNode: MeshNodeCard,
 }
 
+function getEdgePath(args: EdgeProps<FlowEdge>): ReturnType<typeof getBezierPath> {
+    const pathParams = {
+        sourceX: args.sourceX,
+        sourceY: args.sourceY,
+        sourcePosition: args.sourcePosition,
+        targetX: args.targetX,
+        targetY: args.targetY,
+        targetPosition: args.targetPosition,
+    }
+    const graphEdge = args.data.graphEdge
+
+    if (graphEdge.type === 'parentBranch') return getStraightPath(pathParams)
+    if (graphEdge.type === 'worktreeLink' || graphEdge.type === 'submoduleLink') return getSmoothStepPath(pathParams)
+    return getBezierPath(pathParams)
+}
+
+function getEdgeLabelClasses(edge: MeshGraphEdge, isDark: boolean): string {
+    const base = 'nodrag nopan rounded-md border px-2 py-1 text-[10px] font-semibold shadow-sm backdrop-blur-sm'
+    switch (edge.type) {
+        case 'orphanLink':
+            return isDark
+                ? `${base} border-orange-400/35 bg-orange-500/14 text-orange-100`
+                : `${base} border-orange-300 bg-orange-50 text-orange-700`
+        case 'submoduleLink':
+            return isDark
+                ? `${base} border-violet-400/30 bg-violet-500/14 text-violet-100`
+                : `${base} border-violet-300 bg-violet-50 text-violet-700`
+        case 'sessionLink':
+            return isDark
+                ? `${base} border-emerald-400/30 bg-emerald-500/14 text-emerald-100`
+                : `${base} border-emerald-300 bg-emerald-50 text-emerald-700`
+        default:
+            return isDark
+                ? `${base} border-sky-400/25 bg-slate-950/78 text-sky-100`
+                : `${base} border-sky-300 bg-white/95 text-sky-700`
+    }
+}
+
+function MeshGraphEdgeLine(args: EdgeProps<FlowEdge>) {
+    const meshTheme = useContext(MeshGraphThemeContext)
+    const graphEdge = args.data.graphEdge
+    const [edgePath, labelX, labelY] = getEdgePath(args)
+
+    return (
+        <>
+            <BaseEdge
+                id={args.id}
+                path={edgePath}
+                markerEnd={args.markerEnd}
+                style={args.style}
+                interactionWidth={24}
+            />
+            {args.label && (
+                <EdgeLabelRenderer>
+                    <div
+                        className={getEdgeLabelClasses(graphEdge, meshTheme.isDark)}
+                        style={{
+                            position: 'absolute',
+                            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+                            pointerEvents: 'none',
+                        }}
+                    >
+                        {args.label}
+                    </div>
+                </EdgeLabelRenderer>
+            )}
+        </>
+    )
+}
+
+const edgeTypes: EdgeTypes = {
+    meshEdge: MeshGraphEdgeLine,
+}
+
 async function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark')): Promise<{ nodes: FlowNode[]; edges: FlowEdge[] }> {
     const layout = await buildMeshGraphLayout(data)
     const flowNodes: FlowNode[] = layout.nodes.map(node => ({
@@ -308,7 +393,8 @@ async function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('d
         source: edge.source,
         target: edge.target,
         label: edge.label,
-        type: edge.type === 'parentBranch' ? 'straight' : edge.type === 'worktreeLink' || edge.type === 'submoduleLink' ? 'smoothstep' : 'bezier',
+        type: 'meshEdge',
+        data: { graphEdge: edge },
         animated: edge.type === 'orphanLink',
         markerEnd: edge.direction === 'directed'
             ? {
@@ -373,6 +459,18 @@ function minimapNodeColor(node: FlowNode): string {
         default:
             return '#94a3b8'
     }
+}
+
+function minimapNodeClassName(node: FlowNode): string {
+    const graphNode = node.data.graphNode
+    return [
+        'mesh-minimap-node',
+        `mesh-minimap-node--${graphNode.type}`,
+        `mesh-minimap-node--${graphNode.health}`,
+        graphNode.isOrphan ? 'mesh-minimap-node--attention' : null,
+        graphNode.dirty ? 'mesh-minimap-node--dirty' : null,
+        graphNode.outOfSync ? 'mesh-minimap-node--out-of-sync' : null,
+    ].filter(Boolean).join(' ')
 }
 
 function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; viewportKey: string }) {
@@ -489,6 +587,7 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                     nodes={nodes}
                     edges={layout.edges}
                     nodeTypes={nodeTypes}
+                    edgeTypes={edgeTypes}
                     minZoom={0.25}
                     maxZoom={1.35}
                     nodesDraggable={false}
@@ -512,6 +611,7 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                         pannable
                         zoomable
                         nodeColor={minimapNodeColor}
+                        nodeClassName={minimapNodeClassName}
                         nodeStrokeWidth={3}
                         className={meshTheme.isDark ? 'overflow-hidden rounded-xl border border-white/10 bg-slate-950/85' : 'overflow-hidden rounded-xl border border-slate-200 bg-white/95'}
                     />
