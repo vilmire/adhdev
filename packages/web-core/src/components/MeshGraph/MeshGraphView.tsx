@@ -378,6 +378,7 @@ const edgeTypes: EdgeTypes = {
 
 async function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark')): Promise<{ nodes: FlowNode[]; edges: FlowEdge[] }> {
     const layout = await buildMeshGraphLayout(data)
+    const layoutNodeIds = new Set(layout.nodes.map(node => node.id))
     const flowNodes: FlowNode[] = layout.nodes.map(node => ({
         id: node.id,
         type: node.type,
@@ -388,7 +389,9 @@ async function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('d
         selectable: node.selectable,
     }))
 
-    const flowEdges: FlowEdge[] = data.edges.map(edge => ({
+    const flowEdges: FlowEdge[] = data.edges
+        .filter(edge => layoutNodeIds.has(edge.source) && layoutNodeIds.has(edge.target))
+        .map(edge => ({
         id: edge.id,
         source: edge.source,
         target: edge.target,
