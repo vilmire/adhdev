@@ -409,7 +409,7 @@ describe('MeshObservabilitySurface', () => {
     })).toBeNull()
   })
 
-  it('keeps deterministic layout boxes separated for long labels and sibling submodules', () => {
+  it('keeps deterministic ELK layout boxes separated for long labels and sibling submodules', async () => {
     const graph = buildMeshGraph({
       meshId: 'mesh_spacing',
       meshName: 'Spacing Mesh',
@@ -495,7 +495,7 @@ describe('MeshObservabilitySurface', () => {
       ledger: { entries: [] },
     } as any)
 
-    const layout = buildMeshGraphLayout(graph as any)
+    const layout = await buildMeshGraphLayout(graph as any)
     const boxes = new Map(layout.nodes.map(node => [node.id, {
       left: node.position.x,
       top: node.position.y,
@@ -506,8 +506,7 @@ describe('MeshObservabilitySurface', () => {
       a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
     )
 
-    expect(layout.columnGap).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.columnGap)
-    expect(layout.columnGap).toBeGreaterThan(500)
+    expect(layout.columnGap).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.layerGap)
 
     const layoutNodes = [...boxes.entries()]
     for (let i = 0; i < layoutNodes.length; i += 1) {
@@ -525,11 +524,11 @@ describe('MeshObservabilitySurface', () => {
     const secondChild = parentChildren[1]
     const peer = boxes.get('node_peer')!
 
-    // LR layout: same-branch nodes stack vertically, peer comes after parent in the column
+    // ELK RIGHT layout: same-branch nodes share a layer and submodules move to the next layer.
     expect(peer.top).toBeGreaterThanOrEqual(parent.top)
-    expect(child.top - parent.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.parentToSubmoduleGap)
-    expect(secondChild.top).toBe(child.top)
-    expect(secondChild.left - child.right).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.siblingGapX)
+    expect(child.left).toBeGreaterThan(parent.right)
+    expect(secondChild.left).toBe(child.left)
+    expect(secondChild.top - child.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.nodeGap)
   })
 
 })
