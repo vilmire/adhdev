@@ -329,6 +329,7 @@ export class CliProviderInstance implements ProviderInstance {
     private lastApprovalEventAt = 0;
     private autoApproveBusy = false;
     private autoApproveBusyTimer: NodeJS.Timeout | null = null;
+    private lastAutoApprovalSignature = '';
     private controlValues: Record<string, string | number | boolean> = {};
     private summaryMetadata: unknown = undefined;
     private appliedEffectKeys = new Set<string>();
@@ -982,15 +983,29 @@ export class CliProviderInstance implements ProviderInstance {
         // Guard re-entry: onStatusChange/getState can observe the same modal multiple
         // times while the PTY absorbs the approval key. Without this flag, repeated
         // snapshots would write stray keys into the input once the modal dismisses.
-        if (autoApproveActive && !this.autoApproveBusy) {
+        // However, Claude Code can present a second approval immediately after the
+        // first. Resolve a changed modal signature even while the previous write is
+        // still inside the short busy window.
+        if (!autoApproveActive) {
+            this.lastAutoApprovalSignature = '';
+            return autoApproveActive;
+        }
+        const modal = adapterStatus.activeModal;
+        const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(modal?.buttons, this.provider);
+        const signature = [
+            typeof modal?.message === 'string' ? modal.message.trim() : '',
+            Array.isArray(modal?.buttons) ? modal.buttons.join('|') : '',
+            buttonIndex,
+        ].join('::');
+        if (!this.autoApproveBusy || signature !== this.lastAutoApprovalSignature) {
             this.autoApproveBusy = true;
+            this.lastAutoApprovalSignature = signature;
             if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
             this.autoApproveBusyTimer = setTimeout(() => {
                 this.autoApproveBusy = false;
                 this.autoApproveBusyTimer = null;
+                this.lastAutoApprovalSignature = '';
             }, 2000);
-            const modal = adapterStatus.activeModal;
-            const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(modal?.buttons, this.provider);
             this.recordAutoApproval(modal?.message, buttonLabel, now);
             setTimeout(() => {
                 this.adapter.resolveModal(buttonIndex);

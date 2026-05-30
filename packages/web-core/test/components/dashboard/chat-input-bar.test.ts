@@ -45,6 +45,26 @@ describe('ChatInputBar send-state copy', () => {
     expect(shouldDisableChatSendButton({ hasDraft: true, isBusy: false })).toBe(false)
   })
 
+  it('renders an explicit force-send control when generation is busy but force is supported', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ChatInputBar, {
+        contextKey: 'tab-1',
+        panelLabel: 'Codex CLI',
+        isSending: false,
+        isBusy: false,
+        statusMessage: 'Agent is generating. Send queues your message; Force sends it immediately.',
+        onSend: vi.fn(async () => true),
+        onForceSend: vi.fn(async () => true),
+        canForceSend: true,
+        isActive: true,
+      }),
+    )
+
+    expect(html).toContain('Agent is generating. Send queues your message; Force sends it immediately.')
+    expect(html).toContain('aria-label="Force send message now"')
+    expect(html).toContain('title="Force send message now"')
+  })
+
   it('collapses the input surface and marks it aria-hidden when isActive is false', () => {
     const html = renderToStaticMarkup(
       React.createElement(ChatInputBar, {

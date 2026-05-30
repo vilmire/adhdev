@@ -148,6 +148,39 @@ describe('CliProviderInstance provider session recovery', () => {
     expect(enabledByDefault.shouldAutoApprove()).toBe(false)
   })
 
+  it('auto-approves a changed Claude approval modal even inside the prior approval busy window', () => {
+    vi.useFakeTimers()
+    try {
+      const instance = new CliProviderInstance({
+        type: 'claude-cli',
+        name: 'Claude Code',
+        category: 'cli',
+        spawn: { command: 'claude', args: [] },
+      } as any, '/tmp/project') as any
+      const resolveModal = vi.fn()
+      instance.settings = { autoApprove: true }
+      instance.adapter = { resolveModal }
+
+      expect(instance.maybeAutoApproveStatus({
+        status: 'waiting_approval',
+        activeModal: { message: 'Run first command?', buttons: ['Yes', 'No'] },
+      })).toBe(true)
+      expect(instance.maybeAutoApproveStatus({
+        status: 'waiting_approval',
+        activeModal: { message: 'Run first command?', buttons: ['Yes', 'No'] },
+      })).toBe(true)
+      expect(instance.maybeAutoApproveStatus({
+        status: 'waiting_approval',
+        activeModal: { message: 'Run second command?', buttons: ['Yes', 'No'] },
+      })).toBe(true)
+
+      vi.runOnlyPendingTimers()
+      expect(resolveModal).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not adopt a probed hermes saved-history session id during a fresh launch', async () => {
     const instance = new CliProviderInstance({
       type: 'hermes-cli',

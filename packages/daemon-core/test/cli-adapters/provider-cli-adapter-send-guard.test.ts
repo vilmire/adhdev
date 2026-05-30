@@ -260,6 +260,15 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('interrupt now\r')
   })
 
+  it('force-sends immediately while generating instead of adding to the pending queue', async () => {
+    const adapter = buildAdapter()
+
+    await expect(adapter.sendMessage('send now', { force: true })).resolves.toBeUndefined()
+
+    expect(adapter.pendingOutboundQueue).toHaveLength(0)
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('send now\r')
+  })
+
   it('surfaces async PTY write failures instead of reporting sendMessage success', async () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'idle'

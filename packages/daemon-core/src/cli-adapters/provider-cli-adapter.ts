@@ -2210,8 +2210,27 @@ export class ProviderCliAdapter implements CliAdapter {
         ), 50);
     }
 
-    async sendMessage(text: string): Promise<void> {
+    async sendMessage(text: string, options: { force?: boolean } = {}): Promise<void> {
+        if (options.force === true) {
+            await this.forceSendMessage(text);
+            return;
+        }
         await this.sendMessageNow(text, true);
+    }
+
+    async forceSendMessage(text: string): Promise<void> {
+        if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
+        const content = String(text || '');
+        if (!content.trim()) return;
+        this.recordTrace('force_send_message', {
+            text: summarizeCliTraceText(content, 500),
+            status: this.currentStatus,
+            isWaitingForResponse: this.isWaitingForResponse,
+            queueLength: this.pendingOutboundQueue.length,
+        });
+        LOG.info('CLI', `[${this.cliType}] force-sending prompt while status=${this.currentStatus}`);
+        await this.writeToPty(content + this.sendKey);
+        this.onStatusChange?.();
     }
 
     private enqueuePendingOutboundMessage(text: string, reason: string): void {

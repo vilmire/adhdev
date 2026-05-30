@@ -227,6 +227,7 @@ export default function PaneGroup({
                         handleModalButton={cmds.handleModalButton}
                         handleRelaunch={cmds.handleRelaunch}
                         handleSendChat={cmds.handleSendChat}
+                        handleForceSendChat={cmds.handleForceSendChat}
                         isSendingChat={cmds.isSendingChat}
                         sendFeedbackMessage={cmds.sendFeedbackMessage}
                         handleFocusAgent={cmds.handleFocusAgent}

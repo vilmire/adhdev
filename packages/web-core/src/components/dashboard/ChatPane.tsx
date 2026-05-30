@@ -44,6 +44,7 @@ export interface ChatPaneProps {
     activeConv: ActiveConversation;
     ideEntry?: DaemonData;
     handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
+    handleForceSendChat?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
     isSendingChat?: boolean;
     sendFeedbackMessage?: string | null;
     handleFocusAgent: () => void;
@@ -62,6 +63,7 @@ const LIVE_MESSAGE_PAGE_SIZE = 60;
 export default function ChatPane({
     activeConv, ideEntry,
     handleSendChat,
+    handleForceSendChat,
     isSendingChat = false,
     sendFeedbackMessage = null,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
@@ -122,7 +124,10 @@ export default function ChatPane({
     const daemonId = getConversationDaemonRouteId(activeConv);
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
     const sendBlockMessage = getConversationSendBlockMessage(activeConv)
-    const chatInputStatusMessage = sendFeedbackMessage || sendBlockMessage
+    const generatingStatusMessage = viewStates.isGenerating
+        ? 'Agent is generating. Send queues your message; Force sends it immediately.'
+        : null
+    const chatInputStatusMessage = sendFeedbackMessage || sendBlockMessage || generatingStatusMessage
     const isChatInputBlocked = !!sendBlockMessage
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -424,6 +429,8 @@ export default function ChatPane({
                     isBusy={isChatInputBlocked}
                     statusMessage={chatInputStatusMessage}
                     onSend={handleSendChat}
+                    onForceSend={handleForceSendChat}
+                    canForceSend={!!handleForceSendChat && viewStates.isGenerating && !isChatInputBlocked}
                     isActive={isInputActive}
                     showControlsToggle={visibleBarControls.length > 0}
                     onControlsToggle={handleControlsToggleDebugGesture}

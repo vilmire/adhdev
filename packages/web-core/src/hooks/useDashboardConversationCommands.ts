@@ -89,10 +89,11 @@ function buildSendChatPayload(
     message: string,
     attachments: ImageAttachment[] | undefined,
     activeConv: ActiveConversation,
+    options: { force?: boolean } = {},
 ): Record<string, unknown> {
     const providerArgs = getProviderArgs(activeConv)
     if (!attachments || attachments.length === 0) {
-        return { message, ...providerArgs }
+        return { message, ...(options.force ? { force: true } : {}), ...providerArgs }
     }
 
     // Structured input envelope — matches daemon's normalizeInputEnvelope contract
@@ -112,6 +113,7 @@ function buildSendChatPayload(
             parts,
             textFallback: message,
         },
+        ...(options.force ? { force: true } : {}),
         ...providerArgs,
     }
 }
@@ -205,6 +207,55 @@ export function useDashboardConversationCommands({
         }
     }, [activeConv, sendDaemonCommand])
 
+    const handleForceSendChat = useCallback(async (rawMessage: string, attachments?: ImageAttachment[]): Promise<boolean> => {
+        if (!activeConv) return false
+        if (sendInFlightRef.current) return false
+
+        const message = rawMessage.trim()
+        if (!message && (!attachments || attachments.length === 0)) return false
+
+        const now = Date.now()
+        const attempt: RecentSendAttempt = {
+            tabKey: activeConv.tabKey,
+            message: `force:${message}`,
+            timestamp: now,
+        }
+        if (shouldSuppressRecentDuplicateSend(lastSendRef.current, attempt)) {
+            setSendFeedbackMessage(null)
+            return true
+        }
+
+        sendInFlightRef.current = true
+        setIsSendingChat(true)
+        setSendFeedbackMessage(null)
+        lastSendRef.current = attempt
+
+        try {
+            const routeTarget = getRouteTarget(activeConv)
+            if (!routeTarget) {
+                lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
+                setSendFeedbackMessage('Unable to send message right now.')
+                return false
+            }
+
+            const raw = await sendDaemonCommand(routeTarget, 'send_chat', buildSendChatPayload(message, attachments, activeConv, { force: true }))
+            const res = unwrapCommandResult(raw)
+            if (res?.success === false || res?.sent === false) {
+                throw new Error(res?.error || 'Send failed')
+            }
+            setSendFeedbackMessage(null)
+            return true
+        } catch (e) {
+            console.warn('Force send blocked/failed', e)
+            lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
+            setSendFeedbackMessage(getInlineSendFailureMessage(e))
+            return false
+        } finally {
+            sendInFlightRef.current = false
+            setIsSendingChat(false)
+        }
+    }, [activeConv, sendDaemonCommand])
+
     const handleRelaunch = useCallback(async () => {
         if (!activeConv) return
 
@@ -279,6 +330,7 @@ export function useDashboardConversationCommands({
         sendFeedbackMessage,
         isFocusingAgent,
         handleSendChat,
+        handleForceSendChat,
         handleRelaunch,
         handleModalButton,
         handleFocusAgent,

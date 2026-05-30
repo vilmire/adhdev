@@ -437,6 +437,7 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
                 handleModalButton={cmds.handleModalButton}
                 handleRelaunch={cmds.handleRelaunch}
                 handleSendChat={cmds.handleSendChat}
+                handleForceSendChat={cmds.handleForceSendChat}
                 isSendingChat={cmds.isSendingChat}
                 handleFocusAgent={cmds.handleFocusAgent}
                 isFocusingAgent={cmds.isFocusingAgent}

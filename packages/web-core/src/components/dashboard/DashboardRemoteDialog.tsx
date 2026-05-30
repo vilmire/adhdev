@@ -255,6 +255,7 @@ export default function DashboardRemoteDialog({
                                 ideEntry={activeIdeEntry}
                                 showMetaChips={false}
                                 handleSendChat={cmds.handleSendChat}
+                                handleForceSendChat={cmds.handleForceSendChat}
                                 isSendingChat={cmds.isSendingChat}
                                 sendFeedbackMessage={cmds.sendFeedbackMessage}
                                 handleFocusAgent={cmds.handleFocusAgent}

@@ -1881,8 +1881,18 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 assertTextOnlyInput(provider, input);
                 if (!text) return { success: false, error: 'text required for PTY send' };
                 await waitOnceForFreshHermesCliStart(adapter, _log);
-                await adapter.sendMessage(text);
-                return _logSendSuccess(`${transport}-adapter`, adapter.cliType);
+                const forceSend = args?.force === true || args?.forceSend === true;
+                if (forceSend && typeof adapter.forceSendMessage === 'function') {
+                    await adapter.forceSendMessage(text);
+                } else if (forceSend) {
+                    await adapter.sendMessage(text, { force: true });
+                } else {
+                    await adapter.sendMessage(text);
+                }
+                return {
+                    ..._logSendSuccess(`${transport}-adapter`, adapter.cliType),
+                    ...(forceSend ? { forceSent: true } : {}),
+                };
             } catch (e: any) {
                 return { success: false, error: `${transport} send failed: ${e.message}` };
             }

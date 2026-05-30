@@ -292,6 +292,7 @@ export default function DashboardMobileChatMode({
                         })
                     }}
                     handleSendChat={cmds.handleSendChat}
+                    handleForceSendChat={cmds.handleForceSendChat}
                     handleFocusAgent={cmds.handleFocusAgent}
                 />
             ) : screen === 'machine' && selectedMachineEntry ? (

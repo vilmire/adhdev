@@ -20,6 +20,7 @@ interface PaneGroupContentProps {
     handleModalButton: (button: string) => void
     handleRelaunch: () => void
     handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
+    handleForceSendChat?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
     isSendingChat: boolean
     sendFeedbackMessage?: string | null
     handleFocusAgent: () => void
@@ -44,6 +45,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     handleModalButton,
     handleRelaunch,
     handleSendChat,
+    handleForceSendChat,
     isSendingChat,
     sendFeedbackMessage = null,
     handleFocusAgent,
@@ -149,6 +151,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                     activeConv={effectiveConv}
                     ideEntry={ideEntry}
                     handleSendChat={handleSendChat}
+                    handleForceSendChat={handleForceSendChat}
                     isSendingChat={isSendingChat}
                     sendFeedbackMessage={sendFeedbackMessage}
                     handleFocusAgent={handleFocusAgent}
@@ -170,6 +173,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     && prev.handleModalButton === next.handleModalButton
     && prev.handleRelaunch === next.handleRelaunch
     && prev.handleSendChat === next.handleSendChat
+    && prev.handleForceSendChat === next.handleForceSendChat
     && prev.isSendingChat === next.isSendingChat
     && prev.sendFeedbackMessage === next.sendFeedbackMessage
     && prev.handleFocusAgent === next.handleFocusAgent

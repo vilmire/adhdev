@@ -14,6 +14,7 @@ function createManager(adapterStatus = 'idle', options: {
     workingDir: '/repo',
     spawn: vi.fn(async () => {}),
     sendMessage,
+    forceSendMessage: vi.fn(async () => {}),
     getStatus: vi.fn(() => ({ status: adapterStatus, activeModal: null, messages: [] })),
     getScriptParsedStatus: vi.fn(() => ({
       status: options.parsedStatus || adapterStatus,
@@ -61,6 +62,28 @@ describe('DaemonCliManager agent_command', () => {
     })
     expect(String(result?.error || '')).not.toContain('retry after the current turn finishes')
     expect(sendMessage).toHaveBeenCalledWith('next task')
+  })
+
+  it('force-sends while generating when requested', async () => {
+    const { manager, adapter, sendMessage } = createManager('generating')
+
+    const result = await manager.handleCliCommand('agent_command', {
+      targetSessionId: 'session-1',
+      agentType: 'hermes-cli',
+      cliType: 'hermes-cli',
+      action: 'send_chat',
+      message: 'urgent follow-up',
+      force: true,
+    })
+
+    expect(result).toMatchObject({
+      success: true,
+      status: 'generating',
+      forceSent: true,
+      queued: false,
+    })
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(adapter.forceSendMessage).toHaveBeenCalledWith('urgent follow-up')
   })
 
   it('dispatches send_chat when the target runtime is idle', async () => {

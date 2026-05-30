@@ -1206,11 +1206,19 @@ export class DaemonCliManager {
                     }
                     const message = input.textFallback;
                     if (!message) throw new Error('message required for send_chat');
-                    await adapter.sendMessage(message);
+                    const forceSend = args?.force === true || args?.forceSend === true;
+                    if (forceSend && typeof (adapter as any).forceSendMessage === 'function') {
+                        await (adapter as any).forceSendMessage(message);
+                    } else if (forceSend) {
+                        await adapter.sendMessage(message, { force: true });
+                    } else {
+                        await adapter.sendMessage(message);
+                    }
                     return {
                         success: true,
                         status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : 'generating',
                         ...(BUSY_AGENT_STATUSES.has(currentStatus) ? { queued: true, queuedReason: 'agent_runtime_busy' } : {}),
+                        ...(forceSend ? { forceSent: true, queued: false } : {}),
                     };
                 } else if (action === 'clear_history') {
                     if (typeof adapter.clearHistory === 'function') adapter.clearHistory();
