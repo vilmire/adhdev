@@ -765,6 +765,141 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     expect((result.messageSource as any).identityStatus).toBe('transcript_unmapped')
   })
 
+  it('uses current live runtime PTY messages when Codex native history is unmapped but target/session/workspace are exact', async () => {
+    const runtimeSessionId = 'b36337d5-d6ca-4ebe-bd50-39495d83f9a2'
+    const adapter = createCodexAdapter({
+      workingDir: '/Users/vilmire/Work/adhdev',
+      getRuntimeMetadata: vi.fn(() => ({ runtimeId: runtimeSessionId, surfaceKind: 'live_runtime' })),
+      getStatus: vi.fn(() => ({ status: 'generating', activeModal: null, messages: [] })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'generating',
+        title: 'Codex CLI',
+        messages: [
+          { role: 'user', content: '메시상태확인하고 팔로업할거없는지 확인', receivedAt: 1_000 },
+          { role: 'assistant', content: '확인했습니다. 활성 큐 작업은 없습니다.', receivedAt: 2_000, bubbleState: 'streaming', meta: { streaming: true } },
+        ],
+      })),
+      getPartialResponse: vi.fn(() => '확인했습니다. 활성 큐 작업은 없습니다.'),
+    })
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'native-unavailable',
+      hasMore: false,
+      messages: [],
+      unavailableReason: 'native_history_workspace_only_lookup_unsafe',
+    })
+
+    const helpers = {
+      ...createHelpers(adapter),
+      currentSession: {
+        sessionId: runtimeSessionId,
+        providerType: 'codex-cli',
+        providerName: 'Codex CLI',
+        transport: 'pty',
+        adapterKey: runtimeSessionId,
+        workspace: '/Users/vilmire/Work/adhdev',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: runtimeSessionId, instanceKey: runtimeSessionId }) },
+        instanceManager: { getInstance: () => null },
+      },
+    }
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      workspace: '/Users/vilmire/Work/adhdev',
+      tailLimit: 40,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('generating')
+    expect((result.messages as any[]).map((message) => message.content)).toEqual([
+      '메시상태확인하고 팔로업할거없는지 확인',
+      '확인했습니다. 활성 큐 작업은 없습니다.',
+    ])
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      identityStatus: 'transcript_unmapped',
+      ptyStatusApprovalOnly: false,
+      selectedDaemonSource: 'current-runtime-pty',
+      transcriptAuthority: 'daemon',
+      runtimeMappingSafe: true,
+      coverage: {
+        nativeMessageCount: 0,
+        ptyMessageCount: 2,
+        returnedMessageCount: 2,
+        safeMapping: false,
+        ptyMessagesSuppressed: false,
+      },
+    })
+    expect((result as any).debugReadChat).toMatchObject({
+      returnedStatus: 'generating',
+      returnedMsgCount: 2,
+      shouldPreferAdapterMessages: false,
+    })
+  })
+
+  it('does not use current live PTY messages when intended workspace differs from the actual Codex session workspace', async () => {
+    const runtimeSessionId = 'b36337d5-d6ca-4ebe-bd50-39495d83f9a2'
+    const adapter = createCodexAdapter({
+      workingDir: '/Users/vilmire/Work/adhdev',
+      getRuntimeMetadata: vi.fn(() => ({ runtimeId: runtimeSessionId, surfaceKind: 'live_runtime' })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'root prompt', receivedAt: 1_000 },
+          { role: 'assistant', content: 'root assistant', receivedAt: 2_000 },
+        ],
+      })),
+    })
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'native-unavailable',
+      hasMore: false,
+      messages: [],
+      unavailableReason: 'native_history_workspace_only_lookup_unsafe',
+    })
+
+    const helpers = {
+      ...createHelpers(adapter),
+      currentSession: {
+        sessionId: runtimeSessionId,
+        providerType: 'codex-cli',
+        providerName: 'Codex CLI',
+        transport: 'pty',
+        adapterKey: runtimeSessionId,
+        workspace: '/Users/vilmire/Work/adhdev',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: runtimeSessionId, instanceKey: runtimeSessionId }) },
+        instanceManager: { getInstance: () => null },
+      },
+    }
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      workspace: '/Users/vilmire/Work/adhdev-worktrees/feature',
+      tailLimit: 40,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('idle')
+    expect(result.messages).toEqual([])
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      intendedWorkspace: '/Users/vilmire/Work/adhdev-worktrees/feature',
+      identityStatus: 'transcript_unmapped',
+      ptyStatusApprovalOnly: true,
+      coverage: {
+        nativeMessageCount: 0,
+        ptyMessageCount: 2,
+        returnedMessageCount: 0,
+        ptyMessagesSuppressed: true,
+      },
+    })
+    expect((result.messageSource as any).selectedDaemonSource).toBeUndefined()
+  })
+
   it('debug bundle reports transcript_unmapped without PTY bubbles or generating state', async () => {
     const runtimeSessionId = '079cd8c6-742f-458c-b45d-ceec533c6eef'
     const adapter = createCodexAdapter({

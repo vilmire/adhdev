@@ -494,6 +494,62 @@ function readExactRuntimeMirrorMessages(args: {
         });
 }
 
+function normalizeComparableWorkspace(value: unknown): string {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return '';
+    return path.resolve(text);
+}
+
+function isCurrentRuntimePtySafelyAttributed(args: {
+    adapter: CliAdapter;
+    helpers: CommandHelpers;
+    readChatArgs: any;
+    sessionWorkspace?: string;
+    intendedWorkspace?: string;
+    ptyMessages: ChatMessage[];
+}): boolean {
+    if (args.adapter.cliType !== 'codex-cli') return false;
+    if (!Array.isArray(args.ptyMessages) || args.ptyMessages.length === 0) return false;
+    const targetSessionId = typeof args.readChatArgs?.targetSessionId === 'string'
+        ? args.readChatArgs.targetSessionId.trim()
+        : '';
+    const currentSession = args.helpers.currentSession as any;
+    const currentSessionId = typeof currentSession?.sessionId === 'string'
+        ? currentSession.sessionId.trim()
+        : '';
+    if (!targetSessionId || !currentSessionId || targetSessionId !== currentSessionId) return false;
+
+    const runtimeMeta = typeof (args.adapter as any).getRuntimeMetadata === 'function'
+        ? (args.adapter as any).getRuntimeMetadata()
+        : null;
+    const runtimeId = typeof runtimeMeta?.runtimeId === 'string' ? runtimeMeta.runtimeId.trim() : '';
+    if (!runtimeId || runtimeId !== targetSessionId) return false;
+    const surfaceKind = typeof runtimeMeta?.surfaceKind === 'string' ? runtimeMeta.surfaceKind : '';
+    if (surfaceKind === 'inactive_record' || surfaceKind === 'recovery_snapshot') return false;
+
+    const sessionWorkspace = normalizeComparableWorkspace(args.sessionWorkspace);
+    const adapterWorkspace = normalizeComparableWorkspace(args.adapter.workingDir);
+    if (!sessionWorkspace || !adapterWorkspace || sessionWorkspace !== adapterWorkspace) return false;
+    const intendedWorkspace = normalizeComparableWorkspace(args.intendedWorkspace);
+    if (intendedWorkspace && intendedWorkspace !== sessionWorkspace) return false;
+
+    const registryEntry = args.helpers.ctx?.sessionRegistry?.get?.(targetSessionId) as any;
+    const registryInstanceKey = typeof registryEntry?.adapterKey === 'string' && registryEntry.adapterKey.trim()
+        ? registryEntry.adapterKey.trim()
+        : typeof registryEntry?.instanceKey === 'string' && registryEntry.instanceKey.trim()
+            ? registryEntry.instanceKey.trim()
+            : '';
+    if (registryInstanceKey) {
+        const targetInstance = args.helpers.ctx?.instanceManager?.getInstance?.(registryInstanceKey);
+        if (targetInstance) {
+            const instanceType = typeof (targetInstance as any).type === 'string' ? (targetInstance as any).type : '';
+            if (instanceType && instanceType !== args.adapter.cliType) return false;
+        }
+    }
+
+    return true;
+}
+
 function supportsCliNativeTranscript(providerType: string, provider?: ProviderModule): boolean {
     if (CLI_NATIVE_TRANSCRIPT_PROVIDERS.has(providerType)) return true;
     return provider?.category === 'cli' && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
@@ -1552,10 +1608,21 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         });
                         const unsafeNativeFallback = adapter.cliType === 'codex-cli'
                             && isUnsafeNativeTranscriptFallback(fallbackReason);
+                        const safeCurrentRuntimePtyMessages = unsafeNativeFallback
+                            && isCurrentRuntimePtySafelyAttributed({
+                                adapter,
+                                helpers: h,
+                                readChatArgs: args,
+                                sessionWorkspace,
+                                intendedWorkspace,
+                                ptyMessages: returnedMessages,
+                            });
                         const safeRuntimeAckMessages = unsafeNativeFallback
+                            && !safeCurrentRuntimePtyMessages
                             ? selectRuntimeInputAckMessages(returnedMessages)
                             : [];
                         const exactRuntimeMirrorMessages = unsafeNativeFallback
+                            && !safeCurrentRuntimePtyMessages
                             && safeRuntimeAckMessages.length === 0
                             ? readExactRuntimeMirrorMessages({
                                 providerType,
@@ -1569,10 +1636,17 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             ? safeRuntimeAckMessages
                             : exactRuntimeMirrorMessages;
                         if (unsafeNativeFallback) {
-                            selectedMessages = safeDaemonMessages;
-                            selectedTranscriptAuthority = safeDaemonMessages.length > 0 ? 'daemon' : undefined;
-                            selectedCoverage = safeDaemonMessages.length > 0 ? 'tail' : undefined;
-                            selectedStatus = coerceUnsafeNativeFallbackStatus(returnedStatus, activeModal);
+                            if (safeCurrentRuntimePtyMessages) {
+                                selectedMessages = returnedMessages;
+                                selectedTranscriptAuthority = 'daemon';
+                                selectedCoverage = coverage || 'current-turn';
+                                selectedStatus = returnedStatus;
+                            } else {
+                                selectedMessages = safeDaemonMessages;
+                                selectedTranscriptAuthority = safeDaemonMessages.length > 0 ? 'daemon' : undefined;
+                                selectedCoverage = safeDaemonMessages.length > 0 ? 'tail' : undefined;
+                                selectedStatus = coerceUnsafeNativeFallbackStatus(returnedStatus, activeModal);
+                            }
                         }
                         messageSource = buildCliMessageSourceProvenance({
                             selected: 'pty-parser',
@@ -1590,11 +1664,16 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             unavailableReason,
                             nativeMessages,
                             ptyMessages: returnedMessages,
-                            returnedMessages: unsafeNativeFallback ? safeDaemonMessages : returnedMessages,
+                            returnedMessages: unsafeNativeFallback && !safeCurrentRuntimePtyMessages ? safeDaemonMessages : returnedMessages,
                             safeMapping,
                             freshEnough,
-                            ptyStatusApprovalOnly: unsafeNativeFallback,
+                            ptyStatusApprovalOnly: unsafeNativeFallback && !safeCurrentRuntimePtyMessages,
                         });
+                        if (safeCurrentRuntimePtyMessages) {
+                            (messageSource as any).selectedDaemonSource = 'current-runtime-pty';
+                            (messageSource as any).transcriptAuthority = 'daemon';
+                            (messageSource as any).runtimeMappingSafe = true;
+                        }
                         if (unsafeNativeFallback && exactRuntimeMirrorMessages.length > 0) {
                             (messageSource as any).selectedDaemonSource = 'exact-runtime-mirror';
                             (messageSource as any).transcriptAuthority = 'daemon';
