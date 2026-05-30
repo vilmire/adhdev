@@ -3,6 +3,7 @@ import type { ActiveConversation } from '../../../src/components/dashboard/types
 import type { LiveSessionInboxState } from '../../../src/components/dashboard/DashboardMobileChatShared'
 import {
   getConversationInboxSurfaceState,
+  getConversationViewStates,
   isConversationTaskCompleteUnread,
 } from '../../../src/components/dashboard/DashboardMobileChatShared'
 
@@ -72,5 +73,10 @@ describe('DashboardMobileChatShared', () => {
 
     expect(surfaceState.unread).toBe(false)
     expect(surfaceState.inboxBucket).toBe('idle')
+  })
+
+  it('treats long-generating and streaming statuses as working states', () => {
+    expect(getConversationViewStates({ status: 'long_generating' }).isGenerating).toBe(true)
+    expect(getConversationViewStates({ status: 'streaming' }).isGenerating).toBe(true)
   })
 })

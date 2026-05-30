@@ -60,6 +60,19 @@ export interface ChatPaneProps {
 
 const LIVE_MESSAGE_PAGE_SIZE = 60;
 
+export function buildBusyChatInputStatusMessage(conversation: Pick<ActiveConversation, 'status' | 'modalButtons'>): string | null {
+    if (conversation.status === 'long_generating') {
+        return 'Agent has been generating for a long time. Send queues your message; Force sends it immediately.'
+    }
+    if (conversation.status === 'generating' || conversation.status === 'streaming') {
+        return 'Agent is generating. Send queues your message; Force sends it immediately.'
+    }
+    if (conversation.status === 'waiting_approval' && (!conversation.modalButtons || conversation.modalButtons.length === 0)) {
+        return 'Agent is waiting for approval. Approval controls will appear when available.'
+    }
+    return null
+}
+
 export default function ChatPane({
     activeConv, ideEntry,
     handleSendChat,
@@ -124,10 +137,8 @@ export default function ChatPane({
     const daemonId = getConversationDaemonRouteId(activeConv);
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
     const sendBlockMessage = getConversationSendBlockMessage(activeConv)
-    const generatingStatusMessage = viewStates.isGenerating
-        ? 'Agent is generating. Send queues your message; Force sends it immediately.'
-        : null
-    const chatInputStatusMessage = sendFeedbackMessage || sendBlockMessage || generatingStatusMessage
+    const busyStatusMessage = buildBusyChatInputStatusMessage(activeConv)
+    const chatInputStatusMessage = sendFeedbackMessage || sendBlockMessage || busyStatusMessage
     const isChatInputBlocked = !!sendBlockMessage
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
