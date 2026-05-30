@@ -582,6 +582,55 @@ export default function MeshObservabilitySurface({
                                     <Row label="Transport" value={selectedNodeStatus?.connection?.transport ?? 'unknown'} />
                                     <Row label="Sessions" value={selectedNodeSessionEntries.length > 0 ? selectedNodeSessionEntries.map(entry => entry.session.state || entry.session.lifecycle || 'unknown').join(', ') : 'none active'} />
                                 </div>
+                                {selectedNodeSessionEntries.length > 0 && (
+                                    <div className="mt-3">
+                                        <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Active Sessions</div>
+                                        <div className="flex flex-col gap-1.5">
+                                            {selectedNodeSessionEntries.map(entry => (
+                                                <div key={entry.session.sessionId} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className={`font-mono ${meshTheme.textMuted}`}>{entry.session.sessionId.slice(0, 14)}</span>
+                                                        <Badge label={entry.session.state || entry.session.lifecycle || 'unknown'} tone={sessionTone(entry.session.state || entry.session.lifecycle)} />
+                                                    </div>
+                                                    <div className={`mt-0.5 truncate ${meshTheme.textMuted}`}>{(entry.session.workspace || entry.workspace).slice(0, 32)}{entry.branch ? ` · ${entry.branch}` : ''}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                <div className="mt-3">
+                                    <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Ledger (mesh-wide)</div>
+                                    <div className="grid grid-cols-2 gap-1.5">
+                                        <Row label="Completed" value={String(ledgerSummary.taskCompleted)} />
+                                        <Row label="Failed" value={<span className={ledgerSummary.taskFailed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}>{ledgerSummary.taskFailed}</span>} />
+                                        <Row label="Launched" value={String(ledgerSummary.sessionLaunched)} />
+                                        <Row label="Recent failures" value={<span className={ledgerSummary.recentFailures > 0 ? (meshTheme.isDark ? 'text-amber-300' : 'text-amber-600') : ''}>{ledgerSummary.recentFailures}</span>} />
+                                    </div>
+                                </div>
+                                {(() => {
+                                    const queueTasks = (canonicalStatus.queue as any)?.tasks ?? (canonicalStatus.queue as any)?.items ?? null
+                                    if (!Array.isArray(queueTasks) || queueTasks.length === 0) return null
+                                    const nodeTasks = (queueTasks as RepoMeshQueueTask[]).filter(task => getQueueTaskNodeTarget(task) === selectedNodeId).slice(0, 3)
+                                    if (nodeTasks.length === 0) return null
+                                    return (
+                                        <div className="mt-3">
+                                            <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Queue tasks</div>
+                                            <div className="flex flex-col gap-1.5">
+                                                {nodeTasks.map(task => (
+                                                    <div key={task.taskId} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <span className={`font-mono ${meshTheme.textMuted}`}>{task.taskId.slice(0, 12)}</span>
+                                                            <Badge label={task.status ?? 'unknown'} tone={sessionTone(task.status)} />
+                                                        </div>
+                                                        {(task.message || task.description) && (
+                                                            <div className={`mt-0.5 truncate ${meshTheme.textMuted}`}>{(task.message || task.description || '').slice(0, 48)}</div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )
+                                })()}
                                 {selectedGraphNode.snapshotWarnings.length > 0 && (
                                     <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-xs text-amber-100' : 'mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800'}>
                                         <div className="font-medium">Key warning</div>
