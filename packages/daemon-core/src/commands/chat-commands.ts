@@ -398,6 +398,9 @@ function buildCliMessageSourceProvenance(args: {
             ptyMessageCount: ptyMessages.length,
             returnedMessageCount: returnedMessages.length,
             safeMapping: args.safeMapping === true,
+            // true when native-history was selected: PTY message bodies are suppressed and
+            // must not be treated as chat content. PTY only contributes status/approval/screen evidence.
+            ptyMessagesSuppressed: args.selected === 'native-history',
         },
     };
 }
