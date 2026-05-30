@@ -1042,7 +1042,10 @@ test('mesh_send_task fails closed when explicitly targeting a remote live sessio
               id: 'session-legacy-live',
               providerType: 'hermes-cli',
               status: 'idle',
-              settings: {},
+              // Has meshNodeFor so it passes unmanaged check, but missing
+              // meshCoordinatorDaemonId so isMeshOwnedDelegateSession returns false
+              // → mesh_delegate_session_missing_relay_metadata
+              settings: { meshNodeFor: meshId },
             }],
           },
         },
@@ -1788,7 +1791,7 @@ test('mesh_status and mesh_git_status request refreshed upstream truth and block
 });
 
 test('mesh_git_status source requests refreshed upstream truth for cloud and local transport paths', () => {
-  const source = readFileSync(join(process.cwd(), 'src/tools/mesh-tools.ts'), 'utf8');
+  const source = readFileSync(join(new URL('../src/tools/mesh-tools.ts', import.meta.url).pathname), 'utf8');
   assert.match(source, /gitStatus\(node\.daemonId, node\.workspace, true, true\)/);
   assert.match(source, /refreshUpstream: true,/);
 });
@@ -2781,7 +2784,12 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
       return {
         success: true,
         status: {
-          sessions: [{ id: 'session-hermes', providerType: 'hermes-cli', providerSessionId: 'provider-1' }],
+          sessions: [{
+            id: 'session-hermes',
+            providerType: 'hermes-cli',
+            providerSessionId: 'provider-1',
+            settings: { meshNodeFor: meshId },
+          }],
         },
       };
     }
@@ -2903,6 +2911,7 @@ test('local IPC mesh_send_task rejects coordinator session as worker target', as
 });
 
 test('local IPC mesh_send_task preserves retryable agent busy diagnostics from direct dispatch', async () => {
+  const meshId = `mesh-ipc-busy-${Date.now()}`;
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -2912,7 +2921,11 @@ test('local IPC mesh_send_task preserves retryable agent busy diagnostics from d
       return {
         success: true,
         status: {
-          sessions: [{ id: 'session-hermes', providerType: 'hermes-cli' }],
+          sessions: [{
+            id: 'session-hermes',
+            providerType: 'hermes-cli',
+            settings: { meshNodeFor: meshId },
+          }],
         },
       };
     }
@@ -2935,7 +2948,7 @@ test('local IPC mesh_send_task preserves retryable agent busy diagnostics from d
 
   const ctx = {
     mesh: {
-      id: `mesh-ipc-busy-${Date.now()}`,
+      id: meshId,
       name: 'IPC Busy Mesh',
       repoIdentity: 'example/repo',
       policy: {},
@@ -3021,6 +3034,199 @@ test('mesh queue management tools cancel and requeue stale assignments without d
   const queue = getQueue(meshId);
   assert.equal(queue.find(task => task.id === cancelTarget.id)?.status, 'cancelled');
   assert.equal(queue.find(task => task.id === assigned.id)?.status, 'pending');
+});
+
+test('local direct mesh_send_task rejects unmanaged session missing mesh delegation metadata', async () => {
+  const meshId = `mesh-unmanaged-guard-${Date.now()}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        status: {
+          // Session has no meshNodeFor/meshCoordinatorFor/launchedByCoordinator — unmanaged
+          sessions: [{ id: 'session-unmanaged', providerType: 'claude-code' }],
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      throw new Error('unmanaged session must not receive worker task — unsafe_transcript_alias risk');
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+
+  const ctx = {
+    mesh: {
+      id: meshId,
+      name: 'Unmanaged Guard Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-local',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+    localDaemonId: 'daemon-local',
+  };
+
+  const result = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-local',
+    session_id: 'session-unmanaged',
+    message: 'implement a code change',
+    task_mode: 'code_change',
+  }));
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'mesh_target_session_unmanaged');
+  assert.equal(result.sessionId, 'session-unmanaged');
+  assert.equal(result.unsafeTranscriptAlias, true);
+  assert.match(result.error, /meshNodeFor/);
+  assert.match(result.nextAction, /mesh_launch_session/);
+});
+
+test('local direct mesh_send_task rejects coordinator session as unsafe target', async () => {
+  const meshId = `mesh-coordinator-local-guard-${Date.now()}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        status: {
+          sessions: [{
+            id: 'session-coordinator',
+            providerType: 'claude-code',
+            settings: { meshCoordinatorFor: meshId },
+          }],
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      throw new Error('coordinator session must not receive worker task');
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+
+  const ctx = {
+    mesh: {
+      id: meshId,
+      name: 'Coordinator Local Guard Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-local',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+    localDaemonId: 'daemon-local',
+  };
+
+  const result = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-local',
+    session_id: 'session-coordinator',
+    message: 'run validation',
+    task_mode: 'validation',
+  }));
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'mesh_target_session_is_coordinator');
+  assert.equal(result.sessionId, 'session-coordinator');
+  assert.match(result.error, /visible worker session/);
+});
+
+test('local direct mesh_send_task allows proper mesh delegate session with meshNodeFor', async () => {
+  const meshId = `mesh-delegate-allowed-${Date.now()}`;
+  const agentCommandCalls: Array<Record<string, unknown>> = [];
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command, args = {}) => {
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        status: {
+          sessions: [{
+            id: 'session-worker',
+            providerType: 'claude-code',
+            settings: { meshNodeFor: meshId },
+          }],
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      agentCommandCalls.push(args);
+      return { success: true };
+    }
+    if (command === 'trigger_mesh_queue') return { success: true };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+
+  const ctx = {
+    mesh: {
+      id: meshId,
+      name: 'Delegate Allowed Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-local',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+    localDaemonId: 'daemon-local',
+  };
+
+  const result = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-local',
+    session_id: 'session-worker',
+    message: 'implement the feature',
+    task_mode: 'code_change',
+  }));
+
+  assert.equal(result.success, true);
+  assert.equal(result.dispatched, true);
+  assert.equal(result.source, 'direct');
+  assert.equal(result.sessionId, 'session-worker');
+  assert.equal(agentCommandCalls.length, 1);
+  assert.equal(agentCommandCalls[0]?.targetSessionId, 'session-worker');
 });
 
 test('mesh tool registry documents the 24 exposed mesh tools including queue cancel/requeue, read-debug, direct fast-forward, worktree clone/remove/refine, refine config planning, session cleanup, and reconcile-ledger', () => {

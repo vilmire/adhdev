@@ -354,6 +354,35 @@ function isMeshCoordinatorSessionRecord(session: any): boolean {
     );
 }
 
+/**
+ * Returns true when a session has no mesh delegation metadata at all — neither
+ * meshNodeFor (worker) nor meshCoordinatorFor (coordinator).  Dispatching a
+ * worker task to such a session is unsafe: the session may be the coordinator's
+ * own CLI session (self-send risk), an unrelated session, or a stale record
+ * whose providerSessionId now aliases the coordinator's transcript.
+ *
+ * The check intentionally fails closed: an explicit delegate session launched
+ * via mesh_launch_session always carries meshNodeFor, so any safe target passes.
+ */
+function isUnmanagedSessionRecord(session: any): boolean {
+    const hasMeshNodeFor = Boolean(
+        readString(session?.settings?.meshNodeFor)
+        || readString(session?.meta?.meshNodeFor)
+        || readString(session?.metadata?.meshNodeFor)
+        || readString(session?.meshNodeFor),
+    );
+    if (hasMeshNodeFor) return false;
+    if (isMeshCoordinatorSessionRecord(session)) return false;
+    // launchedByCoordinator is set by the daemon when it auto-launches a worker
+    // session in response to a queue task; treat it as a managed delegate.
+    const launchedByCoordinator = Boolean(
+        session?.settings?.launchedByCoordinator === true
+        || session?.meta?.launchedByCoordinator === true
+        || session?.launchedByCoordinator === true,
+    );
+    return !launchedByCoordinator;
+}
+
 function isWorkerTaskMode(taskMode: string | undefined): boolean {
     return taskMode !== 'live_debug_readonly';
 }
@@ -648,8 +677,9 @@ function buildRelayUnsafeRemoteSessionFailure(ctx: MeshContext, node: LocalMeshN
         daemonId: node.daemonId,
         workspace: node.workspace,
         sessionId,
+        unsafeTranscriptAlias: true,
         ...(providerType ? { resolvedProviderType: providerType } : {}),
-        error: `Remote session '${sessionId}' is not relay-safe for mesh '${ctx.mesh.id}': missing meshNodeFor/meshCoordinatorDaemonId metadata, so completion events would not reach the coordinator ledger.`,
+        error: `Remote session '${sessionId}' is not relay-safe for mesh '${ctx.mesh.id}': missing meshNodeFor/meshCoordinatorDaemonId metadata, so completion events would not reach the coordinator ledger. This session may be the coordinator itself or an unrelated session (unsafe_transcript_alias risk).`,
         nextAction: `Launch a fresh relay-safe session with mesh_launch_session(node_id: '${node.id}'${providerType ? `, type: '${providerType}'` : ''}) or dispatch without session_id so Repo Mesh can choose a valid delegate session.`,
         noFallbackReason: 'Blindly reusing a remote session without mesh relay metadata would silently drop task_completed / generating_completed events.',
     };
@@ -1221,6 +1251,12 @@ function isConfiguredCoordinatorNode(ctx: MeshContext, node: LocalMeshNodeEntry)
     if (!ctx.localMachineId && !ctx.localDaemonId) return false;
     const nodeId = readString(node.id) || readString((node as any).nodeId) || readString((node as any).node_id);
     if (!nodeId) return false;
+    // If the node carries explicit daemon/machine identity that doesn't match the
+    // coordinator, it is definitively a remote node — skip the positional fallback.
+    const nodeDaemonId = readNodeDaemonId(node);
+    const nodeMachineId = readNodeMachineId(node);
+    if (nodeDaemonId && ctx.localDaemonId && nodeDaemonId !== ctx.localDaemonId) return false;
+    if (nodeMachineId && ctx.localMachineId && nodeMachineId !== ctx.localMachineId) return false;
     const preferredNodeId = readString(ctx.mesh.coordinator?.preferredNodeId)
         || readString((ctx.mesh.coordinator as any)?.preferred_node_id);
     if (preferredNodeId) return nodeId === preferredNodeId;
@@ -2721,6 +2757,31 @@ export async function meshSendTask(
                     nextAction: `Call mesh_launch_session for node '${args.node_id}' and then retry mesh_send_task with that worker session_id, or use mesh_enqueue_task for queue-based worker assignment.`,
                 });
             }
+            if (explicitTargetSession && isUnmanagedSessionRecord(explicitTargetSession)) {
+                // Session exists but lacks mesh delegation metadata (no meshNodeFor,
+                // meshCoordinatorFor, or launchedByCoordinator). It could be:
+                //   - The coordinator's own session → self-send risk
+                //   - A manually launched session not associated with this mesh
+                // Completion events from this session would not reach the coordinator
+                // ledger. Surface a hard warning but still record the dispatch attempt
+                // in the result so the coordinator can decide whether to proceed.
+                //
+                // Note: if the session happens to have meshCoordinatorFor set, the check
+                // above would have already returned mesh_target_session_is_coordinator.
+                // This warning fires only for truly unmanaged sessions.
+                return JSON.stringify({
+                    success: false,
+                    recoverable: true,
+                    code: 'mesh_target_session_unmanaged',
+                    reason: 'mesh_target_session_unmanaged',
+                    nodeId: args.node_id,
+                    sessionId: args.session_id,
+                    taskMode: taskMode || 'unspecified',
+                    unsafeTranscriptAlias: true,
+                    error: `Session '${args.session_id}' on node '${args.node_id}' has no Repo Mesh delegation metadata (missing meshNodeFor/meshCoordinatorFor/launchedByCoordinator). It may be the coordinator's own session or an unrelated session — dispatching risks self-send and orphaned completion events that never reach the coordinator ledger.`,
+                    nextAction: `Call mesh_launch_session for node '${args.node_id}' to start a fresh managed worker session, then retry mesh_send_task with the returned session_id. Alternatively use mesh_enqueue_task for queue-based assignment without specifying session_id.`,
+                });
+            }
         } catch {
             explicitTargetSession = undefined;
         }
@@ -2833,6 +2894,37 @@ export async function meshSendTask(
                         sessionId: args.session_id,
                         error: `Local session '${args.session_id}' is not present in live status for node '${args.node_id}'.`,
                         nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${args.node_id}') or retry without session_id so Repo Mesh can target a live delegate session.`,
+                    });
+                }
+                // The early validation block only runs for isWorkerTaskMode (excludes
+                // live_debug_readonly). Apply the same coordinator/unmanaged checks here
+                // for sessions resolved in this path so no task mode bypasses them.
+                if (isMeshCoordinatorSessionRecord(explicitSession)) {
+                    return JSON.stringify({
+                        success: false,
+                        recoverable: true,
+                        code: 'mesh_target_session_is_coordinator',
+                        reason: 'mesh_target_session_is_coordinator',
+                        nodeId: args.node_id,
+                        sessionId: args.session_id,
+                        taskMode: taskMode || 'unspecified',
+                        error: `Session '${args.session_id}' is a Repo Mesh coordinator session, not a visible worker session. Launch or use a visible worker session before dispatching this task.`,
+                        nextAction: `Call mesh_launch_session for node '${args.node_id}' and then retry mesh_send_task with that worker session_id, or use mesh_enqueue_task for queue-based worker assignment.`,
+                    });
+                }
+                if (isUnmanagedSessionRecord(explicitSession)) {
+                    return JSON.stringify({
+                        success: false,
+                        recoverable: true,
+                        code: 'mesh_target_session_unmanaged',
+                        reason: 'mesh_target_session_unmanaged',
+                        nodeId: args.node_id,
+                        sessionId: args.session_id,
+                        taskMode: taskMode || 'unspecified',
+                        unsafeTranscriptAlias: true,
+                        unsafeDelegateTarget: true,
+                        error: `Session '${args.session_id}' on node '${args.node_id}' has no Repo Mesh delegation metadata (missing meshNodeFor/meshCoordinatorFor/launchedByCoordinator). It may be the coordinator's own session or an unrelated session — dispatching risks self-send and orphaned completion events that never reach the coordinator ledger.`,
+                        nextAction: `Call mesh_launch_session for node '${args.node_id}' to start a fresh managed worker session, then retry mesh_send_task with the returned session_id. Alternatively use mesh_enqueue_task for queue-based assignment without specifying session_id.`,
                     });
                 }
                 resolvedProviderType = resolveSessionProviderType(explicitSession);
