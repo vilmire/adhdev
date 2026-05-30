@@ -839,6 +839,92 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     })
   })
 
+  it('promotes latest workspace Codex JSONL to native history when live PTY content and workspace match', async () => {
+    const runtimeSessionId = '5a9e3a2a-e692-4278-9bbe-ac0ae4d5906f'
+    const nativeSessionId = '019e78aa-d857-7830-9252-3f170c7e3e79'
+    const ptyMessages = [
+      { role: 'user', content: '메시상태확인', receivedAt: 1_780_140_240_000 },
+      { role: 'assistant', content: '메시 상태 확인했습니다.', receivedAt: 1_780_140_250_000 },
+    ]
+    const nativeMessages = [
+      { role: 'user', content: '메시상태확인', receivedAt: 1_780_140_240_000, historySessionId: nativeSessionId, workspace: '/Users/vilmire/Work/adhdev' },
+      { role: 'assistant', content: '메시 상태 확인했습니다.', receivedAt: 1_780_140_250_000, historySessionId: nativeSessionId, workspace: '/Users/vilmire/Work/adhdev' },
+    ]
+    const adapter = createCodexAdapter({
+      workingDir: '/Users/vilmire/Work/adhdev',
+      getRuntimeMetadata: vi.fn(() => ({ runtimeId: runtimeSessionId, surfaceKind: 'live_runtime' })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        title: 'Codex CLI',
+        messages: ptyMessages,
+      })),
+    })
+    mocks.readProviderChatHistory
+      .mockReturnValueOnce({
+        source: 'native-unavailable',
+        hasMore: false,
+        messages: [],
+      })
+      .mockReturnValueOnce({
+        source: 'provider-native',
+        sourcePath: `/Users/vilmire/.codex/sessions/2026/05/30/rollout-${nativeSessionId}.jsonl`,
+        sourceMtimeMs: Date.now(),
+        providerSessionId: nativeSessionId,
+        workspace: '/Users/vilmire/Work/adhdev',
+        hasMore: false,
+        messages: nativeMessages,
+      })
+
+    const helpers = {
+      ...createHelpers(adapter),
+      currentSession: {
+        sessionId: runtimeSessionId,
+        providerType: 'codex-cli',
+        providerName: 'Codex CLI',
+        transport: 'pty',
+        adapterKey: runtimeSessionId,
+        workspace: '/Users/vilmire/Work/adhdev',
+      },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: runtimeSessionId, instanceKey: runtimeSessionId }) },
+        instanceManager: { getInstance: () => null },
+      },
+    }
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      workspace: '/Users/vilmire/Work/adhdev',
+      tailLimit: 40,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.transcriptAuthority).toBe('provider')
+    expect(result.providerSessionId).toBe(nativeSessionId)
+    expect((result.messages as any[]).map(message => message.content)).toEqual([
+      '메시상태확인',
+      '메시 상태 확인했습니다.',
+    ])
+    expect(result.messageSource).toMatchObject({
+      selected: 'native-history',
+      nativeHandle: nativeSessionId,
+      transcriptWorkspace: '/Users/vilmire/Work/adhdev',
+      selectedDaemonSource: 'live-workspace-native-history',
+      runtimeMappingSafe: true,
+      coverage: {
+        nativeMessageCount: 2,
+        ptyMessageCount: 2,
+        returnedMessageCount: 2,
+        safeMapping: true,
+        ptyMessagesSuppressed: true,
+      },
+    })
+    expect(mocks.readProviderChatHistory).toHaveBeenNthCalledWith(2, 'codex-cli', expect.objectContaining({
+      workspace: '/Users/vilmire/Work/adhdev',
+    }))
+    expect(mocks.readProviderChatHistory.mock.calls[1]?.[1]).not.toHaveProperty('historySessionId')
+  })
+
   it('does not use current live PTY messages when intended workspace differs from the actual Codex session workspace', async () => {
     const runtimeSessionId = 'b36337d5-d6ca-4ebe-bd50-39495d83f9a2'
     const adapter = createCodexAdapter({
