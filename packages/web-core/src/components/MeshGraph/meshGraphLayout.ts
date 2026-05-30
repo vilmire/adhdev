@@ -1,11 +1,12 @@
 /**
- * Deterministic Repo Mesh graph layout helpers.
+ * Deterministic Repo Mesh graph layout helpers backed by ELK layered layout.
  *
- * Keep the spacing model close to the card renderer: when card chrome grows
+ * Keep node dimensions close to the card renderer: when card chrome grows
  * (badges, summaries, callouts, submodule rows), update the estimator here so
- * React Flow positions keep using the same effective geometry humans see.
+ * ELK receives the same effective geometry humans see.
  */
 
+import ELK, { type ElkExtendedEdge, type ElkNode, type LayoutOptions } from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphData, MeshGraphNode } from './types'
 import {
     formatMeshGraphAheadBehind,
@@ -20,20 +21,29 @@ export const MESH_GRAPH_LAYOUT = {
     minWorktreeCardHeight: 174,
     minSubmoduleCardHeight: 146,
     maxEstimatedCardHeight: 304,
-    columnGap: 540,
+    layerGap: 220,
+    nodeGap: 82,
     edgeLabelBuffer: 180,
-    defaultToContentGap: 136,
-    worktreeStackGap: 82,
-    parentToSubmoduleGap: 48,
-    submoduleStackGap: 36,
-    siblingGapX: 56,
-    siblingRowGap: 72,
     placeholderTopOffset: 0,
-    peerColGap: 400,
-    siblingColGap: 380,
 } as const
 
-export const MESH_GRAPH_LAYOUT_DIRECTION = 'LR' as const
+export const MESH_GRAPH_LAYOUT_DIRECTION = 'RIGHT' as const
+
+export const MESH_GRAPH_ELK_OPTIONS: LayoutOptions = {
+    'elk.algorithm': 'layered',
+    'elk.direction': MESH_GRAPH_LAYOUT_DIRECTION,
+    'elk.edgeRouting': 'ORTHOGONAL',
+    'elk.spacing.nodeNode': String(MESH_GRAPH_LAYOUT.nodeGap),
+    'elk.layered.spacing.nodeNodeBetweenLayers': String(MESH_GRAPH_LAYOUT.layerGap),
+    'elk.layered.spacing.edgeNodeBetweenLayers': String(MESH_GRAPH_LAYOUT.edgeLabelBuffer),
+    'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
+    'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+    'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+    'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+    'elk.layered.cycleBreaking.strategy': 'GREEDY',
+    'elk.layered.mergeEdges': 'false',
+    'elk.randomSeed': '1',
+}
 
 type MeshGraphLayoutNodeKind = 'meshNode'
 
@@ -59,7 +69,10 @@ export interface MeshGraphLayoutResult {
     nodes: MeshGraphLayoutNode[]
     bounds: MeshGraphLayoutBounds[]
     columnGap: number
+    layoutOptions: LayoutOptions
 }
+
+const elk = new ELK()
 
 function estimateTextLines(value: string | null | undefined, charsPerLine: number, maxLines: number): number {
     const text = (value || '').trim()
@@ -147,7 +160,13 @@ function compareNodes(a: MeshGraphNode, b: MeshGraphNode): number {
     if (a.branch && b.branch && a.branch !== b.branch) return a.branch.localeCompare(b.branch)
     if (a.branch && !b.branch) return -1
     if (!a.branch && b.branch) return 1
-    return a.label.localeCompare(b.label)
+    return a.label.localeCompare(b.label) || a.id.localeCompare(b.id)
+}
+
+function compareEdges(a: { id: string; source: string; target: string }, b: { id: string; source: string; target: string }): number {
+    return a.source.localeCompare(b.source)
+        || a.target.localeCompare(b.target)
+        || a.id.localeCompare(b.id)
 }
 
 function toLayoutNode(node: MeshGraphNode, x: number, y: number, selectable = true): MeshGraphLayoutNode {
@@ -170,52 +189,6 @@ function makeBounds(node: MeshGraphNode, x: number, y: number): MeshGraphLayoutB
         width: getMeshGraphNodeCardWidth(node),
         height: estimateMeshGraphNodeHeight(node),
     }
-}
-
-function chunkSiblings(nodes: MeshGraphNode[], maxPerRow: number): MeshGraphNode[][] {
-    const rows: MeshGraphNode[][] = []
-    for (let index = 0; index < nodes.length; index += maxPerRow) {
-        rows.push(nodes.slice(index, index + maxPerRow))
-    }
-    return rows
-}
-
-function maxRowHeight(nodes: MeshGraphNode[]): number {
-    return nodes.reduce((height, node) => Math.max(height, estimateMeshGraphNodeHeight(node)), 0)
-}
-
-function getSiblingRowWidth(nodes: MeshGraphNode[]): number {
-    if (nodes.length === 0) return 0
-    return nodes.reduce((width, node) => width + getMeshGraphNodeCardWidth(node), 0)
-        + Math.max(0, nodes.length - 1) * MESH_GRAPH_LAYOUT.siblingGapX
-}
-
-function getSpacedRowWidth(widths: number[]): number {
-    if (widths.length === 0) return 0
-    return widths.reduce((total, width) => total + width, 0)
-        + Math.max(0, widths.length - 1) * MESH_GRAPH_LAYOUT.siblingGapX
-}
-
-function placeSiblingRows(args: {
-    nodes: MeshGraphNode[]
-    centerX: number
-    startY: number
-    maxPerRow: number
-    flowNodes: MeshGraphLayoutNode[]
-    bounds: MeshGraphLayoutBounds[]
-}): number {
-    let cursorY = args.startY
-    for (const row of chunkSiblings(args.nodes, args.maxPerRow)) {
-        const rowWidth = getSiblingRowWidth(row)
-        let cursorX = args.centerX - rowWidth / 2
-        for (const node of row) {
-            args.flowNodes.push(toLayoutNode(node, cursorX, cursorY))
-            args.bounds.push(makeBounds(node, cursorX, cursorY))
-            cursorX += getMeshGraphNodeCardWidth(node) + MESH_GRAPH_LAYOUT.siblingGapX
-        }
-        cursorY += maxRowHeight(row) + MESH_GRAPH_LAYOUT.siblingRowGap
-    }
-    return cursorY
 }
 
 function createPlaceholderNode(defaultAnchor: MeshGraphNode, data: MeshGraphData): MeshGraphNode {
@@ -262,147 +235,71 @@ function createPlaceholderNode(defaultAnchor: MeshGraphNode, data: MeshGraphData
     }
 }
 
-export function buildMeshGraphLayout(data: MeshGraphData): MeshGraphLayoutResult {
+function getOrderedGraphNodes(data: MeshGraphData): MeshGraphNode[] {
     const sortedNodes = [...data.nodes].sort(compareNodes)
     const defaultAnchor = sortedNodes.find(node => node.type === 'defaultBranchNode') ?? null
-    const submoduleNodesByParent = new Map<string, MeshGraphNode[]>()
+    const hasVisibleWorktree = sortedNodes.some(node => node.id !== defaultAnchor?.id && node.type !== 'submoduleNode')
 
-    for (const node of sortedNodes) {
-        if (node.type !== 'submoduleNode' || !node.parentNodeId) continue
-        const bucket = submoduleNodesByParent.get(node.parentNodeId) ?? []
-        bucket.push(node)
-        submoduleNodesByParent.set(node.parentNodeId, bucket)
+    if (!defaultAnchor || hasVisibleWorktree) return sortedNodes
+    return [...sortedNodes, createPlaceholderNode(defaultAnchor, data)]
+}
+
+export function buildMeshGraphElkInput(data: MeshGraphData, layoutOptions: LayoutOptions = MESH_GRAPH_ELK_OPTIONS): ElkNode {
+    const nodes = getOrderedGraphNodes(data)
+    const nodeIds = new Set(nodes.map(node => node.id))
+    const children: ElkNode[] = nodes.map(node => ({
+        id: node.id,
+        width: getMeshGraphNodeCardWidth(node),
+        height: estimateMeshGraphNodeHeight(node),
+    }))
+    const edges: ElkExtendedEdge[] = data.edges
+        .filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+        .sort(compareEdges)
+        .map(edge => ({
+            id: edge.id,
+            sources: [edge.source],
+            targets: [edge.target],
+        }))
+
+    return {
+        id: `${data.meshId || 'mesh'}__elk_root`,
+        layoutOptions: { ...layoutOptions },
+        children,
+        edges,
     }
+}
 
-    const nonDefaultNodes = sortedNodes.filter(node => node.id !== defaultAnchor?.id && node.type !== 'submoduleNode')
-    const branchGroups = new Map<string, MeshGraphNode[]>()
-    const orphanNodes: MeshGraphNode[] = []
+function calculateColumnGap(bounds: MeshGraphLayoutBounds[]): number {
+    const xs = [...new Set(bounds.map(bound => Math.round(bound.x)))].sort((a, b) => a - b)
+    if (xs.length < 2) return MESH_GRAPH_LAYOUT.layerGap
+    return Math.min(...xs.slice(1).map((x, index) => x - xs[index]))
+}
 
-    for (const node of nonDefaultNodes) {
-        if (node.isOrphan || !node.branch) {
-            orphanNodes.push(node)
-            continue
-        }
-        const bucket = branchGroups.get(node.branch) ?? []
-        bucket.push(node)
-        branchGroups.set(node.branch, bucket)
+export async function buildMeshGraphLayout(data: MeshGraphData): Promise<MeshGraphLayoutResult> {
+    const graphNodes = getOrderedGraphNodes(data)
+    const graphNodeById = new Map(graphNodes.map(node => [node.id, node]))
+    const elkGraph = await elk.layout(buildMeshGraphElkInput(data))
+    const layoutNodes = (elkGraph.children ?? [])
+        .map(node => {
+            const graphNode = graphNodeById.get(node.id)
+            if (!graphNode) return null
+            return toLayoutNode(
+                graphNode,
+                Math.round(node.x ?? 0),
+                Math.round(node.y ?? MESH_GRAPH_LAYOUT.placeholderTopOffset),
+                !node.id.endsWith('__placeholder'),
+            )
+        })
+        .filter(Boolean) as MeshGraphLayoutNode[]
+
+    const order = new Map(graphNodes.map((node, index) => [node.id, index]))
+    layoutNodes.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+
+    const bounds = layoutNodes.map(node => makeBounds(node.graphNode, node.position.x, node.position.y))
+    return {
+        nodes: layoutNodes,
+        bounds,
+        columnGap: calculateColumnGap(bounds),
+        layoutOptions: { ...MESH_GRAPH_ELK_OPTIONS },
     }
-
-    const orderedGroups = [...branchGroups.entries()].sort(([a], [b]) => {
-        if (defaultAnchor?.branch && a === defaultAnchor.branch && b !== defaultAnchor.branch) return -1
-        if (defaultAnchor?.branch && b === defaultAnchor.branch && a !== defaultAnchor.branch) return 1
-        return a.localeCompare(b)
-    })
-
-    if (orphanNodes.length > 0) {
-        orderedGroups.push(['__orphans__', [...orphanNodes].sort(compareNodes)])
-    }
-
-    if (orderedGroups.length === 0) {
-        orderedGroups.push(['__nodes__', []])
-    }
-
-    const getNodeSubtreeHeight = (node: MeshGraphNode): number => {
-        const nodeHeight = estimateMeshGraphNodeHeight(node)
-        const submoduleNodes = [...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes)
-        if (submoduleNodes.length === 0) return nodeHeight
-        const submoduleRows = chunkSiblings(submoduleNodes, 3)
-        const submoduleHeight = submoduleRows.reduce((total, row) => total + maxRowHeight(row) + MESH_GRAPH_LAYOUT.siblingRowGap, 0)
-        return nodeHeight + MESH_GRAPH_LAYOUT.parentToSubmoduleGap + submoduleHeight
-    }
-
-    const getNodeSubtreeWidth = (node: MeshGraphNode): number => {
-        const submoduleRows = chunkSiblings([...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes), 3)
-        const widestSubmoduleRow = submoduleRows.reduce((widest, row) => Math.max(widest, getSiblingRowWidth(row)), 0)
-        return Math.max(getMeshGraphNodeCardWidth(node), widestSubmoduleRow)
-    }
-
-    const getGroupTotalHeight = (nodes: MeshGraphNode[]): number => {
-        if (nodes.length === 0) return MESH_GRAPH_LAYOUT.minWorktreeCardHeight
-        return nodes.reduce((total, node, index) =>
-            total + getNodeSubtreeHeight(node) + (index < nodes.length - 1 ? MESH_GRAPH_LAYOUT.worktreeStackGap : 0),
-            0,
-        )
-    }
-
-    const getWorktreeRowWidth = (nodes: MeshGraphNode[]): number => getSpacedRowWidth(nodes.map(getNodeSubtreeWidth))
-
-    const anchorCardWidth = defaultAnchor ? getMeshGraphNodeCardWidth(defaultAnchor) : MESH_GRAPH_LAYOUT.worktreeCardWidth
-
-    // For vertical centering of anchor: center it against the first peer group height
-    const firstGroupNodes = orderedGroups[0]?.[1] ?? []
-    const firstGroupHeight = getGroupTotalHeight(firstGroupNodes)
-    const anchorHeight = defaultAnchor ? estimateMeshGraphNodeHeight(defaultAnchor) : 0
-    const anchorCenterY = Math.max(0, (firstGroupHeight - anchorHeight) / 2)
-
-    const flowNodes: MeshGraphLayoutNode[] = []
-    const bounds: MeshGraphLayoutBounds[] = []
-
-    // Place anchor at (0, anchorCenterY) — LR layout: anchor is leftmost
-    if (defaultAnchor) {
-        flowNodes.push(toLayoutNode(defaultAnchor, 0, anchorCenterY))
-        bounds.push(makeBounds(defaultAnchor, 0, anchorCenterY))
-    }
-
-    // Place peer groups to the right, stacking vertically within each group column.
-    // LR layout: anchor left, groups expand right. Each group gets its own column x.
-    const horizontalColumnGap = anchorCardWidth + MESH_GRAPH_LAYOUT.peerColGap
-    // groupColumnX[i] = left x for group i
-    const groupColumnXList: number[] = []
-    {
-        let cursor = anchorCardWidth + MESH_GRAPH_LAYOUT.peerColGap
-        for (let i = 0; i < orderedGroups.length; i++) {
-            groupColumnXList.push(cursor)
-            const groupNodes = orderedGroups[i][1]
-            const nodesForWidth = groupNodes.length > 0 ? groupNodes : (nonDefaultNodes.length > 0 ? nonDefaultNodes : [])
-            const groupColumnWidth = nodesForWidth.reduce<number>((widest, node) => Math.max(widest, getWorktreeRowWidth([node])), MESH_GRAPH_LAYOUT.worktreeCardWidth)
-            cursor += groupColumnWidth + MESH_GRAPH_LAYOUT.siblingColGap
-        }
-    }
-
-    orderedGroups.forEach(([groupKey, groupNodes], groupIndex) => {
-        const nodesForGroup = groupNodes.length > 0
-            ? groupNodes
-            : nonDefaultNodes.length > 0
-                ? nonDefaultNodes
-                : []
-
-        const groupX = groupColumnXList[groupIndex] ?? (anchorCardWidth + MESH_GRAPH_LAYOUT.peerColGap)
-
-        let cursorY = 0
-
-        for (const node of nodesForGroup) {
-            const nodeWidth = getMeshGraphNodeCardWidth(node)
-            const subtreeWidth = getNodeSubtreeWidth(node)
-            const subtreeCenterX = groupX + subtreeWidth / 2
-            const nodeX = subtreeCenterX - nodeWidth / 2
-            const nodeHeight = estimateMeshGraphNodeHeight(node)
-            flowNodes.push(toLayoutNode(node, nodeX, cursorY))
-            bounds.push(makeBounds(node, nodeX, cursorY))
-
-            const submoduleNodes = [...(submoduleNodesByParent.get(node.id) ?? [])].sort(compareNodes)
-            let deepestY = cursorY + nodeHeight
-            if (submoduleNodes.length > 0) {
-                const submoduleEndY = placeSiblingRows({
-                    nodes: submoduleNodes,
-                    centerX: subtreeCenterX,
-                    startY: cursorY + nodeHeight + MESH_GRAPH_LAYOUT.parentToSubmoduleGap,
-                    maxPerRow: 3,
-                    flowNodes,
-                    bounds,
-                })
-                deepestY = Math.max(deepestY, submoduleEndY - MESH_GRAPH_LAYOUT.siblingRowGap)
-            }
-
-            cursorY = deepestY + MESH_GRAPH_LAYOUT.worktreeStackGap
-        }
-
-        if (groupKey === '__nodes__' && nonDefaultNodes.length === 0 && defaultAnchor) {
-            const placeholder = createPlaceholderNode(defaultAnchor, data)
-            flowNodes.push(toLayoutNode(placeholder, groupX, MESH_GRAPH_LAYOUT.placeholderTopOffset, false))
-            bounds.push(makeBounds(placeholder, groupX, MESH_GRAPH_LAYOUT.placeholderTopOffset))
-        }
-    })
-
-    return { nodes: flowNodes, bounds, columnGap: horizontalColumnGap }
 }

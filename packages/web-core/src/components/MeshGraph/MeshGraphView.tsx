@@ -291,8 +291,8 @@ const nodeTypes: NodeTypes = {
     meshNode: MeshNodeCard,
 }
 
-function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark')): { nodes: FlowNode[]; edges: FlowEdge[] } {
-    const layout = buildMeshGraphLayout(data)
+async function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark')): Promise<{ nodes: FlowNode[]; edges: FlowEdge[] }> {
+    const layout = await buildMeshGraphLayout(data)
     const flowNodes: FlowNode[] = layout.nodes.map(node => ({
         id: node.id,
         type: node.type,
@@ -413,13 +413,23 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const dataFingerprint = useMemo(() => getMeshGraphDataFingerprint(data), [data])
     const layoutFingerprint = useMemo(() => getMeshGraphLayoutFingerprint(data), [data])
-    const layout = useMemo(() => buildLayout(data, meshTheme), [layoutFingerprint, meshTheme])
+    const [layout, setLayout] = useState<{ nodes: FlowNode[]; edges: FlowEdge[] }>({ nodes: [], edges: [] })
     const surfaceRef = useRef<HTMLDivElement | null>(null)
     const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 })
     const viewportKey = useMemo(
         () => getMeshGraphViewportKey(data, surfaceSize.width, surfaceSize.height),
         [dataFingerprint, data, surfaceSize.height, surfaceSize.width],
     )
+
+    useEffect(() => {
+        let cancelled = false
+        void buildLayout(data, meshTheme).then(nextLayout => {
+            if (!cancelled) setLayout(nextLayout)
+        })
+        return () => {
+            cancelled = true
+        }
+    }, [data, layoutFingerprint, meshTheme])
 
     const nodes = useMemo(
         () => layout.nodes.map(node => ({ ...node, selected: node.id === selectedNodeId })),

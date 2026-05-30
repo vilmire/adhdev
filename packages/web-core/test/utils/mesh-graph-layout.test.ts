@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildMeshGraphLayout } from '../../src/components/MeshGraph/meshGraphLayout'
+import {
+    buildMeshGraphElkInput,
+    buildMeshGraphLayout,
+    estimateMeshGraphNodeHeight,
+    getMeshGraphNodeCardWidth,
+    MESH_GRAPH_ELK_OPTIONS,
+    MESH_GRAPH_LAYOUT,
+} from '../../src/components/MeshGraph/meshGraphLayout'
 import type { MeshGraphNode } from '../../src/utils/mesh-visualization'
 
 function node(id: string, overrides: Partial<MeshGraphNode> = {}): MeshGraphNode {
@@ -40,8 +47,46 @@ function node(id: string, overrides: Partial<MeshGraphNode> = {}): MeshGraphNode
 }
 
 describe('buildMeshGraphLayout', () => {
-    it('places same-branch worktrees in a LR column (stacked vertically, same x group)', () => {
-        const layout = buildMeshGraphLayout({
+    it('builds concrete ELK input with deterministic layered options and measured node boxes', () => {
+        const graph = {
+            meshId: 'mesh',
+            meshName: 'Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-05-27T00:00:00.000Z',
+            nodes: [
+                node('__branch_main', { type: 'defaultBranchNode', label: 'main', machineLabel: 'default branch' }),
+                node('node_a', { label: 'A' }),
+                node('sub_a', { type: 'submoduleNode', label: 'A', branch: null, parentNodeId: 'node_a', submodulePath: 'modules/a' }),
+            ],
+            edges: [
+                { id: 'edge_anchor', source: '__branch_main', target: 'node_a', type: 'parentBranch', direction: 'undirected' },
+                { id: 'edge_submodule', source: 'node_a', target: 'sub_a', type: 'submoduleLink', direction: 'directed' },
+                { id: 'edge_missing', source: 'node_a', target: 'missing', type: 'worktreeLink', direction: 'undirected' },
+            ],
+            warnings: [],
+            stats: {} as any,
+        }
+
+        const elkInput = buildMeshGraphElkInput(graph as any)
+        const worktree = graph.nodes[1]
+        const submodule = graph.nodes[2]
+
+        expect(elkInput.layoutOptions).toEqual(MESH_GRAPH_ELK_OPTIONS)
+        expect(elkInput.layoutOptions?.['elk.algorithm']).toBe('layered')
+        expect(elkInput.layoutOptions?.['elk.direction']).toBe('RIGHT')
+        expect(elkInput.children?.find(child => child.id === 'node_a')).toMatchObject({
+            width: getMeshGraphNodeCardWidth(worktree as MeshGraphNode),
+            height: estimateMeshGraphNodeHeight(worktree as MeshGraphNode),
+        })
+        expect(elkInput.children?.find(child => child.id === 'sub_a')).toMatchObject({
+            width: MESH_GRAPH_LAYOUT.submoduleCardWidth,
+            height: estimateMeshGraphNodeHeight(submodule as MeshGraphNode),
+        })
+        expect(elkInput.edges?.map(edge => edge.id)).toEqual(['edge_anchor', 'edge_submodule'])
+    })
+
+    it('positions same-branch worktrees deterministically in one ELK layer', async () => {
+        const layout = await buildMeshGraphLayout({
             meshId: 'mesh',
             meshName: 'Mesh',
             repoIdentity: 'repo',
@@ -52,22 +97,26 @@ describe('buildMeshGraphLayout', () => {
                 node('node_b', { label: 'B' }),
                 node('node_c', { label: 'C' }),
             ],
-            edges: [],
+            edges: [
+                { id: 'edge_a', source: '__branch_main', target: 'node_a', type: 'parentBranch', direction: 'undirected' },
+                { id: 'edge_b', source: '__branch_main', target: 'node_b', type: 'parentBranch', direction: 'undirected' },
+                { id: 'edge_c', source: '__branch_main', target: 'node_c', type: 'parentBranch', direction: 'undirected' },
+            ],
             warnings: [],
             stats: {} as any,
         })
 
         const peers = ['node_a', 'node_b', 'node_c'].map(id => layout.nodes.find(entry => entry.id === id))
-        // LR layout: same branch group stacks vertically — 3 distinct y values, same x column
+        expect(layout.layoutOptions).toEqual(MESH_GRAPH_ELK_OPTIONS)
         expect(new Set(peers.map(entry => entry?.position.y)).size).toBe(3)
         expect(new Set(peers.map(entry => entry?.position.x)).size).toBe(1)
-        // Each successive peer is below the previous one
         expect(peers[1]!.position.y).toBeGreaterThan(peers[0]!.position.y)
         expect(peers[2]!.position.y).toBeGreaterThan(peers[1]!.position.y)
+        expect(layout.columnGap).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.layerGap)
     })
 
-    it('places sibling submodules on the same child row under their parent', () => {
-        const layout = buildMeshGraphLayout({
+    it('preserves graph node status/style data and edge source/target integrity through ELK layout', async () => {
+        const graph = {
             meshId: 'mesh',
             meshName: 'Mesh',
             repoIdentity: 'repo',
@@ -79,17 +128,36 @@ describe('buildMeshGraphLayout', () => {
                 node('sub_b', { type: 'submoduleNode', label: 'B', branch: null, parentNodeId: 'node_parent', submodulePath: 'modules/b' }),
                 node('sub_c', { type: 'submoduleNode', label: 'C', branch: null, parentNodeId: 'node_parent', submodulePath: 'modules/c' }),
             ],
-            edges: [],
+            edges: [
+                { id: 'edge_parent', source: '__branch_main', target: 'node_parent', type: 'parentBranch', direction: 'undirected' },
+                { id: 'edge_sub_a', source: 'node_parent', target: 'sub_a', type: 'submoduleLink', direction: 'directed' },
+                { id: 'edge_sub_b', source: 'node_parent', target: 'sub_b', type: 'submoduleLink', direction: 'directed' },
+                { id: 'edge_sub_c', source: 'node_parent', target: 'sub_c', type: 'submoduleLink', direction: 'directed' },
+            ],
             warnings: [],
             stats: {} as any,
-        })
+        }
+
+        const layout = await buildMeshGraphLayout(graph as any)
+        const elkInput = buildMeshGraphElkInput(graph as any)
 
         const parent = layout.nodes.find(entry => entry.id === 'node_parent')
         const submodules = ['sub_a', 'sub_b', 'sub_c'].map(id => layout.nodes.find(entry => entry.id === id))
 
         expect(parent).toBeTruthy()
-        expect(new Set(submodules.map(entry => entry?.position.y)).size).toBe(1)
-        expect(new Set(submodules.map(entry => entry?.position.x)).size).toBe(3)
-        expect(submodules[0]?.position.y).toBeGreaterThan(parent?.position.y ?? 0)
+        expect(new Set(submodules.map(entry => entry?.position.y)).size).toBe(3)
+        expect(new Set(submodules.map(entry => entry?.position.x)).size).toBe(1)
+        expect(submodules[0]?.position.x).toBeGreaterThan(parent?.position.x ?? 0)
+        expect(submodules[1]?.position.y).toBeGreaterThan(submodules[0]?.position.y ?? 0)
+        expect(submodules[2]?.position.y).toBeGreaterThan(submodules[1]?.position.y ?? 0)
+        expect(submodules[0]?.graphNode.type).toBe('submoduleNode')
+        expect(submodules[0]?.graphNode.submodulePath).toBe('modules/a')
+        expect(layout.nodes.every(entry => entry.draggable === false && entry.selected === false)).toBe(true)
+        expect(elkInput.edges?.map(edge => [edge.sources[0], edge.targets[0]])).toEqual([
+            ['__branch_main', 'node_parent'],
+            ['node_parent', 'sub_a'],
+            ['node_parent', 'sub_b'],
+            ['node_parent', 'sub_c'],
+        ])
     })
 })
