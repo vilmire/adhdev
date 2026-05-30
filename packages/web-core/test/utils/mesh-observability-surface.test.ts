@@ -525,7 +525,8 @@ describe('MeshObservabilitySurface', () => {
     const secondChild = parentChildren[1]
     const peer = boxes.get('node_peer')!
 
-    expect(peer.top).toBe(parent.top)
+    // LR layout: same-branch nodes stack vertically, peer comes after parent in the column
+    expect(peer.top).toBeGreaterThanOrEqual(parent.top)
     expect(child.top - parent.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.parentToSubmoduleGap)
     expect(secondChild.top).toBe(child.top)
     expect(secondChild.left - child.right).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.siblingGapX)

@@ -40,7 +40,7 @@ function node(id: string, overrides: Partial<MeshGraphNode> = {}): MeshGraphNode
 }
 
 describe('buildMeshGraphLayout', () => {
-    it('places same-branch worktrees as peer children instead of a vertical chain', () => {
+    it('places same-branch worktrees in a LR column (stacked vertically, same x group)', () => {
         const layout = buildMeshGraphLayout({
             meshId: 'mesh',
             meshName: 'Mesh',
@@ -58,8 +58,12 @@ describe('buildMeshGraphLayout', () => {
         })
 
         const peers = ['node_a', 'node_b', 'node_c'].map(id => layout.nodes.find(entry => entry.id === id))
-        expect(new Set(peers.map(entry => entry?.position.y)).size).toBe(1)
-        expect(new Set(peers.map(entry => entry?.position.x)).size).toBe(3)
+        // LR layout: same branch group stacks vertically — 3 distinct y values, same x column
+        expect(new Set(peers.map(entry => entry?.position.y)).size).toBe(3)
+        expect(new Set(peers.map(entry => entry?.position.x)).size).toBe(1)
+        // Each successive peer is below the previous one
+        expect(peers[1]!.position.y).toBeGreaterThan(peers[0]!.position.y)
+        expect(peers[2]!.position.y).toBeGreaterThan(peers[1]!.position.y)
     })
 
     it('places sibling submodules on the same child row under their parent', () => {
