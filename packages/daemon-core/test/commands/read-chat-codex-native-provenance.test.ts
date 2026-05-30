@@ -502,6 +502,156 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     })
   })
 
+  it('falls back to PTY with identityStatus=transcript_unmapped when providerSessionId is empty and runtime uuid has no matching native file', async () => {
+    // Regression: exact reproduction of debug bundle
+    //   chat-debug-20260530T101044444Z-18bb4c98-4ff0-4641-ad3f-25ff49ad9efd-239138b9.json
+    // The runtime session ID (18bb4c98-...) was passed as historySessionId to native lookup,
+    // but Codex JSONL files use their own v7 UUIDs. With no providerSessionId emitted from
+    // the PTY parser (because SESSION_ID_RE excluded v7 UUIDs), the native lookup always
+    // failed → selectedMessageSource='pty-parser', identityStatus='transcript_unmapped',
+    // nativeMessageCount=0, ptyMessageCount=17.
+    const RUNTIME_SESSION_ID = '18bb4c98-4ff0-4641-ad3f-25ff49ad9efd'
+    const PTY_MESSAGES = Array.from({ length: 17 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `pty message ${i}`,
+      receivedAt: (i + 1) * 1_000,
+    }))
+    const adapter = createCodexAdapter({
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        title: 'Codex CLI',
+        // No providerSessionId — parser didn't extract one (simulates v7 UUID regex miss)
+        messages: PTY_MESSAGES,
+      })),
+    })
+
+    // Native history unavailable: no Codex JSONL file for the ADHDev runtime UUID
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'native-unavailable',
+      hasMore: false,
+      messages: [],
+      unavailableReason: 'native_history_workspace_only_lookup_unsafe',
+    })
+
+    const helpers = {
+      ...createHelpers(adapter),
+      currentSession: {
+        sessionId: RUNTIME_SESSION_ID,
+        providerType: 'codex-cli',
+        providerName: 'Codex CLI',
+        transport: 'pty',
+        adapterKey: RUNTIME_SESSION_ID,
+        workspace: '/Users/vilmire/Work/adhdev',
+      },
+    }
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'codex-cli',
+      targetSessionId: RUNTIME_SESSION_ID,
+      tailLimit: 40,
+    })
+
+    // Current (pre-fix) behavior: falls back to PTY with transcript_unmapped
+    // Expected (post-fix): when providerSessionId is correctly extracted from
+    // the TUI (now possible for v7 UUIDs after SESSION_ID_RE fix), native history
+    // is used; this test documents the fallback path that still triggers when
+    // the TUI has not yet rendered the session id line.
+    expect(result.success).toBe(true)
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      provider: 'codex-cli',
+      nativeHandle: RUNTIME_SESSION_ID,
+      nativeSource: 'native-unavailable',
+      identityStatus: 'transcript_unmapped',
+      ptyStatusApprovalOnly: false,
+      coverage: {
+        nativeMessageCount: 0,
+        ptyMessageCount: 17,
+        safeMapping: false,
+        ptyMessagesSuppressed: false,
+      },
+    })
+    expect((result.messages as any[]).length).toBe(17)
+    // fallbackReason must start with native_history_unavailable (may carry a sub-code)
+    expect((result.messageSource as any).fallbackReason).toMatch(/^native_history_unavailable/)
+    // identityStatus must distinguish unmapped from ambiguous
+    expect((result.messageSource as any).identityStatus).toBe('transcript_unmapped')
+  })
+
+  it('selects native history when providerSessionId is the Codex v7 native UUID (not the ADHDev runtime UUID)', async () => {
+    // Post-fix scenario: after SESSION_ID_RE is broadened to match v7 UUIDs,
+    // the PTY parser returns the Codex-native v7 UUID as providerSessionId.
+    // read_chat must then use that UUID for the native lookup, not the runtime session UUID.
+    const RUNTIME_SESSION_ID = '18bb4c98-4ff0-4641-ad3f-25ff49ad9efd'
+    const CODEX_NATIVE_UUID = '019dfd67-cb1a-7b72-9c0f-690a1ccef0aa' // v7 UUID from Codex file
+    const NATIVE_MESSAGES = [
+      { role: 'user', content: '메시상태확인, 정리필요한게 있는지 확인', receivedAt: 1_780_135_819_000, historySessionId: CODEX_NATIVE_UUID },
+      { role: 'assistant', content: 'Called adhdev-mesh.mesh_status(...)', receivedAt: 1_780_135_820_000, historySessionId: CODEX_NATIVE_UUID },
+    ]
+    const adapter = createCodexAdapter({
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'idle',
+        title: 'Codex CLI',
+        // providerSessionId now set to the Codex v7 UUID (what SESSION_ID_RE returns after fix)
+        providerSessionId: CODEX_NATIVE_UUID,
+        messages: [
+          { role: 'user', content: 'pty user', receivedAt: 1_780_135_819_000 },
+          { role: 'assistant', content: 'pty assistant', receivedAt: 1_780_135_820_000 },
+        ],
+      })),
+    })
+
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: `/Users/vilmire/.codex/sessions/2026/05/30/rollout-2026-05-30T10-09-00-${CODEX_NATIVE_UUID}.jsonl`,
+      sourceMtimeMs: Date.now(),
+      hasMore: false,
+      providerSessionId: CODEX_NATIVE_UUID,
+      workspace: '/Users/vilmire/Work/adhdev',
+      messages: NATIVE_MESSAGES,
+    })
+
+    const helpers = {
+      ...createHelpers(adapter),
+      currentSession: {
+        sessionId: RUNTIME_SESSION_ID,
+        providerType: 'codex-cli',
+        providerName: 'Codex CLI',
+        transport: 'pty',
+        adapterKey: RUNTIME_SESSION_ID,
+        workspace: '/Users/vilmire/Work/adhdev',
+      },
+    }
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'codex-cli',
+      targetSessionId: RUNTIME_SESSION_ID,
+      tailLimit: 40,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.messageSource).toMatchObject({
+      selected: 'native-history',
+      provider: 'codex-cli',
+      nativeHandle: CODEX_NATIVE_UUID,
+      ptyStatusApprovalOnly: true,
+      coverage: {
+        nativeMessageCount: 2,
+        ptyMessageCount: 2,
+        safeMapping: true,
+        ptyMessagesSuppressed: true,
+      },
+    })
+    // Native messages must be used, not PTY
+    expect((result.messages as any[]).map((m: any) => m.content)).toEqual(
+      NATIVE_MESSAGES.map((m) => m.content),
+    )
+    // Native lookup called with Codex v7 UUID, not the ADHDev runtime UUID
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: CODEX_NATIVE_UUID,
+    }))
+  })
+
   it('includes selected transcript provenance in chat debug bundles', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       source: 'provider-native',
