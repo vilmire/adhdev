@@ -617,13 +617,13 @@ export default function MeshObservabilitySurface({
                                             <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Queue tasks</div>
                                             <div className="flex flex-col gap-1.5">
                                                 {nodeTasks.map(task => (
-                                                    <div key={task.taskId} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
+                                                    <div key={task.id} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
                                                         <div className="flex items-center justify-between gap-2">
-                                                            <span className={`font-mono ${meshTheme.textMuted}`}>{task.taskId.slice(0, 12)}</span>
+                                                            <span className={`font-mono ${meshTheme.textMuted}`}>{task.id.slice(0, 12)}</span>
                                                             <Badge label={task.status ?? 'unknown'} tone={sessionTone(task.status)} />
                                                         </div>
-                                                        {(task.message || task.description) && (
-                                                            <div className={`mt-0.5 truncate ${meshTheme.textMuted}`}>{(task.message || task.description || '').slice(0, 48)}</div>
+                                                        {task.message && (
+                                                            <div className={`mt-0.5 truncate ${meshTheme.textMuted}`}>{task.message.slice(0, 48)}</div>
                                                         )}
                                                     </div>
                                                 ))}
