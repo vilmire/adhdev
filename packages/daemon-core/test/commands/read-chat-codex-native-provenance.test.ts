@@ -84,6 +84,91 @@ describe('Codex CLI read_chat native transcript provenance', () => {
     mocks.readProviderChatHistory.mockReset()
   })
 
+  it('suppresses PTY message bodies when native-history is selected even when PTY and native counts match (regression: safeMapping must not imply PTY is safe chat material)', async () => {
+    // Reproduces the debug bundle scenario:
+    //   providerType=codex-cli, transport=pty, native-history selected,
+    //   ptyStatusApprovalOnly=true, but coverage showed nativeCount==ptyCount==returnedCount
+    //   with safeMapping=true — falsely implying PTY messages were safe chat material.
+    const ptyMessages = Array.from({ length: 6 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `pty message ${i}`,
+      receivedAt: (i + 1) * 1_000,
+    }))
+    const nativeMessages = Array.from({ length: 6 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `native message ${i}`,
+      receivedAt: (i + 1) * 2_000,
+      historySessionId: 'native-session',
+    }))
+    const adapter = createCodexAdapter({
+      getStatus: vi.fn(() => ({ status: 'generating', activeModal: null, messages: [] })),
+      getScriptParsedStatus: vi.fn(() => ({
+        status: 'generating',
+        providerSessionId: 'native-session',
+        messages: ptyMessages,
+      })),
+    })
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'provider-native',
+      sourcePath: '/Users/test/.codex/sessions/native-session.jsonl',
+      sourceMtimeMs: Date.now(),
+      hasMore: false,
+      messages: nativeMessages,
+    })
+
+    const result = await handleReadChat(createHelpers(adapter) as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'native-session',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    // Returned messages must come from native history only — no PTY body content
+    expect((result.messages as any[]).map((m) => m.content)).toEqual(
+      nativeMessages.map((m) => m.content),
+    )
+    expect((result.messages as any[]).map((m) => m.content)).not.toContain('pty message 0')
+    expect(result.messageSource).toMatchObject({
+      selected: 'native-history',
+      ptyStatusApprovalOnly: true,
+      coverage: {
+        nativeMessageCount: 6,
+        ptyMessageCount: 6,
+        returnedMessageCount: 6,
+        safeMapping: true,
+        // KEY: even when counts are equal, ptyMessagesSuppressed must be true so that
+        // safeMapping cannot be misread as "PTY messages are safe chat material".
+        ptyMessagesSuppressed: true,
+      },
+    })
+    // PTY contributes status evidence but not chat content
+    expect(result.status).toBe('generating')
+  })
+
+  it('marks ptyMessagesSuppressed false when PTY parser is the selected source', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'native-unavailable',
+      hasMore: false,
+      messages: [],
+    })
+
+    const result = await handleReadChat(createHelpers() as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'native-session',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      coverage: {
+        ptyMessagesSuppressed: false,
+      },
+    })
+  })
+
   it('selects fresh safely mapped native Codex history while keeping PTY for status and approval', async () => {
     const adapter = createCodexAdapter({
       getScriptParsedStatus: vi.fn(() => ({
@@ -125,6 +210,7 @@ describe('Codex CLI read_chat native transcript provenance', () => {
         ptyMessageCount: 1,
         returnedMessageCount: 2,
         safeMapping: true,
+        ptyMessagesSuppressed: true,
       },
     })
     expect(result.debugReadChat).toMatchObject({
@@ -448,6 +534,7 @@ describe('Codex CLI read_chat native transcript provenance', () => {
         ptyMessageCount: 2,
         returnedMessageCount: 2,
         safeMapping: true,
+        ptyMessagesSuppressed: true,
       },
     })
   })
