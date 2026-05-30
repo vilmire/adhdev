@@ -20,7 +20,7 @@ vi.mock('../../src/detection/cli-detector.js', () => ({
   detectCLI: detectCliMocks.detectCLI,
 }))
 
-import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetBeadsDBForTests, claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 
@@ -464,20 +464,21 @@ describe('setupMeshEventForwarding', () => {
   })
 
   it('injects forwarded stopped and long-generating coordinator hints from remote worker daemons', () => {
-    const { components, coordinator } = createComponents()
+    const meshId = `mesh_long_gen_plain_${Date.now()}`
+    const { components, coordinator } = createComponents(meshId)
 
     const stopped = handleMeshForwardEvent(components, {
       event: 'agent:stopped',
-      meshId: 'mesh_inline_1',
+      meshId,
       nodeId: 'node_child_1',
       targetSessionId: 'runtime-session-1',
       providerType: 'hermes-cli',
     })
     const longGenerating = handleMeshForwardEvent(components, {
       event: 'monitor:long_generating',
-      meshId: 'mesh_inline_1',
+      meshId,
       nodeId: 'node_child_1',
-      targetSessionId: 'runtime-session-1',
+      targetSessionId: 'runtime-session-long',
       providerType: 'hermes-cli',
     })
 
@@ -485,8 +486,146 @@ describe('setupMeshEventForwarding', () => {
     expect(longGenerating).toEqual({ success: true, forwarded: 1 })
     expect(coordinator.onEvent).toHaveBeenCalledTimes(2)
     expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('has stopped')
-    expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('has been generating for a long time')
-    expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('mesh_read_chat once')
+    expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('still reported as generating')
+    expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('one bounded status check')
+    expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).not.toContain('mesh_read_chat once')
+    cleanupMeshFiles(meshId)
+  })
+
+  it('reconciles a long-generating monitor to completion when final summary evidence exists', () => {
+    const meshId = `mesh_long_gen_reconcile_${Date.now()}`
+    try {
+      const { components, coordinator } = createComponents(meshId)
+      const queued = enqueueTask(meshId, 'finish delegated task')
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'monitor:long_generating',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: '019e7707-24a5-76b3-88be-815f2155cab4',
+        finalSummary: 'Committed cleanly and completed.',
+        timestamp: Date.now(),
+      })
+
+      expect(result).toEqual({ success: true, forwarded: 1 })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const text = coordinator.onEvent.mock.calls[0][1].input.textFallback
+      expect(text).toContain('already has completion evidence')
+      expect(text).toContain('reconciled the terminal handoff')
+      expect(text).not.toContain('mesh_read_chat once')
+      expect(getQueue(meshId)[0]).toMatchObject({ id: queued.id, status: 'completed' })
+      const entries = readLedgerEntries(meshId)
+      expect(entries.some(entry => entry.kind === 'task_completed' && entry.payload.taskId === queued.id)).toBe(true)
+      expect(entries.some(entry => entry.kind === 'task_stalled')).toBe(false)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('suppresses long-generating alert when terminal ledger evidence already exists', () => {
+    const meshId = `mesh_long_gen_terminal_${Date.now()}`
+    try {
+      const { components, coordinator } = createComponents(meshId)
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        payload: {
+          event: 'agent:generating_completed',
+          taskId: 'task-done',
+          finalSummary: 'Already completed by ledger.',
+        },
+      })
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'monitor:long_generating',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        forwarded: 0,
+        suppressed: true,
+        terminalLedgerEvidence: true,
+        terminalLedgerKind: 'task_completed',
+      })
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      const kinds = readLedgerEntries(meshId).map(entry => entry.kind)
+      expect(kinds.filter(kind => kind === 'task_stalled')).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('backfills refine terminal pending event from ledger when only accepted is pending', () => {
+    const meshId = `mesh_refine_backfill_${Date.now()}`
+    try {
+      queuePendingMeshCoordinatorEvent({
+        event: 'refine:accepted',
+        meshId,
+        nodeLabel: 'node-refine',
+        nodeId: 'node-refine',
+        workspace: '/repo/refine',
+        metadataEvent: {
+          source: 'refine_mesh_node_async_job',
+          jobId: 'refine_ix_mpruebyb_tpytsw',
+          interactionId: 'ix-test',
+          meshId,
+          nodeId: 'node-refine',
+          status: 'accepted',
+          startedAt: '2026-05-30T04:20:12.000Z',
+        },
+        queuedAt: Date.now(),
+      })
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node-refine',
+        payload: {
+          source: 'refine_mesh_node_async_job',
+          refineJob: {
+            jobId: 'refine_ix_mpruebyb_tpytsw',
+            interactionId: 'ix-test',
+            status: 'completed',
+            meshId,
+            nodeId: 'node-refine',
+            workspace: '/repo/refine',
+            startedAt: '2026-05-30T04:20:12.000Z',
+            completedAt: '2026-05-30T04:21:46.000Z',
+          },
+          async: true,
+          success: true,
+          result: {
+            success: true,
+            merged: true,
+            branch: 'fix/completion-alert-event-handoff-v2',
+            into: 'main',
+          },
+        },
+      })
+
+      const events = drainPendingMeshCoordinatorEvents(meshId)
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        event: 'refine:completed',
+        meshId,
+        nodeId: 'node-refine',
+        metadataEvent: {
+          source: 'refine_mesh_node_async_job',
+          jobId: 'refine_ix_mpruebyb_tpytsw',
+          status: 'completed',
+        },
+      })
+      expect(events[0].coordinatorMessage).toContain('completed successfully')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
   })
 
   it('queues stopped failure events with recovery context when no live coordinator session exists', () => {

@@ -117,6 +117,8 @@ test('direct mesh_send_task is visible as source=direct active work in status an
     assert.equal(status.pollingGuidance.generatingCount, 1);
     assert.match(status.pollingGuidance.message, /Do not repeatedly poll mesh_status\/mesh_view_queue\/mesh_read_chat/i);
     assert.match(status.pollingGuidance.nextRecommendedAction, /wait for pendingCoordinatorEvents|completion events/i);
+    assert.doesNotMatch(status.pollingGuidance.nextRecommendedAction, /mesh_read_chat once/i);
+    assert.match(status.pollingGuidance.nextRecommendedAction, /one bounded status check/i);
     assert.equal(status.pollingGuidance.eventSurface, 'pendingCoordinatorEvents');
     assert.equal(typeof status.pollingGuidance.doNotPollBefore, 'string');
 
@@ -127,6 +129,8 @@ test('direct mesh_send_task is visible as source=direct active work in status an
     assert.equal(activeView.pollingGuidance.generatingCount, 1);
     assert.match(activeView.pollingGuidance.message, /Do not repeatedly poll mesh_status\/mesh_view_queue\/mesh_read_chat/i);
     assert.match(activeView.pollingGuidance.nextRecommendedAction, /wait for pendingCoordinatorEvents|completion events/i);
+    assert.doesNotMatch(activeView.pollingGuidance.nextRecommendedAction, /mesh_read_chat once/i);
+    assert.match(activeView.pollingGuidance.nextRecommendedAction, /one bounded status check/i);
     assert.equal(activeView.pollingGuidance.eventSurface, 'pendingCoordinatorEvents');
     assert.equal(typeof activeView.pollingGuidance.doNotPollBefore, 'string');
     assert.ok(calls.some(call => call.command === 'agent_command'));
