@@ -2,17 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   readProviderChatHistory: vi.fn(),
+  readChatHistory: vi.fn(),
 }))
 
 vi.mock('../../src/config/chat-history.js', () => ({
   readProviderChatHistory: mocks.readProviderChatHistory,
+  readChatHistory: mocks.readChatHistory,
   isNativeSourceCanonicalHistory: (canonicalHistory: any) => {
     if (!canonicalHistory) return false
     return canonicalHistory.mode !== 'disabled' && canonicalHistory.mode !== 'materialized-mirror'
   },
 }))
 
-import { handleGetChatDebugBundle, handleReadChat } from '../../src/commands/chat-commands.js'
+import { handleGetChatDebugBundle, handleReadChat, handleSendChat } from '../../src/commands/chat-commands.js'
 
 function createCodexAdapter(overrides: Record<string, unknown> = {}) {
   return {
@@ -79,9 +81,27 @@ function createHelpers(adapter = createCodexAdapter()) {
   }
 }
 
+function createRuntimeAckMessage(content = 'acknowledged prompt') {
+  return {
+    role: 'user',
+    kind: 'standard',
+    senderName: 'User',
+    content,
+    receivedAt: 3_000,
+    source: 'runtime_input_ack',
+    meta: {
+      runtimeInputAck: true,
+      provider: 'codex-cli',
+      workspace: '/workspaces/adhdev',
+    },
+  }
+}
+
 describe('Codex CLI read_chat native transcript provenance', () => {
   beforeEach(() => {
     mocks.readProviderChatHistory.mockReset()
+    mocks.readChatHistory.mockReset()
+    mocks.readChatHistory.mockReturnValue({ messages: [], hasMore: false })
   })
 
   it('suppresses PTY message bodies when native-history is selected even when PTY and native counts match (regression: safeMapping must not imply PTY is safe chat material)', async () => {
@@ -172,6 +192,158 @@ describe('Codex CLI read_chat native transcript provenance', () => {
         ptyMessagesSuppressed: true,
       },
     })
+  })
+
+  it('keeps daemon-owned user input acknowledgement while suppressing unsafe Codex PTY transcript bodies', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'native-unavailable',
+      hasMore: false,
+      messages: [],
+    })
+    const ackMessage = createRuntimeAckMessage('current prompt')
+    const instance = {
+      category: 'cli',
+      type: 'codex-cli',
+      mergeRuntimeChatMessages: vi.fn((messages: any[]) => [...messages, ackMessage]),
+    }
+    const helpers = {
+      ...createHelpers(),
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'runtime-session', instanceKey: 'runtime-session' }) },
+        instanceManager: { getInstance: () => instance },
+      },
+    }
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'native-session',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('idle')
+    expect(result.messages).toEqual([ackMessage])
+    expect((result.messages as any[]).map((message) => message.content)).not.toContain('pty assistant')
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      identityStatus: 'transcript_unmapped',
+      ptyStatusApprovalOnly: true,
+      coverage: {
+        returnedMessageCount: 1,
+        ptyMessagesSuppressed: true,
+      },
+    })
+  })
+
+  it('uses exact current-runtime daemon mirror when Codex native history is unmapped without borrowing PTY bodies', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'native-unavailable',
+      hasMore: false,
+      messages: [],
+    })
+    mocks.readChatHistory.mockReturnValue({
+      hasMore: false,
+      messages: [
+        { role: 'user', content: 'mirror prompt', receivedAt: 1_000, historySessionId: 'runtime-session', instanceId: 'runtime-session' },
+        { role: 'assistant', content: 'mirror assistant', receivedAt: 2_000, historySessionId: 'runtime-session', instanceId: 'runtime-session' },
+      ],
+    })
+
+    const result = await handleReadChat(createHelpers() as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-session',
+      providerSessionId: 'native-session',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('idle')
+    expect((result.messages as any[]).map((message) => message.content)).toEqual(['mirror prompt', 'mirror assistant'])
+    expect((result.messages as any[]).map((message) => message.content)).not.toContain('pty assistant')
+    expect(mocks.readChatHistory).toHaveBeenCalledWith(
+      'codex-cli',
+      0,
+      200,
+      'runtime-session',
+      0,
+      undefined,
+    )
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      identityStatus: 'transcript_unmapped',
+      selectedDaemonSource: 'exact-runtime-mirror',
+      transcriptAuthority: 'daemon',
+      ptyStatusApprovalOnly: true,
+      coverage: {
+        returnedMessageCount: 2,
+        ptyMessagesSuppressed: true,
+      },
+    })
+  })
+
+  it('does not use daemon mirror history for a different target runtime when Codex native history is unmapped', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      source: 'native-unavailable',
+      hasMore: false,
+      messages: [],
+    })
+    mocks.readChatHistory.mockReturnValue({
+      hasMore: false,
+      messages: [
+        { role: 'assistant', content: 'wrong runtime assistant', receivedAt: 2_000, historySessionId: 'other-runtime', instanceId: 'other-runtime' },
+      ],
+    })
+
+    const result = await handleReadChat(createHelpers() as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'other-runtime',
+      providerSessionId: 'native-session',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.messages).toEqual([])
+    expect(mocks.readChatHistory).not.toHaveBeenCalled()
+    expect(result.messageSource).toMatchObject({
+      selected: 'pty-parser',
+      identityStatus: 'transcript_unmapped',
+      coverage: {
+        returnedMessageCount: 0,
+        ptyMessagesSuppressed: true,
+      },
+    })
+  })
+
+  it('records a user input acknowledgement only after PTY send_chat succeeds', async () => {
+    const adapter = createCodexAdapter({
+      sendMessage: vi.fn(async () => undefined),
+    })
+    const instance = {
+      category: 'cli',
+      type: 'codex-cli',
+      recordAcknowledgedUserInput: vi.fn(),
+    }
+    const helpers = {
+      ...createHelpers(adapter),
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'runtime-session', instanceKey: 'runtime-session' }) },
+        instanceManager: { getInstance: () => instance },
+      },
+    }
+
+    const result = await handleSendChat(helpers as any, {
+      agentType: 'codex-cli',
+      targetSessionId: 'runtime-session',
+      message: 'current prompt',
+    })
+
+    expect(result).toMatchObject({ success: true, sent: true, method: 'pty-adapter' })
+    expect(adapter.sendMessage).toHaveBeenCalledWith('current prompt')
+    expect(instance.recordAcknowledgedUserInput).toHaveBeenCalledTimes(1)
+    expect(instance.recordAcknowledgedUserInput).toHaveBeenCalledWith(expect.objectContaining({
+      textFallback: 'current prompt',
+    }))
   })
 
   it('selects fresh safely mapped native Codex history while keeping PTY for status and approval', async () => {
