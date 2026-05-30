@@ -82,8 +82,8 @@ function buildActiveWorkPollingGuidance(summary: MeshActiveWorkSummary, now = Da
         generatingCount: summary.generatingCount,
         doNotPollBefore: new Date(now + ACTIVE_WORK_POLLING_BACKOFF_MS).toISOString(),
         eventSurface: 'pendingCoordinatorEvents',
-        nextRecommendedAction: 'Wait for pendingCoordinatorEvents/completion events or an explicit user status request. After a terminal signal, call mesh_read_chat once with compact=true, then verify git state if repository changes were expected.',
-        message: 'Do not repeatedly poll mesh_status/mesh_view_queue/mesh_read_chat while delegated work is generating; these snapshots rarely change until the worker emits a completion/status event.',
+        nextRecommendedAction: 'Wait for pendingCoordinatorEvents/completion events or an explicit user status request. If no terminal evidence appears and the user asks for status, make one bounded status check, then wait again.',
+        message: 'Do not repeatedly poll mesh_status/mesh_view_queue/mesh_read_chat while delegated work is generating; terminal ledger or completion evidence will be surfaced through pendingCoordinatorEvents when available.',
     };
 }
 

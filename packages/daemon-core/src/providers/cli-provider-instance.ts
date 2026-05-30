@@ -1145,7 +1145,31 @@ export class CliProviderInstance implements ProviderInstance {
  // Monitor check (cooldown based notification, IDE/CLI common)
         const agentKey = `${this.type}:cli`;
         const monitorEvents = this.monitor.check(agentKey, newStatus, now, progressFingerprint);
+        const monitorParsedStatus: any = parsedStatus;
         for (const me of monitorEvents) {
+            if (
+                me.type === 'monitor:long_generating'
+                && this.completionHasFinalAssistantMessage(monitorParsedStatus?.messages)
+                && !this.hasAdapterPendingResponse()
+                && !hasNonEmptyCliModalButtons(monitorParsedStatus?.activeModal ?? monitorParsedStatus?.modal)
+            ) {
+                this.pushEvent({
+                    event: 'agent:generating_completed',
+                    chatTitle,
+                    duration: this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : undefined,
+                    timestamp: me.timestamp,
+                    finalSummary: extractFinalSummaryFromMessages(monitorParsedStatus?.messages),
+                    completionDiagnostic: {
+                        providerType: this.type,
+                        sessionId: this.instanceId,
+                        providerSessionId: this.providerSessionId || null,
+                        reconciliationReason: 'long_generating_monitor_final_summary',
+                        finalAssistantPresent: true,
+                    },
+                });
+                this.generatingStartedAt = 0;
+                continue;
+            }
             this.pushEvent({ event: me.type, agentKey: me.agentKey, message: me.message, elapsedSec: me.elapsedSec, timestamp: me.timestamp });
         }
     }

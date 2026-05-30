@@ -77,7 +77,7 @@ function hasPendingRefineTerminalEventDuplicate(event: PendingMeshCoordinatorEve
     if (!REFINE_TERMINAL_EVENTS.has(event.event)) return false;
     const jobId = readRefineJobId(event);
     if (!jobId) return false;
-    return getPendingMeshCoordinatorEvents(event.meshId).some((pending) =>
+    return readPendingMeshCoordinatorEventsFromDisk(event.meshId).some((pending) =>
         pending.event === event.event && readRefineJobId(pending) === jobId,
     );
 }
@@ -104,12 +104,94 @@ function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent): strin
 function hasPendingCoordinatorEventDuplicate(event: PendingMeshCoordinatorEvent): boolean {
     const fingerprint = buildPendingEventFingerprint(event);
     if (!fingerprint.trim()) return false;
-    return getPendingMeshCoordinatorEvents(event.meshId).some((pending) => buildPendingEventFingerprint(pending) === fingerprint);
+    return readPendingMeshCoordinatorEventsFromDisk(event.meshId).some((pending) => buildPendingEventFingerprint(pending) === fingerprint);
 }
 
 function getPendingEventsPath(meshId: string): string {
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
     return join(getLedgerDir(), `${safe}.pending-events.jsonl`);
+}
+
+function readPendingMeshCoordinatorEventsFromDisk(meshId?: string): PendingMeshCoordinatorEvent[] {
+    if (!meshId) return [];
+    const path = getPendingEventsPath(meshId);
+    if (!existsSync(path)) return [];
+    try {
+        const raw = readFileSync(path, 'utf-8');
+        return raw.split('\n').filter(Boolean).flatMap(line => {
+            try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
+        });
+    } catch { return []; }
+}
+
+function refineTerminalEventFromLedger(meshId: string, pending: readonly PendingMeshCoordinatorEvent[]): PendingMeshCoordinatorEvent[] {
+    const acceptedJobIds = new Set(
+        pending
+            .filter(event => event.event === 'refine:accepted')
+            .map(event => readRefineJobId(event))
+            .filter(Boolean),
+    );
+    if (acceptedJobIds.size === 0) return [];
+    const existingTerminalJobIds = new Set(
+        pending
+            .filter(event => REFINE_TERMINAL_EVENTS.has(event.event))
+            .map(event => `${event.event}:${readRefineJobId(event)}`)
+            .filter(value => !value.endsWith(':')),
+    );
+    const backfilled: PendingMeshCoordinatorEvent[] = [];
+    const entries = readLedgerEntries(meshId);
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed') continue;
+        const payload = readRecord(entry.payload);
+        if (payload?.source !== 'refine_mesh_node_async_job') continue;
+        const refineJob = readRecord(payload.refineJob);
+        const jobId = readNonEmptyString(refineJob?.jobId);
+        if (!jobId || !acceptedJobIds.has(jobId)) continue;
+        const eventName = entry.kind === 'task_completed' ? 'refine:completed' : 'refine:failed';
+        if (existingTerminalJobIds.has(`${eventName}:${jobId}`)) continue;
+        existingTerminalJobIds.add(`${eventName}:${jobId}`);
+        const result = readRecord(payload.result);
+        const metadataEvent = {
+            source: 'refine_mesh_node_async_job',
+            jobId,
+            interactionId: readNonEmptyString(refineJob?.interactionId),
+            meshId,
+            nodeId: readNonEmptyString(refineJob?.nodeId) || entry.nodeId,
+            targetDaemonId: readNonEmptyString(refineJob?.targetDaemonId),
+            workspace: readNonEmptyString(refineJob?.workspace),
+            status: eventName === 'refine:completed' ? 'completed' : 'failed',
+            startedAt: readNonEmptyString(refineJob?.startedAt),
+            completedAt: readNonEmptyString(refineJob?.completedAt) || entry.timestamp,
+            retryOfJobId: readNonEmptyString(refineJob?.retryOfJobId) || readNonEmptyString(payload.retryOfJobId),
+            ...(result ? { result } : {}),
+        };
+        backfilled.push({
+            event: eventName,
+            meshId,
+            nodeLabel: readNonEmptyString(refineJob?.nodeId) || entry.nodeId || 'refine job',
+            nodeId: readNonEmptyString(refineJob?.nodeId) || entry.nodeId,
+            workspace: readNonEmptyString(refineJob?.workspace),
+            metadataEvent,
+            coordinatorMessage: buildMeshSystemMessage({
+                event: eventName,
+                nodeLabel: readNonEmptyString(refineJob?.nodeId) || entry.nodeId || 'refine job',
+                metadataEvent,
+            }),
+            queuedAt: Date.now(),
+        });
+    }
+    return backfilled.reverse();
+}
+
+function reconcilePendingMeshCoordinatorEvents(meshId: string, events: PendingMeshCoordinatorEvent[]): PendingMeshCoordinatorEvent[] {
+    const backfilled = refineTerminalEventFromLedger(meshId, events);
+    if (backfilled.length === 0) return events;
+    const terminalJobIds = new Set(backfilled.map(event => readRefineJobId(event)).filter(Boolean));
+    return [
+        ...events.filter(event => !(event.event === 'refine:accepted' && terminalJobIds.has(readRefineJobId(event)))),
+        ...backfilled,
+    ];
 }
 
 export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent): boolean {
@@ -136,25 +218,16 @@ export function drainPendingMeshCoordinatorEvents(meshId?: string): PendingMeshC
     const path = getPendingEventsPath(meshId);
     if (!existsSync(path)) return [];
     try {
-        const raw = readFileSync(path, 'utf-8');
+        const parsed = readPendingMeshCoordinatorEventsFromDisk(meshId);
         try { unlinkSync(path); } catch { /* concurrent drain already removed it */ }
-        return raw.split('\n').filter(Boolean).flatMap(line => {
-            try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
-        });
+        return reconcilePendingMeshCoordinatorEvents(meshId, parsed);
     } catch { return []; }
 }
 
 /** Peek at pending coordinator events without draining (non-destructive). */
 export function getPendingMeshCoordinatorEvents(meshId?: string): readonly PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
-    const path = getPendingEventsPath(meshId);
-    if (!existsSync(path)) return [];
-    try {
-        const raw = readFileSync(path, 'utf-8');
-        return raw.split('\n').filter(Boolean).flatMap(line => {
-            try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
-        });
-    } catch { return []; }
+    return reconcilePendingMeshCoordinatorEvents(meshId, readPendingMeshCoordinatorEventsFromDisk(meshId));
 }
 
 /** Explicitly clear all pending coordinator events for a mesh. */
@@ -338,6 +411,80 @@ function isDuplicateRefineTerminalEvent(meshId: string, eventName: string, metad
     return false;
 }
 
+function findRecentTerminalLedgerEvidence(args: {
+    meshId: string;
+    sessionId?: string;
+    nodeId?: string;
+}): { kind: MeshLedgerKind; payload: Record<string, unknown>; timestamp: string } | null {
+    if (!args.sessionId && !args.nodeId) return null;
+    const entries = readLedgerEntries(args.meshId);
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
+        if (args.sessionId && entry.sessionId === args.sessionId) {
+            return { kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
+        }
+        if (!args.sessionId && args.nodeId && entry.nodeId === args.nodeId) {
+            return { kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
+        }
+    }
+    return null;
+}
+
+function buildLongGeneratingCompletionReconciliation(args: {
+    meshId: string;
+    nodeId?: string;
+    nodeLabel: string;
+    metadataEvent: Record<string, unknown>;
+    sourceInstanceId?: string;
+}): Record<string, unknown> | null {
+    const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
+    const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+    const providerType = readNonEmptyString(args.metadataEvent.providerType);
+    const providerSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);
+    const workerResult = readWorkerResultMetadata(args.metadataEvent);
+    const completionDiagnostic = readRecord(args.metadataEvent.completionDiagnostic);
+    const finalSummary = readNonEmptyString(args.metadataEvent.finalSummary);
+    const status = readNonEmptyString(args.metadataEvent.status).toLowerCase();
+    const explicitCompletionEvidence = Boolean(
+        finalSummary
+        || workerResult
+        || completionDiagnostic?.finalAssistantPresent === true
+        || status === 'idle'
+        || status === 'ready'
+        || status === 'completed',
+    );
+    if (explicitCompletionEvidence) {
+        return {
+            ...args.metadataEvent,
+            targetSessionId: sessionId,
+            providerType,
+            providerSessionId,
+            finalSummary,
+            source: 'long_generating_reconciliation',
+            reconciledFromEvent: 'monitor:long_generating',
+            timestamp: args.metadataEvent.timestamp ?? Date.now(),
+            completionDiagnostic: {
+                ...(completionDiagnostic || {}),
+                reconciliationReason: 'provider_completion_evidence',
+            },
+        };
+    }
+
+    const terminal = findRecentTerminalLedgerEvidence({
+        meshId: args.meshId,
+        sessionId: sessionId || undefined,
+        nodeId: nodeId || undefined,
+    });
+    if (!terminal) return null;
+    return {
+        ...args.metadataEvent,
+        source: 'long_generating_terminal_ledger_suppression',
+        terminalLedgerKind: terminal.kind,
+        terminalLedgerAt: terminal.timestamp,
+    };
+}
+
 
 export function tryAssignQueueTask(
     components: DaemonComponents,
@@ -472,6 +619,10 @@ function activeAssignedCount(meshId: string): number {
 
 function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean {
     return getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedNodeId === nodeId);
+}
+
+function sessionHasActiveAssignment(meshId: string, sessionId: string): boolean {
+    return getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedSessionId === sessionId);
 }
 
 function liveSessionCountForNode(components: DaemonComponents, meshId: string, nodeId: string): number {
@@ -739,6 +890,9 @@ function buildMeshSystemMessage(args: {
 }): string {
     const metadata = formatCompletionMetadata(args.metadataEvent);
     if (args.event === 'agent:generating_completed') {
+        if (args.metadataEvent.source === 'long_generating_reconciliation') {
+            return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The long-generating monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
+        }
         return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. This completion came from the agent status event path; use mesh_read_chat once to review its final progress, but do not poll repeatedly.`;
     }
     if (args.event === 'agent:waiting_approval') {
@@ -770,7 +924,7 @@ function buildMeshSystemMessage(args: {
         return `[System] ${args.nodeLabel} has stopped${metadata}. Use mesh_read_chat once if you need to inspect its last output.`;
     }
     if (args.event === 'monitor:long_generating') {
-        return `[System] ${args.nodeLabel} has been generating for a long time${metadata}. Use mesh_read_chat once for a status check, but do not poll repeatedly.`;
+        return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for pendingCoordinatorEvents or a completion/status event; if the user explicitly asks for status, make one bounded status check and then wait again.`;
     }
     if (args.event === 'refine:accepted') {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
@@ -865,6 +1019,34 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return { success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true };
     }
 
+    if (args.event === 'monitor:long_generating') {
+        const reconciledCompletion = buildLongGeneratingCompletionReconciliation({
+            meshId: args.meshId,
+            nodeId: args.nodeId,
+            nodeLabel: args.nodeLabel,
+            metadataEvent: args.metadataEvent,
+            sourceInstanceId: args.sourceInstanceId,
+        });
+        if (reconciledCompletion?.source === 'long_generating_reconciliation') {
+            LOG.info('MeshEvents', `Reconciled long-generating monitor to completion for session ${eventSessionId || '(unknown session)'}`);
+            return injectMeshSystemMessage(components, {
+                ...args,
+                event: 'agent:generating_completed',
+                metadataEvent: reconciledCompletion,
+            });
+        }
+        if (reconciledCompletion?.source === 'long_generating_terminal_ledger_suppression') {
+            LOG.info('MeshEvents', `Suppressed long-generating monitor because terminal ledger evidence already exists for session ${eventSessionId || '(unknown session)'}`);
+            return {
+                success: true,
+                forwarded: 0,
+                suppressed: true,
+                terminalLedgerEvidence: true,
+                terminalLedgerKind: reconciledCompletion.terminalLedgerKind,
+            };
+        }
+    }
+
     if (isDuplicateRefineTerminalEvent(args.meshId, args.event, args.metadataEvent)) {
         LOG.info('MeshEvents', `Suppressed duplicate ${args.event} for refine job ${readRefineJobId({ metadataEvent: args.metadataEvent })}`);
         return { success: true, forwarded: 0, suppressed: true, duplicateRefineTerminalEvent: true };
@@ -872,6 +1054,25 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 
     const eventTimestamp = readEventTimestamp(args.metadataEvent.timestamp);
     if (args.event === 'agent:generating_completed' && eventSessionId) {
+        const terminal = findRecentTerminalLedgerEvidence({
+            meshId: args.meshId,
+            sessionId: eventSessionId,
+            nodeId: eventNodeId || undefined,
+        });
+        if (terminal?.kind === 'task_completed' && !sessionHasActiveAssignment(args.meshId, eventSessionId)) {
+            const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
+            const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);
+            const eventProviderSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);
+            const eventFinalSummary = readNonEmptyString(args.metadataEvent.finalSummary);
+            if (
+                (terminalProviderSessionId && terminalProviderSessionId === eventProviderSessionId)
+                || (terminalFinalSummary && terminalFinalSummary === eventFinalSummary)
+                || args.metadataEvent.source === 'long_generating_reconciliation'
+            ) {
+                LOG.info('MeshEvents', `Suppressed duplicate completion with existing terminal ledger evidence for mesh ${args.meshId} session ${eventSessionId}`);
+                return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true, terminalLedgerEvidence: true };
+            }
+        }
         const duplicateCompletion = isDuplicateMeshCompletionEvent({
             meshId: args.meshId,
             event: args.event,
@@ -1186,6 +1387,10 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             completedAt: readNonEmptyString(payload.completedAt),
             retryOfJobId: readNonEmptyString(payload.retryOfJobId),
             ...(payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result) ? { result: payload.result } : {}),
+            ...(payload.completionDiagnostic && typeof payload.completionDiagnostic === 'object' && !Array.isArray(payload.completionDiagnostic) ? { completionDiagnostic: payload.completionDiagnostic } : {}),
+            ...(payload.workerResult && typeof payload.workerResult === 'object' && !Array.isArray(payload.workerResult) ? { workerResult: payload.workerResult } : {}),
+            ...(payload.meshWorkerResult && typeof payload.meshWorkerResult === 'object' && !Array.isArray(payload.meshWorkerResult) ? { meshWorkerResult: payload.meshWorkerResult } : {}),
+            ...(payload.structuredResult && typeof payload.structuredResult === 'object' && !Array.isArray(payload.structuredResult) ? { structuredResult: payload.structuredResult } : {}),
             ...(payload.timestamp !== undefined ? { timestamp: payload.timestamp } : {}),
             intentional: payload.intentional === true,
             intentionalStop: payload.intentionalStop === true,
