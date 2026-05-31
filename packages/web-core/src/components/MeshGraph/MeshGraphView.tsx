@@ -46,6 +46,9 @@ import {
 } from './meshGraphLayout'
 import { getMeshGraphDataFingerprint, getMeshGraphLayoutFingerprint } from './meshGraphMemo'
 
+/** Dense graph threshold: above this node count, switch to compact card mode */
+const COMPACT_NODE_THRESHOLD = 7
+
 interface MeshGraphViewProps {
     data: MeshGraphData
     selectedNodeId?: string | null
@@ -54,6 +57,7 @@ interface MeshGraphViewProps {
 
 type FlowNodeData = Record<string, unknown> & {
     graphNode: MeshGraphNode
+    compact: boolean
 }
 
 type FlowEdgeData = Record<string, unknown> & {
@@ -64,13 +68,37 @@ type FlowNode = Node<FlowNodeData, 'meshNode'>
 type FlowEdge = Edge<FlowEdgeData, 'meshEdge'>
 
 const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
+const MeshGraphCompactContext = createContext(false)
+
+function isNodeActive(node: MeshGraphNode): boolean {
+    return node.activeSessionCount > 0
+}
+
+function isNodeStale(node: MeshGraphNode): boolean {
+    return node.health === 'offline' || (node.snapshotCompleteness === 'stale' && node.activeSessionCount === 0)
+}
 
 function getHealthClasses(node: MeshGraphNode, selected: boolean, isDark: boolean): string {
-    const base = selected
-        ? 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_24px_60px_rgba(8,145,178,0.18)]'
-        : isDark
+    const isActive = isNodeActive(node)
+    const isStale = isNodeStale(node)
+
+    let base: string
+    if (selected) {
+        base = 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_24px_60px_rgba(8,145,178,0.18)]'
+    } else if (isActive) {
+        base = isDark
+            ? 'border-emerald-400/40 shadow-[0_0_0_1px_rgba(52,211,153,0.18),0_18px_48px_rgba(3,7,18,0.22)]'
+            : 'border-emerald-400/60 shadow-[0_0_0_1px_rgba(52,211,153,0.2),0_18px_48px_rgba(148,163,184,0.20)]'
+    } else if (isStale) {
+        base = isDark
+            ? 'border-white/6 shadow-[0_12px_32px_rgba(3,7,18,0.16)] opacity-60'
+            : 'border-slate-200/70 shadow-[0_12px_32px_rgba(148,163,184,0.14)] opacity-60'
+    } else {
+        base = isDark
             ? 'border-white/10 shadow-[0_18px_48px_rgba(3,7,18,0.22)]'
             : 'border-slate-300/90 shadow-[0_18px_48px_rgba(148,163,184,0.20)]'
+    }
+
     const attention = getMeshGraphAttentionBadge(node)
 
     if (attention?.tone === 'danger') return `${base} ${isDark ? 'bg-rose-500/12' : 'bg-rose-50/95'}`
@@ -79,7 +107,7 @@ function getHealthClasses(node: MeshGraphNode, selected: boolean, isDark: boolea
 
     switch (node.health) {
         case 'online':
-            return `${base} ${isDark ? 'bg-emerald-500/8' : 'bg-emerald-50/95'}`
+            return `${base} ${isDark ? (isActive ? 'bg-emerald-500/10' : 'bg-emerald-500/8') : (isActive ? 'bg-emerald-50' : 'bg-emerald-50/95')}`
         case 'dirty':
             return `${base} ${isDark ? 'bg-amber-500/8' : 'bg-amber-50/95'}`
         case 'degraded':
@@ -87,7 +115,7 @@ function getHealthClasses(node: MeshGraphNode, selected: boolean, isDark: boolea
         case 'wrong_branch':
             return `${base} ${isDark ? 'bg-violet-500/10' : 'bg-violet-50/95'}`
         case 'offline':
-            return `${base} ${isDark ? 'bg-slate-500/12' : 'bg-slate-100/95'}`
+            return `${base} ${isDark ? 'bg-slate-500/10' : 'bg-slate-100/90'}`
         default:
             return `${base} ${isDark ? 'bg-slate-950/78' : 'bg-white/96'}`
     }
@@ -178,6 +206,7 @@ function getLocalityBadgeKind(node: MeshGraphNode): 'meta' | 'health' {
 
 function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const meshTheme = useContext(MeshGraphThemeContext)
+    const compact = useContext(MeshGraphCompactContext)
     const node = data.graphNode
     const isDefaultBranchNode = node.type === 'defaultBranchNode'
     const isSubmoduleNode = node.type === 'submoduleNode'
@@ -189,12 +218,60 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             : [node.machineLabel, formatLocality(node.locality)].filter(Boolean).join(' · ') || node.workspace
     const shortCommit = node.submoduleCommit ? node.submoduleCommit.slice(0, 7) : null
     const attentionBadge = getMeshGraphAttentionBadge(node)
-    const nodeSummary = getNodeSummaryForLayout(node)
     const calloutText = getMeshGraphCalloutText(node)
+    const hasActiveSession = isNodeActive(node)
+
+    if (compact) {
+        return (
+            <div
+                className={`rounded-xl border px-3 py-2.5 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
+                style={{ width: getMeshGraphNodeCardWidth(node, true) }}
+                title={[
+                    node.label,
+                    node.branch ? `Branch: ${node.branch}` : null,
+                    node.machineLabel ? `Machine: ${node.machineLabel}` : null,
+                    node.workspace ? `Workspace: ${node.workspace}` : null,
+                    attentionBadge ? `Status: ${attentionBadge.label}` : null,
+                    getNodeSummaryForLayout(node),
+                ].filter(Boolean).join('\n')}
+            >
+                <Handle type="target" position={Position.Left} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
+                <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                        <div className={`truncate text-xs font-semibold leading-4 ${meshTheme.textPrimary}`}>{node.label}</div>
+                        {!isDefaultBranchNode && (
+                            <div className={`truncate text-[10px] leading-3.5 ${meshTheme.textMuted}`}>{subtitle}</div>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        {hasActiveSession && (
+                            <span className={`h-1.5 w-1.5 rounded-full ${meshTheme.isDark ? 'bg-emerald-400' : 'bg-emerald-500'} animate-pulse`} aria-label="active session" />
+                        )}
+                        <span
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: getHealthDot(node.health) }}
+                            aria-hidden
+                        />
+                    </div>
+                </div>
+                {attentionBadge && (
+                    <div className={`mt-1.5 inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`}>
+                        <span className="truncate">{attentionBadge.label}</span>
+                    </div>
+                )}
+                {!attentionBadge && node.branch && !isSubmoduleNode && (
+                    <div className={`mt-1 truncate text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-2 py-0.5 inline-block max-w-full`}>
+                        {node.branch}
+                    </div>
+                )}
+                <Handle type="source" position={Position.Right} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
+            </div>
+        )
+    }
 
     return (
         <div
-            className={`${isSubmoduleNode ? 'w-[228px]' : 'w-[256px]'} rounded-2xl border px-4 py-3.5 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
+            className={`rounded-2xl border px-4 py-3.5 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
             style={{ width: getMeshGraphNodeCardWidth(node) }}
             title={[
                 node.machineLabel ? `Machine: ${node.machineLabel}` : null,
@@ -215,11 +292,16 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{node.label}</div>
                     <div className={`truncate text-[11px] ${meshTheme.textMuted}`}>{subtitle}</div>
                 </div>
-                <span
-                    className="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: getHealthDot(node.health) }}
-                    aria-hidden
-                />
+                <div className="flex items-center gap-1.5 mt-0.5 shrink-0">
+                    {hasActiveSession && (
+                        <span className={`h-2 w-2 rounded-full ${meshTheme.isDark ? 'bg-emerald-400' : 'bg-emerald-500'} animate-pulse`} aria-label="active session" />
+                    )}
+                    <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: getHealthDot(node.health) }}
+                        aria-hidden
+                    />
+                </div>
             </div>
 
             {attentionBadge && (
@@ -280,7 +362,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             </div>
 
             <div className={`mt-3 text-[11px] leading-5 ${meshTheme.textSecondary}`}>
-                {nodeSummary}
+                {getNodeSummaryForLayout(node)}
             </div>
 
             {shouldShowCallout && calloutText && (
@@ -376,14 +458,14 @@ const edgeTypes: EdgeTypes = {
     meshEdge: MeshGraphEdgeLine,
 }
 
-async function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark')): Promise<{ nodes: FlowNode[]; edges: FlowEdge[] }> {
-    const layout = await buildMeshGraphLayout(data)
+async function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark'), compact = false): Promise<{ nodes: FlowNode[]; edges: FlowEdge[] }> {
+    const layout = await buildMeshGraphLayout(data, compact)
     const layoutNodeIds = new Set(layout.nodes.map(node => node.id))
     const flowNodes: FlowNode[] = layout.nodes.map(node => ({
         id: node.id,
         type: node.type,
         position: node.position,
-        data: { graphNode: node.graphNode },
+        data: { graphNode: node.graphNode, compact },
         selected: node.selected,
         draggable: node.draggable,
         selectable: node.selectable,
@@ -509,11 +591,18 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
     return null
 }
 
+function getGraphHeightClass(nodeCount: number): string {
+    if (nodeCount >= 16) return 'h-[720px] min-h-[720px] sm:h-[860px] xl:h-[980px]'
+    if (nodeCount >= 10) return 'h-[580px] min-h-[580px] sm:h-[700px] xl:h-[820px]'
+    return 'h-[460px] min-h-[460px] sm:h-[560px] xl:h-[680px]'
+}
+
 export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick }: MeshGraphViewProps) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const dataFingerprint = useMemo(() => getMeshGraphDataFingerprint(data), [data])
     const layoutFingerprint = useMemo(() => getMeshGraphLayoutFingerprint(data), [data])
+    const compact = data.nodes.length >= COMPACT_NODE_THRESHOLD
     const [layout, setLayout] = useState<{ nodes: FlowNode[]; edges: FlowEdge[] }>({ nodes: [], edges: [] })
     const surfaceRef = useRef<HTMLDivElement | null>(null)
     const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 })
@@ -524,13 +613,13 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
 
     useEffect(() => {
         let cancelled = false
-        void buildLayout(data, meshTheme).then(nextLayout => {
+        void buildLayout(data, meshTheme, compact).then(nextLayout => {
             if (!cancelled) setLayout(nextLayout)
         })
         return () => {
             cancelled = true
         }
-    }, [data, layoutFingerprint, meshTheme])
+    }, [data, layoutFingerprint, meshTheme, compact])
 
     const nodes = useMemo(
         () => layout.nodes.map(node => ({ ...node, selected: node.id === selectedNodeId })),
@@ -564,34 +653,44 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
         }
     }, [])
 
+    const graphHeightClass = getGraphHeightClass(data.nodes.length)
+
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
+        <MeshGraphCompactContext.Provider value={compact}>
         <div ref={surfaceRef} className={meshTheme.graphShellClass}>
             <div className={`absolute inset-x-3 top-3 z-10 flex flex-wrap items-center justify-between gap-2 text-[11px] ${meshTheme.textSecondary}`}>
                 <div className="flex flex-wrap gap-2">
                     <span className={meshTheme.graphStatChipClass}>
                         {data.stats.totalNodes} node{data.stats.totalNodes === 1 ? '' : 's'}
                     </span>
-                    <span className={meshTheme.graphStatChipClass}>
-                        {data.stats.totalActiveSessions} active session{data.stats.totalActiveSessions === 1 ? '' : 's'}
-                    </span>
+                    {data.stats.totalActiveSessions > 0 && (
+                        <span className={meshTheme.isDark ? 'rounded-full border border-emerald-400/25 bg-emerald-500/12 px-3 py-1 text-emerald-100' : 'rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-emerald-700'}>
+                            {data.stats.totalActiveSessions} active session{data.stats.totalActiveSessions === 1 ? '' : 's'}
+                        </span>
+                    )}
                     {data.stats.orphanNodes > 0 && (
                         <span className={meshTheme.isDark ? 'rounded-full border border-orange-400/25 bg-orange-500/12 px-3 py-1 text-orange-100' : 'rounded-full border border-orange-300 bg-orange-50 px-3 py-1 text-orange-700'}>
                             {data.stats.orphanNodes} need attention
                         </span>
                     )}
+                    {compact && (
+                        <span className={meshTheme.isDark ? 'rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-slate-400' : 'rounded-full border border-slate-200 bg-slate-50/80 px-3 py-1 text-slate-500'}>
+                            dense view · hover for details
+                        </span>
+                    )}
                 </div>
                 <div className={meshTheme.graphHintChipClass}>
-                    Focused on the main path first · drag or scroll to pan
+                    {compact ? 'drag or scroll to pan' : 'Focused on the main path first · drag or scroll to pan'}
                 </div>
             </div>
-            <div className="h-[460px] w-full min-w-0 min-h-[460px] sm:h-[560px] xl:h-[680px]">
+            <div className={`w-full min-w-0 ${graphHeightClass}`}>
                 <ReactFlow<FlowNode, FlowEdge>
                     nodes={nodes}
                     edges={layout.edges}
                     nodeTypes={nodeTypes}
                     edgeTypes={edgeTypes}
-                    minZoom={0.25}
+                    minZoom={0.18}
                     maxZoom={1.35}
                     nodesDraggable={false}
                     nodesConnectable={false}
@@ -622,6 +721,7 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                 </ReactFlow>
             </div>
         </div>
+        </MeshGraphCompactContext.Provider>
         </MeshGraphThemeContext.Provider>
     )
 }

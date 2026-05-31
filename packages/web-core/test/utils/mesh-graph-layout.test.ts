@@ -6,7 +6,9 @@ import {
     estimateMeshGraphNodeHeight,
     getMeshGraphNodeCardWidth,
     MESH_GRAPH_ELK_OPTIONS,
+    MESH_GRAPH_ELK_OPTIONS_COMPACT,
     MESH_GRAPH_LAYOUT,
+    MESH_GRAPH_LAYOUT_COMPACT,
 } from '../../src/components/MeshGraph/meshGraphLayout'
 import type { MeshGraphNode } from '../../src/utils/mesh-visualization'
 
@@ -159,5 +161,66 @@ describe('buildMeshGraphLayout', () => {
             ['node_parent', 'sub_b'],
             ['node_parent', 'sub_c'],
         ])
+    })
+})
+
+describe('compact mode layout', () => {
+    it('uses smaller card dimensions and tighter spacing compared to default mode', () => {
+        const n = node('n')
+        const sub = node('s', { type: 'submoduleNode', branch: null })
+        expect(getMeshGraphNodeCardWidth(n, true)).toBe(MESH_GRAPH_LAYOUT_COMPACT.worktreeCardWidth)
+        expect(getMeshGraphNodeCardWidth(sub, true)).toBe(MESH_GRAPH_LAYOUT_COMPACT.submoduleCardWidth)
+        expect(getMeshGraphNodeCardWidth(n, false)).toBe(MESH_GRAPH_LAYOUT.worktreeCardWidth)
+        expect(getMeshGraphNodeCardWidth(n, true)).toBeLessThan(getMeshGraphNodeCardWidth(n, false))
+        expect(estimateMeshGraphNodeHeight(n, true)).toBeLessThan(estimateMeshGraphNodeHeight(n, false))
+    })
+
+    it('uses compact ELK spacing options that produce a smaller inter-node gap than default', () => {
+        expect(Number(MESH_GRAPH_ELK_OPTIONS_COMPACT['elk.spacing.nodeNode']))
+            .toBeLessThan(Number(MESH_GRAPH_ELK_OPTIONS['elk.spacing.nodeNode']))
+        expect(Number(MESH_GRAPH_ELK_OPTIONS_COMPACT['elk.layered.spacing.nodeNodeBetweenLayers']))
+            .toBeLessThan(Number(MESH_GRAPH_ELK_OPTIONS['elk.layered.spacing.nodeNodeBetweenLayers']))
+    })
+
+    it('returns compact layout options when compact=true is passed to buildMeshGraphLayout', async () => {
+        const graph = {
+            meshId: 'mesh',
+            meshName: 'Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-05-30T00:00:00.000Z',
+            nodes: [
+                node('anchor', { type: 'defaultBranchNode', label: 'main' }),
+                ...Array.from({ length: 7 }, (_, i) => node(`wt_${i}`, { label: `wt ${i}`, branch: `feature-${i}` })),
+            ],
+            edges: Array.from({ length: 7 }, (_, i) => ({
+                id: `e${i}`, source: 'anchor', target: `wt_${i}`, type: 'parentBranch' as const, direction: 'undirected' as const,
+            })),
+            warnings: [],
+            stats: {} as any,
+        }
+
+        const compactLayout = await buildMeshGraphLayout(graph as any, true)
+        const normalLayout = await buildMeshGraphLayout(graph as any, false)
+
+        const compactSpan = Math.max(...compactLayout.nodes.map(n => n.position.x))
+        const normalSpan = Math.max(...normalLayout.nodes.map(n => n.position.x))
+        expect(compactSpan).toBeLessThan(normalSpan)
+        expect(compactLayout.layoutOptions['elk.spacing.nodeNode'])
+            .toBe(MESH_GRAPH_ELK_OPTIONS_COMPACT['elk.spacing.nodeNode'])
+    })
+
+    it('compact node height is bounded by MESH_GRAPH_LAYOUT_COMPACT.maxEstimatedCardHeight', () => {
+        const n = node('n', {
+            health: 'dirty',
+            dirty: true,
+            dirtyFiles: 5,
+            isOrphan: true,
+            outOfSync: true,
+            hasConflicts: true,
+            label: 'very long feature branch worktree name that would overflow',
+        })
+        const h = estimateMeshGraphNodeHeight(n, true)
+        expect(h).toBeLessThanOrEqual(MESH_GRAPH_LAYOUT_COMPACT.maxEstimatedCardHeight)
+        expect(h).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT_COMPACT.minWorktreeCardHeight)
     })
 })

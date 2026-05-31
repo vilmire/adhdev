@@ -27,6 +27,18 @@ export const MESH_GRAPH_LAYOUT = {
     placeholderTopOffset: 0,
 } as const
 
+export const MESH_GRAPH_LAYOUT_COMPACT = {
+    worktreeCardWidth: 188,
+    submoduleCardWidth: 164,
+    minWorktreeCardHeight: 68,
+    minSubmoduleCardHeight: 56,
+    maxEstimatedCardHeight: 120,
+    layerGap: 160,
+    nodeGap: 52,
+    edgeLabelBuffer: 120,
+    placeholderTopOffset: 0,
+} as const
+
 export const MESH_GRAPH_LAYOUT_DIRECTION = 'RIGHT' as const
 
 export const MESH_GRAPH_ELK_OPTIONS: LayoutOptions = {
@@ -43,6 +55,13 @@ export const MESH_GRAPH_ELK_OPTIONS: LayoutOptions = {
     'elk.layered.cycleBreaking.strategy': 'GREEDY',
     'elk.layered.mergeEdges': 'false',
     'elk.randomSeed': '1',
+}
+
+export const MESH_GRAPH_ELK_OPTIONS_COMPACT: LayoutOptions = {
+    ...MESH_GRAPH_ELK_OPTIONS,
+    'elk.spacing.nodeNode': String(MESH_GRAPH_LAYOUT_COMPACT.nodeGap),
+    'elk.layered.spacing.nodeNodeBetweenLayers': String(MESH_GRAPH_LAYOUT_COMPACT.layerGap),
+    'elk.layered.spacing.edgeNodeBetweenLayers': String(MESH_GRAPH_LAYOUT_COMPACT.edgeLabelBuffer),
 }
 
 type MeshGraphLayoutNodeKind = 'meshNode'
@@ -93,10 +112,9 @@ function countRenderedBadges(node: MeshGraphNode): number {
     return count
 }
 
-export function getMeshGraphNodeCardWidth(node: MeshGraphNode): number {
-    return node.type === 'submoduleNode'
-        ? MESH_GRAPH_LAYOUT.submoduleCardWidth
-        : MESH_GRAPH_LAYOUT.worktreeCardWidth
+export function getMeshGraphNodeCardWidth(node: MeshGraphNode, compact = false): number {
+    const layout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
+    return node.type === 'submoduleNode' ? layout.submoduleCardWidth : layout.worktreeCardWidth
 }
 
 export function getNodeSummaryForLayout(node: MeshGraphNode): string {
@@ -127,7 +145,19 @@ export function getNodeSummaryForLayout(node: MeshGraphNode): string {
     return parts.join(' · ')
 }
 
-export function estimateMeshGraphNodeHeight(node: MeshGraphNode): number {
+export function estimateMeshGraphNodeHeight(node: MeshGraphNode, compact = false): number {
+    const layout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
+    if (compact) {
+        const attentionBadge = getMeshGraphAttentionBadge(node)
+        const isDefaultBranchNode = node.type === 'defaultBranchNode'
+        const estimated = 44
+            + (isDefaultBranchNode ? 0 : 14)
+            + (attentionBadge ? 24 : 18)
+        const minHeight = node.type === 'submoduleNode'
+            ? layout.minSubmoduleCardHeight
+            : layout.minWorktreeCardHeight
+        return Math.min(layout.maxEstimatedCardHeight, Math.max(minHeight, Math.ceil(estimated)))
+    }
     const width = getMeshGraphNodeCardWidth(node)
     const charsPerLine = node.type === 'submoduleNode' ? 24 : 30
     const badgeRows = Math.ceil(countRenderedBadges(node) / (node.type === 'submoduleNode' ? 2 : 3))
@@ -147,9 +177,9 @@ export function estimateMeshGraphNodeHeight(node: MeshGraphNode): number {
         + (calloutLines > 0 ? 22 + calloutLines * 16 : 0)
 
     const minHeight = node.type === 'submoduleNode'
-        ? MESH_GRAPH_LAYOUT.minSubmoduleCardHeight
-        : MESH_GRAPH_LAYOUT.minWorktreeCardHeight
-    return Math.min(MESH_GRAPH_LAYOUT.maxEstimatedCardHeight, Math.max(minHeight, Math.ceil(estimated)))
+        ? layout.minSubmoduleCardHeight
+        : layout.minWorktreeCardHeight
+    return Math.min(layout.maxEstimatedCardHeight, Math.max(minHeight, Math.ceil(estimated)))
 }
 
 function compareNodes(a: MeshGraphNode, b: MeshGraphNode): number {
@@ -244,13 +274,13 @@ function getOrderedGraphNodes(data: MeshGraphData): MeshGraphNode[] {
     return [...sortedNodes, createPlaceholderNode(defaultAnchor, data)]
 }
 
-export function buildMeshGraphElkInput(data: MeshGraphData, layoutOptions: LayoutOptions = MESH_GRAPH_ELK_OPTIONS): ElkNode {
+export function buildMeshGraphElkInput(data: MeshGraphData, layoutOptions: LayoutOptions = MESH_GRAPH_ELK_OPTIONS, compact = false): ElkNode {
     const nodes = getOrderedGraphNodes(data)
     const nodeIds = new Set(nodes.map(node => node.id))
     const children: ElkNode[] = nodes.map(node => ({
         id: node.id,
-        width: getMeshGraphNodeCardWidth(node),
-        height: estimateMeshGraphNodeHeight(node),
+        width: getMeshGraphNodeCardWidth(node, compact),
+        height: estimateMeshGraphNodeHeight(node, compact),
     }))
     const edges: ElkExtendedEdge[] = data.edges
         .filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target))
@@ -269,16 +299,18 @@ export function buildMeshGraphElkInput(data: MeshGraphData, layoutOptions: Layou
     }
 }
 
-function calculateColumnGap(bounds: MeshGraphLayoutBounds[]): number {
+function calculateColumnGap(bounds: MeshGraphLayoutBounds[], compact = false): number {
     const xs = [...new Set(bounds.map(bound => Math.round(bound.x)))].sort((a, b) => a - b)
-    if (xs.length < 2) return MESH_GRAPH_LAYOUT.layerGap
+    const fallback = compact ? MESH_GRAPH_LAYOUT_COMPACT.layerGap : MESH_GRAPH_LAYOUT.layerGap
+    if (xs.length < 2) return fallback
     return Math.min(...xs.slice(1).map((x, index) => x - xs[index]))
 }
 
-export async function buildMeshGraphLayout(data: MeshGraphData): Promise<MeshGraphLayoutResult> {
+export async function buildMeshGraphLayout(data: MeshGraphData, compact = false): Promise<MeshGraphLayoutResult> {
+    const layoutOptions = compact ? MESH_GRAPH_ELK_OPTIONS_COMPACT : MESH_GRAPH_ELK_OPTIONS
     const graphNodes = getOrderedGraphNodes(data)
     const graphNodeById = new Map(graphNodes.map(node => [node.id, node]))
-    const elkGraph = await elk.layout(buildMeshGraphElkInput(data))
+    const elkGraph = await elk.layout(buildMeshGraphElkInput(data, layoutOptions, compact))
     const layoutNodes = (elkGraph.children ?? [])
         .map(node => {
             const graphNode = graphNodeById.get(node.id)
@@ -299,7 +331,7 @@ export async function buildMeshGraphLayout(data: MeshGraphData): Promise<MeshGra
     return {
         nodes: layoutNodes,
         bounds,
-        columnGap: calculateColumnGap(bounds),
-        layoutOptions: { ...MESH_GRAPH_ELK_OPTIONS },
+        columnGap: calculateColumnGap(bounds, compact),
+        layoutOptions: { ...layoutOptions },
     }
 }
