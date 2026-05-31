@@ -153,6 +153,94 @@ describe('resolveMeshCoordinatorSetup', () => {
     })
   })
 
+  it('resolves antigravity-cli coordinator as cli_command using agy mcp add template', () => {
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'antigravity-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          serverName: 'adhdev-mesh',
+          requiresRestart: true,
+          instructions: 'ADHDev will register the adhdev-mesh MCP server in Antigravity CLI via `agy mcp add` before launching a fresh coordinator session. You can verify with `agy mcp list`.',
+          template: 'agy mcp add {{serverName}} -- {{adhdevMcpCommand}} mcp --mode ipc --repo-mesh {{meshId}}',
+        },
+      },
+    }
+
+    const result = resolveMeshCoordinatorSetup({
+      provider,
+      meshId: 'mesh_agy_coord',
+      workspace: '/repo',
+    })
+
+    expect(result.kind).toBe('cli_command')
+    if (result.kind !== 'cli_command') throw new Error('expected cli_command')
+    expect(result.serverName).toBe('adhdev-mesh')
+    expect(result.command).toBe('agy mcp add adhdev-mesh -- adhdev mcp --mode ipc --repo-mesh mesh_agy_coord')
+    expect(result.requiresRestart).toBe(true)
+    expect(result.instructions).toContain('agy mcp add')
+  })
+
+  it('resolves antigravity-cli coordinator with a custom adhdevMcpCommand', () => {
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'antigravity-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          serverName: 'adhdev-mesh',
+          requiresRestart: true,
+          instructions: 'Register via agy mcp add.',
+          template: 'agy mcp add {{serverName}} -- {{adhdevMcpCommand}} mcp --mode ipc --repo-mesh {{meshId}}',
+        },
+      },
+    }
+
+    const result = resolveMeshCoordinatorSetup({
+      provider,
+      meshId: 'mesh_agy_custom',
+      workspace: '/repo',
+      adhdevMcpCommand: '/usr/local/bin/adhdev',
+    })
+
+    expect(result.kind).toBe('cli_command')
+    if (result.kind !== 'cli_command') throw new Error('expected cli_command')
+    expect(result.command).toContain('/usr/local/bin/adhdev')
+    expect(result.command).toContain('mesh_agy_custom')
+  })
+
+  it('codex-cli coordinator setup is unaffected after adding antigravity-cli support', () => {
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'codex-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          serverName: 'adhdev-mesh',
+          requiresRestart: true,
+          instructions: 'ADHDev will register the adhdev-mesh MCP server in Codex via `codex mcp add` before launching a fresh coordinator session. You can verify with `codex mcp list`.',
+          template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} mcp --mode ipc --repo-mesh {{meshId}}',
+        },
+      },
+    }
+
+    const result = resolveMeshCoordinatorSetup({
+      provider,
+      meshId: 'mesh_codex_unaffected',
+      workspace: '/repo',
+    })
+
+    expect(result.kind).toBe('cli_command')
+    if (result.kind !== 'cli_command') throw new Error('expected cli_command')
+    expect(result.serverName).toBe('adhdev-mesh')
+    expect(result.command).toContain('codex mcp add')
+    expect(result.command).toContain('mesh_codex_unaffected')
+  })
+
   function createAutoImportRouter(
     provider: ProviderModule,
     cliManager: { handleCliCommand: ReturnType<typeof vi.fn> },
