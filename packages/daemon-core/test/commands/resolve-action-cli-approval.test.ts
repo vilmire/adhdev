@@ -242,6 +242,86 @@ describe('handleResolveAction for CLI approval state', () => {
     expect(resolveModal).toHaveBeenCalledWith(0)
   })
 
+  it('maps Claude Code Settings Warning approve to Continue instead of Fix with Claude', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Settings Warning Claude Code detected project settings that may need review.',
+          buttons: ['Fix with Claude', 'Continue'],
+        },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({
+        type: 'claude-cli',
+        category: 'cli',
+        approvalPositiveHints: ['yes', 'allow once', 'approve', 'accept', 'use this mcp server', 'use this', 'trust', 'continue', 'run', 'proceed', 'confirm', 'allow', 'always allow'],
+      }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'claude-cli', sessionId: 'sess-1' },
+      currentProviderType: 'claude-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'claude-cli',
+      action: 'approve',
+    })
+
+    expect(result).toEqual({ success: true, buttonIndex: 1, button: 'Continue' })
+    expect(resolveModal).toHaveBeenCalledWith(1)
+  })
+
+  it('does not map Claude Code Settings Warning reject to Fix with Claude', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Settings Warning Claude Code detected project settings that may need review.',
+          buttons: ['Fix with Claude', 'Continue'],
+        },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({
+        type: 'claude-cli',
+        category: 'cli',
+        approvalPositiveHints: ['continue'],
+      }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'claude-cli', sessionId: 'sess-1' },
+      currentProviderType: 'claude-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'claude-cli',
+      action: 'reject',
+    })
+
+    expect(result).toEqual({ success: false, error: 'Approval action did not match any visible button' })
+    expect(resolveModal).not.toHaveBeenCalled()
+  })
+
   it('fails closed when action mapping cannot identify a matching button', async () => {
     const resolveModal = vi.fn()
     const adapter = {
