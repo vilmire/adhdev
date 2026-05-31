@@ -44,7 +44,8 @@ describe('mesh graph view interaction boundaries', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 
         expect(source).toContain('meshTheme.graphShellClass')
-        expect(source).toContain('h-[460px] w-full min-w-0 min-h-[460px] sm:h-[560px] xl:h-[680px]')
+        // Dynamic height class based on node count — base case 460px min, grows for dense graphs
+        expect(source).toContain('h-[460px] min-h-[460px] sm:h-[560px] xl:h-[680px]')
         expect(source).toContain('className="h-full w-full"')
     })
 
@@ -80,5 +81,31 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).not.toContain('text-text-primary')
         expect(source).not.toContain('text-text-secondary')
         expect(source).not.toContain('text-text-muted')
+    })
+
+    it('activates compact mode when node count exceeds the dense-graph threshold', () => {
+        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+
+        expect(source).toContain('COMPACT_NODE_THRESHOLD')
+        expect(source).toContain('data.nodes.length >= COMPACT_NODE_THRESHOLD')
+        expect(source).toContain('MeshGraphCompactContext')
+        expect(source).toContain('MeshGraphCompactContext.Provider value={compact}')
+    })
+
+    it('distinguishes active-session nodes and stale/offline nodes visually at the card level', () => {
+        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+
+        expect(source).toContain('isNodeActive(node)')
+        expect(source).toContain('isNodeStale(node)')
+        expect(source).toContain('animate-pulse')
+        expect(source).toContain('opacity-60')
+    })
+
+    it('scales viewport height for dense graphs with 10+ and 16+ nodes', () => {
+        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+
+        expect(source).toContain('getGraphHeightClass(data.nodes.length)')
+        expect(source).toContain('h-[580px]')
+        expect(source).toContain('h-[720px]')
     })
 })
