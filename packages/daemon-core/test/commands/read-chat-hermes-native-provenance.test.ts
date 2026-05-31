@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   readProviderChatHistory: vi.fn(),
+  readChatHistory: vi.fn(() => ({ messages: [], total: 0 })),
 }))
 
 vi.mock('../../src/config/chat-history.js', () => ({
   readProviderChatHistory: mocks.readProviderChatHistory,
+  readChatHistory: mocks.readChatHistory,
   isNativeSourceCanonicalHistory: (canonicalHistory: any) => {
     if (!canonicalHistory) return false
     return canonicalHistory.mode !== 'disabled' && canonicalHistory.mode !== 'materialized-mirror'
@@ -413,6 +415,7 @@ describe('Hermes CLI read_chat native transcript provenance', () => {
           { role: 'assistant', content: 'worker answer', receivedAt: 2_000 },
         ],
       })),
+      getRuntimeMetadata: vi.fn(() => ({ runtimeId: 'worker-runtime', surfaceKind: 'live' })),
     })
     const helpers = createHelpers(adapter, {
       getProvider: () => ({

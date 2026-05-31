@@ -241,6 +241,30 @@ describe('resolveMeshCoordinatorSetup', () => {
     expect(result.command).toContain('mesh_agy_custom')
   })
 
+  it('recognizes hermes-cli as coordinator-capable via supported flag', () => {
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'hermes-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          format: 'hermes_config_yaml',
+          serverName: 'adhdev-mesh',
+          configPathCommand: 'hermes config path',
+          requiresRestart: true,
+          instructions: 'Add this MCP server to Hermes config under mcp_servers.',
+          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - mcp\n      - --mode\n      - ipc\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
+        },
+      },
+    }
+    const result = resolveMeshCoordinatorSetup({ provider, meshId: 'mesh_hermes_cap', workspace: '/repo' })
+    // hermes-cli with manual mcpConfig resolves to auto_import via the resolveHermesMeshCoordinatorSetup path,
+    // but without ADHDEV_MCP_SERVER_PATH set it may fall through to unsupported — the key assertion is that
+    // hermes-cli is NOT rejected at the supported-flag gate; it proceeds to MCP config resolution.
+    expect(result.kind).not.toBe('unsupported')
+  })
+
   it('codex-cli coordinator setup is unaffected after adding antigravity-cli support', () => {
     const provider: ProviderModule = {
       ...baseProvider,
