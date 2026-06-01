@@ -720,3 +720,70 @@ describe('CliProviderInstance incremental history persistence', () => {
     )
   })
 })
+
+describe('CliProviderInstance — stale parsed busy status suppression (Bug 2: false completion from non-empty responseBuffer)', () => {
+  function makeInstance() {
+    return new CliProviderInstance({
+      type: 'claude-cli',
+      name: 'Claude Code',
+      category: 'cli',
+      spawn: { command: 'claude', args: [] },
+    } as any, '/tmp/project') as any
+  }
+
+  it('does not suppress finalization block when adapter responseBuffer is non-empty (even with isWaitingForResponse=false)', () => {
+    const instance = makeInstance()
+    // Simulate the Bug 2 scenario: adapter marked itself idle and cleared isWaitingForResponse,
+    // but responseBuffer still has content (native parser is still processing).
+    instance.adapter = {
+      isWaitingForResponse: false,
+      responseBuffer: 'partial response content still being parsed',
+      currentTurnScope: null,
+      isProcessing: () => false,
+      getPartialResponse: () => '',  // gated on isWaitingForResponse, returns empty
+      getStatus: () => ({ status: 'idle' }),
+      getScriptParsedStatus: () => ({ status: 'generating', messages: [] }),
+    }
+
+    const parsedStatus = { status: 'generating', messages: [], activeModal: null, modal: null }
+    const adapterStatus = { status: 'idle' }
+    // Before fix: shouldSuppressStaleParsedBusyStatus returned true (suppressing the block),
+    // causing the completion event to emit prematurely.
+    // After fix: returns false because responseBuffer is non-empty.
+    expect(instance.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus)).toBe(false)
+  })
+
+  it('suppresses finalization block when adapter responseBuffer is empty and isWaitingForResponse=false', () => {
+    const instance = makeInstance()
+    // Genuine stale parsed status: adapter truly finished, responseBuffer empty, but parser lags.
+    instance.adapter = {
+      isWaitingForResponse: false,
+      responseBuffer: '',
+      currentTurnScope: null,
+      isProcessing: () => false,
+      getPartialResponse: () => '',
+      getStatus: () => ({ status: 'idle' }),
+      getScriptParsedStatus: () => ({ status: 'generating', messages: [] }),
+    }
+
+    const parsedStatus = { status: 'generating', messages: [], activeModal: null, modal: null }
+    const adapterStatus = { status: 'idle' }
+    // Adapter truly done (empty buffer) — suppress the stale generating block so completion can proceed.
+    expect(instance.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus)).toBe(true)
+  })
+
+  it('does not suppress when parsedStatus is idle (suppression only applies to generating-like parsed statuses)', () => {
+    const instance = makeInstance()
+    instance.adapter = {
+      isWaitingForResponse: false,
+      responseBuffer: '',
+      currentTurnScope: null,
+      isProcessing: () => false,
+      getPartialResponse: () => '',
+    }
+
+    const parsedStatus = { status: 'idle', messages: [], activeModal: null, modal: null }
+    const adapterStatus = { status: 'idle' }
+    expect(instance.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus)).toBe(false)
+  })
+})

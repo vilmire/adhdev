@@ -280,4 +280,67 @@ describe('buildMeshActiveWork — direct dispatch acknowledgement gap (Bug: dire
         expect(result.terminalDirectWork).toHaveLength(1);
         expect(result.terminalDirectWork[0]).toMatchObject({ terminal: true, terminalKind: 'task_completed' });
     });
+
+    it('direct dispatch to idle session with session-matched task_completed (no taskId in terminal) is terminal, not stale', () => {
+        // Reproduces Bug 1: session processed the direct dispatch via short-generating path
+        // (task completed < 1s so UI debounce suppressed generating_started), and the
+        // task_completed ledger entry was written with no taskId (no queue task involved).
+        // terminalMatchesDispatch must match by sessionId when taskId is absent.
+        const sessionMatchedCompleted: MeshLedgerEntry = {
+            id: 'completed-session-match',
+            meshId: 'mesh-1',
+            kind: 'task_completed',
+            timestamp: '2026-05-26T00:00:30.000Z',
+            nodeId: 'node-1',
+            sessionId: 'session-1',
+            providerType: 'codex-cli',
+            payload: {
+                event: 'agent:generating_completed',
+                // No taskId — this is the short-generating suppression path where there
+                // was no queue task, so completedTaskForLedger is null.
+                completionDiagnostic: { reason: 'short_generating_suppressed', shortDurationMs: 450 },
+            },
+        };
+
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch(), sessionMatchedCompleted],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', status: 'idle' }] }],
+        });
+
+        expect(result.activeWork).toHaveLength(0);
+        expect(result.staleDirectWork).toHaveLength(0);
+        expect(result.terminalDirectWork).toHaveLength(1);
+        expect(result.terminalDirectWork[0]).toMatchObject({
+            taskId: 'task-1',
+            terminal: true,
+            terminalKind: 'task_completed',
+            status: 'idle',
+        });
+        expect(result.summary.staleDirectCount).toBe(0);
+    });
+
+    it('does not mistake a task_completed with a different queue-taskId as matching a direct dispatch', () => {
+        // If the task_completed has a taskId from a different queue task, it must NOT match
+        // the direct dispatch's taskId. Both must stay non-stale but via separate matching paths.
+        const wrongTaskCompleted: MeshLedgerEntry = {
+            id: 'completed-wrong-task',
+            meshId: 'mesh-1',
+            kind: 'task_completed',
+            timestamp: '2026-05-26T00:00:30.000Z',
+            nodeId: 'node-1',
+            sessionId: 'session-1',
+            providerType: 'codex-cli',
+            payload: { taskId: 'different-queue-task-id' },
+        };
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch(), wrongTaskCompleted],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', status: 'idle' }] }],
+        });
+        // The terminal entry has a taskId that doesn't match 'task-1', so sessionId fallback
+        // is blocked. The dispatch has no terminal match → is stale (idle, unacknowledged).
+        expect(result.staleDirectWork).toHaveLength(1);
+        expect(result.terminalDirectWork).toHaveLength(0);
+    });
 });

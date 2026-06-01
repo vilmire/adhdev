@@ -899,7 +899,16 @@ export class CliProviderInstance implements ProviderInstance {
         if (!isCliGeneratingLikeStatus(parsedRawStatus)) return false;
         if (adapterRawStatus !== 'idle') return false;
         if (hasNonEmptyCliModalButtons(parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
-        return !this.hasAdapterPendingResponse();
+        if (this.hasAdapterPendingResponse()) return false;
+        // Do not suppress when the adapter's raw response buffer is still non-empty.
+        // This catches the case where isWaitingForResponse has already flipped to false
+        // (so getPartialResponse() returns '') but the provider's native parser still
+        // reports generating because it's parsing buffered content. Suppressing the
+        // finalization block here would emit a false completion event while the provider
+        // session is still actively processing its response stream.
+        const adapterAny = this.adapter as any;
+        if (typeof adapterAny?.responseBuffer === 'string' && adapterAny.responseBuffer.trim()) return false;
+        return true;
     }
 
     private getCompletedFinalizationBlock(latestVisibleStatus: string): CompletedFinalizationBlock | null {
@@ -1122,12 +1131,30 @@ export class CliProviderInstance implements ProviderInstance {
                 }
             } else if (newStatus === 'idle' && (this.lastStatus === 'generating' || this.lastStatus === 'waiting_approval')) {
                 const duration = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : 0;
-                // If debounce still pending (generating lasted < 1s), cancel both events
+                // If debounce still pending (generating lasted < 1s), cancel both UI events.
+                // Still emit agent:generating_completed so mesh orchestration can record
+                // task_completed for direct dispatches that complete faster than the debounce.
                 if (this.generatingDebouncePending) {
-                    LOG.info('CLI', `[${this.type}] suppressed short generating (${now - this.generatingStartedAt}ms)`);
+                    const shortDurationMs = this.generatingStartedAt ? now - this.generatingStartedAt : 0;
+                    LOG.info('CLI', `[${this.type}] suppressed short generating (${shortDurationMs}ms)`);
                     if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }
                     this.generatingDebouncePending = null;
                     this.generatingStartedAt = 0;
+                    // Emit completion for mesh task association even though the UI generating
+                    // started/completed pair is suppressed (too short for visible UI update).
+                    let shortFinalSummary: string | undefined;
+                    try { shortFinalSummary = extractFinalSummaryFromMessages(this.adapter?.getScriptParsedStatus()?.messages); } catch { /* best-effort */ }
+                    this.pushEvent({
+                        event: 'agent:generating_completed',
+                        chatTitle,
+                        duration: 0,
+                        timestamp: now,
+                        finalSummary: shortFinalSummary,
+                        completionDiagnostic: {
+                            reason: 'short_generating_suppressed',
+                            shortDurationMs,
+                        },
+                    });
                 } else {
                     // Debounce completed, then require the rich transcript path that read_chat
                     // uses to show an idle turn whose last user-facing message is assistant.

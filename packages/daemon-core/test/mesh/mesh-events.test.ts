@@ -248,6 +248,96 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('records task_completed for short-generating suppressed completion with short_generating_suppressed diagnostic', () => {
+    // Reproduces Bug 1: a direct dispatch to an idle session that completes so fast
+    // that the generating debounce is suppressed (< 1s generating). After fix, the provider
+    // still emits agent:generating_completed with completionDiagnostic.reason=short_generating_suppressed,
+    // and the mesh event system records task_completed so the direct dispatch is NOT classified stale.
+    const meshId = `mesh_short_gen_suppressed_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'short-generating task')
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      expect(getQueue(meshId)[0].status).toBe('assigned')
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'provider-session-short',
+        duration: 0,
+        timestamp: Date.now(),
+        completionDiagnostic: {
+          reason: 'short_generating_suppressed',
+          shortDurationMs: 450,
+        },
+      })
+
+      expect(getQueue(meshId)[0].status).toBe('completed')
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect(completedEntry).toBeDefined()
+      expect(completedEntry?.payload.taskId).toBe(queued.id)
+      expect(completedEntry?.payload.completionDiagnostic).toMatchObject({
+        reason: 'short_generating_suppressed',
+        shortDurationMs: 450,
+      })
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('records task_completed for direct dispatch (no queue task) via short-generating suppressed path, matched by sessionId', () => {
+    // Reproduces Bug 1 for direct dispatch (non-queue) path: no queue task exists,
+    // so completedTaskForLedger is null, and the task_completed ledger entry has no taskId.
+    // buildMeshActiveWork must match this by sessionId, classifying it as terminalDirectWork.
+    const meshId = `mesh_short_gen_direct_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // No queue task — this is a direct dispatch (e.g., mesh_send_task).
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'provider-session-direct',
+        duration: 0,
+        timestamp: Date.now(),
+        completionDiagnostic: {
+          reason: 'short_generating_suppressed',
+          shortDurationMs: 200,
+        },
+      })
+
+      // A task_completed entry must still be written even without a queue task.
+      const entries = readLedgerEntries(meshId)
+      const completedEntry = entries.find(entry => entry.kind === 'task_completed')
+      expect(completedEntry).toBeDefined()
+      // No queue taskId — direct dispatch path writes no taskId in the terminal entry.
+      expect(completedEntry?.payload.taskId).toBeUndefined()
+      // sessionId must be recorded for terminalMatchesDispatch to find it by sessionId.
+      expect(completedEntry?.sessionId).toBe('runtime-session-1')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('records a second task_completed for same-session continuations after an earlier completion', () => {
     const meshId = `mesh_same_session_continuation_${Date.now()}`
     try {
