@@ -224,3 +224,54 @@ describe('compact mode layout', () => {
         expect(h).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT_COMPACT.minWorktreeCardHeight)
     })
 })
+
+describe('badge row estimation (overlap guard)', () => {
+    it('accounts for wide badges like "upstream unverified" that force extra row wrapping', () => {
+        const heavyNode = node('heavy', {
+            health: 'dirty',
+            dirty: true,
+            dirtyFiles: 3,
+            isOrphan: true,
+            upstream: 'origin/main',
+            upstreamStatus: 'unverified',
+            branch: 'feature/my-branch-name-that-is-somewhat-long',
+            locality: 'remote',
+        })
+        const defaultHeight = estimateMeshGraphNodeHeight(heavyNode, false)
+        const minHeight = MESH_GRAPH_LAYOUT.minWorktreeCardHeight
+        // A node with upstream unverified + orphan + long branch + dirty should estimate
+        // more than the minimum height since it has many wide badges that wrap
+        expect(defaultHeight).toBeGreaterThan(minHeight)
+    })
+
+    it('gives taller height estimate when badges include wide labels like "upstream unverified"', () => {
+        const withWide = node('wide', {
+            upstream: 'origin/main',
+            upstreamStatus: 'unverified',
+            isOrphan: true,
+        })
+        const withoutWide = node('narrow', {
+            upstream: null,
+            upstreamStatus: null,
+            isOrphan: false,
+        })
+        const heightWithWide = estimateMeshGraphNodeHeight(withWide, false)
+        const heightWithoutWide = estimateMeshGraphNodeHeight(withoutWide, false)
+        expect(heightWithWide).toBeGreaterThanOrEqual(heightWithoutWide)
+    })
+
+    it('estimated node height exceeds ELK-reported node gap for nodes with many badges', () => {
+        const n = node('many-badges', {
+            dirty: true,
+            dirtyFiles: 2,
+            isOrphan: true,
+            upstream: 'origin/feature',
+            upstreamStatus: 'unverified',
+            branch: 'feature/some-work',
+        })
+        const height = estimateMeshGraphNodeHeight(n, false)
+        // The height estimate must be larger than the nodeGap so ELK places this node
+        // with enough vertical clearance to avoid overlap with its same-column neighbors
+        expect(height).toBeGreaterThan(MESH_GRAPH_LAYOUT.nodeGap)
+    })
+})

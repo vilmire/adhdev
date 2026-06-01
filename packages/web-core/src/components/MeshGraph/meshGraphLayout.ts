@@ -99,17 +99,43 @@ function estimateTextLines(value: string | null | undefined, charsPerLine: numbe
     return Math.max(1, Math.min(maxLines, Math.ceil(text.length / charsPerLine)))
 }
 
-function countRenderedBadges(node: MeshGraphNode): number {
-    let count = 1 // health badge is always visible
-    if (node.type === 'submoduleNode') count += 1
-    if (node.branch && node.type !== 'submoduleNode') count += 1
-    if (node.submoduleCommit && node.type === 'submoduleNode') count += 1
-    if (node.dirty) count += 1
-    if (node.outOfSync) count += 1
-    if (node.hasConflicts) count += 1
-    if (node.type !== 'submoduleNode' && node.upstream && node.upstreamStatus !== 'fresh') count += 1
-    if (node.isOrphan) count += 1
-    return count
+const BADGE_WIDTH_APPROX_PX = 6.2 // chars/px at 10px sans-serif
+const BADGE_H_PAD_PX = 20 // px-2 * 2 sides
+
+function estimateBadgeWidth(text: string): number {
+    return Math.ceil(text.length * BADGE_WIDTH_APPROX_PX) + BADGE_H_PAD_PX
+}
+
+function estimateBadgeRows(node: MeshGraphNode, cardWidth: number): number {
+    const contentWidth = cardWidth - 32 // px-4 * 2 sides
+    const badges: string[] = []
+    badges.push(node.health.replace(/_/g, ' '))
+    if (node.type === 'submoduleNode') {
+        badges.push('submodule')
+    } else {
+        badges.push(node.locality === 'remote' ? 'remote' : 'local')
+    }
+    if (node.branch && node.type !== 'submoduleNode') badges.push(node.branch)
+    if (node.submoduleCommit && node.type === 'submoduleNode') badges.push(node.submoduleCommit.slice(0, 7))
+    if (node.dirty) badges.push(node.type === 'submoduleNode' ? 'local changes' : `${node.dirtyFiles} dirty`)
+    if (node.outOfSync) badges.push('out of sync')
+    if (node.hasConflicts) badges.push('conflicts')
+    if (node.type !== 'submoduleNode' && node.upstream && node.upstreamStatus !== 'fresh') badges.push('upstream unverified')
+    if (node.isOrphan) badges.push('needs follow-up')
+
+    let rows = 0
+    let rowWidth = 0
+    for (const badge of badges) {
+        const w = estimateBadgeWidth(badge) + 6 // gap-1.5 = 6px
+        if (rowWidth > 0 && rowWidth + w > contentWidth) {
+            rows += 1
+            rowWidth = w
+        } else {
+            rowWidth += w
+        }
+    }
+    if (rowWidth > 0) rows += 1
+    return Math.max(1, rows)
 }
 
 export function getMeshGraphNodeCardWidth(node: MeshGraphNode, compact = false): number {
@@ -150,9 +176,12 @@ export function estimateMeshGraphNodeHeight(node: MeshGraphNode, compact = false
     if (compact) {
         const attentionBadge = getMeshGraphAttentionBadge(node)
         const isDefaultBranchNode = node.type === 'defaultBranchNode'
-        const estimated = 44
+        const hasBranchBadge = !attentionBadge && node.branch && node.type !== 'submoduleNode'
+        // py-2.5*2=20 + title~16 + subtitle~14 + (attention mt-1.5+18=24 | branch mt-1+14=16 | nothing~0)
+        const estimated = 20
+            + 16
             + (isDefaultBranchNode ? 0 : 14)
-            + (attentionBadge ? 24 : 18)
+            + (attentionBadge ? 24 : hasBranchBadge ? 16 : 0)
         const minHeight = node.type === 'submoduleNode'
             ? layout.minSubmoduleCardHeight
             : layout.minWorktreeCardHeight
@@ -160,7 +189,7 @@ export function estimateMeshGraphNodeHeight(node: MeshGraphNode, compact = false
     }
     const width = getMeshGraphNodeCardWidth(node)
     const charsPerLine = node.type === 'submoduleNode' ? 24 : 30
-    const badgeRows = Math.ceil(countRenderedBadges(node) / (node.type === 'submoduleNode' ? 2 : 3))
+    const badgeRows = estimateBadgeRows(node, width)
     const titleLines = estimateTextLines(node.label, charsPerLine, 2)
     const subtitleLines = estimateTextLines(node.type === 'submoduleNode' ? node.submodulePath : node.machineLabel || node.workspace, charsPerLine, 2)
     const summaryLines = estimateTextLines(getNodeSummaryForLayout(node), charsPerLine + 4, 3)
