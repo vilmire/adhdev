@@ -206,6 +206,52 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     })
   })
 
+  it('passes the sticky providerSessionId back into parser inputs', () => {
+    const parseSession = vi.fn(() => ({
+      id: 'parser-session',
+      status: 'idle',
+      title: 'Parser Title',
+      messages: [],
+      modal: null,
+      parsedStatus: 'idle',
+    }))
+    const adapter = new ProviderCliAdapter({
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      category: 'cli',
+      binary: 'codex',
+      spawn: {
+        command: 'codex',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        parseSession,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => '›\ngpt-5.4 low · /tmp/project'),
+    }
+    adapter.accumulatedBuffer = '›\ngpt-5.4 low · /tmp/project'
+    adapter.accumulatedRawBuffer = 'raw'
+    adapter.recentOutputBuffer = 'recent'
+    adapter.responseBuffer = ''
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+    adapter.updateRuntimeMeta({ providerSessionId: '11111111-2222-4333-8444-555555555555' })
+
+    adapter.getScriptParsedStatus()
+
+    expect(parseSession).toHaveBeenCalledTimes(1)
+    expect(parseSession.mock.calls[0][0]).toMatchObject({
+      providerSessionId: '11111111-2222-4333-8444-555555555555',
+      historySessionId: '11111111-2222-4333-8444-555555555555',
+    })
+  })
+
   it('initializes constructor-provided script state before the first parser call', () => {
     const state = { seen: 1 }
     const createState = vi.fn(() => state)

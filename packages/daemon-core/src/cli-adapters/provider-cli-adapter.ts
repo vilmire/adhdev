@@ -1669,6 +1669,8 @@ export class ProviderCliAdapter implements CliAdapter {
                 recentOutputBuffer: this.recentOutputBuffer,
                 terminalScreenText: parseScreenText,
                 workingDir: this.workingDir,
+                providerSessionId: this.providerSessionId || undefined,
+                historySessionId: this.providerSessionId || undefined,
                 baseMessages: [],
                 partialResponse: this.responseBuffer,
                 isWaitingForResponse: this.isWaitingForResponse,
@@ -1951,6 +1953,8 @@ export class ProviderCliAdapter implements CliAdapter {
             recentOutputBuffer: this.recentOutputBuffer,
             terminalScreenText: this.getParseScreenText(this.terminalScreen.getText()),
             workingDir: this.workingDir,
+            providerSessionId: this.providerSessionId || undefined,
+            historySessionId: this.providerSessionId || undefined,
             baseMessages: [],
             partialResponse: this.responseBuffer,
             isWaitingForResponse: this.isWaitingForResponse,
@@ -2572,6 +2576,12 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     updateRuntimeMeta(meta: Record<string, unknown>, replace = false): void {
+        const nextProviderSessionId = typeof meta?.providerSessionId === 'string'
+            ? meta.providerSessionId.trim()
+            : '';
+        if (nextProviderSessionId) {
+            this.providerSessionId = nextProviderSessionId;
+        }
         if (!this.ptyProcess || typeof this.ptyProcess.updateMeta !== 'function') return;
         this.ptyProcess.updateMeta(meta, replace);
     }
