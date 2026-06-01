@@ -21,7 +21,7 @@ import { ChatHistoryWriter, isNativeSourceCanonicalHistory, materializeProviderN
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
-import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
+import { formatAutoApprovalMessage, pickApprovalButton, looksLikeActiveApprovalPromptText } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
@@ -47,6 +47,7 @@ function isIdleStatus(value: unknown): boolean {
     const status = typeof value === 'string' ? value.trim().toLowerCase() : '';
     return !status || status === 'idle' || status === 'ready';
 }
+
 
 function getMessageTime(message: unknown): number {
     if (!message || typeof message !== 'object') return 0;
@@ -825,7 +826,11 @@ export class CliProviderInstance implements ProviderInstance {
         const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
         const role = typeof lastVisible?.role === 'string' ? lastVisible.role.trim().toLowerCase() : '';
         const content = lastVisible ? flattenContent(lastVisible.content).trim() : '';
-        return role === 'assistant' && !!content;
+        if (role !== 'assistant' || !content) return false;
+        // Guard: if the last assistant message looks like an active approval/input prompt,
+        // it is not a real completion — the session is still awaiting user input.
+        if (looksLikeActiveApprovalPromptText(content)) return false;
+        return true;
     }
 
     private buildCompletedFinalizationDiagnostic(args: {
@@ -939,6 +944,22 @@ export class CliProviderInstance implements ProviderInstance {
         }
         if (parsed?.activeModal || parsed?.modal) return { reason: 'parsed_modal_active', terminal: true };
         if (!this.completionHasFinalAssistantMessage(parsed?.messages)) return { reason: 'missing_final_assistant' };
+
+        // Guard: if the screen still shows an approval/choice prompt as the last visible text,
+        // the turn is not complete even if the parsed status says idle and there is an assistant
+        // message. This catches the case where waiting_approval→idle transitions occur before
+        // the modal has been resolved (e.g. the PTY rendered the prompt but no button press fired).
+        try {
+            const screenText = typeof (this.adapter as any).getScreenText === 'function'
+                ? String((this.adapter as any).getScreenText() || '')
+                : '';
+            if (screenText) {
+                const tailLines = screenText.split(/\r?\n/).slice(-16).join('\n');
+                if (looksLikeActiveApprovalPromptText(tailLines)) {
+                    return { reason: 'screen_shows_approval_prompt', terminal: false };
+                }
+            }
+        } catch { /* defensive: screen text read is best-effort */ }
 
         return null;
     }

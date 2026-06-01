@@ -840,4 +840,70 @@ describe('buildMeshGraph', () => {
         }))
     })
 
+    it('emits cloneLink edges for nodes with clonedFromNodeId and exposes worktreeBranch on the node', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_clone',
+            meshName: 'Clone Test',
+            repoIdentity: 'git@github.com:test/repo.git',
+            refreshedAt: '2026-06-01T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_main',
+                    machineLabel: 'Main',
+                    workspace: '/repo/main',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: baseGit('main'),
+                },
+                {
+                    nodeId: 'node_feature',
+                    machineLabel: 'Feature',
+                    workspace: '/repo/feature-branch',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    // clonedFromNodeId is on LocalMeshNodeEntry but surfaced via mesh status
+                    ...(({ clonedFromNodeId: 'node_main', worktreeBranch: 'feature/my-task' }) as any),
+                    git: baseGit('feature/my-task'),
+                },
+            ],
+        } as any)
+
+        const featureNode = graph.nodes.find(node => node.id === 'node_feature')
+        expect(featureNode?.clonedFromNodeId).toBe('node_main')
+        expect(featureNode?.worktreeBranch).toBe('feature/my-task')
+
+        const cloneEdge = graph.edges.find(edge => edge.type === 'cloneLink')
+        expect(cloneEdge).toBeDefined()
+        expect(cloneEdge?.source).toBe('node_main')
+        expect(cloneEdge?.target).toBe('node_feature')
+        expect(cloneEdge?.direction).toBe('directed')
+        expect(cloneEdge?.label).toContain('cloned')
+        expect(cloneEdge?.label).toContain('feature/my-task')
+    })
+
+    it('does not emit cloneLink when clonedFromNodeId points to a non-existent node', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_dangling',
+            meshName: 'Dangling Clone',
+            repoIdentity: 'git@github.com:test/repo.git',
+            refreshedAt: '2026-06-01T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_feature',
+                    machineLabel: 'Feature',
+                    workspace: '/repo/feature',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    ...(({ clonedFromNodeId: 'node_that_does_not_exist' }) as any),
+                    git: baseGit('feature/work'),
+                },
+            ],
+        } as any)
+
+        expect(graph.edges.filter(edge => edge.type === 'cloneLink')).toHaveLength(0)
+    })
+
 })

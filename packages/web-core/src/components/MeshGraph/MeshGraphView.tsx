@@ -396,7 +396,7 @@ function getEdgePath(args: EdgeProps<FlowEdge>): ReturnType<typeof getBezierPath
     const graphEdge = args.data.graphEdge
 
     if (graphEdge.type === 'parentBranch') return getStraightPath(pathParams)
-    if (graphEdge.type === 'worktreeLink' || graphEdge.type === 'submoduleLink') return getSmoothStepPath(pathParams)
+    if (graphEdge.type === 'worktreeLink' || graphEdge.type === 'submoduleLink' || graphEdge.type === 'cloneLink') return getSmoothStepPath(pathParams)
     return getBezierPath(pathParams)
 }
 
@@ -415,6 +415,10 @@ function getEdgeLabelClasses(edge: MeshGraphEdge, isDark: boolean): string {
             return isDark
                 ? `${base} border-emerald-400/30 bg-emerald-500/14 text-emerald-100`
                 : `${base} border-emerald-300 bg-emerald-50 text-emerald-700`
+        case 'cloneLink':
+            return isDark
+                ? `${base} border-teal-400/30 bg-teal-500/14 text-teal-100`
+                : `${base} border-teal-300 bg-teal-50 text-teal-700`
         default:
             return isDark
                 ? `${base} border-sky-400/25 bg-slate-950/78 text-sky-100`
@@ -491,8 +495,8 @@ async function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('d
             : undefined,
         style: {
             stroke: edgeColor(edge),
-            strokeWidth: edge.type === 'orphanLink' ? 2.25 : edge.type === 'submoduleLink' ? 1.7 : edge.type === 'worktreeLink' ? 1.8 : 2,
-            strokeDasharray: edge.type === 'orphanLink' ? '5 4' : edge.type === 'submoduleLink' ? '4 3' : undefined,
+            strokeWidth: edge.type === 'orphanLink' ? 2.25 : edge.type === 'submoduleLink' ? 1.7 : edge.type === 'worktreeLink' ? 1.8 : edge.type === 'cloneLink' ? 1.6 : 2,
+            strokeDasharray: edge.type === 'orphanLink' ? '5 4' : edge.type === 'submoduleLink' ? '4 3' : edge.type === 'cloneLink' ? '6 3' : undefined,
         },
         labelStyle: {
             fill: meshTheme.edgeLabelTextColor,
@@ -523,6 +527,8 @@ function edgeColor(edge: MeshGraphEdge): string {
             return '#f97316'
         case 'submoduleLink':
             return '#c084fc'
+        case 'cloneLink':
+            return '#2dd4bf'
         default:
             return '#64748b'
     }

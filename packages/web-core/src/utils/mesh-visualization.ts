@@ -12,7 +12,7 @@ import type {
 import { canonicalizeRepoMeshStatus, repoMeshNodeHasLiveGitEvidence } from './repo-mesh-status'
 
 export type MeshGraphNodeType = 'defaultBranchNode' | 'worktreeNode' | 'orphanNode' | 'submoduleNode'
-export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink'
+export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink' | 'cloneLink'
 
 type MeshGraphSubmoduleStatus = NonNullable<GitRepoStatus['submodules']>[number]
 
@@ -71,6 +71,8 @@ export interface MeshGraphNode {
     nextStepHint?: string
     error?: string
     parentNodeId?: string | null
+    clonedFromNodeId?: string | null
+    worktreeBranch?: string | null
     submodulePath?: string | null
     submoduleCommit?: string | null
     outOfSync?: boolean
@@ -498,6 +500,9 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             expectedSubmodulePaths,
             refreshedAtMs,
         })
+        const rawClonedFromNodeId = typeof (nodeStatus as any).clonedFromNodeId === 'string'
+            ? (nodeStatus as any).clonedFromNodeId
+            : null
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
@@ -524,6 +529,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             error: nodeStatus.error,
             nextStepHint: snapshotAssessment.snapshotWarnings[0] ?? orphanReasons[0] ?? branchConvergence?.nextStep ?? undefined,
             parentNodeId: null,
+            clonedFromNodeId: rawClonedFromNodeId,
+            worktreeBranch: nodeStatus.worktreeBranch ?? null,
             submodulePath: null,
             submoduleCommit: git?.headCommit ?? null,
             outOfSync: hasOutOfSyncSubmodules(git),
@@ -719,6 +726,25 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 direction: 'undirected',
             })
         }
+    }
+
+    const nodeIds = new Set(nodes.map(node => node.id))
+    const cloneLinkEdgeIds = new Set<string>()
+    for (const node of nodes) {
+        if (!node.clonedFromNodeId || node.type === 'submoduleNode') continue
+        if (!nodeIds.has(node.clonedFromNodeId)) continue
+        const edgeId = `clone_${node.clonedFromNodeId}--${node.id}`
+        if (cloneLinkEdgeIds.has(edgeId)) continue
+        cloneLinkEdgeIds.add(edgeId)
+        const branchLabel = node.worktreeBranch ?? node.branch ?? undefined
+        edges.push({
+            id: edgeId,
+            source: node.clonedFromNodeId,
+            target: node.id,
+            type: 'cloneLink',
+            label: branchLabel ? `cloned · ${branchLabel}` : 'cloned',
+            direction: 'directed',
+        })
     }
 
     const visibleGraphNodes = nodes.filter(node => node.type !== 'defaultBranchNode')
