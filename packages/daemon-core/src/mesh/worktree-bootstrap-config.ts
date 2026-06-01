@@ -175,7 +175,22 @@ export async function runMeshWorktreeBootstrap(mesh: any, workspace: string): Pr
         commandsRun: [],
         staleInputs: loaded.config.staleInputs,
     };
+    const staleInputPaths = loaded.config.staleInputs ?? [];
+    // Snapshot which staleInputs files are absent at bootstrap start.
+    // Files already present before we start are not interference signals.
+    const initiallyAbsent = staleInputPaths.filter(p => !existsSync(join(workspace, p)));
     for (const command of validation.commands) {
+        // Check if any initially-absent staleInputs files appeared since bootstrap started
+        // (indicates another process modified the environment mid-run).
+        if (initiallyAbsent.length > 0) {
+            const appearedNow = initiallyAbsent.filter(p => existsSync(join(workspace, p)));
+            if (appearedNow.length > 0) {
+                state.status = 'stale';
+                state.completedAt = new Date().toISOString();
+                state.error = `Bootstrap interrupted: staleInputs files appeared during run: ${appearedNow.join(', ')}`;
+                return state;
+            }
+        }
         const cwd = command.cwd ? pathResolve(workspace, command.cwd) : workspace;
         const startedAt = Date.now();
         state.lastCommand = command.displayCommand;

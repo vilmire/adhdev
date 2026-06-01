@@ -444,7 +444,7 @@ export function cleanupTerminalDirectDispatches(olderThanMs = 7 * 24 * 60 * 60_0
     } catch { /* best-effort */ }
 }
 
-export function markStaleDirectDispatches(meshId: string, olderThanMs = 30 * 60_000): void {
+export function markStaleDirectDispatches(meshId: string, olderThanMs = 60 * 60_000): void {
     try {
         BeadsDB.getInstance().markStaleDirectDispatches(meshId, olderThanMs);
     } catch { /* best-effort */ }

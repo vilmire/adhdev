@@ -29,6 +29,7 @@ export class BeadsDB {
     private static instance: BeadsDB | undefined;
     private readonly db: DatabaseHandle;
     private readonly migratedMeshIds = new Set<string>();
+    private fingerprintSweepCounter = 0;
 
     private constructor(dbPath: string) {
         const dir = dirname(dbPath);
@@ -112,6 +113,12 @@ export class BeadsDB {
         const row = this.db
             .prepare('SELECT 1 FROM mesh_completion_fingerprints WHERE fingerprint = ? AND expires_at > ?')
             .get(fingerprint, now) as { 1: number } | undefined;
+        // Sweep expired fingerprints every 100 reads so stale rows don't accumulate
+        // even during read-heavy (non-write) periods when recordFingerprintSeen is idle.
+        if (++this.fingerprintSweepCounter >= 100) {
+            this.fingerprintSweepCounter = 0;
+            this.sweepExpiredFingerprints();
+        }
         return row !== undefined;
     }
 

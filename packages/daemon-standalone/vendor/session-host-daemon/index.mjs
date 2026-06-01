@@ -750,7 +750,12 @@ var SessionHostServer = class _SessionHostServer extends EventEmitter {
     const record = this.registry.getSession(sessionId);
     if (!record) return;
     const snapshot = this.getSnapshot(sessionId);
-    this.storage.save(record, snapshot);
+    try {
+      this.storage.save(record, snapshot);
+    } catch (error) {
+      const code = typeof error?.code === "string" ? error.code : "persist_failed";
+      console.error(`[session-host] Persist failed for ${sessionId}: ${code}: ${error?.message || error}`);
+    }
   }
   getSessionHostRecoveryLabel(record) {
     const recoveryState = typeof record.meta?.runtimeRecoveryState === "string" ? String(record.meta.runtimeRecoveryState).trim() : "";

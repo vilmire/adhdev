@@ -800,9 +800,8 @@ function isIdleSessionRecord(session) {
 function isMeshOwnedDelegateSession(session, meshId, nodeId) {
   const settings = session?.settings;
   const sessionMeshId = typeof settings?.meshNodeFor === "string" ? settings.meshNodeFor.trim() : "";
-  const coordinatorDaemonId = typeof settings?.meshCoordinatorDaemonId === "string" ? settings.meshCoordinatorDaemonId.trim() : "";
   const sessionNodeId = typeof settings?.meshNodeId === "string" ? settings.meshNodeId.trim() : "";
-  if (sessionMeshId !== meshId || !coordinatorDaemonId) return false;
+  if (sessionMeshId !== meshId) return false;
   return !sessionNodeId || sessionNodeId === nodeId;
 }
 function chooseDispatchableSession(sessions, providerType, meshId, nodeId) {
@@ -2160,7 +2159,7 @@ async function meshStatus(ctx, args = {}) {
         status: s.status ?? s.lifecycle ?? s.state,
         providerType: s.providerType ?? s.cliType ?? s.type,
         ...s.activeChat?.status ? { chatStatus: s.activeChat.status } : {}
-      }));
+      })).filter((s) => s.id);
     }
     return entry;
   }));

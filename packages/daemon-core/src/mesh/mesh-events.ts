@@ -467,8 +467,10 @@ function findRecentTerminalLedgerEvidence(args: {
     nodeId?: string;
 }): { id: string; kind: MeshLedgerKind; payload: Record<string, unknown>; timestamp: string } | null {
     if (!args.sessionId && !args.nodeId) return null;
-    // Tail-limit: terminal evidence for a just-fired completion will always be in recent entries.
-    const entries = readLedgerEntries(args.meshId, { tail: 100 });
+    // Tail-limit: 200 entries gives a wide enough window to catch terminal events for active
+    // sessions while avoiding a full O(n) scan. If a terminal is older than 200 entries,
+    // the BeadsDB fingerprint dedup will still block duplicate processing downstream.
+    const entries = readLedgerEntries(args.meshId, { tail: 200 });
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
         if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
@@ -486,8 +488,8 @@ function findRecentTerminalLedgerEvidence(args: {
 // entry (identified by terminalId) in ledger order. Positional (append) order is used rather
 // than timestamp comparison because both entries may share the same millisecond.
 function hasDispatchAfterTerminal(meshId: string, sessionId: string, terminalId: string): boolean {
-    // Only look at recent entries — a new dispatch after a terminal will always be recent.
-    const entries = readLedgerEntries(meshId, { tail: 100 });
+    // 200-entry window matches findRecentTerminalLedgerEvidence for consistency.
+    const entries = readLedgerEntries(meshId, { tail: 200 });
     let pastTerminal = false;
     for (const entry of entries) {
         if (!pastTerminal) {
