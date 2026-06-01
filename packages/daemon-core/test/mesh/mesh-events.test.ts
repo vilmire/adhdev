@@ -1417,4 +1417,141 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       cleanupMeshFiles(meshId)
     }
   })
+
+  it('routes worker completion events to a claude-cli coordinator session (not just codex/hermes)', () => {
+    const meshId = `mesh_claude_coord_recv_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      let listener: ((event: any) => void) | undefined
+      const workerState = {
+        instanceId: 'worker-session-codex',
+        workspace: '/repo/worktree-a',
+        settings: {
+          meshNodeFor: meshId,
+          meshNodeId: 'node_worker',
+          launchedByCoordinator: true,
+        },
+      }
+      const claudeCoordinatorState = {
+        instanceId: 'claude-coordinator-session',
+        workspace: '/repo/main',
+        type: 'claude-cli',
+        settings: { meshCoordinatorFor: meshId },
+      }
+      const worker = {
+        category: 'cli',
+        getState: vi.fn(() => workerState),
+      }
+      const claudeCoordinator = {
+        category: 'cli',
+        getState: vi.fn(() => claudeCoordinatorState),
+        onEvent: vi.fn(),
+      }
+      const instanceManager = {
+        onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
+        getInstance: vi.fn((id: string) => id === 'worker-session-codex' ? worker : undefined),
+        getByCategory: vi.fn((category: string) => category === 'cli' ? [worker, claudeCoordinator] : []),
+      }
+      const components = { instanceManager } as any
+      setupMeshEventForwarding(components)
+
+      listener!({
+        event: 'agent:generating_completed',
+        instanceId: 'worker-session-codex',
+        targetSessionId: 'worker-session-codex',
+        providerType: 'codex-cli',
+        providerSessionId: 'codex-session-abc',
+        finalSummary: 'implemented feature',
+        timestamp: 1710000001000,
+      })
+
+      expect(claudeCoordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [eventName, payload] = claudeCoordinator.onEvent.mock.calls[0]
+      expect(eventName).toBe('send_message')
+      const text = payload.input.textFallback
+      expect(text).toContain('node_worker')
+      expect(text).toContain('session_id=worker-session-codex')
+      expect(text).toContain('provider=codex-cli')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does not inject completion event when the source is a claude-cli coordinator session (aliasing guard)', () => {
+    meshConfigMocks.getMesh.mockReturnValue(undefined)
+    meshConfigMocks.getMeshByRepo.mockReturnValue({ id: 'mesh_inline_claude', nodes: [] })
+
+    let listener: ((event: any) => void) | undefined
+    const claudeCoordinatorState = {
+      instanceId: 'claude-coord-self',
+      workspace: '/repo/main',
+      type: 'claude-cli',
+      settings: { meshCoordinatorFor: 'mesh_inline_claude' },
+    }
+    const claudeCoordinator = {
+      category: 'cli',
+      getState: vi.fn(() => claudeCoordinatorState),
+      onEvent: vi.fn(),
+    }
+    const instanceManager = {
+      onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
+      getInstance: vi.fn(() => claudeCoordinator),
+      getByCategory: vi.fn((category: string) => category === 'cli' ? [claudeCoordinator] : []),
+    }
+    const components = { instanceManager } as any
+    setupMeshEventForwarding(components)
+
+    listener!({
+      event: 'agent:generating_completed',
+      instanceId: 'claude-coord-self',
+      targetSessionId: 'claude-coord-self',
+      providerType: 'claude-cli',
+    })
+
+    expect(claudeCoordinator.onEvent).not.toHaveBeenCalled()
+  })
+
+  it('routes pending buffered coordinator events to a claude-cli coordinator via handleMeshForwardEvent', () => {
+    const meshId = `mesh_claude_forward_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const claudeCoordinatorState = {
+        instanceId: 'claude-coordinator-fwd',
+        workspace: '/repo/main',
+        type: 'claude-cli',
+        settings: { meshCoordinatorFor: meshId },
+      }
+      const claudeCoordinator = {
+        category: 'cli',
+        getState: vi.fn(() => claudeCoordinatorState),
+        onEvent: vi.fn(),
+      }
+      const instanceManager = {
+        onEvent: vi.fn(),
+        getInstance: vi.fn(),
+        getByCategory: vi.fn((category: string) => category === 'cli' ? [claudeCoordinator] : []),
+      }
+      const components = { instanceManager } as any
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:stopped',
+        meshId,
+        nodeId: 'node_worker',
+        targetSessionId: 'worker-session-1',
+        providerType: 'hermes-cli',
+      })
+
+      expect(result).toEqual({ success: true, forwarded: 1 })
+      expect(claudeCoordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [eventName, payload] = claudeCoordinator.onEvent.mock.calls[0]
+      expect(eventName).toBe('send_message')
+      expect(payload.input.textFallback).toContain('has stopped')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
 })

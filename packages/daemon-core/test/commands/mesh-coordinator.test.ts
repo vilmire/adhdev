@@ -21,6 +21,35 @@ function resolveHermesCoordinatorHomeForTest(meshId: string, workspace: string):
   return join(tmpdir(), `adhdev-hermes-mesh-coordinator-${hash}`)
 }
 
+function createAutoImportRouter(
+  provider: ProviderModule,
+  cliManager: { handleCliCommand: ReturnType<typeof vi.fn> },
+  sessionHostControl?: { listSessions?: ReturnType<typeof vi.fn> },
+) {
+  return new DaemonCommandRouter({
+    commandHandler: { handle: vi.fn(async () => ({ success: false })) } as any,
+    cliManager: cliManager as any,
+    cdpManagers: new Map(),
+    providerLoader: {
+      resolve: vi.fn(() => provider),
+      getMeta: vi.fn(() => provider),
+    } as any,
+    instanceManager: {
+      collectAllStates: () => [],
+      listInstanceIds: () => [],
+      getInstance: () => null,
+    } as any,
+    detectedIdes: { value: [] },
+    sessionRegistry: {} as any,
+    sessionHostControl: {
+      listSessions: vi.fn(async () => []),
+      ...(sessionHostControl || {}),
+    } as any,
+    packageName: 'adhdev',
+    statusVersion: '0.9.71',
+  })
+}
+
 describe('resolveMeshCoordinatorSetup', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -240,35 +269,6 @@ describe('resolveMeshCoordinatorSetup', () => {
     expect(result.command).toContain('codex mcp add')
     expect(result.command).toContain('mesh_codex_unaffected')
   })
-
-  function createAutoImportRouter(
-    provider: ProviderModule,
-    cliManager: { handleCliCommand: ReturnType<typeof vi.fn> },
-    sessionHostControl?: { listSessions?: ReturnType<typeof vi.fn> },
-  ) {
-    return new DaemonCommandRouter({
-      commandHandler: { handle: vi.fn(async () => ({ success: false })) } as any,
-      cliManager: cliManager as any,
-      cdpManagers: new Map(),
-      providerLoader: {
-        resolve: vi.fn(() => provider),
-        getMeta: vi.fn(() => provider),
-      } as any,
-      instanceManager: {
-        collectAllStates: () => [],
-        listInstanceIds: () => [],
-        getInstance: () => null,
-      } as any,
-      detectedIdes: { value: [] },
-      sessionRegistry: {} as any,
-      sessionHostControl: {
-        listSessions: vi.fn(async () => []),
-        ...(sessionHostControl || {}),
-      } as any,
-      packageName: 'adhdev',
-      statusVersion: '0.9.71',
-    })
-  }
 
   it('launch_mesh_coordinator prefers live session-host workspace over stale node workspace', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-coordinator-live-workspace-'))
@@ -1367,6 +1367,120 @@ describe('resolveMeshCoordinatorSetup', () => {
       expect(remote.health).toBe('online')
       expect(remote.error).toBeUndefined()
     } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('claude-cli coordinator provider capability', () => {
+  it('claude-cli meshCoordinator config resolves to auto_import with .mcp.json path', () => {
+    const claudeProvider: ProviderModule = {
+      type: 'claude-cli',
+      name: 'Claude Code',
+      category: 'cli',
+      spawn: { command: 'claude' },
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'claude_mcp_json',
+          path: '.mcp.json',
+          serverName: 'adhdev-mesh',
+        },
+      },
+    }
+
+    const result = resolveMeshCoordinatorSetup({
+      provider: claudeProvider,
+      cliType: 'claude-cli',
+      meshId: 'mesh_claude_coord',
+      workspace: '/repo/workspace',
+    })
+
+    expect(result.kind).toBe('auto_import')
+    if (result.kind !== 'auto_import') throw new Error('expected auto_import')
+    expect(result.configPath).toBe('/repo/workspace/.mcp.json')
+    expect(result.configFormat).toBe('claude_mcp_json')
+    expect(result.serverName).toBe('adhdev-mesh')
+    expect(result.mcpServer.command).toBe('adhdev')
+    expect(result.mcpServer.args).toContain('--repo-mesh')
+    expect(result.mcpServer.args).toContain('mesh_claude_coord')
+  })
+
+  it('provider without meshCoordinator field resolves to unsupported', () => {
+    const bareProvider: ProviderModule = {
+      type: 'bare-cli',
+      name: 'Bare CLI',
+      category: 'cli',
+      spawn: { command: 'bare' },
+    }
+
+    const result = resolveMeshCoordinatorSetup({
+      provider: bareProvider,
+      cliType: 'bare-cli',
+      meshId: 'mesh_bare',
+      workspace: '/repo',
+    })
+
+    expect(result.kind).toBe('unsupported')
+  })
+
+  it('launch_mesh_coordinator includes --mcp-config and --append-system-prompt for claude-cli', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-claude-coord-args-'))
+    const mcpEntry = join(workspace, 'mcp-server.js')
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
+    process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
+
+    const provider: ProviderModule = {
+      type: 'claude-cli',
+      name: 'Claude Code',
+      category: 'cli',
+      spawn: { command: 'claude' },
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'claude_mcp_json',
+          path: '.mcp.json',
+          serverName: 'adhdev-mesh',
+        },
+      },
+    }
+    const cliManager = {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'claude-coord-session' })),
+    }
+    const router = createAutoImportRouter(provider, cliManager)
+    const inlineMesh = {
+      id: 'mesh_claude_args',
+      name: 'Claude Args Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [{ id: 'node-1', workspace, policy: {} }],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      const result = await router.execute('launch_mesh_coordinator', {
+        meshId: 'mesh_claude_args',
+        cliType: 'claude-cli',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({ success: true, cliType: 'claude-cli' })
+      const launchCall = (cliManager.handleCliCommand as any).mock.calls[0]?.[1] as any
+      expect(launchCall.cliType).toBe('claude-cli')
+      expect(launchCall.settings).toEqual({ meshCoordinatorFor: 'mesh_claude_args' })
+      const cliArgs: string[] = launchCall.cliArgs || []
+      expect(cliArgs).toContain('--mcp-config')
+      const mcpConfigIndex = cliArgs.indexOf('--mcp-config')
+      expect(cliArgs[mcpConfigIndex + 1]).toContain('.mcp.json')
+      expect(cliArgs).toContain('--append-system-prompt')
+      const promptIndex = cliArgs.indexOf('--append-system-prompt')
+      expect(cliArgs[promptIndex + 1]).toContain('Repo Mesh Coordinator')
+    } finally {
+      if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
+      else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
       rmSync(workspace, { recursive: true, force: true })
     }
   })
