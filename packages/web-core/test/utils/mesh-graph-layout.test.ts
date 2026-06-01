@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest'
 import {
     buildMeshGraphElkInput,
     buildMeshGraphLayout,
+    estimateMeshGraphEdgeLabelBounds,
+    estimateMeshGraphEdgeLabelWidth,
     estimateMeshGraphNodeHeight,
     getMeshGraphNodeCardWidth,
+    MESH_GRAPH_EDGE_LABEL,
     MESH_GRAPH_ELK_OPTIONS,
     MESH_GRAPH_ELK_OPTIONS_COMPACT,
     MESH_GRAPH_LAYOUT,
@@ -46,6 +49,13 @@ function node(id: string, overrides: Partial<MeshGraphNode> = {}): MeshGraphNode
         source: {} as any,
         ...overrides,
     }
+}
+
+function boxesOverlap(
+    a: { x: number; y: number; width: number; height: number },
+    b: { x: number; y: number; width: number; height: number },
+): boolean {
+    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
 }
 
 describe('buildMeshGraphLayout', () => {
@@ -222,6 +232,113 @@ describe('compact mode layout', () => {
         const h = estimateMeshGraphNodeHeight(n, true)
         expect(h).toBeLessThanOrEqual(MESH_GRAPH_LAYOUT_COMPACT.maxEstimatedCardHeight)
         expect(h).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT_COMPACT.minWorktreeCardHeight)
+    })
+
+    it('keeps long clone and branch edge labels inside the inter-column channel in compact constrained graphs', async () => {
+        const longBranch = 'fix/mesh-graph-overlap-followup-with-extremely-long-branch-name-that-used-to-render-across-node-cards'
+        const graph = {
+            meshId: 'mesh-constrained',
+            meshName: 'Constrained mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-06-01T00:00:00.000Z',
+            nodes: [
+                node('__branch_main', { type: 'defaultBranchNode', label: 'main', machineLabel: 'default branch' }),
+                node('node_local', {
+                    label: 'Local coordinator with long label',
+                    machineLabel: 'm1-local-coordinator-with-long-visible-name',
+                    activeSessionCount: 2,
+                    activeSessions: ['sess-local-a', 'sess-local-b'],
+                    dirty: true,
+                    dirtyFiles: 4,
+                }),
+                node('node_remote', {
+                    label: 'Remote worker with long label',
+                    machineLabel: 'remote-worker-with-long-visible-name',
+                    locality: 'remote',
+                    health: 'dirty',
+                    dirty: true,
+                    dirtyFiles: 3,
+                    activeSessionCount: 1,
+                    activeSessions: ['sess-remote'],
+                }),
+                node('node_clone', {
+                    label: 'Clone worktree with long branch',
+                    machineLabel: 'clone-worktree-host',
+                    branch: longBranch,
+                    upstream: `origin/${longBranch}`,
+                    upstreamStatus: 'unverified',
+                    clonedFromNodeId: 'node_local',
+                    worktreeBranch: longBranch,
+                    isOrphan: true,
+                    nextStepHint: 'Run mesh_refine_node or explicitly classify this worktree branch before ending coordination.',
+                    branchConvergence: {
+                        status: 'blocked_review',
+                        needsConvergence: true,
+                        reason: 'upstream_unverified',
+                        nextStep: 'Verify upstream and refine this worktree branch.',
+                        branch: longBranch,
+                        defaultBranch: 'main',
+                        upstream: `origin/${longBranch}`,
+                        upstreamStatus: 'unverified',
+                        ahead: 1,
+                        behind: 1,
+                        dirty: false,
+                        hasConflicts: false,
+                    },
+                }),
+                node('node_local::submodule::oss/packages/web-core-with-long-path', {
+                    type: 'submoduleNode',
+                    label: 'web-core-with-long-path',
+                    branch: null,
+                    parentNodeId: 'node_local',
+                    submodulePath: 'oss/packages/web-core-with-long-path',
+                    submoduleCommit: '1234567890abcdef',
+                    dirty: true,
+                    dirtyFiles: 1,
+                    outOfSync: true,
+                    health: 'degraded',
+                }),
+            ],
+            edges: [
+                { id: 'edge_local', source: '__branch_main', target: 'node_local', type: 'parentBranch', label: 'checked out', direction: 'undirected' },
+                { id: 'edge_remote', source: '__branch_main', target: 'node_remote', type: 'parentBranch', label: 'checked out', direction: 'undirected' },
+                { id: 'edge_clone_branch', source: '__branch_main', target: 'node_clone', type: 'orphanLink', label: longBranch, direction: 'undirected' },
+                { id: 'edge_session', source: 'node_local', target: 'node_remote', type: 'sessionLink', label: 'active session', direction: 'undirected' },
+                { id: 'edge_clone', source: 'node_local', target: 'node_clone', type: 'cloneLink', label: `cloned · ${longBranch}`, direction: 'directed' },
+                { id: 'edge_submodule', source: 'node_local', target: 'node_local::submodule::oss/packages/web-core-with-long-path', type: 'submoduleLink', label: 'submodule out of sync', direction: 'directed' },
+            ],
+            warnings: [],
+            stats: {} as any,
+        }
+
+        const layout = await buildMeshGraphLayout(graph as any, true)
+        const nodeBoxes = layout.nodes.map(entry => ({
+            id: entry.id,
+            x: entry.position.x,
+            y: entry.position.y,
+            width: getMeshGraphNodeCardWidth(entry.graphNode, true),
+            height: estimateMeshGraphNodeHeight(entry.graphNode, true),
+        }))
+
+        for (let i = 0; i < nodeBoxes.length; i += 1) {
+            for (let j = i + 1; j < nodeBoxes.length; j += 1) {
+                expect(boxesOverlap(nodeBoxes[i], nodeBoxes[j]), `${nodeBoxes[i].id} overlaps ${nodeBoxes[j].id}`).toBe(false)
+            }
+        }
+
+        expect(estimateMeshGraphEdgeLabelWidth(`cloned · ${longBranch}`)).toBe(MESH_GRAPH_EDGE_LABEL.maxWidth)
+
+        for (const edge of graph.edges) {
+            const source = layout.nodes.find(entry => entry.id === edge.source)
+            const target = layout.nodes.find(entry => entry.id === edge.target)
+            const labelBounds = estimateMeshGraphEdgeLabelBounds(edge, layout.nodes, true)
+            if (!source || !target || !labelBounds || source.position.x >= target.position.x) continue
+
+            const sourceRight = source.position.x + getMeshGraphNodeCardWidth(source.graphNode, true)
+            const targetLeft = target.position.x
+            const channelWidth = targetLeft - sourceRight
+            expect(labelBounds.width, `${edge.id} label width`).toBeLessThanOrEqual(channelWidth - 20)
+        }
     })
 })
 

@@ -108,4 +108,18 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain('h-[580px]')
         expect(source).toContain('h-[720px]')
     })
+
+    it('bounds long card and edge label text so rendered labels cannot escape the measured node geometry', () => {
+        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+
+        expect(source).toContain('MESH_GRAPH_EDGE_LABEL.maxWidth')
+        expect(source).toContain('title={labelTitle}')
+        expect(source).toContain('<span className="block truncate">{args.label}</span>')
+        expect(source).toContain('title={node.branch}')
+        expect(source).toContain('style={summaryTextStyle}')
+        expect(source).toContain('style={calloutTextStyle}')
+        expect(source).toContain("overflowWrap: 'anywhere'")
+        expect(source).toContain('WebkitLineClamp: 3')
+        expect(source).toContain('WebkitLineClamp: 4')
+    })
 })
