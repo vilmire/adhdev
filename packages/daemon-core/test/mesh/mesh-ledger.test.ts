@@ -593,6 +593,87 @@ describe('mesh-ledger', () => {
         });
     });
 
+    describe('ledger read cache', () => {
+        it('returns same object reference for repeated reads within 100ms', () => {
+            const meshId = `cache-ref-${randomUUID().slice(0, 8)}`;
+            // Append an entry so the file exists
+            appendLedgerEntry(meshId, { kind: 'task_dispatched', payload: { n: 1 } });
+
+            const first = readLedgerEntries(meshId);
+            const second = readLedgerEntries(meshId);
+            // Both calls must return the exact same array reference (cache hit)
+            expect(second).toBe(first);
+        });
+
+        it('invalidates cache after appendLedgerEntry', () => {
+            const meshId = `cache-append-${randomUUID().slice(0, 8)}`;
+            appendLedgerEntry(meshId, { kind: 'task_dispatched', payload: { n: 1 } });
+
+            // Warm the cache
+            const cached = readLedgerEntries(meshId);
+            expect(cached).toHaveLength(1);
+
+            // appendLedgerEntry must invalidate the cache
+            appendLedgerEntry(meshId, { kind: 'task_completed', payload: { n: 2 } });
+
+            const fresh = readLedgerEntries(meshId);
+            expect(fresh).toHaveLength(2);
+        });
+
+        it('invalidates cache after appendRemoteLedgerEntries', () => {
+            const meshId = `cache-remote-${randomUUID().slice(0, 8)}`;
+            appendLedgerEntry(meshId, { kind: 'task_dispatched', payload: { n: 1 } });
+
+            // Warm the cache
+            const cached = readLedgerEntries(meshId);
+            expect(cached).toHaveLength(1);
+
+            // appendRemoteLedgerEntries must invalidate the cache
+            const remoteEntry: MeshLedgerEntry = {
+                id: `remote-cache-${randomUUID()}`,
+                meshId,
+                timestamp: new Date().toISOString(),
+                kind: 'task_completed',
+                nodeId: 'node_remote',
+                payload: { result: 'ok' },
+            };
+            appendRemoteLedgerEntries(meshId, [remoteEntry]);
+
+            const fresh = readLedgerEntries(meshId);
+            expect(fresh).toHaveLength(2);
+        });
+
+        it('invalidates cache after compactLedger', () => {
+            const meshId = `cache-compact-${randomUUID().slice(0, 8)}`;
+            const oldTs = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+            const recentTs = new Date().toISOString();
+
+            // Write old terminal entries + recent entries directly to the file
+            const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const filePath = join(getLedgerDir(), `${safe}.jsonl`);
+            const entries = [
+                { id: randomUUID(), meshId, timestamp: oldTs, kind: 'task_completed', payload: { n: 1 } },
+                { id: randomUUID(), meshId, timestamp: oldTs, kind: 'task_failed', payload: { n: 2 } },
+                { id: randomUUID(), meshId, timestamp: recentTs, kind: 'task_dispatched', payload: { n: 3 } },
+            ];
+            writeFileSync(filePath, entries.map(e => JSON.stringify(e)).join('\n') + '\n', { encoding: 'utf-8' });
+
+            // Warm the cache — 3 entries
+            const cached = readLedgerEntries(meshId);
+            expect(cached).toHaveLength(3);
+
+            // compactLedger must invalidate the cache
+            const result = compactLedger(meshId);
+            // 2 old terminal entries archived, 1 recent non-terminal kept
+            expect(result.archivedCount).toBe(2);
+            expect(result.retainedCount).toBe(1);
+
+            const fresh = readLedgerEntries(meshId);
+            // Active file now has only the retained count worth of entries
+            expect(fresh).toHaveLength(result.retainedCount);
+        });
+    });
+
     describe('appendRemoteLedgerEntries dedup tail', () => {
         it('accepts entries that are outside the dedup tail window', () => {
             const meshId = `dedup-tail-${randomUUID().slice(0, 8)}`;

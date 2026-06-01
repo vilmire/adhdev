@@ -1557,6 +1557,77 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
   })
 })
 
+describe('atomic drain — concurrent safety', () => {
+  it('concurrent drains return events only once (atomic rename guarantees single consumer)', () => {
+    const meshId = `drain-concurrent-${randomUUID().slice(0, 8)}`
+    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+    try {
+      // Write 3 events directly to the pending-events file
+      const base = Date.now()
+      const lines = [0, 1, 2].map(i =>
+        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + i }, queuedAt: base + i })
+      )
+      fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
+
+      // In Node.js single-threaded execution, the second drain happens after the first rename
+      // completes — meaning it finds no file and returns empty.
+      const first = drainPendingMeshCoordinatorEvents(meshId)
+      const second = drainPendingMeshCoordinatorEvents(meshId)
+
+      expect(first.length).toBe(3)
+      expect(second.length).toBe(0)
+    } finally {
+      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('drain is idempotent — empty on second call', () => {
+    const meshId = `drain-idempotent-${randomUUID().slice(0, 8)}`
+    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+    try {
+      const base = Date.now()
+      const lines = [0, 1].map(i =>
+        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + i }, queuedAt: base + i })
+      )
+      fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
+
+      const first = drainPendingMeshCoordinatorEvents(meshId)
+      expect(first.length).toBe(2)
+
+      // File is already gone after first drain — second drain must return empty
+      const second = drainPendingMeshCoordinatorEvents(meshId)
+      expect(second.length).toBe(0)
+    } finally {
+      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('drain leaves no .draining temp file behind', () => {
+    const meshId = `drain-no-temp-${randomUUID().slice(0, 8)}`
+    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+    const drainingPath = `${pendingPath}.draining`
+    try {
+      const base = Date.now()
+      fs.writeFileSync(
+        pendingPath,
+        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base }, queuedAt: base }) + '\n',
+        'utf-8'
+      )
+
+      drainPendingMeshCoordinatorEvents(meshId)
+
+      // The .draining temp file must not remain on disk after a successful drain
+      expect(fs.existsSync(drainingPath)).toBe(false)
+    } finally {
+      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
+      if (fs.existsSync(drainingPath)) fs.unlinkSync(drainingPath)
+      cleanupMeshFiles(meshId)
+    }
+  })
+})
+
 describe('pending events file size guard', () => {
   it('trims pending events file to last 50 events when it exceeds 100KB', () => {
     const meshId = 'mesh-pending-trim-' + randomUUID().slice(0, 8)
