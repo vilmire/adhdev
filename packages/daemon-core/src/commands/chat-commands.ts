@@ -1593,8 +1593,16 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         && nativeHistoryCoverage !== 'partial'
                         && nativeHistoryCoverage !== 'unavailable'
                         && safeMapping;
-                    const allowStaleNativeChatMessages = adapter.cliType === 'antigravity-cli' && nativeUsableForChatMessages;
+                    // Sticky native anchor: once native was confirmed for this session, keep using it
+                    // even if freshEnough flips false due to PTY buffer activity.
+                    const NATIVE_ANCHOR_TTL_MS = 30 * 60_000;
+                    const nativeAnchoredAt = (adapter as any).nativeHistoryAnchoredAt ?? 0;
+                    const nativeIsAnchored = nativeAnchoredAt > 0
+                        && (Date.now() - nativeAnchoredAt) < NATIVE_ANCHOR_TTL_MS;
+                    const allowStaleNativeChatMessages = (adapter.cliType === 'antigravity-cli' || nativeIsAnchored)
+                        && nativeUsableForChatMessages;
                     if (nativeUsableForChatMessages && (freshEnough || allowStaleNativeChatMessages)) {
+                        (adapter as any).nativeHistoryAnchoredAt = Date.now();
                         selectedMessages = finalizeStreamingMessagesWhenIdle(nativeMessages, returnedStatus);
                         selectedProviderSessionId = historyProviderSessionId || providerSessionId;
                         selectedTranscriptAuthority = 'provider';
@@ -1620,6 +1628,11 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                             ptyStatusApprovalOnly: true,
                         });
                     } else {
+                        // Hard failure (no messages, partial coverage, or safeMapping broken) — clear anchor.
+                        // Do not clear on mere staleness: PTY can race ahead of native mtime legitimately.
+                        if (!nativeUsableForChatMessages && (adapter as any).nativeHistoryAnchoredAt) {
+                            (adapter as any).nativeHistoryAnchoredAt = 0;
+                        }
                         const liveCurrentRuntimePtySafe = isCurrentRuntimePtySafelyAttributed({
                             adapter,
                             helpers: h,

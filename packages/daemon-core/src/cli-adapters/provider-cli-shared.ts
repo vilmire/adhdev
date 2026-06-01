@@ -163,6 +163,10 @@ export interface CliProviderModule {
     requirePromptEchoBeforeSubmit?: boolean;
     /** Allow sending another prompt while the CLI is still generating so users can intervene mid-turn. */
     allowInputDuringGeneration?: boolean;
+    /** When true, only transition to idle after the parsed transcript includes a final standard assistant message. */
+    requiresFinalAssistantBeforeIdle?: boolean;
+    /** When true, allow providers to augment stale snapshot data before parse. Reserved for future use. */
+    augmentStaleSnapshot?: boolean;
     /** When provider-owned, daemon treats provider parser output as canonical transcript authority. */
     transcriptAuthority?: 'provider' | 'daemon';
     /** Full context lets provider-owned parsers canonicalize retained history instead of daemon prefix stitching. */
