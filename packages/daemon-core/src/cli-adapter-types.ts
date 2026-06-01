@@ -58,6 +58,7 @@ export interface CliAdapter {
     clearHistory?(): void;
     resolveAction?(data: unknown): Promise<void>;
     resolveModal?(buttonIndex: number): void;
+    isApprovalRecentlyResolved?(): boolean;
  // Raw PTY I/O (for terminal view)
     setOnPtyData?(callback: (data: string) => void): void;
     writeRaw?(data: string): void;

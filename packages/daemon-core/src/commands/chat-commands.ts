@@ -2770,6 +2770,12 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         if (buttonIndex < 0) {
             return { success: false, error: 'Approval action did not match any visible button' };
         }
+        // Idempotency: if the adapter already resolved this approval within cooldown, report
+        // stale_prompt rather than writing a second key to the PTY.
+        if (typeof adapter.isApprovalRecentlyResolved === 'function' && adapter.isApprovalRecentlyResolved()) {
+            LOG.info('Command', `[resolveAction] CLI PTY → stale_prompt (already resolved within cooldown)`);
+            return { success: true, stalePrompt: true, buttonIndex, button: buttons[buttonIndex] ?? button };
+        }
         if (typeof adapter.resolveModal === 'function') {
             adapter.resolveModal(buttonIndex);
         } else {

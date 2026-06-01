@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snake</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 16px;
+  }
+  h1 { font-size: 1.4rem; letter-spacing: 0.1em; color: #7ee787; }
+  #info { display: flex; gap: 24px; font-size: 0.9rem; color: #8b949e; }
+  #info span b { color: #e6edf3; }
+  canvas {
+    border: 2px solid #30363d;
+    border-radius: 6px;
+    background: #161b22;
+    display: block;
+  }
+  #msg {
+    font-size: 0.85rem;
+    color: #8b949e;
+    min-height: 1.2em;
+    text-align: center;
+  }
+  #msg.over { color: #f85149; }
+  #controls { font-size: 0.75rem; color: #6e7681; text-align: center; }
+</style>
+</head>
+<body>
+<h1>🐍 Snake</h1>
+<div id="info">
+  <span>Score: <b id="score">0</b></span>
+  <span>High: <b id="high">0</b></span>
+  <span>Level: <b id="level">1</b></span>
+</div>
+<canvas id="c" width="400" height="400"></canvas>
+<div id="msg">Press Enter or Space to start</div>
+<div id="controls">Arrow keys / WASD to move &nbsp;·&nbsp; P to pause</div>
+
+<script>
+const CELL = 20;
+const COLS = 20;
+const ROWS = 20;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const highEl = document.getElementById('high');
+const levelEl = document.getElementById('level');
+const msgEl = document.getElementById('msg');
+
+let snake, dir, nextDir, food, score, highScore, state, tick, loop;
+// state: 'idle' | 'running' | 'paused' | 'over'
+
+function rand(n) { return Math.floor(Math.random() * n); }
+
+function spawnFood() {
+  const occupied = new Set(snake.map(([x, y]) => `${x},${y}`));
+  let x, y;
+  do { x = rand(COLS); y = rand(ROWS); } while (occupied.has(`${x},${y}`));
+  return [x, y];
+}
+
+function init() {
+  snake = [[10, 10], [9, 10], [8, 10]];
+  dir = [1, 0];
+  nextDir = [1, 0];
+  food = spawnFood();
+  score = 0;
+  tick = 0;
+  scoreEl.textContent = '0';
+  levelEl.textContent = '1';
+  msgEl.textContent = '';
+  msgEl.className = '';
+  state = 'running';
+  if (loop) clearInterval(loop);
+  loop = setInterval(step, 150);
+}
+
+function level() { return 1 + Math.floor(score / 5); }
+function speed() { return Math.max(80, 150 - (level() - 1) * 10); }
+
+function step() {
+  if (state !== 'running') return;
+  tick++;
+  // Adjust speed by resetting interval on level-up
+  const newSpeed = speed();
+  if (tick % 5 === 0) {
+    clearInterval(loop);
+    loop = setInterval(step, newSpeed);
+  }
+
+  dir = nextDir;
+  const head = [snake[0][0] + dir[0], snake[0][1] + dir[1]];
+
+  // Wall collision
+  if (head[0] < 0 || head[0] >= COLS || head[1] < 0 || head[1] >= ROWS) {
+    return gameOver();
+  }
+  // Self collision
+  if (snake.some(([x, y]) => x === head[0] && y === head[1])) {
+    return gameOver();
+  }
+
+  snake.unshift(head);
+
+  if (head[0] === food[0] && head[1] === food[1]) {
+    score++;
+    scoreEl.textContent = score;
+    levelEl.textContent = level();
+    if (score > highScore) { highScore = score; highEl.textContent = highScore; }
+    food = spawnFood();
+  } else {
+    snake.pop();
+  }
+
+  draw();
+}
+
+function gameOver() {
+  state = 'over';
+  clearInterval(loop);
+  msgEl.textContent = `Game over! Score: ${score} · Press Enter to restart`;
+  msgEl.className = 'over';
+  draw();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Grid lines (subtle)
+  ctx.strokeStyle = '#1c2128';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= COLS; i++) {
+    ctx.beginPath(); ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, canvas.height); ctx.stroke();
+  }
+  for (let j = 0; j <= ROWS; j++) {
+    ctx.beginPath(); ctx.moveTo(0, j * CELL); ctx.lineTo(canvas.width, j * CELL); ctx.stroke();
+  }
+
+  // Food
+  ctx.fillStyle = '#f85149';
+  ctx.beginPath();
+  ctx.arc(food[0] * CELL + CELL / 2, food[1] * CELL + CELL / 2, CELL / 2 - 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Snake
+  snake.forEach(([x, y], i) => {
+    const t = i / Math.max(1, snake.length - 1);
+    // Head: bright green; tail: darker
+    const g = Math.round(100 + (1 - t) * 131);
+    ctx.fillStyle = i === 0 ? '#7ee787' : `rgb(30, ${g}, 50)`;
+    ctx.beginPath();
+    ctx.roundRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2, 3);
+    ctx.fill();
+  });
+
+  // Eyes on head
+  const [hx, hy] = snake[0];
+  ctx.fillStyle = '#0d1117';
+  const ex = dir[0] === 1 ? 0.65 : dir[0] === -1 ? 0.2 : 0.3;
+  const ey = dir[1] === 1 ? 0.65 : dir[1] === -1 ? 0.2 : 0.3;
+  const ex2 = dir[1] !== 0 ? 0.6 : ex;
+  ctx.beginPath();
+  ctx.arc(hx * CELL + ex * CELL, hy * CELL + ey * CELL, 2, 0, Math.PI * 2);
+  ctx.arc(hx * CELL + ex2 * CELL, hy * CELL + (dir[1] !== 0 ? ey : 1 - ey) * CELL, 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Pause overlay
+  if (state === 'paused') {
+    ctx.fillStyle = 'rgba(13,17,23,0.6)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#e6edf3';
+    ctx.font = 'bold 28px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2);
+    ctx.textAlign = 'left';
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  const key = e.key;
+
+  if ((key === 'Enter' || key === ' ') && (state === 'idle' || state === 'over')) {
+    e.preventDefault();
+    init();
+    return;
+  }
+
+  if (key === 'p' || key === 'P') {
+    if (state === 'running') { state = 'paused'; msgEl.textContent = 'Paused · P to resume'; draw(); }
+    else if (state === 'paused') { state = 'running'; msgEl.textContent = ''; }
+    return;
+  }
+
+  if (state !== 'running' && state !== 'paused') return;
+
+  const moves = {
+    ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+    w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0],
+    W: [0, -1], S: [0, 1], A: [-1, 0], D: [1, 0],
+  };
+  const m = moves[key];
+  if (m) {
+    e.preventDefault();
+    // Prevent reversing
+    if (m[0] + dir[0] !== 0 || m[1] + dir[1] !== 0) nextDir = m;
+  }
+});
+
+highScore = 0;
+state = 'idle';
+// Draw empty board
+snake = [[10, 10], [9, 10], [8, 10]];
+dir = [1, 0];
+food = [15, 10];
+draw();
+</script>
+</body>
+</html>
