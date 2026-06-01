@@ -2727,6 +2727,13 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     resolveModal(buttonIndex: number): void {
+        // Idempotency guard: if we already resolved an approval within the cooldown
+        // window, do not write another key to the PTY. This prevents double-writes when
+        // auto-approve fires and then the status poller re-enters before the PTY absorbs
+        // the first keystroke, or when an external mesh_approve command races with auto-approve.
+        if (this.lastApprovalResolvedAt && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown) {
+            return;
+        }
         let modal = this.activeModal || this.runParseApproval(this.recentOutputBuffer);
         if (!modal && typeof this.cliScripts?.parseSession === 'function') {
             try {
@@ -2773,6 +2780,11 @@ export class ProviderCliAdapter implements CliAdapter {
             const keys = DOWN.repeat(clampedIndex) + '\r';
             this.ptyProcess.write(keys);
         }
+    }
+
+    /** Returns true if an approval was resolved within the adapter's cooldown window. */
+    isApprovalRecentlyResolved(): boolean {
+        return !!(this.lastApprovalResolvedAt && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown);
     }
 
     resize(cols: number, rows: number): void {

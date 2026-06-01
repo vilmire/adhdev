@@ -322,6 +322,91 @@ describe('handleResolveAction for CLI approval state', () => {
     expect(resolveModal).not.toHaveBeenCalled()
   })
 
+  it('returns stale_prompt without calling resolveModal when adapter reports recently resolved', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Do you want to proceed?',
+          buttons: ['Yes', 'No'],
+        },
+      }),
+      resolveModal,
+      isApprovalRecentlyResolved: () => true,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'claude-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'claude-cli', sessionId: 'sess-1' },
+      currentProviderType: 'claude-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'claude-cli',
+      action: 'approve',
+    })
+
+    // Must not write a second key to PTY; result indicates stale prompt
+    expect(result.success).toBe(true)
+    expect((result as any).stalePrompt).toBe(true)
+    expect(resolveModal).not.toHaveBeenCalled()
+  })
+
+  it('does not send a second approval key when called twice in rapid succession for same prompt', async () => {
+    const resolveModal = vi.fn()
+    let alreadyResolved = false
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Allow npm run build?',
+          buttons: ['Yes', 'No'],
+        },
+      }),
+      resolveModal: vi.fn((_index: number) => {
+        alreadyResolved = true
+      }),
+      isApprovalRecentlyResolved: () => alreadyResolved,
+      writeRaw: vi.fn(),
+    }
+
+    const helpers = {
+      getProvider: () => ({ type: 'claude-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'claude-cli', sessionId: 'sess-2' },
+      currentProviderType: 'claude-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any
+    const args = { targetSessionId: 'sess-2', agentType: 'claude-cli', action: 'approve' }
+
+    const first = await handleResolveAction(helpers, args)
+    const second = await handleResolveAction(helpers, args)
+
+    expect(first.success).toBe(true)
+    expect((first as any).stalePrompt).toBeUndefined()
+    expect(adapter.resolveModal).toHaveBeenCalledTimes(1)
+
+    expect(second.success).toBe(true)
+    expect((second as any).stalePrompt).toBe(true)
+    // resolveModal must not be called a second time
+    expect(adapter.resolveModal).toHaveBeenCalledTimes(1)
+  })
+
   it('fails closed when action mapping cannot identify a matching button', async () => {
     const resolveModal = vi.fn()
     const adapter = {

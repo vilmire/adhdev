@@ -164,6 +164,7 @@ export declare class ProviderCliAdapter implements CliAdapter {
     isReady(): boolean;
     writeRaw(data: string): Promise<void>;
     resolveModal(buttonIndex: number): void;
+    isApprovalRecentlyResolved(): boolean;
     resize(cols: number, rows: number): void;
     getDebugState(): Record<string, any>;
     getTraceState(limit?: number): Record<string, any>;
