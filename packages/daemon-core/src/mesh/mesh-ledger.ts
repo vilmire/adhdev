@@ -371,6 +371,7 @@ export function compactLedger(meshId: string): { archivedCount: number; retained
     try {
         const keepLines = keep.length ? keep.map(e => JSON.stringify(e)).join('\n') + '\n' : '';
         writeFileSync(filePath, keepLines, { encoding: 'utf-8', mode: 0o600 });
+        invalidateLedgerCache(meshId);
     } catch (e: any) {
         process.stderr.write(`[adhdev-mesh] Ledger compaction rewrite failed for mesh ${meshId}: ${e?.message || e}\n`);
         return { archivedCount: archive.length, retainedCount: keep.length };
@@ -553,6 +554,7 @@ export function appendLedgerEntry(
     try {
         const line = JSON.stringify(entry) + '\n';
         appendFileSync(filePath, line, { encoding: 'utf-8', mode: 0o600 });
+        invalidateLedgerCache(meshId);
         meshLedgerEvents.emit('append', meshId, entry);
         return entry;
     } catch (e: any) {
@@ -610,6 +612,7 @@ export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEnt
     try {
         const lines = validEntries.map(e => JSON.stringify(e)).join('\n') + '\n';
         appendFileSync(ledgerPath, lines, { encoding: 'utf-8', mode: 0o600 });
+        invalidateLedgerCache(meshId);
         for (const entry of validEntries) {
             meshLedgerEvents.emit('append', meshId, entry);
         }
@@ -619,51 +622,62 @@ export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEnt
     }
 }
 
+// ─── Ledger Read Cache ─────────────────────────
+// Absorbs repeated reads within a single event-processing burst (e.g. agent:stopped
+// triggers shouldSuppressIntentionalCleanupStop, findRecentTerminalLedgerEvidence,
+// hasDispatchAfterTerminal, and getSessionRecoveryContext — all reading the same file).
+// TTL is 100ms: short enough to stay current, long enough to cover one event cycle.
+// Cache is invalidated on every write (append, remote import, compaction).
+
+const ledgerReadCache = new Map<string, { entries: MeshLedgerEntry[]; cachedAt: number }>();
+const LEDGER_CACHE_TTL_MS = 100;
+
+function readLedgerFile(meshId: string): MeshLedgerEntry[] {
+    const filePath = getLedgerPath(meshId);
+    if (!existsSync(filePath)) return [];
+    let content: string;
+    try { content = readFileSync(filePath, 'utf-8'); } catch { return []; }
+    const entries: MeshLedgerEntry[] = [];
+    for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+            const entry = JSON.parse(line) as MeshLedgerEntry;
+            if (entry.id && entry.kind) entries.push(entry);
+        } catch { /* skip malformed lines */ }
+    }
+    return entries;
+}
+
+function getCachedRawEntries(meshId: string): MeshLedgerEntry[] {
+    const now = Date.now();
+    const cached = ledgerReadCache.get(meshId);
+    if (cached && now - cached.cachedAt < LEDGER_CACHE_TTL_MS) return cached.entries;
+    const entries = readLedgerFile(meshId);
+    ledgerReadCache.set(meshId, { entries, cachedAt: now });
+    return entries;
+}
+
+function invalidateLedgerCache(meshId: string): void {
+    ledgerReadCache.delete(meshId);
+}
+
 /**
  * Read ledger entries with optional filtering.
  */
 export function readLedgerEntries(meshId: string, opts?: ReadLedgerOptions): MeshLedgerEntry[] {
-    const filePath = getLedgerPath(meshId);
-    if (!existsSync(filePath)) return [];
+    let entries = getCachedRawEntries(meshId);
 
-    let content: string;
-    try {
-        content = readFileSync(filePath, 'utf-8');
-    } catch {
-        return [];
-    }
-
-    const lines = content.split('\n').filter(line => line.trim());
-    let entries: MeshLedgerEntry[] = [];
-
-    for (const line of lines) {
-        try {
-            const entry = JSON.parse(line) as MeshLedgerEntry;
-            if (!entry.id || !entry.kind) continue;
-            entries.push(entry);
-        } catch {
-            // Skip malformed lines
-        }
-    }
-
-    // Apply filters
     if (opts?.since) {
         const sinceDate = new Date(opts.since).getTime();
-        if (!isNaN(sinceDate)) {
-            entries = entries.filter(e => new Date(e.timestamp).getTime() >= sinceDate);
-        }
+        if (!isNaN(sinceDate)) entries = entries.filter(e => new Date(e.timestamp).getTime() >= sinceDate);
     }
-
     if (opts?.kind?.length) {
         const kindSet = new Set(opts.kind);
         entries = entries.filter(e => kindSet.has(e.kind));
     }
-
-    // Apply tail (return last N entries)
     if (opts?.tail && opts.tail > 0 && entries.length > opts.tail) {
         entries = entries.slice(-opts.tail);
     }
-
     return entries;
 }
 
@@ -785,7 +799,11 @@ export function getSessionRecoveryContext(
     },
 ): SessionRecoveryContext {
     const maxRetries = opts.maxRetries ?? 1;
-    const entries = readLedgerEntries(meshId);
+    // tail:500 is sufficient — task_dispatched is never archived (only terminal kinds are),
+    // so dispatch history is always present. The 30-min failure window means we never need
+    // more than a few dozen recent entries for consecutiveNodeFailures. Bounding to 500
+    // avoids a full O(n) scan for meshes with many historical entries.
+    const entries = readLedgerEntries(meshId, { tail: 500 });
 
     // Find the last task_dispatched for this session or node
     let lastDispatch: MeshLedgerEntry | null = null;

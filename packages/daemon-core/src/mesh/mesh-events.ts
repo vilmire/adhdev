@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
@@ -252,6 +252,26 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
     }
 }
 
+// Atomically rename the file before reading so concurrent drains can't both consume
+// the same events. renameSync is atomic on POSIX (same filesystem); only one caller
+// wins the rename — the other gets ENOENT and returns null, preventing duplicate delivery.
+function atomicDrainFile(path: string): string | null {
+    const tmpPath = `${path}.draining`;
+    try {
+        renameSync(path, tmpPath);
+    } catch {
+        return null; // another drain already renamed it, or file doesn't exist
+    }
+    try {
+        const content = readFileSync(tmpPath, 'utf-8');
+        try { unlinkSync(tmpPath); } catch { /* already cleaned up */ }
+        return content;
+    } catch {
+        try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+        return null;
+    }
+}
+
 /** Drain and return all pending coordinator events for meshId, removing them from disk. */
 export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
@@ -260,12 +280,16 @@ export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDa
         : [getPendingEventsPath(meshId)];
     const all: PendingMeshCoordinatorEvent[] = [];
     for (const path of paths) {
-        if (!existsSync(path)) continue;
-        try {
-            const parsed = readPendingMeshCoordinatorEventsFromDisk(meshId, coordinatorDaemonId);
-            try { unlinkSync(path); } catch { /* concurrent drain already removed it */ }
-            all.push(...parsed);
-        } catch { /* skip */ }
+        const content = atomicDrainFile(path);
+        if (!content) continue;
+        const parsed = content.split('\n').filter(Boolean).flatMap(line => {
+            try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
+        });
+        // If reading the shared file, filter to events that target this coordinator or are unscoped.
+        const filtered = (coordinatorDaemonId && path === getPendingEventsPath(meshId))
+            ? parsed.filter(e => !e.targetCoordinatorDaemonId || e.targetCoordinatorDaemonId === coordinatorDaemonId)
+            : parsed;
+        all.push(...filtered);
     }
     if (all.length === 0) return [];
     return reconcilePendingMeshCoordinatorEvents(meshId, all);
