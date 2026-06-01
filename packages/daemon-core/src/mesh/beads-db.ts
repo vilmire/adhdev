@@ -230,6 +230,134 @@ export class BeadsDB {
         this.migratedMeshIds.delete(meshId);
     }
 
+    insertQueueEntry(entry: MeshWorkQueueEntry): void {
+        this.db.prepare(`
+            INSERT INTO mesh_queue (
+                id, mesh_id, status, target_node_id, target_session_id,
+                assigned_node_id, assigned_session_id, created_at, updated_at, payload
+            ) VALUES (
+                @id, @meshId, @status, @targetNodeId, @targetSessionId,
+                @assignedNodeId, @assignedSessionId, @createdAt, @updatedAt, @payload
+            )
+        `).run(this.toRow(entry));
+        this.maybeCheckpointWal();
+    }
+
+    updateQueueEntry(entry: MeshWorkQueueEntry): void {
+        const now = new Date().toISOString();
+        entry.updatedAt = now;
+        this.db.prepare(`
+            UPDATE mesh_queue SET
+                status = @status,
+                target_node_id = @targetNodeId,
+                target_session_id = @targetSessionId,
+                assigned_node_id = @assignedNodeId,
+                assigned_session_id = @assignedSessionId,
+                updated_at = @updatedAt,
+                payload = @payload
+            WHERE id = @id AND mesh_id = @meshId
+        `).run(this.toRow(entry));
+        this.maybeCheckpointWal();
+    }
+
+    findQueueEntryById(meshId: string, id: string): MeshWorkQueueEntry | null {
+        this.ensureLegacyQueueMigrated(meshId);
+        const row = this.db.prepare(
+            'SELECT payload FROM mesh_queue WHERE id = ? AND mesh_id = ?'
+        ).get(id, meshId) as { payload: string } | undefined;
+        return row ? JSON.parse(row.payload) as MeshWorkQueueEntry : null;
+    }
+
+    hasActiveAssignment(meshId: string, sessionId: string, nodeId: string): boolean {
+        this.ensureLegacyQueueMigrated(meshId);
+        const row = this.db.prepare(`
+            SELECT 1 FROM mesh_queue
+            WHERE mesh_id = ? AND status = 'assigned'
+              AND (assigned_session_id = ? OR assigned_node_id = ?)
+            LIMIT 1
+        `).get(meshId, sessionId, nodeId);
+        return row !== undefined;
+    }
+
+    // O(1) claim: transaction ensures only one session claims a pending task
+    claimNextQueueTask(meshId: string, nodeId: string, sessionId: string): MeshWorkQueueEntry | null {
+        return this.transaction(() => {
+            this.ensureLegacyQueueMigrated(meshId);
+            if (this.hasActiveAssignment(meshId, sessionId, nodeId)) return null;
+
+            // Priority: session-targeted > node-targeted (no session) > unconstrained
+            const row = (
+                this.db.prepare(`
+                    SELECT payload FROM mesh_queue
+                    WHERE mesh_id = ? AND status = 'pending' AND target_session_id = ?
+                    ORDER BY created_at ASC LIMIT 1
+                `).get(meshId, sessionId) as { payload: string } | undefined
+            ) || (
+                this.db.prepare(`
+                    SELECT payload FROM mesh_queue
+                    WHERE mesh_id = ? AND status = 'pending' AND target_node_id = ? AND target_session_id IS NULL
+                    ORDER BY created_at ASC LIMIT 1
+                `).get(meshId, nodeId) as { payload: string } | undefined
+            ) || (
+                this.db.prepare(`
+                    SELECT payload FROM mesh_queue
+                    WHERE mesh_id = ? AND status = 'pending' AND target_node_id IS NULL AND target_session_id IS NULL
+                    ORDER BY created_at ASC LIMIT 1
+                `).get(meshId) as { payload: string } | undefined
+            );
+            if (!row) return null;
+
+            const entry = JSON.parse(row.payload) as MeshWorkQueueEntry;
+            const now = new Date().toISOString();
+            entry.status = 'assigned';
+            entry.assignedNodeId = nodeId;
+            entry.assignedSessionId = sessionId;
+            entry.dispatchTimestamp = now;
+            entry.updatedAt = now;
+
+            this.db.prepare(`
+                UPDATE mesh_queue SET
+                    status = 'assigned', assigned_node_id = ?, assigned_session_id = ?,
+                    updated_at = ?, payload = ?
+                WHERE id = ? AND mesh_id = ?
+            `).run(nodeId, sessionId, now, JSON.stringify(entry), entry.id, meshId);
+
+            this.maybeCheckpointWal();
+            return entry;
+        });
+    }
+
+    getQueueStatsByStatus(meshId: string): { status: string; count: number }[] {
+        this.ensureLegacyQueueMigrated(meshId);
+        return this.db.prepare(
+            `SELECT status, COUNT(*) as count FROM mesh_queue WHERE mesh_id = ? GROUP BY status`
+        ).all(meshId) as { status: string; count: number }[];
+    }
+
+    getActiveAssignmentDetails(meshId: string): Array<{ id: string; nodeId?: string; sessionId?: string; message: string }> {
+        this.ensureLegacyQueueMigrated(meshId);
+        const rows = this.db.prepare(`
+            SELECT assigned_node_id, assigned_session_id, payload
+            FROM mesh_queue WHERE mesh_id = ? AND status = 'assigned'
+        `).all(meshId) as Array<{ assigned_node_id: string | null; assigned_session_id: string | null; payload: string }>;
+        return rows.map(r => {
+            let id = '', message = '';
+            try { const e = JSON.parse(r.payload) as MeshWorkQueueEntry; id = e.id; message = e.message; } catch { /* ignore */ }
+            return { id, nodeId: r.assigned_node_id ?? undefined, sessionId: r.assigned_session_id ?? undefined, message };
+        });
+    }
+
+    findAssignedBySession(meshId: string, sessionId: string, occurredAtIso?: string): MeshWorkQueueEntry | null {
+        this.ensureLegacyQueueMigrated(meshId);
+        // Use updated_at (≈ dispatchTimestamp when status='assigned') for the occurredAt filter.
+        const sql = occurredAtIso
+            ? `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND assigned_session_id = ? AND status = 'assigned' AND updated_at <= ? ORDER BY updated_at DESC LIMIT 1`
+            : `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND assigned_session_id = ? AND status = 'assigned' ORDER BY updated_at DESC LIMIT 1`;
+        const args: string[] = occurredAtIso ? [meshId, sessionId, occurredAtIso] : [meshId, sessionId];
+        const row = this.db.prepare(sql).get(...args as [string, string, string?]) as { payload: string } | undefined;
+        return row ? JSON.parse(row.payload) as MeshWorkQueueEntry : null;
+    }
+
     private toRow(entry: MeshWorkQueueEntry): Record<string, unknown> {
         return {
             id: entry.id,

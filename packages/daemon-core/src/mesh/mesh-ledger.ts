@@ -682,44 +682,10 @@ export function readLedgerEntries(meshId: string, opts?: ReadLedgerOptions): Mes
 }
 
 /**
- * Read a bounded, cursor-addressable ledger slice for local-first/P2P replication.
- * The result is intentionally small and self-describing so coordinators can query
- * remote daemons on demand without Cloud/D1 becoming a ledger data-plane.
+ * Build a ledger summary from pre-loaded entries. Used by both getLedgerSummary
+ * and readLedgerSlice so they share a single getCachedRawEntries() call.
  */
-export function readLedgerSlice(meshId: string, opts?: ReadLedgerSliceOptions): MeshLedgerSlice {
-    const limit = clampLedgerSliceLimit(opts?.limit);
-    let entries = readLedgerEntries(meshId, { since: opts?.since, kind: opts?.kind });
-    const afterId = typeof opts?.afterId === 'string' && opts.afterId.trim() ? opts.afterId.trim() : null;
-    if (afterId) {
-        const index = entries.findIndex(entry => entry.id === afterId);
-        entries = index >= 0 ? entries.slice(index + 1) : entries;
-    }
-    const bounded = entries.slice(0, limit);
-    return {
-        protocol: 'adhdev.mesh.ledger.slice.v1',
-        meshId,
-        entries: bounded,
-        cursor: {
-            afterId,
-            nextAfterId: bounded.length ? bounded[bounded.length - 1].id : afterId,
-            limit,
-            hasMore: entries.length > bounded.length,
-        },
-        summary: getLedgerSummary(meshId),
-        sourceOfTruth: {
-            kind: 'local_jsonl',
-            path: getLedgerPath(meshId),
-            bounded: true,
-            maxLimit: MAX_LEDGER_SLICE_LIMIT,
-        },
-    };
-}
-
-/**
- * Get a summary of mesh activity from the ledger.
- */
-export function getLedgerSummary(meshId: string): MeshLedgerSummary {
-    const entries = readLedgerEntries(meshId);
+function buildLedgerSummary(meshId: string, entries: MeshLedgerEntry[]): MeshLedgerSummary {
     const archived = readArchivedCounts(meshId);
     const now = Date.now();
     const recentFailureCutoff = now - RECENT_FAILURE_WINDOW_MS;
@@ -765,6 +731,59 @@ export function getLedgerSummary(meshId: string): MeshLedgerSummary {
     return summary;
 }
 
+/**
+ * Read a bounded, cursor-addressable ledger slice for local-first/P2P replication.
+ * The result is intentionally small and self-describing so coordinators can query
+ * remote daemons on demand without Cloud/D1 becoming a ledger data-plane.
+ */
+export function readLedgerSlice(meshId: string, opts?: ReadLedgerSliceOptions): MeshLedgerSlice {
+    const limit = clampLedgerSliceLimit(opts?.limit);
+    // Load raw entries once and share between filtering, pagination, and summary.
+    const rawEntries = getCachedRawEntries(meshId);
+
+    let entries: MeshLedgerEntry[] = rawEntries;
+    if (opts?.since) {
+        const sinceDate = new Date(opts.since).getTime();
+        if (!isNaN(sinceDate)) entries = entries.filter(e => new Date(e.timestamp).getTime() >= sinceDate);
+    }
+    if (opts?.kind?.length) {
+        const kindSet = new Set(opts.kind);
+        entries = entries.filter(e => kindSet.has(e.kind));
+    }
+
+    const afterId = typeof opts?.afterId === 'string' && opts.afterId.trim() ? opts.afterId.trim() : null;
+    if (afterId) {
+        const index = entries.findIndex(entry => entry.id === afterId);
+        entries = index >= 0 ? entries.slice(index + 1) : entries;
+    }
+    const bounded = entries.slice(0, limit);
+    return {
+        protocol: 'adhdev.mesh.ledger.slice.v1',
+        meshId,
+        entries: bounded,
+        cursor: {
+            afterId,
+            nextAfterId: bounded.length ? bounded[bounded.length - 1].id : afterId,
+            limit,
+            hasMore: entries.length > bounded.length,
+        },
+        summary: buildLedgerSummary(meshId, rawEntries),
+        sourceOfTruth: {
+            kind: 'local_jsonl',
+            path: getLedgerPath(meshId),
+            bounded: true,
+            maxLimit: MAX_LEDGER_SLICE_LIMIT,
+        },
+    };
+}
+
+/**
+ * Get a summary of mesh activity from the ledger.
+ */
+export function getLedgerSummary(meshId: string): MeshLedgerSummary {
+    return buildLedgerSummary(meshId, getCachedRawEntries(meshId));
+}
+
 // ─── Recovery Context ───────────────────────────
 
 export interface SessionRecoveryContext {
@@ -805,35 +824,43 @@ export function getSessionRecoveryContext(
     // avoids a full O(n) scan for meshes with many historical entries.
     const entries = readLedgerEntries(meshId, { tail: 500 });
 
-    // Find the last task_dispatched for this session or node
+    // Single backward pass: find last task_dispatched AND count consecutive recent failures.
+    const now = Date.now();
+    const recentWindow = now - RECENT_FAILURE_WINDOW_MS;
     let lastDispatch: MeshLedgerEntry | null = null;
+    let consecutiveNodeFailures = 0;
+    let failureCountDone = false;
     for (let i = entries.length - 1; i >= 0; i--) {
         const e = entries[i];
-        if (e.kind !== 'task_dispatched') continue;
-        if (opts.sessionId && e.sessionId === opts.sessionId) { lastDispatch = e; break; }
-        if (opts.nodeId && e.nodeId === opts.nodeId) { lastDispatch = e; break; }
+        const ts = new Date(e.timestamp).getTime();
+
+        // Failure counting: scan until we exit the recent window or hit a chain-breaker
+        if (!failureCountDone) {
+            if (ts < recentWindow) {
+                failureCountDone = true;
+            } else if (opts.nodeId && e.nodeId !== opts.nodeId) {
+                // Entry for a different node — skip for failure counting but continue scanning for dispatch
+            } else if (e.kind === 'task_failed') {
+                if (!isIntentionalCleanupStopEntry(e)) consecutiveNodeFailures++;
+            } else if (e.kind === 'task_completed' || e.kind === 'task_dispatched') {
+                // A completion or new dispatch breaks the consecutive failure chain
+                failureCountDone = true;
+            }
+        }
+
+        // Dispatch search: find the last dispatch matching this session or node
+        if (lastDispatch === null && e.kind === 'task_dispatched') {
+            if (opts.sessionId && e.sessionId === opts.sessionId) { lastDispatch = e; }
+            else if (!opts.sessionId && opts.nodeId && e.nodeId === opts.nodeId) { lastDispatch = e; }
+        }
+
+        // Stop once both tasks are done
+        if (lastDispatch !== null && failureCountDone) break;
     }
 
     const lastTaskMessage = typeof lastDispatch?.payload?.message === 'string'
         ? lastDispatch.payload.message
         : null;
-
-    // Count consecutive recent failures for this node (within 30 min window)
-    const now = Date.now();
-    const recentWindow = now - RECENT_FAILURE_WINDOW_MS;
-    let consecutiveNodeFailures = 0;
-    for (let i = entries.length - 1; i >= 0; i--) {
-        const e = entries[i];
-        if (new Date(e.timestamp).getTime() < recentWindow) break;
-        if (opts.nodeId && e.nodeId !== opts.nodeId) continue;
-        if (e.kind === 'task_failed') {
-            if (isIntentionalCleanupStopEntry(e)) continue;
-            consecutiveNodeFailures++;
-        } else if (e.kind === 'task_completed' || e.kind === 'task_dispatched') {
-            // A completion or new dispatch breaks the consecutive failure chain
-            break;
-        }
-    }
 
     // Count how many times the same task was attempted.
     // Prefer exact taskId match (payload.taskId) to avoid 200-char prefix collisions.

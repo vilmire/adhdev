@@ -124,35 +124,26 @@ export function enqueueTask(
     if (!modeValidation.valid) {
         throw new Error(`live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(', ')})`);
     }
-    return withQueueLock(meshId, () => {
-        const queue = readQueue(meshId);
-        const entry: MeshWorkQueueEntry = {
-            id: randomUUID(),
-            meshId,
-            message,
-            status: 'pending',
-            taskMode: modeValidation.taskMode,
-            targetNodeId: opts?.targetNodeId,
-            targetSessionId: opts?.targetSessionId,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-        };
-        queue.push(entry);
-        writeQueue(meshId, queue);
-        return entry;
-    });
+    const entry: MeshWorkQueueEntry = {
+        id: randomUUID(),
+        meshId,
+        message,
+        status: 'pending',
+        taskMode: modeValidation.taskMode,
+        targetNodeId: opts?.targetNodeId,
+        targetSessionId: opts?.targetSessionId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+    BeadsDB.getInstance().insertQueueEntry(entry);
+    return entry;
 }
 
 /**
  * Get all tasks in the queue, optionally filtered by status.
  */
 export function getQueue(meshId: string, opts?: { status?: MeshTaskStatus[] }): MeshWorkQueueEntry[] {
-    let queue = readQueue(meshId);
-    if (opts?.status?.length) {
-        const statuses = new Set(opts.status);
-        queue = queue.filter(q => statuses.has(q.status));
-    }
-    return queue;
+    return BeadsDB.getInstance().getQueueEntries(meshId, opts?.status?.length ? opts.status : undefined);
 }
 
 export function getMeshQueueRevision(meshId: string): string {
@@ -163,29 +154,7 @@ export function getMeshQueueRevision(meshId: string): string {
  * Find the next pending task that this node is allowed to claim, and mark it as assigned.
  */
 export function claimNextTask(meshId: string, nodeId: string, sessionId: string): MeshWorkQueueEntry | null {
-    return withQueueLock(meshId, () => {
-        const queue = readQueue(meshId);
-        const hasActiveAssignment = queue.some(q => q.status === 'assigned' && (
-            q.assignedSessionId === sessionId || q.assignedNodeId === nodeId
-        ));
-        if (hasActiveAssignment) return null;
-        let targetIdx = queue.findIndex(q => q.status === 'pending' && q.targetSessionId === sessionId);
-        if (targetIdx === -1) {
-            targetIdx = queue.findIndex(q => q.status === 'pending' && q.targetNodeId === nodeId && !q.targetSessionId);
-        }
-        if (targetIdx === -1) {
-            targetIdx = queue.findIndex(q => q.status === 'pending' && !q.targetNodeId && !q.targetSessionId);
-        }
-        if (targetIdx === -1) return null;
-        const entry = queue[targetIdx];
-        entry.status = 'assigned';
-        entry.assignedNodeId = nodeId;
-        entry.assignedSessionId = sessionId;
-        entry.dispatchTimestamp = new Date().toISOString();
-        entry.updatedAt = new Date().toISOString();
-        writeQueue(meshId, queue);
-        return entry;
-    });
+    return BeadsDB.getInstance().claimNextQueueTask(meshId, nodeId, sessionId);
 }
 
 /**
@@ -200,13 +169,11 @@ export function updateTaskStatus(
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
-        const queue = readQueue(meshId);
-        const idx = queue.findIndex(q => q.id === taskId);
-        if (idx === -1) return null;
-        queue[idx].status = status;
-        queue[idx].updatedAt = new Date().toISOString();
-        writeQueue(meshId, queue);
-        return queue[idx];
+        const entry = BeadsDB.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
+        entry.status = status;
+        BeadsDB.getInstance().updateQueueEntry(entry);
+        return entry;
     });
 }
 
@@ -216,14 +183,12 @@ export function recordTaskAutoLaunch(
     autoLaunch: Omit<NonNullable<MeshWorkQueueEntry['autoLaunch']>, 'updatedAt'>,
 ): MeshWorkQueueEntry | null {
     return withQueueLock(meshId, () => {
-        const queue = readQueue(meshId);
-        const idx = queue.findIndex(q => q.id === taskId);
-        if (idx === -1) return null;
+        const entry = BeadsDB.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
         const now = new Date().toISOString();
-        queue[idx].autoLaunch = { ...autoLaunch, updatedAt: now };
-        queue[idx].updatedAt = now;
-        writeQueue(meshId, queue);
-        return queue[idx];
+        entry.autoLaunch = { ...autoLaunch, updatedAt: now };
+        BeadsDB.getInstance().updateQueueEntry(entry);
+        return entry;
     });
 }
 
@@ -237,16 +202,14 @@ export function cancelTask(
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
-        const queue = readQueue(meshId);
-        const idx = queue.findIndex(q => q.id === taskId);
-        if (idx === -1) return null;
+        const entry = BeadsDB.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
         const now = new Date().toISOString();
-        queue[idx].status = 'cancelled';
-        queue[idx].updatedAt = now;
-        queue[idx].cancelledAt = now;
-        if (opts?.reason) queue[idx].cancelReason = opts.reason;
-        writeQueue(meshId, queue);
-        return queue[idx];
+        entry.status = 'cancelled';
+        entry.cancelledAt = now;
+        if (opts?.reason) entry.cancelReason = opts.reason;
+        BeadsDB.getInstance().updateQueueEntry(entry);
+        return entry;
     });
 }
 
@@ -267,11 +230,8 @@ export function requeueTask(
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
-        const queue = readQueue(meshId);
-        const idx = queue.findIndex(q => q.id === taskId);
-        if (idx === -1) return null;
-        const entry = queue[idx];
-        const now = new Date().toISOString();
+        const entry = BeadsDB.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
         entry.status = 'pending';
         delete entry.assignedNodeId;
         delete entry.assignedSessionId;
@@ -281,11 +241,10 @@ export function requeueTask(
         if (typeof opts?.targetNodeId === 'string') entry.targetNodeId = opts.targetNodeId;
         if (opts?.clearTargetSession !== false) delete entry.targetSessionId;
         if (typeof opts?.targetSessionId === 'string') entry.targetSessionId = opts.targetSessionId;
-        entry.updatedAt = now;
-        entry.requeuedAt = now;
+        entry.requeuedAt = new Date().toISOString();
         entry.requeueCount = (entry.requeueCount || 0) + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
-        writeQueue(meshId, queue);
+        BeadsDB.getInstance().updateQueueEntry(entry);
         return entry;
     });
 }
@@ -300,22 +259,12 @@ export function updateSessionTaskStatus(
     opts?: { occurredAt?: string },
 ): MeshWorkQueueEntry | null {
     return withQueueLock(meshId, () => {
-        const queue = readQueue(meshId);
-        const occurredAtTime = opts?.occurredAt ? new Date(opts.occurredAt).getTime() : Number.NaN;
-        const hasOccurredAt = Number.isFinite(occurredAtTime);
-        let bestIdx = -1;
-        let bestTime = 0;
-        for (let i = queue.length - 1; i >= 0; i--) {
-            if (queue[i].assignedSessionId !== sessionId || queue[i].status !== 'assigned') continue;
-            const time = new Date(queue[i].dispatchTimestamp || queue[i].updatedAt).getTime();
-            if (hasOccurredAt && Number.isFinite(time) && time > occurredAtTime) continue;
-            if (time > bestTime) { bestTime = time; bestIdx = i; }
-        }
-        if (bestIdx === -1) return null;
-        queue[bestIdx].status = status;
-        queue[bestIdx].updatedAt = new Date().toISOString();
-        writeQueue(meshId, queue);
-        return queue[bestIdx];
+        const occurredAtIso = opts?.occurredAt ? new Date(opts.occurredAt).toISOString() : undefined;
+        const entry = BeadsDB.getInstance().findAssignedBySession(meshId, sessionId, occurredAtIso);
+        if (!entry) return null;
+        entry.status = status;
+        BeadsDB.getInstance().updateQueueEntry(entry);
+        return entry;
     });
 }
 
@@ -344,14 +293,16 @@ export interface MeshWorkQueueStats {
  * Return aggregate queue statistics for the given mesh.
  */
 export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
-    const queue = readQueue(meshId);
-    const pending = queue.filter(q => q.status === 'pending').length;
-    const assigned = queue.filter(q => q.status === 'assigned').length;
-    const completed = queue.filter(q => q.status === 'completed').length;
-    const failed = queue.filter(q => q.status === 'failed').length;
-    const cancelled = queue.filter(q => q.status === 'cancelled').length;
+    const rows = BeadsDB.getInstance().getQueueStatsByStatus(meshId);
+    const counts: Record<string, number> = {};
+    for (const r of rows) counts[r.status] = r.count;
+    const pending = counts['pending'] ?? 0;
+    const assigned = counts['assigned'] ?? 0;
+    const completed = counts['completed'] ?? 0;
+    const failed = counts['failed'] ?? 0;
+    const cancelled = counts['cancelled'] ?? 0;
     return {
-        total: queue.length,
+        total: pending + assigned + completed + failed + cancelled,
         active: pending + assigned,
         historical: completed + failed + cancelled,
         pending,
@@ -359,23 +310,9 @@ export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
         completed,
         failed,
         cancelled,
-        activeCounts: {
-            pending,
-            assigned,
-        },
-        historicalCounts: {
-            completed,
-            failed,
-            cancelled,
-        },
-        activeAssignments: queue
-            .filter(q => q.status === 'assigned')
-            .map(q => ({
-                id: q.id,
-                nodeId: q.assignedNodeId,
-                sessionId: q.assignedSessionId,
-                message: q.message,
-            })),
+        activeCounts: { pending, assigned },
+        historicalCounts: { completed, failed, cancelled },
+        activeAssignments: BeadsDB.getInstance().getActiveAssignmentDetails(meshId),
     };
 }
 
