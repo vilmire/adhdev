@@ -650,6 +650,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     excludeRecentCount: number;
     historyBehavior?: ProviderModule['historyBehavior'];
     scripts?: ProviderScripts;
+    excludeInProgressTurn?: boolean;
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
     if (!args.historySessionId) {
         return {
@@ -669,6 +670,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         excludeRecentCount: args.excludeRecentCount,
         historyBehavior: args.historyBehavior,
         scripts: args.scripts as any,
+        excludeInProgressTurn: args.excludeInProgressTurn,
     });
     // Native transcripts are keyed by provider/runtime session identity. Falling
     // back to workspace makes concurrent local Codex/Hermes sessions alias each
@@ -1533,6 +1535,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         excludeRecentCount: 0,
                         historyBehavior: provider?.historyBehavior,
                         scripts: provider?.scripts as any,
+                        excludeInProgressTurn: returnedStatus === 'waiting_approval',
                     });
                 } catch (error: any) {
                     const fallbackReason = `native_history_error:${error?.message || String(error)}`;
