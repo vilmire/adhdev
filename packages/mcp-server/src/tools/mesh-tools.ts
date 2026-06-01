@@ -666,9 +666,11 @@ function isIdleSessionRecord(session: any): boolean {
 function isMeshOwnedDelegateSession(session: any, meshId: string, nodeId: string): boolean {
     const settings = session?.settings;
     const sessionMeshId = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
-    const coordinatorDaemonId = typeof settings?.meshCoordinatorDaemonId === 'string' ? settings.meshCoordinatorDaemonId.trim() : '';
     const sessionNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
-    if (sessionMeshId !== meshId || !coordinatorDaemonId) return false;
+    // meshNodeFor is the primary ownership signal. meshCoordinatorDaemonId is required for
+    // relay safety on remote nodes but NOT for local ownership matching — older coordinator
+    // versions may have launched sessions without it. Allow those sessions as mesh-owned delegates.
+    if (sessionMeshId !== meshId) return false;
     return !sessionNodeId || sessionNodeId === nodeId;
 }
 
@@ -2356,12 +2358,15 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         const liveSessions = await collectLiveStatusSessions(ctx, node);
         if (liveSessions.length > 0) {
             // Slim to essential fields only — full session objects are expensive in coordinator context.
-            entry.sessions = liveSessions.map((s: any) => ({
-                id: s.instanceId ?? s.id ?? s.sessionId,
-                status: s.status ?? s.lifecycle ?? s.state,
-                providerType: s.providerType ?? s.cliType ?? s.type,
-                ...(s.activeChat?.status ? { chatStatus: s.activeChat.status } : {}),
-            }));
+            entry.sessions = liveSessions
+                .map((s: any) => ({
+                    id: s.instanceId ?? s.id ?? s.sessionId,
+                    status: s.status ?? s.lifecycle ?? s.state,
+                    providerType: s.providerType ?? s.cliType ?? s.type,
+                    ...(s.activeChat?.status ? { chatStatus: s.activeChat.status } : {}),
+                }))
+                // Exclude sessions with no resolvable id (malformed or custom provider response).
+                .filter((s: any) => s.id);
         }
 
         return entry;

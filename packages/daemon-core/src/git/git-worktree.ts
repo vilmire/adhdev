@@ -116,8 +116,11 @@ export async function createWorktree(opts: WorktreeCreateOptions): Promise<Workt
         });
     } catch (error: any) {
         const stderr = typeof error.stderr === 'string' ? error.stderr : '';
-        // Clean error messages for common failures
         if (/already exists/i.test(stderr)) {
+            // Distinguish directory-collision (TOCTOU race) from branch-already-exists
+            if (existsSync(targetDir)) {
+                throw new Error(`Worktree target directory was created concurrently: ${targetDir}`);
+            }
             throw new Error(`Branch '${branch}' already exists or is checked out in another worktree`);
         }
         throw new Error(`git worktree add failed: ${stderr.trim() || error.message}`);
