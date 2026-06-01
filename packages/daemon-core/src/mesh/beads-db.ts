@@ -309,4 +309,14 @@ export class BeadsDB {
             WHERE status IN ('completed', 'failed', 'stale') AND updated_at < ?
         `).run(cutoff);
     }
+
+    markStaleDirectDispatches(meshId: string, olderThanMs: number): void {
+        const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            UPDATE mesh_direct_dispatches
+            SET status = 'stale', updated_at = ?
+            WHERE mesh_id = ? AND status = 'dispatched' AND dispatched_at < ?
+        `).run(now, meshId, cutoff);
+    }
 }

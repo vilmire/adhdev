@@ -32,7 +32,8 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
-const POOL_IDLE_EVICT_MS = 5 * 60_000; // evict connections idle for >5 min
+const POOL_IDLE_EVICT_MS = 5 * 60_000;   // evict connections idle for >5 min
+const POOL_MAX_AGE_MS = 10 * 60_000;     // force-refresh connections older than 10 min
 
 interface PooledConnection {
   ws: WebSocket;
@@ -40,6 +41,7 @@ interface PooledConnection {
   commandQueue: Array<{ type: string; args: Record<string, unknown>; requestId: string }>;
   pending: Map<string, PendingRequest>;
   lastUsedAt: number;
+  createdAt: number;
 }
 
 const connectionPool = new Map<string, PooledConnection>();
@@ -62,12 +64,14 @@ function getOrCreateConnection(
   const existing = connectionPool.get(url);
   if (existing) {
     const { readyState } = existing.ws;
+    const now = Date.now();
     const isAlive = readyState === WS_CONNECTING || readyState === WS_OPEN;
-    const isIdle = Date.now() - existing.lastUsedAt > POOL_IDLE_EVICT_MS && existing.pending.size === 0;
-    if (isAlive && !isIdle) {
+    const isIdle = now - existing.lastUsedAt > POOL_IDLE_EVICT_MS && existing.pending.size === 0;
+    const isTooOld = now - existing.createdAt > POOL_MAX_AGE_MS && existing.pending.size === 0;
+    if (isAlive && !isIdle && !isTooOld) {
       return existing;
     }
-    if (isAlive && isIdle) {
+    if (isAlive && (isIdle || isTooOld)) {
       try { existing.ws.close(); } catch { /* noop */ }
       connectionPool.delete(url);
     }
@@ -75,12 +79,14 @@ function getOrCreateConnection(
     connectionPool.delete(url);
   }
 
+  const now = Date.now();
   const conn: PooledConnection = {
     ws: new WebSocketCtor(url),
     ready: false,
     commandQueue: [],
     pending: new Map(),
-    lastUsedAt: Date.now(),
+    lastUsedAt: now,
+    createdAt: now,
   };
   connectionPool.set(url, conn);
 

@@ -53,6 +53,7 @@ var IPC_COMMAND_TIMEOUTS_MS = {
 var WS_CONNECTING = 0;
 var WS_OPEN = 1;
 var POOL_IDLE_EVICT_MS = 5 * 6e4;
+var POOL_MAX_AGE_MS = 10 * 6e4;
 var connectionPool = /* @__PURE__ */ new Map();
 function buildRequestId() {
   return `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -67,12 +68,14 @@ function getOrCreateConnection(WebSocketCtor, url) {
   const existing = connectionPool.get(url);
   if (existing) {
     const { readyState } = existing.ws;
+    const now2 = Date.now();
     const isAlive = readyState === WS_CONNECTING || readyState === WS_OPEN;
-    const isIdle = Date.now() - existing.lastUsedAt > POOL_IDLE_EVICT_MS && existing.pending.size === 0;
-    if (isAlive && !isIdle) {
+    const isIdle = now2 - existing.lastUsedAt > POOL_IDLE_EVICT_MS && existing.pending.size === 0;
+    const isTooOld = now2 - existing.createdAt > POOL_MAX_AGE_MS && existing.pending.size === 0;
+    if (isAlive && !isIdle && !isTooOld) {
       return existing;
     }
-    if (isAlive && isIdle) {
+    if (isAlive && (isIdle || isTooOld)) {
       try {
         existing.ws.close();
       } catch {
@@ -81,12 +84,14 @@ function getOrCreateConnection(WebSocketCtor, url) {
     }
     connectionPool.delete(url);
   }
+  const now = Date.now();
   const conn = {
     ws: new WebSocketCtor(url),
     ready: false,
     commandQueue: [],
     pending: /* @__PURE__ */ new Map(),
-    lastUsedAt: Date.now()
+    lastUsedAt: now,
+    createdAt: now
   };
   connectionPool.set(url, conn);
   const drainQueue = () => {
@@ -1304,7 +1309,7 @@ function rememberMeshSessionProviderMetadataFromEvent(event) {
   });
 }
 function resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId) {
-  const entries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
+  const entries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 50 });
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
     const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
@@ -1340,6 +1345,20 @@ function isGitStatusDirty(status) {
   if (typeof status?.isDirty === "boolean") return status.isDirty;
   if (typeof status?.dirty === "boolean") return status.dirty;
   return countUncommittedChanges(status) > 0;
+}
+function slimLedgerPayload(payload) {
+  const slim = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (k === "message" || k === "taskSummary") {
+      slim[k] = typeof v === "string" && v.length > 200 ? v.slice(0, 200) + "\u2026" : v;
+    } else if (k === "evidence" || k === "workerResult" || k === "gitStatus" || k === "validationResults") {
+    } else if (k === "finalSummary") {
+      slim[k] = typeof v === "string" && v.length > 300 ? v.slice(0, 300) + "\u2026" : v;
+    } else {
+      slim[k] = v;
+    }
+  }
+  return slim;
 }
 function readRelatedRepos(node) {
   const raw = Array.isArray(node.relatedRepos) ? node.relatedRepos : Array.isArray(node.policy?.relatedRepos) ? node.policy.relatedRepos : [];
@@ -2019,9 +2038,8 @@ var ALL_MESH_TOOLS = [
 async function meshStatus(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
   const { mesh, transport } = ctx;
-  const results = [];
   const ledgerSummary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
-  for (const node of mesh.nodes) {
+  const results = await Promise.all(mesh.nodes.map(async (node) => {
     const entry = {
       nodeId: node.id,
       workspace: node.workspace,
@@ -2095,7 +2113,7 @@ async function meshStatus(ctx, args = {}) {
     if (recoveryContext.consecutiveNodeFailures > 0) {
       entry.recoveryHints = {
         consecutiveFailures: recoveryContext.consecutiveNodeFailures,
-        lastTaskMessage: recoveryContext.lastTaskMessage,
+        lastTaskMessage: typeof recoveryContext.lastTaskMessage === "string" ? recoveryContext.lastTaskMessage.slice(0, 100) + (recoveryContext.lastTaskMessage.length > 100 ? "\u2026" : "") : recoveryContext.lastTaskMessage,
         advice: recoveryContext.advice,
         retryRecommended: recoveryContext.retryRecommended
       };
@@ -2137,11 +2155,16 @@ async function meshStatus(ctx, args = {}) {
     if (relatedRepos.length) entry.relatedRepos = relatedRepos;
     const liveSessions = await collectLiveStatusSessions(ctx, node);
     if (liveSessions.length > 0) {
-      entry.sessions = liveSessions;
+      entry.sessions = liveSessions.map((s) => ({
+        id: s.instanceId ?? s.id ?? s.sessionId,
+        status: s.status ?? s.lifecycle ?? s.state,
+        providerType: s.providerType ?? s.cliType ?? s.type,
+        ...s.activeChat?.status ? { chatStatus: s.activeChat.status } : {}
+      }));
     }
-    results.push(entry);
-  }
-  const ledgerEntries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail: 500 });
+    return entry;
+  }));
+  const ledgerEntries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail: 200 });
   const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
     meshId: mesh.id,
     queue: (0, import_daemon_core.getQueue)(mesh.id),
@@ -2169,7 +2192,8 @@ async function meshStatus(ctx, args = {}) {
     activeWork: activeWorkEvidence.activeWork,
     staleDirectWorkSummary,
     ...args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {},
-    terminalDirectWork: activeWorkEvidence.terminalDirectWork,
+    // terminalDirectWork is historical (completed/failed direct dispatches) — opt-in only.
+    ...args.includeTerminalDirectWork === true ? { terminalDirectWork: activeWorkEvidence.terminalDirectWork } : {},
     activeWorkSummary: activeWorkEvidence.summary,
     ...pollingGuidance ? { pollingGuidance } : {},
     branchConvergenceSummary: summarizeBranchConvergence(results)
@@ -2200,7 +2224,11 @@ async function meshTaskHistory(ctx, args) {
   const pendingEvents = await drainCoordinatorPendingEvents(ctx);
   const tail = typeof args.tail === "number" && args.tail > 0 ? args.tail : 20;
   const kind = typeof args.kind === "string" && args.kind.trim() ? [args.kind.trim()] : void 0;
-  const entries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail, kind });
+  const rawEntries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail, kind });
+  const entries = rawEntries.map((e) => ({
+    ...e,
+    payload: e.payload ? slimLedgerPayload(e.payload) : e.payload
+  }));
   const summary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
   return JSON.stringify({
     meshId: mesh.id,
@@ -2392,7 +2420,8 @@ async function meshViewQueue(ctx, args) {
     const visibleSummary = buildQueueStatusSummary(queue);
     const maintenance = buildQueueMaintenanceReport(fullQueue);
     const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
-    const ledgerEntries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
+    (0, import_daemon_core.markStaleDirectDispatches)(ctx.mesh.id);
+    const ledgerEntries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
     const directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(ctx.mesh.id);
     const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
       meshId: ctx.mesh.id,
@@ -2427,21 +2456,11 @@ async function meshViewQueue(ctx, args) {
         filtered: Boolean(statusFilter?.length) || view !== "all"
       },
       queue,
-      visibleQueue: queue,
       activeWork: activeWorkEvidence.activeWork,
       staleDirectWork: activeWorkEvidence.staleDirectWork,
       activeWorkSummary: activeWorkEvidence.summary,
       ...pollingGuidance ? { pollingGuidance } : {},
-      visibleSummary,
       summary,
-      activeCounts: summary.activeCounts,
-      historicalCounts: summary.historicalCounts,
-      activeCount: summary.activeCount,
-      historicalCount: summary.historicalCount,
-      visibleActiveCounts: visibleSummary.activeCounts,
-      visibleHistoricalCounts: visibleSummary.historicalCounts,
-      visibleActiveCount: visibleSummary.activeCount,
-      visibleHistoricalCount: visibleSummary.historicalCount,
       staleAssignedTasks,
       staleAssignedCount: maintenance.staleAssignedCount,
       queueMaintenance: maintenance,
@@ -2807,18 +2826,19 @@ async function meshReadChat(ctx, args) {
       workspace: node.workspace,
       ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
       ...providerSessionId ? { providerSessionId } : {},
-      tailLimit: args.tail ?? 10
+      tailLimit: args.tail ?? 3
     });
     const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result), {
       key: `mesh:${args.node_id}:${args.session_id}`,
       toolName: "mesh_read_chat",
       completionCallbackExpected: true
     });
-    if (args.compact) {
+    const useCompact = args.compact !== false;
+    if (useCompact) {
       const compactPayload = compactChatPayload(payload, {
         nodeId: args.node_id,
         sessionId: args.session_id,
-        limit: args.tail ?? 10
+        limit: args.tail ?? 3
       });
       return JSON.stringify(
         payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
@@ -2831,7 +2851,7 @@ async function meshReadChat(ctx, args) {
     try {
       const targetId = `${node.daemonId}:session:${args.session_id}`;
       const res = await ctx.transport.readChat(targetId, {
-        limit: args.tail ?? 10,
+        limit: args.tail ?? 3,
         sessionId: args.session_id
       });
       return JSON.stringify(res, null, 2);

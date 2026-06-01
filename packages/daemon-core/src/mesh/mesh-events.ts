@@ -162,7 +162,7 @@ function refineTerminalEventFromLedger(meshId: string, pending: readonly Pending
             .filter(value => !value.endsWith(':')),
     );
     const backfilled: PendingMeshCoordinatorEvent[] = [];
-    const entries = readLedgerEntries(meshId);
+    const entries = readLedgerEntries(meshId, { tail: 200 });
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
         if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed') continue;
@@ -467,7 +467,8 @@ function findRecentTerminalLedgerEvidence(args: {
     nodeId?: string;
 }): { id: string; kind: MeshLedgerKind; payload: Record<string, unknown>; timestamp: string } | null {
     if (!args.sessionId && !args.nodeId) return null;
-    const entries = readLedgerEntries(args.meshId);
+    // Tail-limit: terminal evidence for a just-fired completion will always be in recent entries.
+    const entries = readLedgerEntries(args.meshId, { tail: 100 });
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
         if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
@@ -485,7 +486,8 @@ function findRecentTerminalLedgerEvidence(args: {
 // entry (identified by terminalId) in ledger order. Positional (append) order is used rather
 // than timestamp comparison because both entries may share the same millisecond.
 function hasDispatchAfterTerminal(meshId: string, sessionId: string, terminalId: string): boolean {
-    const entries = readLedgerEntries(meshId);
+    // Only look at recent entries — a new dispatch after a terminal will always be recent.
+    const entries = readLedgerEntries(meshId, { tail: 100 });
     let pastTerminal = false;
     for (const entry of entries) {
         if (!pastTerminal) {
