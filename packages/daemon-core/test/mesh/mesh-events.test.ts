@@ -1005,3 +1005,194 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 })
+
+describe('Codex coordinator stuck-generating: refine terminal event delivery', () => {
+  function createGeneratingCoordinatorComponents(meshId: string, coordinatorStatus: string = 'generating') {
+    const coordinatorState = {
+      instanceId: 'codex-coordinator-session',
+      workspace: '/repo/main',
+      settings: { meshCoordinatorFor: meshId },
+      status: coordinatorStatus,
+      activeChat: { status: coordinatorStatus === 'generating' ? 'generating' : undefined },
+    }
+    const coordinator = {
+      category: 'cli',
+      getState: vi.fn(() => coordinatorState),
+      onEvent: vi.fn(),
+    }
+    const instanceManager = {
+      onEvent: vi.fn(),
+      getInstance: vi.fn(() => null),
+      getByCategory: vi.fn((category: string) => category === 'cli' ? [coordinator] : []),
+    }
+    return { components: { instanceManager } as any, coordinator }
+  }
+
+  it('buffers refine:completed to pending events when CLI coordinator is generating', () => {
+    const meshId = `mesh_codex_refine_completed_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      const { components, coordinator } = createGeneratingCoordinatorComponents(meshId, 'generating')
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'refine:completed',
+        meshId,
+        nodeId: 'node-worktree',
+        jobId: 'refine_ix_test_123',
+        status: 'completed',
+        result: { success: true, merged: true, branch: 'fix/branch', into: 'main' },
+      })
+
+      // Should forward to coordinator via send_message AND buffer to pending (because coordinator is generating)
+      expect(result).toMatchObject({ success: true, forwarded: 1 })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][0]).toBe('send_message')
+
+      // Terminal event must also be in pending queue so coordinator can drain it via get_pending_mesh_events
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({
+        event: 'refine:completed',
+        meshId,
+        nodeId: 'node-worktree',
+      })
+      expect(pending[0].coordinatorMessage).toContain('completed successfully')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('buffers refine:failed to pending events when CLI coordinator is generating', () => {
+    const meshId = `mesh_codex_refine_failed_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      const { components, coordinator } = createGeneratingCoordinatorComponents(meshId, 'generating')
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'refine:failed',
+        meshId,
+        nodeId: 'node-worktree',
+        jobId: 'refine_ix_test_456',
+        status: 'failed',
+        result: { success: false, code: 'validation_failed', error: 'Tests failed' },
+      })
+
+      expect(result).toMatchObject({ success: true, forwarded: 1 })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({
+        event: 'refine:failed',
+        meshId,
+      })
+      expect(pending[0].coordinatorMessage).toContain('failed')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does NOT buffer refine:completed to pending events when CLI coordinator is idle (normal path)', () => {
+    const meshId = `mesh_codex_refine_idle_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      const { components, coordinator } = createGeneratingCoordinatorComponents(meshId, 'idle')
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'refine:completed',
+        meshId,
+        nodeId: 'node-worktree',
+        jobId: 'refine_ix_test_789',
+        status: 'completed',
+        result: { success: true, merged: true },
+      })
+
+      expect(result).toMatchObject({ success: true, forwarded: 1 })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+
+      // Idle coordinator receives directly — should NOT buffer to pending queue
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('buffers refine:accepted to pending events whether coordinator is generating or idle (non-terminal event dual delivery)', () => {
+    const meshId = `mesh_codex_refine_accepted_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      const { components, coordinator } = createGeneratingCoordinatorComponents(meshId, 'generating')
+
+      handleMeshForwardEvent(components, {
+        event: 'refine:accepted',
+        meshId,
+        nodeId: 'node-worktree',
+        jobId: 'refine_ix_test_accepted',
+        status: 'accepted',
+      })
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      // Non-terminal events always buffer for MCP dual delivery
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('refine:accepted')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('pending terminal refine events are surfaced to coordinator sessions even if provider was generating at fire time', () => {
+    // Verify the reconcile path: accepted event in pending → ledger has terminal → drain replaces with terminal
+    const meshId = `mesh_codex_refine_reconcile_${Date.now()}`
+    try {
+      queuePendingMeshCoordinatorEvent({
+        event: 'refine:accepted',
+        meshId,
+        nodeLabel: 'node-worktree',
+        nodeId: 'node-worktree',
+        workspace: '/repo/worktree',
+        metadataEvent: {
+          source: 'refine_mesh_node_async_job',
+          jobId: 'refine_ix_coord_stuck',
+          interactionId: 'ix-stuck-test',
+          meshId,
+          nodeId: 'node-worktree',
+          status: 'accepted',
+          startedAt: '2026-06-01T00:00:00.000Z',
+        },
+        queuedAt: Date.now(),
+      })
+
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node-worktree',
+        payload: {
+          source: 'refine_mesh_node_async_job',
+          refineJob: {
+            jobId: 'refine_ix_coord_stuck',
+            interactionId: 'ix-stuck-test',
+            status: 'completed',
+            meshId,
+            nodeId: 'node-worktree',
+            workspace: '/repo/worktree',
+            startedAt: '2026-06-01T00:00:00.000Z',
+            completedAt: '2026-06-01T00:02:00.000Z',
+          },
+          async: true,
+          success: true,
+          result: { success: true, merged: true, branch: 'fix/coord-stuck', into: 'main' },
+        },
+      })
+
+      const events = drainPendingMeshCoordinatorEvents(meshId)
+      // reconcilePendingMeshCoordinatorEvents should replace accepted with completed
+      expect(events).toHaveLength(1)
+      expect(events[0].event).toBe('refine:completed')
+      expect(events[0].coordinatorMessage).toContain('completed successfully')
+      expect(events[0].metadataEvent.jobId).toBe('refine_ix_coord_stuck')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+})

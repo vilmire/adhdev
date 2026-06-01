@@ -107,6 +107,9 @@ function buildDirectTaskPayload(
         taskMode?: string;
         providerType?: string;
         targetSessionId?: string;
+        /** When true, the target session was idle at time of dispatch. This flag helps
+         *  mesh-active-work stale detection identify unacknowledged direct dispatches. */
+        dispatchedToIdleSession?: boolean;
     },
 ): Record<string, unknown> {
     const descriptor = summarizeTaskMessage(message);
@@ -120,6 +123,7 @@ function buildDirectTaskPayload(
         ...(opts.taskMode ? { taskMode: opts.taskMode } : {}),
         ...(opts.providerType ? { providerType: opts.providerType } : {}),
         ...(opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {}),
+        ...(opts.dispatchedToIdleSession !== undefined ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {}),
     };
 }
 
@@ -2949,6 +2953,13 @@ export async function meshSendTask(
                     nextAction: `Relaunch the target session on node '${args.node_id}' or retry without session_id so Repo Mesh can pick a session with provider metadata.`,
                 });
             }
+            // Detect whether the session was idle at dispatch time. An idle session that
+            // receives agent_command/send_chat should transition to generating. If it stays
+            // idle, the dispatch was not acknowledged. Record this for stale detection and
+            // surface it as a dispatchAcknowledgementRisk warning in the success response.
+            const sessionWasIdle = explicitTargetSession
+                ? isIdleSessionRecord(explicitTargetSession)
+                : false;
             const dispatchResult = await commandForNode(ctx, node, 'agent_command', {
                 targetSessionId: args.session_id,
                 agentType: resolvedProviderType,
@@ -2980,10 +2991,25 @@ export async function meshSendTask(
                         taskMode,
                         providerType: resolvedProviderType,
                         targetSessionId: args.session_id,
+                        dispatchedToIdleSession: sessionWasIdle,
                     }),
                 });
             } catch { /* best-effort */ }
-            return JSON.stringify({ success: true, dispatched: true, source: 'direct', taskId, taskMode, providerType: resolvedProviderType, nodeId: args.node_id, sessionId: args.session_id });
+            return JSON.stringify({
+                success: true,
+                dispatched: true,
+                source: 'direct',
+                taskId,
+                taskMode,
+                providerType: resolvedProviderType,
+                nodeId: args.node_id,
+                sessionId: args.session_id,
+                ...(sessionWasIdle ? {
+                    dispatchAcknowledgementRisk: true,
+                    dispatchAcknowledgementRiskReason: 'session_was_idle_at_dispatch',
+                    dispatchAcknowledgementNote: `Session '${args.session_id}' was idle at dispatch time. If it does not transition to generating, this direct task was not acknowledged. Use mesh_status to verify; if the session remains idle, it may appear as stale direct work — launch a fresh session and retry.`,
+                } : {}),
+            });
         }
 
         // ── Untargeted local task: use queue pull ─────────────────────────────
