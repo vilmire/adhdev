@@ -1687,3 +1687,51 @@ describe('pending events file size guard', () => {
     }
   })
 })
+
+describe('workspace-to-mesh cache in setupMeshEventForwarding', () => {
+  it('caches getMeshByRepo result for repeated events from same workspace', () => {
+    const meshId = `mesh-ws-cache-${randomUUID().slice(0, 8)}`
+    try {
+      meshConfigMocks.getMeshByRepo.mockReset()
+      meshConfigMocks.getMesh.mockReset()
+      meshConfigMocks.getMeshByRepo.mockReturnValue({ id: meshId, nodes: [] })
+      meshConfigMocks.getMesh.mockReturnValue(null)
+
+      let listener: ((event: any) => void) | undefined
+      const noMeshNodeForState = {
+        instanceId: 'runtime-session-ws',
+        workspace: `/repo/workspace-cached-${randomUUID().slice(0, 8)}`,
+        settings: {
+          // NO meshNodeFor — triggers workspace-based lookup via getCachedMeshByWorkspace
+          launchedByCoordinator: true,
+        },
+      }
+      const workerSession = {
+        category: 'cli',
+        getState: vi.fn(() => noMeshNodeForState),
+      }
+      const instanceManager = {
+        onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
+        getInstance: vi.fn((id: string) => id === 'runtime-session-ws' ? workerSession : undefined),
+        getByCategory: vi.fn((_category: string) => []),
+      }
+      const components = { instanceManager } as any
+      setupMeshEventForwarding(components)
+
+      // Emit 5 mesh events from the same workspace instance
+      for (let i = 0; i < 5; i++) {
+        listener!({
+          instanceId: 'runtime-session-ws',
+          event: 'agent:ready',
+          targetSessionId: `sess-${i}`,
+          timestamp: Date.now() + i,
+        })
+      }
+
+      // getMeshByRepo should have been called only once (first cache miss), then cached
+      expect(meshConfigMocks.getMeshByRepo).toHaveBeenCalledTimes(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+})
