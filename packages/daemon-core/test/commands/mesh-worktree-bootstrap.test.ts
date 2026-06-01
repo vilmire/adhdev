@@ -10,6 +10,7 @@ import { DaemonCommandRouter } from '../../src/commands/router'
 import {
   loadMeshWorktreeBootstrapConfig,
   validateMeshWorktreeBootstrapConfig,
+  runMeshWorktreeBootstrap,
 } from '../../src/mesh/worktree-bootstrap-config'
 
 const execFileAsync = promisify(execFile)
@@ -214,5 +215,62 @@ describe('mesh worktree bootstrap', () => {
       launchBlockedReason: 'worktree_bootstrap_failed',
       launchBlockedMessage: 'bootstrap failed',
     })
+  })
+
+  it('marks bootstrap stale when a staleInputs file appears during the run', async () => {
+    const { dir, repoRoot } = await createRepo('adhdev-stale-inputs-appear-')
+    try {
+      // Write a first script that creates the marker file, and a second script that is the
+      // real bootstrap. The stale check fires between commands: after step1 creates marker.lock,
+      // the loop detects it before running step2 and returns status='stale'.
+      await writeFile(join(repoRoot, 'scripts', 'step1.mjs'), [
+        "import { writeFileSync } from 'node:fs';",
+        "writeFileSync('marker.lock', 'locked');",
+        '',
+      ].join('\n'))
+      await writeFile(join(repoRoot, 'scripts', 'step2.mjs'), [
+        "import { mkdirSync, writeFileSync } from 'node:fs';",
+        "mkdirSync('node_modules/.bin', { recursive: true });",
+        "writeFileSync('node_modules/.bin/vitest', '#!/usr/bin/env node\\n', { mode: 0o755 });",
+        '',
+      ].join('\n'))
+      await execFileAsync('git', ['add', 'scripts/step1.mjs', 'scripts/step2.mjs'], { cwd: repoRoot })
+      await execFileAsync('git', ['commit', '-q', '-m', 'two-step bootstrap for stale test'], { cwd: repoRoot })
+
+      // Patch the config: two commands + marker.lock as staleInput (not pre-existing).
+      // The stale guard fires at the top of the loop: after step1 runs and creates marker.lock,
+      // the loop checks before step2 and returns status='stale'.
+      const configPath = join(repoRoot, '.adhdev', 'worktree_bootstrap.json')
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'))
+      config.staleInputs = ['marker.lock']
+      config.commands = [
+        { command: 'node', args: ['scripts/step1.mjs'], category: 'custom', timeoutMs: 10000 },
+        { command: 'node', args: ['scripts/step2.mjs'], category: 'custom', timeoutMs: 10000 },
+      ]
+      await writeFile(configPath, JSON.stringify(config, null, 2))
+      await execFileAsync('git', ['add', '.adhdev/worktree_bootstrap.json'], { cwd: repoRoot })
+      await execFileAsync('git', ['commit', '-q', '-m', 'add marker.lock stale guard'], { cwd: repoRoot })
+
+      const mesh = { id: 'mesh-stale', nodes: [] }
+      const result = await runMeshWorktreeBootstrap(mesh, repoRoot)
+
+      expect(result.status).toBe('stale')
+      expect(result.error).toContain('marker.lock')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not mark bootstrap stale for staleInputs files that existed before bootstrap started', async () => {
+    const { dir, repoRoot } = await createRepo('adhdev-stale-preexist-')
+    try {
+      // package-lock.json and package.json are in staleInputs but pre-exist — should not trigger stale
+      const mesh = { id: 'mesh-preexist', nodes: [] }
+      const result = await runMeshWorktreeBootstrap(mesh, repoRoot)
+      expect(result.status).toBe('ready')
+      expect(result.exitCode).toBe(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
