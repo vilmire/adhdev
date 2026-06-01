@@ -39,6 +39,14 @@ export const MESH_GRAPH_LAYOUT_COMPACT = {
     placeholderTopOffset: 0,
 } as const
 
+export const MESH_GRAPH_EDGE_LABEL = {
+    maxWidth: 180,
+    minWidth: 44,
+    height: 24,
+    charWidth: 6.2,
+    horizontalPadding: 18,
+} as const
+
 export const MESH_GRAPH_LAYOUT_DIRECTION = 'RIGHT' as const
 
 export const MESH_GRAPH_ELK_OPTIONS: LayoutOptions = {
@@ -247,6 +255,51 @@ function makeBounds(node: MeshGraphNode, x: number, y: number): MeshGraphLayoutB
         y,
         width: getMeshGraphNodeCardWidth(node),
         height: estimateMeshGraphNodeHeight(node),
+    }
+}
+
+export function estimateMeshGraphEdgeLabelWidth(label: string | null | undefined): number {
+    const text = (label || '').trim()
+    if (!text) return 0
+    return Math.max(
+        MESH_GRAPH_EDGE_LABEL.minWidth,
+        Math.min(
+            MESH_GRAPH_EDGE_LABEL.maxWidth,
+            Math.ceil(text.length * MESH_GRAPH_EDGE_LABEL.charWidth) + MESH_GRAPH_EDGE_LABEL.horizontalPadding,
+        ),
+    )
+}
+
+export function estimateMeshGraphEdgeLabelBounds(
+    edge: { source: string; target: string; label?: string },
+    nodes: MeshGraphLayoutNode[],
+    compact = false,
+): MeshGraphLayoutBounds | null {
+    const source = nodes.find(node => node.id === edge.source)
+    const target = nodes.find(node => node.id === edge.target)
+    const width = estimateMeshGraphEdgeLabelWidth(edge.label)
+    if (!source || !target || width <= 0) return null
+
+    const sourceWidth = getMeshGraphNodeCardWidth(source.graphNode, compact)
+    const sourceHeight = estimateMeshGraphNodeHeight(source.graphNode, compact)
+    const targetHeight = estimateMeshGraphNodeHeight(target.graphNode, compact)
+    const sourceCenter = {
+        x: source.position.x + sourceWidth,
+        y: source.position.y + sourceHeight / 2,
+    }
+    const targetCenter = {
+        x: target.position.x,
+        y: target.position.y + targetHeight / 2,
+    }
+    const centerX = (sourceCenter.x + targetCenter.x) / 2
+    const centerY = (sourceCenter.y + targetCenter.y) / 2
+
+    return {
+        id: edge.label ? `${edge.source}--${edge.target}::label` : `${edge.source}--${edge.target}::label-empty`,
+        x: Math.round(centerX - width / 2),
+        y: Math.round(centerY - MESH_GRAPH_EDGE_LABEL.height / 2),
+        width,
+        height: MESH_GRAPH_EDGE_LABEL.height,
     }
 }
 

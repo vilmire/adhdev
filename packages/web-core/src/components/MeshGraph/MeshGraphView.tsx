@@ -2,7 +2,7 @@
  * MeshGraphView — React Flow-based visualization for live Repo Mesh status.
  */
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
     Background,
     BackgroundVariant,
@@ -41,6 +41,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme } from './meshGraphTheme'
 import {
     buildMeshGraphLayout,
+    MESH_GRAPH_EDGE_LABEL,
     getMeshGraphNodeCardWidth,
     getNodeSummaryForLayout,
 } from './meshGraphLayout'
@@ -69,6 +70,27 @@ type FlowEdge = Edge<FlowEdgeData, 'meshEdge'>
 
 const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
 const MeshGraphCompactContext = createContext(false)
+
+const boundedTextStyle: CSSProperties = {
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+}
+
+const summaryTextStyle: CSSProperties = {
+    ...boundedTextStyle,
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: 3,
+    overflow: 'hidden',
+}
+
+const calloutTextStyle: CSSProperties = {
+    ...boundedTextStyle,
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: 4,
+    overflow: 'hidden',
+}
 
 function isNodeActive(node: MeshGraphNode): boolean {
     return node.activeSessionCount > 0
@@ -255,12 +277,12 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     </div>
                 </div>
                 {attentionBadge && (
-                    <div className={`mt-1.5 inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`}>
+                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionBadge.label}>
                         <span className="truncate">{attentionBadge.label}</span>
                     </div>
                 )}
                 {!attentionBadge && node.branch && !isSubmoduleNode && (
-                    <div className={`mt-1 truncate text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-2 py-0.5 inline-block max-w-full`}>
+                    <div className={`mt-1 min-w-0 max-w-full truncate text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-2 py-0.5 inline-block`} title={node.branch}>
                         {node.branch}
                     </div>
                 )}
@@ -305,12 +327,12 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             </div>
 
             {attentionBadge && (
-                <div className={`mt-3 inline-flex max-w-full items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`}>
+                <div className={`mt-3 inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionBadge.label}>
                     <span className="truncate">{attentionBadge.label}</span>
                 </div>
             )}
 
-            <div className="mt-3 flex flex-wrap gap-1.5 text-[10px]">
+            <div className="mt-3 flex min-w-0 flex-wrap gap-1.5 text-[10px]">
                 <span className={`rounded-full border px-2 py-0.5 capitalize ${getBadgeClasses('health', meshTheme.isDark)}`}>
                     {formatHealth(node.health)}
                 </span>
@@ -325,8 +347,8 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     </span>
                 )}
                 {node.branch && !isSubmoduleNode && (
-                    <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('meta', meshTheme.isDark)}`}>
-                        {node.branch}
+                    <span className={`min-w-0 max-w-full rounded-full border px-2 py-0.5 ${getBadgeClasses('meta', meshTheme.isDark)}`} title={node.branch}>
+                        <span className="block truncate">{node.branch}</span>
                     </span>
                 )}
                 {shortCommit && isSubmoduleNode && (
@@ -361,12 +383,16 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 )}
             </div>
 
-            <div className={`mt-3 text-[11px] leading-5 ${meshTheme.textSecondary}`}>
+            <div className={`mt-3 text-[11px] leading-5 ${meshTheme.textSecondary}`} style={summaryTextStyle} title={getNodeSummaryForLayout(node)}>
                 {getNodeSummaryForLayout(node)}
             </div>
 
             {shouldShowCallout && calloutText && (
-                <div className={`mt-3 rounded-xl border px-3 py-2 text-[10px] leading-4 ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/8 text-cyan-50/90' : 'border-sky-300 bg-sky-50 text-sky-700'}`}>
+                <div
+                    className={`mt-3 rounded-xl border px-3 py-2 text-[10px] leading-4 ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/8 text-cyan-50/90' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
+                    style={calloutTextStyle}
+                    title={calloutText}
+                >
                     {calloutText}
                 </div>
             )}
@@ -430,6 +456,7 @@ function MeshGraphEdgeLine(args: EdgeProps<FlowEdge>) {
     const meshTheme = useContext(MeshGraphThemeContext)
     const graphEdge = args.data.graphEdge
     const [edgePath, labelX, labelY] = getEdgePath(args)
+    const labelTitle = typeof args.label === 'string' ? args.label : undefined
 
     return (
         <>
@@ -444,13 +471,15 @@ function MeshGraphEdgeLine(args: EdgeProps<FlowEdge>) {
                 <EdgeLabelRenderer>
                     <div
                         className={getEdgeLabelClasses(graphEdge, meshTheme.isDark)}
+                        title={labelTitle}
                         style={{
                             position: 'absolute',
                             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
                             pointerEvents: 'none',
+                            maxWidth: MESH_GRAPH_EDGE_LABEL.maxWidth,
                         }}
                     >
-                        {args.label}
+                        <span className="block truncate">{args.label}</span>
                     </div>
                 </EdgeLabelRenderer>
             )}
