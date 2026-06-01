@@ -26,6 +26,23 @@ interface RemoteIdleSession {
 const REMOTE_IDLE_SESSION_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const remoteIdleSessions = new Map<string, RemoteIdleSession>(); // key: `${nodeId}:${sessionId}`
 
+// ---------------------------------------------------------------------------
+// Workspace-to-mesh lookup cache
+// ---------------------------------------------------------------------------
+// getMeshByRepo is called on every coordinator event for sessions without
+// meshNodeFor. Cache results for 5 seconds to avoid repeated config reads.
+const meshByWorkspaceCache = new Map<string, { mesh: any; cachedAt: number }>();
+const MESH_WORKSPACE_CACHE_TTL_MS = 5_000;
+
+function getCachedMeshByWorkspace(workspace: string): any {
+    const now = Date.now();
+    const cached = meshByWorkspaceCache.get(workspace);
+    if (cached && now - cached.cachedAt < MESH_WORKSPACE_CACHE_TTL_MS) return cached.mesh;
+    const mesh = getMeshByRepo(workspace);
+    meshByWorkspaceCache.set(workspace, { mesh, cachedAt: now });
+    return mesh;
+}
+
 function readWorkerResultMetadata(event: Record<string, unknown>): Record<string, unknown> | undefined {
     return readRecord(event.workerResult) || readRecord(event.meshWorkerResult) || readRecord(event.structuredResult);
 }
@@ -394,7 +411,7 @@ function isIntentionalCleanupStopMetadata(event: Record<string, unknown>): boole
 function hasRecentIntentionalCleanupStop(meshId: string, sessionId?: string, nodeId?: string): boolean {
     if (!sessionId && !nodeId) return false;
     const cutoff = Date.now() - INTENTIONAL_CLEANUP_STOP_SUPPRESSION_MS;
-    const entries = readLedgerEntries(meshId);
+    const entries = readLedgerEntries(meshId, { tail: 200 });
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
         const timestamp = new Date(entry.timestamp).getTime();
@@ -1612,7 +1629,7 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         const isMeshDelegate = Boolean(meshIdFromRuntime || settings.launchedByCoordinator);
         if (!isMeshDelegate) return;
 
-        const mesh = meshIdFromRuntime ? getMeshWithCache(components, meshIdFromRuntime) : getMeshByRepo(workspace);
+        const mesh = meshIdFromRuntime ? getMeshWithCache(components, meshIdFromRuntime) : getCachedMeshByWorkspace(workspace);
         const meshId = meshIdFromRuntime || readNonEmptyString(mesh?.id);
         if (!meshId) return;
 
