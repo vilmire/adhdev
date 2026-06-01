@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
+import { randomUUID } from 'crypto'
 
 const meshConfigMocks = vi.hoisted(() => ({
   getMesh: vi.fn(),
@@ -1551,6 +1552,66 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       expect(eventName).toBe('send_message')
       expect(payload.input.textFallback).toContain('has stopped')
     } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+})
+
+describe('pending events file size guard', () => {
+  it('trims pending events file to last 50 events when it exceeds 100KB', () => {
+    const meshId = 'mesh-pending-trim-' + randomUUID().slice(0, 8)
+    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+    try {
+      // Write 100 large event lines (~1200 chars each) so total > 100KB.
+      // Each line has a unique timestamp so duplicate detection does not suppress any of them.
+      const base = Date.now()
+      const lines = Array.from({ length: 100 }, (_, i) =>
+        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { data: 'x'.repeat(1100), timestamp: base + i }, queuedAt: base + i })
+      )
+      fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
+
+      queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', metadataEvent: { timestamp: base + 200 }, queuedAt: base + 200 })
+
+      const result = fs.readFileSync(pendingPath, 'utf-8').split('\n').filter(Boolean)
+      expect(result.length).toBeLessThanOrEqual(51)
+    } finally {
+      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does not trim file that is under 100KB', () => {
+    const meshId = 'mesh-pending-notrim-' + randomUUID().slice(0, 8)
+    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+    try {
+      // Write 10 small event lines (~50 chars each, well under 100KB total).
+      // Each line has a unique timestamp so duplicate detection does not suppress any of them.
+      const base = Date.now()
+      const lines = Array.from({ length: 10 }, (_, i) =>
+        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + i }, queuedAt: base + i })
+      )
+      fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
+
+      queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', metadataEvent: { timestamp: base + 100 }, queuedAt: base + 100 })
+
+      const result = fs.readFileSync(pendingPath, 'utf-8').split('\n').filter(Boolean)
+      expect(result.length).toBe(11)
+    } finally {
+      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('trim is best-effort — does not fail if file is unreadable', () => {
+    // Calling queuePendingMeshCoordinatorEvent on a normal non-existent file should not throw
+    const meshId = 'mesh-pending-nofile-' + randomUUID().slice(0, 8)
+    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+    try {
+      expect(() => {
+        queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', metadataEvent: { timestamp: Date.now() }, queuedAt: Date.now() })
+      }).not.toThrow()
+    } finally {
+      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
       cleanupMeshFiles(meshId)
     }
   })

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -29,6 +29,8 @@ import {
     getLedgerDir,
     MAX_LEDGER_SLICE_LIMIT,
     buildTaskCompletionEvidence,
+    compactLedger,
+    buildWorkerTaskFooter,
 } from '../../src/mesh/mesh-ledger.js';
 import type { MeshLedgerEntry, MeshLedgerKind } from '../../src/mesh/mesh-ledger.js';
 
@@ -375,6 +377,256 @@ describe('mesh-ledger', () => {
             const match = files.find((f: string) => f.endsWith('.jsonl'));
             expect(match).toBeTruthy();
             expect(match).not.toContain('..');
+        });
+    });
+
+    describe('compactLedger', () => {
+        // Helper: build a ledger path for a given meshId (mirrors getLedgerPath internals)
+        function ledgerPathFor(meshId: string): string {
+            const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            return join(getLedgerDir(), `${safe}.jsonl`);
+        }
+        function archivePathFor(meshId: string): string {
+            const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            return join(getLedgerDir(), `${safe}.archive.jsonl`);
+        }
+        function countsPathFor(meshId: string): string {
+            const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            return join(getLedgerDir(), `${safe}.archived-counts.json`);
+        }
+        function writeEntries(meshId: string, entries: Omit<MeshLedgerEntry, 'id' | 'meshId'>[]): void {
+            const ledgerPath = ledgerPathFor(meshId);
+            const lines = entries.map(e => JSON.stringify({
+                id: randomUUID(),
+                meshId,
+                ...e,
+            })).join('\n') + '\n';
+            writeFileSync(ledgerPath, lines, { encoding: 'utf-8' });
+        }
+
+        it('moves old terminal entries to archive, keeps non-terminal and recent terminal', () => {
+            const meshId = `compact-test-${randomUUID().slice(0, 8)}`;
+            const oldTs = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+            const recentTs = new Date().toISOString();
+
+            writeEntries(meshId, [
+                // Two old terminal entries — should be archived
+                { kind: 'task_completed', timestamp: oldTs, payload: { n: 1 } },
+                { kind: 'task_failed', timestamp: oldTs, payload: { n: 2 } },
+                // One non-terminal — always kept
+                { kind: 'task_dispatched', timestamp: recentTs, payload: { n: 3 } },
+                // One recent terminal — kept because not old enough
+                { kind: 'task_completed', timestamp: recentTs, payload: { n: 4 } },
+            ]);
+
+            const result = compactLedger(meshId);
+
+            expect(result).toEqual({ archivedCount: 2, retainedCount: 2 });
+
+            // Archive file must exist with 2 lines
+            const archivePath = archivePathFor(meshId);
+            expect(existsSync(archivePath)).toBe(true);
+            const archiveLines = readFileSync(archivePath, 'utf-8').split('\n').filter(l => l.trim());
+            expect(archiveLines).toHaveLength(2);
+
+            // Active file must have 2 entries
+            const activeEntries = readLedgerEntries(meshId);
+            expect(activeEntries).toHaveLength(2);
+            const activeKinds = activeEntries.map(e => e.kind);
+            expect(activeKinds).toContain('task_dispatched');
+            expect(activeKinds).toContain('task_completed');
+        });
+
+        it('returns zero counts when all entries are recent', () => {
+            const meshId = `compact-recent-${randomUUID().slice(0, 8)}`;
+            const recentTs = new Date().toISOString();
+
+            writeEntries(meshId, [
+                { kind: 'task_completed', timestamp: recentTs, payload: {} },
+                { kind: 'task_failed', timestamp: recentTs, payload: {} },
+                { kind: 'task_dispatched', timestamp: recentTs, payload: {} },
+            ]);
+
+            const result = compactLedger(meshId);
+
+            expect(result).toEqual({ archivedCount: 0, retainedCount: 3 });
+            expect(existsSync(archivePathFor(meshId))).toBe(false);
+        });
+
+        it('does nothing on empty mesh', () => {
+            const meshId = `compact-empty-${randomUUID().slice(0, 8)}`;
+            const result = compactLedger(meshId);
+            expect(result).toEqual({ archivedCount: 0, retainedCount: 0 });
+        });
+
+        it('never archives non-terminal kinds regardless of age', () => {
+            const meshId = `compact-nonterminal-${randomUUID().slice(0, 8)}`;
+            const oldTs = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+
+            writeEntries(meshId, [
+                { kind: 'task_dispatched', timestamp: oldTs, payload: {} },
+                { kind: 'session_launched', timestamp: oldTs, payload: {} },
+                { kind: 'node_cloned', timestamp: oldTs, payload: {} },
+                { kind: 'checkpoint_created', timestamp: oldTs, payload: {} },
+            ]);
+
+            const result = compactLedger(meshId);
+
+            expect(result.archivedCount).toBe(0);
+            expect(result.retainedCount).toBe(4);
+            expect(existsSync(archivePathFor(meshId))).toBe(false);
+        });
+
+        it('updates archived-counts file', () => {
+            const meshId = `compact-counts-${randomUUID().slice(0, 8)}`;
+            const oldTs = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+
+            writeEntries(meshId, [
+                { kind: 'task_completed', timestamp: oldTs, payload: {} },
+                { kind: 'task_completed', timestamp: oldTs, payload: {} },
+                { kind: 'task_failed', timestamp: oldTs, payload: {} },
+            ]);
+
+            compactLedger(meshId);
+
+            const countsPath = countsPathFor(meshId);
+            expect(existsSync(countsPath)).toBe(true);
+
+            const counts = JSON.parse(readFileSync(countsPath, 'utf-8'));
+            expect(counts.taskCompleted).toBe(2);
+            expect(counts.taskFailed).toBe(1);
+            expect(counts.totalArchived).toBe(3);
+            expect(typeof counts.lastArchivedAt).toBe('string');
+            expect(counts.lastArchivedAt.length).toBeGreaterThan(0);
+        });
+
+        it('getLedgerSummary includes archived counts after compaction', () => {
+            const meshId = `compact-summary-${randomUUID().slice(0, 8)}`;
+            const oldTs = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+            const recentTs = new Date().toISOString();
+
+            writeEntries(meshId, [
+                { kind: 'task_completed', timestamp: oldTs, payload: {} },
+                { kind: 'task_completed', timestamp: oldTs, payload: {} },
+                { kind: 'task_dispatched', timestamp: recentTs, payload: {} },
+            ]);
+
+            compactLedger(meshId);
+
+            const summary = getLedgerSummary(meshId);
+            // 2 archived task_completed + 1 live task_dispatched
+            expect(summary.taskCompleted).toBe(2);
+            expect(summary.taskDispatched).toBe(1);
+            // totalEntries = 1 live + 2 archived
+            expect(summary.totalEntries).toBe(3);
+        });
+    });
+
+    describe('buildWorkerTaskFooter', () => {
+        it('returns a string containing the structured result schema', () => {
+            const footer = buildWorkerTaskFooter();
+            expect(typeof footer).toBe('string');
+            expect(footer.length).toBeGreaterThan(0);
+            expect(footer).toContain('"status"');
+            expect(footer).toContain('"changedFiles"');
+            expect(footer).toContain('"gitStatus"');
+            expect(footer).toContain('"validationResults"');
+            expect(footer).toContain('"errors"');
+            expect(footer).toContain('"nextAction"');
+            expect(footer).toContain('completed');
+        });
+    });
+
+    describe('extractJsonObjectFromSummary via buildTaskCompletionEvidence', () => {
+        const baseOpts = {
+            event: 'agent:generating_completed' as const,
+            nodeId: 'n1',
+            sessionId: 's1',
+        };
+
+        it('parses worker JSON with status and changedFiles', () => {
+            const evidence = buildTaskCompletionEvidence({
+                ...baseOpts,
+                finalSummary: 'All done.\n```json\n{"status":"completed","changedFiles":["src/foo.ts"],"errors":[]}\n```',
+            });
+            expect(evidence.workerResult.status).toBe('completed');
+            expect(evidence.workerResult.changedFiles).toEqual(['src/foo.ts']);
+            expect(evidence.workerResult.errors).toEqual([]);
+            expect(evidence.workerResult.source).toBe('final_summary_json');
+        });
+
+        it('rejects generic JSON without worker result fields', () => {
+            const evidence = buildTaskCompletionEvidence({
+                ...baseOpts,
+                finalSummary: 'Some summary.\n```json\n{"foo":"bar","baz":123}\n```',
+            });
+            expect(evidence.workerResult.source).toBe('default');
+        });
+
+        it('accepts JSON with status + errors only', () => {
+            const evidence = buildTaskCompletionEvidence({
+                ...baseOpts,
+                finalSummary: '```json\n{"status":"failed","errors":["build failed"]}\n```',
+            });
+            expect(evidence.workerResult.status).toBe('failed');
+            expect(evidence.workerResult.errors).toContain('build failed');
+            expect(evidence.workerResult.source).toBe('final_summary_json');
+        });
+
+        it('accepts JSON with status + gitStatus', () => {
+            const evidence = buildTaskCompletionEvidence({
+                ...baseOpts,
+                finalSummary: '```json\n{"status":"completed","gitStatus":{"branch":"feat/x","committed":true}}\n```',
+            });
+            expect(evidence.workerResult.status).toBe('completed');
+            expect(evidence.workerResult.gitStatus).toEqual({ branch: 'feat/x', committed: true });
+            expect(evidence.workerResult.source).toBe('final_summary_json');
+        });
+
+        it('rejects JSON with only status field and no other worker fields', () => {
+            // "status" alone plus unrelated field is not enough — need changedFiles/errors/gitStatus/nextAction/validationResults
+            const evidence = buildTaskCompletionEvidence({
+                ...baseOpts,
+                finalSummary: '```json\n{"status":"completed","message":"hello"}\n```',
+            });
+            expect(evidence.workerResult.source).toBe('default');
+        });
+    });
+
+    describe('appendRemoteLedgerEntries dedup tail', () => {
+        it('accepts entries that are outside the dedup tail window', () => {
+            const meshId = `dedup-tail-${randomUUID().slice(0, 8)}`;
+
+            // Write 5 entries directly to the ledger file (simulating existing history)
+            const existingEntries: MeshLedgerEntry[] = Array.from({ length: 5 }, (_, i) => ({
+                id: `existing-${randomUUID()}`,
+                meshId,
+                timestamp: new Date().toISOString(),
+                kind: 'task_dispatched' as MeshLedgerKind,
+                payload: { index: i },
+            }));
+            const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const ledgerPath = join(getLedgerDir(), `${safe}.jsonl`);
+            writeFileSync(ledgerPath, existingEntries.map(e => JSON.stringify(e)).join('\n') + '\n', { encoding: 'utf-8' });
+
+            // Re-submit the first existing entry — should be caught as a duplicate (within tail-1000)
+            const dupResult = appendRemoteLedgerEntries(meshId, [existingEntries[0]]);
+            expect(dupResult.skippedDuplicate).toBe(1);
+            expect(dupResult.accepted).toBe(0);
+
+            // Submit a brand-new remote entry — should be accepted
+            const newRemoteEntry: MeshLedgerEntry = {
+                id: `remote-new-${randomUUID()}`,
+                meshId,
+                timestamp: new Date().toISOString(),
+                kind: 'task_completed',
+                nodeId: 'node_remote',
+                payload: { result: 'ok' },
+            };
+            // Note: the tail is 1000, so all 5 existing entries are within the dedup window
+            const newResult = appendRemoteLedgerEntries(meshId, [newRemoteEntry]);
+            expect(newResult.accepted).toBe(1);
+            expect(newResult.skippedDuplicate).toBe(0);
         });
     });
 });
