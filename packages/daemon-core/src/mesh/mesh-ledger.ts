@@ -13,7 +13,7 @@
  * Safety:  mode 0o600, atomic append via appendFileSync
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, renameSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getConfigDir } from '../config/config.js';
@@ -203,8 +203,19 @@ export interface AppendRemoteLedgerResult {
 // ─── Constants ──────────────────────────────────
 
 const LEDGER_DIR_NAME = 'mesh-ledger';
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB — full rotation threshold
+const COMPACT_THRESHOLD_BYTES = 2 * 1024 * 1024; // 2 MB — compaction threshold
+const ARCHIVE_TERMINAL_OLDER_THAN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const RECENT_FAILURE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+
+// Kinds that accumulate indefinitely and are safe to archive after ARCHIVE_TERMINAL_OLDER_THAN_MS.
+// Non-terminal kinds (dispatched, sessions, nodes, checkpoints) are always kept in the active file.
+const ARCHIVABLE_KINDS: ReadonlySet<MeshLedgerKind> = new Set([
+    'task_completed',
+    'task_failed',
+    'task_stalled',
+    'recovery_attempted',
+] as MeshLedgerKind[]);
 const DEFAULT_LEDGER_SLICE_LIMIT = 100;
 export const MAX_LEDGER_SLICE_LIMIT = 500;
 
@@ -227,6 +238,90 @@ function getLedgerPath(meshId: string): string {
 function getRotatedPath(meshId: string, index: number): string {
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
     return join(getLedgerDir(), `${safe}.${index}.jsonl`);
+}
+
+function getArchivePath(meshId: string): string {
+    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return join(getLedgerDir(), `${safe}.archive.jsonl`);
+}
+
+// ─── Worker Result Footer ───────────────────────
+
+/**
+ * Footer to append to worker task messages so workers output structured results
+ * that the daemon parses via extractJsonObjectFromSummary / normalizeMeshWorkerResult.
+ *
+ * Usage: append buildWorkerTaskFooter() to the task message in mesh_send_task /
+ * mesh_enqueue_task. The coordinator prompt rules instruct coordinators to do this.
+ */
+export function buildWorkerTaskFooter(): string {
+    return `
+
+---
+When your task is done, end your final response with a JSON code block in this exact format (omit fields that don't apply):
+\`\`\`json
+{
+  "status": "completed",
+  "changedFiles": ["src/foo.ts", "tests/foo.test.ts"],
+  "gitStatus": { "branch": "feat/your-branch", "committed": true, "pushed": false },
+  "validationResults": [{ "command": "npm test", "status": "passed" }],
+  "errors": [],
+  "nextAction": "optional guidance for the coordinator"
+}
+\`\`\`
+Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
+}
+
+// ─── Ledger Compaction ──────────────────────────
+
+/**
+ * Compact the active ledger file for a mesh by moving old terminal entries
+ * (task_completed, task_failed, task_stalled, recovery_attempted older than 7 days)
+ * to <meshId>.archive.jsonl, keeping the active file lean.
+ *
+ * Non-terminal entries (dispatch, sessions, node lifecycle) are always retained.
+ * Called automatically from appendLedgerEntry when the file exceeds COMPACT_THRESHOLD_BYTES.
+ */
+export function compactLedger(meshId: string): { archivedCount: number; retainedCount: number } {
+    const filePath = getLedgerPath(meshId);
+    if (!existsSync(filePath)) return { archivedCount: 0, retainedCount: 0 };
+
+    const cutoff = Date.now() - ARCHIVE_TERMINAL_OLDER_THAN_MS;
+    const entries = readLedgerEntries(meshId);
+
+    const keep: MeshLedgerEntry[] = [];
+    const archive: MeshLedgerEntry[] = [];
+    for (const entry of entries) {
+        if (ARCHIVABLE_KINDS.has(entry.kind) && new Date(entry.timestamp).getTime() < cutoff) {
+            archive.push(entry);
+        } else {
+            keep.push(entry);
+        }
+    }
+
+    if (archive.length === 0) return { archivedCount: 0, retainedCount: keep.length };
+
+    // Append archived entries to the archive file
+    const archivePath = getArchivePath(meshId);
+    try {
+        const archiveLines = archive.map(e => JSON.stringify(e)).join('\n') + '\n';
+        appendFileSync(archivePath, archiveLines, { encoding: 'utf-8', mode: 0o600 });
+    } catch (e: any) {
+        process.stderr.write(`[adhdev-mesh] Ledger archive write failed for mesh ${meshId}: ${e?.message || e}\n`);
+        return { archivedCount: 0, retainedCount: entries.length };
+    }
+
+    // Rewrite active file with retained entries only
+    try {
+        const keepLines = keep.length ? keep.map(e => JSON.stringify(e)).join('\n') + '\n' : '';
+        writeFileSync(filePath, keepLines, { encoding: 'utf-8', mode: 0o600 });
+    } catch (e: any) {
+        process.stderr.write(`[adhdev-mesh] Ledger compaction rewrite failed for mesh ${meshId}: ${e?.message || e}\n`);
+        // Archive was already written — don't double-archive; leave active file as-is
+        return { archivedCount: archive.length, retainedCount: keep.length };
+    }
+
+    return { archivedCount: archive.length, retainedCount: keep.length };
 }
 
 // ─── Core API ───────────────────────────────────
@@ -377,12 +472,14 @@ export function appendLedgerEntry(
 
     const filePath = getLedgerPath(meshId);
 
-    // Rotate if file exceeds max size
+    // Compact or rotate based on file size
     if (existsSync(filePath)) {
         try {
             const stat = statSync(filePath);
             if (stat.size >= MAX_FILE_SIZE_BYTES) {
                 rotateLedgerFile(meshId, filePath);
+            } else if (stat.size >= COMPACT_THRESHOLD_BYTES) {
+                compactLedger(meshId);
             }
         } catch {
             // stat failed — proceed with append anyway

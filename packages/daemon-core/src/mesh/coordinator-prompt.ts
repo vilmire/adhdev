@@ -210,7 +210,7 @@ function buildRulesSection(coordinatorCliType?: string): string {
     return `## Rules
 
 - **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator — keep context lean.
-- **Front-load task messages.** Include everything the agent needs (files, problem, expected fix) in \`mesh_enqueue_task\` / \`mesh_send_task\`. Agents don't ask follow-ups.
+- **Front-load task messages.** Include everything the agent needs (files, problem, expected fix) in \`mesh_enqueue_task\` / \`mesh_send_task\`. Append a structured result request at the end: ask the worker to conclude with a JSON block containing \`status\`, \`changedFiles\`, \`gitStatus\`, \`validationResults\`, \`errors\`, \`nextAction\`. The daemon parses this automatically; you can read it from \`mesh_task_history\`.
 - **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start fresh only for independent work, provider mismatch, transcript contamination, or required worktree isolation.
 - **Respect explicit provider requests.** Map: Hermes → \`hermes-cli\`, Claude/Claude Code → \`claude-cli\`, Codex → \`codex-cli\`, Gemini → \`gemini-cli\`, Antigravity → \`antigravity-cli\`. Never substitute the coordinator's own runtime.
 - **Verify via git, not source.** Use \`mesh_git_status\` to confirm side effects. Treat agent summaries as self-reports, not verification.
