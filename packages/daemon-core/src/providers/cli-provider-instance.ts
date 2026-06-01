@@ -390,6 +390,9 @@ export class CliProviderInstance implements ProviderInstance {
         this.launchMode = options?.launchMode || 'new';
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
         this.adapter = new ProviderCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory);
+        if (this.providerSessionId) {
+            this.adapter.updateRuntimeMeta({ providerSessionId: this.providerSessionId });
+        }
         this.monitor = new StatusMonitor();
         this.historyWriter = new ChatHistoryWriter();
     }

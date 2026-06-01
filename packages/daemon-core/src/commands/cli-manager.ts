@@ -553,7 +553,9 @@ export class DaemonCliManager {
                 providerSessionId,
                 attachExisting,
             );
-            return new ProviderCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs, extraEnv || {}, transportFactory);
+            const adapter = new ProviderCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs, extraEnv || {}, transportFactory);
+            if (providerSessionId) adapter.updateRuntimeMeta({ providerSessionId });
+            return adapter;
         }
 
         throw new Error(`No CLI provider found for '${cliType}'. Create a provider.js in providers/cli/${cliType}/`);

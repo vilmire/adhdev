@@ -108,6 +108,8 @@ export interface CliScriptInput {
     screenText: string;
     workspace?: string;
     workingDir?: string;
+    providerSessionId?: string;
+    historySessionId?: string;
     screen: CliScreenSnapshot;
     bufferScreen: CliScreenSnapshot;
     recentScreen: CliScreenSnapshot;
