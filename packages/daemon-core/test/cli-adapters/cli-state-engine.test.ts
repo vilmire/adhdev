@@ -1,0 +1,419 @@
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { CliStateEngine } from '../../src/cli-adapters/cli-state-engine.js'
+import { CliScriptRunner } from '../../src/cli-adapters/cli-script-runner.js'
+import type { CliTransportAccess, CliBufferSnapshot, CliStateEngineCallbacks } from '../../src/cli-adapters/cli-state-engine.js'
+import type { CliProviderModule } from '../../src/cli-adapters/provider-cli-shared.js'
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function makeSnap(overrides: Partial<CliBufferSnapshot> = {}): CliBufferSnapshot {
+    const now = Date.now()
+    return {
+        accumulatedBuffer: '',
+        accumulatedRawBuffer: '',
+        recentOutputBuffer: '',
+        responseBuffer: '',
+        screenText: '',
+        parseScreenText: '',
+        workingDir: '/tmp/test',
+        runtimeSettings: {},
+        lastOutputAt: now,
+        lastNonEmptyOutputAt: now,
+        lastScreenChangeAt: now,
+        spawnedAt: now - 5000,
+        rawBufferVersion: 1,
+        isWaitingForResponse: false,
+        ...overrides,
+    }
+}
+
+function makeProvider(overrides: Partial<CliProviderModule> = {}): CliProviderModule {
+    return {
+        type: 'test-cli',
+        name: 'Test CLI',
+        category: 'cli',
+        binary: 'test',
+        spawn: { command: 'test', args: [], shell: false, env: {} },
+        ...overrides,
+    } as CliProviderModule
+}
+
+const DEFAULT_TIMEOUTS: Required<NonNullable<CliProviderModule['timeouts']>> = {
+    ptyFlush: 100,
+    dialogAccept: 500,
+    approvalCooldown: 2000,
+    generatingIdle: 30000,
+    idleFinish: 800,
+    idleFinishConfirm: 1200,
+    statusActivityHold: 2000,
+    maxResponse: 300000,
+    shutdownGrace: 4000,
+    outputSettle: 500,
+}
+
+interface TestContext {
+    engine: CliStateEngine
+    transport: CliTransportAccess & {
+        written: string[]
+        flushed: number
+    }
+    callbacks: {
+        onStatusChange: ReturnType<typeof vi.fn>
+        onApplyParsedSession: ReturnType<typeof vi.fn>
+        onTurnCompleted: ReturnType<typeof vi.fn>
+    }
+    runner: CliScriptRunner
+}
+
+function buildEngine(
+    providerOverrides: Partial<CliProviderModule> = {},
+    transportOverrides: Partial<CliTransportAccess> = {},
+): TestContext {
+    const written: string[] = []
+    let flushed = 0
+
+    const transport: CliTransportAccess & { written: string[]; flushed: number } = {
+        written,
+        flushed,
+        getSnapshot: () => makeSnap(),
+        writeRaw: (data) => { written.push(String(data)) },
+        getApprovalKeyForIndex: () => undefined,
+        flushOutboundQueue: () => { flushed++ },
+        isAlive: () => true,
+        ...transportOverrides,
+    }
+
+    const callbacks = {
+        onStatusChange: vi.fn(),
+        onApplyParsedSession: vi.fn(),
+        onTurnCompleted: vi.fn(),
+    }
+
+    const runner = new CliScriptRunner()
+
+    const engine = new CliStateEngine(
+        makeProvider(providerOverrides),
+        runner,
+        transport,
+        callbacks as CliStateEngineCallbacks,
+        DEFAULT_TIMEOUTS,
+    )
+
+    return { engine, transport, callbacks, runner }
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+describe('CliStateEngine', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    // ── Status transitions ──────────────────────────────────────────────────
+
+    describe('setStatus', () => {
+        it('transitions the current status', () => {
+            const { engine } = buildEngine()
+            engine.setStatus('generating')
+            expect(engine.currentStatus).toBe('generating')
+        })
+
+        it('is a no-op when status is already the target', () => {
+            const { engine, callbacks } = buildEngine()
+            // setStatus does not call onStatusChange directly (that's done by applyXxx helpers)
+            engine.setStatus('idle')
+            engine.setStatus('idle') // second call — no change
+            // Status should still be idle, not double-recorded
+            const history = engine.getStatusHistory()
+            const idleEntries = history.filter(h => h.status === 'idle')
+            expect(idleEntries).toHaveLength(1)
+        })
+
+        it('records status in history', () => {
+            const { engine } = buildEngine()
+            engine.setStatus('generating', 'test_trigger')
+            const history = engine.getStatusHistory()
+            expect(history.at(-1)).toMatchObject({ status: 'generating', trigger: 'test_trigger' })
+        })
+    })
+
+    // ── Lifecycle ───────────────────────────────────────────────────────────
+
+    describe('onSpawnReady', () => {
+        it('sets status to starting and resets trace', () => {
+            const { engine } = buildEngine()
+            engine.onSpawnReady()
+            expect(engine.currentStatus).toBe('starting')
+            // Trace session ID is assigned
+            expect(engine.getTraceSessionId()).not.toBe('')
+        })
+    })
+
+    describe('onPtyExit', () => {
+        it('sets status to stopped and clears all timers', () => {
+            const { engine } = buildEngine()
+            engine.setStatus('generating')
+            engine.scheduleSettle()
+            engine.onPtyExit()
+            expect(engine.currentStatus).toBe('stopped')
+            // Timer should be cleared — advancing time does not trigger evaluateSettled
+            vi.advanceTimersByTime(5000)
+            expect(engine.currentStatus).toBe('stopped')
+        })
+    })
+
+    // ── Turn lifecycle ───────────────────────────────────────────────────────
+
+    describe('onTurnStarted / finishResponse', () => {
+        it('onTurnStarted sets turn scope and waiting flag', () => {
+            const { engine } = buildEngine()
+            engine.onTurnStarted({
+                prompt: 'hello',
+                startedAt: Date.now(),
+                bufferStart: 0,
+                rawBufferStart: 0,
+            })
+            expect(engine.isWaitingForResponse).toBe(true)
+            expect(engine.currentTurnScope?.prompt).toBe('hello')
+        })
+
+        it('finishResponse clears turn when parseSession returns standard assistant', () => {
+            const { engine, transport, callbacks } = buildEngine()
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'hello' },
+                    { role: 'assistant', kind: 'standard', content: 'hi back' },
+                ],
+                activeModal: null,
+            }))
+            engine.currentStatus = 'idle' as any
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = {
+                prompt: 'hello',
+                startedAt: Date.now() - 1000,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+
+            engine.finishResponse()
+
+            expect(engine.isWaitingForResponse).toBe(false)
+            expect(engine.currentTurnScope).toBe(null)
+            expect(engine.currentStatus).toBe('idle')
+            expect(callbacks.onTurnCompleted).toHaveBeenCalled()
+        })
+
+        it('finishResponse with requiresFinalAssistantBeforeIdle defers when only tool messages', () => {
+            const { engine, transport } = buildEngine({ requiresFinalAssistantBeforeIdle: true })
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'do it' },
+                    { role: 'assistant', kind: 'tool', content: 'tool call' },
+                ],
+                activeModal: null,
+            }))
+            engine.currentStatus = 'idle' as any
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = {
+                prompt: 'do it',
+                startedAt: Date.now() - 1000,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+
+            engine.finishResponse()
+
+            // Should defer — still waiting, still generating
+            expect(engine.isWaitingForResponse).toBe(true)
+            expect(engine.currentTurnScope).not.toBe(null)
+            expect(engine.currentStatus).toBe('generating')
+        })
+
+        it('finishResponse with requiresFinalAssistantBeforeIdle completes when standard assistant present', () => {
+            const { engine, transport, callbacks } = buildEngine({ requiresFinalAssistantBeforeIdle: true })
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'do it' },
+                    { role: 'assistant', kind: 'standard', content: 'Done.' },
+                ],
+                activeModal: null,
+            }))
+            engine.currentStatus = 'idle' as any
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = {
+                prompt: 'do it',
+                startedAt: Date.now() - 1000,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+
+            engine.finishResponse()
+
+            expect(engine.isWaitingForResponse).toBe(false)
+            expect(engine.currentStatus).toBe('idle')
+            expect(callbacks.onTurnCompleted).toHaveBeenCalled()
+        })
+
+        it('finishResponse returns early when submitPending guard is active', () => {
+            const { engine, callbacks } = buildEngine()
+            // submitPendingUntil set to far future blocks finishResponse
+            engine.submitPendingUntil = Date.now() + 30_000
+            engine.isWaitingForResponse = true
+            engine.finishResponse()
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+        })
+    })
+
+    // ── Modal / approval ────────────────────────────────────────────────────
+
+    describe('resolveModal', () => {
+        it('sends approval key and transitions to generating', () => {
+            const { engine, transport, callbacks } = buildEngine()
+            engine.activeModal = { message: 'Approve?', buttons: ['Yes', 'No'] }
+            engine.isWaitingForResponse = true
+            engine.currentStatus = 'waiting_approval' as any
+
+            // Provide a known approval key for button 0
+            transport.getApprovalKeyForIndex = (idx) => idx === 0 ? '\r' : undefined
+
+            engine.resolveModal(0)
+
+            expect(engine.activeModal).toBe(null)
+            expect(engine.currentStatus).toBe('generating')
+            expect(transport.written).toContain('\r')
+            expect(callbacks.onStatusChange).toHaveBeenCalled()
+        })
+
+        it('navigates by arrow key when no approval key mapping', () => {
+            const { engine, transport } = buildEngine()
+            engine.activeModal = { message: 'Pick one', buttons: ['A', 'B', 'C'] }
+            engine.isWaitingForResponse = true
+
+            // No approval key mapping
+            transport.getApprovalKeyForIndex = () => undefined
+
+            engine.resolveModal(2) // button index 2 → 2 down arrows + enter
+
+            const joined = transport.written.join('')
+            expect(joined).toContain('\x1B[B\x1B[B\r') // 2 down + enter
+        })
+
+        it('isApprovalRecentlyResolved returns true right after resolveModal', () => {
+            const { engine, transport } = buildEngine()
+            engine.activeModal = { message: 'OK?', buttons: ['OK'] }
+            transport.getApprovalKeyForIndex = () => '\r'
+            engine.resolveModal(0)
+            expect(engine.isApprovalRecentlyResolved()).toBe(true)
+        })
+
+        it('isApprovalRecentlyResolved returns false after cooldown expires', () => {
+            const { engine, transport } = buildEngine()
+            engine.activeModal = { message: 'OK?', buttons: ['OK'] }
+            transport.getApprovalKeyForIndex = () => '\r'
+            engine.resolveModal(0)
+            vi.advanceTimersByTime(DEFAULT_TIMEOUTS.approvalCooldown + 1)
+            expect(engine.isApprovalRecentlyResolved()).toBe(false)
+        })
+    })
+
+    // ── Stale idle guard ────────────────────────────────────────────────────
+
+    describe('clearStaleIdleResponseGuard', () => {
+        it('clears stale waiting state when terminal is idle and no modal', () => {
+            const { engine, transport, callbacks } = buildEngine()
+            transport.runDetectStatus = () => 'idle'
+
+            engine.isWaitingForResponse = true
+            engine.currentStatus = 'idle' as any
+            engine.currentTurnScope = {
+                prompt: 'hello',
+                startedAt: Date.now() - 2000,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+
+            const snap = makeSnap({ recentOutputBuffer: '> ' })
+            const cleared = engine.clearStaleIdleResponseGuard('pre_send', snap)
+
+            expect(cleared).toBe(true)
+            expect(engine.isWaitingForResponse).toBe(false)
+            expect(engine.currentTurnScope).toBe(null)
+            expect(callbacks.onTurnCompleted).toHaveBeenCalled()
+        })
+
+        it('does not clear when status is not idle', () => {
+            const { engine, transport, callbacks } = buildEngine()
+            transport.runDetectStatus = () => 'generating'
+
+            engine.isWaitingForResponse = true
+            engine.currentStatus = 'generating' as any
+
+            const cleared = engine.clearStaleIdleResponseGuard('pre_send', makeSnap())
+            expect(cleared).toBe(false)
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+        })
+
+        it('does not clear when a modal is present', () => {
+            const { engine, transport, callbacks } = buildEngine()
+            transport.runDetectStatus = () => 'idle'
+            transport.runParseApproval = () => ({ message: 'Approve?', buttons: ['Yes'] })
+
+            engine.isWaitingForResponse = true
+            engine.currentStatus = 'idle' as any
+
+            const cleared = engine.clearStaleIdleResponseGuard('pre_send', makeSnap())
+            expect(cleared).toBe(false)
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+        })
+    })
+
+    // ── scheduleSettle debounce ─────────────────────────────────────────────
+
+    describe('scheduleSettle', () => {
+        it('calls evaluateSettled after outputSettle timeout', () => {
+            const { engine, transport } = buildEngine()
+            transport.runParseSession = vi.fn(() => null) // parseSession → null → no-op
+
+            engine.currentStatus = 'generating' as any
+            engine.isWaitingForResponse = true
+            engine.scheduleSettle()
+
+            expect(transport.runParseSession).not.toHaveBeenCalled()
+            vi.advanceTimersByTime(DEFAULT_TIMEOUTS.outputSettle + 10)
+            expect(transport.runParseSession).toHaveBeenCalled()
+        })
+
+        it('resets the timer on each call (debounce)', () => {
+            const { engine, transport } = buildEngine()
+            const parseSpy = vi.fn(() => null)
+            transport.runParseSession = parseSpy
+
+            engine.scheduleSettle()
+            vi.advanceTimersByTime(200) // half-way through settle
+            engine.scheduleSettle() // reset
+            vi.advanceTimersByTime(300) // not enough for the reset timer
+            expect(parseSpy).not.toHaveBeenCalled()
+            vi.advanceTimersByTime(250) // now enough
+            expect(parseSpy).toHaveBeenCalledTimes(1)
+        })
+    })
+
+    // ── resetActiveTurnState ────────────────────────────────────────────────
+
+    describe('resetActiveTurnState', () => {
+        it('clears all turn-related state', () => {
+            const { engine } = buildEngine()
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = { prompt: 'x', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 }
+            engine.activeModal = { message: 'OK?', buttons: ['OK'] }
+
+            engine.resetActiveTurnState()
+
+            expect(engine.isWaitingForResponse).toBe(false)
+            expect(engine.currentTurnScope).toBe(null)
+            expect(engine.activeModal).toBe(null)
+        })
+    })
+})

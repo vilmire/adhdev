@@ -130,7 +130,6 @@ export declare class ProviderCliAdapter implements CliAdapter {
     private waitForInteractivePrompt;
     private evaluateSettled;
     private finishResponse;
-    private commitCurrentTranscript;
     private runDetectStatus;
     private runParseApproval;
     getStatus(): CliSessionStatus;

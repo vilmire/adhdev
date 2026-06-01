@@ -735,14 +735,12 @@ describe('ProviderCliAdapter sendMessage guard', () => {
       ],
       activeModal: null,
     }))
-    adapter.commitCurrentTranscript = vi.fn(() => ({ hasAssistant: true, assistantContent: 'tool activity' }))
 
     adapter.finishResponse()
 
     expect(adapter.isWaitingForResponse).toBe(true)
     expect(adapter.currentTurnScope?.prompt).toBe('continue validation')
     expect(adapter.currentStatus).toBe('generating')
-    expect(adapter.commitCurrentTranscript).not.toHaveBeenCalled()
   })
 
   it('allows Codex finish once parsed idle has a final standard assistant answer', () => {
@@ -764,13 +762,11 @@ describe('ProviderCliAdapter sendMessage guard', () => {
       ],
       activeModal: null,
     }))
-    adapter.commitCurrentTranscript = vi.fn(() => ({ hasAssistant: true, assistantContent: 'Validation is complete.' }))
 
     adapter.finishResponse()
 
     expect(adapter.isWaitingForResponse).toBe(false)
     expect(adapter.currentTurnScope).toBe(null)
     expect(adapter.currentStatus).toBe('idle')
-    expect(adapter.commitCurrentTranscript).toHaveBeenCalled()
   })
 })
