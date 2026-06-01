@@ -245,6 +245,58 @@ function getArchivePath(meshId: string): string {
     return join(getLedgerDir(), `${safe}.archive.jsonl`);
 }
 
+function getRotatedArchivePath(meshId: string, index: number): string {
+    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return join(getLedgerDir(), `${safe}.archive.${index}.jsonl`);
+}
+
+function getArchivedCountsPath(meshId: string): string {
+    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return join(getLedgerDir(), `${safe}.archived-counts.json`);
+}
+
+function rotateArchiveFile(meshId: string, archivePath: string): void {
+    let index = 1;
+    while (existsSync(getRotatedArchivePath(meshId, index))) {
+        index++;
+        if (index > 5) break;
+    }
+    if (index > 5) index = 5;
+    try {
+        renameSync(archivePath, getRotatedArchivePath(meshId, index));
+    } catch (e: any) {
+        process.stderr.write(`[adhdev-mesh] Archive rotation failed for mesh ${meshId}: ${e?.message || e}\n`);
+    }
+}
+
+interface LedgerArchivedCounts {
+    taskCompleted: number;
+    taskFailed: number;
+    taskStalled: number;
+    recoveryAttempted: number;
+    totalArchived: number;
+    lastArchivedAt: string;
+}
+
+function readArchivedCounts(meshId: string): LedgerArchivedCounts {
+    const path = getArchivedCountsPath(meshId);
+    if (!existsSync(path)) return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: '' };
+    try { return JSON.parse(readFileSync(path, 'utf-8')) as LedgerArchivedCounts; } catch { return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: '' }; }
+}
+
+function updateArchivedCounts(meshId: string, archived: MeshLedgerEntry[]): void {
+    const counts = readArchivedCounts(meshId);
+    for (const e of archived) {
+        if (e.kind === 'task_completed') counts.taskCompleted++;
+        else if (e.kind === 'task_failed') counts.taskFailed++;
+        else if (e.kind === 'task_stalled') counts.taskStalled++;
+        else if (e.kind === 'recovery_attempted') counts.recoveryAttempted++;
+    }
+    counts.totalArchived += archived.length;
+    counts.lastArchivedAt = new Date().toISOString();
+    try { writeFileSync(getArchivedCountsPath(meshId), JSON.stringify(counts), { encoding: 'utf-8', mode: 0o600 }); } catch { /* best-effort */ }
+}
+
 // ─── Worker Result Footer ───────────────────────
 
 /**
@@ -301,11 +353,15 @@ export function compactLedger(meshId: string): { archivedCount: number; retained
 
     if (archive.length === 0) return { archivedCount: 0, retainedCount: keep.length };
 
-    // Append archived entries to the archive file
+    // Append archived entries to the archive file, rotate if it exceeds 50MB
     const archivePath = getArchivePath(meshId);
     try {
+        if (existsSync(archivePath) && statSync(archivePath).size > 50 * 1024 * 1024) {
+            rotateArchiveFile(meshId, archivePath);
+        }
         const archiveLines = archive.map(e => JSON.stringify(e)).join('\n') + '\n';
         appendFileSync(archivePath, archiveLines, { encoding: 'utf-8', mode: 0o600 });
+        updateArchivedCounts(meshId, archive);
     } catch (e: any) {
         process.stderr.write(`[adhdev-mesh] Ledger archive write failed for mesh ${meshId}: ${e?.message || e}\n`);
         return { archivedCount: 0, retainedCount: entries.length };
@@ -317,7 +373,6 @@ export function compactLedger(meshId: string): { archivedCount: number; retained
         writeFileSync(filePath, keepLines, { encoding: 'utf-8', mode: 0o600 });
     } catch (e: any) {
         process.stderr.write(`[adhdev-mesh] Ledger compaction rewrite failed for mesh ${meshId}: ${e?.message || e}\n`);
-        // Archive was already written — don't double-archive; leave active file as-is
         return { archivedCount: archive.length, retainedCount: keep.length };
     }
 
@@ -345,7 +400,16 @@ function extractJsonObjectFromSummary(summary?: string): Record<string, unknown>
         if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
         try {
             const parsed = JSON.parse(trimmed);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                // Require at least one mesh worker result field to avoid false positives
+                // (e.g. JSON from tool call outputs or log lines in the final summary).
+                const hasWorkerShape = 'status' in parsed && (
+                    'changedFiles' in parsed || 'errors' in parsed
+                    || 'gitStatus' in parsed || 'nextAction' in parsed
+                    || 'validationResults' in parsed
+                );
+                if (hasWorkerShape) return parsed;
+            }
         } catch { /* try next candidate */ }
     }
     return undefined;
@@ -520,8 +584,9 @@ export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEnt
     if (entries.length === 0) return { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
     const ledgerPath = getLedgerPath(meshId);
 
-    // Read existing to deduplicate by ID
-    const existing = new Set(readLedgerEntries(meshId).map(e => e.id));
+    // Dedup against recent entries only — P2P replication is incremental (cursor-based),
+    // so duplicates appear in the recent tail, not deep history.
+    const existing = new Set(readLedgerEntries(meshId, { tail: 1000 }).map(e => e.id));
     const validEntries: MeshLedgerEntry[] = [];
     let rejectedInvalid = 0;
     let skippedDuplicate = 0;
@@ -641,16 +706,17 @@ export function readLedgerSlice(meshId: string, opts?: ReadLedgerSliceOptions): 
  */
 export function getLedgerSummary(meshId: string): MeshLedgerSummary {
     const entries = readLedgerEntries(meshId);
+    const archived = readArchivedCounts(meshId);
     const now = Date.now();
     const recentFailureCutoff = now - RECENT_FAILURE_WINDOW_MS;
 
     const summary: MeshLedgerSummary = {
         meshId,
-        totalEntries: entries.length,
+        totalEntries: entries.length + archived.totalArchived,
         taskDispatched: 0,
-        taskCompleted: 0,
-        taskFailed: 0,
-        taskStalled: 0,
+        taskCompleted: archived.taskCompleted,
+        taskFailed: archived.taskFailed,
+        taskStalled: archived.taskStalled,
         sessionLaunched: 0,
         checkpointCreated: 0,
         lastActivityAt: null,
