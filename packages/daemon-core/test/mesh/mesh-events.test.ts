@@ -1043,12 +1043,13 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         result: { success: true, merged: true, branch: 'fix/branch', into: 'main' },
       })
 
-      // Should forward to coordinator via send_message AND buffer to pending (because coordinator is generating)
-      expect(result).toMatchObject({ success: true, forwarded: 1 })
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-      expect(coordinator.onEvent.mock.calls[0][0]).toBe('send_message')
+      // When coordinator is generating, do NOT inject via send_message — only buffer to pending queue.
+      // Injecting into a generating PTY corrupts the input stream and leaves Codex stuck generating.
+      expect(result).toMatchObject({ success: true, forwarded: 0, bufferedForGeneratingCoordinator: true })
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
 
-      // Terminal event must also be in pending queue so coordinator can drain it via get_pending_mesh_events
+      // Terminal event must be in pending queue so coordinator can drain it via get_pending_mesh_events
+      // once it returns to idle after its current generation turn.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0]).toMatchObject({
@@ -1077,8 +1078,9 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         result: { success: false, code: 'validation_failed', error: 'Tests failed' },
       })
 
-      expect(result).toMatchObject({ success: true, forwarded: 1 })
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      // When coordinator is generating, do NOT inject via send_message — only buffer to pending queue.
+      expect(result).toMatchObject({ success: true, forwarded: 0, bufferedForGeneratingCoordinator: true })
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
 
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
