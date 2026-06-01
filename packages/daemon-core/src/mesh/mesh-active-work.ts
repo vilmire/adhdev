@@ -23,6 +23,12 @@ export interface MeshActiveWorkRecord {
     terminalKind?: string;
     terminalAt?: string;
     staleReason?: string;
+    /**
+     * When true, the session targeted by this direct dispatch still exists in the live mesh
+     * but did not transition to generating — the dispatch was not acknowledged by the provider.
+     * Distinct from historical/orphaned stale entries where the node/session is gone.
+     */
+    staleDispatchUnacknowledged?: boolean;
 }
 
 export interface MeshActiveWorkSummary {
@@ -37,10 +43,15 @@ export interface MeshActiveWorkSummary {
     statusCounts: Record<MeshActiveWorkStatus, number>;
     staleDirectCount: number;
     /**
-     * When staleDirectCount > 0, this note clarifies that stale direct records are
-     * historical/recovery evidence — orphaned ledger entries whose original node or session
-     * is no longer present in the live mesh. They are NOT active or unresolved work items.
-     * The active queue (queue source) is the authoritative source for pending/assigned work.
+     * Count of stale direct entries where the target session still exists in the live mesh
+     * but never transitioned to generating — these are fresh dispatch failures, not historical orphans.
+     * Requires immediate recovery: launch a fresh session and retry the task.
+     */
+    staleDirectUnacknowledgedCount?: number;
+    /**
+     * When staleDirectCount > 0, this note clarifies what kind of stale records exist.
+     * Fresh unacknowledged dispatches carry an actionable recovery note; orphaned historical
+     * entries carry the "historical evidence only" note. Both may coexist.
      */
     staleDirectNote?: string;
 }
@@ -163,6 +174,7 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         statusCounts[item.status] += 1;
     }
     const staleDirectCount = activeWork.filter(item => item.source === 'direct' && item.staleReason).length;
+    const staleDirectUnacknowledgedCount = activeWork.filter(item => item.source === 'direct' && item.staleDispatchUnacknowledged).length;
     return {
         totalActiveCount: activeWork.length,
         queueActiveCount: sourceCounts.queue,
@@ -174,6 +186,7 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         sourceCounts,
         statusCounts,
         staleDirectCount,
+        ...(staleDirectUnacknowledgedCount > 0 ? { staleDirectUnacknowledgedCount } : {}),
         ...(staleDirectCount > 0 ? { staleDirectNote: 'Stale direct records are orphaned ledger entries whose node/session no longer exists. They are historical recovery evidence only — not active or unresolved work. The queue (source: queue) is authoritative for pending/assigned tasks.' } : {}),
     };
 }
@@ -216,11 +229,25 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
         const status = terminalStatus || live.status || 'assigned';
         const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
-        const ledgerOnlyStaleReason = !terminalRow && (status === 'idle' || (!terminalStatus && !live.status))
+        // dispatchedToIdleSession is recorded by mesh_send_task when the target session was idle
+        // at dispatch time. Combined with status === 'idle', it confirms no runtime transition.
+        const dispatchedToIdleSession = dispatch.payload?.dispatchedToIdleSession === true;
+        // Flag stale when no terminal event AND either:
+        // - session is now idle (dispatch not acknowledged), OR
+        // - no live status reported (node/session absent from live mesh), OR
+        // - payload flagged idle-at-dispatch AND session is still not generating (redundant guard for clarity).
+        const isNoTransition = !terminalStatus && !live.status;
+        const isIdleUnacknowledged = status === 'idle';
+        const ledgerOnlyStaleReason = !terminalRow && (isIdleUnacknowledged || isNoTransition || (dispatchedToIdleSession && isIdleUnacknowledged))
             ? 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition'
             : undefined;
         const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
         const { title, summary } = summarizeMessage(message);
+        // A dispatch is a fresh unacknowledged failure when the node and session both still exist
+        // in the live mesh but the session never transitioned to generating. This is distinct from
+        // historical/orphaned stale entries where the node or session is gone from the live mesh.
+        // fresh-unacknowledged: ledgerOnlyStaleReason is set (session didn't ack) AND no live.staleReason (node/session is present)
+        const isFreshUnacknowledged = Boolean(ledgerOnlyStaleReason && !live.staleReason);
         const record: MeshActiveWorkRecord = {
             taskId,
             source: 'direct',
@@ -240,6 +267,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             terminalKind: terminal?.kind,
             terminalAt: terminal?.timestamp,
             staleReason: live.staleReason || ledgerOnlyStaleReason,
+            ...(isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}),
         };
         if (terminalRow) {
             terminalDirectWork.push(record);
@@ -257,8 +285,19 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
     terminalDirectWork.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     const summary = buildMeshActiveWorkSummary(records);
     summary.staleDirectCount = staleDirectWork.length;
+    const unacknowledgedCount = staleDirectWork.filter(r => r.staleDispatchUnacknowledged).length;
+    if (unacknowledgedCount > 0) {
+        summary.staleDirectUnacknowledgedCount = unacknowledgedCount;
+    }
+    // Build a note that accurately describes what's in the stale set.
+    // When there are fresh unacknowledged entries (node/session still live, session never started),
+    // use the actionable recovery note instead of the misleading "historical evidence only" note.
     const staleDirectWorkNote = staleDirectWork.length > 0
-        ? 'These are orphaned ledger entries whose original node or session no longer exists in the live mesh. They are historical/recovery evidence only — not active or unresolved work. Do not treat staleDirectCount as a status mismatch; use the queue (source: queue) as authoritative for pending/assigned tasks.'
+        ? unacknowledgedCount > 0 && unacknowledgedCount === staleDirectWork.length
+            ? `${unacknowledgedCount} direct dispatch(es) were not acknowledged by the target session — the session received the agent_command but never transitioned to generating. This is a fresh dispatch failure, not historical noise. Recovery: launch a fresh session on the same node and retry the task, or use mesh_enqueue_task for queue-based assignment.`
+            : unacknowledgedCount > 0
+                ? `${unacknowledgedCount} of ${staleDirectWork.length} stale direct record(s) are fresh unacknowledged dispatch failures (session still live but never transitioned to generating); the rest are orphaned historical entries whose node/session no longer exists. Fresh unacknowledged dispatches need recovery: launch a fresh session and retry. Orphaned entries are historical evidence only — not active or unresolved work.`
+                : 'These are orphaned ledger entries whose original node or session no longer exists in the live mesh. They are historical/recovery evidence only — not active or unresolved work. Do not treat staleDirectCount as a status mismatch; use the queue (source: queue) as authoritative for pending/assigned tasks.'
         : undefined;
     if (staleDirectWorkNote) {
         summary.staleDirectNote = staleDirectWorkNote;

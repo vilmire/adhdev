@@ -1332,7 +1332,24 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // that poll via get_pending_mesh_events (dual delivery). Refine terminal events are
     // forwarded directly only — they must not accumulate in the pending queue when a live
     // coordinator already received them.
-    if (!isRefineTerminalEvent) {
+    //
+    // Exception: if ALL live CLI coordinator instances are in a generating/active state
+    // when a refine terminal event fires (e.g. a Codex CLI coordinator that triggered an
+    // async refine job and is still in the generating turn that sent it), the coordinator
+    // cannot immediately receive send_message input. Buffer the event to the pending queue
+    // so it is available via get_pending_mesh_events when the coordinator returns to idle.
+    // Critically: do NOT attempt send_message injection into a generating PTY coordinator for
+    // terminal refine events — injecting text into an active PTY can corrupt the input stream
+    // and leave the coordinator stuck in generating state, unable to process the refine result.
+    const allCoordinatorsGenerating = isRefineTerminalEvent && coordinatorInstances.every((inst) => {
+        const s = inst.getState();
+        const status = readNonEmptyString(s.status).toLowerCase();
+        const activeChatStatus = readNonEmptyString(s.activeChat?.status).toLowerCase();
+        return status === 'generating' || status === 'streaming' || status === 'long_generating'
+            || activeChatStatus === 'generating' || activeChatStatus === 'streaming';
+    });
+
+    if (!isRefineTerminalEvent || allCoordinatorsGenerating) {
         if (queuePendingMeshCoordinatorEvent({
                 event: args.event,
                 meshId: args.meshId,
@@ -1346,8 +1363,21 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 coordinatorMessage: messageText,
                 queuedAt: Date.now(),
             })) {
-            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+            if (allCoordinatorsGenerating) {
+                LOG.info('MeshEvents', `Queued ${args.event} for generating CLI coordinator (mesh ${args.meshId}) — will be delivered via get_pending_mesh_events when coordinator returns to idle`);
+            } else {
+                LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+            }
         }
+    }
+
+    // When all CLI coordinators are actively generating and a terminal refine event fires,
+    // skip send_message injection entirely. The event is already buffered to the pending queue.
+    // Injecting into a generating PTY coordinator can corrupt its input stream and cause it to
+    // remain stuck in generating state, never processing the refine result.
+    // The coordinator will drain pending events via get_pending_mesh_events on its next idle cycle.
+    if (allCoordinatorsGenerating) {
+        return { success: true, forwarded: 0, bufferedForGeneratingCoordinator: true };
     }
 
     for (const coord of coordinatorInstances) {

@@ -187,3 +187,97 @@ describe('buildMeshActiveWork — staleDirectNote / staleDirectWorkNote', () => 
         expect(summary.staleDirectNote).toMatch(/historical/i);
     });
 });
+
+describe('buildMeshActiveWork — direct dispatch acknowledgement gap (Bug: direct task not acknowledged by live session)', () => {
+    it('dispatch to a live idle session without terminal event is stale (session never started generating)', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch()],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', providerType: 'codex-cli', status: 'idle' }] }],
+        });
+
+        expect(result.activeWork).toHaveLength(0);
+        expect(result.staleDirectWork).toHaveLength(1);
+        expect(result.staleDirectWork[0]).toMatchObject({
+            taskId: 'task-1',
+            status: 'idle',
+            staleReason: 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition',
+        });
+        expect(result.summary.totalActiveCount).toBe(0);
+        expect(result.summary.staleDirectCount).toBe(1);
+    });
+
+    it('dispatch with dispatchedToIdleSession=true to an idle session is stale', () => {
+        const dispatchWithIdleFlag = dispatch({
+            payload: {
+                source: 'direct',
+                via: 'local_direct',
+                taskId: 'task-idle-flag',
+                message: 'do the work',
+                dispatchedToIdleSession: true,
+            },
+        });
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatchWithIdleFlag],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', providerType: 'codex-cli', status: 'idle' }] }],
+        });
+
+        expect(result.activeWork).toHaveLength(0);
+        expect(result.staleDirectWork).toHaveLength(1);
+        expect(result.staleDirectWork[0].staleReason).toContain('no provider acknowledgement');
+    });
+
+    it('dispatch to a live generating session without dispatchedToIdleSession is counted as active (fresh session)', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch()],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', providerType: 'codex-cli', status: 'generating' }] }],
+        });
+
+        expect(result.activeWork).toHaveLength(1);
+        expect(result.staleDirectWork).toHaveLength(0);
+        expect(result.activeWork[0]).toMatchObject({ status: 'generating', staleReason: undefined });
+    });
+
+    it('dispatch to a node that is no longer in the live mesh is stale', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch({ nodeId: 'node-gone' })],
+            nodes: [{ id: 'node-1', sessions: [] }],
+        });
+
+        expect(result.staleDirectWork).toHaveLength(1);
+        expect(result.staleDirectWork[0].staleReason).toContain('no longer in the live mesh');
+        expect(result.summary.staleDirectCount).toBe(1);
+    });
+
+    it('stale direct entries are not counted as active work and expose actionable recovery evidence', () => {
+        const staleDispatch = dispatch({ nodeId: 'node-gone' });
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [staleDispatch],
+            nodes: [],
+        });
+
+        expect(result.activeWork).toHaveLength(0);
+        expect(result.staleDirectWork).toHaveLength(1);
+        expect(result.staleDirectWork[0].taskId).toBe('task-1');
+        expect(result.staleDirectWork[0].staleReason).toBeDefined();
+        expect(result.summary.totalActiveCount).toBe(0);
+        expect(result.staleDirectWorkNote).toMatch(/historical/i);
+    });
+
+    it('completed direct task is in terminalDirectWork and not counted as stale', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch(), completed()],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', status: 'idle' }] }],
+        });
+
+        expect(result.activeWork).toHaveLength(0);
+        expect(result.staleDirectWork).toHaveLength(0);
+        expect(result.terminalDirectWork).toHaveLength(1);
+        expect(result.terminalDirectWork[0]).toMatchObject({ terminal: true, terminalKind: 'task_completed' });
+    });
+});
