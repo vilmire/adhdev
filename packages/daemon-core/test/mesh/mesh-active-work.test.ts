@@ -343,4 +343,93 @@ describe('buildMeshActiveWork — direct dispatch acknowledgement gap (Bug: dire
         expect(result.staleDirectWork).toHaveLength(1);
         expect(result.terminalDirectWork).toHaveLength(0);
     });
+
+    it('direct dispatch with dispatchedToIdleSession=true is terminal when followed by session-matched task_completed', () => {
+        // Regression: models the exact sequence for task 501d7d38.
+        // Direct dispatch was sent to an idle session (dispatchedToIdleSession: true).
+        // The session completed and wrote a task_completed entry (no taskId, matched by sessionId).
+        // buildMeshActiveWork must classify this as terminalDirectWork, not staleDirectWork.
+        const directDispatch: MeshLedgerEntry = {
+            id: 'dispatch-idle',
+            meshId: 'mesh-1',
+            kind: 'task_dispatched',
+            timestamp: '2026-06-01T04:48:16.281Z',
+            nodeId: 'node-1',
+            sessionId: 'session-idle-1',
+            providerType: 'hermes-cli',
+            payload: {
+                source: 'direct',
+                via: 'mesh_send_task',
+                taskId: '501d7d38-2135-4818-9a57-aa688ff38a22',
+                message: 'verify the preview result',
+                dispatchedToIdleSession: true,
+            },
+        };
+        const idleCompletion: MeshLedgerEntry = {
+            id: 'completed-idle-session',
+            meshId: 'mesh-1',
+            kind: 'task_completed',
+            timestamp: '2026-06-01T04:50:00.000Z',
+            nodeId: 'node-1',
+            sessionId: 'session-idle-1',
+            providerType: 'hermes-cli',
+            payload: {
+                event: 'agent:generating_completed',
+                completionMarker: 'turn:cli-turn:1',
+                // No taskId: direct tasks are not in the queue, so completedTaskForLedger is null
+            },
+        };
+
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [directDispatch, idleCompletion],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-idle-1', status: 'idle' }] }],
+        });
+
+        expect(result.activeWork).toHaveLength(0);
+        expect(result.staleDirectWork).toHaveLength(0);
+        expect(result.terminalDirectWork).toHaveLength(1);
+        expect(result.terminalDirectWork[0]).toMatchObject({
+            taskId: '501d7d38-2135-4818-9a57-aa688ff38a22',
+            terminal: true,
+            terminalKind: 'task_completed',
+            status: 'idle',
+        });
+        expect(result.summary.staleDirectCount).toBe(0);
+        expect(result.summary.staleDirectUnacknowledgedCount).toBeUndefined();
+    });
+
+    it('genuine unacknowledged direct dispatch (no terminal, no generating transition) remains stale', () => {
+        // Safety: a direct dispatch to an idle session where no task_completed was ever written
+        // must still surface as staleDispatchUnacknowledged=true, not be silently lost.
+        const directDispatch: MeshLedgerEntry = {
+            id: 'dispatch-unacked',
+            meshId: 'mesh-1',
+            kind: 'task_dispatched',
+            timestamp: '2026-06-01T04:00:00.000Z',
+            nodeId: 'node-1',
+            sessionId: 'session-unacked',
+            providerType: 'hermes-cli',
+            payload: {
+                source: 'direct',
+                via: 'mesh_send_task',
+                taskId: 'task-never-acked',
+                message: 'this was never processed',
+                dispatchedToIdleSession: true,
+            },
+        };
+
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [directDispatch],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-unacked', status: 'idle' }] }],
+        });
+
+        expect(result.activeWork).toHaveLength(0);
+        expect(result.staleDirectWork).toHaveLength(1);
+        expect(result.staleDirectWork[0].staleDispatchUnacknowledged).toBe(true);
+        expect(result.staleDirectWork[0].staleReason).toContain('no provider acknowledgement');
+        expect(result.summary.staleDirectCount).toBe(1);
+        expect(result.summary.staleDirectUnacknowledgedCount).toBe(1);
+    });
 });
