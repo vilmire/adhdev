@@ -1434,10 +1434,18 @@ function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmoduleReach
 
 function resolveRefineryAutoPublishSubmoduleMainCommits(mesh: any, workspace: string): { enabled: boolean; source?: string } {
     if (mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true) {
+        process.stderr.write(
+            `[adhdev-mesh] WARNING: allowAutoPublishSubmoduleMainCommits is ENABLED via mesh.policy. `
+            + `Refinery may push unreachable submodule commits to submodule origin/main without additional user approval.\n`,
+        );
         return { enabled: true, source: 'mesh.policy.allowAutoPublishSubmoduleMainCommits' };
     }
     const loaded = loadMeshRefineConfig(mesh, workspace);
     if (loaded.config?.allowAutoPublishSubmoduleMainCommits === true) {
+        process.stderr.write(
+            `[adhdev-mesh] WARNING: allowAutoPublishSubmoduleMainCommits is ENABLED via ${loaded.path || loaded.source}. `
+            + `Refinery may push unreachable submodule commits to submodule origin/main without additional user approval.\n`,
+        );
         return { enabled: true, source: loaded.path || loaded.source };
     }
     return { enabled: false };

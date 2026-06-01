@@ -1,5 +1,5 @@
 import type { MeshLedgerEntry } from './mesh-ledger.js';
-import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
+import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
 export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval';
@@ -69,6 +69,12 @@ export interface BuildMeshActiveWorkOptions {
     meshId: string;
     queue?: MeshWorkQueueEntry[];
     ledgerEntries?: MeshLedgerEntry[];
+    /**
+     * Active direct dispatches from BeadsDB. When provided, these are used instead of
+     * scanning ledger entries for direct dispatches — eliminates the O(n_ledger) scan.
+     * Falls back to ledger scanning when not provided.
+     */
+    directDispatches?: DirectDispatchRecord[];
     nodes?: any[];
     now?: number;
     /** Include terminal direct rows (idle/failed) for handoff/recent-work surfaces. Defaults false. */
@@ -218,66 +224,163 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         });
     }
 
-    const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-    const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
-    for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
-        const taskId = directDispatchTaskId(dispatch);
-        const terminal = terminals
-            .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
-            .find(entry => terminalMatchesDispatch(entry, dispatch, taskId));
-        const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
-        const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
-        const status = terminalStatus || live.status || 'assigned';
-        const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
-        // dispatchedToIdleSession is recorded by mesh_send_task when the target session was idle
-        // at dispatch time. Combined with status === 'idle', it confirms no runtime transition.
-        const dispatchedToIdleSession = dispatch.payload?.dispatchedToIdleSession === true;
-        // Flag stale when no terminal event AND either:
-        // - session is now idle (dispatch not acknowledged), OR
-        // - no live status reported (node/session absent from live mesh), OR
-        // - payload flagged idle-at-dispatch AND session is still not generating (redundant guard for clarity).
-        const isNoTransition = !terminalStatus && !live.status;
-        const isIdleUnacknowledged = status === 'idle';
-        const ledgerOnlyStaleReason = !terminalRow && (isIdleUnacknowledged || isNoTransition || (dispatchedToIdleSession && isIdleUnacknowledged))
-            ? 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition'
-            : undefined;
-        const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
-        const { title, summary } = summarizeMessage(message);
-        // A dispatch is a fresh unacknowledged failure when the node and session both still exist
-        // in the live mesh but the session never transitioned to generating. This is distinct from
-        // historical/orphaned stale entries where the node or session is gone from the live mesh.
-        // fresh-unacknowledged: ledgerOnlyStaleReason is set (session didn't ack) AND no live.staleReason (node/session is present)
-        const isFreshUnacknowledged = Boolean(ledgerOnlyStaleReason && !live.staleReason);
-        const record: MeshActiveWorkRecord = {
-            taskId,
-            source: 'direct',
-            status,
-            nodeId: dispatch.nodeId,
-            sessionId: dispatch.sessionId,
-            providerType: dispatch.providerType || readString(dispatch.payload?.providerType),
-            taskTitle: readString(dispatch.payload?.taskTitle) || title,
-            taskSummary: readString(dispatch.payload?.taskSummary) || summary,
-            message,
-            taskMode: readString(dispatch.payload?.taskMode),
-            createdAt: dispatch.timestamp,
-            updatedAt: terminal?.timestamp || dispatch.timestamp,
-            dispatchedAt: dispatch.timestamp,
-            elapsedMs: elapsedSince(dispatch.timestamp, now),
-            terminal: terminalRow,
-            terminalKind: terminal?.kind,
-            terminalAt: terminal?.timestamp,
-            staleReason: live.staleReason || ledgerOnlyStaleReason,
-            ...(isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}),
-        };
-        if (terminalRow) {
-            terminalDirectWork.push(record);
-            if (opts.includeTerminalDirect !== true) continue;
+    // When BeadsDB direct dispatches are provided, use them for LOCAL dispatches (O(1) indexed).
+    // ALSO scan ledger for remote dispatches (P2P) whose taskIds are not in BeadsDB — these
+    // are never written to the local BeadsDB since they're dispatched from a remote daemon.
+    if (opts.directDispatches !== undefined) {
+        const dbTaskIds = new Set(opts.directDispatches.map(d => d.taskId));
+        for (const dispatch of opts.directDispatches) {
+            const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId ?? undefined, dispatch.sessionId ?? undefined);
+            const dbStatus = dispatch.status; // 'dispatched' | 'acked' | 'completed' | 'failed' | 'stale'
+            const isTerminal = dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'stale';
+            const status: MeshActiveWorkStatus = isTerminal
+                ? (dbStatus === 'completed' ? 'idle' : 'failed')
+                : live.status || (dbStatus === 'acked' ? 'generating' : 'assigned');
+            const isNoTransition = !isTerminal && !live.status;
+            const isIdleUnacknowledged = status === 'idle' && !isTerminal;
+            const ledgerOnlyStaleReason = !isTerminal && (isIdleUnacknowledged || isNoTransition || (dispatch.dispatchedToIdleSession && isIdleUnacknowledged))
+                ? 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition'
+                : undefined;
+            const isFreshUnacknowledged = Boolean(ledgerOnlyStaleReason && !live.staleReason);
+            const { title, summary } = summarizeMessage(dispatch.message || '');
+            const record: MeshActiveWorkRecord = {
+                taskId: dispatch.taskId,
+                source: 'direct',
+                status,
+                nodeId: dispatch.nodeId ?? undefined,
+                sessionId: dispatch.sessionId ?? undefined,
+                providerType: dispatch.providerType ?? undefined,
+                taskTitle: title,
+                taskSummary: summary,
+                message: dispatch.message,
+                taskMode: dispatch.taskMode ?? undefined,
+                createdAt: dispatch.dispatchedAt,
+                updatedAt: dispatch.updatedAt,
+                dispatchedAt: dispatch.dispatchedAt,
+                elapsedMs: elapsedSince(dispatch.dispatchedAt, now),
+                terminal: isTerminal,
+                terminalKind: isTerminal ? (dbStatus === 'completed' ? 'task_completed' : 'task_failed') : undefined,
+                terminalAt: isTerminal ? dispatch.updatedAt : undefined,
+                staleReason: live.staleReason || ledgerOnlyStaleReason,
+                ...(isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}),
+            };
+            if (isTerminal) {
+                terminalDirectWork.push(record);
+                if (opts.includeTerminalDirect !== true) continue;
+            }
+            if ((live.staleReason || ledgerOnlyStaleReason) && !isTerminal) {
+                staleDirectWork.push(record);
+                continue;
+            }
+            records.push(record);
         }
-        if ((live.staleReason || ledgerOnlyStaleReason) && !terminalRow) {
-            staleDirectWork.push(record);
-            continue;
+        // Also scan ledger for remote dispatches (via p2p_direct) whose taskIds are NOT in BeadsDB.
+        // Remote daemons write their own local BeadsDB; this coordinator's BeadsDB only has local dispatches.
+        const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
+        for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
+            const taskId = directDispatchTaskId(dispatch);
+            if (dbTaskIds.has(taskId)) continue; // already covered by BeadsDB path above
+            const terminal = terminals
+                .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
+                .find(entry => terminalMatchesDispatch(entry, dispatch, taskId));
+            const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
+            const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
+            const status = terminalStatus || live.status || 'assigned';
+            const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
+            const dispatchedToIdleSession = dispatch.payload?.dispatchedToIdleSession === true;
+            const isNoTransition = !terminalStatus && !live.status;
+            const isIdleUnacknowledged = status === 'idle';
+            const ledgerOnlyStaleReason = !terminalRow && (isIdleUnacknowledged || isNoTransition || (dispatchedToIdleSession && isIdleUnacknowledged))
+                ? 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition'
+                : undefined;
+            const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
+            const { title, summary } = summarizeMessage(message);
+            const isFreshUnacknowledged = Boolean(ledgerOnlyStaleReason && !live.staleReason);
+            const record: MeshActiveWorkRecord = {
+                taskId,
+                source: 'direct',
+                status,
+                nodeId: dispatch.nodeId,
+                sessionId: dispatch.sessionId,
+                providerType: dispatch.providerType || readString(dispatch.payload?.providerType),
+                taskTitle: readString(dispatch.payload?.taskTitle) || title,
+                taskSummary: readString(dispatch.payload?.taskSummary) || summary,
+                message,
+                taskMode: readString(dispatch.payload?.taskMode),
+                createdAt: dispatch.timestamp,
+                updatedAt: terminal?.timestamp || dispatch.timestamp,
+                dispatchedAt: dispatch.timestamp,
+                elapsedMs: elapsedSince(dispatch.timestamp, now),
+                terminal: terminalRow,
+                terminalKind: terminal?.kind,
+                terminalAt: terminal?.timestamp,
+                staleReason: live.staleReason || ledgerOnlyStaleReason,
+                ...(isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}),
+            };
+            if (terminalRow) {
+                terminalDirectWork.push(record);
+                if (opts.includeTerminalDirect !== true) continue;
+            }
+            if ((live.staleReason || ledgerOnlyStaleReason) && !terminalRow) {
+                staleDirectWork.push(record);
+                continue;
+            }
+            records.push(record);
         }
-        records.push(record);
+    } else {
+        // Full ledger scan: no BeadsDB direct dispatches available (standalone mode or empty).
+        const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
+        for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
+            const taskId = directDispatchTaskId(dispatch);
+            const terminal = terminals
+                .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
+                .find(entry => terminalMatchesDispatch(entry, dispatch, taskId));
+            const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
+            const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
+            const status = terminalStatus || live.status || 'assigned';
+            const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
+            const dispatchedToIdleSession = dispatch.payload?.dispatchedToIdleSession === true;
+            const isNoTransition = !terminalStatus && !live.status;
+            const isIdleUnacknowledged = status === 'idle';
+            const ledgerOnlyStaleReason = !terminalRow && (isIdleUnacknowledged || isNoTransition || (dispatchedToIdleSession && isIdleUnacknowledged))
+                ? 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition'
+                : undefined;
+            const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
+            const { title, summary } = summarizeMessage(message);
+            const isFreshUnacknowledged = Boolean(ledgerOnlyStaleReason && !live.staleReason);
+            const record: MeshActiveWorkRecord = {
+                taskId,
+                source: 'direct',
+                status,
+                nodeId: dispatch.nodeId,
+                sessionId: dispatch.sessionId,
+                providerType: dispatch.providerType || readString(dispatch.payload?.providerType),
+                taskTitle: readString(dispatch.payload?.taskTitle) || title,
+                taskSummary: readString(dispatch.payload?.taskSummary) || summary,
+                message,
+                taskMode: readString(dispatch.payload?.taskMode),
+                createdAt: dispatch.timestamp,
+                updatedAt: terminal?.timestamp || dispatch.timestamp,
+                dispatchedAt: dispatch.timestamp,
+                elapsedMs: elapsedSince(dispatch.timestamp, now),
+                terminal: terminalRow,
+                terminalKind: terminal?.kind,
+                terminalAt: terminal?.timestamp,
+                staleReason: live.staleReason || ledgerOnlyStaleReason,
+                ...(isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}),
+            };
+            if (terminalRow) {
+                terminalDirectWork.push(record);
+                if (opts.includeTerminalDirect !== true) continue;
+            }
+            if ((live.staleReason || ledgerOnlyStaleReason) && !terminalRow) {
+                staleDirectWork.push(record);
+                continue;
+            }
+            records.push(record);
+        }
     }
 
     records.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());

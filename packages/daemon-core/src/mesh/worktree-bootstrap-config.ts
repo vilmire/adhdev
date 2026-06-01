@@ -9,6 +9,7 @@ import {
     type MeshRefineValidationCommandPlan,
     type RepoMeshRefineValidationCommandConfig,
 } from './refine-config.js';
+import type { MeshAsyncJobLifecycle } from '../repo-mesh-types.js';
 
 export type WorktreeBootstrapStatus = 'ready' | 'running' | 'failed' | 'not_configured' | 'disabled' | 'stale';
 
@@ -21,16 +22,13 @@ export interface RepoMeshWorktreeBootstrapConfig {
     staleInputs?: string[];
 }
 
-export interface WorktreeBootstrapState {
+export interface WorktreeBootstrapState extends MeshAsyncJobLifecycle {
     status: WorktreeBootstrapStatus;
     required: boolean;
     configSource?: string;
     configSourceType?: 'repo_file' | 'mesh_policy' | 'unavailable' | 'invalid';
-    startedAt?: string;
-    completedAt?: string;
     lastCommand?: string;
     exitCode?: number | null;
-    error?: string;
     commandsRun?: Array<Record<string, unknown>>;
     staleInputs?: string[];
 }

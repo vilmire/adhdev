@@ -21,10 +21,12 @@ export interface MeshTaskModeValidationResult {
 
 const LIVE_DEBUG_READONLY_FORBIDDEN: Array<{ label: string; pattern: RegExp }> = [
     { label: 'source_edit', pattern: /\b(edit|modify|patch|apply\s+patch|write\s+(?:to\s+)?(?:file|source)|overwrite|delete\s+file|remove\s+file|create\s+file|touch\s+file)\b/i },
-    { label: 'git_mutation', pattern: /\b(?:git\s+(?:add|commit|push|reset|rebase|clean|checkout|switch|merge|tag|restore|rm|mv)|push\b)/i },
+    { label: 'git_mutation', pattern: /\b(?:git\s+(?:add|commit|push|reset|rebase|clean|checkout|switch|merge|tag|restore|rm|mv|stash|worktree\s+(?:add|remove|move))|push\b)/i },
     { label: 'checkpoint', pattern: /\b(checkpoint|mesh_checkpoint)\b/i },
-    { label: 'deploy_or_version_bump', pattern: /\b(deploy|wrangler\s+deploy|version[-\s]?bump|npm\s+version|release)\b/i },
-    { label: 'destructive_shell', pattern: /\b(rm\s+-rf|mv\s+\S+\s+\S+|truncate\s|tee\s+\S+|sed\s+-i)\b/i },
+    { label: 'deploy_or_version_bump', pattern: /\b(deploy|wrangler\s+deploy|version[-\s]?bump|npm\s+version|release|npm\s+publish|yarn\s+publish|pnpm\s+publish)\b/i },
+    { label: 'destructive_shell', pattern: /\b(rm\s+-rf|mv\s+\S+\s+\S+|truncate\s|tee\s+\S+|sed\s+-i|shred\b)\b/i },
+    { label: 'package_install', pattern: /\b(npm\s+(?:install|i|add|link|uninstall|remove)|yarn\s+(?:add|remove|link)|pnpm\s+(?:add|remove|link)|pip\s+install|brew\s+install|apt\s+install|cargo\s+install)\b/i },
+    { label: 'container_mutation', pattern: /\b(docker\s+(?:build|run|exec|push|tag|rmi|rm|create|start|stop|kill)|kubectl\s+(?:apply|delete|patch|replace|create|scale))\b/i },
 ];
 
 export function normalizeMeshTaskMode(value: unknown): MeshTaskMode | undefined {
@@ -389,4 +391,55 @@ export function __clearMeshQueueForTests(meshId: string): void {
 
 export function __resetBeadsDBForTests(): void {
     BeadsDB.resetForTests();
+}
+
+// ── Direct Dispatch Tracking ─────────────────────────────────────────────────
+// Persists direct (non-queue) task dispatches so buildMeshActiveWork can read
+// active work from BeadsDB instead of scanning ledger JSONL entries.
+
+export type DirectDispatchRecord = ReturnType<BeadsDB['getActiveDirectDispatches']>[number];
+
+export function insertDirectDispatch(
+    meshId: string,
+    data: {
+        taskId: string;
+        nodeId?: string;
+        sessionId?: string;
+        providerType?: string;
+        message: string;
+        taskMode?: string;
+        via: string;
+        dispatchedToIdleSession?: boolean;
+        dispatchedAt: string;
+    },
+): void {
+    try {
+        BeadsDB.getInstance().insertDirectDispatch({ ...data, meshId });
+    } catch (e: any) {
+        process.stderr.write(`[adhdev-mesh] insertDirectDispatch failed for task ${data.taskId}: ${e?.message || e}\n`);
+    }
+}
+
+export function getActiveDirectDispatches(meshId: string): DirectDispatchRecord[] {
+    try {
+        return BeadsDB.getInstance().getActiveDirectDispatches(meshId);
+    } catch {
+        return [];
+    }
+}
+
+export function updateDirectDispatchStatus(
+    meshId: string,
+    sessionId: string,
+    status: 'acked' | 'completed' | 'failed' | 'stale',
+): void {
+    try {
+        BeadsDB.getInstance().updateDirectDispatchStatus(meshId, sessionId, status);
+    } catch { /* best-effort */ }
+}
+
+export function cleanupTerminalDirectDispatches(olderThanMs = 7 * 24 * 60 * 60_000): void {
+    try {
+        BeadsDB.getInstance().cleanupTerminalDirectDispatches(olderThanMs);
+    } catch { /* best-effort */ }
 }

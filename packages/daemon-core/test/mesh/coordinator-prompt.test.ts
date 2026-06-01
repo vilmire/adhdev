@@ -25,7 +25,7 @@ describe('Repo Mesh coordinator prompt', () => {
 
     expect(prompt).toContain('Maximum **2** tasks running in parallel')
     expect(prompt).toContain('Hermes → `hermes-cli`')
-    expect(prompt).toContain('Never substitute `claude-cli`')
+    expect(prompt).toContain('Never substitute the coordinator')
     expect(prompt).toContain('Coordinator runtime is not a delegation default')
   })
 
@@ -109,7 +109,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('pendingCoordinatorEvents')
     expect(prompt).toContain('completion/approval/status signal')
     expect(prompt).toContain('Use at most one compact `mesh_read_chat` check')
-    expect(prompt).toContain('Never launch a duplicate session or second worker solely because `mesh_read_chat` has no final assistant message')
+    expect(prompt).toContain('Never duplicate a session because')
   })
 
   it('prefers reusing idle sessions and concise delta instructions for same-issue continuations', () => {
@@ -136,8 +136,8 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Call `mesh_launch_session` only when no suitable session exists')
     expect(prompt).toContain('send a concise **delta instruction**')
     expect(prompt).toContain('Do not resend the full original task or open a new chat solely to continue the same work')
-    expect(prompt).toContain('Avoid context-wasting restarts')
-    expect(prompt).toContain('prefer the existing idle session and send only the delta from its last verified state')
+    expect(prompt).toContain('Reuse idle sessions')
+    expect(prompt).toContain('send only the delta')
   })
 
   it('requires a branch convergence final state before reporting completion', () => {
@@ -169,7 +169,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('`blocked_review`')
     expect(prompt).toContain('`cleanup_candidate`')
     expect(prompt).toContain('`not_mergeable`')
-    expect(prompt).toContain('Do not strand completed branches')
+    expect(prompt).toContain('Converge branches')
   })
 
   it('treats submodule reachability failures as publish-needed blocked review', () => {
@@ -198,6 +198,6 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('keep the public convergence bucket as `blocked_review`')
     expect(prompt).toContain('ask the user for explicit approval to push/publish the unreachable submodule commit(s) to submodule main')
     expect(prompt).toContain('then rerun `mesh_refine_node`')
-    expect(prompt).toContain('Do not treat feature-branch reachability as complete')
+    expect(prompt).toContain('Submodule reachability = publish-needed')
   })
 })

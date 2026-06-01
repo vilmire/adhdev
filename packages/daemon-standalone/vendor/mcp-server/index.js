@@ -50,6 +50,108 @@ var IPC_COMMAND_TIMEOUTS_MS = {
   fast_forward_mesh_node: 12e4,
   mesh_status: 12e4
 };
+var WS_CONNECTING = 0;
+var WS_OPEN = 1;
+var POOL_IDLE_EVICT_MS = 5 * 6e4;
+var connectionPool = /* @__PURE__ */ new Map();
+function buildRequestId() {
+  return `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+function getTimeoutMs(type, nestedCommand) {
+  return Math.max(
+    IPC_COMMAND_TIMEOUTS_MS[type] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
+    IPC_COMMAND_TIMEOUTS_MS[nestedCommand] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS
+  );
+}
+function getOrCreateConnection(WebSocketCtor, url) {
+  const existing = connectionPool.get(url);
+  if (existing) {
+    const { readyState } = existing.ws;
+    const isAlive = readyState === WS_CONNECTING || readyState === WS_OPEN;
+    const isIdle = Date.now() - existing.lastUsedAt > POOL_IDLE_EVICT_MS && existing.pending.size === 0;
+    if (isAlive && !isIdle) {
+      return existing;
+    }
+    if (isAlive && isIdle) {
+      try {
+        existing.ws.close();
+      } catch {
+      }
+      connectionPool.delete(url);
+    }
+    connectionPool.delete(url);
+  }
+  const conn = {
+    ws: new WebSocketCtor(url),
+    ready: false,
+    commandQueue: [],
+    pending: /* @__PURE__ */ new Map(),
+    lastUsedAt: Date.now()
+  };
+  connectionPool.set(url, conn);
+  const drainQueue = () => {
+    conn.ready = true;
+    for (const { type, args, requestId } of conn.commandQueue) {
+      conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type, args, requestId } }));
+    }
+    conn.commandQueue = [];
+  };
+  let tornDown = false;
+  const teardown = (error) => {
+    if (tornDown) return;
+    tornDown = true;
+    connectionPool.delete(url);
+    conn.ready = false;
+    for (const [, req] of conn.pending) {
+      clearTimeout(req.timer);
+      req.reject(error);
+    }
+    conn.pending.clear();
+    conn.commandQueue = [];
+  };
+  conn.ws.addEventListener("open", () => {
+    conn.ws.send(JSON.stringify({
+      type: "ext:register",
+      payload: {
+        ideType: "mcp-server",
+        ideVersion: "1.0.0",
+        extensionVersion: "1.0.0",
+        instanceId: `mcp-server-${process.pid}`,
+        machineId: "mcp-server",
+        workspaceFolders: []
+      }
+    }));
+  });
+  conn.ws.addEventListener("message", (event) => {
+    try {
+      const raw = typeof event.data === "string" ? event.data : String(event.data);
+      const msg = JSON.parse(raw);
+      if (msg?.type === "daemon:welcome") {
+        drainQueue();
+        return;
+      }
+      if (msg?.type !== "ext:command_result") return;
+      const req = conn.pending.get(msg?.payload?.requestId);
+      if (!req) return;
+      conn.pending.delete(msg.payload.requestId);
+      clearTimeout(req.timer);
+      const payload = msg.payload;
+      if (payload?.success === false) {
+        req.reject(new Error(payload.error || "Daemon IPC command failed"));
+      } else {
+        req.resolve(payload?.result ?? payload);
+      }
+    } catch {
+    }
+  });
+  conn.ws.addEventListener("error", () => {
+    teardown(new Error(`Cannot connect to daemon IPC at ${url}`));
+  });
+  conn.ws.addEventListener("close", () => {
+    teardown(new Error(`Daemon IPC connection closed: ${url}`));
+  });
+  return conn;
+}
 var IpcTransport = class {
   port;
   path;
@@ -78,86 +180,41 @@ var IpcTransport = class {
       args
     });
   }
-  async sendIpcCommand(type, args) {
+  sendIpcCommand(type, args) {
     const WebSocketCtor = globalThis.WebSocket;
     if (!WebSocketCtor) {
-      throw new Error("WebSocket is not available in this Node runtime; Node 20+ is required for daemon IPC mode");
+      return Promise.reject(new Error("WebSocket is not available in this Node runtime; Node 20+ is required for daemon IPC mode"));
     }
+    const requestId = buildRequestId();
+    const nestedCommand = typeof args?.command === "string" ? args.command : "";
+    const timeoutMs = getTimeoutMs(type, nestedCommand);
+    const targetDaemonId = typeof args?.targetDaemonId === "string" ? args.targetDaemonId : "";
+    const diagnosticParts = [
+      `command='${type}'`,
+      ...nestedCommand ? [`relayedCommand='${nestedCommand}'`] : [],
+      ...targetDaemonId ? [`targetDaemonId='${targetDaemonId.slice(0, 12)}'`] : [],
+      ...typeof args?.nodeId === "string" ? [`nodeId='${args.nodeId}'`] : [],
+      ...typeof args?.workspace === "string" ? [`workspace='${args.workspace}'`] : []
+    ];
+    const url = `ws://127.0.0.1:${this.port}${this.path}`;
     return new Promise((resolve, reject) => {
-      const requestId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const ws = new WebSocketCtor(`ws://127.0.0.1:${this.port}${this.path}`);
-      let settled = false;
-      const finish = (fn) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        try {
-          ws.close();
-        } catch {
-        }
-        fn();
-      };
-      const nestedCommand = typeof args?.command === "string" ? args.command : "";
-      const targetDaemonId = typeof args?.targetDaemonId === "string" ? args.targetDaemonId : "";
-      const effectiveType = type === "mesh_relay_command" && nestedCommand ? nestedCommand : type;
-      const timeoutMs = Math.max(
-        IPC_COMMAND_TIMEOUTS_MS[type] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
-        IPC_COMMAND_TIMEOUTS_MS[effectiveType] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS
-      );
-      const diagnosticParts = [
-        `command='${type}'`,
-        ...nestedCommand ? [`relayedCommand='${nestedCommand}'`] : [],
-        ...targetDaemonId ? [`targetDaemonId='${targetDaemonId.slice(0, 12)}'`] : [],
-        ...typeof args?.nodeId === "string" ? [`nodeId='${args.nodeId}'`] : [],
-        ...typeof args?.workspace === "string" ? [`workspace='${args.workspace}'`] : []
-      ];
-      const timeout = setTimeout(() => {
-        finish(() => reject(new Error(`Daemon IPC ${diagnosticParts.join(" ")} timed out after ${Math.round(timeoutMs / 1e3)}s (requestId=${requestId})`)));
+      let conn;
+      try {
+        conn = getOrCreateConnection(WebSocketCtor, url);
+      } catch (e) {
+        return reject(new Error(`Failed to create IPC connection: ${e?.message || e}`));
+      }
+      const timer = setTimeout(() => {
+        conn.pending.delete(requestId);
+        reject(new Error(`Daemon IPC ${diagnosticParts.join(" ")} timed out after ${Math.round(timeoutMs / 1e3)}s (requestId=${requestId})`));
       }, timeoutMs);
-      let commandSent = false;
-      const send = () => {
-        if (commandSent) return;
-        commandSent = true;
-        ws.send(JSON.stringify({
-          type: "ext:command",
-          payload: { command: type, args, requestId }
-        }));
-      };
-      ws.addEventListener("open", () => {
-        ws.send(JSON.stringify({
-          type: "ext:register",
-          payload: {
-            ideType: "mcp-server",
-            ideVersion: "1.0.0",
-            extensionVersion: "1.0.0",
-            instanceId: `mcp-server-${process.pid}`,
-            machineId: "mcp-server",
-            workspaceFolders: []
-          }
-        }));
-      });
-      ws.addEventListener("message", (event) => {
-        try {
-          const raw = typeof event.data === "string" ? event.data : String(event.data);
-          const msg = JSON.parse(raw);
-          if (msg?.type === "daemon:welcome") {
-            send();
-            return;
-          }
-          if (msg?.type !== "ext:command_result") return;
-          if (msg?.payload?.requestId !== requestId) return;
-          const payload = msg.payload;
-          if (payload?.success === false) {
-            finish(() => reject(new Error(payload.error || `Daemon IPC command '${type}' failed`)));
-            return;
-          }
-          finish(() => resolve(payload?.result ?? payload));
-        } catch {
-        }
-      });
-      ws.addEventListener("error", () => {
-        finish(() => reject(new Error(`Cannot connect to daemon IPC at ws://127.0.0.1:${this.port}${this.path}`)));
-      });
+      conn.pending.set(requestId, { resolve, reject, timer });
+      conn.lastUsedAt = Date.now();
+      if (conn.ready) {
+        conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type, args, requestId } }));
+      } else {
+        conn.commandQueue.push({ type, args, requestId });
+      }
     });
   }
 };
@@ -266,7 +323,17 @@ function annotateRapidReadChatAdvisory(payload, options) {
 
 // src/tools/mesh-tools.ts
 var import_daemon_core = require("@adhdev/daemon-core");
+var SESSION_PROVIDER_METADATA_TTL_MS = 30 * 6e4;
 var meshSessionProviderMetadata = /* @__PURE__ */ new Map();
+function getSessionMetadata(key) {
+  const entry = meshSessionProviderMetadata.get(key);
+  if (!entry) return void 0;
+  if (entry.expiresAt <= Date.now()) {
+    meshSessionProviderMetadata.delete(key);
+    return void 0;
+  }
+  return entry;
+}
 var ACTIVE_WORK_POLLING_BACKOFF_MS = 6e4;
 function buildActiveWorkPollingGuidance(summary, now = Date.now()) {
   if (!summary || summary.generatingCount <= 0) return void 0;
@@ -275,8 +342,8 @@ function buildActiveWorkPollingGuidance(summary, now = Date.now()) {
     generatingCount: summary.generatingCount,
     doNotPollBefore: new Date(now + ACTIVE_WORK_POLLING_BACKOFF_MS).toISOString(),
     eventSurface: "pendingCoordinatorEvents",
-    nextRecommendedAction: "Wait for pendingCoordinatorEvents/completion events or an explicit user status request. After a terminal signal, call mesh_read_chat once with compact=true, then verify git state if repository changes were expected.",
-    message: "Do not repeatedly poll mesh_status/mesh_view_queue/mesh_read_chat while delegated work is generating; these snapshots rarely change until the worker emits a completion/status event."
+    nextRecommendedAction: "Wait for pendingCoordinatorEvents/completion events or an explicit user status request. If no terminal evidence appears and the user asks for status, make one bounded status check, then wait again.",
+    message: "Do not repeatedly poll mesh_status/mesh_view_queue/mesh_read_chat while delegated work is generating; terminal ledger or completion evidence will be surfaced through pendingCoordinatorEvents when available."
   };
 }
 function readString(value) {
@@ -298,7 +365,8 @@ function buildDirectTaskPayload(message, via, opts) {
     taskSummary: descriptor.taskSummary,
     ...opts.taskMode ? { taskMode: opts.taskMode } : {},
     ...opts.providerType ? { providerType: opts.providerType } : {},
-    ...opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {}
+    ...opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {},
+    ...opts.dispatchedToIdleSession !== void 0 ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {}
   };
 }
 function findNode(mesh, nodeId) {
@@ -312,7 +380,7 @@ var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
 var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
 var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
 async function refreshMeshFromDaemon(ctx) {
-  if (!(ctx.transport instanceof IpcTransport)) return;
+  if (!isLocalTransport(ctx.transport)) return;
   try {
     const result = await ctx.transport.command("get_mesh", { meshId: ctx.mesh.id });
     if (!result?.success || !Array.isArray(result.mesh?.nodes)) return;
@@ -477,6 +545,17 @@ function isMeshCoordinatorSessionRecord(session) {
   return Boolean(
     readString(session?.settings?.meshCoordinatorFor) || readString(session?.meta?.meshCoordinatorFor) || readString(session?.metadata?.meshCoordinatorFor) || readString(session?.meshCoordinatorFor)
   );
+}
+function isUnmanagedSessionRecord(session) {
+  const hasMeshNodeFor = Boolean(
+    readString(session?.settings?.meshNodeFor) || readString(session?.meta?.meshNodeFor) || readString(session?.metadata?.meshNodeFor) || readString(session?.meshNodeFor)
+  );
+  if (hasMeshNodeFor) return false;
+  if (isMeshCoordinatorSessionRecord(session)) return false;
+  const launchedByCoordinator = Boolean(
+    session?.settings?.launchedByCoordinator === true || session?.meta?.launchedByCoordinator === true || session?.launchedByCoordinator === true
+  );
+  return !launchedByCoordinator;
 }
 function isWorkerTaskMode(taskMode) {
   return taskMode !== "live_debug_readonly";
@@ -742,8 +821,9 @@ function buildRelayUnsafeRemoteSessionFailure(ctx, node, sessionId, providerType
     daemonId: node.daemonId,
     workspace: node.workspace,
     sessionId,
+    unsafeTranscriptAlias: true,
     ...providerType ? { resolvedProviderType: providerType } : {},
-    error: `Remote session '${sessionId}' is not relay-safe for mesh '${ctx.mesh.id}': missing meshNodeFor/meshCoordinatorDaemonId metadata, so completion events would not reach the coordinator ledger.`,
+    error: `Remote session '${sessionId}' is not relay-safe for mesh '${ctx.mesh.id}': missing meshNodeFor/meshCoordinatorDaemonId metadata, so completion events would not reach the coordinator ledger. This session may be the coordinator itself or an unrelated session (unsafe_transcript_alias risk).`,
     nextAction: `Launch a fresh relay-safe session with mesh_launch_session(node_id: '${node.id}'${providerType ? `, type: '${providerType}'` : ""}) or dispatch without session_id so Repo Mesh can choose a valid delegate session.`,
     noFallbackReason: "Blindly reusing a remote session without mesh relay metadata would silently drop task_completed / generating_completed events."
   };
@@ -1086,7 +1166,8 @@ function buildNodeMachineIdentity(ctx, node) {
   const hostname = readNodeHostname(node);
   const machineName = readNodeDisplayMachineName(node);
   const coordinatorHostname = readString(ctx.coordinatorHostname);
-  const directLocal = isLocalControlPlaneNode(ctx, node);
+  const localControlPlaneReason = getLocalControlPlaneMatchReason(ctx, node);
+  const directLocal = !!localControlPlaneReason;
   const hostnameMatches = Boolean(
     normalizeHostname(hostname) && normalizeHostname(coordinatorHostname) && normalizeHostname(hostname) === normalizeHostname(coordinatorHostname)
   );
@@ -1096,8 +1177,13 @@ function buildNodeMachineIdentity(ctx, node) {
   pushIdentityEvidence(evidence, "hostname", hostname);
   pushIdentityEvidence(evidence, "machineId", machineId);
   pushIdentityEvidence(evidence, "daemonId", daemonId);
+  if (localControlPlaneReason) {
+    pushIdentityEvidence(evidence, "localMatch", localControlPlaneReason);
+    pushIdentityEvidence(evidence, "localMachineId", ctx.localMachineId);
+    pushIdentityEvidence(evidence, "localDaemonId", ctx.localDaemonId);
+  }
   const locality = sameMachine ? "same_machine" : evidence.length > 0 ? "remote_known" : "remote_or_unknown";
-  const localityReason = sameMachine ? directLocal ? "matched coordinator daemon or machine id" : "matched coordinator hostname" : evidence.length > 0 ? `known remote/other machine identity; no local coordinator match (${evidence.join(", ")})` : "no useful machine identity evidence available";
+  const localityReason = sameMachine ? localControlPlaneReason || "matched coordinator hostname" : evidence.length > 0 ? `known remote/other machine identity; no local coordinator match (${evidence.join(", ")})` : "no useful machine identity evidence available";
   return {
     daemonId,
     machineId,
@@ -1111,12 +1197,77 @@ function buildNodeMachineIdentity(ctx, node) {
     identityEvidence: evidence
   };
 }
+function nodeHasLocalDaemonEvidence(ctx, node) {
+  const isLocal = (session) => {
+    if (!session || typeof session !== "object") return false;
+    if (ctx.localDaemonId && session.settings?.meshCoordinatorDaemonId === ctx.localDaemonId) return true;
+    if (session.launchedByCoordinator === true) return true;
+    if (ctx.localDaemonId && session.runtime?.owner === ctx.localDaemonId) return true;
+    if (ctx.localDaemonId && session.daemonClient?.daemonId === ctx.localDaemonId) return true;
+    return false;
+  };
+  const sessionArrays = [
+    node?.sessions,
+    node?.activeSessions,
+    node?.active_sessions,
+    node?.lastProbe?.sessions,
+    node?.last_probe?.sessions,
+    node?.lastProbe?.status?.sessions,
+    node?.last_probe?.status?.sessions
+  ];
+  for (const arr of sessionArrays) {
+    if (Array.isArray(arr) && arr.some(isLocal)) return true;
+  }
+  const sessionRecords = [
+    node?.activeSession,
+    node?.active_session,
+    node?.currentSession,
+    node?.current_session,
+    node?.runtimeSession,
+    node?.runtime_session,
+    node?.session,
+    node?.lastProbe?.activeSession,
+    node?.last_probe?.active_session,
+    node?.lastProbe?.currentSession,
+    node?.last_probe?.current_session,
+    node?.lastProbe?.session,
+    node?.last_probe?.session
+  ];
+  for (const session of sessionRecords) {
+    if (isLocal(session)) return true;
+  }
+  return false;
+}
 function isDirectLocalNode(ctx, node) {
   const machineId = readNodeMachineId(node);
   const daemonId = readNodeDaemonId(node);
   return Boolean(
-    ctx.localMachineId && machineId === ctx.localMachineId || ctx.localDaemonId && daemonId === ctx.localDaemonId
+    ctx.localMachineId && machineId === ctx.localMachineId || ctx.localDaemonId && daemonId === ctx.localDaemonId || nodeHasLocalDaemonEvidence(ctx, node)
   );
+}
+function isConfiguredCoordinatorNode(ctx, node) {
+  if (!ctx.localMachineId && !ctx.localDaemonId) return false;
+  const nodeId = readString(node.id) || readString(node.nodeId) || readString(node.node_id);
+  if (!nodeId) return false;
+  const nodeDaemonId = readNodeDaemonId(node);
+  const nodeMachineId = readNodeMachineId(node);
+  if (nodeDaemonId && ctx.localDaemonId && nodeDaemonId !== ctx.localDaemonId) return false;
+  if (nodeMachineId && ctx.localMachineId && nodeMachineId !== ctx.localMachineId) return false;
+  const preferredNodeId = readString(ctx.mesh.coordinator?.preferredNodeId) || readString(ctx.mesh.coordinator?.preferred_node_id);
+  if (preferredNodeId) return nodeId === preferredNodeId;
+  const first = ctx.mesh.nodes?.[0];
+  const firstNodeId = readString(first?.id) || readString(first?.nodeId) || readString(first?.node_id);
+  return !!firstNodeId && nodeId === firstNodeId;
+}
+function getLocalControlPlaneMatchReason(ctx, node) {
+  if (isDirectLocalNode(ctx, node)) return "matched coordinator daemon or machine id";
+  if (isConfiguredCoordinatorNode(ctx, node)) return "matched configured coordinator node";
+  if (node.isLocalWorktree === true) {
+    const sourceNode = findClonedFromNode(ctx, node);
+    if (sourceNode && isDirectLocalNode(ctx, sourceNode)) return "matched local cloned-from node";
+    if (sourceNode && isConfiguredCoordinatorNode(ctx, sourceNode)) return "matched configured coordinator source node";
+  }
+  return void 0;
 }
 function findClonedFromNode(ctx, node) {
   const clonedFromNodeId = readString(node.clonedFromNodeId) || readString(node.cloned_from_node_id);
@@ -1124,12 +1275,7 @@ function findClonedFromNode(ctx, node) {
   return ctx.mesh.nodes.find((n) => n.id === clonedFromNodeId || n.nodeId === clonedFromNodeId || n.node_id === clonedFromNodeId);
 }
 function isLocalControlPlaneNode(ctx, node) {
-  if (isDirectLocalNode(ctx, node)) return true;
-  if (node.isLocalWorktree === true) {
-    const sourceNode = findClonedFromNode(ctx, node);
-    if (sourceNode && isDirectLocalNode(ctx, sourceNode)) return true;
-  }
-  return false;
+  return !!getLocalControlPlaneMatchReason(ctx, node);
 }
 function meshSessionCacheKey(nodeId, runtimeSessionId) {
   return `${nodeId}:${runtimeSessionId}`;
@@ -1141,10 +1287,11 @@ function rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, metadata)
   const providerType = readString(metadata.providerType);
   const providerSessionId = readString(metadata.providerSessionId);
   if (!providerType && !providerSessionId) return;
-  const existing = meshSessionProviderMetadata.get(meshSessionCacheKey(keyNodeId, keySessionId)) || { providerType: "" };
+  const existing = getSessionMetadata(meshSessionCacheKey(keyNodeId, keySessionId)) || { providerType: "" };
   meshSessionProviderMetadata.set(meshSessionCacheKey(keyNodeId, keySessionId), {
     providerType: providerType || existing.providerType,
-    providerSessionId: providerSessionId || existing.providerSessionId
+    providerSessionId: providerSessionId || existing.providerSessionId,
+    expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS
   });
 }
 function rememberMeshSessionProviderMetadataFromEvent(event) {
@@ -1176,7 +1323,7 @@ function resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessio
   return void 0;
 }
 function resolveMeshSessionProviderMetadata(ctx, nodeId, runtimeSessionId) {
-  const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(nodeId, runtimeSessionId));
+  const cached = getSessionMetadata(meshSessionCacheKey(nodeId, runtimeSessionId));
   if (cached?.providerType || cached?.providerSessionId) return cached;
   const fromLedger = resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId);
   if (fromLedger) rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, fromLedger);
@@ -1252,6 +1399,16 @@ function missingProviderPriorityMessage(nodeId) {
   return `Node '${nodeId}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority`;
 }
 function getNodeLaunchReadiness(node) {
+  const bootstrap = node.worktreeBootstrap;
+  if (node.isLocalWorktree && bootstrap?.status === "failed" && bootstrap?.required !== false) {
+    return {
+      providerPriority: readProviderPriority(node.policy),
+      launchReady: false,
+      launchBlockedReason: "worktree_bootstrap_failed",
+      launchBlockedMessage: typeof bootstrap.error === "string" && bootstrap.error.trim() ? bootstrap.error.trim() : "Required worktree bootstrap failed; resolve it before launching an agent into this node.",
+      worktreeBootstrap: bootstrap
+    };
+  }
   const providerPriority = readProviderPriority(node.policy);
   if (providerPriority.length) {
     return {
@@ -1266,6 +1423,18 @@ function getNodeLaunchReadiness(node) {
     launchBlockedMessage: missingProviderPriorityMessage(node.id)
   };
 }
+function getWorktreeBootstrapLaunchBlock(node) {
+  const bootstrap = node.worktreeBootstrap;
+  if (!node.isLocalWorktree || bootstrap?.status !== "failed" || bootstrap?.required === false) return void 0;
+  return {
+    success: false,
+    code: "worktree_bootstrap_failed",
+    error: typeof bootstrap.error === "string" && bootstrap.error.trim() ? bootstrap.error.trim() : `Node '${node.id}' has a failed required worktree bootstrap.`,
+    nodeId: node.id,
+    worktreeBootstrap: bootstrap,
+    recoveryHint: "Fix the configured worktree bootstrap command or remove/recreate the worktree node before launching an agent."
+  };
+}
 async function collectLiveStatusSessions(ctx, node) {
   try {
     const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
@@ -1273,6 +1442,13 @@ async function collectLiveStatusSessions(ctx, node) {
   } catch {
     return [];
   }
+}
+async function collectMeshViewQueueNodesWithLiveSessions(ctx) {
+  const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
+    const liveSessions = await collectLiveStatusSessions(ctx, node);
+    return liveSessions.length > 0 ? { ...node, sessions: liveSessions } : node;
+  }));
+  return nodes;
 }
 function readNumeric(value, fallback = 0) {
   const parsed = Number(value);
@@ -1507,7 +1683,8 @@ var MESH_STATUS_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
-      _gemini_compat: { type: "string", description: "Dummy property for Gemini compatibility. Ignore this." }
+      _gemini_compat: { type: "string", description: "Dummy property for Gemini compatibility. Ignore this." },
+      includeStaleDirectWorkDetails: { type: "boolean", description: "Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only." }
     }
   }
 };
@@ -1839,7 +2016,7 @@ var ALL_MESH_TOOLS = [
   MESH_TASK_HISTORY_TOOL,
   MESH_RECONCILE_LEDGER_TOOL
 ];
-async function meshStatus(ctx) {
+async function meshStatus(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
   const { mesh, transport } = ctx;
   const results = [];
@@ -1964,13 +2141,18 @@ async function meshStatus(ctx) {
     }
     results.push(entry);
   }
+  const ledgerEntries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail: 500 });
   const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
     meshId: mesh.id,
     queue: (0, import_daemon_core.getQueue)(mesh.id),
-    ledgerEntries: (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail: 500 }),
+    ledgerEntries,
     nodes: results
   });
   const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
+  const staleDirectWorkSummary = (0, import_daemon_core.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
+    note: activeWorkEvidence.staleDirectWorkNote,
+    detailHint: "Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail."
+  });
   const response = {
     meshId: mesh.id,
     meshName: mesh.name,
@@ -1985,7 +2167,8 @@ async function meshStatus(ctx) {
     },
     nodes: results,
     activeWork: activeWorkEvidence.activeWork,
-    staleDirectWork: activeWorkEvidence.staleDirectWork,
+    staleDirectWorkSummary,
+    ...args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {},
     terminalDirectWork: activeWorkEvidence.terminalDirectWork,
     activeWorkSummary: activeWorkEvidence.summary,
     ...pollingGuidance ? { pollingGuidance } : {},
@@ -1997,6 +2180,14 @@ async function meshStatus(ctx) {
   }
   try {
     const pendingEvents = await drainCoordinatorPendingEvents(ctx);
+    const asyncRefineJobs = (0, import_daemon_core.buildMeshAsyncRefineJobs)({
+      meshId: mesh.id,
+      ledgerEntries,
+      pendingEvents
+    });
+    if (asyncRefineJobs.length > 0) {
+      response.asyncRefineJobs = asyncRefineJobs;
+    }
     if (pendingEvents.length > 0) {
       response.pendingCoordinatorEvents = pendingEvents;
     }
@@ -2159,7 +2350,21 @@ async function meshEnqueueTask(ctx, args) {
               } catch {
               }
             }
-          }).catch(() => {
+          }).catch((err) => {
+            try {
+              (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+                kind: "p2p_dispatch_failed",
+                nodeId: node.id,
+                payload: {
+                  source: "queue",
+                  via: "p2p_direct",
+                  taskId: task.id,
+                  error: err?.message || String(err),
+                  dispatchFailedAt: (/* @__PURE__ */ new Date()).toISOString()
+                }
+              });
+            } catch {
+            }
           })
         );
       }
@@ -2186,12 +2391,25 @@ async function meshViewQueue(ctx, args) {
     const summary = buildQueueStatusSummary(fullQueue);
     const visibleSummary = buildQueueStatusSummary(queue);
     const maintenance = buildQueueMaintenanceReport(fullQueue);
+    const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+    const ledgerEntries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
+    const directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(ctx.mesh.id);
     const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
       meshId: ctx.mesh.id,
       queue: fullQueue,
-      ledgerEntries: (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 500 }),
-      nodes: ctx.mesh.nodes
+      ledgerEntries,
+      // Always pass BeadsDB records (may be empty). buildMeshActiveWork uses them for local
+      // dispatches and falls through to ledger scan for remote P2P dispatches not in BeadsDB.
+      directDispatches,
+      nodes: liveNodes
     });
+    const recentDispatchFailures = ledgerEntries.filter((e) => e.kind === "p2p_dispatch_failed").slice(-20).map((e) => ({
+      nodeId: e.nodeId,
+      taskId: e.payload?.taskId,
+      error: e.payload?.error,
+      via: e.payload?.via,
+      failedAt: e.payload?.dispatchFailedAt || e.timestamp
+    }));
     const staleAssignedTasks = maintenance.staleAssignedTasks || [];
     const requestedHistoricalRows = queue.some((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
@@ -2228,6 +2446,11 @@ async function meshViewQueue(ctx, args) {
       staleAssignedCount: maintenance.staleAssignedCount,
       queueMaintenance: maintenance,
       cleanupDryRun: maintenance,
+      ...recentDispatchFailures.length > 0 ? {
+        recentDispatchFailures,
+        dispatchFailureCount: recentDispatchFailures.length,
+        dispatchFailureNote: "Remote P2P dispatch attempts that failed. Affected tasks remain pending and may require mesh_queue_requeue if no idle session picks them up."
+      } : {},
       ...view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status)) ? {
         activeQueue: queue.filter((task) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || "")))
       } : {},
@@ -2317,6 +2540,20 @@ async function meshSendTask(ctx, args) {
           nextAction: `Call mesh_launch_session for node '${args.node_id}' and then retry mesh_send_task with that worker session_id, or use mesh_enqueue_task for queue-based worker assignment.`
         });
       }
+      if (explicitTargetSession && isUnmanagedSessionRecord(explicitTargetSession)) {
+        return JSON.stringify({
+          success: false,
+          recoverable: true,
+          code: "mesh_target_session_unmanaged",
+          reason: "mesh_target_session_unmanaged",
+          nodeId: args.node_id,
+          sessionId: args.session_id,
+          taskMode: taskMode || "unspecified",
+          unsafeTranscriptAlias: true,
+          error: `Session '${args.session_id}' on node '${args.node_id}' has no Repo Mesh delegation metadata (missing meshNodeFor/meshCoordinatorFor/launchedByCoordinator). It may be the coordinator's own session or an unrelated session \u2014 dispatching risks self-send and orphaned completion events that never reach the coordinator ledger.`,
+          nextAction: `Call mesh_launch_session for node '${args.node_id}' to start a fresh managed worker session, then retry mesh_send_task with the returned session_id. Alternatively use mesh_enqueue_task for queue-based assignment without specifying session_id.`
+        });
+      }
     } catch {
       explicitTargetSession = void 0;
     }
@@ -2351,7 +2588,7 @@ async function meshSendTask(ctx, args) {
     }
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
-      const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id || ""));
+      const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ""));
       const taskId = (0, import_node_crypto.randomUUID)();
       const result2 = await ipcDispatchToRemoteAgent(ctx, node, {
         session_id: args.session_id,
@@ -2389,7 +2626,7 @@ async function meshSendTask(ctx, args) {
       });
     }
     if (args.session_id && isLocalTransport(ctx.transport)) {
-      const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+      const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
       let resolvedProviderType = cached?.providerType || "";
       if (!resolvedProviderType) {
         let explicitSession = explicitTargetSession;
@@ -2412,11 +2649,40 @@ async function meshSendTask(ctx, args) {
             nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${args.node_id}') or retry without session_id so Repo Mesh can target a live delegate session.`
           });
         }
+        if (isMeshCoordinatorSessionRecord(explicitSession)) {
+          return JSON.stringify({
+            success: false,
+            recoverable: true,
+            code: "mesh_target_session_is_coordinator",
+            reason: "mesh_target_session_is_coordinator",
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            taskMode: taskMode || "unspecified",
+            error: `Session '${args.session_id}' is a Repo Mesh coordinator session, not a visible worker session. Launch or use a visible worker session before dispatching this task.`,
+            nextAction: `Call mesh_launch_session for node '${args.node_id}' and then retry mesh_send_task with that worker session_id, or use mesh_enqueue_task for queue-based worker assignment.`
+          });
+        }
+        if (isUnmanagedSessionRecord(explicitSession)) {
+          return JSON.stringify({
+            success: false,
+            recoverable: true,
+            code: "mesh_target_session_unmanaged",
+            reason: "mesh_target_session_unmanaged",
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            taskMode: taskMode || "unspecified",
+            unsafeTranscriptAlias: true,
+            unsafeDelegateTarget: true,
+            error: `Session '${args.session_id}' on node '${args.node_id}' has no Repo Mesh delegation metadata (missing meshNodeFor/meshCoordinatorFor/launchedByCoordinator). It may be the coordinator's own session or an unrelated session \u2014 dispatching risks self-send and orphaned completion events that never reach the coordinator ledger.`,
+            nextAction: `Call mesh_launch_session for node '${args.node_id}' to start a fresh managed worker session, then retry mesh_send_task with the returned session_id. Alternatively use mesh_enqueue_task for queue-based assignment without specifying session_id.`
+          });
+        }
         resolvedProviderType = resolveSessionProviderType(explicitSession);
         if (resolvedProviderType) {
           meshSessionProviderMetadata.set(meshSessionCacheKey(args.node_id, args.session_id), {
             providerType: resolvedProviderType,
-            providerSessionId: readString(explicitSession?.providerSessionId) || void 0
+            providerSessionId: readString(explicitSession?.providerSessionId) || void 0,
+            expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS
           });
         }
       }
@@ -2434,6 +2700,7 @@ async function meshSendTask(ctx, args) {
           nextAction: `Relaunch the target session on node '${args.node_id}' or retry without session_id so Repo Mesh can pick a session with provider metadata.`
         });
       }
+      const sessionWasIdle = explicitTargetSession ? isIdleSessionRecord(explicitTargetSession) : false;
       const dispatchResult = await commandForNode(ctx, node, "agent_command", {
         targetSessionId: args.session_id,
         agentType: resolvedProviderType,
@@ -2454,6 +2721,7 @@ async function meshSendTask(ctx, args) {
         });
       }
       const taskId = (0, import_node_crypto.randomUUID)();
+      const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
       try {
         (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
           kind: "task_dispatched",
@@ -2464,12 +2732,38 @@ async function meshSendTask(ctx, args) {
             taskId,
             taskMode,
             providerType: resolvedProviderType,
-            targetSessionId: args.session_id
+            targetSessionId: args.session_id,
+            dispatchedToIdleSession: sessionWasIdle
           })
         });
       } catch {
       }
-      return JSON.stringify({ success: true, dispatched: true, source: "direct", taskId, taskMode, providerType: resolvedProviderType, nodeId: args.node_id, sessionId: args.session_id });
+      (0, import_daemon_core.insertDirectDispatch)(ctx.mesh.id, {
+        taskId,
+        nodeId: args.node_id,
+        sessionId: args.session_id,
+        providerType: resolvedProviderType || void 0,
+        message: args.message,
+        taskMode: taskMode || void 0,
+        via: "local_direct",
+        dispatchedToIdleSession: sessionWasIdle,
+        dispatchedAt
+      });
+      return JSON.stringify({
+        success: true,
+        dispatched: true,
+        source: "direct",
+        taskId,
+        taskMode,
+        providerType: resolvedProviderType,
+        nodeId: args.node_id,
+        sessionId: args.session_id,
+        ...sessionWasIdle ? {
+          dispatchAcknowledgementRisk: true,
+          dispatchAcknowledgementRiskReason: "session_was_idle_at_dispatch",
+          dispatchAcknowledgementNote: `Session '${args.session_id}' was idle at dispatch time. If it does not transition to generating, this direct task was not acknowledged. Use mesh_status to verify; if the session remains idle, it may appear as stale direct work \u2014 launch a fresh session and retry.`
+        } : {}
+      });
     }
     const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, {
       targetNodeId: args.node_id,
@@ -2582,6 +2876,8 @@ async function meshReadDebug(ctx, args) {
 }
 async function meshLaunchSession(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
+  const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node);
+  if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
   if (isLocalTransport(ctx.transport)) {
     let resolvedProviderType = typeof args.type === "string" && args.type.trim() ? args.type : "";
     if (!resolvedProviderType) {
@@ -2637,7 +2933,8 @@ async function meshLaunchSession(ctx, args) {
     if (runtimeSessionId) {
       meshSessionProviderMetadata.set(meshSessionCacheKey(args.node_id, runtimeSessionId), {
         providerType: resolvedProviderType,
-        ...providerSessionId ? { providerSessionId } : {}
+        ...providerSessionId ? { providerSessionId } : {},
+        expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS
       });
     }
     try {
@@ -2817,7 +3114,13 @@ async function meshCheckpoint(ctx, args) {
       (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
         kind: "checkpoint_created",
         nodeId: args.node_id,
-        payload: { message: args.message, commit: result?.checkpoint?.commit }
+        payload: {
+          message: args.message,
+          commit: result?.checkpoint?.commit,
+          outcome: result?.checkpoint?.status || (result?.checkpoint?.noop ? "skipped" : void 0),
+          noop: result?.checkpoint?.noop === true,
+          reason: result?.checkpoint?.reason
+        }
       });
     } catch {
     }
@@ -2833,7 +3136,13 @@ async function meshCheckpoint(ctx, args) {
         (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
           kind: "checkpoint_created",
           nodeId: args.node_id,
-          payload: { message: args.message, commit: res?.checkpoint?.commit }
+          payload: {
+            message: args.message,
+            commit: res?.checkpoint?.commit,
+            outcome: res?.checkpoint?.status || (res?.checkpoint?.noop ? "skipped" : void 0),
+            noop: res?.checkpoint?.noop === true,
+            reason: res?.checkpoint?.reason
+          }
         });
       } catch {
       }
@@ -2848,7 +3157,7 @@ async function meshCheckpoint(ctx, args) {
 async function meshApprove(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   if (isLocalTransport(ctx.transport)) {
-    const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+    const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
     const providerSessionId = cached?.providerSessionId;
     const result = await commandForNode(ctx, node, "resolve_action", {
       sessionId: args.session_id,
@@ -4725,7 +5034,8 @@ async function startMcpServer(opts) {
       try {
         const { loadConfig } = await import("@adhdev/daemon-core");
         const cfg = loadConfig();
-        if (cfg.registeredMachineId) localMachineId = cfg.registeredMachineId;
+        if (cfg.machineId) localMachineId = cfg.machineId;
+        else if (cfg.registeredMachineId) localMachineId = cfg.registeredMachineId;
       } catch {
       }
     }
@@ -4768,7 +5078,7 @@ async function startMcpServer(opts) {
         let text;
         switch (name) {
           case "mesh_status":
-            text = await meshStatus(meshCtx);
+            text = await meshStatus(meshCtx, a);
             break;
           case "mesh_list_nodes":
             text = await meshListNodes(meshCtx);

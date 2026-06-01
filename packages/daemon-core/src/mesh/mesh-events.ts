@@ -7,7 +7,8 @@ import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getLedgerDir, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
-import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch } from './mesh-work-queue.js';
+import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './mesh-work-queue.js';
+import { BeadsDB } from './beads-db.js';
 
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
@@ -57,6 +58,12 @@ export interface PendingMeshCoordinatorEvent {
     metadataEvent: Record<string, unknown>;
     coordinatorMessage?: string;
     queuedAt: number;
+    /**
+     * When set, this event is intended for a specific coordinator daemon.
+     * Coordinators on other daemons should ignore it during drain.
+     * Absent on legacy events — treated as broadcast to any coordinator.
+     */
+    targetCoordinatorDaemonId?: string;
 }
 
 const REFINE_TERMINAL_EVENTS = new Set(['refine:completed', 'refine:failed']);
@@ -107,21 +114,37 @@ function hasPendingCoordinatorEventDuplicate(event: PendingMeshCoordinatorEvent)
     return readPendingMeshCoordinatorEventsFromDisk(event.meshId).some((pending) => buildPendingEventFingerprint(pending) === fingerprint);
 }
 
-function getPendingEventsPath(meshId: string): string {
+function getPendingEventsPath(meshId: string, coordinatorDaemonId?: string): string {
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (coordinatorDaemonId) {
+        const safeDaemon = coordinatorDaemonId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        return join(getLedgerDir(), `${safe}-${safeDaemon}.pending-events.jsonl`);
+    }
     return join(getLedgerDir(), `${safe}.pending-events.jsonl`);
 }
 
-function readPendingMeshCoordinatorEventsFromDisk(meshId?: string): PendingMeshCoordinatorEvent[] {
+function readPendingMeshCoordinatorEventsFromDisk(meshId?: string, coordinatorDaemonId?: string): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
-    const path = getPendingEventsPath(meshId);
-    if (!existsSync(path)) return [];
-    try {
-        const raw = readFileSync(path, 'utf-8');
-        return raw.split('\n').filter(Boolean).flatMap(line => {
-            try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
-        });
-    } catch { return []; }
+    // Read coordinator-scoped file first; fall back to legacy shared file.
+    const paths = coordinatorDaemonId
+        ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
+        : [getPendingEventsPath(meshId)];
+    const events: PendingMeshCoordinatorEvent[] = [];
+    for (const path of paths) {
+        if (!existsSync(path)) continue;
+        try {
+            const raw = readFileSync(path, 'utf-8');
+            const parsed = raw.split('\n').filter(Boolean).flatMap(line => {
+                try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
+            });
+            // If reading the shared file, filter to events that target this coordinator or are unscoped.
+            const filtered = (coordinatorDaemonId && path === getPendingEventsPath(meshId))
+                ? parsed.filter(e => !e.targetCoordinatorDaemonId || e.targetCoordinatorDaemonId === coordinatorDaemonId)
+                : parsed;
+            events.push(...filtered);
+        } catch { /* skip unreadable files */ }
+    }
+    return events;
 }
 
 function refineTerminalEventFromLedger(meshId: string, pending: readonly PendingMeshCoordinatorEvent[]): PendingMeshCoordinatorEvent[] {
@@ -204,7 +227,10 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
             LOG.info('MeshEvents', `Suppressed duplicate pending ${event.event} for mesh ${event.meshId}`);
             return true;
         }
-        appendFileSync(getPendingEventsPath(event.meshId), JSON.stringify(event) + '\n', 'utf-8');
+        // Write to the coordinator-scoped file when the target coordinator is known;
+        // fall back to the shared file for legacy/unscoped events.
+        const path = getPendingEventsPath(event.meshId, event.targetCoordinatorDaemonId);
+        appendFileSync(path, JSON.stringify(event) + '\n', 'utf-8');
         return true;
     } catch (e: any) {
         LOG.warn('MeshEvents', `Failed to persist pending coordinator event: ${e?.message || e}`);
@@ -213,28 +239,39 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
 }
 
 /** Drain and return all pending coordinator events for meshId, removing them from disk. */
-export function drainPendingMeshCoordinatorEvents(meshId?: string): PendingMeshCoordinatorEvent[] {
+export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
-    const path = getPendingEventsPath(meshId);
-    if (!existsSync(path)) return [];
-    try {
-        const parsed = readPendingMeshCoordinatorEventsFromDisk(meshId);
-        try { unlinkSync(path); } catch { /* concurrent drain already removed it */ }
-        return reconcilePendingMeshCoordinatorEvents(meshId, parsed);
-    } catch { return []; }
+    const paths = coordinatorDaemonId
+        ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
+        : [getPendingEventsPath(meshId)];
+    const all: PendingMeshCoordinatorEvent[] = [];
+    for (const path of paths) {
+        if (!existsSync(path)) continue;
+        try {
+            const parsed = readPendingMeshCoordinatorEventsFromDisk(meshId, coordinatorDaemonId);
+            try { unlinkSync(path); } catch { /* concurrent drain already removed it */ }
+            all.push(...parsed);
+        } catch { /* skip */ }
+    }
+    if (all.length === 0) return [];
+    return reconcilePendingMeshCoordinatorEvents(meshId, all);
 }
 
 /** Peek at pending coordinator events without draining (non-destructive). */
-export function getPendingMeshCoordinatorEvents(meshId?: string): readonly PendingMeshCoordinatorEvent[] {
+export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): readonly PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
-    return reconcilePendingMeshCoordinatorEvents(meshId, readPendingMeshCoordinatorEventsFromDisk(meshId));
+    return reconcilePendingMeshCoordinatorEvents(meshId, readPendingMeshCoordinatorEventsFromDisk(meshId, coordinatorDaemonId));
 }
 
-/** Explicitly clear all pending coordinator events for a mesh. */
-export function clearPendingMeshCoordinatorEvents(meshId?: string): void {
+/** Explicitly clear all pending coordinator events for a mesh (and coordinator if scoped). */
+export function clearPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): void {
     if (!meshId) return;
-    const path = getPendingEventsPath(meshId);
-    if (existsSync(path)) try { unlinkSync(path); } catch { /* already removed */ }
+    const paths = coordinatorDaemonId
+        ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
+        : [getPendingEventsPath(meshId)];
+    for (const path of paths) {
+        if (existsSync(path)) try { unlinkSync(path); } catch { /* already removed */ }
+    }
 }
 
 function readNonEmptyString(value: unknown): string {
@@ -344,7 +381,22 @@ function shouldSuppressIntentionalCleanupStop(args: {
 }
 
 const RECENT_COMPLETION_FINGERPRINT_TTL_MS = 10 * 60 * 1000;
-const recentCompletionFingerprints = new Map<string, number>();
+
+function hasFingerprintSeen(fingerprint: string): boolean {
+    try {
+        return BeadsDB.getInstance().hasCompletionFingerprint(fingerprint);
+    } catch {
+        return false;
+    }
+}
+
+function recordFingerprintSeen(fingerprint: string): void {
+    try {
+        const db = BeadsDB.getInstance();
+        db.recordCompletionFingerprint(fingerprint, RECENT_COMPLETION_FINGERPRINT_TTL_MS);
+        db.sweepExpiredFingerprints();
+    } catch { /* best-effort; duplicate events are preferable to a crash */ }
+}
 
 function readEventTimestamp(value: unknown): number | null {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -365,6 +417,10 @@ function buildMeshCompletionFingerprint(args: {
     providerSessionId?: string;
     timestamp?: number | null;
     finalSummary?: string;
+    /** When set, scopes the fingerprint to a specific coordinator daemon so
+     *  two coordinators processing events from their respective workers don't
+     *  suppress each other's completion events. */
+    coordinatorDaemonId?: string;
 }): string {
     const timestampPart = Number.isFinite(args.timestamp)
         ? String(args.timestamp)
@@ -376,6 +432,7 @@ function buildMeshCompletionFingerprint(args: {
         args.providerType || '',
         args.providerSessionId || '',
         timestampPart,
+        args.coordinatorDaemonId || '',
     ].join('::');
 }
 
@@ -387,27 +444,20 @@ function isDuplicateMeshCompletionEvent(args: {
     providerSessionId?: string;
     timestamp?: number | null;
     finalSummary?: string;
+    coordinatorDaemonId?: string;
 }): boolean {
     const fingerprint = buildMeshCompletionFingerprint(args);
     if (!fingerprint) return false;
-    const now = Date.now();
-    for (const [key, seenAt] of recentCompletionFingerprints.entries()) {
-        if (now - seenAt > RECENT_COMPLETION_FINGERPRINT_TTL_MS) recentCompletionFingerprints.delete(key);
-    }
-    if (recentCompletionFingerprints.has(fingerprint)) return true;
-    recentCompletionFingerprints.set(fingerprint, now);
+    if (hasFingerprintSeen(fingerprint)) return true;
+    recordFingerprintSeen(fingerprint);
     return false;
 }
 
 function isDuplicateRefineTerminalEvent(meshId: string, eventName: string, metadataEvent: Record<string, unknown>): boolean {
     const fingerprint = buildRefineTerminalEventFingerprint(meshId, eventName, metadataEvent);
     if (!fingerprint) return false;
-    const now = Date.now();
-    for (const [key, seenAt] of recentCompletionFingerprints.entries()) {
-        if (now - seenAt > RECENT_COMPLETION_FINGERPRINT_TTL_MS) recentCompletionFingerprints.delete(key);
-    }
-    if (recentCompletionFingerprints.has(fingerprint)) return true;
-    recentCompletionFingerprints.set(fingerprint, now);
+    if (hasFingerprintSeen(fingerprint)) return true;
+    recordFingerprintSeen(fingerprint);
     return false;
 }
 
@@ -1020,6 +1070,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 }) {
     const eventSessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
     const eventNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+
+    // Resolve coordinator ownership early — used in fingerprinting and coordinator routing.
+    const sourceSession = args.sourceInstanceId
+        ? components.instanceManager.getInstance(args.sourceInstanceId)
+        : undefined;
+    const workerCoordinatorDaemonId = readNonEmptyString(
+        (sourceSession?.getState()?.settings as Record<string, unknown>)?.meshCoordinatorDaemonId,
+    );
+    const localDaemonId = readNonEmptyString(loadConfig().machineId);
     const intentionalCleanupStop = shouldSuppressIntentionalCleanupStop({
         event: args.event,
         meshId: args.meshId,
@@ -1102,6 +1161,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
             timestamp: eventTimestamp,
             finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+            // Scope dedup to the coordinator daemon so two coordinators for the same mesh
+            // don't suppress each other's completion events via shared fingerprint table.
+            coordinatorDaemonId: workerCoordinatorDaemonId || undefined,
         });
         if (duplicateCompletion) {
             LOG.info('MeshEvents', `Suppressed duplicate completion for mesh ${args.meshId} session ${eventSessionId}`);
@@ -1121,9 +1183,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 occurredAt: eventTimestamp !== null ? new Date(eventTimestamp).toISOString() : undefined,
             });
             completedTaskForLedger = completedTask ? { id: completedTask.id } : null;
+            updateDirectDispatchStatus(args.meshId, sessionId, 'completed');
+            setImmediate(() => cleanupTerminalDirectDispatches());
             if (nodeId && providerType) {
-                // Queue state is already updated above; setImmediate avoids the
-                // 500 ms artificial delay while still deferring past this call frame.
                 setImmediate(() => {
                     tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
                 });
@@ -1140,8 +1202,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const completedTask = sessionId && hasCompletionEvidence
             ? updateSessionTaskStatus(args.meshId, sessionId, 'completed')
             : null;
-        if (completedTask) {
+        if (completedTask && sessionId) {
             completedTaskForLedger = { id: completedTask.id };
+            updateDirectDispatchStatus(args.meshId, sessionId, 'completed');
+            setImmediate(() => cleanupTerminalDirectDispatches());
             try {
                 appendLedgerEntry(args.meshId, {
                     kind: 'task_completed',
@@ -1189,6 +1253,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         if (sessionId && nodeId) {
             remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
         }
+        if (sessionId) {
+            // Mark direct dispatch as acknowledged — the session started generating.
+            updateDirectDispatchStatus(args.meshId, sessionId, 'acked');
+        }
     } else if (args.event === 'agent:stopped') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
@@ -1198,6 +1266,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         if (sessionId) {
             const failedTask = updateSessionTaskStatus(args.meshId, sessionId, 'failed');
             completedTaskForLedger = failedTask ? { id: failedTask.id } : null;
+            updateDirectDispatchStatus(args.meshId, sessionId, 'failed');
         }
     }
 
@@ -1320,6 +1389,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const instState = inst.getState();
         if (instState.settings?.meshCoordinatorFor !== args.meshId) return false;
         if (args.sourceInstanceId && instState.instanceId === args.sourceInstanceId) return false;
+        // If the worker knows which coordinator daemon launched it, only route to coordinators
+        // on that specific daemon. This prevents cross-contamination when multiple coordinator
+        // sessions run simultaneously for the same mesh on different daemons.
+        if (workerCoordinatorDaemonId && localDaemonId && workerCoordinatorDaemonId !== localDaemonId) return false;
         return true;
     });
 
@@ -1330,7 +1403,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     const isRefineTerminalEvent = REFINE_TERMINAL_EVENTS.has(args.event);
 
     if (coordinatorInstances.length === 0) {
-        // No CLI coordinator session found — buffer for MCP-based coordinators.
+        // No local CLI coordinator — buffer for MCP-based coordinator on the target daemon.
         if (queuePendingMeshCoordinatorEvent({
                 event: args.event,
                 meshId: args.meshId,
@@ -1343,8 +1416,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 },
                 coordinatorMessage: messageText,
                 queuedAt: Date.now(),
+                // Scope to the coordinator daemon that launched this worker so drain
+                // by other coordinators on the same daemon doesn't consume this event.
+                ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
             })) {
-            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId}${workerCoordinatorDaemonId ? `, coordinator daemon ${workerCoordinatorDaemonId}` : ''})`);
         }
         return { success: true, forwarded: 0 };
     }
@@ -1383,6 +1459,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 },
                 coordinatorMessage: messageText,
                 queuedAt: Date.now(),
+                ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
             })) {
             if (allCoordinatorsGenerating) {
                 LOG.info('MeshEvents', `Queued ${args.event} for generating CLI coordinator (mesh ${args.meshId}) — will be delivered via get_pending_mesh_events when coordinator returns to idle`);

@@ -472,3 +472,13 @@ export interface RepoMeshLedgerStatus {
     entries: RepoMeshLedgerEntryStatus[];
     summary: RepoMeshLedgerSummaryStatus;
 }
+
+// ─── Async Job Lifecycle ─────────────────────────
+// Shared base for all mesh async job types (refine jobs, bootstrap runs, etc.)
+// Each concrete type adds its own status enum and domain-specific fields.
+
+export interface MeshAsyncJobLifecycle {
+    startedAt?: string;
+    completedAt?: string;
+    error?: string;
+}
