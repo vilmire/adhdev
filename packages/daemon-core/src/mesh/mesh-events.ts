@@ -415,20 +415,36 @@ function findRecentTerminalLedgerEvidence(args: {
     meshId: string;
     sessionId?: string;
     nodeId?: string;
-}): { kind: MeshLedgerKind; payload: Record<string, unknown>; timestamp: string } | null {
+}): { id: string; kind: MeshLedgerKind; payload: Record<string, unknown>; timestamp: string } | null {
     if (!args.sessionId && !args.nodeId) return null;
     const entries = readLedgerEntries(args.meshId);
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
         if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
         if (args.sessionId && entry.sessionId === args.sessionId) {
-            return { kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
+            return { id: entry.id, kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
         }
         if (!args.sessionId && args.nodeId && entry.nodeId === args.nodeId) {
-            return { kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
+            return { id: entry.id, kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
         }
     }
     return null;
+}
+
+// Returns true when a task_dispatched entry for the given session appears AFTER the terminal
+// entry (identified by terminalId) in ledger order. Positional (append) order is used rather
+// than timestamp comparison because both entries may share the same millisecond.
+function hasDispatchAfterTerminal(meshId: string, sessionId: string, terminalId: string): boolean {
+    const entries = readLedgerEntries(meshId);
+    let pastTerminal = false;
+    for (const entry of entries) {
+        if (!pastTerminal) {
+            if (entry.id === terminalId) pastTerminal = true;
+            continue;
+        }
+        if (entry.kind === 'task_dispatched' && entry.sessionId === sessionId) return true;
+    }
+    return false;
 }
 
 function buildLongGeneratingCompletionReconciliation(args: {
@@ -1060,17 +1076,22 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             nodeId: eventNodeId || undefined,
         });
         if (terminal?.kind === 'task_completed' && !sessionHasActiveAssignment(args.meshId, eventSessionId)) {
-            const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
-            const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);
-            const eventProviderSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);
-            const eventFinalSummary = readNonEmptyString(args.metadataEvent.finalSummary);
-            if (
-                (terminalProviderSessionId && terminalProviderSessionId === eventProviderSessionId)
-                || (terminalFinalSummary && terminalFinalSummary === eventFinalSummary)
-                || args.metadataEvent.source === 'long_generating_reconciliation'
-            ) {
-                LOG.info('MeshEvents', `Suppressed duplicate completion with existing terminal ledger evidence for mesh ${args.meshId} session ${eventSessionId}`);
-                return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true, terminalLedgerEvidence: true };
+            // If a new task_dispatched was recorded for this session after the prior terminal,
+            // this completion belongs to the new task — never suppress it as a duplicate.
+            const newDispatchAfterTerminal = hasDispatchAfterTerminal(args.meshId, eventSessionId, terminal.id);
+            if (!newDispatchAfterTerminal) {
+                const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
+                const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);
+                const eventProviderSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);
+                const eventFinalSummary = readNonEmptyString(args.metadataEvent.finalSummary);
+                if (
+                    (terminalProviderSessionId && terminalProviderSessionId === eventProviderSessionId)
+                    || (terminalFinalSummary && terminalFinalSummary === eventFinalSummary)
+                    || args.metadataEvent.source === 'long_generating_reconciliation'
+                ) {
+                    LOG.info('MeshEvents', `Suppressed duplicate completion with existing terminal ledger evidence for mesh ${args.meshId} session ${eventSessionId}`);
+                    return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true, terminalLedgerEvidence: true };
+                }
             }
         }
         const duplicateCompletion = isDuplicateMeshCompletionEvent({

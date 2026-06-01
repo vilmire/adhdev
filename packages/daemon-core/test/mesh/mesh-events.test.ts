@@ -1287,4 +1287,134 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       cleanupMeshFiles(meshId)
     }
   })
+
+  it('records task_completed for direct dispatch to idle session even when prior queue task used the same providerSessionId', () => {
+    // Regression: direct task dispatched to idle live session; prior queue-task completion
+    // shares the same providerSessionId (same long-running provider session reused across turns).
+    // The new completion must NOT be suppressed as a duplicate — it belongs to the new direct task.
+    const meshId = `mesh_direct_idle_session_completion_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      // Step 1: a queue task completes first (via emit, which updates queue status correctly).
+      const queuedTask = enqueueTask(meshId, 'first queue task')
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'shared-provider-session-id',
+        finalSummary: 'first task done',
+        // No explicit timestamp — lets the ledger use new Date() (now) so the direct
+        // dispatch appended immediately after is always timestamped after this terminal.
+      })
+
+      const afterFirstCompletion = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')
+      expect(afterFirstCompletion).toHaveLength(1)
+      expect(afterFirstCompletion[0].payload.taskId).toBe(queuedTask.id)
+      // Queue task is now marked completed, so updateSessionTaskStatus will find nothing for it
+      expect(getQueue(meshId)[0]).toMatchObject({ status: 'completed' })
+
+      // Step 2: a new direct dispatch is recorded to the same idle session
+      // (simulating mesh_send_task with dispatchedToIdleSession: true).
+      // appendLedgerEntry writes new Date() which is always AFTER the terminal written above.
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        payload: {
+          source: 'direct',
+          via: 'mesh_send_task',
+          taskId: 'direct-task-501d7d38',
+          message: 'verify the preview result',
+          dispatchedToIdleSession: true,
+        },
+      })
+
+      // Step 3: the session completes the direct task — same providerSessionId, new finalSummary.
+      // No generating transition was observed (idle→idle path for fast or idle-session tasks).
+      const secondResult = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'shared-provider-session-id',
+        finalSummary: '--- 최종 보고서 (읽기 전용 검증) 실행한 읽기 전용 명령어 ...',
+        completionMarker: 'turn:cli-turn:1',
+      })
+
+      // Must NOT be suppressed — a new task_dispatched existed after the prior terminal
+      expect(secondResult).not.toMatchObject({ suppressed: true })
+      expect(secondResult.success).toBe(true)
+
+      // Two task_completed entries must exist in the ledger
+      const allCompleted = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')
+      expect(allCompleted).toHaveLength(2)
+      expect(allCompleted[0].payload.taskId).toBe(queuedTask.id)
+      // Second entry has no taskId (direct task not in queue) but belongs to the direct dispatch
+      expect(allCompleted[1].payload.taskId).toBeUndefined()
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('still suppresses genuine duplicate completion that has no new dispatch after prior terminal', () => {
+    // Safety: verify the existing duplicate-suppression safeguard is not broken.
+    // A second identical generating_completed with no intervening task_dispatched must still be suppressed.
+    const meshId = `mesh_genuine_duplicate_suppressed_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      const queued = enqueueTask(meshId, 'dedupe queue task')
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      const completionAt = Date.now() + 1_000
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'provider-dedup-1',
+        finalSummary: 'task completed once',
+        timestamp: completionAt,
+      })
+
+      // Same event replayed — no new dispatch in between
+      const duplicate = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'provider-dedup-1',
+        finalSummary: 'task completed once',
+        timestamp: completionAt,
+      })
+
+      expect(duplicate).toMatchObject({ success: true, forwarded: 0, suppressed: true, duplicateCompletion: true })
+      const completedEntries = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')
+      expect(completedEntries).toHaveLength(1)
+      expect(completedEntries[0].payload.taskId).toBe(queued.id)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
 })
