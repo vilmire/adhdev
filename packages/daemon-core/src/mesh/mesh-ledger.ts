@@ -26,6 +26,7 @@ export type MeshLedgerKind =
     | 'task_failed'
     | 'task_stalled'
     | 'task_approval_needed'
+    | 'p2p_dispatch_failed'
     | 'session_launched'
     | 'session_auto_launch'
     | 'session_stopped'
@@ -653,14 +654,20 @@ export function getSessionRecoveryContext(
         }
     }
 
-    // Count how many times the same task was attempted (match by message prefix)
+    // Count how many times the same task was attempted.
+    // Prefer exact taskId match (payload.taskId) to avoid 200-char prefix collisions.
     let taskAttemptCount = 0;
-    if (lastTaskMessage) {
-        const prefix = lastTaskMessage.slice(0, 200);
-        for (const e of entries) {
-            if (e.kind === 'task_dispatched' && typeof e.payload?.message === 'string') {
-                if (e.payload.message.startsWith(prefix)) {
-                    taskAttemptCount++;
+    if (lastDispatch) {
+        const taskId = typeof lastDispatch.payload?.taskId === 'string' ? lastDispatch.payload.taskId : null;
+        if (taskId) {
+            for (const e of entries) {
+                if (e.kind === 'task_dispatched' && e.payload?.taskId === taskId) taskAttemptCount++;
+            }
+        } else if (lastTaskMessage) {
+            const prefix = lastTaskMessage.slice(0, 200);
+            for (const e of entries) {
+                if (e.kind === 'task_dispatched' && typeof e.payload?.message === 'string') {
+                    if (e.payload.message.startsWith(prefix)) taskAttemptCount++;
                 }
             }
         }
@@ -710,7 +717,8 @@ function rotateLedgerFile(meshId: string, currentPath: string): void {
 
     try {
         renameSync(currentPath, getRotatedPath(meshId, index));
-    } catch {
+    } catch (e: any) {
         // Rotation failed — the next append will just grow the file
+        process.stderr.write(`[adhdev-mesh] Ledger rotation failed for mesh ${meshId}: ${e?.message || e}. File will continue to grow.\n`);
     }
 }

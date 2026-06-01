@@ -36,9 +36,11 @@ import {
     classifyP2pRelayFailure,
     drainPendingMeshCoordinatorEvents,
     enqueueTask,
+    getActiveDirectDispatches,
     getQueue,
     getLedgerSummary,
     getSessionRecoveryContext,
+    insertDirectDispatch,
     isP2pRelayTransportFailure,
     readLedgerEntries,
     readLedgerSlice,
@@ -62,7 +64,19 @@ type MeshSessionProviderMetadata = {
     providerSessionId?: string;
 };
 
-const meshSessionProviderMetadata = new Map<string, MeshSessionProviderMetadata>();
+const SESSION_PROVIDER_METADATA_TTL_MS = 30 * 60_000;
+type TimestampedSessionMetadata = MeshSessionProviderMetadata & { expiresAt: number };
+const meshSessionProviderMetadata = new Map<string, TimestampedSessionMetadata>();
+
+function getSessionMetadata(key: string): MeshSessionProviderMetadata | undefined {
+    const entry = meshSessionProviderMetadata.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+        meshSessionProviderMetadata.delete(key);
+        return undefined;
+    }
+    return entry;
+}
 
 const ACTIVE_WORK_POLLING_BACKOFF_MS = 60_000;
 
@@ -146,9 +160,9 @@ type QueueViewMode = 'all' | 'active' | 'historical';
  * created or removed worktree nodes through clone_mesh_node/remove_mesh_node.
  */
 async function refreshMeshFromDaemon(ctx: MeshContext): Promise<void> {
-    if (!(ctx.transport instanceof IpcTransport)) return;
+    if (!isLocalTransport(ctx.transport)) return;
     try {
-        const result = await (ctx.transport as IpcTransport).command('get_mesh', { meshId: ctx.mesh.id }) as any;
+        const result = await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id }) as any;
         if (!result?.success || !Array.isArray(result.mesh?.nodes)) return;
         const refreshedNodes = result.mesh.nodes
             .filter((n: any) => n?.id)
@@ -1305,10 +1319,11 @@ function rememberMeshSessionProviderMetadata(
     const providerType = readString(metadata.providerType);
     const providerSessionId = readString(metadata.providerSessionId);
     if (!providerType && !providerSessionId) return;
-    const existing = meshSessionProviderMetadata.get(meshSessionCacheKey(keyNodeId, keySessionId)) || { providerType: '' };
+    const existing = getSessionMetadata(meshSessionCacheKey(keyNodeId, keySessionId)) || { providerType: '' };
     meshSessionProviderMetadata.set(meshSessionCacheKey(keyNodeId, keySessionId), {
         providerType: providerType || existing.providerType,
         providerSessionId: providerSessionId || existing.providerSessionId,
+        expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS,
     });
 }
 
@@ -1369,7 +1384,7 @@ function resolveMeshSessionProviderMetadata(
     nodeId: string,
     runtimeSessionId: string,
 ): MeshSessionProviderMetadata | undefined {
-    const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(nodeId, runtimeSessionId));
+    const cached = getSessionMetadata(meshSessionCacheKey(nodeId, runtimeSessionId));
     if (cached?.providerType || cached?.providerSessionId) return cached;
     const fromLedger = resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId);
     if (fromLedger) rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, fromLedger);
@@ -2272,7 +2287,9 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         if (recoveryContext.consecutiveNodeFailures > 0) {
             entry.recoveryHints = {
                 consecutiveFailures: recoveryContext.consecutiveNodeFailures,
-                lastTaskMessage: recoveryContext.lastTaskMessage,
+                lastTaskMessage: typeof recoveryContext.lastTaskMessage === 'string'
+                    ? recoveryContext.lastTaskMessage.slice(0, 100) + (recoveryContext.lastTaskMessage.length > 100 ? '…' : '')
+                    : recoveryContext.lastTaskMessage,
                 advice: recoveryContext.advice,
                 retryRecommended: recoveryContext.retryRecommended,
             };
@@ -2321,13 +2338,19 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
 
         const liveSessions = await collectLiveStatusSessions(ctx, node);
         if (liveSessions.length > 0) {
-            entry.sessions = liveSessions;
+            // Slim to essential fields only — full session objects are expensive in coordinator context.
+            entry.sessions = liveSessions.map((s: any) => ({
+                id: s.instanceId ?? s.id ?? s.sessionId,
+                status: s.status ?? s.lifecycle ?? s.state,
+                providerType: s.providerType ?? s.cliType ?? s.type,
+                ...(s.activeChat?.status ? { chatStatus: s.activeChat.status } : {}),
+            }));
         }
 
         results.push(entry);
     }
 
-    const ledgerEntries = readLedgerEntries(mesh.id, { tail: 500 });
+    const ledgerEntries = readLedgerEntries(mesh.id, { tail: 200 });
     const activeWorkEvidence = buildMeshActiveWork({
         meshId: mesh.id,
         queue: getQueue(mesh.id),
@@ -2571,7 +2594,21 @@ export async function meshEnqueueTask(
                                 } catch { /* best-effort */ }
                             }
                         })
-                        .catch(() => { /* non-fatal: no idle session or P2P failure */ }),
+                        .catch((err: any) => {
+                            try {
+                                appendLedgerEntry(ctx.mesh.id, {
+                                    kind: 'p2p_dispatch_failed',
+                                    nodeId: node.id,
+                                    payload: {
+                                        source: 'queue',
+                                        via: 'p2p_direct',
+                                        taskId: task.id,
+                                        error: err?.message || String(err),
+                                        dispatchFailedAt: new Date().toISOString(),
+                                    },
+                                });
+                            } catch { /* best-effort */ }
+                        }),
                 );
             }
             // Fire-and-forget — don't block the coordinator response
@@ -2605,12 +2642,27 @@ export async function meshViewQueue(
         const visibleSummary = buildQueueStatusSummary(queue);
         const maintenance = buildQueueMaintenanceReport(fullQueue);
         const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+        const ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
+        const directDispatches = getActiveDirectDispatches(ctx.mesh.id);
         const activeWorkEvidence = buildMeshActiveWork({
             meshId: ctx.mesh.id,
             queue: fullQueue,
-            ledgerEntries: readLedgerEntries(ctx.mesh.id, { tail: 500 }),
+            ledgerEntries,
+            // Always pass BeadsDB records (may be empty). buildMeshActiveWork uses them for local
+            // dispatches and falls through to ledger scan for remote P2P dispatches not in BeadsDB.
+            directDispatches,
             nodes: liveNodes,
         });
+        const recentDispatchFailures = ledgerEntries
+            .filter(e => e.kind === 'p2p_dispatch_failed')
+            .slice(-20)
+            .map(e => ({
+                nodeId: e.nodeId,
+                taskId: e.payload?.taskId,
+                error: e.payload?.error,
+                via: e.payload?.via,
+                failedAt: e.payload?.dispatchFailedAt || e.timestamp,
+            }));
         const staleAssignedTasks = (maintenance as any).staleAssignedTasks || [];
         const requestedHistoricalRows = queue.some((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
         const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
@@ -2628,25 +2680,20 @@ export async function meshViewQueue(
                 filtered: Boolean(statusFilter?.length) || view !== 'all',
             },
             queue,
-            visibleQueue: queue,
             activeWork: activeWorkEvidence.activeWork,
             staleDirectWork: activeWorkEvidence.staleDirectWork,
             activeWorkSummary: activeWorkEvidence.summary,
             ...(pollingGuidance ? { pollingGuidance } : {}),
-            visibleSummary,
             summary,
-            activeCounts: (summary as any).activeCounts,
-            historicalCounts: (summary as any).historicalCounts,
-            activeCount: (summary as any).activeCount,
-            historicalCount: (summary as any).historicalCount,
-            visibleActiveCounts: (visibleSummary as any).activeCounts,
-            visibleHistoricalCounts: (visibleSummary as any).historicalCounts,
-            visibleActiveCount: (visibleSummary as any).activeCount,
-            visibleHistoricalCount: (visibleSummary as any).historicalCount,
             staleAssignedTasks,
             staleAssignedCount: (maintenance as any).staleAssignedCount,
             queueMaintenance: maintenance,
             cleanupDryRun: maintenance,
+            ...(recentDispatchFailures.length > 0 ? {
+                recentDispatchFailures,
+                dispatchFailureCount: recentDispatchFailures.length,
+                dispatchFailureNote: 'Remote P2P dispatch attempts that failed. Affected tasks remain pending and may require mesh_queue_requeue if no idle session picks them up.',
+            } : {}),
             ...(view === 'active' || statusFilter?.some(status => ACTIVE_QUEUE_STATUSES.has(status)) ? {
                 activeQueue: queue.filter((task: any) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || ''))),
             } : {}),
@@ -2834,7 +2881,7 @@ export async function meshSendTask(
         // directly over P2P so the remote daemon forwards it to its agent.
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
-            const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id || ''));
+            const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ''));
             const taskId = randomUUID();
             const result = await ipcDispatchToRemoteAgent(ctx, node, {
                 session_id: args.session_id,
@@ -2877,7 +2924,7 @@ export async function meshSendTask(
         // and surface route failures immediately instead of creating a queue item
         // that can remain pending forever when the session was already stopped.
         if (args.session_id && isLocalTransport(ctx.transport)) {
-            const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+            const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
             let resolvedProviderType = cached?.providerType || '';
             if (!resolvedProviderType) {
                 let explicitSession = explicitTargetSession;
@@ -2936,6 +2983,7 @@ export async function meshSendTask(
                     meshSessionProviderMetadata.set(meshSessionCacheKey(args.node_id, args.session_id), {
                         providerType: resolvedProviderType,
                         providerSessionId: readString(explicitSession?.providerSessionId) || undefined,
+                        expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS,
                     });
                 }
             }
@@ -2980,6 +3028,7 @@ export async function meshSendTask(
                 });
             }
             const taskId = randomUUID();
+            const dispatchedAt = new Date().toISOString();
             try {
                 appendLedgerEntry(ctx.mesh.id, {
                     kind: 'task_dispatched',
@@ -2995,6 +3044,17 @@ export async function meshSendTask(
                     }),
                 });
             } catch { /* best-effort */ }
+            insertDirectDispatch(ctx.mesh.id, {
+                taskId,
+                nodeId: args.node_id,
+                sessionId: args.session_id,
+                providerType: resolvedProviderType || undefined,
+                message: args.message,
+                taskMode: taskMode || undefined,
+                via: 'local_direct',
+                dispatchedToIdleSession: sessionWasIdle,
+                dispatchedAt,
+            });
             return JSON.stringify({
                 success: true,
                 dispatched: true,
@@ -3068,18 +3128,21 @@ export async function meshReadChat(
             workspace: node.workspace,
             ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
             ...(providerSessionId ? { providerSessionId } : {}),
-            tailLimit: args.tail ?? 10,
+            tailLimit: args.tail ?? 3,
         });
         const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result) as Record<string, any>, {
             key: `mesh:${args.node_id}:${args.session_id}`,
             toolName: 'mesh_read_chat',
             completionCallbackExpected: true,
         });
-        if (args.compact) {
+        // Default compact=true to keep coordinator context lean.
+        // Pass compact=false explicitly only when full transcript detail is needed for debugging.
+        const useCompact = args.compact !== false;
+        if (useCompact) {
             const compactPayload = compactChatPayload(payload, {
                 nodeId: args.node_id,
                 sessionId: args.session_id,
-                limit: args.tail ?? 10,
+                limit: args.tail ?? 3,
             });
             return JSON.stringify(
                 payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
@@ -3092,7 +3155,7 @@ export async function meshReadChat(
         try {
             const targetId = `${node.daemonId}:session:${args.session_id}`;
             const res = await (ctx.transport as CloudTransport).readChat(targetId, {
-                limit: args.tail ?? 10,
+                limit: args.tail ?? 3,
                 sessionId: args.session_id,
             });
             return JSON.stringify(res, null, 2);
@@ -3218,6 +3281,7 @@ export async function meshLaunchSession(
             meshSessionProviderMetadata.set(meshSessionCacheKey(args.node_id, runtimeSessionId), {
                 providerType: resolvedProviderType,
                 ...(providerSessionId ? { providerSessionId } : {}),
+                expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS,
             });
         }
         // Record session launch in ledger
@@ -3470,7 +3534,7 @@ export async function meshApprove(
     const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
 
     if (isLocalTransport(ctx.transport)) {
-        const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+        const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
         const providerSessionId = cached?.providerSessionId;
         const result = await commandForNode(ctx, node, 'resolve_action', {
             sessionId: args.session_id,

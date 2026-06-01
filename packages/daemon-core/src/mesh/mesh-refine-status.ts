@@ -1,9 +1,10 @@
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events.js';
+import type { MeshAsyncJobLifecycle } from '../repo-mesh-types.js';
 
 export type MeshAsyncRefineJobStatus = 'accepted' | 'running' | 'completed' | 'failed';
 
-export interface MeshAsyncRefineJobSummary {
+export interface MeshAsyncRefineJobSummary extends MeshAsyncJobLifecycle {
     jobId: string;
     interactionId?: string;
     status: MeshAsyncRefineJobStatus;
@@ -14,8 +15,6 @@ export interface MeshAsyncRefineJobSummary {
     workspace?: string;
     branch?: string;
     into?: string;
-    startedAt?: string;
-    completedAt?: string;
     retryOfJobId?: string;
     lastEvent?: string;
     lastLedgerKind?: string;

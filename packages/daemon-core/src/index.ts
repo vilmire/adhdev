@@ -115,6 +115,7 @@ export type {
   RepoMeshLedgerEntryStatus,
   RepoMeshLedgerSummaryStatus,
   RepoMeshLedgerStatus,
+  MeshAsyncJobLifecycle,
 } from './repo-mesh-types.js';
 export { DEFAULT_MESH_POLICY } from './repo-mesh-types.js';
 
@@ -195,8 +196,8 @@ export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence }
 export type { MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest } from './mesh/mesh-work-queue.js';
-export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshWorkQueueStats, MeshQueueMutationOptions, MeshTaskModeValidationResult } from './mesh/mesh-work-queue.js';
+export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './mesh/mesh-work-queue.js';
+export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshWorkQueueStats, MeshQueueMutationOptions, MeshTaskModeValidationResult, DirectDispatchRecord } from './mesh/mesh-work-queue.js';
 export { buildCompactStaleDirectWorkSummary, buildMeshActiveWork, buildMeshActiveWorkSummary } from './mesh/mesh-active-work.js';
 export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource, MeshStaleDirectWorkSummary } from './mesh/mesh-active-work.js';
 export { buildMeshAsyncRefineJobs } from './mesh/mesh-refine-status.js';

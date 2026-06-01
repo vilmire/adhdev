@@ -170,6 +170,10 @@ export async function removeWorktree(repoRoot: string, worktreePath: string, opt
         const stdout = typeof error.stdout === 'string' ? error.stdout : '';
         const detail = `${stderr}\n${stdout}\n${error.message || ''}`;
         if (opts.allowSubmoduleForceFallback && SUBMODULE_WORKTREE_REMOVE_RE.test(detail)) {
+            process.stderr.write(
+                `[adhdev-mesh] WARNING: git worktree remove --force fallback for submodule worktree '${worktreePath}'. `
+                + `Any uncommitted changes inside submodules will be lost.\n`,
+            );
             try {
                 await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], {
                     cwd: repoRoot,
