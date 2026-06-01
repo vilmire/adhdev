@@ -674,6 +674,26 @@ describe('mesh-ledger', () => {
         });
     });
 
+    describe('readLedgerSlice summary matches getLedgerSummary for same mesh', () => {
+        it('readLedgerSlice summary matches getLedgerSummary for same mesh', () => {
+            const meshId = `slice-summary-${randomUUID().slice(0, 8)}`;
+            appendLedgerEntry(meshId, { kind: 'task_dispatched', payload: {} });
+            appendLedgerEntry(meshId, { kind: 'task_dispatched', payload: {} });
+            appendLedgerEntry(meshId, { kind: 'task_completed', payload: {} });
+            appendLedgerEntry(meshId, { kind: 'task_completed', payload: {} });
+            appendLedgerEntry(meshId, { kind: 'task_failed', payload: {} });
+
+            const slice = readLedgerSlice(meshId);
+            const summary = getLedgerSummary(meshId);
+
+            expect(slice.summary.totalEntries).toBe(summary.totalEntries);
+            expect(slice.summary.taskDispatched).toBe(summary.taskDispatched);
+            expect(slice.summary.taskCompleted).toBe(summary.taskCompleted);
+            expect(slice.summary.taskFailed).toBe(summary.taskFailed);
+            expect(slice.summary.meshId).toBe(meshId);
+        });
+    });
+
     describe('appendRemoteLedgerEntries dedup tail', () => {
         it('accepts entries that are outside the dedup tail window', () => {
             const meshId = `dedup-tail-${randomUUID().slice(0, 8)}`;

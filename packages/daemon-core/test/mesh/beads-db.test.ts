@@ -23,6 +23,14 @@ import {
     markStaleDirectDispatches,
     cleanupTerminalDirectDispatches,
     __resetBeadsDBForTests,
+    enqueueTask,
+    claimNextTask,
+    getQueue,
+    getMeshQueueStats,
+    cancelTask,
+    requeueTask,
+    updateTaskStatus,
+    __clearMeshQueueForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 
 describe('beads-db', () => {
@@ -256,6 +264,237 @@ describe('beads-db', () => {
 
             expect(activeB).toHaveLength(1);
             expect(activeB[0].sessionId).toBe(sB);
+        });
+    });
+
+    describe('claimNextQueueTask — BeadsDB level', () => {
+        afterEach(() => {
+            __resetBeadsDBForTests();
+        });
+
+        it('claims the oldest pending task when no active assignment exists', () => {
+            const meshId = `mesh-claim-oldest-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            db.insertQueueEntry({ id: 'task-1', meshId, message: 'first', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
+            db.insertQueueEntry({ id: 'task-2', meshId, message: 'second', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            const result = db.claimNextQueueTask(meshId, 'node1', 'sess1');
+            expect(result?.id).toBe('task-1');
+            expect(result?.status).toBe('assigned');
+            expect(result?.assignedNodeId).toBe('node1');
+            expect(result?.assignedSessionId).toBe('sess1');
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('returns null when node/session already has an active assignment', () => {
+            const meshId = `mesh-claim-active-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            db.insertQueueEntry({ id: 'task-a', meshId, message: 'first task', status: 'pending', createdAt: new Date(Date.now() - 2000).toISOString(), updatedAt: new Date(Date.now() - 2000).toISOString() });
+
+            // Claim the first task
+            db.claimNextQueueTask(meshId, 'node1', 'sess1');
+
+            // Insert another task
+            db.insertQueueEntry({ id: 'task-b', meshId, message: 'second task', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            // Same session: null
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess1')).toBeNull();
+            // Same node, different session: null
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2')).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('prioritizes session-targeted task over unconstrained task', () => {
+            const meshId = `mesh-claim-sess-prio-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            db.insertQueueEntry({ id: 'unconstrained-1', meshId, message: 'unconstrained', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
+            db.insertQueueEntry({ id: 'session-targeted-1', meshId, message: 'session targeted', status: 'pending', targetSessionId: 'sess-target', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            const claimed = db.claimNextQueueTask(meshId, 'node1', 'sess-target');
+            expect(claimed?.id).toBe('session-targeted-1');
+            expect(claimed?.targetSessionId).toBe('sess-target');
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('prioritizes node-targeted (no session) over unconstrained', () => {
+            const meshId = `mesh-claim-node-prio-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            db.insertQueueEntry({ id: 'unconstrained-2', meshId, message: 'unconstrained', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
+            db.insertQueueEntry({ id: 'node-targeted-1', meshId, message: 'node targeted', status: 'pending', targetNodeId: 'node-a', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            const claimed = db.claimNextQueueTask(meshId, 'node-a', 'sess1');
+            expect(claimed?.id).toBe('node-targeted-1');
+            expect(claimed?.targetNodeId).toBe('node-a');
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('returns null when queue is empty', () => {
+            const meshId = `mesh-claim-empty-${randomUUID().slice(0, 8)}`;
+            expect(BeadsDB.getInstance().claimNextQueueTask(meshId, 'node1', 'sess1')).toBeNull();
+        });
+    });
+
+    describe('findQueueEntryById', () => {
+        afterEach(() => {
+            __resetBeadsDBForTests();
+        });
+
+        it('returns entry when found, null for nonexistent', () => {
+            const meshId = `mesh-find-by-id-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            const entryId = `entry-${randomUUID().slice(0, 8)}`;
+            db.insertQueueEntry({ id: entryId, meshId, message: 'find me', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            const found = db.findQueueEntryById(meshId, entryId);
+            expect(found).not.toBeNull();
+            expect(found?.message).toBe('find me');
+
+            const notFound = db.findQueueEntryById(meshId, 'nonexistent');
+            expect(notFound).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+    });
+
+    describe('findAssignedBySession', () => {
+        afterEach(() => {
+            __resetBeadsDBForTests();
+        });
+
+        it('returns the assigned entry for a session', () => {
+            const meshId = `mesh-assigned-sess-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            db.insertQueueEntry({ id: 'task-assigned-1', meshId, message: 'assigned task', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            // Claim it so it becomes assigned
+            db.claimNextQueueTask(meshId, 'node1', sessionId);
+
+            const found = db.findAssignedBySession(meshId, sessionId);
+            expect(found).not.toBeNull();
+            expect(found?.status).toBe('assigned');
+
+            const notFound = db.findAssignedBySession(meshId, 'unknown-session');
+            expect(notFound).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('respects occurredAt filter — ignores entries updated after occurredAt cutoff', () => {
+            const meshId = `mesh-assigned-cutoff-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-cutoff-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            db.insertQueueEntry({ id: 'task-cutoff-1', meshId, message: 'cutoff task', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            // Claim just now — updatedAt is current time
+            db.claimNextQueueTask(meshId, 'node1', sessionId);
+
+            // Requesting entries updated BEFORE 10 seconds ago — should return null
+            // because the task was just claimed (updated_at = now, not 10 seconds ago)
+            const farPastIso = new Date(Date.now() - 10_000).toISOString();
+            const notFound = db.findAssignedBySession(meshId, sessionId, farPastIso);
+            expect(notFound).toBeNull();
+
+            // Without occurredAt — should return the assigned entry
+            const found = db.findAssignedBySession(meshId, sessionId);
+            expect(found).not.toBeNull();
+            expect(found?.status).toBe('assigned');
+
+            __clearMeshQueueForTests(meshId);
+        });
+    });
+
+    describe('getQueueStatsByStatus', () => {
+        afterEach(() => {
+            __resetBeadsDBForTests();
+        });
+
+        it('returns accurate counts by status via SQL GROUP BY', () => {
+            const meshId = `mesh-stats-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            const now = new Date().toISOString();
+
+            // Insert 3 tasks
+            db.insertQueueEntry({ id: 'stats-t1', meshId, message: 'task 1', status: 'pending', createdAt: now, updatedAt: now });
+            db.insertQueueEntry({ id: 'stats-t2', meshId, message: 'task 2', status: 'pending', createdAt: now, updatedAt: now });
+            db.insertQueueEntry({ id: 'stats-t3', meshId, message: 'task 3', status: 'pending', createdAt: now, updatedAt: now });
+
+            // Cancel one via direct update
+            const t2 = db.findQueueEntryById(meshId, 'stats-t2')!;
+            t2.status = 'cancelled';
+            db.updateQueueEntry(t2);
+
+            // Assign one via claim
+            db.claimNextQueueTask(meshId, 'node1', 'sess1');
+
+            // t1 should now be assigned (oldest pending), t2 cancelled, t3 still pending
+            const stats = db.getQueueStatsByStatus(meshId);
+            const sorted = [...stats].sort((a, b) => a.status.localeCompare(b.status));
+            expect(sorted).toContainEqual({ status: 'assigned', count: 1 });
+            expect(sorted).toContainEqual({ status: 'cancelled', count: 1 });
+            expect(sorted).toContainEqual({ status: 'pending', count: 1 });
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('returns empty array for a mesh with no tasks', () => {
+            const stats = BeadsDB.getInstance().getQueueStatsByStatus('empty-mesh-xyz-never-used');
+            expect(stats).toEqual([]);
+        });
+    });
+
+    describe('getActiveAssignmentDetails', () => {
+        afterEach(() => {
+            __resetBeadsDBForTests();
+        });
+
+        it('returns node, session, and message for assigned tasks', () => {
+            const meshId = `mesh-active-details-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            const now = new Date().toISOString();
+            db.insertQueueEntry({ id: 'detail-t1', meshId, message: 'task message', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
+            db.insertQueueEntry({ id: 'detail-t2', meshId, message: 'pending task', status: 'pending', createdAt: now, updatedAt: now });
+
+            db.claimNextQueueTask(meshId, 'node-x', 'sess-x');
+
+            const details = db.getActiveAssignmentDetails(meshId);
+            expect(details).toHaveLength(1);
+            expect(details[0].nodeId).toBe('node-x');
+            expect(details[0].sessionId).toBe('sess-x');
+            expect(details[0].message).toBe('task message');
+
+            __clearMeshQueueForTests(meshId);
+        });
+    });
+
+    describe('insertQueueEntry + updateQueueEntry round-trip', () => {
+        afterEach(() => {
+            __resetBeadsDBForTests();
+        });
+
+        it('insertQueueEntry persists and updateQueueEntry modifies in place', () => {
+            const meshId = `mesh-roundtrip-${randomUUID().slice(0, 8)}`;
+            const db = BeadsDB.getInstance();
+            const entryId = `roundtrip-${randomUUID().slice(0, 8)}`;
+            const now = new Date().toISOString();
+
+            db.insertQueueEntry({ id: entryId, meshId, message: 'update me', status: 'pending', createdAt: now, updatedAt: now });
+
+            const before = db.findQueueEntryById(meshId, entryId);
+            expect(before?.status).toBe('pending');
+
+            before!.status = 'completed';
+            before!.updatedAt = new Date().toISOString();
+            db.updateQueueEntry(before!);
+
+            const after = db.findQueueEntryById(meshId, entryId);
+            expect(after?.status).toBe('completed');
+
+            __clearMeshQueueForTests(meshId);
         });
     });
 });

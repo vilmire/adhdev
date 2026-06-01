@@ -367,4 +367,55 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(getQueue(meshId, { status: ['pending'] })).to.have.length(1);
         expect(getQueue(meshId, { status: ['pending'] })[0].id).to.equal(pendingTask.id);
     });
+
+    it('getQueue filters by status via SQL — only returns matching entries', () => {
+        const t1 = enqueueTask(meshId, 'will be assigned');
+        const t2 = enqueueTask(meshId, 'pending task');
+        const t3 = enqueueTask(meshId, 'will be cancelled');
+
+        // Claim t1 (oldest pending) to make it assigned
+        claimNextTask(meshId, 'node-filter', 'session-filter');
+        // Cancel t3
+        cancelTask(meshId, t3.id, { reason: 'test cancel' });
+
+        // After claiming t1: t1=assigned, t2=pending, t3=cancelled
+        expect(getQueue(meshId, { status: ['pending'] })).to.have.length(1);
+        expect(getQueue(meshId, { status: ['pending'] })[0].id).to.equal(t2.id);
+
+        expect(getQueue(meshId, { status: ['assigned'] })).to.have.length(1);
+        expect(getQueue(meshId, { status: ['assigned'] })[0].id).to.equal(t1.id);
+
+        expect(getQueue(meshId, { status: ['cancelled'] })).to.have.length(1);
+        expect(getQueue(meshId, { status: ['cancelled'] })[0].id).to.equal(t3.id);
+
+        expect(getQueue(meshId, { status: ['pending', 'assigned'] })).to.have.length(2);
+
+        expect(getQueue(meshId)).to.have.length(3);
+    });
+
+    it('getMeshQueueStats uses SQL GROUP BY — counts all status buckets correctly', () => {
+        enqueueTask(meshId, 'task pending');
+        const assignedTask = enqueueTask(meshId, 'task to assign');
+        const completedTask = enqueueTask(meshId, 'task to complete');
+        const cancelledTask = enqueueTask(meshId, 'task to cancel');
+
+        // Claim assignedTask (second oldest)
+        claimNextTask(meshId, 'node-stats-a', 'session-stats-a');
+        // Complete completedTask by claiming then completing via session status
+        claimNextTask(meshId, 'node-stats-b', 'session-stats-b');
+        updateSessionTaskStatus(meshId, 'session-stats-b', 'completed');
+        // Cancel cancelledTask
+        cancelTask(meshId, cancelledTask.id, { reason: 'stats test cancel' });
+
+        const stats = getMeshQueueStats(meshId);
+
+        expect(stats.total).to.equal(4);
+        expect(stats.active).to.equal(2); // pending + assigned
+        expect(stats.historical).to.equal(2); // completed + cancelled
+        expect(stats.pending).to.equal(1);
+        expect(stats.assigned).to.equal(1);
+        expect(stats.completed).to.equal(1);
+        expect(stats.cancelled).to.equal(1);
+        expect(stats.failed).to.equal(0);
+    });
 });
