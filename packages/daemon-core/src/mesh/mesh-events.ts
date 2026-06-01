@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, unlinkSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
@@ -217,6 +217,19 @@ function reconcilePendingMeshCoordinatorEvents(meshId: string, events: PendingMe
     ];
 }
 
+const MAX_PENDING_EVENTS_BYTES = 100 * 1024; // 100 KB — keep the pending file small
+const MAX_PENDING_EVENTS_KEEP = 50;           // keep the last 50 events when trimming
+
+function trimPendingEventsIfNeeded(path: string): void {
+    try {
+        if (!existsSync(path)) return;
+        if (statSync(path).size <= MAX_PENDING_EVENTS_BYTES) return;
+        const lines = readFileSync(path, 'utf-8').split('\n').filter(Boolean);
+        if (lines.length <= MAX_PENDING_EVENTS_KEEP) return;
+        writeFileSync(path, lines.slice(-MAX_PENDING_EVENTS_KEEP).join('\n') + '\n', 'utf-8');
+    } catch { /* best-effort; if trim fails, append still proceeds */ }
+}
+
 export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent): boolean {
     try {
         if (hasPendingRefineTerminalEventDuplicate(event)) {
@@ -230,6 +243,7 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
         // Write to the coordinator-scoped file when the target coordinator is known;
         // fall back to the shared file for legacy/unscoped events.
         const path = getPendingEventsPath(event.meshId, event.targetCoordinatorDaemonId);
+        trimPendingEventsIfNeeded(path);
         appendFileSync(path, JSON.stringify(event) + '\n', 'utf-8');
         return true;
     } catch (e: any) {
@@ -618,6 +632,13 @@ const autoLaunchInProgress = new Set<string>();
 const autoLaunchCooldownUntil = new Map<string, number>();
 const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
 
+function sweepExpiredCooldowns(): void {
+    const now = Date.now();
+    for (const [key, until] of autoLaunchCooldownUntil) {
+        if (now >= until) autoLaunchCooldownUntil.delete(key);
+    }
+}
+
 function normalizeProviderPriority(policy: unknown): string[] {
     const raw = policy && typeof policy === 'object' && !Array.isArray(policy)
         ? (policy as Record<string, unknown>).providerPriority
@@ -824,12 +845,14 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             const nodeId = readNonEmptyString(node?.id);
             if (!nodeId) continue;
             const launchKey = `${meshId}:${nodeId}`;
+            const now = Date.now();
             const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
+            if (cooldownUntil > 0 && now >= cooldownUntil) autoLaunchCooldownUntil.delete(launchKey);
             if (autoLaunchInProgress.has(launchKey)) {
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'auto_launch_in_progress', nodeId });
                 continue;
             }
-            if (Date.now() < cooldownUntil) {
+            if (now < cooldownUntil) {
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'auto_launch_cooldown', nodeId });
                 continue;
             }
@@ -879,13 +902,13 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 if (!launchResult?.success) {
                     const reason = launchResult?.error || 'launch_cli_failed';
                     markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: resolved.providerType });
-                    autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                    autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                     return false;
                 }
                 const sessionId = readNonEmptyString(launchResult.sessionId) || readNonEmptyString(launchResult.id) || readNonEmptyString(launchResult.runtimeSessionId);
                 if (!sessionId) {
                     markAutoLaunch(meshId, task.id, { status: 'failed', reason: 'launch_missing_session_id', nodeId, providerType: resolved.providerType });
-                    autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                    autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                     return false;
                 }
                 markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId });
