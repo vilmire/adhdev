@@ -42,6 +42,7 @@ import {
     getSessionRecoveryContext,
     insertDirectDispatch,
     isP2pRelayTransportFailure,
+    markStaleDirectDispatches,
     readLedgerEntries,
     readLedgerSlice,
     requeueTask,
@@ -1349,7 +1350,7 @@ function resolveMeshSessionProviderMetadataFromLedger(
     nodeId: string,
     runtimeSessionId: string,
 ): MeshSessionProviderMetadata | undefined {
-    const entries = readLedgerEntries(ctx.mesh.id, { tail: 500 });
+    const entries = readLedgerEntries(ctx.mesh.id, { tail: 50 });
     for (let i = entries.length - 1; i >= 0; i -= 1) {
         const entry = entries[i];
         const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
@@ -1403,6 +1404,22 @@ function isGitStatusDirty(status: any): boolean {
     if (typeof status?.isDirty === 'boolean') return status.isDirty;
     if (typeof status?.dirty === 'boolean') return status.dirty;
     return countUncommittedChanges(status) > 0;
+}
+
+function slimLedgerPayload(payload: Record<string, unknown>): Record<string, unknown> {
+    const slim: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(payload)) {
+        if (k === 'message' || k === 'taskSummary') {
+            slim[k] = typeof v === 'string' && v.length > 200 ? v.slice(0, 200) + '…' : v;
+        } else if (k === 'evidence' || k === 'workerResult' || k === 'gitStatus' || k === 'validationResults') {
+            // Skip large nested evidence objects — accessible via mesh_reconcile_ledger if needed.
+        } else if (k === 'finalSummary') {
+            slim[k] = typeof v === 'string' && v.length > 300 ? v.slice(0, 300) + '…' : v;
+        } else {
+            slim[k] = v;
+        }
+    }
+    return slim;
 }
 
 function readRelatedRepos(node: LocalMeshNodeEntry): RepoMeshRelatedRepo[] {
@@ -2201,14 +2218,14 @@ export const ALL_MESH_TOOLS = [
 
 // ─── Tool Implementations ───────────────────────
 
-export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean } = {}): Promise<string> {
+export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean } = {}): Promise<string> {
     await refreshMeshFromDaemon(ctx);
     const { mesh, transport } = ctx;
-    const results: any[] = [];
 
     const ledgerSummary = getLedgerSummary(mesh.id);
 
-    for (const node of mesh.nodes) {
+    // Probe all nodes in parallel — git_status + session collection per node are independent.
+    const results = await Promise.all(mesh.nodes.map(async (node) => {
         const entry: any = {
             nodeId: node.id,
             workspace: node.workspace,
@@ -2347,8 +2364,8 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             }));
         }
 
-        results.push(entry);
-    }
+        return entry;
+    }));
 
     const ledgerEntries = readLedgerEntries(mesh.id, { tail: 200 });
     const activeWorkEvidence = buildMeshActiveWork({
@@ -2379,7 +2396,8 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         activeWork: activeWorkEvidence.activeWork,
         staleDirectWorkSummary,
         ...(args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {}),
-        terminalDirectWork: activeWorkEvidence.terminalDirectWork,
+        // terminalDirectWork is historical (completed/failed direct dispatches) — opt-in only.
+        ...(args.includeTerminalDirectWork === true ? { terminalDirectWork: activeWorkEvidence.terminalDirectWork } : {}),
         activeWorkSummary: activeWorkEvidence.summary,
         ...(pollingGuidance ? { pollingGuidance } : {}),
         branchConvergenceSummary: summarizeBranchConvergence(results),
@@ -2418,7 +2436,12 @@ export async function meshTaskHistory(
     const pendingEvents = await drainCoordinatorPendingEvents(ctx);
     const tail = typeof args.tail === 'number' && args.tail > 0 ? args.tail : 20;
     const kind = typeof args.kind === 'string' && args.kind.trim() ? [args.kind.trim() as any] : undefined;
-    const entries = readLedgerEntries(mesh.id, { tail, kind });
+    const rawEntries = readLedgerEntries(mesh.id, { tail, kind });
+    // Slim large payload fields so coordinator context stays lean.
+    const entries = rawEntries.map(e => ({
+        ...e,
+        payload: e.payload ? slimLedgerPayload(e.payload) : e.payload,
+    }));
     const summary = getLedgerSummary(mesh.id);
     return JSON.stringify({
         meshId: mesh.id,
@@ -2642,6 +2665,8 @@ export async function meshViewQueue(
         const visibleSummary = buildQueueStatusSummary(queue);
         const maintenance = buildQueueMaintenanceReport(fullQueue);
         const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+        // Mark dispatched entries with no session activity after 30 min as stale.
+        markStaleDirectDispatches(ctx.mesh.id);
         const ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
         const directDispatches = getActiveDirectDispatches(ctx.mesh.id);
         const activeWorkEvidence = buildMeshActiveWork({
