@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { createRequire } from 'module';
 import { getLedgerDir } from './mesh-ledger.js';
@@ -28,13 +28,18 @@ function legacyQueuePath(meshId: string): string {
 export class BeadsDB {
     private static instance: BeadsDB | undefined;
     private readonly db: DatabaseHandle;
+    private readonly dbPath: string;
     private readonly migratedMeshIds = new Set<string>();
     private fingerprintSweepCounter = 0;
+    private walWriteCounter = 0;
+    private static readonly WAL_CHECK_INTERVAL = 500;
+    private static readonly WAL_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
 
     private constructor(dbPath: string) {
         const dir = dirname(dbPath);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
+        this.dbPath = dbPath;
         this.db = new (loadDatabaseCtor())(dbPath);
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('synchronous = NORMAL');
@@ -126,10 +131,26 @@ export class BeadsDB {
         const expiresAt = Date.now() + ttlMs;
         this.db.prepare('INSERT OR REPLACE INTO mesh_completion_fingerprints (fingerprint, expires_at) VALUES (?, ?)')
             .run(fingerprint, expiresAt);
+        this.maybeCheckpointWal();
     }
 
     sweepExpiredFingerprints(): void {
         this.db.prepare('DELETE FROM mesh_completion_fingerprints WHERE expires_at <= ?').run(Date.now());
+    }
+
+    private maybeCheckpointWal(): void {
+        if (++this.walWriteCounter < BeadsDB.WAL_CHECK_INTERVAL) return;
+        this.walWriteCounter = 0;
+        try {
+            const walPath = `${this.dbPath}-wal`;
+            if (!existsSync(walPath)) return;
+            const size = statSync(walPath).size;
+            if (size < BeadsDB.WAL_MAX_BYTES) return;
+            process.stderr.write(
+                `[adhdev-mesh] WAL file ${Math.round(size / 1024 / 1024)}MB exceeds threshold; forcing checkpoint\n`,
+            );
+            this.db.pragma('wal_checkpoint(TRUNCATE)');
+        } catch { /* best-effort */ }
     }
 
     private ensureLegacyQueueMigrated(meshId: string): void {
@@ -201,6 +222,7 @@ export class BeadsDB {
         `);
         deleteStmt.run(meshId);
         for (const entry of queue) insert.run(this.toRow(entry));
+        this.maybeCheckpointWal();
     }
 
     deleteQueue(meshId: string): void {
