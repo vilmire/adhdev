@@ -273,6 +273,18 @@ export function getConfigDir(): string {
 }
 
 /**
+ * Get the daemon runtime data directory (~/.adhdev/daemon/).
+ * Distinct from the user-config dir so runtime state can be cleared independently.
+ */
+export function getDaemonDataDir(): string {
+    const dir = join(getConfigDir(), 'daemon');
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+    }
+    return dir;
+}
+
+/**
  * Get the config file path
  */
 function getConfigPath(): string {

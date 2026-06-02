@@ -10,7 +10,7 @@
 
 import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { getConfigDir } from '../config/config.js';
+import { getDaemonDataDir } from '../config/config.js';
 
 export interface CoordinatorRegistryEntry {
     meshId: string;
@@ -22,7 +22,7 @@ export interface CoordinatorRegistryEntry {
 const _registry = new Map<string, CoordinatorRegistryEntry>();
 
 function getRegistryPath(): string {
-    return join(getConfigDir(), 'mesh-coordinators.json');
+    return join(getDaemonDataDir(), 'mesh-coordinators.json');
 }
 
 /** Load persisted coordinator registry from disk into in-memory map. Called once on daemon boot. */
