@@ -7,6 +7,7 @@ import {
     useMemo,
     useRef,
     useState,
+    useSyncExternalStore,
     type Dispatch,
     type SetStateAction,
 } from 'react'
@@ -37,6 +38,7 @@ import {
     type DashboardStoredHiddenTabLocation,
 } from '../../utils/dashboardLayoutStorage'
 import { getConversationInboxSurfaceState, type LiveSessionInboxState } from './DashboardMobileChatShared'
+import { getChatTyping, subscribeChatTyping } from './chat-typing-indicator-store'
 import { getPreferredConversationForIde } from './conversation-sort'
 import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
@@ -569,10 +571,30 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
     const surfaceState = getConversationInboxSurfaceState(conversation, ctx.liveSessionInboxState, {
         isOpenConversation: isActive,
     })
-    
+
+    // The tab spinner used to derive isGenerating from surfaceState alone,
+    // which in turn read conversation.status. ChatPane's chat-bubble
+    // "Agent generating..." typing indicator also reads from the same
+    // conversation but through a separate render snapshot, so the two
+    // surfaces could fall out of sync (Playwright showed a 25s+ window
+    // where tab=idle but chat=generating). The user asked that the tab
+    // follow the typing-indicator's decision instead of independently
+    // recomputing it. Subscribe to the chat-typing store ChatPane
+    // publishes to, and OR that into the existing signal so the surfaces
+    // can never diverge in the "chat still says generating but tab
+    // cleared" direction. The reverse (tab generating but chat already
+    // settled) cannot happen — both branches must hold for the tab to
+    // light up.
+    const chatTypingSessionId = conversation.sessionId
+    const isTypingFromStore = useSyncExternalStore(
+        useCallback((listener) => subscribeChatTyping(listener), []),
+        () => getChatTyping(chatTypingSessionId),
+        () => getChatTyping(chatTypingSessionId),
+    )
+
     const isReconnecting = surfaceState.isReconnecting
     const isConnecting = surfaceState.isConnecting
-    const isGenerating = surfaceState.isGenerating
+    const isGenerating = surfaceState.isGenerating || isTypingFromStore
     const isWaiting = surfaceState.isWaiting
     const isTaskCompleteUnread = surfaceState.unread
     const shortcut = ctx.tabShortcuts[conversation.tabKey]

@@ -32,6 +32,7 @@ import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages } from '.
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { buildVisibleConversationMessages, getConversationLiveMessages } from './conversation-message-snapshot';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
+import { publishChatTyping } from './chat-typing-indicator-store';
 import { buildGitSystemBubbleMessages } from './git-system-bubbles';
 import {
     CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY,
@@ -97,6 +98,24 @@ export default function ChatPane({
     });
 
     const viewStates = React.useMemo(() => getConversationViewStates(activeConv), [activeConv.status, activeConv.connectionState]);
+
+    // The chat-bubble "Agent generating..." indicator is the
+    // authoritative signal for "this session is currently generating".
+    // Publish it to the shared store so the tab spinner reads the same
+    // value (the user reported the two surfaces could diverge for ~25s+
+    // because each computed isGenerating from its own snapshot of
+    // conversation.status).
+    React.useEffect(() => {
+        const sessionId = activeConv.sessionId;
+        if (!sessionId) return;
+        publishChatTyping(sessionId, viewStates.isGenerating);
+        return () => {
+            // Clear our claim when this ChatPane instance unmounts (tab
+            // closed, tab switched away). The next ChatPane to mount for
+            // the same session re-publishes from its own viewStates.
+            publishChatTyping(sessionId, false);
+        };
+    }, [activeConv.sessionId, viewStates.isGenerating]);
     const controlsContext = useMemo(
         () => getConversationControlsContext(activeConv, ideEntry),
         [activeConv, ideEntry],
