@@ -26,12 +26,24 @@ const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
 const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
 const CLI_NATIVE_HISTORY_FRESH_MS = 5 * 60_000;
-// Fallback list for supportsCliNativeTranscript() when the ProviderModule is
-// unavailable (e.g. provider config not yet loaded). The authoritative check is
-// provider.canonicalHistory via isNativeSourceCanonicalHistory(). New providers
-// with native transcripts should set canonicalHistory in their provider.json
-// rather than adding entries here.
+// Hardcoded native-transcript provider allow-list. Deprecated. Kept only as a
+// last-resort fallback when ProviderModule is not yet loaded; on every hit we
+// warn so the dependency on this set is visible. A2 deletes the set entirely
+// and routes solely through canonicalHistory.contractVersion +
+// isNativeSourceCanonicalHistory().
 const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli', 'hermes-cli', 'antigravity-cli']);
+const warnedLegacyNativeAllowlistHits = new Set<string>();
+function warnLegacyNativeAllowlistHit(providerType: string): void {
+    if (warnedLegacyNativeAllowlistHits.has(providerType)) return;
+    warnedLegacyNativeAllowlistHits.add(providerType);
+    // eslint-disable-next-line no-console
+    console.warn(
+        `[chat-commands] supportsCliNativeTranscript fell back to the hardcoded `
+        + `CLI_NATIVE_TRANSCRIPT_PROVIDERS set for "${providerType}". `
+        + `The provider module was unavailable or did not declare canonicalHistory. `
+        + `Set canonicalHistory.contractVersion in the provider.json to remove this dependency.`,
+    );
+}
 const recentSendByTarget = new Map<string, number>();
 
 interface ApprovalSelectableInstance extends ProviderInstance {
@@ -551,8 +563,21 @@ function isCurrentRuntimePtySafelyAttributed(args: {
 }
 
 function supportsCliNativeTranscript(providerType: string, provider?: ProviderModule): boolean {
-    if (CLI_NATIVE_TRANSCRIPT_PROVIDERS.has(providerType)) return true;
-    return provider?.category === 'cli' && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
+    // Preferred path: the provider module declares canonicalHistory in its
+    // provider.json. We trust that declaration regardless of the legacy
+    // allow-list. A2 will additionally require canonicalHistory.contractVersion
+    // to be a supported value (transcript-v2.ts).
+    if (provider?.category === 'cli' && isNativeSourceCanonicalHistory(provider?.canonicalHistory)) {
+        return true;
+    }
+    // Last-resort fallback for early call sites where the provider module is
+    // not yet loaded. Warn once per provider type so this dependency is visible
+    // and can be removed in A2.
+    if (CLI_NATIVE_TRANSCRIPT_PROVIDERS.has(providerType)) {
+        warnLegacyNativeAllowlistHit(providerType);
+        return true;
+    }
+    return false;
 }
 
 function getComparableVisibleText(message: ChatMessage | undefined): string {
