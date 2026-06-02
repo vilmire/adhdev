@@ -422,11 +422,35 @@ function handleNativePresent(
     return handleNativeUnavailable(prev, 'empty', at, lockedSince);
   }
 
-  // From PtyOnly: sticky. Only an exact match of the original superset rule
-  // re-locks; anything else stays PtyOnly. This is the only state where
-  // re-locking from native_present requires meeting the old watermark
-  // without first going through Recovering.
-  if (prev.nativeSequencePeak === undefined || incomingPeak >= prev.nativeSequencePeak) {
+  // From PtyOnly: sticky for transient native blips. A re-lock requires
+  // either (a) meeting the historical watermark with a superset of the
+  // previously committed unit keys (strict path, kept for compatibility),
+  // OR (b) the incoming peak being meaningfully ahead of the historical
+  // watermark even with a different (tail-limited) message slice. The
+  // second case handles the common reality where consumers ask for
+  // different tail lengths across reads — the resulting unit-key sets are
+  // *subsets* of each other, not supersets, so the strict path traps the
+  // machine in PtyOnly even though native is clearly healthy and ahead.
+  if (prev.nativeSequencePeak === undefined || incomingPeak > prev.nativeSequencePeak) {
+    // Strictly ahead of the previous peak with non-partial coverage and a
+    // non-empty key set: native has clearly progressed; trust it.
+    if (observation.coverage !== 'partial' && incomingUnitKeys.size > 0) {
+      const next: ChatSourceState = {
+        name: 'NativeLocked',
+        nativeSequencePeak: Math.max(prev.nativeSequencePeak ?? incomingPeak, incomingPeak),
+        committedUnitKeys: incomingUnitKeys,
+        recoveringMisses: 0,
+      };
+      return {
+        next,
+        selected: 'native-history',
+        transition: { fromState, toState: 'NativeLocked', event: 'NativeProgressed', cause: 'native_progressed', at },
+        lockState: { locked: true, lockedSince: at },
+      };
+    }
+  } else if (incomingPeak >= prev.nativeSequencePeak) {
+    // Equal-peak observation only re-locks when the superset rule holds
+    // (the original strict behaviour).
     if (isSupersetOf(incomingUnitKeys, prev.committedUnitKeys)
         && observation.coverage !== 'partial') {
       const next: ChatSourceState = {
