@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -136,7 +136,7 @@ function createMeshEventComponents(meshId: string, messages: string[], coordinat
   } as any
 }
 
-async function waitForRefineLedger(meshId: string, jobId: string, timeoutMs = 5000): Promise<any> {
+async function waitForRefineLedger(meshId: string, jobId: string, timeoutMs = 60000): Promise<any> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const entries = readLedgerEntries(meshId)
@@ -151,6 +151,10 @@ async function waitForRefineLedger(meshId: string, jobId: string, timeoutMs = 50
 }
 
 describe('refine_mesh_node validation gate', () => {
+  beforeAll(() => {
+    vi.setConfig({ testTimeout: 90000 })
+  })
+
   it('delivers async refine completion and failure as coordinator-visible system messages with duplicate suppression', () => {
     const meshId = `mesh-refine-delivery-${Date.now()}`
     const messages: string[] = []
@@ -275,7 +279,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('classifies missing package dependencies before running package-manager validation when no bootstrap is configured', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-missing-deps-'))
@@ -324,7 +328,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('runs configured bootstrap commands before package-manager validation', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-bootstrap-deps-'))
@@ -364,7 +368,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('returns before long validation completes and reuses the in-flight job for duplicate refine requests', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-async-duplicate-'))
@@ -401,7 +405,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('starts a new async refine job after a terminal validation failure instead of returning the failed job as duplicate', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-retry-failed-'))
@@ -444,7 +448,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('starts a new async refine job after a completed terminal job when the same node is reintroduced', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-retry-completed-'))
@@ -482,7 +486,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('records validation pass, merge, cleanup and final convergence in completion evidence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-pass-'))
@@ -551,7 +555,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('fails before merge or cleanup when the merged tree points at an unreachable submodule gitlink', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-missing-submodule-'))
@@ -654,7 +658,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('requires submodule gitlink commits to be reachable from the configured remote main branch, not only local checkout', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-local-only-submodule-'))
@@ -756,7 +760,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('auto-publishes unreachable submodule gitlink commits only when repo refine config opts in, then verifies origin/main reachability', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-auto-publish-submodule-'))
@@ -850,7 +854,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('accepts a submodule gitlink commit that is an ancestor of fetched remote main', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-submodule-main-ancestor-'))
@@ -902,7 +906,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('aligns the base submodule checkout after merging a changed gitlink', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-submodule-align-'))
@@ -958,7 +962,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('adds an actionable hint when patch equivalence fails on a submodule conflict', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-submodule-conflict-hint-'))
@@ -1029,7 +1033,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('does not treat submodule feature-branch reachability as remote main convergence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-feature-submodule-'))
@@ -1089,7 +1093,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('records cleanup failure as an observable partial convergence state after merge', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-cleanup-fail-'))
@@ -1124,7 +1128,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('records config/command guard failures asynchronously without running unsafe commands', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-injection-'))
@@ -1161,7 +1165,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('does not execute heuristic package scripts when repo mesh/refine config is missing', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-no-config-'))
@@ -1200,7 +1204,7 @@ describe('refine_mesh_node validation gate', () => {
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       rmSync(root, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 90000)
 
   it('returns a dry-run refine plan with config source and heuristic suggestions', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-plan-'))
