@@ -1971,6 +1971,19 @@ class StandaloneServer {
         client.send(msg);
       }
     }
+    // (status flicker fix) The dashboard consumes session status from two
+    // channels: the legacy `type: 'status'` snapshot broadcast above and the
+    // `daemon.metadata` topic. Every status change should push BOTH so the
+    // various UI surfaces (tab badge, chat bubble "Agent generating..."
+    // indicator, chat input "Send queues your message" hint) all see the
+    // transition at the same time. Without this, daemon.metadata subscribers
+    // kept their stale generating snapshot until the next provider-script
+    // invocation, which is what the user observed:
+    //
+    //   "탭하고 채팅안에 제너레이팅하고 채팅입력창하고 다 같은 소스를 보는게
+    //    아닌거같은데 ... 출력이 완료되었음에도 Agent generating... 로
+    //    보여지는중."
+    void this.flushWsDaemonMetadataSubscriptions();
   }
 
   // ─── Network ───

@@ -810,12 +810,20 @@ export class CliStateEngine {
         this.pendingIdleFinishTimer = setTimeout(() => {
             this.pendingIdleFinishTimer = null;
             this.pendingIdleFinishAt = 0;
-            // Final guard: the grace window may have ended without
-            // applyGenerating firing, but a separate path may have already
-            // moved us out of "we owe an idle transition". Only commit when
-            // we are not waiting for a response AND not currently generating.
+            // If a new user turn started during the grace window, we owe
+            // generating semantics to that turn — do not retroactively idle.
             if (this.isWaitingForResponse) return;
-            if (this.currentStatus === 'generating') return;
+            // The timer firing without a cancelPendingIdleFinish call means
+            // no fresh applyGenerating happened during the grace window;
+            // the previous fake-blip is over. Commit the idle.
+            //
+            // Note: the previous "currentStatus === 'generating' → return"
+            // guard caused stuck-generating sessions — finishResponse leaves
+            // currentStatus='generating' on purpose (so the dashboard keeps
+            // the spinner during the 2s grace), and then the timer fired
+            // without cancellation but refused to commit because the very
+            // status we are about to transition out of was still set.
+            // Re-checking currentStatus there meant idle was unreachable.
             this.setStatus('idle', reason);
             this.callbacks.onStatusChange();
         }, IDLE_CONFIRMATION_GRACE_MS);
