@@ -542,15 +542,40 @@ class StandaloneServer {
   }
 
   private isTrustedStandaloneMutationRequest(req: IncomingMessage): boolean {
-    const originHeader = req.headers.origin;
-    if (typeof originHeader !== 'string' || !originHeader.trim()) return true;
+    return this.isAllowedOrigin(req);
+  }
+
+  /**
+   * Allow same-origin requests, requests without an Origin header (curl, native
+   * fetches that omit it), and the well-known dashboard dev origins on
+   * loopback. Cross-origin browser requests from arbitrary websites are
+   * rejected — this is what blocks the no-auth-default exploitation reported
+   * by external researchers where a malicious page reads /api/v1/status or
+   * fires /api/v1/command on the locally-bound daemon.
+   */
+  private isAllowedOrigin(req: IncomingMessage): boolean {
+    const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+    if (!originHeader) return true;
     try {
       const origin = new URL(originHeader);
       const host = req.headers.host || '';
-      return origin.host === host;
+      if (origin.host === host) return true;
+      const hostname = (origin.hostname || '').toLowerCase();
+      const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+      // Vite dev server (3000) and our own served dashboard ports we know
+      // about. Only honor when the request is coming TO a loopback bind.
+      if (isLoopback && (this.listenHost === '127.0.0.1' || this.listenHost === 'localhost' || this.listenHost === '::1' || this.listenHost === '0.0.0.0')) {
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
+  }
+
+  private originHeaderFor(req: IncomingMessage): string | null {
+    const o = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+    return o || null;
   }
 
   private async readJsonBody(req: IncomingMessage): Promise<Record<string, any>> {
@@ -679,6 +704,16 @@ class StandaloneServer {
     this.httpServer.on('upgrade', (req, socket, head) => {
       const wsUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
       if (wsUrl.pathname === '/ws') {
+        // (fix) Validate Origin before upgrade. ws spec lets any browser open
+        // a WS to localhost:3847 from any page; without an Origin check the
+        // page subscribes to topic_update streams and can dispatch commands
+        // through the WS path. We rely on isAllowedOrigin which matches the
+        // HTTP CORS gate.
+        if (!this.isAllowedOrigin(req)) {
+          socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+          socket.destroy();
+          return;
+        }
         if (!this.isRequestAuthenticated(req, req.url || '/')) {
           socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
           socket.destroy();
@@ -775,13 +810,37 @@ class StandaloneServer {
       return sharedSnapshotCache;
     };
 
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // CORS — only advertise the request's own origin when allowed. Defaulting
+    // to '*' let any website read /api/v1/status and POST commands to the
+    // locally-bound daemon (reported by an external researcher; reproduced).
+    const requestOrigin = this.originHeaderFor(req);
+    const originAllowed = this.isAllowedOrigin(req);
+    if (requestOrigin) {
+      res.setHeader('Vary', 'Origin');
+      if (originAllowed) {
+        res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+      }
+    } else {
+      // No-Origin requests (curl, native http clients) — no need to echo.
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (method === 'OPTIONS') {
+      if (requestOrigin && !originAllowed) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Cross-origin request rejected.' }));
+        return;
+      }
       res.writeHead(204);
       res.end();
+      return;
+    }
+    // Reject cross-origin actual requests outright. GET/HEAD with an Origin
+    // header is browser-issued so this catches the simple-request bypass.
+    if (requestOrigin && !originAllowed) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Cross-origin request rejected.' }));
       return;
     }
 
