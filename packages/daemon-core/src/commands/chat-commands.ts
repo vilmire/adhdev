@@ -308,7 +308,15 @@ function readHistorySessionIdFromMessages(messages: ChatMessage[]): string | und
 function shouldPreserveNativeIdentity(providerType: string, sessionId: string, message: ChatMessage): boolean {
     const providerUnitKey = typeof message.providerUnitKey === 'string' ? message.providerUnitKey.trim() : '';
     const turnKey = typeof message._turnKey === 'string' ? message._turnKey.trim() : '';
-    if (!providerUnitKey || !turnKey) return false;
+    if (!providerUnitKey) return false;
+    // (A2.3) v2 stamped identity is producer-owned and globally stable; trust it
+    // unconditionally. Producers may omit _turnKey (the daemon recomputes it
+    // from the current ordering), so do not require turnKey for v2 messages.
+    if (providerUnitKey.startsWith('v2:') || providerUnitKey.startsWith('v2-pty:')) {
+        return true;
+    }
+    // v1 identity always required both keys to be present.
+    if (!turnKey) return false;
     if (providerType === 'hermes-cli' && sessionId) {
         return providerUnitKey.startsWith(`${providerType}:native:${sessionId}:`)
             && turnKey.startsWith(`${providerType}:native-turn:${sessionId}:`);
@@ -343,6 +351,18 @@ function normalizeNativeHistoryMessages(providerType: string, messages: ChatMess
         const meta = message.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : undefined;
         const isSystemSessionStart = role === 'system' || kind === 'system' || kind === 'session_start';
         const isActivity = role === 'assistant' && (kind === 'tool' || kind === 'terminal' || kind === 'thought');
+        // (A2.3) sequence emit. Producer-supplied wins (v2-stamped messages
+        // bring their own monotonic sequence); otherwise derive from
+        // receivedAt/timestamp; otherwise positional. Always present on the
+        // output so consumers (ChatSourceMachine) have a stable ordering key.
+        const existingSequence = typeof (message as any).sequence === 'number'
+            && Number.isFinite((message as any).sequence)
+                ? (message as any).sequence
+                : null;
+        const tsCandidate = Number(message.receivedAt || message.timestamp || 0);
+        const sequence = existingSequence !== null
+            ? existingSequence
+            : (tsCandidate > 0 ? tsCandidate : index);
         return {
             ...message,
             role: role === 'human' ? 'user' : (role || 'assistant'),
@@ -352,6 +372,7 @@ function normalizeNativeHistoryMessages(providerType: string, messages: ChatMess
                 && preserveNativeIdentity
                 ? message.bubbleId.trim()
                 : `bubble:${providerUnitKey}`,
+            sequence,
             _turnKey: preserveNativeIdentity
                 ? existingTurnKey
                 : `${providerType}:native-turn:${nativeIdentitySessionId || 'workspace'}:${turnIndex}`,

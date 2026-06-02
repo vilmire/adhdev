@@ -1375,19 +1375,42 @@ function normalizeProviderNativeHistoryRecords(agentType: string, historySession
     if (!Array.isArray(records)) return [];
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
     return records
-        .map((record: any) => sanitizeHistoryMessage(agentType, {
-            ts: typeof record?.ts === 'string' ? record.ts : new Date(Number(record?.receivedAt) || Date.now()).toISOString(),
-            receivedAt: Number(record?.receivedAt) || Date.parse(record?.ts || '') || Date.now(),
-            role: record?.role,
-            content: String(record?.content || ''),
-            kind: record?.kind || (record?.role === 'system' ? 'session_start' : 'standard'),
-            senderName: record?.senderName,
-            agent: agentType,
-            instanceId: record?.instanceId,
-            historySessionId: normalizeSavedHistorySessionId(record?.historySessionId || normalizedSessionId),
-            sessionTitle: record?.sessionTitle,
-            workspace: record?.workspace,
-        } as HistoryMessage))
+        .map((record: any) => {
+            const base: HistoryMessage = {
+                ts: typeof record?.ts === 'string' ? record.ts : new Date(Number(record?.receivedAt) || Date.now()).toISOString(),
+                receivedAt: Number(record?.receivedAt) || Date.parse(record?.ts || '') || Date.now(),
+                role: record?.role,
+                content: String(record?.content || ''),
+                kind: record?.kind || (record?.role === 'system' ? 'session_start' : 'standard'),
+                senderName: record?.senderName,
+                agent: agentType,
+                instanceId: record?.instanceId,
+                historySessionId: normalizeSavedHistorySessionId(record?.historySessionId || normalizedSessionId),
+                sessionTitle: record?.sessionTitle,
+                workspace: record?.workspace,
+            } as HistoryMessage;
+            // (A2.3 v2 identity passthrough) — if the producer (native_history.js)
+            // emitted v2 stable identity, keep it across the sanitize layer so
+            // downstream (chat-commands.ts normalizeNativeHistoryMessages) sees
+            // the producer's contract output instead of recomputing from index
+            // and content hash. v1 producers without these fields are unaffected.
+            if (typeof record?.providerUnitKey === 'string' && record.providerUnitKey) {
+                (base as any).providerUnitKey = record.providerUnitKey;
+            }
+            if (typeof record?.bubbleId === 'string' && record.bubbleId) {
+                (base as any).bubbleId = record.bubbleId;
+            }
+            if (typeof record?.sequence === 'number' && Number.isFinite(record.sequence)) {
+                (base as any).sequence = record.sequence;
+            }
+            if (typeof record?._turnKey === 'string' && record._turnKey) {
+                (base as any)._turnKey = record._turnKey;
+            }
+            if (typeof record?.bubbleState === 'string' && record.bubbleState) {
+                (base as any).bubbleState = record.bubbleState;
+            }
+            return sanitizeHistoryMessage(agentType, base);
+        })
         .filter(Boolean) as HistoryMessage[];
 }
 

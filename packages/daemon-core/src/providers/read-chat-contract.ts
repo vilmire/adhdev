@@ -79,6 +79,9 @@ function validateMessage(message: unknown, source: string, index: number): ChatM
   if (isFiniteNumber(message.index)) normalized.index = message.index
   if (isFiniteNumber(message.timestamp)) normalized.timestamp = message.timestamp
   if (isFiniteNumber(message.receivedAt)) normalized.receivedAt = message.receivedAt
+  // (A2.3) sequence is the monotonic ordering key consumed by ChatSourceMachine.
+  // v1 producers omit it; the daemon derives it in normalizeNativeHistoryMessages.
+  if (isFiniteNumber(message.sequence)) normalized.sequence = message.sequence
   if (typeof message._turnKey === 'string') normalized._turnKey = message._turnKey
   if (Array.isArray(message.toolCalls)) normalized.toolCalls = message.toolCalls as ChatMessage['toolCalls']
   if (isPlainObject(message.meta)) normalized.meta = message.meta as ChatMessage['meta']
