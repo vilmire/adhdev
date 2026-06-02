@@ -1378,11 +1378,15 @@ export class ProviderLoader {
       return args ? args.map((arg) => /\s/.test(arg) ? JSON.stringify(arg) : arg).join(' ') : '';
     }
     const schemaDef = this.getSettingsSchema(providerType)[key];
-    const defaultVal = schemaDef
-      ? (key === 'autoApprove' && schemaDef.type === 'boolean'
-        ? true
-        : schemaDef.default)
-      : undefined;
+    // (fix) Previously this hard-coded `autoApprove` boolean default to `true`,
+    // overriding whatever schemaDef.default the provider.json declared. That
+    // surfaced as soon as a provider added an `autoApprove` schema entry with
+    // default=false: the user had never opted in but the daemon treated the
+    // session as auto-approve, which then triggered recordAutoApproval every
+    // time the CLI showed an approval modal — producing a flood of system
+    // "Auto-approved: ..." messages and keeping the session pinned to
+    // generating while modals cycled in and out. Trust the schemaDef.default.
+    const defaultVal = schemaDef ? schemaDef.default : undefined;
 
     const config = this.readConfig();
     const userVal = config?.providerSettings?.[providerType]?.[key];
@@ -1496,10 +1500,17 @@ export class ProviderLoader {
       ...this.getSyntheticSettings(type, provider),
       ...(provider.settings || {}),
     };
+    // (fix) Previously this clause forced `autoApprove.default = true` for any
+    // boolean autoApprove schema, even when the provider.json explicitly set
+    // `default: false`. Combined with the synthetic-settings fallback at
+    // getSyntheticSettings (which also defaults autoApprove to true when the
+    // provider doesn't supply one), that meant CLI providers silently turned on
+    // auto-approval, producing a flood of "Auto-approved: ..." system messages
+    // every time an approval modal appeared and pinning the session to
+    // generating while modals cycled. Trust the provider's declared default.
     if (result.autoApprove?.type === 'boolean') {
       result.autoApprove = {
         ...result.autoApprove,
-        default: true,
         public: true,
         label: result.autoApprove.label || 'Auto Approve',
         description: result.autoApprove.description || 'Automatically approve actionable prompts without sending approval alerts.',
@@ -1524,7 +1535,10 @@ export class ProviderLoader {
     if (!provider.settings?.autoApprove) {
       result.autoApprove = {
         type: 'boolean',
-        default: true,
+        // (fix) Safe default is *off*. Auto-approving every modal without the
+        // user opting in produced silent-bash-execution surprises and the
+        // "Auto-approved: ..." system-message flood seen on AGY/Codex.
+        default: false,
         public: true,
         label: 'Auto Approve',
         description: 'Automatically approve actionable prompts without sending approval alerts.',

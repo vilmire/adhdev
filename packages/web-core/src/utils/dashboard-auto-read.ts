@@ -86,11 +86,17 @@ export function getDesktopAutoReadPlan(input: DesktopAutoReadPlanInput): Desktop
     unread ? '1' : '0',
   ].join(':')
 
+  // Mark-seen fires whenever the live state says the session is unread in the
+  // task_complete bucket. We previously also required `completionMarker` to be
+  // present and differ from `seenCompletionMarker`, which meant sessions whose
+  // provider doesn't emit a stable marker (e.g. CLI providers that don't supply
+  // a turn id) could never auto-clear — the user had to click the bell. When
+  // there is no marker we still want to update `lastSeenAt` so the timestamp-
+  // based unread computation downstream resolves to false.
   const shouldMarkSeen = !!(
     inboxBucket === 'task_complete'
     && unread
-    && completionMarker
-    && completionMarker !== seenCompletionMarker
+    && (!completionMarker || completionMarker !== seenCompletionMarker)
   )
 
   return {
