@@ -50,6 +50,8 @@ export interface ActiveConversation {
     connectionState?: string;
     sessionCapabilities?: string[];
     settings?: Record<string, any>;
+    /** Set when this session is acting as a mesh coordinator. Survives daemon restart via registry. */
+    coordinator?: { meshId: string; role: 'coordinator' };
     meshQueueStats?: {
         total?: number;
         active?: number;

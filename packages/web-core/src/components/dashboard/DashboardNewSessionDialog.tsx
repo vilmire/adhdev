@@ -91,7 +91,7 @@ export function LaunchCategorySelector({
             <div className="flex flex-wrap gap-2">
                 {([
                     { id: 'cli', label: 'CLI', enabled: cliEnabled },
-                    { id: 'ide', label: 'IDE', enabled: ideEnabled },
+                    { id: 'ide', label: 'Workspace', enabled: ideEnabled },
                     { id: 'acp', label: 'ACP', enabled: acpEnabled },
                 ] as const).map(kind => (
                     <button

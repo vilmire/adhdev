@@ -218,6 +218,8 @@ export interface BaseDaemonData {
     /** @internal Status payload included an explicit sessions list, even if empty. */
     _sessionListAuthoritative?: boolean;
     settings?: Record<string, any>;
+    /** Set when this session is acting as a mesh coordinator for the given mesh. */
+    coordinator?: { meshId: string; role: 'coordinator' };
     meshQueueStats?: {
         total?: number;
         active?: number;

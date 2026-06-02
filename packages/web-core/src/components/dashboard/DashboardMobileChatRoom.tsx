@@ -65,8 +65,7 @@ export default function DashboardMobileChatRoom({
     const isCli = isCliConv(selectedConversation) && !isAcp
     const isCliTerminal = isCli && cliViewMode === 'terminal'
     const meshGraphAvailable = !!selectedConversation.daemonId
-        && typeof selectedConversation.settings?.meshCoordinatorFor === 'string'
-        && selectedConversation.settings.meshCoordinatorFor.length > 0
+        && !!(selectedConversation.coordinator?.meshId || selectedConversation.settings?.meshCoordinatorFor)
     const headerPaddingClass = isStandalone
         ? 'px-4 pt-3.5 pb-2.5'
         : 'px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-2.5'

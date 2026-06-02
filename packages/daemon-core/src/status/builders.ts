@@ -25,6 +25,7 @@ import {
     type NormalizeActiveChatOptions,
 } from './normalize.js';
 import { getMeshQueueStats } from '../mesh/mesh-work-queue.js';
+import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import { normalizeProviderStateControlValues } from '../providers/provider-patch-state.js';
 import { normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import {
@@ -164,7 +165,7 @@ const ACP_SESSION_CAPABILITIES: SessionCapability[] = [
     'set_thought_level',
 ];
 
-function buildIdeWorkspaceSession(
+function buildWorkspaceSession(
     state: IdeProviderState,
     cdpManagers: Map<string, DaemonCdpManager>,
     options: SessionEntryBuildOptions,
@@ -179,7 +180,10 @@ function buildIdeWorkspaceSession(
     const git = getGitSummaryForWorkspace(workspace, options);
     const title = activeChat?.title || state.name;
     const meshCoordinatorFor = state.settings?.meshCoordinatorFor as string | undefined;
-    const meshQueueStats = meshCoordinatorFor ? getMeshQueueStats(meshCoordinatorFor) : undefined;
+    const registryEntry = state.instanceId ? getCoordinatorForSession(state.instanceId) : undefined;
+    const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
+    const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
+    const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
     return {
         id: state.instanceId || state.type,
         parentId: null,
@@ -203,6 +207,7 @@ function buildIdeWorkspaceSession(
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
         settings: state.settings,
+        ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
     };
 }
@@ -221,7 +226,10 @@ function buildExtensionAgentSession(
     const workspace = parent.workspace || null;
     const git = getGitSummaryForWorkspace(workspace, options);
     const meshCoordinatorFor = ext.settings?.meshCoordinatorFor as string | undefined;
-    const meshQueueStats = meshCoordinatorFor ? getMeshQueueStats(meshCoordinatorFor) : undefined;
+    const registryEntry = ext.instanceId ? getCoordinatorForSession(ext.instanceId) : undefined;
+    const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
+    const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
+    const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
     return {
         id: ext.instanceId || `${parent.instanceId}:${ext.type}`,
         parentId: parent.instanceId || parent.type,
@@ -245,6 +253,7 @@ function buildExtensionAgentSession(
         errorReason: ext.errorReason,
         lastUpdated: ext.lastUpdated,
         settings: ext.settings,
+        ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
     };
 }
@@ -287,7 +296,10 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
     const workspace = state.workspace || null;
     const git = getGitSummaryForWorkspace(workspace, options);
     const meshCoordinatorFor = state.settings?.meshCoordinatorFor as string | undefined;
-    const meshQueueStats = meshCoordinatorFor ? getMeshQueueStats(meshCoordinatorFor) : undefined;
+    const registryEntry = state.instanceId ? getCoordinatorForSession(state.instanceId) : undefined;
+    const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
+    const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
+    const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
     return {
         id: state.instanceId,
         parentId: null,
@@ -327,6 +339,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
         settings: state.settings,
+        ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
     };
 }
@@ -341,7 +354,10 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
     const workspace = state.workspace || null;
     const git = getGitSummaryForWorkspace(workspace, options);
     const meshCoordinatorFor = state.settings?.meshCoordinatorFor as string | undefined;
-    const meshQueueStats = meshCoordinatorFor ? getMeshQueueStats(meshCoordinatorFor) : undefined;
+    const registryEntry = state.instanceId ? getCoordinatorForSession(state.instanceId) : undefined;
+    const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
+    const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
+    const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
     return {
         id: state.instanceId,
         parentId: null,
@@ -364,6 +380,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
         settings: state.settings,
+        ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
     };
 }
@@ -380,7 +397,7 @@ export function buildSessionEntries(
     const acpStates = allStates.filter((s): s is AcpProviderState => s.category === 'acp');
 
     for (const state of ideStates) {
-        sessions.push(buildIdeWorkspaceSession(state, cdpManagers, options));
+        sessions.push(buildWorkspaceSession(state, cdpManagers, options));
         for (const ext of state.extensions as ExtensionProviderState[]) {
             if (!shouldIncludeExtensionSession(ext)) continue;
             sessions.push(buildExtensionAgentSession(state, ext, options));

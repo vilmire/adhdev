@@ -18,6 +18,7 @@ import { loadConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
+import { unregisterMeshCoordinator } from '../mesh/coordinator-registry.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
@@ -577,6 +578,7 @@ export class DaemonCliManager {
                             this.deps.removeAgentTracking(key);
                             sessionRegistry?.unregisterByInstanceKey(key);
                             instanceManager?.removeInstance(key);
+                            unregisterMeshCoordinator(key);
                             LOG.info('CLI', `🧹 Auto-cleaned ${status.status} CLI: ${cliType}`);
                             this.deps.onStatusChange();
                         }
@@ -903,6 +905,7 @@ export class DaemonCliManager {
             this.deps.removeAgentTracking(key);
             this.deps.getSessionRegistry?.()?.unregisterByInstanceKey(key);
             this.deps.getInstanceManager()?.removeInstance(key);
+            unregisterMeshCoordinator(key);
             LOG.info('CLI', `🛑 Agent stopped: ${adapter.cliType} in ${adapter.workingDir}`);
             this.deps.onStatusChange();
         } else {
@@ -912,6 +915,7 @@ export class DaemonCliManager {
                 this.deps.getSessionRegistry?.()?.unregisterByInstanceKey(key);
                 im.removeInstance(key);
                 this.deps.removeAgentTracking(key);
+                unregisterMeshCoordinator(key);
                 LOG.warn('CLI', `🧹 Force-removed orphan entry: ${key}`);
                 this.deps.onStatusChange();
             }

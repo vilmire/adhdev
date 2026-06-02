@@ -197,7 +197,7 @@ export default function DashboardHeader({
     const { ides, p2pStates = {} } = useBaseDaemons();
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
     const isAcpActive = !!activeConv && isAcpConv(activeConv);
-    const meshGraphAvailable = !!activeConv?.daemonId && typeof activeConv?.settings?.meshCoordinatorFor === 'string' && activeConv.settings.meshCoordinatorFor.length > 0
+    const meshGraphAvailable = !!activeConv?.daemonId && !!activeConv?.coordinator?.meshId
     const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
     const [isHiddenDropTarget, setIsHiddenDropTarget] = useState(false);
     const inboxRef = useRef<HTMLDivElement | null>(null);

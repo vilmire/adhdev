@@ -37,6 +37,7 @@ import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
+import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 
 // ─── Init Config ───
 
@@ -131,6 +132,7 @@ export interface DaemonDevSupportOptions {
 export async function initDaemonComponents(config: DaemonInitConfig): Promise<DaemonComponents> {
     // 1. Global log interceptor
     installGlobalInterceptor();
+    loadMeshCoordinatorRegistry();
 
     // 2. ProviderLoader (provider source mode from config.json)
     const appConfig = loadConfig();
