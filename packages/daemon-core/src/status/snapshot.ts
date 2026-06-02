@@ -297,18 +297,30 @@ export function getSessionCompletionMarker(session: {
             receivedAt?: number | string;
             timestamp?: number | string;
             _turnKey?: string;
+            kind?: string;
         }> | null
     } | null
 }) {
-    const lastMessage = session.activeChat?.messages?.at?.(-1);
-    if (!lastMessage) return '';
-    const role = typeof lastMessage.role === 'string' ? lastMessage.role : '';
-    if (role === 'user' || role === 'human' || role === 'system') return '';
-    if (typeof lastMessage._turnKey === 'string' && lastMessage._turnKey) return `turn:${lastMessage._turnKey}`;
-    if (typeof lastMessage.id === 'string' && lastMessage.id) return `id:${lastMessage.id}`;
-    if (typeof lastMessage.index === 'number' && Number.isFinite(lastMessage.index)) return `idx:${lastMessage.index}`;
-    const timestamp = getMessageEventTime(lastMessage);
-    return timestamp > 0 ? `ts:${timestamp}` : '';
+    const messages = session.activeChat?.messages;
+    if (!Array.isArray(messages) || messages.length === 0) return '';
+    // Walk backwards until we find an assistant message that's not a tool call,
+    // or a user/human message (which ends the turn). System messages and tool
+    // messages don't gate "task completion" — they can't be acknowledged
+    // independently and rotate too aggressively for marker-based bell clearing.
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const m = messages[i];
+        const role = typeof m?.role === 'string' ? m.role : '';
+        const kind = typeof m?.kind === 'string' ? m.kind : '';
+        if (role === 'user' || role === 'human') return '';
+        if (role === 'system') continue;
+        if (kind === 'tool') continue;
+        if (typeof m._turnKey === 'string' && m._turnKey) return `turn:${m._turnKey}`;
+        if (typeof m.id === 'string' && m.id) return `id:${m.id}`;
+        if (typeof m.index === 'number' && Number.isFinite(m.index)) return `idx:${m.index}`;
+        const timestamp = getMessageEventTime(m);
+        return timestamp > 0 ? `ts:${timestamp}` : '';
+    }
+    return '';
 }
 
 function getSessionLastUsedAt(session: {
@@ -347,9 +359,21 @@ function getUnreadState(
     if (status === 'generating' || status === 'starting') {
         return { unread: false, inboxBucket: 'working' };
     }
+    // Read-state resolution:
+    // - When provider supplies a `completionMarker`, prefer marker-equality.
+    //   But if `seenCompletionMarker` hasn't been recorded yet (legacy/transition
+    //   case), fall back to timestamp comparison so a stale marker doesn't keep
+    //   the bell lit after the user already viewed the conversation.
+    // - When there is no completionMarker, use timestamp + role guard.
+    // - Trailing `assistant.tool` turns no longer count as unread on their own
+    //   — the human can't acknowledge a tool call separately from the answer,
+    //   so they'd be stuck with a perpetually unread badge.
+    const ignorableTrailingRoles = lastRole === 'user' || lastRole === 'human' || lastRole === 'system' || lastRole === 'tool';
     const unread = completionMarker
-        ? completionMarker !== seenCompletionMarker
-        : hasContentChange && lastUsedAt > lastSeenAt && lastRole !== 'user' && lastRole !== 'human' && lastRole !== 'system';
+        ? (seenCompletionMarker
+            ? completionMarker !== seenCompletionMarker
+            : hasContentChange && lastUsedAt > lastSeenAt && !ignorableTrailingRoles)
+        : hasContentChange && lastUsedAt > lastSeenAt && !ignorableTrailingRoles;
     return { unread, inboxBucket: unread ? 'task_complete' : 'idle' };
 }
 
