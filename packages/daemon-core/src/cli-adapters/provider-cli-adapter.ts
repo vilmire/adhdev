@@ -170,9 +170,10 @@ export class ProviderCliAdapter implements CliAdapter {
  // Resize redraw suppression
     private resizeSuppressUntil: number = 0;
 
-    // Native transcript anchor — when >0, native history was confirmed for this session.
-    // Prevents freshEnough flips caused by PTY buffer activity after the first successful native read.
-    nativeHistoryAnchoredAt: number = 0;
+    // (A2.2) Native transcript anchor moved to CHAT_SOURCE_REGISTRY.
+    // ChatSourceMachine holds the lock by state, not by a mutable field on
+    // the adapter. Removed entirely; no callers remain after the readChat
+    // ladder was replaced.
 
     // ─── Script runner (parsing isolated here, adapter stays as transport) ───
     private readonly runner: CliScriptRunner;
