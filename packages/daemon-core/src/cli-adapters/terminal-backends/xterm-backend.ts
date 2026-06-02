@@ -64,7 +64,14 @@ export class XtermTerminalBackend implements TerminalViewportBackend {
 
         for (let i = start; i < end; i++) {
             const line = buffer.getLine(i);
-            lines.push(line ? line.translateToString(true) : '');
+            // (fix) translateToString(true) strips trailing whitespace per row
+            // AND collapses cells touched only by cursor-forward (ESC[<n>C),
+            // so Claude Code's "Do you want to proceed?" arrives as
+            // "Doyouwanttoproceed?" — every downstream approval/prompt regex
+            // misses. Use false to preserve inter-word padding; we trim each
+            // row's trailing whitespace ourselves below.
+            const raw = line ? line.translateToString(false) : '';
+            lines.push(raw.replace(/\s+$/, ''));
         }
 
         let first = 0;

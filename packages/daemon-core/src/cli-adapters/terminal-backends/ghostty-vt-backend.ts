@@ -121,7 +121,23 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     }
 
     getText(): string {
-        return this.terminal.formatPlainText({ trim: true }) || '';
+        // (fix) ghostty's `trim:true` mode strips trailing whitespace per row
+        // AND collapses cells that were touched only by cursor-forward (ESC[<n>C)
+        // without a printable glyph. Many TUIs (Claude Code most prominently)
+        // render inter-word spaces via CUF rather than literal spaces, so
+        // trim:true would smash "Do you want to proceed?" into
+        // "Doyouwanttoproceed?" and break every downstream regex
+        // (approval detection, prompt-line discovery, etc.). Keep the per-row
+        // padding, then trim each row's trailing whitespace ourselves so the
+        // serialized text matches what the user sees in the terminal.
+        const raw = this.terminal.formatPlainText({ trim: false }) || '';
+        if (!raw) return '';
+        const lines = raw.split('\n').map((row) => row.replace(/\s+$/, ''));
+        let first = 0;
+        let last = lines.length;
+        while (first < last && !lines[first]) first += 1;
+        while (last > first && !lines[last - 1]) last -= 1;
+        return lines.slice(first, last).join('\n');
     }
 
     getCursorPosition(): { col: number; row: number } {
