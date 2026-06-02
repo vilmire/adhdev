@@ -1841,7 +1841,12 @@ export class ProviderCliAdapter implements CliAdapter {
         if (parsedDebugState?.status === 'error') {
             effectiveStatus = 'error';
         }
-        if (startupDetectedStatus === 'waiting_approval') {
+        // (fix) Mirror the getStatus contract: never surface waiting_approval
+        // without a concrete modal. detectStatus alone can fire while
+        // parseApproval is still null, and a bare debugState waiting_approval
+        // confused dashboards reading the debug payload.
+        const debugEffectiveModal = startupModal || this.engine.activeModal;
+        if (startupDetectedStatus === 'waiting_approval' && debugEffectiveModal) {
             effectiveStatus = 'waiting_approval';
         }
         if (
