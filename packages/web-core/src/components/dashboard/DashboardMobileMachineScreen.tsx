@@ -83,7 +83,7 @@ export default function DashboardMobileMachineScreen({
     onListSavedSessions,
 }: DashboardMobileMachineScreenProps) {
     const formatKindLabel = (kind: MachineRecentLaunch['kind']) => {
-        if (kind === 'ide') return 'IDE'
+        if (kind === 'ide') return 'Workspace'
         if (kind === 'cli') return 'CLI'
         return 'ACP'
     }
@@ -382,7 +382,7 @@ export default function DashboardMobileMachineScreen({
                                                         workspaceOptions: options,
                                                         selectedWorkspaceKey: selectedKey,
                                                         details: [
-                                                            { label: 'Mode', value: 'IDE' },
+                                                            { label: 'Mode', value: 'Workspace' },
                                                             { label: 'Provider', value: ide.name },
                                                         ],
                                                     }, async () => {

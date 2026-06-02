@@ -23,9 +23,8 @@ function dashboardMeshGraphStatusCacheKey(daemonId: string | null, meshId: strin
 }
 
 export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand, onClose }: DashboardMeshGraphDialogProps) {
-    const meshId = typeof activeConv.settings?.meshCoordinatorFor === 'string'
-        ? activeConv.settings.meshCoordinatorFor
-        : null
+    const meshId = activeConv.coordinator?.meshId
+        ?? (typeof activeConv.settings?.meshCoordinatorFor === 'string' ? activeConv.settings.meshCoordinatorFor : null)
     const daemonId = activeConv.daemonId ?? null
     const cacheKey = dashboardMeshGraphStatusCacheKey(daemonId, meshId)
     const initialMeshStatus = cacheKey ? dashboardMeshGraphStatusCache.get(cacheKey) ?? null : null

@@ -150,6 +150,7 @@ export function buildIdeConversations(
         surfaceHidden?: boolean;
         git?: GitCompactSummary;
         settings?: Record<string, any>;
+        coordinator?: { meshId: string; role: 'coordinator' };
         messageInput?: MessageInputSupport;
     }[] = Array.isArray(ide.childSessions)
         ? ide.childSessions.map(child => ({
@@ -177,6 +178,7 @@ export function buildIdeConversations(
             surfaceHidden: child.surfaceHidden,
             git: child.git,
             settings: child.settings,
+            coordinator: child.coordinator,
             messageInput: child.messageInput,
         }))
         : [];
@@ -215,6 +217,10 @@ export function buildIdeConversations(
         const nativeHistorySessionId = (typeof activeId === 'string' && activeId.trim())
             ? activeId
             : ide.providerSessionId;
+        const nativeCoordinator = ide.coordinator
+            || (typeof ide.settings?.meshCoordinatorFor === 'string' && ide.settings.meshCoordinatorFor
+                ? { meshId: ide.settings.meshCoordinatorFor, role: 'coordinator' as const }
+                : undefined);
         results.push({
             routeId: ide.id,
             sessionId: nativeSessionId,
@@ -256,6 +262,7 @@ export function buildIdeConversations(
             machineName,
             connectionState,
             settings: ide.settings,
+            coordinator: nativeCoordinator,
             messageInput: ide.messageInput,
         });
     }
@@ -281,6 +288,10 @@ export function buildIdeConversations(
             || !!effectiveStreamTitle
             || !['idle', 'panel_hidden', 'disconnected', 'not_monitored'].includes(streamStatus);
         if (!hasMeaningfulStream) continue;
+        const streamCoordinator = stream.coordinator
+            || (typeof stream.settings?.meshCoordinatorFor === 'string' && stream.settings.meshCoordinatorFor
+                ? { meshId: stream.settings.meshCoordinatorFor, role: 'coordinator' as const }
+                : undefined);
         results.push({
             routeId: ide.id,
             sessionId: stream.sessionId || stream.instanceId,
@@ -317,6 +328,7 @@ export function buildIdeConversations(
             machineName,
             connectionState,
             settings: stream.settings,
+            coordinator: streamCoordinator,
             messageInput: stream.messageInput,
         });
     }

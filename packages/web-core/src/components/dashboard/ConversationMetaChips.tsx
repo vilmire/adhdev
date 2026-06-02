@@ -38,7 +38,7 @@ export default function ConversationMetaChips({
     const ideChipLabel = getConversationIdeChipLabel(conversation)
     const isMeshNode = conversation.settings?.meshNodeFor;
     const meshQueueStats = conversation.meshQueueStats;
-    const isMeshCoordinator = conversation.settings?.meshCoordinatorFor;
+    const isMeshCoordinator = conversation.coordinator?.meshId || conversation.settings?.meshCoordinatorFor;
 
     if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !isMeshNode && !meshQueueStats) {
         return null;

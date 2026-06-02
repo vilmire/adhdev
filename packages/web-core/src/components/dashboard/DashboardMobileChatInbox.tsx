@@ -194,8 +194,7 @@ function DashboardMobileChatItem({
     const timestampClassName = isEarlier ? 'text-text-muted opacity-80' : 'text-text-muted'
     const shouldShowTimestamp = !isWorking && !isTaskComplete
     const meshGraphAvailable = !!item.conversation.daemonId
-        && typeof item.conversation.settings?.meshCoordinatorFor === 'string'
-        && item.conversation.settings.meshCoordinatorFor.length > 0
+        && !!(item.conversation.coordinator?.meshId || item.conversation.settings?.meshCoordinatorFor)
     const warningTextClassName = 'text-[color:var(--status-warning)]'
     const handleConversationContextMenu = (event: MouseEvent<HTMLButtonElement>) => {
         if (!onCollectChatDebugBundle) return

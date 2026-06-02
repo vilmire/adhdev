@@ -396,6 +396,8 @@ export interface SessionEntry {
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;
     settings?: Record<string, any>;
+    /** Set when this session is acting as a mesh coordinator for the given mesh. */
+    coordinator?: { meshId: string; role: 'coordinator' };
     meshQueueStats?: {
         total?: number;
         active?: number;

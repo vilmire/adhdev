@@ -160,6 +160,8 @@ export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './con
 // ── Mesh Coordinator ──
 export { buildCoordinatorSystemPrompt } from './mesh/coordinator-prompt.js';
 export type { CoordinatorPromptContext } from './mesh/coordinator-prompt.js';
+export { loadMeshCoordinatorRegistry, registerMeshCoordinator, unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from './mesh/coordinator-registry.js';
+export type { CoordinatorRegistryEntry } from './mesh/coordinator-registry.js';
 export {
   MESH_REFINE_CONFIG_LOCATIONS,
   MESH_REFINE_CONFIG_SCHEMA,

@@ -114,7 +114,7 @@ describe('DashboardNewSessionDialog', () => {
 
     expect(html).toContain('Category')
     expect(html).toContain('CLI')
-    expect(html).toContain('IDE')
+    expect(html).toContain('Workspace')
     expect(html).toContain('ACP')
   })
 })

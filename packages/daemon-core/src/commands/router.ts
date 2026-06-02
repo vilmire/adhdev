@@ -38,6 +38,7 @@ import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../l
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
 import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
 import { buildSessionEntries } from '../status/builders.js';
+import { registerMeshCoordinator } from '../mesh/coordinator-registry.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
@@ -5329,11 +5330,15 @@ export class DaemonCommandRouter {
                         }
 
                         LOG.info('MeshCoordinator', `Launched ${cliType} coordinator (cli_command) for mesh ${meshId}`);
+                        const cliCmdSessionId = cliCmdLaunch.sessionId || cliCmdLaunch.id;
+                        if (cliCmdSessionId) {
+                            registerMeshCoordinator({ meshId, sessionId: cliCmdSessionId, workspace, startedAt: Date.now() });
+                        }
                         try {
                             const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
                             appendLedgerEntry(meshId, {
                                 kind: 'coordinator_started',
-                                sessionId: cliCmdLaunch.sessionId || cliCmdLaunch.id,
+                                sessionId: cliCmdSessionId,
                                 providerType: cliType,
                                 payload: { workspace },
                             });
@@ -5344,7 +5349,7 @@ export class DaemonCommandRouter {
                             meshId,
                             cliType,
                             workspace,
-                            sessionId: cliCmdLaunch.sessionId || cliCmdLaunch.id,
+                            sessionId: cliCmdSessionId,
                             mcpRegistered: true,
                         };
                     }
@@ -5510,13 +5515,17 @@ export class DaemonCommandRouter {
                     }
 
                     LOG.info('MeshCoordinator', `Launched ${cliType} coordinator for mesh ${meshId} in ${workspace}`);
+                    const launchSessionId = launchResult.sessionId || launchResult.id;
+                    if (launchSessionId) {
+                        registerMeshCoordinator({ meshId, sessionId: launchSessionId, workspace, startedAt: Date.now() });
+                    }
 
                     // Record coordinator launch in task ledger
                     try {
                         const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
                         appendLedgerEntry(meshId, {
                             kind: 'coordinator_started',
-                            sessionId: launchResult.sessionId || launchResult.id,
+                            sessionId: launchSessionId,
                             providerType: cliType,
                             payload: { workspace },
                         });
@@ -5527,7 +5536,7 @@ export class DaemonCommandRouter {
                         meshId,
                         cliType,
                         workspace,
-                        sessionId: launchResult.sessionId || launchResult.id,
+                        sessionId: launchSessionId,
                         mcpConfigWritten: true,
                     };
                 } catch (e: any) {
