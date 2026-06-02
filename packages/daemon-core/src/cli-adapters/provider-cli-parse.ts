@@ -43,6 +43,7 @@ export function buildCliParseInput(options: {
     isWaitingForResponse?: boolean;
     scope?: TurnParseScope | null;
     runtimeSettings: Record<string, any>;
+    spawnAt?: number;
 }): CliScriptInput {
     const {
         accumulatedBuffer,
@@ -57,6 +58,7 @@ export function buildCliParseInput(options: {
         isWaitingForResponse,
         scope,
         runtimeSettings,
+        spawnAt,
     } = options;
     const buffer = scope
         ? sliceFromOffset(accumulatedBuffer, scope.bufferStart)
@@ -84,6 +86,7 @@ export function buildCliParseInput(options: {
         isWaitingForResponse,
         promptText: scope?.prompt || '',
         settings: { ...runtimeSettings },
+        ...(typeof spawnAt === 'number' && spawnAt > 0 ? { spawnAt } : {}),
     };
 }
 

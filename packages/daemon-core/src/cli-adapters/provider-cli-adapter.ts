@@ -769,6 +769,7 @@ export class ProviderCliAdapter implements CliAdapter {
             isWaitingForResponse: this.engine.isWaitingForResponse,
             scope: this.engine.currentTurnScope,
             runtimeSettings: this.runtimeSettings,
+            spawnAt: this.spawnAt,
         });
         const session = this.runner.parseSession({
             ...input,
@@ -810,7 +811,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const providerSessionId = typeof parsed?.providerSessionId === 'string' && parsed.providerSessionId.trim()
             ? parsed.providerSessionId.trim()
             : '';
-        if (providerSessionId) {
+        if (providerSessionId && providerSessionId !== this.providerSessionId) {
             this.providerSessionId = providerSessionId;
             this.updateRuntimeMeta({ providerSessionId });
         }
@@ -833,7 +834,42 @@ export class ProviderCliAdapter implements CliAdapter {
             : null;
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
         let effectiveModal = startupModal || this.engine.activeModal;
-        if (startupDetectedStatus === 'waiting_approval') {
+        // (fix) When we have no captured modal yet, take one more live attempt
+        // with the current screen text — the engine's settle pass can miss
+        // the modal when it happens to fire exactly between writes, and
+        // without a modal here the dashboard could never show the buttons.
+        // We deliberately do NOT overwrite an existing engine.activeModal so
+        // a stable matched modal wins. This runs even outside the startup
+        // gate because Claude's approval frames can appear long after launch.
+        if (allowParse && !effectiveModal && this.engine.isWaitingForResponse) {
+            const liveDetect = this.runDetectStatus(this.recentOutputBuffer || this.terminalScreen.getText());
+            if (liveDetect === 'waiting_approval') {
+                const liveModal = this.runParseApproval(this.terminalScreen.getText())
+                    || this.runParseApproval(this.recentOutputBuffer);
+                if (liveModal) {
+                    effectiveModal = liveModal;
+                    // Promote so subsequent calls don't re-walk the buffer.
+                    // Only set if engine hasn't already captured one — keeps
+                    // the first stable modal as authoritative.
+                    if (!this.engine.activeModal) this.engine.activeModal = liveModal;
+                } else {
+                    LOG.warn('CLI', `[${this.cliType}] getStatus live re-extract: detect=waiting_approval but parseApproval still null (recentLen=${this.recentOutputBuffer.length} screenLen=${this.terminalScreen.getText().length})`);
+                }
+            } else if (liveDetect && liveDetect !== 'generating' && liveDetect !== 'idle') {
+                LOG.warn('CLI', `[${this.cliType}] getStatus live re-extract: detect=${liveDetect} (not waiting_approval)`);
+            } else if (this.engine.currentStatus === 'waiting_approval' && liveDetect !== 'waiting_approval') {
+                LOG.warn('CLI', `[${this.cliType}] getStatus live re-extract: engine.status=waiting_approval but live detect=${liveDetect}`);
+            }
+        } else if (!effectiveModal && this.engine.currentStatus === 'waiting_approval') {
+            LOG.warn('CLI', `[${this.cliType}] getStatus skipped live re-extract: allowParse=${allowParse} isWaitingForResponse=${this.engine.isWaitingForResponse}`);
+        }
+        // Only surface waiting_approval when we ALSO have a concrete modal
+        // (message + buttons). detectStatus alone can fire while parseApproval
+        // is still null — the engine logs "detectStatus=waiting_approval but
+        // parseApproval returned null; ignoring". Without this guard getStatus
+        // was shipping a bare waiting_approval with activeModal=null and the
+        // user perceived the flow as broken.
+        if (startupDetectedStatus === 'waiting_approval' && effectiveModal) {
             effectiveStatus = 'waiting_approval';
         } else if (startupDetectedStatus === 'idle' && !startupModal && !effectiveModal) {
             effectiveStatus = 'idle';
@@ -973,6 +1009,7 @@ export class ProviderCliAdapter implements CliAdapter {
             isWaitingForResponse: this.engine.isWaitingForResponse,
             scope: this.engine.currentTurnScope,
             runtimeSettings: this.runtimeSettings,
+            spawnAt: this.spawnAt,
         });
         return await Promise.resolve(this.runner.invokeByName(scriptName, {
             ...input,
