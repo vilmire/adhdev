@@ -253,6 +253,16 @@ function validateCanonicalHistory(raw: unknown, errors: string[]): void {
     errors.push('canonicalHistory.mode must be one of: native-source, materialized-mirror, disabled')
   }
 
+  // Chat transcript contract version (transcript-v2.ts). Absent → treated as
+  // v1 by readDeclaredChatContractVersion(). A2 will reject unrecognised
+  // values at load time; A1 only validates the field shape.
+  const chatContractVersion = canonicalHistory.contractVersion
+  if (chatContractVersion !== undefined
+      && chatContractVersion !== '1.0'
+      && chatContractVersion !== '2.0') {
+    errors.push(`canonicalHistory.contractVersion must be '1.0' or '2.0' when provided (got ${JSON.stringify(chatContractVersion)})`)
+  }
+
   const scripts = canonicalHistory.scripts
   if (scripts === undefined) return
   if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) {

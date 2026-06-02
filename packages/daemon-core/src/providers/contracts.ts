@@ -15,6 +15,14 @@ import type { ChatMessageKind } from './chat-message-normalization.js';
 export type ReadChatTurnStatus = 'open' | 'waiting_approval' | 'complete' | 'error';
 
 export interface ReadChatResult {
+  /**
+   * Declared chat contract version. Absent or `'1.0'` → legacy v1 payload
+   * (current shape). `'2.0'` → v2 payload conforming to transcript-v2.ts
+   * (ReadChatResultV2). Validators in read-chat-contract.ts route on this
+   * field. A1 only adds the field; A2 will make v2 the daemon-internal
+   * canonical form and reject unrecognised versions at provider load time.
+   */
+  contractVersion?: import('./transcript-v2.js').ChatContractVersion;
   messages: ChatMessage[];
   status: AgentStatus;
   activeModal?: ModalInfo | null;
@@ -702,6 +710,17 @@ export interface ProviderCanonicalHistoryConfig {
    * Omitted mode defaults to 'native-source'.
    */
   mode?: 'native-source' | 'materialized-mirror' | 'disabled';
+  /**
+   * Chat transcript contract version this provider's read_chat output
+   * conforms to. See transcript-v2.ts for the v2 invariants. Absent or `'1.0'`
+   * → legacy v1 payload (current behaviour). `'2.0'` → strict v2 payload
+   * (stable providerUnitKey/bubbleId/sequence, strict enums, honest coverage).
+   *
+   * A1 only surfaces this field; validators in read-chat-contract.ts route
+   * on it. A2 makes v2 the daemon-internal canonical form and rejects
+   * unrecognised values at provider load time.
+   */
+  contractVersion?: import('./transcript-v2.js').ChatContractVersion;
 }
 
 /**
