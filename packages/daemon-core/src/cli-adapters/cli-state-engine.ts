@@ -616,14 +616,41 @@ export class CliStateEngine {
         if (!inCooldown) {
             if (!modal) {
                 LOG.warn('CLI', `[${this.provider.type}] detectStatus=waiting_approval but parseApproval returned null; ignoring`);
+                // (fix) If we previously surfaced waiting_approval but the
+                // modal extraction is now failing, do NOT keep the status
+                // pinned to waiting_approval forever — the dashboard would
+                // show a "waiting" badge with no buttons (activeModal=null)
+                // and the user perceives the agent as stuck. Drop the modal
+                // and fall back to generating so the rest of the run can
+                // settle normally; a future evaluate with a real modal will
+                // re-enter waiting_approval cleanly.
+                if (this.currentStatus === 'waiting_approval') {
+                    this.activeModal = null;
+                    this.setStatus('generating', 'approval_lost_modal');
+                    this.callbacks.onStatusChange();
+                }
                 return;
             }
             this.isWaitingForResponse = true;
             this.setStatus('waiting_approval', 'script_detect');
-            this.activeModal = modal;
+            // (fix) Don't overwrite an already-captured modal with a fresh
+            // re-parse on every evaluate — Claude TUI redraws option labels
+            // partially between paints (e.g. "Yes, and don't ask again for ..."
+            // is wider than the row and ships with a different trailing
+            // string each paint), which made the dashboard flap the modal
+            // signature continuously. Keep the first stable modal whose
+            // button count matches the latest parse; only swap when the
+            // shape clearly changed (different number of buttons → different
+            // approval).
+            const prev = this.activeModal;
+            const prevBtnCount = Array.isArray(prev?.buttons) ? prev!.buttons.length : 0;
+            const nextBtnCount = Array.isArray(modal.buttons) ? modal.buttons.length : 0;
+            if (!prev || prevBtnCount !== nextBtnCount) {
+                this.activeModal = modal;
+                this.callbacks.onStatusChange();
+            }
             if (this.idleTimeout) clearTimeout(this.idleTimeout);
             this.armApprovalExitTimeout();
-            this.callbacks.onStatusChange();
         }
     }
 
