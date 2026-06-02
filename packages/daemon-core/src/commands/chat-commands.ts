@@ -18,6 +18,14 @@ import { isNativeSourceCanonicalHistory, readChatHistory, readProviderChatHistor
 import { LOG, getRecentLogs } from '../logging/logger.js';
 import { getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { buildChatMessageSignature, hashSignatureParts } from '../chat/chat-signatures.js';
+import {
+    CHAT_SOURCE_REGISTRY,
+    buildV1NativePresentObservation,
+    chatSourceSessionKey,
+    type ChatSourceDecision,
+    type ChatSourceObservation,
+    type ChatSourceTransitionCause,
+} from '../chat/source-resolver.js';
 import type { ChatMessage } from '../types.js';
 import type { SessionTransport } from '../shared-types.js';
 import { filterUserFacingChatMessages, normalizeChatMessages } from '../providers/chat-message-normalization.js';
@@ -25,7 +33,7 @@ import { filterUserFacingChatMessages, normalizeChatMessages } from '../provider
 const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
 const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
-const CLI_NATIVE_HISTORY_FRESH_MS = 5 * 60_000;
+// (A2.2) CLI_NATIVE_HISTORY_FRESH_MS removed with isNativeHistoryFreshEnough.
 // Hardcoded native-transcript provider allow-list. Deprecated. Kept only as a
 // last-resort fallback when ProviderModule is not yet loaded; on every hit we
 // warn so the dependency on this set is visible. A2 deletes the set entirely
@@ -432,27 +440,323 @@ function buildCliMessageSourceProvenance(args: {
     };
 }
 
-function buildNativeHistoryFallbackReason(args: {
+/**
+ * Map a ChatSourceMachine transition cause back to the v1 messageSource
+ * `fallbackReason` vocabulary so legacy consumers (web-cloud, tests, mesh
+ * debug bundles) keep parsing strings they already know. A3 replaces the
+ * caller surface with stateTransition/lockState, after which this map can be
+ * deleted.
+ *
+ * Returns undefined when the cause does not correspond to a fallback (i.e.
+ * the source is native-history and there is nothing to explain).
+ */
+function causeToLegacyFallbackReason(
+    cause: ChatSourceTransitionCause,
+    selected: 'native-history' | 'pty-parser',
+    extraDetail?: { unavailableReason?: string; nativeSource?: string },
+): string | undefined {
+    if (selected === 'native-history') return undefined;
+    switch (cause) {
+        case 'initial':
+            return 'native_history_not_checked';
+        case 'native_progressed':
+            // Selected pty-parser despite a progressed observation — that
+            // means we held PtyOnly stickily (peak unmet or non-superset).
+            return 'native_history_not_selected';
+        case 'native_regressed_shrunk':
+            return 'native_history_empty';
+        case 'native_regressed_unsafe_mapping':
+            return 'native_history_not_safely_mapped';
+        case 'native_regressed_coverage_partial':
+            return 'native_history_partial';
+        case 'native_regressed_coverage_unavailable':
+            return 'native_history_unavailable';
+        case 'native_unavailable_read_error':
+            return extraDetail?.unavailableReason
+                ? `native_history_unavailable:${extraDetail.unavailableReason}`
+                : 'native_history_unavailable';
+        case 'native_unavailable_provider_unsupported':
+            return 'provider_native_transcript_not_supported';
+        case 'native_unavailable_empty':
+            return 'native_history_empty';
+        case 'native_unavailable_not_native_source':
+            return extraDetail?.nativeSource
+                ? `native_history_source_${extraDetail.nativeSource}`
+                : 'native_history_unavailable';
+    }
+}
+
+/**
+ * Translate a native-history fetch result + provider/adapter context into a
+ * ChatSourceObservation and drive ChatSourceRegistry. Returns the decision
+ * together with the legacy messageSource payload so call sites can produce
+ * a v1-compatible response without duplicating the registry plumbing.
+ *
+ * This is the replacement for the 300-line if-ladder that previously lived
+ * inline in handleReadChat. It is intentionally split out for two reasons:
+ * (1) we will call it from two places (CLI adapter branch + history-only
+ * branch) instead of duplicating the ladder, (2) tests can drive it with
+ * synthetic native-history results to verify the cause→fallbackReason
+ * mapping without booting the whole readChat pipeline.
+ */
+function decideCliReadChatSource(args: {
     providerType: string;
     provider?: ProviderModule;
-    nativeSource?: string;
-    nativeHistoryCoverage?: string;
-    unavailableReason?: string;
-    nativeMessageCount: number;
+    sessionId: string;
+    nativeHistoryResult: any | null;
+    nativeHistoryError?: unknown;
     safeMapping: boolean;
-    freshEnough: boolean;
-}): string {
-    if (!supportsCliNativeTranscript(args.providerType, args.provider)) return 'provider_native_transcript_not_supported';
-    if (args.unavailableReason) return `native_history_unavailable:${args.unavailableReason}`;
-    if (args.nativeSource === 'native-unavailable') return 'native_history_unavailable';
-    if (args.nativeHistoryCoverage === 'partial') return 'native_history_partial';
-    if (args.nativeHistoryCoverage === 'unavailable') return 'native_history_unavailable';
-    if (args.nativeSource && args.nativeSource !== 'provider-native') return `native_history_source_${args.nativeSource}`;
-    if (args.nativeMessageCount <= 0) return 'native_history_empty';
-    if (!args.safeMapping) return 'native_history_not_safely_mapped';
-    if (!args.freshEnough) return 'native_history_stale';
-    return 'native_history_not_selected';
+    sessionWorkspace?: string;
+    intendedWorkspace?: string;
+    ptyMessages: ChatMessage[];
+    ptyStatusApprovalOnly: boolean;
+}): {
+    decision: ChatSourceDecision;
+    messageSource: Record<string, unknown>;
+    nativeMessages: ChatMessage[];
+    nativeSelected: boolean;
+} {
+    const supportsNative = supportsCliNativeTranscript(args.providerType, args.provider);
+    const observation = buildObservationForCli(args, supportsNative);
+    const sessionKey = chatSourceSessionKey(args.providerType, args.sessionId);
+    const decision = CHAT_SOURCE_REGISTRY.observe(sessionKey, observation);
+
+    const nativeMessages: ChatMessage[] = observation.kind === 'native_present'
+        ? extractNativeMessagesFromResult(args.providerType, args.nativeHistoryResult)
+        : [];
+
+    const nativeSource = typeof args.nativeHistoryResult?.source === 'string'
+        ? args.nativeHistoryResult.source
+        : undefined;
+    const sourcePath = typeof args.nativeHistoryResult?.sourcePath === 'string'
+        ? args.nativeHistoryResult.sourcePath
+        : undefined;
+    const sourceMtimeMs = typeof args.nativeHistoryResult?.sourceMtimeMs === 'number'
+        ? args.nativeHistoryResult.sourceMtimeMs
+        : undefined;
+    const coverageHint = typeof args.nativeHistoryResult?.nativeHistoryCoverage === 'string'
+        ? args.nativeHistoryResult.nativeHistoryCoverage
+        : undefined;
+    const partialReason = typeof args.nativeHistoryResult?.partialReason === 'string'
+        ? args.nativeHistoryResult.partialReason
+        : undefined;
+    const unavailableReason = typeof args.nativeHistoryResult?.unavailableReason === 'string'
+        ? args.nativeHistoryResult.unavailableReason
+        : args.nativeHistoryError
+            ? `error:${(args.nativeHistoryError as any)?.message || String(args.nativeHistoryError)}`
+            : undefined;
+    const nativeHandle = typeof args.nativeHistoryResult?.providerSessionId === 'string'
+        ? args.nativeHistoryResult.providerSessionId
+        : undefined;
+    const transcriptWorkspace = typeof args.nativeHistoryResult?.workspace === 'string'
+        ? args.nativeHistoryResult.workspace
+        : nativeMessages.map((m: any) => typeof m?.workspace === 'string' ? m.workspace.trim() : '').find(Boolean);
+
+    const fallbackReason = causeToLegacyFallbackReason(decision.transition.cause, decision.selected, {
+        unavailableReason,
+        nativeSource: nativeSource && nativeSource !== 'provider-native' ? nativeSource : undefined,
+    });
+
+    const messageSource = buildCliMessageSourceProvenance({
+        selected: decision.selected,
+        provider: args.providerType,
+        nativeHandle,
+        sessionWorkspace: args.sessionWorkspace,
+        intendedWorkspace: args.intendedWorkspace,
+        transcriptWorkspace,
+        fallbackReason,
+        nativeSource,
+        sourcePath,
+        sourceMtimeMs,
+        nativeHistoryCoverage: coverageHint,
+        partialReason,
+        unavailableReason,
+        nativeMessages,
+        ptyMessages: args.ptyMessages,
+        returnedMessages: decision.selected === 'native-history' ? nativeMessages : args.ptyMessages,
+        safeMapping: args.safeMapping,
+        // freshEnough is a v1 concept the machine does not model directly.
+        // We surface lockState.locked here so v1 consumers reading
+        // staleness.freshEnough still get a meaningful boolean.
+        freshEnough: decision.lockState.locked,
+        ptyStatusApprovalOnly: args.ptyStatusApprovalOnly,
+    });
+
+    return {
+        decision,
+        messageSource,
+        nativeMessages,
+        nativeSelected: decision.selected === 'native-history',
+    };
 }
+
+function buildObservationForCli(
+    args: {
+        providerType: string;
+        sessionId: string;
+        nativeHistoryResult: any | null;
+        nativeHistoryError?: unknown;
+        safeMapping: boolean;
+    },
+    supportsNative: boolean,
+): ChatSourceObservation {
+    if (!supportsNative) {
+        return { kind: 'native_unavailable', reason: 'provider_not_supported' };
+    }
+    if (args.nativeHistoryError) {
+        return { kind: 'native_unavailable', reason: 'read_error' };
+    }
+    const result = args.nativeHistoryResult;
+    if (!result || typeof result !== 'object') {
+        return { kind: 'native_unavailable', reason: 'read_error' };
+    }
+    const source = typeof result.source === 'string' ? result.source : '';
+    if (source && source !== 'provider-native') {
+        // 'native-unavailable' or other producer-side declined source.
+        return { kind: 'native_unavailable', reason: source === 'native-unavailable' ? 'empty' : 'not_native_source' };
+    }
+    const messages = Array.isArray(result.messages) ? result.messages : [];
+    if (messages.length === 0) {
+        return { kind: 'native_unavailable', reason: 'empty' };
+    }
+    const coverage = typeof result.nativeHistoryCoverage === 'string'
+        ? result.nativeHistoryCoverage
+        : 'tail';
+    if (coverage === 'unavailable') {
+        return { kind: 'native_unavailable', reason: 'coverage_unavailable' };
+    }
+    return buildV1NativePresentObservation({
+        providerType: args.providerType,
+        sessionId: args.sessionId,
+        messages,
+        coverage: coverage === 'full' || coverage === 'tail' || coverage === 'current-turn' || coverage === 'partial'
+            ? coverage
+            : 'tail',
+        safeMapping: args.safeMapping,
+    });
+}
+
+function extractNativeMessagesFromResult(providerType: string, result: any): ChatMessage[] {
+    if (!result || !Array.isArray(result.messages)) return [];
+    return normalizeNativeHistoryMessages(
+        providerType,
+        result.messages as ChatMessage[],
+        typeof result.providerSessionId === 'string' ? result.providerSessionId : undefined,
+    );
+}
+
+/**
+ * ptyStatusApprovalOnly is true when the daemon should treat PTY content as
+ * status/approval signal only (not as chat messages). v1 set this to `true`
+ * whenever native-history was selected as the source, and `false` otherwise.
+ * The machine equivalent: when native is the source we want PTY suppressed.
+ */
+function primaryPtyApprovalOnlyFor(_cliType: string, nativeSelected: boolean): boolean {
+    return nativeSelected;
+}
+
+/**
+ * Codex-only unsafe-native fallback: when the primary native fetch produced
+ * unsafe-mapping data, v1 attempted to recover by reading exact runtime
+ * mirror messages, runtime input ACK messages, or by trusting the current-
+ * runtime PTY when safely attributed. None of this is the machine's
+ * responsibility — the machine already decided pty-parser. This helper
+ * preserves the daemon-side message selection and annotates messageSource.
+ */
+function applyUnsafeNativeDaemonFallback(args: {
+    providerType: string;
+    adapter: CliAdapter;
+    helpers: CommandHelpers;
+    readChatArgs: any;
+    sessionWorkspace?: string;
+    intendedWorkspace?: string;
+    ptyMessages: ChatMessage[];
+    nativeHistoryLimit: number;
+    provider?: ProviderModule;
+    messageSourceRef: { set(value: Record<string, unknown>): void; get(): Record<string, unknown> };
+    apply(selection: {
+        messages: ChatMessage[];
+        transcriptAuthority?: 'provider' | 'daemon';
+        coverage?: 'full' | 'tail' | 'current-turn';
+        status?: string;
+    }): void;
+    activeModal: unknown;
+    returnedStatus: string;
+    coverage?: 'full' | 'tail' | 'current-turn';
+}): void {
+    if (args.adapter.cliType !== 'codex-cli') {
+        // Only codex-cli had v1 daemon mirror recovery. Other providers skip.
+        return;
+    }
+    const ms = args.messageSourceRef.get();
+    const fallbackReason = typeof ms.fallbackReason === 'string' ? ms.fallbackReason : '';
+    if (!isUnsafeNativeTranscriptFallback(fallbackReason)) {
+        return;
+    }
+    const safeCurrentRuntimePtyMessages = isCurrentRuntimePtySafelyAttributed({
+        adapter: args.adapter,
+        helpers: args.helpers,
+        readChatArgs: args.readChatArgs,
+        sessionWorkspace: args.sessionWorkspace,
+        intendedWorkspace: args.intendedWorkspace,
+        ptyMessages: args.ptyMessages,
+    });
+    if (safeCurrentRuntimePtyMessages) {
+        args.apply({
+            messages: args.ptyMessages,
+            transcriptAuthority: 'daemon',
+            coverage: args.coverage || 'current-turn',
+            status: args.returnedStatus,
+        });
+        const next = { ...ms, selectedDaemonSource: 'current-runtime-pty', transcriptAuthority: 'daemon', runtimeMappingSafe: true };
+        args.messageSourceRef.set(next);
+        return;
+    }
+    const safeRuntimeAckMessages = selectRuntimeInputAckMessages(args.ptyMessages);
+    if (safeRuntimeAckMessages.length > 0) {
+        args.apply({
+            messages: safeRuntimeAckMessages,
+            transcriptAuthority: 'daemon',
+            coverage: 'tail',
+            status: coerceUnsafeNativeFallbackStatus(args.returnedStatus, args.activeModal),
+        });
+        const next = { ...ms, ptyStatusApprovalOnly: true };
+        args.messageSourceRef.set(next);
+        return;
+    }
+    const exactRuntimeMirrorMessages = readExactRuntimeMirrorMessages({
+        providerType: args.providerType,
+        targetSessionId: typeof args.readChatArgs?.targetSessionId === 'string' ? args.readChatArgs.targetSessionId : undefined,
+        currentSessionId: typeof (args.helpers.currentSession as any)?.sessionId === 'string' ? (args.helpers.currentSession as any).sessionId : undefined,
+        tailLimit: args.nativeHistoryLimit,
+        historyBehavior: args.provider?.historyBehavior,
+    });
+    if (exactRuntimeMirrorMessages.length > 0) {
+        args.apply({
+            messages: exactRuntimeMirrorMessages,
+            transcriptAuthority: 'daemon',
+            coverage: 'tail',
+            status: coerceUnsafeNativeFallbackStatus(args.returnedStatus, args.activeModal),
+        });
+        const next = { ...ms, selectedDaemonSource: 'exact-runtime-mirror', transcriptAuthority: 'daemon', ptyStatusApprovalOnly: true };
+        args.messageSourceRef.set(next);
+        return;
+    }
+    // No daemon mirror available — keep PTY messages as-is (still pty-parser
+    // selection); just coerce status for waiting_approval consistency.
+    args.apply({
+        messages: args.ptyMessages,
+        coverage: args.coverage,
+        status: coerceUnsafeNativeFallbackStatus(args.returnedStatus, args.activeModal),
+    });
+    const next = { ...ms, ptyStatusApprovalOnly: true };
+    args.messageSourceRef.set(next);
+}
+
+// (A2.2) buildNativeHistoryFallbackReason removed. ChatSourceMachine emits a
+// ChatSourceTransitionCause; causeToLegacyFallbackReason maps it back to the
+// v1 vocabulary for response compatibility. A3 deletes the v1 vocabulary
+// entirely and surfaces stateTransition/lockState directly.
 
 function isUnsafeNativeTranscriptFallback(reason?: string): boolean {
     const value = String(reason || '').trim();
@@ -727,18 +1031,12 @@ function readLiveCodexWorkspaceNativeHistory(agentStr: string, args: {
     return { ...(history as any), lookup: 'workspace' };
 }
 
-function isNativeHistoryFreshEnough(args: {
-    sourceMtimeMs?: number;
-    nativeMessages: ChatMessage[];
-    ptyMessages: ChatMessage[];
-}): boolean {
-    const nativeNewest = getMessageNewestReceivedAt(args.nativeMessages);
-    const ptyNewest = getMessageNewestReceivedAt(args.ptyMessages);
-    if (nativeNewest > 0 && nativeNewest >= ptyNewest) return true;
-    const sourceMtimeMs = Number(args.sourceMtimeMs || 0);
-    if (sourceMtimeMs > 0 && Date.now() - sourceMtimeMs <= CLI_NATIVE_HISTORY_FRESH_MS) return true;
-    return ptyNewest === 0 && nativeNewest > 0;
-}
+// (A2.2) isNativeHistoryFreshEnough removed. The v1 freshness comparison
+// (native_newest vs pty_newest with a 5-minute mtime grace window) was the
+// direct cause of the plipping behaviour: PTY arrived every turn so native
+// looked stale by default. ChatSourceMachine never compares native vs PTY
+// freshness — the lock holds across arbitrary PTY arrival. See
+// chat/source-machine.ts for the new semantics.
 
 function shouldPreserveReadChatPayloadField(key: string): boolean {
     return key === 'messageSource' || key === 'transcriptProvenance';
@@ -1521,35 +1819,57 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     ? adapter.workingDir
                     : undefined;
             const intendedWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
-            let messageSource = buildCliMessageSourceProvenance({
-                selected: 'pty-parser',
-                provider: adapter.cliType,
-                fallbackReason: supportsCliNativeTranscript(providerType, provider) ? 'native_history_not_checked' : 'provider_native_transcript_not_supported',
-                sessionWorkspace,
-                intendedWorkspace,
-                ptyMessages: returnedMessages,
-                returnedMessages,
-                ptyStatusApprovalOnly: false,
-            });
+            // ───────────────────────────────────────────────────────────
+            //  Chat source decision via ChatSourceMachine (A2 big-bang).
+            //  Replaces the ~300-line if-ladder that mixed source decision
+            //  with native fetch, anchor mutation, and runtime mirror
+            //  selection. The machine decides only between native-history
+            //  and pty-parser; downstream selection of which message array
+            //  to surface stays here.
+            //
+            //  Behavioural changes vs v1:
+            //    - No more nativeHistoryAnchoredAt mutation on the adapter.
+            //      Lock state lives in CHAT_SOURCE_REGISTRY keyed by
+            //      (providerType, sessionId).
+            //    - No PTY-vs-native freshness comparison. The lock holds
+            //      across arbitrary PTY arrival; only native regression /
+            //      unavailability unlocks. This is the plipping fix.
+            //    - 6 trigger strings (native_history_partial / _stale /
+            //      _not_safely_mapped / _empty / _error / _unavailable)
+            //      collapse to 3 events with diagnostic causes preserved
+            //      and mapped back to legacy fallbackReason strings for
+            //      response compatibility.
+            //    - Codex live-workspace native probe and unsafe-native
+            //      daemon mirror fallbacks are preserved as additional
+            //      input rounds to the machine; they were never the source
+            //      decision itself, they were retries.
+            // ───────────────────────────────────────────────────────────
 
-            if (supportsCliNativeTranscript(providerType, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)) {
-                const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h, adapter.cliType);
-                const workspace = sessionWorkspace;
-                const nativeHistoryLimit = Math.max(
-                    normalizeReadChatTailLimit(args) || 0,
-                    returnedMessages.length,
-                    200,
-                );
-                const nativeHistorySessionId = resolveCliNativeHistorySessionId(args, historySessionId, providerSessionId);
-                const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-                const exactNativeHistoryScope = Boolean(
-                    (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
-                    || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
-                    || providerSessionId
-                    || (nativeHistorySessionId && nativeHistorySessionId !== targetSessionId)
-                    || ((h.currentSession as any)?.sessionId === args?.targetSessionId && typeof (h.currentSession as any)?.providerSessionId === 'string' && (h.currentSession as any).providerSessionId.trim())
-                );
-                let nativeHistory: (ReturnType<typeof readProviderChatHistory> & { lookup?: 'session' | 'workspace' }) | null = null;
+            const supportsNative = supportsCliNativeTranscript(providerType, provider)
+                && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
+            const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h, adapter.cliType);
+            const workspace = sessionWorkspace;
+            const nativeHistoryLimit = Math.max(
+                normalizeReadChatTailLimit(args) || 0,
+                returnedMessages.length,
+                200,
+            );
+            const nativeHistorySessionId = supportsNative
+                ? resolveCliNativeHistorySessionId(args, historySessionId, providerSessionId)
+                : undefined;
+            const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+            const exactNativeHistoryScope = Boolean(
+                (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
+                || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
+                || providerSessionId
+                || (nativeHistorySessionId && nativeHistorySessionId !== targetSessionId)
+                || ((h.currentSession as any)?.sessionId === args?.targetSessionId && typeof (h.currentSession as any)?.providerSessionId === 'string' && (h.currentSession as any).providerSessionId.trim())
+            );
+
+            // 1. Fetch native history (or skip if provider does not support it).
+            let nativeHistory: any | null = null;
+            let nativeHistoryError: unknown | undefined;
+            if (supportsNative) {
                 try {
                     nativeHistory = readCliProviderNativeHistory(agentStr, {
                         canonicalHistory: provider?.canonicalHistory,
@@ -1563,268 +1883,180 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         excludeInProgressTurn: returnedStatus === 'waiting_approval',
                     });
                 } catch (error: any) {
-                    const fallbackReason = `native_history_error:${error?.message || String(error)}`;
-                    messageSource = buildCliMessageSourceProvenance({
-                        selected: 'pty-parser',
-                        provider: adapter.cliType,
-                        fallbackReason,
+                    nativeHistoryError = error;
+                    nativeHistory = null;
+                }
+            }
+
+            // 2. Compute safeMapping with the same rules the v1 code used so the
+            //    machine sees the same observation it always would have.
+            const nativeMessages: ChatMessage[] = nativeHistory && Array.isArray(nativeHistory.messages)
+                ? normalizeNativeHistoryMessages(agentStr, nativeHistory.messages as ChatMessage[], nativeHistory.providerSessionId)
+                : [];
+            const historyProviderSessionId = typeof nativeHistory?.providerSessionId === 'string'
+                ? nativeHistory.providerSessionId
+                : readHistorySessionIdFromMessages(nativeMessages) || nativeHistorySessionId || historySessionId;
+            const lookup = nativeHistory?.lookup === 'workspace' ? 'workspace' : 'session';
+            const nativeHistorySessionForMapping = adapter.cliType === 'antigravity-cli'
+                && historyProviderSessionId
+                && nativeHistorySessionId
+                && historyProviderSessionId !== nativeHistorySessionId
+                ? undefined
+                : nativeHistorySessionId;
+            const safeMapping = supportsNative && nativeHistory
+                ? hasSafeNativeHistoryMapping({
+                    historySessionId: lookup === 'workspace' ? undefined : nativeHistorySessionForMapping,
+                    providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId || providerSessionId,
+                    workspace,
+                    nativeMessages,
+                    ptyMessages: returnedMessages,
+                    requireWorkspaceContentOverlap: lookup === 'workspace' && !exactNativeHistoryScope,
+                })
+                : false;
+
+            // 3. Drive ChatSourceMachine — one observation per readChat call,
+            //    keyed by (providerType, sessionKey-for-this-call). targetSessionId
+            //    is the most specific session anchor we have; fall back to
+            //    historySessionId so we never leak state across distinct sessions.
+            const machineSessionKey = String(
+                args?.targetSessionId
+                || providerSessionId
+                || historySessionId
+                || (h.currentSession as any)?.sessionId
+                || ''
+            );
+            const primary = decideCliReadChatSource({
+                providerType,
+                provider,
+                sessionId: machineSessionKey,
+                nativeHistoryResult: nativeHistory,
+                nativeHistoryError,
+                safeMapping,
+                sessionWorkspace,
+                intendedWorkspace,
+                ptyMessages: returnedMessages,
+                ptyStatusApprovalOnly: primaryPtyApprovalOnlyFor(adapter.cliType, /*native selected first*/ true),
+            });
+            let messageSource: Record<string, unknown> = primary.messageSource;
+
+            if (primary.nativeSelected) {
+                selectedMessages = finalizeStreamingMessagesWhenIdle(primary.nativeMessages, returnedStatus);
+                selectedProviderSessionId = historyProviderSessionId || providerSessionId;
+                selectedTranscriptAuthority = 'provider';
+                selectedCoverage = nativeHistory?.hasMore ? 'tail' : 'full';
+            } else if (supportsNative) {
+                // Native not selected. Two preserved v1 fallbacks before settling
+                // on PTY: (a) Codex-only live workspace native probe; (b) unsafe-
+                // native daemon mirror selection. The machine sees each retry as
+                // an additional observation.
+                const liveCurrentRuntimePtySafe = isCurrentRuntimePtySafelyAttributed({
+                    adapter,
+                    helpers: h,
+                    readChatArgs: args,
+                    sessionWorkspace,
+                    intendedWorkspace,
+                    ptyMessages: returnedMessages,
+                });
+                const mayProbeLiveCodexWorkspaceNative = adapter.cliType === 'codex-cli'
+                    && liveCurrentRuntimePtySafe
+                    && !(typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
+                    && !(providerSessionId && providerSessionId.trim())
+                    && (!historyProviderSessionId || historyProviderSessionId === nativeHistorySessionId || historyProviderSessionId === historySessionId);
+                const liveWorkspaceNativeHistory = mayProbeLiveCodexWorkspaceNative
+                    ? readLiveCodexWorkspaceNativeHistory(agentStr, {
+                        canonicalHistory: provider?.canonicalHistory,
+                        workspace,
+                        offset: 0,
+                        limit: nativeHistoryLimit,
+                        excludeRecentCount: 0,
+                        historyBehavior: provider?.historyBehavior,
+                        scripts: provider?.scripts as any,
+                    })
+                    : null;
+                const liveWorkspaceNativeMessages = Array.isArray((liveWorkspaceNativeHistory as any)?.messages)
+                    ? normalizeNativeHistoryMessages(agentStr, (liveWorkspaceNativeHistory as any).messages as ChatMessage[], (liveWorkspaceNativeHistory as any)?.providerSessionId)
+                    : [];
+                const liveWorkspaceNativeProviderSessionId = typeof (liveWorkspaceNativeHistory as any)?.providerSessionId === 'string'
+                    ? (liveWorkspaceNativeHistory as any).providerSessionId
+                    : readHistorySessionIdFromMessages(liveWorkspaceNativeMessages);
+                const liveWorkspaceNativeSafeMapping = liveWorkspaceNativeMessages.length > 0
+                    && hasSafeNativeHistoryMapping({
+                        workspace,
+                        nativeMessages: liveWorkspaceNativeMessages,
+                        ptyMessages: returnedMessages,
+                        requireWorkspaceContentOverlap: true,
+                    });
+                if (liveWorkspaceNativeHistory) {
+                    const liveDecision = decideCliReadChatSource({
+                        providerType,
+                        provider,
+                        // Distinct session key so a transient codex live-probe does not
+                        // clobber the primary session's lock. The machine treats this
+                        // as its own session; the primary session's state is untouched.
+                        sessionId: `${machineSessionKey}::live-workspace`,
+                        nativeHistoryResult: liveWorkspaceNativeHistory,
+                        safeMapping: liveWorkspaceNativeSafeMapping,
                         sessionWorkspace,
                         intendedWorkspace,
                         ptyMessages: returnedMessages,
-                        returnedMessages,
-                        ptyStatusApprovalOnly: false,
+                        ptyStatusApprovalOnly: true,
                     });
-                    nativeHistory = null;
-                }
-
-                if (nativeHistory) {
-                    const nativeMessages = Array.isArray((nativeHistory as any).messages)
-                        ? normalizeNativeHistoryMessages(agentStr, (nativeHistory as any).messages as ChatMessage[], (nativeHistory as any)?.providerSessionId)
-                        : [];
-                    const historyProviderSessionId = typeof (nativeHistory as any)?.providerSessionId === 'string'
-                        ? (nativeHistory as any).providerSessionId
-                        : readHistorySessionIdFromMessages(nativeMessages) || nativeHistorySessionId || historySessionId;
-                    const nativeHistoryCoverage = typeof (nativeHistory as any)?.nativeHistoryCoverage === 'string'
-                        ? (nativeHistory as any).nativeHistoryCoverage
-                        : undefined;
-                    const partialReason = typeof (nativeHistory as any)?.partialReason === 'string'
-                        ? (nativeHistory as any).partialReason
-                        : undefined;
-                    const unavailableReason = typeof (nativeHistory as any)?.unavailableReason === 'string'
-                        ? (nativeHistory as any).unavailableReason
-                        : undefined;
-                    const lookup = (nativeHistory as any).lookup === 'workspace' ? 'workspace' : 'session';
-                    const transcriptWorkspace = typeof (nativeHistory as any)?.workspace === 'string'
-                        ? (nativeHistory as any).workspace
-                        : nativeMessages.map((message: any) => typeof message?.workspace === 'string' ? message.workspace.trim() : '').find(Boolean);
-                    const nativeHistorySessionForMapping = adapter.cliType === 'antigravity-cli'
-                        && historyProviderSessionId
-                        && nativeHistorySessionId
-                        && historyProviderSessionId !== nativeHistorySessionId
-                        ? undefined
-                        : nativeHistorySessionId;
-                    const safeMapping = hasSafeNativeHistoryMapping({
-                        historySessionId: lookup === 'workspace' ? undefined : nativeHistorySessionForMapping,
-                        providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId || providerSessionId,
-                        workspace,
-                        nativeMessages,
-                        ptyMessages: returnedMessages,
-                        requireWorkspaceContentOverlap: lookup === 'workspace' && !exactNativeHistoryScope,
-                    });
-                    const freshEnough = isNativeHistoryFreshEnough({
-                        sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
-                        nativeMessages,
-                        ptyMessages: returnedMessages,
-                    });
-                    const nativeUsableForChatMessages = (nativeHistory as any).source === 'provider-native'
-                        && nativeMessages.length > 0
-                        && nativeHistoryCoverage !== 'partial'
-                        && nativeHistoryCoverage !== 'unavailable'
-                        && safeMapping;
-                    // Sticky native anchor: once native was confirmed for this session, keep using it
-                    // even if freshEnough flips false due to PTY buffer activity.
-                    const NATIVE_ANCHOR_TTL_MS = 30 * 60_000;
-                    const nativeAnchoredAt = (adapter as any).nativeHistoryAnchoredAt ?? 0;
-                    const nativeIsAnchored = nativeAnchoredAt > 0
-                        && (Date.now() - nativeAnchoredAt) < NATIVE_ANCHOR_TTL_MS;
-                    const allowStaleNativeChatMessages = (adapter.cliType === 'antigravity-cli' || nativeIsAnchored)
-                        && nativeUsableForChatMessages;
-                    if (nativeUsableForChatMessages && (freshEnough || allowStaleNativeChatMessages)) {
-                        (adapter as any).nativeHistoryAnchoredAt = Date.now();
-                        selectedMessages = finalizeStreamingMessagesWhenIdle(nativeMessages, returnedStatus);
-                        selectedProviderSessionId = historyProviderSessionId || providerSessionId;
+                    if (liveDecision.nativeSelected) {
+                        selectedMessages = finalizeStreamingMessagesWhenIdle(liveDecision.nativeMessages, returnedStatus);
+                        selectedProviderSessionId = liveWorkspaceNativeProviderSessionId || providerSessionId;
                         selectedTranscriptAuthority = 'provider';
-                        selectedCoverage = (nativeHistory as any).hasMore ? 'tail' : 'full';
-                        messageSource = buildCliMessageSourceProvenance({
-                            selected: 'native-history',
-                            provider: adapter.cliType,
-                            nativeHandle: selectedProviderSessionId || nativeHistorySessionId || historySessionId,
-                            sessionWorkspace,
-                            intendedWorkspace,
-                            transcriptWorkspace,
-                            nativeSource: (nativeHistory as any).source,
-                            sourcePath: (nativeHistory as any).sourcePath,
-                            sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
-                            nativeHistoryCoverage,
-                            partialReason,
-                            unavailableReason,
-                            nativeMessages,
-                            ptyMessages: returnedMessages,
-                            returnedMessages: selectedMessages,
-                            safeMapping,
-                            freshEnough,
-                            ptyStatusApprovalOnly: true,
-                        });
+                        selectedCoverage = (liveWorkspaceNativeHistory as any).hasMore ? 'tail' : 'full';
+                        messageSource = liveDecision.messageSource;
+                        (messageSource as any).selectedDaemonSource = 'live-workspace-native-history';
+                        (messageSource as any).runtimeMappingSafe = true;
                     } else {
-                        // Hard failure (no messages, partial coverage, or safeMapping broken) — clear anchor.
-                        // Do not clear on mere staleness: PTY can race ahead of native mtime legitimately.
-                        if (!nativeUsableForChatMessages && (adapter as any).nativeHistoryAnchoredAt) {
-                            (adapter as any).nativeHistoryAnchoredAt = 0;
-                        }
-                        const liveCurrentRuntimePtySafe = isCurrentRuntimePtySafelyAttributed({
+                        // Live probe also rejected: apply unsafe-native daemon mirror
+                        // selection (codex-only) using the primary decision's
+                        // fallbackReason.
+                        applyUnsafeNativeDaemonFallback({
+                            providerType,
                             adapter,
                             helpers: h,
                             readChatArgs: args,
                             sessionWorkspace,
                             intendedWorkspace,
                             ptyMessages: returnedMessages,
+                            nativeHistoryLimit,
+                            provider,
+                            messageSourceRef: { set(value) { messageSource = value; }, get() { return messageSource; } },
+                            apply(selection) {
+                                selectedMessages = selection.messages;
+                                selectedTranscriptAuthority = selection.transcriptAuthority;
+                                selectedCoverage = selection.coverage ?? coverage;
+                                selectedStatus = selection.status ?? returnedStatus;
+                            },
+                            activeModal,
+                            returnedStatus,
+                            coverage,
                         });
-                        const mayProbeLiveCodexWorkspaceNative = adapter.cliType === 'codex-cli'
-                            && liveCurrentRuntimePtySafe
-                            && !(typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
-                            && !(providerSessionId && providerSessionId.trim())
-                            && (!historyProviderSessionId || historyProviderSessionId === nativeHistorySessionId || historyProviderSessionId === historySessionId);
-                        const liveWorkspaceNativeHistory = mayProbeLiveCodexWorkspaceNative
-                            ? readLiveCodexWorkspaceNativeHistory(agentStr, {
-                                canonicalHistory: provider?.canonicalHistory,
-                                workspace,
-                                offset: 0,
-                                limit: nativeHistoryLimit,
-                                excludeRecentCount: 0,
-                                historyBehavior: provider?.historyBehavior,
-                                scripts: provider?.scripts as any,
-                            })
-                            : null;
-                        const liveWorkspaceNativeMessages = Array.isArray((liveWorkspaceNativeHistory as any)?.messages)
-                            ? normalizeNativeHistoryMessages(agentStr, (liveWorkspaceNativeHistory as any).messages as ChatMessage[], (liveWorkspaceNativeHistory as any)?.providerSessionId)
-                            : [];
-                        const liveWorkspaceNativeProviderSessionId = typeof (liveWorkspaceNativeHistory as any)?.providerSessionId === 'string'
-                            ? (liveWorkspaceNativeHistory as any).providerSessionId
-                            : readHistorySessionIdFromMessages(liveWorkspaceNativeMessages);
-                        const liveWorkspaceTranscriptWorkspace = typeof (liveWorkspaceNativeHistory as any)?.workspace === 'string'
-                            ? (liveWorkspaceNativeHistory as any).workspace
-                            : liveWorkspaceNativeMessages.map((message: any) => typeof message?.workspace === 'string' ? message.workspace.trim() : '').find(Boolean);
-                        const liveWorkspaceNativeSafeMapping = liveWorkspaceNativeMessages.length > 0
-                            && hasSafeNativeHistoryMapping({
-                                workspace,
-                                nativeMessages: liveWorkspaceNativeMessages,
-                                ptyMessages: returnedMessages,
-                                requireWorkspaceContentOverlap: true,
-                            });
-                        const liveWorkspaceNativeFreshEnough = liveWorkspaceNativeMessages.length > 0
-                            && isNativeHistoryFreshEnough({
-                                sourceMtimeMs: (liveWorkspaceNativeHistory as any)?.sourceMtimeMs,
-                                nativeMessages: liveWorkspaceNativeMessages,
-                                ptyMessages: returnedMessages,
-                            });
-                        const liveWorkspaceNativeUsable = (liveWorkspaceNativeHistory as any)?.source === 'provider-native'
-                            && liveWorkspaceNativeMessages.length > 0
-                            && (liveWorkspaceNativeHistory as any)?.nativeHistoryCoverage !== 'partial'
-                            && (liveWorkspaceNativeHistory as any)?.nativeHistoryCoverage !== 'unavailable'
-                            && liveWorkspaceNativeSafeMapping
-                            && liveWorkspaceNativeFreshEnough;
-                        if (liveWorkspaceNativeUsable) {
-                            selectedMessages = finalizeStreamingMessagesWhenIdle(liveWorkspaceNativeMessages, returnedStatus);
-                            selectedProviderSessionId = liveWorkspaceNativeProviderSessionId || providerSessionId;
-                            selectedTranscriptAuthority = 'provider';
-                            selectedCoverage = (liveWorkspaceNativeHistory as any).hasMore ? 'tail' : 'full';
-                            messageSource = buildCliMessageSourceProvenance({
-                                selected: 'native-history',
-                                provider: adapter.cliType,
-                                nativeHandle: selectedProviderSessionId || nativeHistorySessionId || historySessionId,
-                                sessionWorkspace,
-                                intendedWorkspace,
-                                transcriptWorkspace: liveWorkspaceTranscriptWorkspace,
-                                nativeSource: (liveWorkspaceNativeHistory as any).source,
-                                sourcePath: (liveWorkspaceNativeHistory as any).sourcePath,
-                                sourceMtimeMs: (liveWorkspaceNativeHistory as any).sourceMtimeMs,
-                                nativeHistoryCoverage: (liveWorkspaceNativeHistory as any).nativeHistoryCoverage,
-                                partialReason: (liveWorkspaceNativeHistory as any).partialReason,
-                                unavailableReason: (liveWorkspaceNativeHistory as any).unavailableReason,
-                                nativeMessages: liveWorkspaceNativeMessages,
-                                ptyMessages: returnedMessages,
-                                returnedMessages: selectedMessages,
-                                safeMapping: true,
-                                freshEnough: true,
-                                ptyStatusApprovalOnly: true,
-                            });
-                            (messageSource as any).selectedDaemonSource = 'live-workspace-native-history';
-                            (messageSource as any).runtimeMappingSafe = true;
-                        } else {
-                            const fallbackReason = buildNativeHistoryFallbackReason({
-                                providerType,
-                                provider,
-                                nativeSource: (nativeHistory as any).source,
-                                nativeHistoryCoverage,
-                                unavailableReason,
-                                nativeMessageCount: nativeMessages.length,
-                                safeMapping,
-                                freshEnough,
-                            });
-                            const unsafeNativeFallback = adapter.cliType === 'codex-cli'
-                                && isUnsafeNativeTranscriptFallback(fallbackReason);
-                            const safeCurrentRuntimePtyMessages = unsafeNativeFallback
-                                && isCurrentRuntimePtySafelyAttributed({
-                                    adapter,
-                                    helpers: h,
-                                    readChatArgs: args,
-                                    sessionWorkspace,
-                                    intendedWorkspace,
-                                    ptyMessages: returnedMessages,
-                                });
-                            const safeRuntimeAckMessages = unsafeNativeFallback
-                                && !safeCurrentRuntimePtyMessages
-                                ? selectRuntimeInputAckMessages(returnedMessages)
-                                : [];
-                            const exactRuntimeMirrorMessages = unsafeNativeFallback
-                                && !safeCurrentRuntimePtyMessages
-                                && safeRuntimeAckMessages.length === 0
-                                ? readExactRuntimeMirrorMessages({
-                                    providerType,
-                                    targetSessionId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
-                                    currentSessionId: typeof (h.currentSession as any)?.sessionId === 'string' ? (h.currentSession as any).sessionId : undefined,
-                                    tailLimit: nativeHistoryLimit,
-                                    historyBehavior: provider?.historyBehavior,
-                                })
-                                : [];
-                            const safeDaemonMessages = safeRuntimeAckMessages.length > 0
-                                ? safeRuntimeAckMessages
-                                : exactRuntimeMirrorMessages;
-                            if (unsafeNativeFallback) {
-                                if (safeCurrentRuntimePtyMessages) {
-                                    selectedMessages = returnedMessages;
-                                    selectedTranscriptAuthority = 'daemon';
-                                    selectedCoverage = coverage || 'current-turn';
-                                    selectedStatus = returnedStatus;
-                                } else {
-                                    selectedMessages = safeDaemonMessages;
-                                    selectedTranscriptAuthority = safeDaemonMessages.length > 0 ? 'daemon' : undefined;
-                                    selectedCoverage = safeDaemonMessages.length > 0 ? 'tail' : undefined;
-                                    selectedStatus = coerceUnsafeNativeFallbackStatus(returnedStatus, activeModal);
-                                }
-                            }
-                            messageSource = buildCliMessageSourceProvenance({
-                                selected: 'pty-parser',
-                                provider: adapter.cliType,
-                                nativeHandle: historyProviderSessionId || nativeHistorySessionId || historySessionId,
-                                sessionWorkspace,
-                                intendedWorkspace,
-                                transcriptWorkspace,
-                                fallbackReason,
-                                nativeSource: (nativeHistory as any).source,
-                                sourcePath: (nativeHistory as any).sourcePath,
-                                sourceMtimeMs: (nativeHistory as any).sourceMtimeMs,
-                                nativeHistoryCoverage,
-                                partialReason,
-                                unavailableReason,
-                                nativeMessages,
-                                ptyMessages: returnedMessages,
-                                returnedMessages: unsafeNativeFallback && !safeCurrentRuntimePtyMessages ? safeDaemonMessages : returnedMessages,
-                                safeMapping,
-                                freshEnough,
-                                ptyStatusApprovalOnly: unsafeNativeFallback && !safeCurrentRuntimePtyMessages,
-                            });
-                            if (safeCurrentRuntimePtyMessages) {
-                                (messageSource as any).selectedDaemonSource = 'current-runtime-pty';
-                                (messageSource as any).transcriptAuthority = 'daemon';
-                                (messageSource as any).runtimeMappingSafe = true;
-                            }
-                            if (unsafeNativeFallback && exactRuntimeMirrorMessages.length > 0) {
-                                (messageSource as any).selectedDaemonSource = 'exact-runtime-mirror';
-                                (messageSource as any).transcriptAuthority = 'daemon';
-                            }
-                        }
                     }
+                } else {
+                    applyUnsafeNativeDaemonFallback({
+                        providerType,
+                        adapter,
+                        helpers: h,
+                        readChatArgs: args,
+                        sessionWorkspace,
+                        intendedWorkspace,
+                        ptyMessages: returnedMessages,
+                        nativeHistoryLimit,
+                        provider,
+                        messageSourceRef: { set(value) { messageSource = value; }, get() { return messageSource; } },
+                        apply(selection) {
+                            selectedMessages = selection.messages;
+                            selectedTranscriptAuthority = selection.transcriptAuthority;
+                            selectedCoverage = selection.coverage ?? coverage;
+                            selectedStatus = selection.status ?? returnedStatus;
+                        },
+                        activeModal,
+                        returnedStatus,
+                        coverage,
+                    });
                 }
             }
             LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord.status || '')} parsedMsgCount=${parsedRecord.messages.length} returnedMsgCount=${returnedMessages.length}`);
@@ -1859,6 +2091,11 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ...(selectedCoverage ? { coverage: selectedCoverage } : {}),
             }, args);
         }
+        // History-only path (no adapter). Same source-decision contract as
+        // the adapter path above, but with no PTY messages — the machine
+        // simply decides whether native is usable; if not we return the
+        // history we have plus a `native_history_not_safely_available`
+        // error response when the provider requires native source.
         const historyLimit = normalizeReadChatTailLimit(args);
         try {
             const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h);
@@ -1866,13 +2103,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ? (h.currentSession as any).workspace
                 : undefined;
             const intendedWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
-            const exactNativeHistoryScope = Boolean(
-                (typeof args?.targetSessionId === 'string' && args.targetSessionId.trim())
-                || (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
-                || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
-                || ((h.currentSession as any)?.sessionId === args?.targetSessionId && typeof (h.currentSession as any)?.providerSessionId === 'string' && (h.currentSession as any).providerSessionId.trim())
-            );
-            const history = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)
+            const supportsNative = supportsCliNativeTranscript(agentStr, provider)
+                && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
+            const history = supportsNative
                 ? readCliProviderNativeHistory(agentStr, {
                     canonicalHistory: provider?.canonicalHistory,
                     historySessionId,
@@ -1884,35 +2117,23 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     scripts: provider?.scripts as any,
                 })
                 : readProviderChatHistory(agentStr, {
-                canonicalHistory: provider?.canonicalHistory,
-                historySessionId,
-                workspace,
-                offset: 0,
-                limit: historyLimit,
-                excludeRecentCount: 0,
-                historyBehavior: provider?.historyBehavior,
-                scripts: provider?.scripts as any,
-            });
-            const lookup = (history as any).lookup === 'workspace' ? 'workspace' : 'session';
+                    canonicalHistory: provider?.canonicalHistory,
+                    historySessionId,
+                    workspace,
+                    offset: 0,
+                    limit: historyLimit,
+                    excludeRecentCount: 0,
+                    historyBehavior: provider?.historyBehavior,
+                    scripts: provider?.scripts as any,
+                });
+            const lookup = (history as any)?.lookup === 'workspace' ? 'workspace' : 'session';
             const historyMessages = Array.isArray((history as any)?.messages)
                 ? normalizeNativeHistoryMessages(agentStr, (history as any).messages as ChatMessage[], (history as any)?.providerSessionId)
                 : [];
             const historyProviderSessionId = typeof (history as any)?.providerSessionId === 'string'
                 ? (history as any).providerSessionId
                 : readHistorySessionIdFromMessages(historyMessages) || historySessionId;
-            const nativeHistoryCoverage = typeof (history as any)?.nativeHistoryCoverage === 'string'
-                ? (history as any).nativeHistoryCoverage
-                : undefined;
-            const partialReason = typeof (history as any)?.partialReason === 'string'
-                ? (history as any).partialReason
-                : undefined;
-            const unavailableReason = typeof (history as any)?.unavailableReason === 'string'
-                ? (history as any).unavailableReason
-                : undefined;
-            const transcriptWorkspace = typeof (history as any)?.workspace === 'string'
-                ? (history as any).workspace
-                : historyMessages.map((message: any) => typeof message?.workspace === 'string' ? message.workspace.trim() : '').find(Boolean);
-            const safeMapping = supportsCliNativeTranscript(agentStr, provider)
+            const safeMapping = supportsNative
                 ? hasSafeNativeHistoryMapping({
                     historySessionId: lookup === 'workspace' ? undefined : historySessionId,
                     providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
@@ -1920,60 +2141,41 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     nativeMessages: historyMessages,
                 })
                 : false;
-            const nativeSelected = supportsCliNativeTranscript(agentStr, provider)
-                && (history as any).source === 'provider-native'
-                && historyMessages.length > 0
-                && nativeHistoryCoverage !== 'partial'
-                && nativeHistoryCoverage !== 'unavailable'
-                && safeMapping;
-            const messageSource = buildCliMessageSourceProvenance({
-                selected: nativeSelected ? 'native-history' : 'pty-parser',
-                provider: agentStr,
-                nativeHandle: historyProviderSessionId || historySessionId,
+
+            const machineSessionKey = String(
+                args?.targetSessionId
+                || historyProviderSessionId
+                || historySessionId
+                || (h.currentSession as any)?.sessionId
+                || ''
+            );
+            const decision = decideCliReadChatSource({
+                providerType: agentStr,
+                provider,
+                sessionId: machineSessionKey,
+                nativeHistoryResult: history,
+                safeMapping,
                 sessionWorkspace: workspace,
                 intendedWorkspace,
-                transcriptWorkspace,
-                fallbackReason: nativeSelected
-                    ? undefined
-                    : buildNativeHistoryFallbackReason({
-                        providerType: agentStr,
-                        provider,
-                        nativeSource: (history as any).source,
-                        nativeHistoryCoverage,
-                        unavailableReason,
-                        nativeMessageCount: historyMessages.length,
-                        safeMapping,
-                        freshEnough: true,
-                    }),
-                nativeSource: (history as any).source,
-                sourcePath: (history as any).sourcePath,
-                sourceMtimeMs: (history as any).sourceMtimeMs,
-                nativeHistoryCoverage,
-                partialReason,
-                unavailableReason,
-                nativeMessages: historyMessages,
-                returnedMessages: historyMessages,
-                safeMapping,
-                freshEnough: true,
+                ptyMessages: [],
                 ptyStatusApprovalOnly: false,
             });
-            const requiresNativeSource = supportsCliNativeTranscript(agentStr, provider)
-                && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
-            if (requiresNativeSource && !nativeSelected) {
+
+            if (supportsNative && !decision.nativeSelected) {
                 return {
                     success: false,
                     code: 'native_history_not_safely_available',
                     error: 'Provider-native history was not safely available for the requested CLI session.',
                     providerSessionId: historyProviderSessionId,
-                    messageSource,
-                    transcriptProvenance: messageSource,
+                    messageSource: decision.messageSource,
+                    transcriptProvenance: decision.messageSource,
                 };
             }
             return buildReadChatCommandResult({
                 messages: historyMessages,
                 status: 'idle',
-                messageSource,
-                transcriptProvenance: messageSource,
+                messageSource: decision.messageSource,
+                transcriptProvenance: decision.messageSource,
                 ...(typeof (history as any)?.title === 'string' ? { title: (history as any).title } : {}),
                 ...(historyProviderSessionId ? { providerSessionId: historyProviderSessionId } : {}),
                 ...(((provider?.historyBehavior as any)?.transcriptAuthority === 'provider' || (provider?.historyBehavior as any)?.transcriptAuthority === 'daemon')
