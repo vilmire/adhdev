@@ -110,6 +110,13 @@ export interface ReadChatSyncResult {
     status: string;
     title?: string;
     activeModal?: { message: string; buttons: string[] } | null;
+    /**
+     * Chat source provenance from ChatSourceMachine (A2). Carries the
+     * selected source, transition cause, lock state, and legacy
+     * fallbackReason — opaque to the daemon-core, consumed by web-core
+     * for the source debug badge and SourceTimeline (A3).
+     */
+    messageSource?: Record<string, unknown>;
 }
 
 export interface ProviderSummaryItem {

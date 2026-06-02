@@ -111,6 +111,14 @@ export function prepareSessionChatTailUpdate(
   const title = typeof result.title === 'string' ? result.title : undefined
   const activeModal = normalizeChatTailActiveModal(result.activeModal)
   const status = typeof result.status === 'string' ? result.status : 'idle'
+  // (A3) messageSource passthrough. v1 deliberately dropped this on the
+  // subscription wire so the frontend had to infer source from message
+  // count heuristics. The frontend now consumes ChatSourceMachine's
+  // decision (selected, lockState, fallbackReason, etc.) directly to
+  // render the source debug badge and SourceTimeline.
+  const messageSource = result.messageSource && typeof result.messageSource === 'object'
+    ? result.messageSource as Record<string, unknown>
+    : undefined
   const deliverySignature = buildChatTailDeliverySignature({
     sessionId: input.sessionId,
     ...(input.historySessionId ? { historySessionId: input.historySessionId } : {}),
@@ -146,6 +154,7 @@ export function prepareSessionChatTailUpdate(
       status,
       ...(title ? { title } : {}),
       ...(activeModal ? { activeModal } : {}),
+      ...(messageSource ? { messageSource } : {}),
     },
   }
 }
