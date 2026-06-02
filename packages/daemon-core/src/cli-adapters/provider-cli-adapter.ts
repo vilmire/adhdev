@@ -667,6 +667,14 @@ export class ProviderCliAdapter implements CliAdapter {
                 this.engine.lastApprovalResolvedAt = Date.now();
             }
             this.engine.activeModal = null;
+            // Clear the in-flight turn flag at the same time we declare
+            // startup-idle. Otherwise the next settled evaluation sees
+            // isWaitingForResponse=true + recent CLI welcome-screen paints
+            // and flips us right back to generating via the hold path
+            // (the "startup → generating → idle → generating → idle"
+            // flicker the user observed on claude-cli launch).
+            this.engine.isWaitingForResponse = false;
+            this.engine.currentTurnScope = null;
             this.engine.setStatus('idle', `startup_ready:${trigger}`);
         }
         LOG.info(

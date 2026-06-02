@@ -518,8 +518,19 @@ export class CliStateEngine {
             `[${this.provider.type}] settled diagnostics prompt=${JSON.stringify(this.currentTurnScope?.prompt || '').slice(0, 140)} status=${String(status || '')} parsedStatus=${String(parsedStatus || '')} parsedMsgCount=${parsedMessages.length} lastParsedAssistant=${JSON.stringify((lastParsedAssistant?.content || '').slice(0, 120)).slice(0, 160)} responseBuffer=${JSON.stringify((snap.responseBuffer || '').slice(0, 160)).slice(0, 220)}`
         );
 
-        const shouldHoldGenerating = status === 'idle' && this.isWaitingForResponse && !modal
-            && recentInteractiveActivity && !(parsedStatus === 'idle' && !!lastParsedAssistant);
+        // recent_activity_hold protects an in-flight user turn from a false
+        // idle blip. It must NOT fire during startup — when the adapter has
+        // no currentTurnScope, there is no user turn to protect; the recent
+        // activity is just the CLI painting its welcome screen. Firing here
+        // produced the startup status flip the user reported
+        // (generating → idle → generating → idle within the first few seconds
+        // of claude-cli launch).
+        const shouldHoldGenerating = status === 'idle'
+            && this.isWaitingForResponse
+            && !!this.currentTurnScope
+            && !modal
+            && recentInteractiveActivity
+            && !(parsedStatus === 'idle' && !!lastParsedAssistant);
 
         if (shouldHoldGenerating) { this.applyHoldGenerating(ctx); return; }
         if (status === 'error') {
