@@ -119,6 +119,7 @@ export interface CliScriptInput {
     promptText?: string;
     settings?: Record<string, any>;
     args?: Record<string, any>;
+    spawnAt?: number;
 }
 
 export interface CliStatusInput {
@@ -362,7 +363,18 @@ export class TerminalTranscriptAccumulator {
         this.ensureRow();
         if (final === 'A') this.row = Math.max(0, this.row - count);
         else if (final === 'B') this.row += count;
-        else if (final === 'C') this.col += count;
+        else if (final === 'C') {
+            // (fix) Cursor-forward must materialize spaces in the cells it
+            // skips, otherwise rendered transcripts collapse "Do you" written
+            // as "Do\x1b[1Cyou" into "Doyou". That mis-rendering broke
+            // Claude Code's approval-prompt and prompt-line detection
+            // (parseApproval saw "Doyouwanttoproceed?" and returned null).
+            const line = this.lines[this.row];
+            for (let c = this.col; c < this.col + count; c += 1) {
+                if (line[c] === undefined) line[c] = ' ';
+            }
+            this.col += count;
+        }
         else if (final === 'D') this.col = Math.max(0, this.col - count);
         else if (final === 'G') this.col = Math.max(0, count - 1);
         else if (final === 'H' || final === 'f') {
