@@ -517,6 +517,30 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
         props.api.setActive()
     }, [props.api])
 
+    // ── Hooks must run unconditionally (Rules of Hooks) ─────────────────
+    // The two early-return branches below (remote / missing conversation)
+    // both render without consulting these subscriptions, so we resolve
+    // the session id and subscribe up here even if the result is unused
+    // on those code paths. Computing them here keeps the hook order
+    // identical across all renders of this component.
+    const conversationForTypingLookup = props.params.kind === 'remote'
+        ? undefined
+        : ctx.conversationsByTabKey.get(props.params.tabKey)
+    const chatTypingSessionId = conversationForTypingLookup?.sessionId
+    const subscribeTypingStore = useCallback(
+        (listener: () => void) => subscribeChatTyping(listener),
+        [],
+    )
+    const getTypingSnapshot = useCallback(
+        () => getChatTyping(chatTypingSessionId),
+        [chatTypingSessionId],
+    )
+    const isTypingFromStore = useSyncExternalStore(
+        subscribeTypingStore,
+        getTypingSnapshot,
+        getTypingSnapshot,
+    )
+
     if (props.params.kind === 'remote') {
         const remoteConversation = getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], props.params.routeId)
         const isActive = props.api.group.activePanel?.id === props.api.id
@@ -572,26 +596,15 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
         isOpenConversation: isActive,
     })
 
-    // The tab spinner used to derive isGenerating from surfaceState alone,
-    // which in turn read conversation.status. ChatPane's chat-bubble
-    // "Agent generating..." typing indicator also reads from the same
-    // conversation but through a separate render snapshot, so the two
-    // surfaces could fall out of sync (Playwright showed a 25s+ window
-    // where tab=idle but chat=generating). The user asked that the tab
-    // follow the typing-indicator's decision instead of independently
-    // recomputing it. Subscribe to the chat-typing store ChatPane
-    // publishes to, and OR that into the existing signal so the surfaces
-    // can never diverge in the "chat still says generating but tab
-    // cleared" direction. The reverse (tab generating but chat already
-    // settled) cannot happen — both branches must hold for the tab to
-    // light up.
-    const chatTypingSessionId = conversation.sessionId
-    const isTypingFromStore = useSyncExternalStore(
-        useCallback((listener) => subscribeChatTyping(listener), []),
-        () => getChatTyping(chatTypingSessionId),
-        () => getChatTyping(chatTypingSessionId),
-    )
-
+    // The chat-typing-store subscription is set up at the top of this
+    // function (above the early-return branches) so the hook order is
+    // identical across all renders; isTypingFromStore is captured there
+    // and we just consume it here. The OR direction matters: the tab
+    // shows the spinner when *either* the daemon-derived
+    // surfaceState.isGenerating OR ChatPane's published indicator is
+    // true. This guarantees the tab spinner never lags behind the
+    // chat-bubble "Agent generating..." indicator that the user
+    // specifically asked to treat as authoritative.
     const isReconnecting = surfaceState.isReconnecting
     const isConnecting = surfaceState.isConnecting
     const isGenerating = surfaceState.isGenerating || isTypingFromStore
