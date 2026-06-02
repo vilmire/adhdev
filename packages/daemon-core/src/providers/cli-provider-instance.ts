@@ -1052,10 +1052,27 @@ export class CliProviderInstance implements ProviderInstance {
             return autoApproveActive;
         }
         const modal = adapterStatus.activeModal;
-        const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(modal?.buttons, this.provider);
+        // (fix) Do not auto-approve when no concrete modal/buttons are present.
+        // Claude TUI flaps between paints; without this guard adapterStatus
+        // could report status=waiting_approval with activeModal=null (or with
+        // an empty buttons array briefly) and we'd still call
+        // resolveModal(-1) — which used to type "1" into the prompt
+        // repeatedly. Skip until a real modal is captured.
+        const buttons = Array.isArray(modal?.buttons)
+            ? modal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
+            : [];
+        if (!modal || buttons.length === 0) {
+            return autoApproveActive;
+        }
+        const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, this.provider);
+        if (buttonIndex < 0) {
+            // No positive button matched — don't pick a random index, just
+            // surface the modal so the user can decide.
+            return autoApproveActive;
+        }
         const signature = [
             typeof modal?.message === 'string' ? modal.message.trim() : '',
-            Array.isArray(modal?.buttons) ? modal.buttons.join('|') : '',
+            buttons.join('|'),
             buttonIndex,
         ].join('::');
         if (!this.autoApproveBusy || signature !== this.lastAutoApprovalSignature) {

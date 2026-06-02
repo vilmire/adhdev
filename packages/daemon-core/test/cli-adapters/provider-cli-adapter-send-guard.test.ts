@@ -387,7 +387,15 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.activeModal).toBeNull()
   })
 
-  it('projects startup detectStatus waiting_approval even when parseApproval cannot build buttons', () => {
+  it('does NOT project waiting_approval when parseApproval cannot build buttons', () => {
+    // (note) Previously getStatus surfaced waiting_approval whenever
+    // detectStatus said so, even if parseApproval returned null. The
+    // dashboard then rendered a "waiting" badge with no buttons and
+    // auto-approve received a modal=null snapshot — which made it call
+    // resolveModal(-1) and type the provider's index-0 key into the
+    // prompt every paint (the "111111..." bug reported by users). The
+    // contract is now: waiting_approval requires a concrete activeModal
+    // with buttons; otherwise the adapter falls back to its engine status.
     const adapter = buildAdapter()
     adapter.currentStatus = 'starting'
     adapter.ready = false
@@ -399,15 +407,12 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     adapter.runParseApproval = vi.fn(() => null)
     adapter.runDetectStatus = vi.fn(() => 'waiting_approval')
 
-    expect(adapter.getStatus()).toMatchObject({
-      status: 'waiting_approval',
-      activeModal: null,
-    })
-    expect(adapter.getDebugState()).toMatchObject({
-      status: 'waiting_approval',
-      ready: true,
-      activeModal: null,
-    })
+    const status = adapter.getStatus()
+    expect(status.status).not.toBe('waiting_approval')
+    expect(status.activeModal).toBeFalsy()
+    const debug = adapter.getDebugState()
+    expect(debug.status).not.toBe('waiting_approval')
+    expect(debug.activeModal).toBeFalsy()
   })
 
   it('does not synthesize a generic resolveAction prompt when the provider does not supply a resolver script', async () => {
