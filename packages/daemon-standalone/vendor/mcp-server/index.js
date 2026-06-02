@@ -1678,7 +1678,7 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
     return surfacedEvents;
   }
   if (isLocalTransport(ctx.transport)) {
-    const events = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id).filter(matchesCurrentMesh);
+    const events = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId).filter(matchesCurrentMesh);
     events.forEach(rememberMeshSessionProviderMetadataFromEvent);
     return events;
   }
@@ -2792,7 +2792,7 @@ async function meshSendTask(ctx, args) {
       ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
       });
     }
-    const pendingEvents = isLocalTransport(ctx.transport) ? (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id) : [];
+    const pendingEvents = isLocalTransport(ctx.transport) ? (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId) : [];
     const result = { success: true, source: "queue", nodeId: args.node_id, taskId: task.id, status: task.status, taskMode: task.taskMode };
     if (pendingEvents.length > 0) {
       result.pendingCoordinatorEvents = pendingEvents;
