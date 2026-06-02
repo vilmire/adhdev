@@ -93,6 +93,7 @@ const MAX_FINISH_RETRIES = 2;
 const FINISH_RETRY_DELAY_MS = 300;
 const MAX_TRACE_ENTRIES = 250;
 const APPROVAL_EXIT_TIMEOUT_MS = 60_000;
+const IDLE_CONFIRMATION_GRACE_MS = 2_000;
 
 // ─── Engine ────────────────────────────────────────────────────────────────
 
@@ -132,6 +133,21 @@ export class CliStateEngine {
 
     // ── Idle candidate ───────────────────────────────
     private idleFinishCandidate: IdleFinishCandidate | null = null;
+
+    // ── Idle confirmation grace ──────────────────────
+    /**
+     * `finishResponse` produces the `generating → idle` transition that
+     * coordinators interpret as "task complete". Some providers (antigravity-
+     * cli observed in the wild) briefly paint a screen that looks like an
+     * idle prompt between tool result frames while still actively running,
+     * which fired `response_finished` and broke completion semantics.
+     * We defer the actual idle transition by IDLE_CONFIRMATION_GRACE_MS and
+     * cancel it if the scripted detection re-detects generating during that
+     * window — a true completion stays idle for many seconds, so a 2-second
+     * grace is sufficient to filter the paint blip.
+     */
+    private pendingIdleFinishTimer: NodeJS.Timeout | null = null;
+    private pendingIdleFinishAt = 0;
 
     // ── Status history (debug) ───────────────────────
     private statusHistory: { status: string; at: number; trigger?: string }[] = [];
@@ -333,6 +349,7 @@ export class CliStateEngine {
         if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
         if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
         if (this.providerErrorRetryTimer) { clearTimeout(this.providerErrorRetryTimer); this.providerErrorRetryTimer = null; }
+        if (this.pendingIdleFinishTimer) { clearTimeout(this.pendingIdleFinishTimer); this.pendingIdleFinishTimer = null; this.pendingIdleFinishAt = 0; }
         this.providerErrorRetryKey = '';
     }
 
@@ -602,6 +619,10 @@ export class CliStateEngine {
     private applyGenerating(ctx: SettledEvalContext): void {
         const { modal, parsedMessages, lastParsedAssistant, parsedStatus, prevStatus } = ctx;
         this.clearIdleFinishCandidate('generating');
+        // Cancel any pending grace-window idle transition. We have fresh
+        // evidence the provider is still generating; the previous
+        // finishResponse() was a paint blip, not a real completion.
+        this.cancelPendingIdleFinish('generating_signal_returned');
         const snap = this.transport.getSnapshot();
         const effectiveScreenText = snap.screenText || snap.accumulatedBuffer;
         const noActiveTurn = !this.currentTurnScope;
@@ -762,9 +783,39 @@ export class CliStateEngine {
         }
         this.resetActiveTurnState();
         this.callbacks.onTurnCompleted();
-        this.setStatus('idle', 'response_finished');
-        this.callbacks.onStatusChange();
+        // Defer the actual `generating → idle` transition by a short grace
+        // window. If applyGenerating fires again before the grace expires —
+        // antigravity's tool-result paint blips do this — cancelPendingIdle
+        // Finish() drops the pending transition and we stay generating.
+        this.scheduleIdleFinish('response_finished');
         this.transport.flushOutboundQueue();
+    }
+
+    private scheduleIdleFinish(reason: string): void {
+        // If we are already deferring, replace the schedule so the most
+        // recent finishResponse "wins". Reasons accumulate via the trigger.
+        if (this.pendingIdleFinishTimer) clearTimeout(this.pendingIdleFinishTimer);
+        this.pendingIdleFinishAt = Date.now() + IDLE_CONFIRMATION_GRACE_MS;
+        this.pendingIdleFinishTimer = setTimeout(() => {
+            this.pendingIdleFinishTimer = null;
+            this.pendingIdleFinishAt = 0;
+            // Final guard: the grace window may have ended without
+            // applyGenerating firing, but a separate path may have already
+            // moved us out of "we owe an idle transition". Only commit when
+            // we are not waiting for a response AND not currently generating.
+            if (this.isWaitingForResponse) return;
+            if (this.currentStatus === 'generating') return;
+            this.setStatus('idle', reason);
+            this.callbacks.onStatusChange();
+        }, IDLE_CONFIRMATION_GRACE_MS);
+    }
+
+    private cancelPendingIdleFinish(reason: string): void {
+        if (!this.pendingIdleFinishTimer) return;
+        clearTimeout(this.pendingIdleFinishTimer);
+        this.pendingIdleFinishTimer = null;
+        this.pendingIdleFinishAt = 0;
+        this.recordTrace('idle_finish_cancelled', { trigger: reason });
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
