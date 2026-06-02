@@ -43,6 +43,11 @@ export interface ChatMessage {
   index?: number;
   timestamp?: number;
   receivedAt?: number;
+  /** (A2.3) Monotonic sequence number per (session, source). Producer-asserted
+   *  when emitted by v2-aware providers (transcript v2 schema); otherwise
+   *  derived by the daemon from receivedAt/timestamp/index. ChatSourceMachine
+   *  uses this as the native peak watermark for regression detection. */
+  sequence?: number;
   _turnKey?: string;
   /** Tool calls associated with this message */
   toolCalls?: ToolCallInfo[];
