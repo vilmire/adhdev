@@ -192,7 +192,12 @@ describe('ProviderLoader settings schema', () => {
     testConfig = { providerSettings: {}, machineProviders: {}, ideSettings: {} };
   });
 
-  it('adds synthetic autoApprove for providers that do not declare it', () => {
+  it('adds synthetic autoApprove (default off) for providers that do not declare it', () => {
+    // (note) synthetic default flipped from true → false: auto-approving
+    // every modal without an explicit opt-in caused "Auto-approved: ..."
+    // floods for CLIs (notably AGY) whose modal could be misclassified by
+    // the parser, and could silently run unsafe commands. Default is now
+    // off; users opt in via the UI toggle.
     writeProvider(userDir, 'cli', 'foo-cli', {
       type: 'foo-cli',
       name: 'Foo CLI',
@@ -207,14 +212,19 @@ describe('ProviderLoader settings schema', () => {
     const settings = byKey(loader.getPublicSettings('foo-cli'));
     expect(settings.autoApprove).toMatchObject({
       type: 'boolean',
-      default: true,
+      default: false,
       public: true,
       label: 'Auto Approve',
     });
-    expect(loader.getSettingValue('foo-cli', 'autoApprove')).toBe(true);
+    expect(loader.getSettingValue('foo-cli', 'autoApprove')).toBe(false);
   });
 
-  it('normalizes declared autoApprove to default-on public schema and respects user override', () => {
+  it('normalizes a declared autoApprove and honors the provider-defined default + user override', () => {
+    // (note) Previously getSettingsSchema force-rewrote autoApprove.default
+    // to true even when the provider.json explicitly set false. That hid
+    // the maintainer's intent and silently turned on auto-approval for
+    // providers that wanted it off by default. The loader now trusts the
+    // declared default.
     writeProvider(userDir, 'cli', 'bar-cli', {
       type: 'bar-cli',
       name: 'Bar CLI',
@@ -242,7 +252,7 @@ describe('ProviderLoader settings schema', () => {
     const settings = byKey(loader.getPublicSettings('bar-cli'));
     expect(settings.autoApprove).toMatchObject({
       type: 'boolean',
-      default: true,
+      default: false,
       public: true,
       label: 'Auto Approve',
     });

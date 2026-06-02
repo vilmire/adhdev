@@ -846,22 +846,19 @@ export class ProviderCliAdapter implements CliAdapter {
             if (liveDetect === 'waiting_approval') {
                 const liveModal = this.runParseApproval(this.terminalScreen.getText())
                     || this.runParseApproval(this.recentOutputBuffer);
-                if (liveModal) {
+                // (fix) Only surface modals that have at least one non-empty
+                // button. Half-rendered approval frames produced
+                // { message, buttons: [] } briefly — auto-approve would then
+                // pick buttonIndex=-1 and resolveModal would write the
+                // provider's index-0 key into the prompt. Skip those frames
+                // and let a later evaluate find the complete modal.
+                const buttonsOk = liveModal && Array.isArray(liveModal.buttons)
+                    && liveModal.buttons.some((b: any) => typeof b === 'string' && b.trim());
+                if (liveModal && buttonsOk) {
                     effectiveModal = liveModal;
-                    // Promote so subsequent calls don't re-walk the buffer.
-                    // Only set if engine hasn't already captured one — keeps
-                    // the first stable modal as authoritative.
                     if (!this.engine.activeModal) this.engine.activeModal = liveModal;
-                } else {
-                    LOG.warn('CLI', `[${this.cliType}] getStatus live re-extract: detect=waiting_approval but parseApproval still null (recentLen=${this.recentOutputBuffer.length} screenLen=${this.terminalScreen.getText().length})`);
                 }
-            } else if (liveDetect && liveDetect !== 'generating' && liveDetect !== 'idle') {
-                LOG.warn('CLI', `[${this.cliType}] getStatus live re-extract: detect=${liveDetect} (not waiting_approval)`);
-            } else if (this.engine.currentStatus === 'waiting_approval' && liveDetect !== 'waiting_approval') {
-                LOG.warn('CLI', `[${this.cliType}] getStatus live re-extract: engine.status=waiting_approval but live detect=${liveDetect}`);
             }
-        } else if (!effectiveModal && this.engine.currentStatus === 'waiting_approval') {
-            LOG.warn('CLI', `[${this.cliType}] getStatus skipped live re-extract: allowParse=${allowParse} isWaitingForResponse=${this.engine.isWaitingForResponse}`);
         }
         // Only surface waiting_approval when we ALSO have a concrete modal
         // (message + buttons). detectStatus alone can fire while parseApproval

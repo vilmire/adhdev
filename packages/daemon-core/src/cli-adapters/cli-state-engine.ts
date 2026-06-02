@@ -107,6 +107,15 @@ export class CliStateEngine {
     // ── Approval ─────────────────────────────────────
     lastApprovalResolvedAt = 0;
     lastResolvedModalMessage = '';
+    /**
+     * When the engine previously held a modal but the latest parse failed
+     * to extract one, we record the timestamp here and only drop the modal
+     * after the configured `approvalCooldown` to avoid flapping between
+     * waiting_approval and generating on every Claude TUI redraw — that
+     * flapping is what fed auto-approve a fresh modal signature on each
+     * paint and made the engine type "1" repeatedly into the prompt.
+     */
+    modalLostAt = 0;
     private approvalExitTimeout: NodeJS.Timeout | null = null;
 
     // ── Response tracking ────────────────────────────
@@ -239,7 +248,17 @@ export class CliStateEngine {
             } catch { /* ignore parse failures */ }
         }
 
-        if (!this.transport.isAlive() || (this.currentStatus !== 'waiting_approval' && !modal)) return;
+        if (!this.transport.isAlive()) return;
+        // (fix) Hard fail-safe: never write an approval key without a concrete
+        // modal that has buttons. The previous gate `currentStatus !== 'WA' &&
+        // !modal` let resolveModal proceed whenever status was still pinned to
+        // waiting_approval, even if parseApproval had returned null. Combined
+        // with auto-approve and Claude's modal flapping (status==WA but modal
+        // briefly null between paints) this typed "1" into the prompt over and
+        // over. Require a real modal with at least one button.
+        const buttonsValid = Array.isArray(modal?.buttons)
+            && modal.buttons.some((b: any) => typeof b === 'string' && b.trim());
+        if (!modal || !buttonsValid) return;
 
         const currentModalMessage = typeof modal?.message === 'string' ? modal.message.trim() : '';
         const inCooldown = !!this.lastApprovalResolvedAt
@@ -617,20 +636,30 @@ export class CliStateEngine {
             if (!modal) {
                 LOG.warn('CLI', `[${this.provider.type}] detectStatus=waiting_approval but parseApproval returned null; ignoring`);
                 // (fix) If we previously surfaced waiting_approval but the
-                // modal extraction is now failing, do NOT keep the status
-                // pinned to waiting_approval forever — the dashboard would
-                // show a "waiting" badge with no buttons (activeModal=null)
-                // and the user perceives the agent as stuck. Drop the modal
-                // and fall back to generating so the rest of the run can
-                // settle normally; a future evaluate with a real modal will
-                // re-enter waiting_approval cleanly.
-                if (this.currentStatus === 'waiting_approval') {
-                    this.activeModal = null;
-                    this.setStatus('generating', 'approval_lost_modal');
-                    this.callbacks.onStatusChange();
+                // modal extraction is now failing, eventually drop the modal
+                // and fall back to generating so the dashboard doesn't show
+                // a "waiting" badge with no buttons. BUT defer the transition
+                // for a hysteresis window — Claude TUI re-renders parts of
+                // the approval frame multiple times per second and the
+                // intermediate parses occasionally lose buttons for a single
+                // pass. Flapping the engine status WA → generating → WA →
+                // generating between paints fed auto-approve a fresh modal
+                // signature each time, which typed the approval key
+                // ("1") into the prompt repeatedly. Wait for the modal to
+                // stay gone for `approvalCooldown` before clearing.
+                if (this.currentStatus === 'waiting_approval' && this.activeModal) {
+                    const lostAt = this.modalLostAt || Date.now();
+                    if (!this.modalLostAt) this.modalLostAt = lostAt;
+                    if (Date.now() - lostAt >= this.timeouts.approvalCooldown) {
+                        this.activeModal = null;
+                        this.modalLostAt = 0;
+                        this.setStatus('generating', 'approval_lost_modal');
+                        this.callbacks.onStatusChange();
+                    }
                 }
                 return;
             }
+            this.modalLostAt = 0;
             this.isWaitingForResponse = true;
             this.setStatus('waiting_approval', 'script_detect');
             // (fix) Don't overwrite an already-captured modal with a fresh
