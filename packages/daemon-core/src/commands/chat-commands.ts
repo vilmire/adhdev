@@ -1232,6 +1232,47 @@ function finalizeStreamingMessagesWhenIdle(messages: ChatMessage[], status: stri
     });
 }
 
+/**
+ * Collapse adjacent PTY messages whose normalized content is identical. The
+ * PTY parser of some providers (hermes-cli observed in the wild) emits the
+ * same logical assistant turn twice when the terminal re-wraps the text at
+ * a different column — the bubble content differs only by newline position.
+ * Both copies carry the same turn key (e.g. `hermes-cli:turn_1_*`); we
+ * normalize whitespace before comparing, so any wrap-only divergence
+ * collapses to a single message. Native-history paths run through
+ * pageHistoryRecords and already collapse on the same signature; this
+ * helper is the PTY equivalent the readChat sync path was missing.
+ */
+function collapseAdjacentDuplicateChatMessages(messages: ChatMessage[]): ChatMessage[] {
+    if (!Array.isArray(messages) || messages.length <= 1) return messages;
+    const result: ChatMessage[] = [];
+    let prevSignature = '';
+    for (const message of messages) {
+        const role = typeof message.role === 'string' ? message.role : '';
+        const kind = typeof message.kind === 'string' ? message.kind : 'standard';
+        const content = typeof message.content === 'string'
+            ? message.content
+            : (Array.isArray(message.content) ? message.content.map((p: any) => typeof p?.text === 'string' ? p.text : '').join('') : '');
+        const normalizedContent = content.replace(/\s+/g, ' ').trim();
+        // Empty content or system messages are passed through untouched.
+        if (!normalizedContent || role === 'system') {
+            result.push(message);
+            prevSignature = '';
+            continue;
+        }
+        const signature = `${role}:${kind}:${normalizedContent}`;
+        if (signature === prevSignature && result.length > 0) {
+            // Adjacent duplicate. Keep the *later* copy because PTY's last
+            // emission usually has the most complete formatting.
+            result[result.length - 1] = message;
+            continue;
+        }
+        result.push(message);
+        prevSignature = signature;
+    }
+    return result;
+}
+
 function buildReadChatCommandResult(payload: Record<string, any>, args: any): CommandResult {
     let validatedPayload: Record<string, any>;
     const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === 'object'
@@ -1842,7 +1883,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const activeModal = parsedRecord.activeModal ?? parsedRecord.modal ?? null;
             const returnedStatus = normalizeCliReadChatStatus(parsedRecord.status, activeModal, adapter, adapterStatus, parsedRecord.messages);
             const runtimeMessageMerger = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
-            const parsedMessages = finalizeStreamingMessagesWhenIdle(parsedRecord.messages as ChatMessage[], returnedStatus);
+            const parsedMessages = collapseAdjacentDuplicateChatMessages(
+                finalizeStreamingMessagesWhenIdle(parsedRecord.messages as ChatMessage[], returnedStatus),
+            );
             const returnedMessages = runtimeMessageMerger?.category === 'cli'
                 && runtimeMessageMerger.type === adapter.cliType
                 && typeof runtimeMessageMerger.mergeRuntimeChatMessages === 'function'
