@@ -578,6 +578,18 @@ function decideCliReadChatSource(args: {
         nativeSource: nativeSource && nativeSource !== 'provider-native' ? nativeSource : undefined,
     });
 
+    // ptyStatusApprovalOnly: when the machine selected native-history we
+    // suppress PTY content so the dashboard does not double-show messages
+    // already in the native transcript. When the machine selected
+    // pty-parser, PTY is the authoritative source — do NOT suppress it.
+    // Callers used to hard-code this to `nativeSelected first = true` which
+    // suppressed PTY content even when native was empty/unavailable, leaving
+    // the dashboard with zero visible messages (the codex generating/waiting
+    // approval stuck state). Trust the machine here, not the caller hint.
+    const ptyStatusApprovalOnly = decision.selected === 'native-history'
+        ? true
+        : args.ptyStatusApprovalOnly;
+
     const messageSource = buildCliMessageSourceProvenance({
         selected: decision.selected,
         provider: args.providerType,
@@ -600,7 +612,7 @@ function decideCliReadChatSource(args: {
         // We surface lockState.locked here so v1 consumers reading
         // staleness.freshEnough still get a meaningful boolean.
         freshEnough: decision.lockState.locked,
-        ptyStatusApprovalOnly: args.ptyStatusApprovalOnly,
+        ptyStatusApprovalOnly,
     });
 
     return {
@@ -1143,6 +1155,15 @@ function normalizeReadChatCommandStatus(status: unknown, activeModal: unknown): 
         case 'disconnected':
         case 'not_monitored':
             return 'error';
+        case 'waiting_approval':
+            // The contract validator requires activeModal+buttons whenever
+            // status is waiting_approval. If a producer/coercer set this
+            // status without staging the modal yet (a race we hit with
+            // codex-cli during tool approval setup), downgrade to a
+            // generating-like status so readChat still returns successfully.
+            // The next poll will pick up the modal once the provider has
+            // emitted it.
+            return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'generating';
         default:
             return raw;
     }
@@ -1956,7 +1977,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 sessionWorkspace,
                 intendedWorkspace,
                 ptyMessages: returnedMessages,
-                ptyStatusApprovalOnly: primaryPtyApprovalOnlyFor(adapter.cliType, /*native selected first*/ true),
+                // Start with PTY visible; decideCliReadChatSource flips this
+                // to true when the machine actually selects native-history.
+                ptyStatusApprovalOnly: false,
             });
             let messageSource: Record<string, unknown> = primary.messageSource;
 
