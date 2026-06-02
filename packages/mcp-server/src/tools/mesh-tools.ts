@@ -1830,7 +1830,11 @@ async function drainCoordinatorPendingEvents(
     }
 
     if (isLocalTransport(ctx.transport)) {
-        const events = (drainPendingMeshCoordinatorEvents(ctx.mesh.id) as any[]).filter(matchesCurrentMesh);
+        // (B3) Pass localDaemonId so unicast events targeted at other
+        // coordinators are skipped (and requeued) instead of being silently
+        // consumed by this MCP. drainPendingMeshCoordinatorEvents already
+        // accepts the second arg in the base; we were the missing wiring.
+        const events = (drainPendingMeshCoordinatorEvents(ctx.mesh.id, ctx.localDaemonId) as any[]).filter(matchesCurrentMesh);
         events.forEach(rememberMeshSessionProviderMetadataFromEvent);
         return events;
     }
@@ -3115,7 +3119,7 @@ export async function meshSendTask(
 
         // Also drain any pending coordinator events so the caller sees them inline
         const pendingEvents = isLocalTransport(ctx.transport)
-            ? drainPendingMeshCoordinatorEvents(ctx.mesh.id)
+            ? drainPendingMeshCoordinatorEvents(ctx.mesh.id, ctx.localDaemonId)
             : [];
 
         const result: Record<string, unknown> = { success: true, source: 'queue', nodeId: args.node_id, taskId: task.id, status: task.status, taskMode: task.taskMode };

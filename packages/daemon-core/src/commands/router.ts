@@ -3645,7 +3645,13 @@ export class DaemonCommandRouter {
 
             case 'get_pending_mesh_events': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                const events = drainPendingMeshCoordinatorEvents(meshId || undefined);
+                // (B3) Respect coordinatorDaemonId when the caller declares it
+                // so unicast events route to the right coordinator instead of
+                // being silently consumed by the first drainer.
+                const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
+                    ? args.coordinatorDaemonId.trim()
+                    : undefined;
+                const events = drainPendingMeshCoordinatorEvents(meshId || undefined, coordinatorDaemonId);
                 return { success: true, events };
             }
 
@@ -5887,7 +5893,13 @@ export class DaemonCommandRouter {
                         nodeStatuses.push(status);
                     }
 
-                    const pendingCoordinatorEvents = drainPendingMeshCoordinatorEvents(meshId);
+                    // (B3) Pass coordinatorDaemonId when the caller declares
+                    // it so v1.5 unicast routing (targetCoordinatorDaemonId)
+                    // delivers events to the right coordinator.
+                    const callerCoordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
+                        ? args.coordinatorDaemonId.trim()
+                        : undefined;
+                    const pendingCoordinatorEvents = drainPendingMeshCoordinatorEvents(meshId, callerCoordinatorDaemonId);
                     const previewFreshness = (() => {
                         const localRepoRoot = nodeStatuses
                             .map((node: any) => readStringValue(node?.git?.repoRoot, node?.repoRoot, node?.workspace))
