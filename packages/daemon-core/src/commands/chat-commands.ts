@@ -1233,42 +1233,59 @@ function finalizeStreamingMessagesWhenIdle(messages: ChatMessage[], status: stri
 }
 
 /**
- * Collapse adjacent PTY messages whose normalized content is identical. The
- * PTY parser of some providers (hermes-cli observed in the wild) emits the
- * same logical assistant turn twice when the terminal re-wraps the text at
- * a different column — the bubble content differs only by newline position.
- * Both copies carry the same turn key (e.g. `hermes-cli:turn_1_*`); we
- * normalize whitespace before comparing, so any wrap-only divergence
- * collapses to a single message. Native-history paths run through
- * pageHistoryRecords and already collapse on the same signature; this
- * helper is the PTY equivalent the readChat sync path was missing.
+ * Collapse adjacent PTY messages whose canonical (whitespace-stripped)
+ * content is identical, OR whose turn key + role/kind match.
+ *
+ * The PTY parser of some providers (hermes-cli observed in the wild)
+ * emits the same logical assistant turn twice when the terminal re-wraps
+ * the text at a different column. The two emissions differ in newline
+ * position — and sometimes in a single inserted space next to punctuation
+ * (e.g. `(수정 2개), upstream` vs `(수정 2개 ), upstream`), so a simple
+ * `\s+ -> ' '` normalize cannot collapse them.
+ *
+ * Strategy:
+ *   1. If both messages carry the same _turnKey + role + kind, they are
+ *      the same logical turn by construction. Collapse.
+ *   2. Otherwise compare with all whitespace stripped — wrap variants
+ *      collapse to identical strings.
+ *
+ * Native-history paths run through pageHistoryRecords and already
+ * collapse on a normalized signature; this helper is the PTY equivalent
+ * the readChat sync path was missing.
  */
 function collapseAdjacentDuplicateChatMessages(messages: ChatMessage[]): ChatMessage[] {
     if (!Array.isArray(messages) || messages.length <= 1) return messages;
     const result: ChatMessage[] = [];
-    let prevSignature = '';
+    let prevRoleKind = '';
+    let prevStripped = '';
     for (const message of messages) {
         const role = typeof message.role === 'string' ? message.role : '';
         const kind = typeof message.kind === 'string' ? message.kind : 'standard';
         const content = typeof message.content === 'string'
             ? message.content
             : (Array.isArray(message.content) ? message.content.map((p: any) => typeof p?.text === 'string' ? p.text : '').join('') : '');
-        const normalizedContent = content.replace(/\s+/g, ' ').trim();
+        const strippedContent = content.replace(/\s+/g, '');
         // Empty content or system messages are passed through untouched.
-        if (!normalizedContent || role === 'system') {
+        if (!strippedContent || role === 'system') {
             result.push(message);
-            prevSignature = '';
+            prevRoleKind = '';
+            prevStripped = '';
             continue;
         }
-        const signature = `${role}:${kind}:${normalizedContent}`;
-        if (signature === prevSignature && result.length > 0) {
-            // Adjacent duplicate. Keep the *later* copy because PTY's last
-            // emission usually has the most complete formatting.
+        const roleKind = `${role}:${kind}`;
+        const sameStripped = strippedContent === prevStripped && roleKind === prevRoleKind;
+        if (result.length > 0 && sameStripped) {
+            // Adjacent duplicate after stripping all whitespace. Keep the
+            // *later* copy because PTY's last emission usually has the most
+            // complete formatting.
             result[result.length - 1] = message;
+            prevRoleKind = roleKind;
+            prevStripped = strippedContent;
             continue;
         }
         result.push(message);
-        prevSignature = signature;
+        prevRoleKind = roleKind;
+        prevStripped = strippedContent;
     }
     return result;
 }
