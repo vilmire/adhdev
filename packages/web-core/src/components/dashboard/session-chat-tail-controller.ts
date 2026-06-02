@@ -20,6 +20,14 @@ export interface SessionChatTailSnapshot {
   historyOffset: number
   hasMoreHistory: boolean
   historyError: string | null
+  /**
+   * (A3) Latest ChatSourceMachine decision delivered from the daemon.
+   * Carries selected ('native-history' | 'pty-parser'), fallbackReason,
+   * coverage, identityStatus, staleness, lockState. Consumed by the
+   * source debug badge and SourceTimeline. Undefined for v1 daemons /
+   * pre-A2 subscriptions.
+   */
+  messageSource?: Record<string, unknown>
 }
 
 export interface SessionChatHistoryPageRequest {
@@ -146,6 +154,7 @@ function shouldDeferBusyTailUpdate(
   fallbackRecentCount: number,
   nextMessages: DashboardMessage[],
   status: unknown,
+  messageSource: Record<string, unknown> | undefined,
 ): boolean {
   if (!isBusyChatTailStatus(status)) return false
   const existingCount = getExistingVisibleMessageCount(snapshot, fallbackRecentCount)
@@ -153,9 +162,31 @@ function shouldDeferBusyTailUpdate(
 
   if (isTransientNonSubstantiveTail(nextMessages)) return true
 
-  // During generation, some CLI providers briefly publish a tiny PTY-derived
-  // current-turn tail before provider-native history catches up. Do not let it
-  // replace a richer visible transcript and make the pane appear to lose history.
+  // (A3) When the daemon ships a ChatSourceMachine decision, trust it.
+  // The machine already knows whether the incoming tail is the locked
+  // native transcript (don't defer) or a PTY substitute (defer until
+  // native catches up). v1 had to infer this from message count, which
+  // misfired whenever PTY ran ahead of native legitimately.
+  if (messageSource && typeof messageSource === 'object') {
+    const selected = (messageSource as { selected?: unknown }).selected
+    const fallbackReason = (messageSource as { fallbackReason?: unknown }).fallbackReason
+    // Native-history is authoritative — never defer.
+    if (selected === 'native-history') return false
+    // Provider declined native ('provider_native_transcript_not_supported',
+    // 'native_history_not_checked', or any non-'native_history_' code) —
+    // PTY is the only source we have, so accept it instead of insisting on
+    // the larger stale snapshot.
+    if (typeof fallbackReason === 'string'
+        && fallbackReason !== ''
+        && !fallbackReason.startsWith('native_history_')) {
+      return false
+    }
+    // Otherwise (genuine native_history_* fallback during busy) fall through
+    // to the count heuristic — native is expected but transiently behind.
+  }
+
+  // Legacy heuristic for v1 daemons or v1-only producers that do not emit a
+  // ChatSourceMachine decision. Doomed once the v1 vocabulary is removed.
   return nextMessages.length < existingCount
 }
 
@@ -348,7 +379,8 @@ export class SessionChatTailController {
     if (update.error) return
 
     const nextMessages = readChatTailUpdateMessages(update)
-    if (shouldDeferBusyTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status)) {
+    const incomingMessageSource = (update as SessionChatTailUpdate & { messageSource?: Record<string, unknown> }).messageSource
+    if (shouldDeferBusyTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource)) {
       return
     }
     const nextCursor: SessionChatTailCursor = { tailLimit: this.snapshot.cursor.tailLimit }
@@ -361,6 +393,9 @@ export class SessionChatTailController {
       liveMessages: nextMessages,
       hasLiveSnapshot: true,
       cursor: nextCursor,
+      // (A3) Track latest source decision for the debug badge / SourceTimeline.
+      // Read-only consumption; daemon is source of truth.
+      messageSource: incomingMessageSource,
     }
     this.emit()
   }
