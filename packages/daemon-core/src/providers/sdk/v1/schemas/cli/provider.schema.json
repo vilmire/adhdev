@@ -124,6 +124,13 @@
       "minimum": 0,
       "description": "Delay between pasting prompt text and pressing Enter."
     },
+    "scriptCallBudgetMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5000,
+      "default": 50,
+      "description": "Per-invocation wall-clock budget (ms) for provider scripts (detectStatus, parseSession, parseApproval). Default 50. Scripts that exceed the budget are flagged in the runner's invocation trace and surfaced via the debug bundle so operators can identify a hanging settle loop. The budget is NOT a hard kill — Node CJS cannot interrupt synchronous code without a worker thread."
+    },
     "sendKey": {
       "type": "string",
       "default": "\r",

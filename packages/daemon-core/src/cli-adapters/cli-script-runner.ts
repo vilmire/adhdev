@@ -71,9 +71,23 @@ export interface CliScriptInvocationTrace {
     elapsedUs: number;
     resultSummary?: string;            // JSON.stringify(result).slice(0, 400)
     error?: string;
+    /**
+     * True when the invocation's elapsed time exceeded the runner's
+     * `scriptCallBudgetMs`. The script is NOT aborted (Node CJS can't
+     * interrupt sync code without a worker thread) — this flag plus the
+     * trace ring lets an operator identify which provider is hanging the
+     * settle loop. A throttled WARN is emitted alongside.
+     */
+    timedOut?: boolean;
 }
 
 const TRACE_RING_CAPACITY = 64;
+
+/** Default per-invocation wall-clock budget (ms) when the manifest omits one. */
+const DEFAULT_SCRIPT_CALL_BUDGET_MS = 50;
+
+/** Minimum interval between repeated budget-violation WARNs per script. */
+const BUDGET_WARN_THROTTLE_MS = 30_000;
 
 function summarizeInput(input: any): CliScriptInvocationTrace['inputSummary'] {
     const screenText = typeof input?.screenText === 'string' ? input.screenText : '';
@@ -104,6 +118,10 @@ export class CliScriptRunner {
     private readonly cliType: string;
     private sdk: CliScriptSdk = {};
     private invocationTrace: CliScriptInvocationTrace[] = [];
+    /** Per-invocation wall-clock budget (ms). Configurable via setScriptCallBudget. */
+    private scriptCallBudgetMs = DEFAULT_SCRIPT_CALL_BUDGET_MS;
+    /** Last WARN emit time per scriptName, used to throttle repeated budget violations. */
+    private lastBudgetWarnAt = new Map<string, number>();
 
     constructor(cliType: string) {
         this.cliType = cliType;
@@ -117,6 +135,31 @@ export class CliScriptRunner {
     /** Clear the trace ring — used by tests and after PTY reset. */
     clearInvocationTrace(): void {
         this.invocationTrace = [];
+    }
+
+    /**
+     * Configure the wall-clock budget (ms) applied to every script invocation.
+     *
+     * Out-of-range or non-finite values are clamped to [1, 5000] and the
+     * default (50ms) is used as a fallback. The budget is enforced per-call,
+     * not aggregated — it does not abort a runaway script (Node CJS cannot
+     * interrupt synchronous code without a worker thread). Instead, an
+     * exceeded budget flags the trace entry with `timedOut: true` and emits
+     * a throttled WARN naming the script and elapsed time so an operator
+     * can identify which provider is hanging the settle loop.
+     */
+    setScriptCallBudget(ms: number): void {
+        if (typeof ms !== 'number' || !Number.isFinite(ms)) {
+            this.scriptCallBudgetMs = DEFAULT_SCRIPT_CALL_BUDGET_MS;
+            return;
+        }
+        const clamped = Math.max(1, Math.min(5000, Math.floor(ms)));
+        this.scriptCallBudgetMs = clamped;
+    }
+
+    /** Test/debug accessor — current effective budget in ms. */
+    getScriptCallBudgetMs(): number {
+        return this.scriptCallBudgetMs;
     }
 
     private recordTrace(entry: CliScriptInvocationTrace): void {
@@ -210,6 +253,7 @@ export class CliScriptRunner {
     resetSessionState(): void {
         this.scriptState = null;
         this.invocationTrace = [];
+        this.lastBudgetWarnAt.clear();
     }
 
     // ─── Script access (for reflection and test patching) ────────────────────
@@ -322,27 +366,56 @@ export class CliScriptRunner {
             } else {
                 result = (fn as (input: any) => T)(input);
             }
+            const elapsedUs = startedHr ? Number((process.hrtime.bigint() - startedHr) / 1000n) : 0;
+            const timedOut = this.checkBudget(scriptName, elapsedUs);
             this.recordTrace({
                 at: startedAt,
                 scriptName,
                 arity,
                 inputSummary: summarizeInput(input),
                 ok: true,
-                elapsedUs: startedHr ? Number((process.hrtime.bigint() - startedHr) / 1000n) : 0,
+                elapsedUs,
                 resultSummary: summarizeResult(result),
+                ...(timedOut ? { timedOut: true } : {}),
             });
             return result;
         } catch (e: any) {
+            const elapsedUs = startedHr ? Number((process.hrtime.bigint() - startedHr) / 1000n) : 0;
+            const timedOut = this.checkBudget(scriptName, elapsedUs);
             this.recordTrace({
                 at: startedAt,
                 scriptName,
                 arity,
                 inputSummary: summarizeInput(input),
                 ok: false,
-                elapsedUs: startedHr ? Number((process.hrtime.bigint() - startedHr) / 1000n) : 0,
+                elapsedUs,
                 error: e?.message ? String(e.message).slice(0, 400) : String(e).slice(0, 400),
+                ...(timedOut ? { timedOut: true } : {}),
             });
             throw e;
         }
+    }
+
+    /**
+     * Returns true when `elapsedUs` exceeded the configured budget. On the
+     * first violation per script (or after the throttle window expires) we
+     * emit a single WARN so the operator learns which provider is slow.
+     *
+     * We deliberately throttle per-scriptName so a chronically-slow
+     * detectStatus doesn't spam the log on every PTY frame settle.
+     */
+    private checkBudget(scriptName: string, elapsedUs: number): boolean {
+        const budgetUs = this.scriptCallBudgetMs * 1000;
+        if (elapsedUs <= budgetUs) return false;
+        const now = Date.now();
+        const last = this.lastBudgetWarnAt.get(scriptName) ?? 0;
+        if (now - last >= BUDGET_WARN_THROTTLE_MS) {
+            this.lastBudgetWarnAt.set(scriptName, now);
+            LOG.warn(
+                'CLI',
+                `[${this.cliType}] script ${scriptName} took ${elapsedUs}us, budget ${budgetUs}us`,
+            );
+        }
+        return true;
     }
 }
