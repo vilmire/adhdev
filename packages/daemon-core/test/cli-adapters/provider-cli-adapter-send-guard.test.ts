@@ -1,13 +1,14 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { ProviderCliAdapter } from '../../src/cli-adapters/provider-cli-adapter.js'
 
-function buildAdapter(options: { allowInputDuringGeneration?: boolean } = {}) {
+function buildAdapter(options: { allowInputDuringGeneration?: boolean; requiresFinalAssistantBeforeIdle?: boolean } = {}) {
   const adapter = new ProviderCliAdapter({
     type: 'hermes-cli',
     name: 'Hermes Agent',
     category: 'cli',
     binary: 'hermes',
     allowInputDuringGeneration: options.allowInputDuringGeneration,
+    requiresFinalAssistantBeforeIdle: options.requiresFinalAssistantBeforeIdle,
     spawn: {
       command: 'hermes',
       args: [],
@@ -721,8 +722,11 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.getDebugState().status).toBe('generating')
   })
 
-  it('keeps Codex generating when finish is attempted on tool-call activity instead of a final answer', () => {
-    const adapter = buildAdapter()
+  it('keeps the session generating when finish is attempted on tool-call activity instead of a final answer, with requiresFinalAssistantBeforeIdle opt-in', () => {
+    // The defer-finish gate is now controlled by the manifest flag
+    // `requiresFinalAssistantBeforeIdle`, not by a hardcoded provider type
+    // check. Set the flag explicitly to exercise the gate.
+    const adapter = buildAdapter({ requiresFinalAssistantBeforeIdle: true })
     adapter.cliType = 'codex-cli'
     adapter.currentStatus = 'idle'
     adapter.isWaitingForResponse = true
@@ -748,8 +752,8 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.currentStatus).toBe('generating')
   })
 
-  it('allows Codex finish once parsed idle has a final standard assistant answer', () => {
-    const adapter = buildAdapter()
+  it('allows finish once parsed idle has a final standard assistant answer, even with requiresFinalAssistantBeforeIdle opt-in', () => {
+    const adapter = buildAdapter({ requiresFinalAssistantBeforeIdle: true })
     adapter.cliType = 'codex-cli'
     adapter.currentStatus = 'idle'
     adapter.isWaitingForResponse = true
