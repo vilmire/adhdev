@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/welcome-screen@1",
+  "title": "TUI welcome screen",
+  "description": "Declares cues that identify the cold-start welcome / splash region of a CLI agent. Daemon uses this to suppress assistant-block / message extraction during the boot phase, so the splash banner is not turned into a fake assistant message.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cues"],
+  "properties": {
+    "$schema": { "const": "adhdev:tui/welcome-screen@1" },
+    "cues": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pattern"],
+        "properties": {
+          "pattern": { "type": "string" },
+          "flags": { "type": "string" }
+        }
+      }
+    },
+    "dismissAfter": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How the welcome state ends. Default: first prompt-marker sighting.",
+      "properties": {
+        "onPromptMarker": { "type": "boolean", "default": true },
+        "onUserEcho": { "type": "boolean", "default": true },
+        "onAssistantBlock": { "type": "boolean", "default": false }
+      }
+    }
+  }
+}

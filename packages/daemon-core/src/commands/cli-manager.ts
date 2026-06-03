@@ -1154,6 +1154,45 @@ export class DaemonCliManager {
                 this.deps.onStatusChange();
                 return { success: true, id: found.key, mode };
             }
+            case 'record_provider_pty': {
+                const cliType = args?.type || args?.cliType;
+                if (!cliType) {
+                    return { success: false, error: '`type` (provider type) is required', code: 'MISSING_TYPE' };
+                }
+                const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId : '';
+                const dir = args?.dir || '';
+                const found = (targetSessionId ? this.findAdapterBySessionId(targetSessionId) : null)
+                    || this.findAdapter(cliType, { instanceKey: targetSessionId, dir });
+                if (!found) {
+                    return {
+                        success: false,
+                        error: `No running ${cliType} session. Launch one first (adhdev launch ${cliType}) or pass --target-session-id.`,
+                        code: 'NO_RUNNING_SESSION',
+                    };
+                }
+                const instance = this.deps.getInstanceManager()?.getInstance(found.key);
+                if (!(instance instanceof CliProviderInstance)) {
+                    return { success: false, error: 'CLI instance not available', code: 'CLI_INSTANCE_NOT_FOUND' };
+                }
+                const adapter = instance.getAdapter();
+                if (!adapter || typeof (adapter as any).getAccumulatedRawBuffer !== 'function') {
+                    return { success: false, error: 'Adapter does not expose PTY buffer', code: 'ADAPTER_NOT_RECORDABLE' };
+                }
+                const buffer = (adapter as any).getAccumulatedRawBuffer() as { text: string; droppedChars: number };
+                const maxBytes = Number(args?.maxBytes) > 0 ? Number(args.maxBytes) : 262144;
+                const truncated = buffer.text.length > maxBytes;
+                const ptyBytes = truncated ? buffer.text.slice(-maxBytes) : buffer.text;
+                return {
+                    success: true,
+                    cliType,
+                    sessionId: found.key,
+                    ptyBytes,
+                    bytes: ptyBytes.length,
+                    truncated,
+                    droppedChars: buffer.droppedChars,
+                    capturedAt: Date.now(),
+                };
+            }
             case 'restart_session': {
                 const cliType = args?.cliType || args?.agentType || args?.ideType;
                 const cfg = loadConfig();

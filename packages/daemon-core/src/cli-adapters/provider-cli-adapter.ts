@@ -179,6 +179,18 @@ export class ProviderCliAdapter implements CliAdapter {
     private readonly runner: CliScriptRunner;
     /** @deprecated use runner.cliScripts for direct script access */
     get cliScripts(): CliScripts { return this.runner.cliScripts; }
+
+    /**
+     * Returns the full raw PTY byte stream captured since adapter start.
+     * Used by the `record_provider_pty` IPC command to produce fixtures.
+     * Bounded by MAX_ACCUMULATED_BUFFER; older bytes may have been dropped.
+     */
+    getAccumulatedRawBuffer(): { text: string; droppedChars: number } {
+        return {
+            text: this.accumulatedRawBuffer,
+            droppedChars: this.accumulatedRawBufferDroppedChars,
+        };
+    }
     set cliScripts(scripts: CliScripts) { this.setCliScripts(scripts); }
     private runtimeSettings: Record<string, any> = {};
     /** Full accumulated rendered PTY transcript for parser/readback use */

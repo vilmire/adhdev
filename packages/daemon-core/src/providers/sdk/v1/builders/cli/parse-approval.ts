@@ -19,6 +19,10 @@ import type {
   CliApprovalModal,
   CliParseApprovalFn,
 } from '../../types/cli/index.js';
+import {
+  applyVisibleRegion,
+  type VisibleRegionSpec,
+} from './visible-region.js';
 
 // ─── Spec shapes ───────────────────────────────────────────────────────
 
@@ -40,6 +44,15 @@ export interface ModalTuiSpec {
   questionVariants?: ModalQuestionVariant[];
   buttonPattern: string;
   buttonFlags?: string;
+  /**
+   * Optional fallback for terminals that render all options on a single line
+   * (e.g. Antigravity feedback survey: `[0] skip [1] yes [2] no [3] still using`).
+   * When per-line button extraction collects fewer than `minButtons`, the
+   * builder makes a second pass with this regex (global match, capture group 1
+   * is the label).
+   */
+  inlineButtonPattern?: string;
+  inlineButtonFlags?: string;
   scope?: 'between-last-two-separators' | 'window-around-question' | 'whole-screen';
   scopeWindowLines?: number;
   contextHeader?: ModalContextHeader;
@@ -174,18 +187,51 @@ function buildMessage(
 
 // ─── Public builder ────────────────────────────────────────────────────
 
-export function buildParseApprovalFromTui(spec: ModalTuiSpec): CliParseApprovalFn {
+function extractInlineButtons(
+  spec: ModalTuiSpec,
+  lines: string[],
+  windowStart: number,
+  windowEnd: number,
+): string[] {
+  if (!spec.inlineButtonPattern) return [];
+  // Always force the `g` flag so we can iterate all matches in the line.
+  const declaredFlags = spec.inlineButtonFlags ?? 'gi';
+  const flags = declaredFlags.includes('g') ? declaredFlags : declaredFlags + 'g';
+  const re = compile(spec.inlineButtonPattern, flags);
+  const out: string[] = [];
+  for (let i = windowStart; i < windowEnd; i += 1) {
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(lines[i])) !== null) {
+      const label = (m[1] ?? m[0]).trim();
+      if (label && !out.includes(label)) out.push(label);
+      if (m.index === re.lastIndex) re.lastIndex += 1; // safety against zero-width matches
+    }
+  }
+  return out;
+}
+
+export function buildParseApprovalFromTui(
+  spec: ModalTuiSpec,
+  visibleRegion?: VisibleRegionSpec,
+): CliParseApprovalFn {
   const minButtons = spec.minButtons ?? 2;
 
   return function parseApproval(input: CliApprovalInput): CliApprovalModal | null {
-    const text = input.screenText ?? input.buffer ?? '';
-    if (!text) return null;
+    const rawText = input.screenText ?? input.buffer ?? '';
+    if (!rawText) return null;
+    const text = visibleRegion ? applyVisibleRegion(visibleRegion, rawText) : rawText;
     const lines = text.split('\n');
     const question = findQuestionLineIndex(spec, lines);
     if (!question) return null;
     const { start, end } = scopeLines(spec, lines, question.index);
     if (question.index < start || question.index >= end) return null;
-    const buttons = extractButtons(spec, lines, question.index + 1, end);
+    let buttons = extractButtons(spec, lines, question.index + 1, end);
+    // Inline fallback: when per-line extraction came up short, the terminal
+    // may have rendered every option on the same line ("[0] skip [1] yes …").
+    if (buttons.length < minButtons && spec.inlineButtonPattern) {
+      buttons = extractInlineButtons(spec, lines, question.index, end);
+    }
     if (buttons.length < minButtons) return null;
     const message = buildMessage(spec, lines, question.index, start, end);
     return { message, buttons };

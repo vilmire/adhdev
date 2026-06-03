@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/footer-chrome@1",
+  "title": "TUI footer chrome",
+  "description": "Declares the lines/regions that constitute the persistent CLI footer (input hint, model badge, token counter, etc.). Used to mask the footer out before running prompt-marker / spinner / settled-prompt matchers, so chrome text never gets misclassified as agent state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["regions"],
+  "properties": {
+    "$schema": { "const": "adhdev:tui/footer-chrome@1" },
+    "regions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered list of regions; the first match wins. Each region is identified by a sentinel + bounded line span.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sentinel"],
+        "properties": {
+          "name": { "type": "string" },
+          "sentinel": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pattern"],
+            "properties": {
+              "pattern": { "type": "string", "description": "Regex source." },
+              "flags": { "type": "string" }
+            }
+          },
+          "spanLinesBefore": { "type": "integer", "minimum": 0, "default": 0 },
+          "spanLinesAfter": { "type": "integer", "minimum": 0, "default": 0 },
+          "anchor": {
+            "enum": ["bottom", "any"],
+            "default": "bottom",
+            "description": "When 'bottom', region must be within the last N lines of the screen."
+          },
+          "bottomLookbackLines": { "type": "integer", "minimum": 1, "default": 12 }
+        }
+      }
+    }
+  }
+}

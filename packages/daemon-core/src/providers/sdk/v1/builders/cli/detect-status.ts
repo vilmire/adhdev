@@ -24,6 +24,10 @@ import type {
   CliStatus,
   CliDetectStatusFn,
 } from '../../types/cli/index.js';
+import {
+  applyVisibleRegion,
+  type VisibleRegionSpec,
+} from './visible-region.js';
 
 // ─── Primitive spec shapes (mirror the JSON schemas) ───────────────────
 
@@ -67,10 +71,26 @@ interface ModalSpec {
   buttonFlags?: string;
 }
 
+export type DispatchGroup =
+  | 'spinner'
+  | 'modal'
+  | 'settled-prompt'
+  | 'cue-ordering'
+  | 'error-detection'
+  | 'approval-stitching';
+
+export interface DispatchOrderSpec {
+  $schema: 'adhdev:tui/dispatch-order@1';
+  order: DispatchGroup[];
+  onNoMatch?: 'idle' | 'unknown' | 'preserve-last';
+}
+
 export interface DetectStatusTuiSpec {
   spinner?: SpinnerSpec;
   settledPrompt?: SettledPromptSpec;
   modal?: ModalSpec;
+  dispatchOrder?: DispatchOrderSpec;
+  visibleRegion?: VisibleRegionSpec;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────
@@ -158,38 +178,77 @@ function modalMatches(spec: ModalSpec, input: CliStatusInput): boolean {
 
 // ─── Public builder ────────────────────────────────────────────────────
 
+const DEFAULT_ORDER: DispatchGroup[] = ['spinner', 'modal', 'settled-prompt'];
+
+function evaluateGroup(
+  group: DispatchGroup,
+  spec: DetectStatusTuiSpec,
+  input: CliStatusInput,
+  compiled: {
+    spinner: RegExp[] | null;
+    settled: ReturnType<typeof compileSettledPromptMatchers> | null;
+  },
+): CliStatus | null {
+  switch (group) {
+    case 'spinner': {
+      if (!spec.spinner || !compiled.spinner) return null;
+      const text = scopeText(input, spec.spinner.scope, spec.spinner.scopeWindowLines);
+      return compiled.spinner.some((re) => re.test(text)) ? 'generating' : null;
+    }
+    case 'modal': {
+      if (!spec.modal) return null;
+      return modalMatches(spec.modal, input) ? 'waiting_approval' : null;
+    }
+    case 'settled-prompt': {
+      if (!spec.settledPrompt || !compiled.settled) return null;
+      const text = scopeText(input, spec.settledPrompt.scope, spec.settledPrompt.scopeWindowLines);
+      if (!compiled.settled.prompt.test(text)) return null;
+      if (compiled.settled.footers.length === 0) return 'idle';
+      return compiled.settled.footers.every((f) => f.test(text)) ? 'idle' : null;
+    }
+    // Groups declared in the catalog but not yet implemented as builder steps
+    // return null so they are no-ops in dispatch — declaring them in `order`
+    // is forward-compatible. Phase 2 Week 8+ will wire them.
+    case 'cue-ordering':
+    case 'error-detection':
+    case 'approval-stitching':
+      return null;
+    default:
+      return null;
+  }
+}
+
 export function buildDetectStatusFromTui(spec: DetectStatusTuiSpec): CliDetectStatusFn {
   const compiledSpinner = spec.spinner ? compileSpinnerMatchers(spec.spinner) : null;
   const compiledSettled = spec.settledPrompt
     ? compileSettledPromptMatchers(spec.settledPrompt)
     : null;
-  // Modal compilation is recomputed each call because the question + variants
-  // share a small RegExp set we don't need to memoise heavily. Cheap on hot path.
+  const compiled = { spinner: compiledSpinner, settled: compiledSettled };
+  const order = spec.dispatchOrder?.order && spec.dispatchOrder.order.length > 0
+    ? spec.dispatchOrder.order
+    : DEFAULT_ORDER;
 
   return function detectStatus(input: CliStatusInput): CliStatus | null {
-    // Order matters — see file header docstring.
-
-    // 1. Generation cues
-    if (spec.spinner && compiledSpinner) {
-      const text = scopeText(input, spec.spinner.scope, spec.spinner.scopeWindowLines);
-      if (compiledSpinner.some((re) => re.test(text))) return 'generating';
-    }
-
-    // 2. Modal cue
-    if (spec.modal && modalMatches(spec.modal, input)) {
-      return 'waiting_approval';
-    }
-
-    // 3. Settled prompt
-    if (spec.settledPrompt && compiledSettled) {
-      const text = scopeText(input, spec.settledPrompt.scope, spec.settledPrompt.scopeWindowLines);
-      if (compiledSettled.prompt.test(text)) {
-        if (compiledSettled.footers.length === 0 || compiledSettled.footers.every((f) => f.test(text))) {
-          return 'idle';
+    // Apply visible-region scoping before running any matchers.
+    const effectiveInput: CliStatusInput = spec.visibleRegion
+      ? {
+          ...input,
+          screenText: applyVisibleRegion(spec.visibleRegion, input.screenText ?? ''),
+          tail: applyVisibleRegion(spec.visibleRegion, input.tail),
         }
-      }
-    }
+      : input;
 
+    for (const group of order) {
+      const verdict = evaluateGroup(group, spec, effectiveInput, compiled);
+      if (verdict !== null) return verdict;
+    }
+    // onNoMatch policy: the builder always returns null when nothing matched.
+    // The daemon's outer state machine maps null per the policy below:
+    //   'idle'          → caller treats null as idle (default)
+    //   'unknown'       → caller keeps status unknown / shows last
+    //   'preserve-last' → caller preserves the last reported verdict
+    // Encoding this here would require call-site state; instead the daemon
+    // reads `dispatchOrder.onNoMatch` from the manifest directly.
     return null;
   };
 }
