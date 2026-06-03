@@ -41,6 +41,10 @@ interface DashboardMobileChatInboxProps {
     isConnected?: boolean
     isStandalone?: boolean
     onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
+    /** Optional: returns true if the conversation is muted (standalone only). */
+    isConversationMuted?: (conversation: ActiveConversation) => boolean
+    /** Optional: toggle mute state for a conversation (standalone only). */
+    onToggleMuteConversation?: (conversation: ActiveConversation) => void
 }
 
 function InboxSectionHeader({
@@ -157,6 +161,8 @@ function DashboardMobileChatItem({
     onRequestHideConversation,
     onOpenMeshGraph,
     onCollectChatDebugBundle,
+    isMuted,
+    onToggleMute,
 }: {
     item: MobileConversationListItem
     type: 'needs_attention' | 'task_complete' | 'working' | 'earlier'
@@ -165,6 +171,8 @@ function DashboardMobileChatItem({
     onRequestHideConversation?: () => void
     onOpenMeshGraph?: (conversation: ActiveConversation) => void
     onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
+    isMuted?: boolean
+    onToggleMute?: () => void
 }) {
     const isUnread = type === 'needs_attention' || type === 'task_complete'
     const isWorking = type === 'working'
@@ -236,6 +244,26 @@ function DashboardMobileChatItem({
                         >
                             <IconEyeOff size={11} />
                             <span>Hide</span>
+                        </button>
+                    )}
+                    {onToggleMute && (
+                        <button
+                            type="button"
+                            className={`mobile-inbox-mute-button inline-flex min-h-7 items-center justify-center gap-1 rounded-full border px-2 text-[10px] font-semibold transition-colors ${
+                                isMuted
+                                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
+                                    : 'border-border-subtle bg-bg-primary/70 text-text-muted hover:border-border-default hover:text-text-primary'
+                            }`}
+                            onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                onToggleMute()
+                            }}
+                            aria-label={isMuted ? `Unmute ${title}` : `Mute ${title}`}
+                            title={isMuted ? 'Unmute (resume notifications)' : 'Mute notifications'}
+                        >
+                            <IconBell size={11} />
+                            <span>{isMuted ? 'Muted' : 'Mute'}</span>
                         </button>
                     )}
                     {meshGraphAvailable && onOpenMeshGraph && (
@@ -334,6 +362,8 @@ export default function DashboardMobileChatInbox({
     wsStatus = 'connected',
     isStandalone = false,
     onCollectChatDebugBundle,
+    isConversationMuted,
+    onToggleMuteConversation,
 }: DashboardMobileChatInboxProps) {
     const [hideConfirmConversation, setHideConfirmConversation] = useState<ActiveConversation | null>(null)
     const isDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed'
@@ -448,7 +478,7 @@ export default function DashboardMobileChatInbox({
                                 title={isStandalone ? 'Waiting for your daemon' : 'Connect your machines'}
                                 subtitle={
                                     isStandalone
-                                        ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can open an IDE or launch CLI and ACP sessions.'
+                                        ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can launch sessions with any installed provider.'
                                         : 'Install ADHDev on a machine, sign in, and it will show up here.'
                                 }
                             >
@@ -509,6 +539,8 @@ export default function DashboardMobileChatInbox({
                                         onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
                                         onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
+                                        isMuted={isConversationMuted?.(item.conversation)}
+                                        onToggleMute={onToggleMuteConversation ? () => onToggleMuteConversation(item.conversation) : undefined}
                                     />
                                 </div>
                             ))}
@@ -530,6 +562,8 @@ export default function DashboardMobileChatInbox({
                                         onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
                                         onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
+                                        isMuted={isConversationMuted?.(item.conversation)}
+                                        onToggleMute={onToggleMuteConversation ? () => onToggleMuteConversation(item.conversation) : undefined}
                                     />
                                 </div>
                             ))}
@@ -551,6 +585,8 @@ export default function DashboardMobileChatInbox({
                                         onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
                                         onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
+                                        isMuted={isConversationMuted?.(item.conversation)}
+                                        onToggleMute={onToggleMuteConversation ? () => onToggleMuteConversation(item.conversation) : undefined}
                                     />
                                 </div>
                             ))}
@@ -575,6 +611,8 @@ export default function DashboardMobileChatInbox({
                                             onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
                                             onOpenMeshGraph={onOpenMeshGraph}
                                             onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
+                                            isMuted={isConversationMuted?.(item.conversation)}
+                                            onToggleMute={onToggleMuteConversation ? () => onToggleMuteConversation(item.conversation) : undefined}
                                         />
                                     </div>
                                 ))}

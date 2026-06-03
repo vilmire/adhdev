@@ -144,21 +144,11 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         userDir: appConfig.providerDir,
     });
 
-    // If no upstream providers exist, fetch them first (blocking — critical for new users).
-    // Try the registry first (per-provider checksums, incremental); fall back to GitHub tarball.
-    if (!disableUpstream && !providerLoader.hasUpstream()) {
-        LOG.info('Provider', 'No upstream providers found — syncing from registry...');
-        try {
-            const regResult = await providerLoader.fetchFromRegistry();
-            if (!regResult.updated && regResult.error) {
-                LOG.info('Provider', 'Registry unavailable — falling back to GitHub tarball...');
-                await providerLoader.fetchLatest();
-            }
-        } catch (e: any) {
-            LOG.warn('Provider', `⚠ Failed to fetch providers: ${e?.message}`);
-        }
-    }
-
+    // Boot-time auto-sync is intentionally disabled. The user picks which
+    // providers to install via the dashboard onboarding / Providers tab; the
+    // daemon ships empty and only contains what the user explicitly installs.
+    // Manual sync is still available via the install / check_provider_updates
+    // commands (and the REST endpoint at /api/v1/providers/updates).
     providerLoader.loadAll();
     providerLoader.registerToDetector();
 

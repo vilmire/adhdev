@@ -251,14 +251,19 @@ export default function DashboardMobileMachineScreen({
                     </section>
                 )}
 
-                {(launcher.hasIdeOptions || cliProviders.length > 0 || acpProviders.length > 0) && (
+                {/*
+                  * Old "Start" launcher (workspace dropdown + IDE/CLI/ACP picker)
+                  * removed: it duplicated the dashboard "+" New Session dialog
+                  * with worse UX. The inbox "+" button now drives all launches.
+                  */}
+                {false && (
                     <section className="flex flex-col gap-0">
                         <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Start</div>
                         <div className="grid grid-cols-1 gap-2.5 px-4">
                             <div className="flex flex-col gap-2.5 w-full p-3.5 rounded-2xl border border-border-default/80 bg-surface-primary/90">
                                 <div className="text-sm font-bold text-text-primary">Workspace</div>
                                 <div className="text-xs leading-relaxed text-text-secondary">
-                                    Pick a saved workspace or browse folders before choosing IDE, CLI, or ACP.
+                                    Pick a saved workspace or browse folders before choosing a session type.
                                 </div>
                                 <select
                                     value={launcher.workspaceChoice}

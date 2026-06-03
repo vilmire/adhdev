@@ -18,6 +18,7 @@ import { TransportProvider, MachineDetail, Dashboard, RepoMesh, useBaseDaemons, 
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
+import StandaloneOnboarding, { hasCompletedOnboarding } from './StandaloneOnboarding'
 import '@adhdev/web-core/index.css'
 
 // Restore persisted appearance before first render so CSS vars resolve correctly.
@@ -174,6 +175,34 @@ function SingleMachineRedirect() {
     return <Navigate to="/dashboard" replace />
 }
 
+/**
+ * Show the first-boot onboarding dialog when:
+ *   - the user has not completed onboarding before (localStorage flag), AND
+ *   - the daemon currently has 0 installed providers.
+ *
+ * If either is false, render nothing. After Done/Skip, the dialog persists
+ * the flag and never reopens.
+ */
+function OnboardingGate() {
+    const [show, setShow] = useState(false)
+
+    useEffect(() => {
+        let cancelled = false
+        if (hasCompletedOnboarding()) return
+        fetch('/api/v1/providers/installed')
+            .then(r => r.ok ? r.json() : { providers: [] })
+            .then((data: { providers?: unknown[] }) => {
+                if (cancelled) return
+                if ((data.providers ?? []).length === 0) setShow(true)
+            })
+            .catch(() => { /* ignore — likely no daemon yet */ })
+        return () => { cancelled = true }
+    }, [])
+
+    if (!show) return null
+    return <StandaloneOnboarding onDone={() => setShow(false)} />
+}
+
 export default function App() {
     const transportValue = useMemo(() => ({
         sendCommand: sendCommandViaWs,
@@ -193,6 +222,7 @@ export default function App() {
                     <StandaloneDaemonProvider>
                         <TransportProvider value={transportValue}>
                             <StandaloneLayout>
+                                <OnboardingGate />
                                 <Routes>
                                     <Route path="/dashboard" element={<Dashboard />} />
                                     <Route path="/machine" element={<SingleMachineRedirect />} />
