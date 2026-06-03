@@ -50,7 +50,7 @@ const SAFE_STDLIB = new Set<string>([
  * Standard library modules that need a shim — we expose a deliberately
  * narrowed surface and trap everything else.
  */
-const SHIMMED_STDLIB = new Set<string>(['fs', 'child_process']);
+const SHIMMED_STDLIB = new Set<string>(['fs', 'child_process', 'process']);
 
 const ALL_GATED_STDLIB = new Set<string>([
     ...SAFE_STDLIB,
@@ -163,6 +163,136 @@ function shimmedExecFileSync(
 const CHILD_PROCESS_SHIM = Object.freeze({
     execFileSync: shimmedExecFileSync,
 });
+
+// ─── process shim — block lifecycle/abort/native bridges ────────────────────
+
+/**
+ * The methods on `globalThis.process` that a provider script must NEVER be
+ * able to call. `exit`/`kill`/`abort` would terminate the daemon; `binding`
+ * and `dlopen` are escape hatches that re-introduce arbitrary native code
+ * (the whole reason the require() whitelist exists in the first place).
+ */
+const DANGEROUS_PROCESS_METHODS = new Set<string>([
+    'exit', 'kill', 'abort', 'binding', 'dlopen', '_kill', '_exit',
+    'reallyExit', '_fatalException',
+]);
+
+let _processGloballyHardened = false;
+let _originalProcessMethods: Map<string, unknown> | null = null;
+
+/**
+ * Decide whether the current call stack passes through a registered provider
+ * script root. We use `new Error().stack` (cheaper than `Error.captureStackTrace`
+ * for hot paths because we never need a frame object). The stack string format
+ * is `at <fn> (<filename>:line:col)` per frame; we scan for any registered
+ * provider root substring. This is best-effort: a determined attacker who
+ * controls a non-provider module loaded BY a provider could escape this, but
+ * the require() whitelist already prevents loading such modules.
+ */
+function callStackTouchesProviderRoot(): boolean {
+    if (_gatedRoots.length === 0) return false;
+    const stack = new Error().stack || '';
+    for (const root of _gatedRoots) {
+        if (stack.includes(root.rootPath)) return true;
+    }
+    return false;
+}
+
+/**
+ * Wrap `globalThis.process` methods so calls from provider script stacks
+ * throw, while every other caller (daemon-core itself, npm deps, the test
+ * harness) goes through untouched.
+ *
+ * Trade-off: this is a stack-introspection check on every call to the
+ * affected methods. The methods in question (exit/kill/abort/binding/dlopen)
+ * are not hot paths — they're either never called or called once at
+ * shutdown. The cost is negligible.
+ *
+ * Alternative considered: wrap only the module-scope `process` binding via
+ * Module._extensions. Node's ESM/CJS semantics make this unreliable across
+ * dynamic-require paths. Stack introspection is uglier but correct.
+ *
+ * Caveat: a provider script that grabs `globalThis.process.exit` once and
+ * passes the reference to a non-provider callback can still escape — the
+ * stack at the actual call site no longer goes through provider code. We
+ * accept this gap; the threat model assumes scripts are not actively
+ * trying to launder calls through arbitrary daemon callbacks, just that
+ * a naive `process.exit(0)` should not silently terminate the daemon.
+ */
+export function installProviderProcessShim(): void {
+    if (_processGloballyHardened) return;
+    _processGloballyHardened = true;
+    const proc = globalThis.process as unknown as Record<string, unknown>;
+    if (!proc) return;
+    _originalProcessMethods = new Map();
+    for (const name of DANGEROUS_PROCESS_METHODS) {
+        const original = proc[name];
+        if (typeof original !== 'function') continue;
+        _originalProcessMethods.set(name, original);
+        const wrapped = function gatedProcessMethod(this: unknown, ...args: unknown[]): unknown {
+            if (callStackTouchesProviderRoot()) {
+                const err: any = new Error(
+                    `process.${name}() denied: provider scripts cannot terminate, signal, or extend the daemon process.`,
+                );
+                err.code = 'PROVIDER_PROCESS_DENIED';
+                err.method = name;
+                throw err;
+            }
+            return (original as (...a: unknown[]) => unknown).apply(this, args);
+        };
+        try {
+            // Preserve `.name` for stack traces / debugging tools.
+            Object.defineProperty(wrapped, 'name', { value: name, configurable: true });
+            proc[name] = wrapped;
+        } catch {
+            // Some Node builds mark certain process.* members non-writable.
+            // Skip silently; the require('process') gate still applies.
+        }
+    }
+}
+
+/** For tests — restore the original process.* methods. */
+export function _uninstallProviderProcessShimForTest(): void {
+    if (!_originalProcessMethods) {
+        _processGloballyHardened = false;
+        return;
+    }
+    const proc = globalThis.process as unknown as Record<string, unknown>;
+    for (const [name, original] of _originalProcessMethods) {
+        try { proc[name] = original; } catch { /* noop */ }
+    }
+    _originalProcessMethods = null;
+    _processGloballyHardened = false;
+}
+
+/**
+ * Build the `process` shim returned to provider scripts that do
+ * `require('process')`. Same surface as `globalThis.process` minus the
+ * dangerous methods, which are replaced with throwers regardless of caller
+ * (because they got here via the whitelist — caller is definitively a
+ * provider script).
+ */
+function buildProcessShim(): NodeJS.Process {
+    const real = globalThis.process;
+    const shim: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(real) as Array<keyof NodeJS.Process>) {
+        if (DANGEROUS_PROCESS_METHODS.has(String(key))) continue;
+        try { shim[key as string] = (real as any)[key]; } catch { /* noop */ }
+    }
+    for (const name of DANGEROUS_PROCESS_METHODS) {
+        shim[name] = function blockedProcessMethod(): never {
+            const err: any = new Error(
+                `process.${name}() denied via require('process'): provider scripts cannot terminate, signal, or extend the daemon.`,
+            );
+            err.code = 'PROVIDER_PROCESS_DENIED';
+            err.method = name;
+            throw err;
+        };
+    }
+    return Object.freeze(shim) as unknown as NodeJS.Process;
+}
+
+const PROCESS_SHIM = buildProcessShim();
 
 // ─── Hook installation ─────────────────────────────────────────────────────
 
@@ -313,6 +443,7 @@ function gatedRequire(
     }
     if (normalized === 'fs') return FS_SHIM;
     if (normalized === 'child_process') return CHILD_PROCESS_SHIM;
+    if (normalized === 'process') return PROCESS_SHIM;
     // SAFE_STDLIB — pass through.
     return originalLoad.call(this, request, parent, isMain);
 }
@@ -337,4 +468,5 @@ export const PROVIDER_REQUIRE_POLICY = Object.freeze({
     shimmedStdlib: Array.from(SHIMMED_STDLIB).sort(),
     fsAllowedMembers: Array.from(FS_READ_ONLY_MEMBERS),
     childProcessAllowedMembers: ['execFileSync'],
+    processDeniedMembers: Array.from(DANGEROUS_PROCESS_METHODS).sort(),
 });

@@ -38,6 +38,8 @@ import type { IdeProviderInstance } from '../providers/ide-provider-instance.js'
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
+import { applyProcessHardening } from './process-hardening.js';
+import { installProviderProcessShim } from '../providers/sdk/v1/sandbox/require-whitelist.js';
 
 // ─── Init Config ───
 
@@ -130,6 +132,13 @@ export interface DaemonDevSupportOptions {
  *   8. Start instance ticking
  */
 export async function initDaemonComponents(config: DaemonInitConfig): Promise<DaemonComponents> {
+    // 0. Process-level hardening (must run before any provider script is loaded).
+    //    Freezes built-in prototypes (Object/Array/Function/String/Number/Boolean/Promise)
+    //    and shadows process.exit/kill/abort/binding/dlopen so provider-script callers
+    //    throw instead of killing the daemon. See ./process-hardening.ts for details.
+    applyProcessHardening();
+    installProviderProcessShim();
+
     // 1. Global log interceptor
     installGlobalInterceptor();
     loadMeshCoordinatorRegistry();
