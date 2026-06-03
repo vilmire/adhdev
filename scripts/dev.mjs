@@ -169,16 +169,16 @@ function startChild(spec) {
   // `--disallow-code-generation-from-strings` makes `eval('...')` and
   // `new Function('...')` throw EvalError at runtime, closing the
   // dynamic-code-generation bypass around the require() whitelist.
-  // The flag is process-wide, so it covers tsx + every npm dep too. The
-  // daemon and its current deps boot fine with it on (verified manually);
-  // if a future dep starts using runtime code generation, the flag will
-  // surface that immediately at first import. The web/core watcher
-  // children inherit it via env, which is fine — none of them use eval.
+  // Applied ONLY to the daemon child. Vite (web spec) builds an
+  // AsyncFunction from string at startup and crashes with this flag on;
+  // daemon-core (the tsup --watch child) is safe but doesn't need it.
   const env = { ...process.env };
-  const hardeningFlag = '--disallow-code-generation-from-strings';
-  const existing = env.NODE_OPTIONS || '';
-  if (!existing.includes(hardeningFlag)) {
-    env.NODE_OPTIONS = existing ? `${existing} ${hardeningFlag}` : hardeningFlag;
+  if (spec.name === 'daemon') {
+    const hardeningFlag = '--disallow-code-generation-from-strings';
+    const existing = env.NODE_OPTIONS || '';
+    if (!existing.includes(hardeningFlag)) {
+      env.NODE_OPTIONS = existing ? `${existing} ${hardeningFlag}` : hardeningFlag;
+    }
   }
   const child = spawn(npmCmd, spec.args, {
     cwd: repoRoot,
