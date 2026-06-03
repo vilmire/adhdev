@@ -2363,12 +2363,25 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         if (liveSessions.length > 0) {
             // Slim to essential fields only — full session objects are expensive in coordinator context.
             entry.sessions = liveSessions
-                .map((s: any) => ({
-                    id: s.instanceId ?? s.id ?? s.sessionId,
-                    status: s.status ?? s.lifecycle ?? s.state,
-                    providerType: s.providerType ?? s.cliType ?? s.type,
-                    ...(s.activeChat?.status ? { chatStatus: s.activeChat.status } : {}),
-                }))
+                .map((s: any) => {
+                    // A session is marked as a coordinator for THIS mesh when the daemon's
+                    // coordinator registry / session settings report its meshId matches ours.
+                    // From the caller's perspective (which is itself a coordinator for this
+                    // mesh), any such session is "self" — i.e. it is the calling coordinator
+                    // session, not a foreign delegated worker. This prevents the coordinator
+                    // from mis-reporting its own generating CLI session as someone else's
+                    // delegated task.
+                    const coordinatorMeshId =
+                        typeof s.coordinator?.meshId === 'string' ? s.coordinator.meshId : undefined;
+                    const isSelfCoordinator = coordinatorMeshId === mesh.id;
+                    return {
+                        id: s.instanceId ?? s.id ?? s.sessionId,
+                        status: s.status ?? s.lifecycle ?? s.state,
+                        providerType: s.providerType ?? s.cliType ?? s.type,
+                        ...(s.activeChat?.status ? { chatStatus: s.activeChat.status } : {}),
+                        ...(isSelfCoordinator ? { isSelfCoordinator: true, role: 'coordinator' as const } : {}),
+                    };
+                })
                 // Exclude sessions with no resolvable id (malformed or custom provider response).
                 .filter((s: any) => s.id);
         }
@@ -2389,6 +2402,26 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         note: activeWorkEvidence.staleDirectWorkNote,
         detailHint: 'Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail.',
     });
+
+    // Surface coordinator session identity at the top level so the caller (which
+    // is itself a coordinator for this mesh) can immediately recognize which
+    // sessions in the response are its own — see the per-session
+    // `isSelfCoordinator` marker derived above.
+    const coordinatorSessions: Array<Record<string, unknown>> = [];
+    for (const nodeEntry of results) {
+        const sessions = Array.isArray((nodeEntry as any).sessions) ? (nodeEntry as any).sessions : [];
+        for (const s of sessions) {
+            if (s?.isSelfCoordinator === true && s.id) {
+                coordinatorSessions.push({
+                    nodeId: (nodeEntry as any).nodeId,
+                    sessionId: s.id,
+                    providerType: s.providerType,
+                    status: s.status,
+                });
+            }
+        }
+    }
+
     const response: Record<string, unknown> = {
         meshId: mesh.id,
         meshName: mesh.name,
@@ -2410,6 +2443,16 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         activeWorkSummary: activeWorkEvidence.summary,
         ...(pollingGuidance ? { pollingGuidance } : {}),
         branchConvergenceSummary: summarizeBranchConvergence(results),
+        ...(coordinatorSessions.length > 0
+            ? {
+                coordinatorSessions,
+                selfIdentification: {
+                    meshId: mesh.id,
+                    coordinatorSessions,
+                    note: 'Sessions listed here are coordinator sessions for this mesh. The calling coordinator IS one of these sessions — do not treat its own generating CLI session as a foreign delegated task. Per-session marker: sessions[].isSelfCoordinator === true.',
+                },
+            }
+            : {}),
     };
 
     // Include task ledger summary for coordinator context
