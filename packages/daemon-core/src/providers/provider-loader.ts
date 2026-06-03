@@ -1020,6 +1020,36 @@ export class ProviderLoader {
           resolved.scripts = { ...resolved.scripts, ...override.scripts };
         }
       }
+    } else if (base.overrides && typeof base.overrides === 'object') {
+      // v1 manifest shape: { detectStatus: { path }, parseSession: { path }, ... }
+      // Each script name maps to a path inside the provider directory. We load
+      // the file and merge its export(s) into resolved.scripts. Lets a
+      // provider override a single primitive (e.g. just detectStatus) while
+      // letting the SDK synthesize the rest from the tui block.
+      const providerDir = this.findProviderDirInternal(base.type);
+      if (providerDir) {
+        for (const [scriptName, override] of Object.entries(base.overrides as Record<string, any>)) {
+          if (!override || typeof override.path !== 'string') continue;
+          const fullPath = path.join(providerDir, override.path);
+          if (!fs.existsSync(fullPath)) {
+            this.log(`  [overrides] ${base.type}: ${scriptName} path not found: ${fullPath}`);
+            continue;
+          }
+          try {
+            delete require.cache[require.resolve(fullPath)];
+            const fn = require(fullPath);
+            const target = typeof fn === 'function' ? fn : (fn && fn[scriptName]);
+            if (typeof target === 'function') {
+              resolved.scripts = { ...resolved.scripts, [scriptName]: target } as any;
+              this.log(`  [overrides] ${base.type}: ${scriptName} loaded from ${override.path}`);
+            } else {
+              this.log(`  [overrides] ${base.type}: ${scriptName} export missing in ${override.path}`);
+            }
+          } catch (e: any) {
+            this.log(`  [overrides] ${base.type}: ${scriptName} require failed: ${e?.message || e}`);
+          }
+        }
+      }
     }
 
     if ((resolved.category === 'cli' || resolved.category === 'acp') && resolved.spawn?.command) {

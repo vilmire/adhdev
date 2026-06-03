@@ -379,8 +379,13 @@ export class ProviderCliAdapter implements CliAdapter {
             resolvedConfig.timeouts,
         );
 
-        // Scripts delegated to CliScriptRunner — adapter stays as transport
-        this.runner.setScripts(provider.scripts || {});
+        // Scripts delegated to CliScriptRunner — adapter stays as transport.
+        // Pass the manifest tui block so the runner can build the
+        // declarativeDetectStatus / declarativeParseApproval SDK functions
+        // that v1 extended-tier overrides depend on (without these, scripts
+        // like codex-cli's detect_status v1 fail-closed with return 'idle'
+        // and the session sticks in `generating` forever).
+        this.runner.setScripts(provider.scripts || {}, provider.tui);
         const scriptNames = this.runner.getScriptNames();
         if (scriptNames.length > 0) {
             LOG.info('CLI', `[${this.cliType}] CLI scripts: [${scriptNames.join(', ')}]`);

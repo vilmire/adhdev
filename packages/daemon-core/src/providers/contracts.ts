@@ -481,6 +481,14 @@ export interface ProviderModule {
   compatibility?: ProviderCompatibilityEntry[];
   defaultScriptDir?: string;
   /**
+   * v1 declarative tui block (spinner/settledPrompt/modal/dispatchOrder/etc).
+   * When present, the daemon's CliScriptRunner builds canonical
+   * (input → verdict) functions from this and injects them into provider
+   * scripts as `sdk.declarativeDetectStatus` and `sdk.declarativeParseApproval`.
+   * v0 / verified-tier providers can omit this entirely.
+   */
+  tui?: Record<string, unknown>;
+  /**
    * Scripts that can run at the IDE main-page level (not just inside the extension webview session frame).
    * Default: ['listModes', 'setMode', 'listModels', 'setModel'].
    * Add extra scripts here if the provider supports them at the IDE level (e.g. 'setModelGui').

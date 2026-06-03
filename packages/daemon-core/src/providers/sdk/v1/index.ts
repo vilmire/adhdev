@@ -28,6 +28,14 @@ export {
   compactText,
   type ApprovalSquashSpec,
 } from './builders/cli/parse-approval-squash.js';
+export {
+  buildParseSessionFromTui,
+  normalizeMessageIdentity,
+  type ParseSessionTuiSpec,
+  type TranscriptPtySpec,
+  type SynthesizedMessage,
+  type SynthesizedSession,
+} from './builders/cli/parse-session.js';
 
 // ACP builders — declarative stdio session-status detection.
 export {

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/transcript-pty@1",
+  "title": "TUI transcript extraction (PTY screen)",
+  "description": "Declarative rules for extracting user/assistant/tool messages from a PTY screen buffer. Composed with detect-status + parse-approval to yield a full parseSession output without provider-specific JavaScript.\n\nThe extraction model: each line in the screen is classified as one of {assistant, user, tool, chrome, continuation}. Adjacent lines of the same role (or marked as continuations) get grouped into a single message. Chrome lines are skipped.\n\nWith just this primitive declared, a verified/declarative-only provider can produce a working transcript from PTY output alone, no parse_output.js required.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assistantPrefix"],
+  "properties": {
+    "$schema": { "const": "adhdev:tui/transcript-pty@1" },
+    "assistantPrefix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["regex"],
+      "description": "Regex that matches the leading character/string of an assistant message line. Capture group 1 is the rest of the line (the message content for this line). Examples: Claude `^[⏺]\\s+(.*)$`, Codex `^>\\s+(.*)$`.",
+      "properties": {
+        "regex": { "type": "string" },
+        "flags": { "type": "string", "default": "" }
+      }
+    },
+    "userPrefix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["regex"],
+      "description": "Optional: regex that matches the user's submitted prompt line on screen (post-echo). When omitted, user messages are tracked via input echo correlation only.",
+      "properties": {
+        "regex": { "type": "string" },
+        "flags": { "type": "string", "default": "" }
+      }
+    },
+    "toolPrefix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["regex"],
+      "description": "Optional: regex that matches lines emitted by tool calls. By default these are surfaced as `kind: 'tool'` messages. Examples: Claude `^[⎿]\\s+(.*)$`, Codex `^[•]\\s+(.*)$`.",
+      "properties": {
+        "regex": { "type": "string" },
+        "flags": { "type": "string", "default": "" },
+        "skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, tool lines are silently dropped from the transcript instead of being emitted as `kind: 'tool'` messages."
+        }
+      }
+    },
+    "continuationLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How to recognize continuation lines (no prefix) that belong to the previous message. Default rule: any non-empty line that is not chrome and has no role prefix continues the previous message.",
+      "properties": {
+        "indented": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, only lines starting with whitespace are continuation lines. When false (default), any unprefixed non-chrome non-empty line is a continuation."
+        }
+      }
+    },
+    "chromePatterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["regex"],
+        "properties": {
+          "regex": { "type": "string" },
+          "flags": { "type": "string", "default": "" },
+          "label": { "type": "string" }
+        }
+      },
+      "description": "Lines matching any of these regexes are treated as chrome and excluded from messages. Use this for shell prompts, footer hints, copyright banners, etc."
+    },
+    "stripLeadingChrome": {
+      "type": "boolean",
+      "default": true,
+      "description": "When true, leading welcome/banner lines (before the first user or assistant prefix is seen) are dropped."
+    },
+    "scope": {
+      "enum": ["screen", "buffer", "tail"],
+      "default": "buffer",
+      "description": "Which input field to parse: rendered screen text, full buffer (default), or tail string. Most providers use buffer because the screen alone loses scrollback."
+    }
+  }
+}
