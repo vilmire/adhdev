@@ -1143,7 +1143,11 @@ export class ProviderLoader {
    * should proceed to the GitHub tarball fallback.
    */
   async fetchFromRegistry(): Promise<{ updated: boolean; error?: string }> {
-    if (this.disableUpstream) return { updated: false };
+    if (this.disableUpstream) {
+      this.log('Registry sync skipped (sourceMode=no-upstream)');
+      return { updated: false };
+    }
+    this.log(`Registry sync starting (${ProviderLoader.REGISTRY_BASE_URL})...`);
 
     const https = require('https') as typeof import('https');
     const regMetaPath = path.join(this.upstreamDir, ProviderLoader.REGISTRY_META_FILE);
