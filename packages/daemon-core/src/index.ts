@@ -456,6 +456,17 @@ export type { ExtensionInfo as InstallerExtensionInfo } from './installer.js';
 export { initDaemonComponents, startDaemonDevSupport, shutdownDaemonComponents } from './boot/daemon-lifecycle.js';
 export type { DaemonInitConfig, DaemonComponents, DaemonDevSupportOptions } from './boot/daemon-lifecycle.js';
 
+// ── Local IPC server (shared between cloud + standalone daemons) ──
+export {
+  startLocalIpcServer,
+  buildIpcStatusHttpResponse,
+  type LocalIpcServerOptions,
+  type LocalIpcServerHandle,
+  type IpcCommandContext,
+  type IpcCommandResult,
+  type IpcStatusPayload,
+} from './ipc/local-ipc-server.js';
+
 // ── Provider SDK (v1) — selective re-exports for external tooling ──
 // Tooling (registry publish, dashboard validators, the e2e harness) needs
 // the manifest validator, the builder catalog, and the contract version.
