@@ -1478,15 +1478,17 @@ export class ProviderLoader {
     } catch { }
   }
 
-  /** Count provider files (provider.js or provider.json) */
+  /** Count provider files (provider.v1.json or provider.json — at most one per dir). */
   private countProviders(dir: string): number {
     if (!fs.existsSync(dir)) return 0;
     let count = 0;
     const scan = (d: string) => {
       try {
-        for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+        const entries = fs.readdirSync(d, { withFileTypes: true });
+        const hasManifest = entries.some(e => e.name === 'provider.v1.json' || e.name === 'provider.json');
+        if (hasManifest) count++;
+        for (const entry of entries) {
           if (entry.isDirectory()) scan(path.join(d, entry.name));
-          else if (entry.name === 'provider.json') count++;
         }
       } catch { }
     };
@@ -1758,23 +1760,32 @@ export class ProviderLoader {
     const cat = provider.category;
 
     const searchRoots = this.getProviderRoots();
+    const hasManifest = (dir: string) =>
+      fs.existsSync(path.join(dir, 'provider.v1.json')) || fs.existsSync(path.join(dir, 'provider.json'));
+    const readManifestType = (dir: string): string | null => {
+      for (const file of ['provider.v1.json', 'provider.json']) {
+        const p = path.join(dir, file);
+        if (!fs.existsSync(p)) continue;
+        try {
+          const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          if (typeof data?.type === 'string') return data.type;
+        } catch { /* skip */ }
+      }
+      return null;
+    };
     for (const root of searchRoots) {
       if (!fs.existsSync(root)) continue;
       const candidate = this.getProviderDir(root, cat, type);
-      if (fs.existsSync(path.join(candidate, 'provider.json'))) return candidate;
+      if (hasManifest(candidate)) return candidate;
       // Scan category dir for type match
       const catDir = path.join(root, cat);
       if (fs.existsSync(catDir)) {
         try {
           for (const entry of fs.readdirSync(catDir, { withFileTypes: true })) {
             if (!entry.isDirectory()) continue;
-            const jsonPath = path.join(catDir, entry.name, 'provider.json');
-            if (fs.existsSync(jsonPath)) {
-              try {
-                const data = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
-                if (data.type === type) return path.join(catDir, entry.name);
-              } catch { /* skip */ }
-            }
+            const entryDir = path.join(catDir, entry.name);
+            const manifestType = readManifestType(entryDir);
+            if (manifestType === type) return entryDir;
           }
         } catch { /* skip */ }
       }
@@ -1867,11 +1878,18 @@ export class ProviderLoader {
         return;
       }
 
-      // Check if this directory has provider.json
+      // v1-first manifest selection. provider.v1.json (the SDK-shape
+      // manifest with `overrides`, `tui`, `source`, `canonicalHistory`)
+      // wins over provider.json (legacy). Without this branch the v1
+      // file is silently ignored — that's how the codex-cli `overrides`
+      // path and the tui-block builders went un-honored for the first
+      // pass of SDK rollout.
+      const hasV1 = entries.some(e => e.name === 'provider.v1.json');
       const hasJson = entries.some(e => e.name === 'provider.json');
 
-      if (hasJson) {
-        const jsonPath = path.join(d, 'provider.json');
+      if (hasV1 || hasJson) {
+        const manifestFile = hasV1 ? 'provider.v1.json' : 'provider.json';
+        const jsonPath = path.join(d, manifestFile);
         try {
           const raw = fs.readFileSync(jsonPath, 'utf-8');
           const mod = JSON.parse(raw) as Omit<ProviderModule, 'extensionIdPattern'> & {

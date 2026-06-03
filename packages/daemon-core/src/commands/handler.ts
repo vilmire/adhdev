@@ -687,7 +687,19 @@ export class DaemonCommandHandler implements CommandHelpers {
                 return { success: false, error: 'install path escaped marketplace root' };
             }
             fs.mkdirSync(targetDir, { recursive: true });
-            const targetPath = path.join(targetDir, 'provider.json');
+            // v1 vs v0 manifest selection — v1 manifests carry an SDK
+            // $schema URL or v1-only keys (tui, overrides-as-object,
+            // source, canonicalHistory). The loader prefers
+            // provider.v1.json when both exist, so writing v1 manifests
+            // under the v0 name would shadow them. Detect and write to
+            // the right file.
+            let manifestProbe: Record<string, any> = {};
+            try { manifestProbe = JSON.parse(manifestBody) as Record<string, any>; } catch { /* validation below */ }
+            const isV1 = typeof manifestProbe?.$schema === 'string' && manifestProbe.$schema.includes('/v1/')
+                || (manifestProbe?.overrides && typeof manifestProbe.overrides === 'object' && !Array.isArray(manifestProbe.overrides))
+                || !!manifestProbe?.tui;
+            const targetFile = isV1 ? 'provider.v1.json' : 'provider.json';
+            const targetPath = path.join(targetDir, targetFile);
             fs.writeFileSync(targetPath, manifestBody, 'utf-8');
 
             // 5. If the manifest declares a `source` GitHub repo, fetch the
@@ -982,8 +994,11 @@ export class DaemonCommandHandler implements CommandHelpers {
             let entries: string[];
             try { entries = fs.readdirSync(categoryDir); } catch { continue; }
             for (const type of entries) {
-                const manifestPath = path.join(categoryDir, type, 'provider.json');
-                if (!fs.existsSync(manifestPath)) continue;
+                // v1 manifest takes precedence over v0 when both are present.
+                const v1Path = path.join(categoryDir, type, 'provider.v1.json');
+                const v0Path = path.join(categoryDir, type, 'provider.json');
+                const manifestPath = fs.existsSync(v1Path) ? v1Path : (fs.existsSync(v0Path) ? v0Path : null);
+                if (!manifestPath) continue;
                 try {
                     const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
                     items.push({
