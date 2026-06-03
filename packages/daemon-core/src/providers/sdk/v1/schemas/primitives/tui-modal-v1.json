@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/modal@1",
+  "title": "tui/modal — v1",
+  "description": "Declares how to extract an approval modal from the screen. Codex `Do you want to proceed?` + numbered list, Claude approval frame with explicit separators, Antigravity `agy wants to run:` are all expressible. The builder returns null when no modal is visible; daemon then keeps status non-waiting.",
+  "type": "object",
+  "required": ["$schema", "questionPattern", "buttonPattern"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "const": "adhdev:tui/modal@1" },
+    "questionPattern": {
+      "type": "string",
+      "description": "Regex source matching the question line that introduces the modal. Examples: `Do you want to proceed\\?`, `Do you trust the contents of this directory\\?`, `agy wants to run:`."
+    },
+    "questionFlags": {
+      "type": "string",
+      "pattern": "^[gimsuy]*$",
+      "default": "i"
+    },
+    "questionVariants": {
+      "type": "array",
+      "description": "Additional regex sources that count as the same approval kind. Each is tried in order; the first match wins.",
+      "items": {
+        "type": "object",
+        "required": ["regex"],
+        "additionalProperties": false,
+        "properties": {
+          "regex": { "type": "string" },
+          "flags": { "type": "string", "pattern": "^[gimsuy]*$", "default": "i" },
+          "label": { "type": "string", "description": "Optional category label, e.g. \"trust-folder\", \"tool-approval\"." }
+        }
+      },
+      "default": []
+    },
+    "buttonPattern": {
+      "type": "string",
+      "description": "Regex source matching a single button line. Capture group 1 is the button label. Example: `^[\\s❯>]*\\d+\\.\\s+(.+)$`."
+    },
+    "buttonFlags": {
+      "type": "string",
+      "pattern": "^[gimsuy]*$",
+      "default": "m"
+    },
+    "scope": {
+      "default": "between-last-two-separators",
+      "description": "Where on the screen the question + buttons must appear together.",
+      "oneOf": [
+        {
+          "const": "between-last-two-separators",
+          "title": "Between last two separators",
+          "description": "Most robust for Claude/Antigravity-style framed modals."
+        },
+        {
+          "const": "window-around-question",
+          "title": "Window around the question line",
+          "description": "Matches when the modal is announced by an explicit question line; collects buttons in the N lines below."
+        },
+        {
+          "const": "whole-screen",
+          "title": "Whole screen",
+          "description": "Use sparingly; tends to false-positive on numbered lists in assistant prose."
+        }
+      ]
+    },
+    "scopeWindowLines": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 64,
+      "default": 16,
+      "description": "Lines of context around the question when scope is `window-around-question`."
+    },
+    "contextHeader": {
+      "type": "object",
+      "description": "Optional header line that should be included in the modal message text. Captures the tool name / command being approved.",
+      "additionalProperties": false,
+      "properties": {
+        "regex": { "type": "string" },
+        "flags": { "type": "string", "pattern": "^[gimsuy]*$", "default": "i" }
+      }
+    },
+    "continuationLines": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, indented lines immediately following a button line are concatenated to the previous label (handles wrapped long options like Antigravity's \"Yes, and always allow ...\")."
+    },
+    "minButtons": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 2,
+      "description": "Minimum buttons required for the modal to be considered valid. Daemon's auto-approve gate also enforces buttons.length > 0."
+    }
+  },
+  "examples": [
+    {
+      "$schema": "adhdev:tui/modal@1",
+      "questionPattern": "Do you want to (?:proceed|allow|run)",
+      "buttonPattern": "^[\\s❯>]*\\d+\\.\\s+(.+)$",
+      "scope": "between-last-two-separators",
+      "minButtons": 2
+    },
+    {
+      "$schema": "adhdev:tui/modal@1",
+      "questionPattern": "agy wants to run:",
+      "buttonPattern": "^\\s*\\d+\\.\\s+(.+)$",
+      "scope": "window-around-question",
+      "continuationLines": true,
+      "contextHeader": { "regex": "agy wants to run:\\s*\\n?(.+)" }
+    }
+  ]
+}

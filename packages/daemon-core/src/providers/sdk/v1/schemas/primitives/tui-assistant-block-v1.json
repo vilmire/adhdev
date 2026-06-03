@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/assistant-block@1",
+  "title": "tui/assistant-block — v1",
+  "description": "Declares how to extract assistant turns from the rendered transcript. The block starts at a marker (e.g. Claude `⏺`, Codex `Codex` heading) and ends at either the next user prompt or the next block marker. Each captured block becomes one assistant chat message.",
+  "type": "object",
+  "required": ["$schema", "startMarker"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "const": "adhdev:tui/assistant-block@1" },
+    "startMarker": {
+      "description": "Where an assistant block begins. Can be a plain substring or a regex.",
+      "oneOf": [
+        { "type": "string", "description": "Plain substring." },
+        {
+          "type": "object",
+          "required": ["regex"],
+          "additionalProperties": false,
+          "properties": {
+            "regex": { "type": "string" },
+            "flags": { "type": "string", "pattern": "^[gimsuy]*$", "default": "m" }
+          }
+        }
+      ]
+    },
+    "endMarker": {
+      "description": "Where the block ends. Common: next prompt marker or another startMarker. Defaults to \"next-user-prompt\".",
+      "default": "next-user-prompt",
+      "oneOf": [
+        { "const": "next-user-prompt", "title": "Stop at the next prompt marker line" },
+        { "const": "next-start-marker", "title": "Stop at the next startMarker" },
+        { "type": "string", "title": "Plain substring marker" },
+        {
+          "type": "object",
+          "required": ["regex"],
+          "additionalProperties": false,
+          "properties": {
+            "regex": { "type": "string" },
+            "flags": { "type": "string", "pattern": "^[gimsuy]*$", "default": "m" }
+          }
+        }
+      ]
+    },
+    "skipKinds": {
+      "type": "array",
+      "description": "Which sub-blocks to skip when classifying assistant turns. Tool calls and thinking blocks are usually classified separately via tui/tool-block and tui/thinking-block.",
+      "items": { "enum": ["tool", "thinking", "system"] },
+      "default": ["tool"]
+    },
+    "headerLines": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of header lines after the startMarker to skip when extracting content (e.g. Codex's `Codex\\n<timestamp>` header)."
+    },
+    "trimEmptyLeading": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether to strip leading whitespace-only lines from the captured content."
+    },
+    "trimEmptyTrailing": {
+      "type": "boolean",
+      "default": true
+    },
+    "kind": {
+      "type": "string",
+      "default": "standard",
+      "description": "The CliChatMessage.kind value to stamp on captured blocks."
+    },
+    "minLength": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Discard blocks whose captured content is shorter than this. Set higher if you have noisy short blocks (e.g. single-character paints)."
+    }
+  },
+  "examples": [
+    {
+      "$schema": "adhdev:tui/assistant-block@1",
+      "startMarker": "⏺",
+      "endMarker": "next-user-prompt",
+      "skipKinds": ["tool", "thinking"]
+    },
+    {
+      "$schema": "adhdev:tui/assistant-block@1",
+      "startMarker": { "regex": "^Codex\\s*$" },
+      "endMarker": "next-start-marker",
+      "headerLines": 1
+    }
+  ]
+}
