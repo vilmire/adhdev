@@ -22,7 +22,7 @@ vi.mock('../../src/detection/cli-detector.js', () => ({
 }))
 
 import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
-import { __clearMeshQueueForTests, __resetBeadsDBForTests, claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetBeadsDBForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 
 function createComponents(meshId = 'mesh_inline_1') {
@@ -512,6 +512,81 @@ describe('setupMeshEventForwarding', () => {
     })
 
     expect(coordinator.onEvent).not.toHaveBeenCalled()
+  })
+
+  it('forwards completion when a coordinator session is itself the direct-dispatch target so other coordinators see pendingCoordinatorEvents', () => {
+    // Reproduces the missing-completion-signal bug: when an outer coordinator dispatches a
+    // mesh_send_task to this local coordinator session, the dispatcher coordinator must
+    // still receive a task_completed signal. Previously setupMeshEventForwarding bailed
+    // out unconditionally for any meshCoordinatorFor session, so the dispatcher polled
+    // pendingCoordinatorEvents forever and never saw the completion.
+    const meshId = `mesh_coordinator_direct_dispatch_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // Pre-register an in-flight direct dispatch targeting the coordinator session.
+      insertDirectDispatch(meshId, {
+        taskId: 'task_direct_to_coordinator',
+        sessionId: 'coordinator-session-self',
+        message: 'do work',
+        via: 'local_direct',
+        dispatchedAt: new Date().toISOString(),
+      })
+
+      let listener: ((event: any) => void) | undefined
+      const coordinatorState = {
+        instanceId: 'coordinator-session-self',
+        workspace: '/repo/main',
+        settings: { meshCoordinatorFor: meshId },
+      }
+      const coordinator = {
+        category: 'cli',
+        getState: vi.fn(() => coordinatorState),
+        onEvent: vi.fn(),
+      }
+      const instanceManager = {
+        onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
+        getInstance: vi.fn(() => coordinator),
+        // Only this single coordinator instance is present on this daemon; the
+        // dispatching coordinator lives elsewhere and consumes pendingCoordinatorEvents.
+        getByCategory: vi.fn((category: string) => category === 'cli' ? [coordinator] : []),
+      }
+      const components = { instanceManager } as any
+      setupMeshEventForwarding(components)
+
+      listener!({
+        event: 'agent:generating_completed',
+        instanceId: 'coordinator-session-self',
+        targetSessionId: 'coordinator-session-self',
+        providerType: 'claude-cli',
+        providerSessionId: 'claude-history-1',
+        finalSummary: 'task done',
+      })
+
+      // The local coordinator must not be sent a message about its own completion.
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      // The dispatcher coordinator (on another daemon / process) must be able to drain
+      // a task_completed event from the shared pending queue.
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({
+        event: 'agent:generating_completed',
+        meshId,
+        metadataEvent: {
+          targetSessionId: 'coordinator-session-self',
+          providerType: 'claude-cli',
+          providerSessionId: 'claude-history-1',
+          finalSummary: 'task done',
+        },
+      })
+      // Ledger must record task_completed for downstream activeWork reconciliation.
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect(completedEntry).toBeTruthy()
+      expect(completedEntry?.sessionId).toBe('coordinator-session-self')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
   })
 
   it('does not inject completion event for unrelated CLI sessions without mesh metadata', () => {
