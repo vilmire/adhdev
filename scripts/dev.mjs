@@ -164,9 +164,25 @@ async function shutdown(exitCode = 0) {
 }
 
 function startChild(spec) {
+  // Process-level hardening for the standalone daemon (c) — see
+  // docs/guides/PROVIDER_SDK.md "Process-level hardening".
+  // `--disallow-code-generation-from-strings` makes `eval('...')` and
+  // `new Function('...')` throw EvalError at runtime, closing the
+  // dynamic-code-generation bypass around the require() whitelist.
+  // The flag is process-wide, so it covers tsx + every npm dep too. The
+  // daemon and its current deps boot fine with it on (verified manually);
+  // if a future dep starts using runtime code generation, the flag will
+  // surface that immediately at first import. The web/core watcher
+  // children inherit it via env, which is fine — none of them use eval.
+  const env = { ...process.env };
+  const hardeningFlag = '--disallow-code-generation-from-strings';
+  const existing = env.NODE_OPTIONS || '';
+  if (!existing.includes(hardeningFlag)) {
+    env.NODE_OPTIONS = existing ? `${existing} ${hardeningFlag}` : hardeningFlag;
+  }
   const child = spawn(npmCmd, spec.args, {
     cwd: repoRoot,
-    env: process.env,
+    env,
     stdio: ['inherit', 'pipe', 'pipe'],
   });
   children.set(spec.name, child);
