@@ -43,15 +43,87 @@ interface CliScriptSdk {
     declarativeParseApproval?: (input: CliApprovalInput) => { message: string; buttons: string[] } | null;
 }
 
+/**
+ * One entry per script invocation, kept in a ring buffer so debug
+ * tooling can answer "what did the script see, and what did it return?"
+ * without having to re-run the daemon with custom logs. This is the
+ * trace that would have answered the codex-cli #102 regression in one
+ * pass instead of a dozen guesses.
+ *
+ * Body fields are bounded: input is reduced to a small summary (sizes
+ * + a salted hash + the first few normalized chars of screenText), and
+ * result is JSON-serialized then capped. Full PTY frames are NOT
+ * captured here — they live in CliBufferSnapshot and are exposed by
+ * the chat debug bundle separately.
+ */
+export interface CliScriptInvocationTrace {
+    at: number;                       // Date.now()
+    scriptName: string;
+    arity: number;
+    inputSummary: {
+        screenTextLen: number;
+        rawBufferLen: number;
+        tailLen: number;
+        isWaitingForResponse?: boolean;
+        screenTextHead?: string;       // first 200 chars of screenText (post-strip)
+    };
+    ok: boolean;
+    elapsedUs: number;
+    resultSummary?: string;            // JSON.stringify(result).slice(0, 400)
+    error?: string;
+}
+
+const TRACE_RING_CAPACITY = 64;
+
+function summarizeInput(input: any): CliScriptInvocationTrace['inputSummary'] {
+    const screenText = typeof input?.screenText === 'string' ? input.screenText : '';
+    const rawBuffer = typeof input?.rawBuffer === 'string' ? input.rawBuffer : '';
+    const tail = typeof input?.tail === 'string' ? input.tail : '';
+    return {
+        screenTextLen: screenText.length,
+        rawBufferLen: rawBuffer.length,
+        tailLen: tail.length,
+        isWaitingForResponse: typeof input?.isWaitingForResponse === 'boolean' ? input.isWaitingForResponse : undefined,
+        screenTextHead: screenText ? screenText.slice(0, 200) : undefined,
+    };
+}
+
+function summarizeResult(result: unknown): string {
+    try {
+        const json = JSON.stringify(result);
+        return json && json.length > 400 ? `${json.slice(0, 400)}…[truncated ${json.length - 400}]` : (json ?? 'undefined');
+    } catch (e: any) {
+        return `<unserializable: ${e?.message || e}>`;
+    }
+}
+
 export class CliScriptRunner {
     private scripts: CliScripts = {};
     private scriptState: unknown = null;
     private _parseErrorMessage: string | null = null;
     private readonly cliType: string;
     private sdk: CliScriptSdk = {};
+    private invocationTrace: CliScriptInvocationTrace[] = [];
 
     constructor(cliType: string) {
         this.cliType = cliType;
+    }
+
+    /** Returns the most-recent script invocation traces (oldest → newest). */
+    getInvocationTrace(): CliScriptInvocationTrace[] {
+        return this.invocationTrace.slice();
+    }
+
+    /** Clear the trace ring — used by tests and after PTY reset. */
+    clearInvocationTrace(): void {
+        this.invocationTrace = [];
+    }
+
+    private recordTrace(entry: CliScriptInvocationTrace): void {
+        this.invocationTrace.push(entry);
+        if (this.invocationTrace.length > TRACE_RING_CAPACITY) {
+            this.invocationTrace.splice(0, this.invocationTrace.length - TRACE_RING_CAPACITY);
+        }
     }
 
     // ─── Script lifecycle ─────────────────────────────
@@ -137,6 +209,7 @@ export class CliScriptRunner {
     /** Reset per-session state — called when the PTY process exits. */
     resetSessionState(): void {
         this.scriptState = null;
+        this.invocationTrace = [];
     }
 
     // ─── Script access (for reflection and test patching) ────────────────────
@@ -174,7 +247,7 @@ export class CliScriptRunner {
     detectStatus(input: CliStatusInput): string | null {
         if (!this.scripts.detectStatus) return null;
         try {
-            return this.invoke<string | null>(this.scripts.detectStatus, input);
+            return this.invoke<string | null>('detectStatus', this.scripts.detectStatus, input);
         } catch (e: any) {
             LOG.warn('CLI', `[${this.cliType}] detectStatus error: ${e?.message || e}`);
             return null;
@@ -187,6 +260,7 @@ export class CliScriptRunner {
         if (!this.scripts.parseApproval) return null;
         try {
             return this.invoke<{ message: string; buttons: string[] } | null>(
+                'parseApproval',
                 this.scripts.parseApproval,
                 input,
             );
@@ -204,7 +278,7 @@ export class CliScriptRunner {
             return null;
         }
         try {
-            const result = this.invoke<ParsedSession | null>(this.scripts.parseSession, input);
+            const result = this.invoke<ParsedSession | null>('parseSession', this.scripts.parseSession, input);
             this._parseErrorMessage = null;
             return result && typeof result === 'object' ? result : null;
         } catch (e: any) {
@@ -223,24 +297,52 @@ export class CliScriptRunner {
         if (typeof fn !== 'function') {
             throw new Error(`CLI script '${name}' not available`);
         }
-        return this.invoke(fn, input);
+        return this.invoke(name, fn, input);
     }
 
     // ─── Internal ─────────────────────────────────────
 
-    private invoke<T>(fn: Function, input: any): T {
+    private invoke<T>(scriptName: string, fn: Function, input: any): T {
         // Pick the call shape from fn.length so each script gets exactly the
         // args its signature declares:
         //   (input)             — v0 single-arg scripts
         //   (state, input)      — v0 stateful scripts that opt in via createState()
         //   (state, input, sdk) — v1 extended-tier overrides that consume the SDK
         const arity = fn.length;
-        if (arity >= 3) {
-            return (fn as (state: unknown, input: any, sdk: CliScriptSdk) => T)(this.scriptState, input, this.sdk);
+        const startedAt = Date.now();
+        const startedHr = typeof process !== 'undefined' && typeof process.hrtime === 'function'
+            ? process.hrtime.bigint()
+            : null;
+        let result: T;
+        try {
+            if (arity >= 3) {
+                result = (fn as (state: unknown, input: any, sdk: CliScriptSdk) => T)(this.scriptState, input, this.sdk);
+            } else if (arity === 2) {
+                result = (fn as (state: unknown, input: any) => T)(this.scriptState, input);
+            } else {
+                result = (fn as (input: any) => T)(input);
+            }
+            this.recordTrace({
+                at: startedAt,
+                scriptName,
+                arity,
+                inputSummary: summarizeInput(input),
+                ok: true,
+                elapsedUs: startedHr ? Number((process.hrtime.bigint() - startedHr) / 1000n) : 0,
+                resultSummary: summarizeResult(result),
+            });
+            return result;
+        } catch (e: any) {
+            this.recordTrace({
+                at: startedAt,
+                scriptName,
+                arity,
+                inputSummary: summarizeInput(input),
+                ok: false,
+                elapsedUs: startedHr ? Number((process.hrtime.bigint() - startedHr) / 1000n) : 0,
+                error: e?.message ? String(e.message).slice(0, 400) : String(e).slice(0, 400),
+            });
+            throw e;
         }
-        if (arity === 2) {
-            return (fn as (state: unknown, input: any) => T)(this.scriptState, input);
-        }
-        return (fn as (input: any) => T)(input);
     }
 }
