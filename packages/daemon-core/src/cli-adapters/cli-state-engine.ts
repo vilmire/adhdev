@@ -986,11 +986,14 @@ export class CliStateEngine {
     }
 
     private shouldDeferFinishForTranscript(parsed: any): boolean {
-        // Support both explicit flag and legacy codex-cli type check
-        // Also check transport.cliType to support tests that patch adapter.cliType directly
-        const effectiveType = this.transport.cliType ?? this.provider.type;
-        const requiresFinalAssistant = !!this.provider.requiresFinalAssistantBeforeIdle
-            || effectiveType === 'codex-cli';
+        // Honor only the explicit manifest opt-in. We used to also hard-code
+        // codex-cli here, but that left codex sessions wedged in `generating`
+        // whenever the PTY parser or native transcript missed the final
+        // assistant line — a much more common failure mode than the original
+        // background-tool race this was meant to guard against. If a provider
+        // really needs the gate, the manifest can set
+        // `requiresFinalAssistantBeforeIdle: true`.
+        const requiresFinalAssistant = !!this.provider.requiresFinalAssistantBeforeIdle;
         if (!requiresFinalAssistant) return false;
         if (!this.isWaitingForResponse || !this.currentTurnScope || this.hasActionableApproval()) return false;
         const parsedStatus = typeof parsed?.status === 'string' ? parsed.status.trim() : '';
