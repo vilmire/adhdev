@@ -698,6 +698,32 @@ export class DaemonCommandHandler implements CommandHelpers {
             const isV1 = typeof manifestProbe?.$schema === 'string' && manifestProbe.$schema.includes('/v1/')
                 || (manifestProbe?.overrides && typeof manifestProbe.overrides === 'object' && !Array.isArray(manifestProbe.overrides))
                 || !!manifestProbe?.tui;
+
+            // Reject v1 manifests that don't match the schema at install
+            // time so the daemon never persists a known-bad manifest.
+            // The provider-loader keeps a permissive warn-only behavior
+            // for manifests already on disk, but the install path is the
+            // right place to fail fast.
+            if (isV1 && manifestProbe?.category === 'cli') {
+                try {
+                    const { validateCliProviderManifest, formatManifestValidationIssues } =
+                        require('../providers/sdk/v1/validators/manifest.js') as typeof import('../providers/sdk/v1/validators/manifest.js');
+                    const validation = validateCliProviderManifest(manifestProbe);
+                    if (!validation.ok) {
+                        return {
+                            success: false,
+                            error: `manifest failed v1 schema validation:\n${formatManifestValidationIssues(validation.issues)}`,
+                            validationIssues: validation.issues,
+                        };
+                    }
+                } catch (e: any) {
+                    // Validator load failure shouldn't block install — log
+                    // and continue. The loader's warn-only path will
+                    // surface the same issue at boot if it's real.
+                    LOG.warn('Command', `[install_provider_manifest] schema validator unavailable: ${e?.message || e}`);
+                }
+            }
+
             const targetFile = isV1 ? 'provider.v1.json' : 'provider.json';
             const targetPath = path.join(targetDir, targetFile);
             fs.writeFileSync(targetPath, manifestBody, 'utf-8');

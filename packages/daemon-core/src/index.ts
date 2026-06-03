@@ -455,3 +455,19 @@ export type { ExtensionInfo as InstallerExtensionInfo } from './installer.js';
 // ── Boot / Lifecycle ──
 export { initDaemonComponents, startDaemonDevSupport, shutdownDaemonComponents } from './boot/daemon-lifecycle.js';
 export type { DaemonInitConfig, DaemonComponents, DaemonDevSupportOptions } from './boot/daemon-lifecycle.js';
+
+// ── Provider SDK (v1) — selective re-exports for external tooling ──
+// Tooling (registry publish, dashboard validators, the e2e harness) needs
+// the manifest validator, the builder catalog, and the contract version.
+// We don't re-export *everything* from the SDK to keep the public surface
+// stable; consumers that need internal SDK types still import from the
+// sdk/v1 subpath.
+export {
+  validateCliProviderManifest,
+  formatManifestValidationIssues,
+  type ManifestValidationIssue,
+  type ManifestValidationResult,
+  V1_CONTRACT_VERSION,
+  V1_PRIMITIVE_CATALOG,
+  V1_ALL_PRIMITIVES,
+} from './providers/sdk/v1/index.js';

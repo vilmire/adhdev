@@ -1896,6 +1896,26 @@ export class ProviderLoader {
             extensionIdPattern?: RegExp | string;
           };
 
+          // Validate v1 manifests against the SDK schema. Failures are
+          // surfaced as a single warning line with all issues attached
+          // so manifest authors don't need to guess which field is wrong.
+          // Loading still proceeds — bricking the daemon on a single
+          // bad field would be worse than running with a known warning.
+          if (hasV1 && mod?.category === 'cli') {
+            try {
+              const { validateCliProviderManifest, formatManifestValidationIssues } =
+                require('./sdk/v1/validators/manifest.js') as typeof import('./sdk/v1/validators/manifest.js');
+              const validation = validateCliProviderManifest(mod);
+              if (!validation.ok) {
+                this.log(`⚠ ${jsonPath}: schema validation failed:\n${formatManifestValidationIssues(validation.issues)}`);
+              }
+            } catch (e: any) {
+              // Validator load failed — log once and continue so a
+              // broken validator can't take down provider loading.
+              this.log(`⚠ ${jsonPath}: validator unavailable: ${e?.message || e}`);
+            }
+          }
+
           // Restore RegExp fields from JSON (extensionIdPattern)
           if (typeof mod.extensionIdPattern === 'string') {
             const flags = mod.extensionIdPattern_flags || '';

@@ -49,6 +49,8 @@
     "@adhdev/session-host-core": "*",
     "@agentclientprotocol/sdk": "^0.16.1",
     "@xterm/xterm": "^6.0.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "better-sqlite3": "^12.10.0",
     "chalk": "^5.3.0",
     "chokidar": "^4.0.3",

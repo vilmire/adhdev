@@ -67,6 +67,10 @@ export {
   type TaintCategory,
   type TaintFinding,
   type TaintResult,
+  validateCliProviderManifest,
+  formatManifestValidationIssues,
+  type ManifestValidationIssue,
+  type ManifestValidationResult,
 } from './validators/index.js';
 
 // Primitive identifiers — the canonical list.
