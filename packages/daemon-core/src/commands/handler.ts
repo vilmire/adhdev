@@ -510,6 +510,7 @@ export class DaemonCommandHandler implements CommandHelpers {
 
             // ─── Script manage ───────────────────
             case 'refresh_scripts': return this.handleRefreshScripts(args);
+            case 'list_provider_availability': return this.handleListProviderAvailability(args);
 
             // ─── Stream commands (stream-commands.ts) ───────────
             case 'select_session': return Stream.handleSelectSession(this, args);
@@ -565,6 +566,31 @@ export class DaemonCommandHandler implements CommandHelpers {
             return { success: true, refreshedInstances, providers };
         }
         return { success: false, error: 'ProviderLoader not initialized' };
+    }
+
+    /**
+     * Return per-provider availability so a Marketplace UI can show
+     * "Installed" badges. Reuses the existing detection state from
+     * ProviderLoader.getMachineProviderStatus() — no probing is triggered.
+     */
+    private handleListProviderAvailability(_args: any): CommandResult {
+        if (!this._ctx.providerLoader) {
+            return { success: false, error: 'ProviderLoader not initialized' };
+        }
+        const loader = this._ctx.providerLoader;
+        const items = loader.getAll().map((provider) => {
+            const machineConfig = loader.getMachineProviderConfig(provider.type);
+            const lastDetection = machineConfig.lastDetection;
+            return {
+                type: provider.type,
+                category: provider.category,
+                status: loader.getMachineProviderStatus(provider.type),
+                installed: lastDetection?.ok === true,
+                detectedPath: lastDetection?.path ?? null,
+                checkedAt: lastDetection?.checkedAt ?? null,
+            };
+        });
+        return { success: true, providers: items };
     }
 
     // ─── DevServer HTTP proxy helpers ─────────────────
