@@ -10,3 +10,10 @@ export {
   type TaintFinding,
   type TaintResult,
 } from './taint.js';
+
+export {
+  validateCliProviderManifest,
+  formatManifestValidationIssues,
+  type ManifestValidationIssue,
+  type ManifestValidationResult,
+} from './manifest.js';

@@ -7,6 +7,32 @@
   "required": ["type", "name", "category", "binary", "spawn"],
   "additionalProperties": false,
   "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Schema URL. Hint for editor tooling; not consumed by the daemon."
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Documentation URLs. Surfaced in marketplace UI."
+    },
+    "install": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Install instructions by channel (npm/pip/manual/brew). UI-only."
+    },
+    "source": {
+      "type": "object",
+      "description": "GitHub source descriptor. Daemon uses this to fetch script files on install.",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "github" },
+        "repo": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$" },
+        "ref":  { "type": "string" },
+        "subdir": { "type": "string" }
+      },
+      "required": ["type", "repo", "ref"]
+    },
     "type": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*$",
