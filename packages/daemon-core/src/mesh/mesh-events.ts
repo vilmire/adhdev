@@ -7,7 +7,7 @@ import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getLedgerDir, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
-import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './mesh-work-queue.js';
+import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches } from './mesh-work-queue.js';
 import { BeadsDB } from './beads-db.js';
 
 // ---------------------------------------------------------------------------
@@ -1615,14 +1615,30 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         if (!workspace) return;
         const settings = state.settings && typeof state.settings === 'object' ? state.settings as Record<string, unknown> : {};
 
-        // Coordinator sessions must never inject events into themselves.
-        // A coordinator instance carries meshCoordinatorFor but not meshNodeFor/launchedByCoordinator.
-        if (readNonEmptyString(settings.meshCoordinatorFor)) return;
+        // Coordinator sessions normally must not inject events into themselves, but a
+        // coordinator session can also be the direct-dispatch target of mesh_send_task
+        // issued by another coordinator (e.g. a remote orchestrator delegated a task to
+        // this local coordinator). In that case the completion event must still flow into
+        // injectMeshSystemMessage so the ledger records task_completed and the *other*
+        // coordinator's pendingCoordinatorEvents queue is populated. Skip only when this
+        // session is purely a coordinator with no in-flight direct dispatch waiting on it.
+        const coordinatorMeshId = readNonEmptyString(settings.meshCoordinatorFor);
+        let meshIdFromDirectDispatch = '';
+        if (coordinatorMeshId) {
+            try {
+                const activeDispatches = getActiveDirectDispatches(coordinatorMeshId);
+                if (activeDispatches.some(d => d.sessionId === instanceId)) {
+                    meshIdFromDirectDispatch = coordinatorMeshId;
+                }
+            } catch { /* best-effort */ }
+            if (!meshIdFromDirectDispatch) return;
+        }
 
-        const meshIdFromRuntime = readNonEmptyString(settings.meshNodeFor);
+        const meshIdFromRuntime = readNonEmptyString(settings.meshNodeFor) || meshIdFromDirectDispatch;
 
         // Only forward events for sessions that were explicitly launched as mesh-node delegates
-        // (meshNodeFor set by mesh_launch_session) or that carry the launchedByCoordinator flag.
+        // (meshNodeFor set by mesh_launch_session), carry the launchedByCoordinator flag, or
+        // have an active direct-dispatch entry (mesh_send_task to a pre-existing session).
         // Do NOT fall back to workspace-based mesh lookup: that would pick up coordinator sessions
         // and any other CLI session that happens to share the same workspace, causing spurious
         // system-message injection into the coordinator's own conversation.
