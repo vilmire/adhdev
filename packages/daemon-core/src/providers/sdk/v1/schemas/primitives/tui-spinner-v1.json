@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/spinner@1",
+  "title": "tui/spinner — v1",
+  "description": "Declares which patterns in the PTY/screen text indicate the agent is actively generating. The daemon's status state machine fires `generating` when any pattern matches inside the configured scope window. Codex's `Working (8m 56s • esc to interrupt)`, Claude's braille spinner, and Antigravity's `Thinking…` are all expressible with this primitive.",
+  "type": "object",
+  "required": ["$schema", "patterns"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "const": "adhdev:tui/spinner@1"
+    },
+    "patterns": {
+      "type": "array",
+      "minItems": 1,
+      "description": "List of patterns. Any match within the scope window classifies the screen as generating.",
+      "items": {
+        "type": "object",
+        "required": ["regex"],
+        "additionalProperties": false,
+        "properties": {
+          "regex": {
+            "type": "string",
+            "description": "ECMAScript regex source. Daemon compiles with the flags below."
+          },
+          "flags": {
+            "type": "string",
+            "pattern": "^[gimsuy]*$",
+            "default": "i"
+          },
+          "description": {
+            "type": "string",
+            "description": "Author-facing note explaining when this pattern fires."
+          }
+        }
+      }
+    },
+    "scope": {
+      "description": "Where in the text the patterns are searched. Defaults to `live-frame-tail` which mirrors the safest production behaviour (avoids matching scrollback or earlier turns).",
+      "default": "live-frame-tail",
+      "oneOf": [
+        {
+          "const": "live-frame-tail",
+          "title": "Live frame tail",
+          "description": "Last N lines of the visible screen, where N is `scopeWindowLines` (default 8). Recommended for most providers."
+        },
+        {
+          "const": "whole-screen",
+          "title": "Whole screen",
+          "description": "Match anywhere in the current screen text. Use with caution; tends to false-positive on scrollback."
+        },
+        {
+          "const": "recent-buffer",
+          "title": "Recent buffer",
+          "description": "Last ~1000 chars of accumulated buffer. Useful when the spinner is in raw byte stream but not in the rendered screen yet."
+        }
+      ]
+    },
+    "scopeWindowLines": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 8,
+      "description": "Number of trailing lines considered the live frame when scope is `live-frame-tail`."
+    }
+  },
+  "examples": [
+    {
+      "$schema": "adhdev:tui/spinner@1",
+      "patterns": [
+        { "regex": "(?:Thinking|Working) \\([0-9hms\\s]+", "flags": "i", "description": "Codex/Claude elapsed-time spinner" },
+        { "regex": "esc to (?:cancel|interrupt|stop)", "flags": "i" }
+      ]
+    },
+    {
+      "$schema": "adhdev:tui/spinner@1",
+      "scope": "whole-screen",
+      "patterns": [
+        { "regex": "[⠁-⣿]", "description": "Braille spinner glyphs" }
+      ]
+    }
+  ]
+}

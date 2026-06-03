@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:cli/provider@1",
+  "title": "CLI provider.json — v1",
+  "description": "Schema for CLI provider manifests. Validates the contract documented in docs/provider-contract/cli/v1.md. All 4 production CLI providers (codex, claude, hermes, antigravity) pass this schema without modification.",
+  "type": "object",
+  "required": ["type", "name", "category", "binary", "spawn"],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Stable identifier. Lowercase kebab-case."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short canonical name."
+    },
+    "displayName": {
+      "type": "string",
+      "description": "Optional UI label. Defaults to name."
+    },
+    "category": {
+      "const": "cli",
+      "description": "Must be \"cli\" for this schema."
+    },
+    "icon": {
+      "type": "string",
+      "maxLength": 4,
+      "description": "Single emoji or short glyph."
+    },
+    "aliases": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Alternative identifiers accepted at launch."
+    },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adhdev": {
+          "type": "string",
+          "description": "SemVer range against the ADHDev contract version. Required for marketplace-published providers."
+        }
+      },
+      "description": "Optional today; required by marketplace publish flow once registry is live."
+    },
+    "providerVersion": {
+      "type": "string",
+      "description": "Provider package SemVer."
+    },
+    "contractVersion": {
+      "type": ["number", "string"],
+      "description": "Legacy contract version. Reserved."
+    },
+    "status": {
+      "enum": ["Stable", "Beta", "Experimental", "Deprecated"]
+    },
+    "details": {
+      "type": "string",
+      "description": "Short blurb shown in marketplace."
+    },
+    "disableUpstream": {
+      "type": "boolean",
+      "description": "When true, daemon does not auto-sync this provider from registry. claude-cli uses this for explicit-version pinning."
+    },
+    "binary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Binary basename used for which-style detection."
+    },
+    "versionCommand": {
+      "type": "string",
+      "description": "Command the daemon runs to probe installed version. Example: \"my-cli --version\"."
+    },
+    "spawn": {
+      "type": "object",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "shell": { "type": "boolean", "default": false },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {}
+        }
+      }
+    },
+    "sendDelayMs": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Delay between pasting prompt text and pressing Enter."
+    },
+    "sendKey": {
+      "type": "string",
+      "default": "\r",
+      "description": "Character sent to submit a prompt. Default carriage return."
+    },
+    "submitStrategy": {
+      "enum": ["wait_for_echo", "immediate"],
+      "default": "immediate"
+    },
+    "requirePromptEchoBeforeSubmit": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, daemon waits for the typed prompt to be visible in the PTY screen before sending sendKey."
+    },
+    "allowInputDuringGeneration": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, daemon permits sending a new prompt mid-generation."
+    },
+    "requiresFinalAssistantBeforeIdle": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, daemon defers generating→idle until parseSession includes a final standard assistant message."
+    },
+    "augmentStaleSnapshot": {
+      "type": "boolean",
+      "description": "Reserved for future use."
+    },
+    "transcriptAuthority": {
+      "enum": ["provider", "daemon"],
+      "description": "When 'provider', daemon treats parsed output as canonical and suppresses fallback parsing."
+    },
+    "transcriptContext": {
+      "enum": ["full", "tail"],
+      "description": "When 'full', provider-owned parser receives the entire accumulated transcript context."
+    },
+    "patterns": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional regex hints for the legacy fallback detector. Modern providers express these via primitives.",
+      "properties": {
+        "prompt":     { "$ref": "#/$defs/patternList" },
+        "generating": { "$ref": "#/$defs/patternList" },
+        "approval":   { "$ref": "#/$defs/patternList" },
+        "ready":      { "$ref": "#/$defs/patternList" },
+        "dialog":     { "$ref": "#/$defs/patternList" }
+      }
+    },
+    "approvalKeys": {
+      "type": "object",
+      "patternProperties": {
+        "^[0-9]+$": { "type": "string" }
+      },
+      "additionalProperties": false,
+      "description": "Map of button index → key sequence to send."
+    },
+    "approvalPositiveHints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Lowercase substrings considered \"positive\" (accept). Auto-approve picks the matching button."
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ptyFlush":           { "type": "number", "minimum": 0 },
+        "dialogAccept":       { "type": "number", "minimum": 0 },
+        "approvalCooldown":   { "type": "number", "minimum": 0 },
+        "generatingIdle":     { "type": "number", "minimum": 0 },
+        "idleFinish":         { "type": "number", "minimum": 0 },
+        "idleFinishConfirm":  { "type": "number", "minimum": 0 },
+        "statusActivityHold": { "type": "number", "minimum": 0 },
+        "maxResponse":        { "type": "number", "minimum": 0 },
+        "shutdownGrace":      { "type": "number", "minimum": 0 },
+        "outputSettle":       { "type": "number", "minimum": 0 }
+      }
+    },
+    "resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported"],
+      "properties": {
+        "supported": { "type": "boolean" },
+        "stopStrategy": { "enum": ["command", "ctrl_c", "signal"] },
+        "stopCommand": { "type": "string" },
+        "shutdownGraceMs": { "type": "number", "minimum": 0 },
+        "sessionIdFormat": { "enum": ["uuid", "free", "string"] },
+        "newSessionArgs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "resumeSessionArgs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "resumeArgs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "compatibility": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["scriptDir"],
+        "additionalProperties": false,
+        "properties": {
+          "ideVersion": { "type": "string", "description": "SemVer range." },
+          "scriptDir":  { "type": "string", "pattern": "^scripts/[^/]+$" }
+        }
+      },
+      "description": "Maps installed agent versions to script subdirectories."
+    },
+    "defaultScriptDir": {
+      "type": "string",
+      "pattern": "^scripts/[^/]+$",
+      "description": "Fallback when no compatibility[] entry matches."
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "multipart": { "type": "boolean" },
+            "mediaTypes": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "strategies": { "type": "array" }
+          }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "richContent": { "type": "boolean" },
+            "mediaTypes": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "controls": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "typedResults": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "meshCoordinator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported"],
+      "properties": {
+        "supported": { "type": "boolean" },
+        "mcpConfig": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode":                { "enum": ["manual", "auto_import"] },
+            "format":              { "type": "string" },
+            "path":                { "type": "string" },
+            "configPathCommand":   { "type": "string" },
+            "serverName":          { "type": "string" },
+            "requiresRestart":     { "type": "boolean" },
+            "instructions":        { "type": "string" },
+            "template":            { "type": "string" }
+          }
+        }
+      }
+    },
+    "canonicalHistory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format":           { "type": "string" },
+        "watchPath":        { "type": "string" },
+        "mode":             { "enum": ["native-source", "daemon-mirror"] },
+        "contractVersion":  { "type": "string" },
+        "scripts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "readSession":  { "type": "string" },
+            "listSessions": { "type": "string" }
+          }
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/settingDef" }
+    },
+    "controls": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/controlDef" }
+    }
+  },
+  "$defs": {
+    "patternList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source"],
+        "additionalProperties": false,
+        "properties": {
+          "source": { "type": "string", "description": "Regex source." },
+          "flags":  { "type": "string", "pattern": "^[gimsuy]*$" }
+        }
+      }
+    },
+    "settingDef": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type":        { "enum": ["boolean", "number", "string", "select"] },
+        "default":     {},
+        "public":      { "type": "boolean" },
+        "label":       { "type": "string" },
+        "description": { "type": "string" },
+        "options":     { "type": "array" },
+        "min":         { "type": "number" },
+        "max":         { "type": "number" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "select" } } },
+          "then": { "required": ["options"] }
+        }
+      ]
+    },
+    "controlDef": {
+      "type": "object",
+      "required": ["id", "type", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "id":              { "type": "string" },
+        "type":            { "enum": ["select", "action", "toggle"] },
+        "label":           { "type": "string" },
+        "icon":            { "type": "string" },
+        "placement":       { "type": "string" },
+        "order":           { "type": "number" },
+        "dynamic":         { "type": "boolean" },
+        "hidden":          { "type": "boolean", "description": "When true, dashboard does not render the control directly. Used for commands triggered by other UI (slash menu, etc.)." },
+        "options":         { "type": "array" },
+        "listScript":      { "type": "string" },
+        "setScript":       { "type": "string" },
+        "invokeScript":    { "type": "string" },
+        "readFrom":        { "type": "string" },
+        "resultDisplay":   { "type": "string" },
+        "defaultValue":    {},
+        "confirmTitle":    { "type": "string" },
+        "confirmMessage":  { "type": "string" },
+        "confirmLabel":    { "type": "string" }
+      }
+    }
+  }
+}
