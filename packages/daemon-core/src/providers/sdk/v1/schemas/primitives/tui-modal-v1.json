@@ -41,6 +41,15 @@
       "pattern": "^[gimsuy]*$",
       "default": "m"
     },
+    "inlineButtonPattern": {
+      "type": "string",
+      "description": "Fallback regex for terminals that render all options on a single line (e.g. Antigravity's `[0] skip [1] yes [2] no [3] still using` survey). Used only when per-line extraction collects fewer than `minButtons`. The `g` flag is forced on by the builder; capture group 1 is the label."
+    },
+    "inlineButtonFlags": {
+      "type": "string",
+      "pattern": "^[gimsuy]*$",
+      "default": "gi"
+    },
     "scope": {
       "default": "between-last-two-separators",
       "description": "Where on the screen the question + buttons must appear together.",

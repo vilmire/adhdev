@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/cue-ordering@1",
+  "title": "TUI cue ordering",
+  "description": "Declares the relative spatial order cues must occur in to be considered evidence of a state. Addresses the canonical 'idle-while-Working-still-visible' regression: spinner cue near bottom + settled prompt cue ABOVE spinner → still generating; spinner ABOVE settled prompt → stale.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rules"],
+  "properties": {
+    "$schema": { "const": "adhdev:tui/cue-ordering@1" },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "cues", "verdict"],
+        "properties": {
+          "name": { "type": "string" },
+          "cues": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["primitive", "position"],
+              "properties": {
+                "primitive": {
+                  "type": "string",
+                  "description": "Reference to another primitive $id (e.g. adhdev:tui/spinner@1)."
+                },
+                "position": {
+                  "enum": ["above", "below", "same-line", "any"],
+                  "description": "Spatial relation to the NEXT cue in this array."
+                }
+              }
+            }
+          },
+          "verdict": {
+            "enum": ["generating", "idle", "approval", "ignore"],
+            "description": "What to return when this ordering matches."
+          }
+        }
+      }
+    }
+  }
+}

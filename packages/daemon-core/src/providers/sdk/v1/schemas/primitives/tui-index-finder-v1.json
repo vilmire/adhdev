@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/index-finder@1",
+  "title": "TUI index finder",
+  "description": "Locates the most-recent occurrence of a cue inside a rendered screen by line index — exposed as a helper primitive used by cue-ordering, settled-prompt, and visible-region. Authors don't reference this primitive directly in manifests; the runtime uses it internally when evaluating spatial relations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["strategy"],
+  "properties": {
+    "$schema": { "const": "adhdev:tui/index-finder@1" },
+    "strategy": {
+      "enum": ["last-match", "first-match", "tail-window-only"],
+      "default": "last-match"
+    },
+    "tailWindowLines": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 12,
+      "description": "Used when strategy=tail-window-only."
+    },
+    "ignoreInsideRegions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Primitive $ids whose matched regions should be ignored (e.g. mask out footer-chrome lines before finding the cue)."
+    }
+  }
+}

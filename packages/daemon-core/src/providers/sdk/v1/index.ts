@@ -19,10 +19,54 @@ export {
   buildParseApprovalFromTui,
   type ModalTuiSpec,
 } from './builders/cli/parse-approval.js';
+export {
+  applyVisibleRegion,
+  type VisibleRegionSpec,
+} from './builders/cli/visible-region.js';
+export {
+  buildParseApprovalFromSquash,
+  compactText,
+  type ApprovalSquashSpec,
+} from './builders/cli/parse-approval-squash.js';
+
+// ACP builders — declarative stdio session-status detection.
+export {
+  buildDetectStatusFromAcp,
+  type AcpSessionSpec,
+  type AcpStatusInput,
+  type AcpDetectedStatus,
+} from './builders/acp/detect-status.js';
+
+// Fixture tooling — record/replay for provider regression suites.
+export {
+  loadFixtureExpected,
+  replayFixture,
+  formatReplayReport,
+  type FixtureExpected,
+  type FixtureAnchor,
+  type MessageShape,
+  type AnchorReplayResult,
+  type FixtureReplayResult,
+  type CliProviderHandlers,
+  type ReplayOptions,
+} from './fixture-tooling/index.js';
+
+// Static validators — used by `adhdev provider validate` + registry publish.
+export {
+  analyzeOverrideTaint,
+  formatTaintResult,
+  type TaintLevel,
+  type TaintCategory,
+  type TaintFinding,
+  type TaintResult,
+} from './validators/index.js';
 
 // Primitive identifiers — the canonical list.
 // Implementations live under ./primitives/ and are wired in by builders.
 export const V1_PRIMITIVE_CATALOG = Object.freeze({
+  acp: [
+    'adhdev:acp/session-protocol@1',
+  ],
   tui: [
     'adhdev:tui/prompt-marker@1',
     'adhdev:tui/spinner@1',
@@ -41,6 +85,7 @@ export const V1_PRIMITIVE_CATALOG = Object.freeze({
     'adhdev:tui/index-finder@1',
     'adhdev:tui/status-downgrade@1',
     'adhdev:tui/approval-stitching@1',
+    'adhdev:tui/approval-squash@1',
     'adhdev:tui/media-input@1',
     'adhdev:tui/session-id-extraction@1',
     'adhdev:tui/error-detection@1',

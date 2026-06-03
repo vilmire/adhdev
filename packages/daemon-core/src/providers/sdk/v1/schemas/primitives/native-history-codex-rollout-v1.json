@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:native-history/codex-rollout@1",
+  "title": "native-history/codex-rollout — v1",
+  "description": "Declares that the provider's chat history is canonically owned by Codex's rollout JSONL files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`. The daemon's chat-history layer routes readChat through the configured `scripts.readSession` adapter, which is expected to honour the format contract documented at:\n\n  - One JSONL line per record. First line is `session_meta`; subsequent lines are `response_item` payloads.\n  - Workspace scoping by matching `session_meta.payload.cwd` to the live session's working directory (with symlink expansion via `fs.realpathSync.native`).\n  - spawnAt grace window (default 3000ms): reject workspace-only candidates older than `spawnAt - graceMs`.\n  - excludeInProgressTurn: strip trailing in-flight assistant/tool records when set.\n  - Silent-skip malformed JSONL lines (mirrors codex's concurrent-write tolerance).\n\nThis primitive is currently script-delegated. A daemon-side built-in adapter may replace `_shared/native_history.js` in a later phase; the schema is forward-compatible.",
+  "type": "object",
+  "required": ["$schema", "format", "watchPath", "mode"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "const": "adhdev:native-history/codex-rollout@1" },
+    "format": {
+      "const": "codex-rollout",
+      "description": "Identifies the rollout-jsonl contract version. Sync with `payload.cli_version` interpretation in adapter code."
+    },
+    "watchPath": {
+      "type": "string",
+      "default": "~/.codex/sessions",
+      "description": "Filesystem root the daemon watches for new rollout files. Defaults to the canonical Codex path; override only when the user has a custom CODEX_HOME."
+    },
+    "mode": {
+      "const": "native-source",
+      "description": "Codex JSONL is authoritative for sealed turns; PTY parsing fills the in-flight tail."
+    },
+    "contractVersion": {
+      "type": "string",
+      "default": "1.0",
+      "description": "Adapter contract version; bump in lockstep with breaking changes to Codex's rollout-record schema."
+    },
+    "spawnGraceMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000,
+      "default": 3000,
+      "description": "Workspace-only candidates with mtime older than `spawnAt - spawnGraceMs` are rejected as stale. Codex's default is 3000ms; only override if you observe a different race window."
+    },
+    "excludeInProgressTurn": {
+      "type": "boolean",
+      "default": true,
+      "description": "When true, trailing assistant/tool records produced mid-turn are stripped so paused approvals don't show as completed."
+    },
+    "scripts": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Pointers to the JS adapter functions (until a daemon-side built-in replaces them).",
+      "properties": {
+        "readSession": { "type": "string", "default": "readCodexNativeHistory" },
+        "listSessions": { "type": "string", "default": "listCodexNativeHistory" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "$schema": "adhdev:native-history/codex-rollout@1",
+      "format": "codex-rollout",
+      "watchPath": "~/.codex/sessions",
+      "mode": "native-source",
+      "contractVersion": "1.0",
+      "spawnGraceMs": 3000,
+      "excludeInProgressTurn": true,
+      "scripts": {
+        "readSession": "readCodexNativeHistory",
+        "listSessions": "listCodexNativeHistory"
+      }
+    }
+  ]
+}

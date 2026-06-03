@@ -508,6 +508,21 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     getState(): ProviderState {
+        // TODO(phase5-sandbox): JS override scripts (detectStatus, parseApproval,
+        // parseSession) are currently invoked by CliScriptRunner.invoke() via direct
+        // function calls — the scripts run in the daemon process with full Node.js
+        // access and no resource limits.
+        //
+        // When Phase 5 lands, CliScriptRunner should route these calls through a
+        // SandboxedScriptRunner (see providers/sdk/v1/sandbox/script-runner.ts) so
+        // that each call gets a fresh isolated-vm context with a 50 ms CPU limit and
+        // a 32 MB memory cap.  The execution path to change is:
+        //   CliScriptRunner.invoke() → SandboxedScriptRunner.run(scriptSource, context)
+        //
+        // This getState() call-site is NOT where the change goes — the wiring belongs
+        // in cli-script-runner.ts (CliScriptRunner.detectStatus / parseApproval /
+        // parseSession), with provider-loader.ts updated to store script source strings
+        // alongside the loaded function references for extended-legacy providers.
         const adapterStatus = this.adapter.getStatus();
         let parsedStatus: any = null;
         let parseErrorMessage: string | undefined;

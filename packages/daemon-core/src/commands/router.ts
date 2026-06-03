@@ -3659,6 +3659,7 @@ export class DaemonCommandRouter {
             case 'launch_cli':
             case 'stop_cli':
             case 'set_cli_view_mode':
+            case 'record_provider_pty':
             case 'agent_command': {
                 return this.deps.cliManager.handleCliCommand(cmd, args);
             }

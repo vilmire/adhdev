@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/visible-region@1",
+  "title": "TUI visible region",
+  "description": "Defines which portion of the rendered terminal screen counts as 'visible' for detectStatus / parseApproval / parseSession dispatch. Used to scope matchers away from off-screen scrollback or header chrome. Without a visible-region declaration, daemon falls back to the entire accumulator buffer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scope"],
+  "properties": {
+    "$schema": { "const": "adhdev:tui/visible-region@1" },
+    "scope": {
+      "enum": ["screen", "tail", "buffer", "between-anchors"],
+      "description": "screen=current rendered viewport, tail=last N chars, buffer=full accumulated buffer, between-anchors=between most recent top/bottom anchor lines."
+    },
+    "tailChars": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 4000,
+      "description": "Used when scope=tail."
+    },
+    "anchors": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Used when scope=between-anchors.",
+      "properties": {
+        "top": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pattern"],
+          "properties": {
+            "pattern": { "type": "string" },
+            "flags": { "type": "string" }
+          }
+        },
+        "bottom": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pattern"],
+          "properties": {
+            "pattern": { "type": "string" },
+            "flags": { "type": "string" }
+          }
+        }
+      }
+    },
+    "selectAnchor": {
+      "enum": ["first", "last"],
+      "default": "first",
+      "description": "When multiple matches exist for the anchor pair, pick the first or last. Antigravity uses `last` to anchor on the most recent prompt separator and exclude scrollback above it; codex's similar pattern also benefits from `last`."
+    },
+    "stripCues": {
+      "type": "array",
+      "description": "Optional list of primitive $ids whose matches should be masked out of the visible region before downstream dispatch. Common: footer-chrome, welcome-screen.",
+      "items": { "type": "string" }
+    }
+  }
+}

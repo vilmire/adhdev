@@ -2154,12 +2154,17 @@ async function meshStatus(ctx, args = {}) {
     if (relatedRepos.length) entry.relatedRepos = relatedRepos;
     const liveSessions = await collectLiveStatusSessions(ctx, node);
     if (liveSessions.length > 0) {
-      entry.sessions = liveSessions.map((s) => ({
-        id: s.instanceId ?? s.id ?? s.sessionId,
-        status: s.status ?? s.lifecycle ?? s.state,
-        providerType: s.providerType ?? s.cliType ?? s.type,
-        ...s.activeChat?.status ? { chatStatus: s.activeChat.status } : {}
-      })).filter((s) => s.id);
+      entry.sessions = liveSessions.map((s) => {
+        const coordinatorMeshId = typeof s.coordinator?.meshId === "string" ? s.coordinator.meshId : void 0;
+        const isSelfCoordinator = coordinatorMeshId === mesh.id;
+        return {
+          id: s.instanceId ?? s.id ?? s.sessionId,
+          status: s.status ?? s.lifecycle ?? s.state,
+          providerType: s.providerType ?? s.cliType ?? s.type,
+          ...s.activeChat?.status ? { chatStatus: s.activeChat.status } : {},
+          ...isSelfCoordinator ? { isSelfCoordinator: true, role: "coordinator" } : {}
+        };
+      }).filter((s) => s.id);
     }
     return entry;
   }));
@@ -2175,6 +2180,20 @@ async function meshStatus(ctx, args = {}) {
     note: activeWorkEvidence.staleDirectWorkNote,
     detailHint: "Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail."
   });
+  const coordinatorSessions = [];
+  for (const nodeEntry of results) {
+    const sessions = Array.isArray(nodeEntry.sessions) ? nodeEntry.sessions : [];
+    for (const s of sessions) {
+      if (s?.isSelfCoordinator === true && s.id) {
+        coordinatorSessions.push({
+          nodeId: nodeEntry.nodeId,
+          sessionId: s.id,
+          providerType: s.providerType,
+          status: s.status
+        });
+      }
+    }
+  }
   const response = {
     meshId: mesh.id,
     meshName: mesh.name,
@@ -2195,7 +2214,15 @@ async function meshStatus(ctx, args = {}) {
     ...args.includeTerminalDirectWork === true ? { terminalDirectWork: activeWorkEvidence.terminalDirectWork } : {},
     activeWorkSummary: activeWorkEvidence.summary,
     ...pollingGuidance ? { pollingGuidance } : {},
-    branchConvergenceSummary: summarizeBranchConvergence(results)
+    branchConvergenceSummary: summarizeBranchConvergence(results),
+    ...coordinatorSessions.length > 0 ? {
+      coordinatorSessions,
+      selfIdentification: {
+        meshId: mesh.id,
+        coordinatorSessions,
+        note: "Sessions listed here are coordinator sessions for this mesh. The calling coordinator IS one of these sessions \u2014 do not treat its own generating CLI session as a foreign delegated task. Per-session marker: sessions[].isSelfCoordinator === true."
+      }
+    } : {}
   };
   try {
     response.ledgerSummary = ledgerSummary;

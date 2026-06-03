@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/dispatch-order@1",
+  "title": "TUI dispatch order",
+  "description": "Declares the order in which detectStatus consults its primitive groups. Default order — spinner → modal → settled-prompt — is what fixed the sprint-2026-06 'idle while Working visible' regression and must be expressible in declarative manifests.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["order"],
+  "properties": {
+    "$schema": { "const": "adhdev:tui/dispatch-order@1" },
+    "order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Ordered list of primitive group identifiers. Daemon evaluates them in this order; first matching group decides the verdict.",
+      "items": {
+        "enum": [
+          "spinner",
+          "modal",
+          "settled-prompt",
+          "cue-ordering",
+          "error-detection",
+          "approval-stitching"
+        ]
+      }
+    },
+    "onNoMatch": {
+      "enum": ["idle", "unknown", "preserve-last"],
+      "default": "idle"
+    }
+  }
+}

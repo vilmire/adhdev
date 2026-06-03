@@ -547,7 +547,11 @@ export class DaemonCommandHandler implements CommandHelpers {
 
     private async handleRefreshScripts(_args: any): Promise<CommandResult> {
         if (this._ctx.providerLoader) {
-            await this._ctx.providerLoader.fetchLatest().catch(() => {});
+            // Try registry first (incremental), fall back to full GitHub tarball
+            const regResult = await this._ctx.providerLoader.fetchFromRegistry().catch(() => ({ updated: false, error: 'registry error' }));
+            if (!regResult.updated && regResult.error) {
+                await this._ctx.providerLoader.fetchLatest().catch(() => {});
+            }
             this._ctx.providerLoader.reload();
             this._ctx.providerLoader.registerToDetector();
             const refreshedInstances = this._ctx.instanceManager

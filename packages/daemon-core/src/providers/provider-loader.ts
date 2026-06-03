@@ -92,7 +92,9 @@ export class ProviderLoader {
   }
 
   private static readonly GITHUB_TARBALL_URL = 'https://github.com/vilmire/adhdev-providers/archive/refs/heads/main.tar.gz';
+  private static readonly REGISTRY_BASE_URL = 'https://api.adhf.dev/api/v1/registry';
   private static readonly META_FILE = '.meta.json';
+  private static readonly REGISTRY_META_FILE = '.registry-meta.json';
   private static readonly REPO_PROVIDER_DIRNAME = 'adhdev-providers';
   private static readonly SIBLING_MARKER_FILE = '.adhdev-provider-root';
   private static readonly SIBLING_ENV_VAR = 'ADHDEV_USE_SIBLING_PROVIDERS';
@@ -1128,6 +1130,105 @@ export class ProviderLoader {
  * 
  * @returns Whether an update occurred
  */
+  /**
+   * Sync providers from the ADHDev registry (registry.adhf.dev).
+   *
+   * Downloads only providers whose server checksum differs from the locally
+   * cached checksum. Falls back gracefully to the GitHub tarball path if the
+   * registry is unreachable or returns an unexpected response.
+   *
+   * Returns `{ updated: true }` when at least one provider file changed on disk,
+   * `{ updated: false }` when everything is already current, or
+   * `{ updated: false, error }` when the registry couldn't be reached and we
+   * should proceed to the GitHub tarball fallback.
+   */
+  async fetchFromRegistry(): Promise<{ updated: boolean; error?: string }> {
+    if (this.disableUpstream) return { updated: false };
+
+    const https = require('https') as typeof import('https');
+    const regMetaPath = path.join(this.upstreamDir, ProviderLoader.REGISTRY_META_FILE);
+
+    // Load cached checksums
+    let cachedChecksums: Record<string, string> = {};
+    try {
+      if (fs.existsSync(regMetaPath)) {
+        cachedChecksums = JSON.parse(fs.readFileSync(regMetaPath, 'utf-8')).checksums ?? {};
+      }
+    } catch { }
+
+    try {
+      // 1. Fetch provider list
+      const listUrl = `${ProviderLoader.REGISTRY_BASE_URL}/providers`;
+      const listBody = await new Promise<string>((resolve, reject) => {
+        const req = https.get(listUrl, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: 10000 }, (res) => {
+          if (res.statusCode !== 200) { reject(new Error(`registry list HTTP ${res.statusCode}`)); return; }
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('registry list timeout')); });
+      });
+
+      const list = JSON.parse(listBody) as { providers: Array<{ type: string; category: string; checksum: string; version: string }> };
+      if (!Array.isArray(list.providers)) throw new Error('unexpected registry response shape');
+
+      let updatedCount = 0;
+
+      for (const entry of list.providers) {
+        const { type, category, checksum, version } = entry;
+        const cacheKey = `${category}/${type}`;
+        if (cachedChecksums[cacheKey] === checksum) continue; // already current
+
+        // Download this provider's manifest
+        const dlUrl = `${ProviderLoader.REGISTRY_BASE_URL}/providers/${type}/${version}/download`;
+        const manifestBody = await new Promise<string>((resolve, reject) => {
+          const req = https.get(dlUrl, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: 30000 }, (res) => {
+            if (res.statusCode !== 200) { reject(new Error(`registry download HTTP ${res.statusCode} for ${type}@${version}`)); return; }
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+          });
+          req.on('error', reject);
+          req.on('timeout', () => { req.destroy(); reject(new Error(`download timeout for ${type}`)); });
+        });
+
+        // Verify checksum
+        const actualChecksum = await new Promise<string>((resolve) => {
+          const crypto = require('crypto') as typeof import('crypto');
+          resolve(crypto.createHash('sha256').update(manifestBody, 'utf-8').digest('hex'));
+        });
+        if (actualChecksum !== checksum) {
+          this.log(`⚠ Registry checksum mismatch for ${type}@${version} — skipping`);
+          continue;
+        }
+
+        // Write to upstream dir
+        const providerDir = path.join(this.upstreamDir, category, type);
+        fs.mkdirSync(providerDir, { recursive: true });
+        fs.writeFileSync(path.join(providerDir, 'provider.json'), manifestBody, 'utf-8');
+
+        cachedChecksums[cacheKey] = checksum;
+        updatedCount++;
+        this.log(`✓ Registry updated: ${category}/${type}@${version}`);
+      }
+
+      // Persist updated checksums
+      fs.mkdirSync(this.upstreamDir, { recursive: true });
+      fs.writeFileSync(regMetaPath, JSON.stringify({
+        checksums: cachedChecksums,
+        syncedAt: new Date().toISOString(),
+        providerCount: list.providers.length,
+      }, null, 2));
+
+      this.log(`Registry sync complete: ${list.providers.length} providers, ${updatedCount} updated`);
+      return { updated: updatedCount > 0 };
+    } catch (e: any) {
+      this.log(`⚠ Registry sync failed (falling back to GitHub tarball): ${e?.message}`);
+      return { updated: false, error: e?.message };
+    }
+  }
+
   async fetchLatest(): Promise<{ updated: boolean; error?: string }> {
     if (this.disableUpstream) {
       this.log('Upstream fetch skipped (sourceMode=no-upstream)');

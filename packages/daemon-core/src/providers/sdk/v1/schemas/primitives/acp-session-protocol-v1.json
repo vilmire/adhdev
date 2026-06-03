@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:acp/session-protocol@1",
+  "title": "acp/session-protocol — v1",
+  "description": "Describes how to detect ACP stdio session status from line-oriented process output. Supports json-rpc, plain-text, and mcp prompt styles. The daemon compiles the regex patterns at builder time and uses them at runtime to classify each incoming line as idle, generating, or an error verdict.",
+  "type": "object",
+  "required": ["$schema"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "const": "adhdev:acp/session-protocol@1"
+    },
+    "idlePattern": {
+      "type": "object",
+      "description": "Regex pattern that matches a line emitted when the agent finishes a turn and is waiting for the next user message.",
+      "required": ["regex"],
+      "additionalProperties": false,
+      "properties": {
+        "regex": {
+          "type": "string",
+          "description": "ECMAScript regex source. Daemon compiles with the flags below."
+        },
+        "flags": {
+          "type": "string",
+          "pattern": "^[gimsuy]*$",
+          "default": "i",
+          "description": "Optional ECMAScript regex flags (default: 'i')."
+        },
+        "description": {
+          "type": "string",
+          "description": "Author-facing note explaining when this pattern fires."
+        }
+      }
+    },
+    "generatingPattern": {
+      "type": "object",
+      "description": "Regex pattern that matches a line emitted while the agent is actively working (streaming tokens, calling tools, etc.).",
+      "required": ["regex"],
+      "additionalProperties": false,
+      "properties": {
+        "regex": {
+          "type": "string",
+          "description": "ECMAScript regex source."
+        },
+        "flags": {
+          "type": "string",
+          "pattern": "^[gimsuy]*$",
+          "default": "i"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "errorPatterns": {
+      "type": "array",
+      "description": "List of error-signal patterns. Each entry provides a regex and the status verdict to return on match. Checked in order; first match wins.",
+      "items": {
+        "type": "object",
+        "required": ["regex", "verdict"],
+        "additionalProperties": false,
+        "properties": {
+          "regex": {
+            "type": "string",
+            "description": "ECMAScript regex source."
+          },
+          "flags": {
+            "type": "string",
+            "pattern": "^[gimsuy]*$",
+            "default": "i"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": ["idle", "generating", "waiting_approval"],
+            "description": "Status verdict to return when this error pattern fires."
+          },
+          "description": {
+            "type": "string",
+            "description": "Author-facing note explaining what condition this pattern represents."
+          }
+        }
+      }
+    },
+    "promptStyle": {
+      "description": "Wire format used by the agent on stdio. Affects how lines are parsed (e.g. json-rpc messages are newline-delimited JSON objects; plain-text is freeform; mcp is the Model Context Protocol framing).",
+      "default": "plain-text",
+      "oneOf": [
+        {
+          "const": "json-rpc",
+          "title": "JSON-RPC",
+          "description": "Each line is a newline-delimited JSON-RPC 2.0 object."
+        },
+        {
+          "const": "plain-text",
+          "title": "Plain text",
+          "description": "Freeform text output — patterns are matched against each line directly."
+        },
+        {
+          "const": "mcp",
+          "title": "MCP",
+          "description": "Model Context Protocol stdio framing (Content-Length + JSON body)."
+        }
+      ]
+    },
+    "messageDelimiter": {
+      "type": "string",
+      "default": "\n",
+      "description": "String used to delimit messages in the stdio stream. Defaults to newline ('\\n'). For MCP framing this is effectively the Content-Length header separator, but the builder uses this field to split incoming bytes into logical lines for regex matching."
+    }
+  },
+  "examples": [
+    {
+      "$schema": "adhdev:acp/session-protocol@1",
+      "promptStyle": "plain-text",
+      "idlePattern": { "regex": "^\\$\\s*$", "flags": "m", "description": "Shell prompt — agent returned to idle" },
+      "generatingPattern": { "regex": "thinking|processing|calling tool", "flags": "i" },
+      "errorPatterns": [
+        { "regex": "error:|exception:", "flags": "i", "verdict": "idle", "description": "Unrecoverable error — treat as idle so user can retry" }
+      ]
+    },
+    {
+      "$schema": "adhdev:acp/session-protocol@1",
+      "promptStyle": "json-rpc",
+      "idlePattern": { "regex": "\"method\"\\s*:\\s*\"agent/ready\"" },
+      "generatingPattern": { "regex": "\"method\"\\s*:\\s*\"agent/(?:thinking|toolCall)\"" },
+      "errorPatterns": [
+        { "regex": "\"method\"\\s*:\\s*\"agent/approvalRequired\"", "verdict": "waiting_approval" }
+      ]
+    }
+  ]
+}
