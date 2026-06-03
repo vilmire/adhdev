@@ -397,6 +397,12 @@ export class ProviderCliAdapter implements CliAdapter {
         // like codex-cli's detect_status v1 fail-closed with return 'idle'
         // and the session sticks in `generating` forever).
         this.runner.setScripts(provider.scripts || {}, provider.tui);
+        // Per-invocation wall-clock budget for provider scripts. Manifests may
+        // raise this for genuinely slow parsers, but the default (50ms) is the
+        // settle-loop safety net — any script that exceeds it gets flagged in
+        // the invocation trace and surfaced via the debug bundle so we can
+        // identify the offender instead of guessing why the settle loop hangs.
+        this.runner.setScriptCallBudget(provider.scriptCallBudgetMs ?? 50);
         const scriptNames = this.runner.getScriptNames();
         if (scriptNames.length > 0) {
             LOG.info('CLI', `[${this.cliType}] CLI scripts: [${scriptNames.join(', ')}]`);

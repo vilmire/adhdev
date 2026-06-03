@@ -158,6 +158,10 @@ export interface CliProviderModule {
     binary: string;
     approvalKeys?: Record<number, string>;
     sendDelayMs?: number;
+    /** Wall-clock budget (ms) for a single provider script invocation. Default 50. Range 1..5000.
+     *  Exceeding the budget records `timedOut: true` on the invocation trace and emits a
+     *  throttled WARN — it does NOT abort the script (Node CJS can't interrupt sync code). */
+    scriptCallBudgetMs?: number;
     sendKey?: string;
     submitStrategy?: 'wait_for_echo' | 'immediate';
     /** Require the typed prompt to be visible on the PTY screen before sending Enter. */
