@@ -3244,3 +3244,158 @@ test('mesh tool registry documents the 24 exposed mesh tools including queue can
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_cancel'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_requeue'));
 });
+
+test('mesh_status marks coordinator sessions for this mesh as self so the calling coordinator can identify them', async () => {
+  const meshId = `mesh-self-coordinator-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: meshId,
+      name: 'Self Coordinator Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo-local',
+        repoRoot: '/repo-local',
+        daemonId: 'daemon-coordinator',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    if (command === 'git_status') {
+      return { success: true, status: { workspace: '/repo-local', repoRoot: '/repo-local', isGitRepo: true, branch: 'main' } };
+    }
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [
+              // Coordinator session for THIS mesh — must be reported as self.
+              {
+                id: 'session-coordinator-self',
+                providerType: 'claude-cli',
+                status: 'generating',
+                coordinator: { meshId, role: 'coordinator' },
+              },
+              // Coordinator session for a different mesh — must NOT be marked self.
+              {
+                id: 'session-other-mesh-coordinator',
+                providerType: 'claude-cli',
+                status: 'idle',
+                coordinator: { meshId: 'some-other-mesh', role: 'coordinator' },
+              },
+              // Plain delegated worker session — must NOT be marked self.
+              {
+                id: 'session-worker',
+                providerType: 'hermes-cli',
+                status: 'idle',
+              },
+            ],
+          },
+        },
+      };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const status = JSON.parse(await meshStatus(ctx as any));
+
+  const nodeStatus = status.nodes.find((n: any) => n.nodeId === 'node-local');
+  assert.ok(nodeStatus, 'expected node-local in status');
+  const selfSession = nodeStatus.sessions.find((s: any) => s.id === 'session-coordinator-self');
+  assert.ok(selfSession, 'expected self coordinator session');
+  assert.equal(selfSession.isSelfCoordinator, true, 'coordinator session for this mesh must be marked self');
+  assert.equal(selfSession.role, 'coordinator');
+
+  const otherMeshSession = nodeStatus.sessions.find((s: any) => s.id === 'session-other-mesh-coordinator');
+  assert.ok(otherMeshSession, 'expected other-mesh coordinator session');
+  assert.equal(otherMeshSession.isSelfCoordinator, undefined, 'coordinator for a different mesh must not be marked self');
+
+  const workerSession = nodeStatus.sessions.find((s: any) => s.id === 'session-worker');
+  assert.ok(workerSession, 'expected worker session');
+  assert.equal(workerSession.isSelfCoordinator, undefined, 'plain worker must not be marked self');
+
+  assert.ok(Array.isArray(status.coordinatorSessions), 'expected top-level coordinatorSessions array');
+  assert.equal(status.coordinatorSessions.length, 1, 'only sessions matching this mesh should appear');
+  assert.equal(status.coordinatorSessions[0].sessionId, 'session-coordinator-self');
+  assert.equal(status.coordinatorSessions[0].nodeId, 'node-local');
+  assert.equal(status.coordinatorSessions[0].providerType, 'claude-cli');
+  assert.equal(status.selfIdentification?.meshId, meshId);
+});
+
+test('mesh_status omits coordinatorSessions when no self coordinator session is present', async () => {
+  const meshId = `mesh-no-self-coordinator-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: meshId,
+      name: 'No Self Coordinator Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo-local',
+        repoRoot: '/repo-local',
+        daemonId: 'daemon-coordinator',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    if (command === 'git_status') {
+      return { success: true, status: { workspace: '/repo-local', repoRoot: '/repo-local', isGitRepo: true, branch: 'main' } };
+    }
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{ id: 'session-worker', providerType: 'hermes-cli', status: 'idle' }],
+          },
+        },
+      };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const status = JSON.parse(await meshStatus(ctx as any));
+  assert.equal(status.coordinatorSessions, undefined, 'coordinatorSessions should be absent when no self coordinator');
+  assert.equal(status.selfIdentification, undefined, 'selfIdentification should be absent when no self coordinator');
+});
