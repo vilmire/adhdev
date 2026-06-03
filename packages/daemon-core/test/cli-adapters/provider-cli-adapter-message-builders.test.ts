@@ -303,7 +303,11 @@ describe('ProviderCliAdapter message fallback shaping', () => {
   })
 
   it('normalizes undefined injected script state to null for stateful parser hooks', () => {
-    const parseSession = vi.fn((receivedState: any) => ({
+    // Arity-based dispatch contract: a stateful 2-arg `(state, input)` parseSession
+    // gets `null` as state when createState() returns undefined — never `undefined`,
+    // so the script doesn't have to guard against both. Scripts that declare a
+    // 1-arg `(input)` signature go through the single-arg path and never see state.
+    const parseSession = vi.fn((receivedState: any, _input: any) => ({
       status: receivedState === null ? 'idle' : 'error',
       messages: [],
       modal: null,
