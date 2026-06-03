@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/prompt-marker@1",
+  "title": "tui/prompt-marker — v1",
+  "description": "Declares how to recognize the line where the user types prompts. Used by builders to find the last user prompt, slice transcript after it, and detect when the agent is ready for input. Claude `❯`, Codex `>` and `>`, Antigravity `>`, Hermes `>` are all expressible with this primitive.",
+  "type": "object",
+  "required": ["$schema", "regex"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "const": "adhdev:tui/prompt-marker@1"
+    },
+    "regex": {
+      "type": "string",
+      "description": "ECMAScript regex source matching the prompt marker. Common patterns: `^❯\\s`, `^>\\s`, `^[›❯>]\\s*$`."
+    },
+    "flags": {
+      "type": "string",
+      "pattern": "^[gimsuy]*$",
+      "default": "m"
+    },
+    "anchor": {
+      "description": "Where the regex must anchor. `line-start` (default) is the most common; the marker is at column 0. `line-end` is rare. `any` matches anywhere in a line.",
+      "default": "line-start",
+      "enum": ["line-start", "line-end", "any"]
+    },
+    "description": {
+      "type": "string"
+    }
+  },
+  "examples": [
+    {
+      "$schema": "adhdev:tui/prompt-marker@1",
+      "regex": "^❯\\s",
+      "anchor": "line-start",
+      "description": "Claude TUI prompt arrow"
+    },
+    {
+      "$schema": "adhdev:tui/prompt-marker@1",
+      "regex": "^>\\s*$",
+      "anchor": "line-start",
+      "description": "Codex empty prompt"
+    }
+  ]
+}

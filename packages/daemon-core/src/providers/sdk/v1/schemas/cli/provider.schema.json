@@ -301,6 +301,35 @@
     "controls": {
       "type": "array",
       "items": { "$ref": "#/$defs/controlDef" }
+    },
+    "tui": {
+      "type": "object",
+      "description": "Declarative TUI parsing primitives. When present, daemon's builder synthesises detectStatus / parseApproval / parseSession from these blocks. Each block is identified by its $schema.",
+      "additionalProperties": true
+    },
+    "nativeHistory": {
+      "type": "object",
+      "description": "Declarative native-history adapter declaration. Daemon's builder routes readChat history through the named adapter ($schema).",
+      "additionalProperties": true
+    },
+    "overrides": {
+      "type": "object",
+      "description": "Optional JS override pointers. Presence promotes the provider tier to `extended`. Each value identifies the handler being overridden and the relative path to the JS file implementing it.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string", "description": "Relative path to the override JS file." },
+          {
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": false,
+            "properties": {
+              "$schema": { "type": "string" },
+              "path":    { "type": "string" },
+              "reason":  { "type": "string" }
+            }
+          }
+        ]
+      }
     }
   },
   "$defs": {

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/settled-prompt@1",
+  "title": "tui/settled-prompt — v1",
+  "description": "Declares the screen patterns that indicate the agent is idle and ready for a new prompt. Combined with `tui/spinner` (negated) and `tui/modal` (negated) by the builder to decide `idle`. Codex `❯ <model> · /shortcuts`, Claude `? for shortcuts` + `❯`, Antigravity `>` + `? for shortcuts` are all expressible.",
+  "type": "object",
+  "required": ["$schema", "regex"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "const": "adhdev:tui/settled-prompt@1"
+    },
+    "regex": {
+      "type": "string",
+      "description": "ECMAScript regex source. Matched within the scope window."
+    },
+    "flags": {
+      "type": "string",
+      "pattern": "^[gimsuy]*$",
+      "default": "m"
+    },
+    "withFooter": {
+      "type": "array",
+      "description": "Optional auxiliary substrings or regex sources that must also be present in the scope window for the prompt to count as settled. Use this to disambiguate from mid-stream prompt-like text.",
+      "items": {
+        "type": "object",
+        "required": ["pattern"],
+        "additionalProperties": false,
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Plain substring (when `kind` is omitted or `substring`) or regex source (when `kind` is `regex`)."
+          },
+          "kind": {
+            "enum": ["substring", "regex"],
+            "default": "substring"
+          },
+          "flags": {
+            "type": "string",
+            "pattern": "^[gimsuy]*$",
+            "default": "i"
+          }
+        }
+      }
+    },
+    "scope": {
+      "default": "last-n-lines",
+      "enum": ["last-n-lines", "whole-screen"]
+    },
+    "scopeWindowLines": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 8
+    }
+  },
+  "examples": [
+    {
+      "$schema": "adhdev:tui/settled-prompt@1",
+      "regex": "^[›❯>]\\s*$",
+      "withFooter": [
+        { "pattern": "? for shortcuts" }
+      ]
+    },
+    {
+      "$schema": "adhdev:tui/settled-prompt@1",
+      "regex": "(?:^|[›❯>]\\s*)\\b(?:gpt-|o\\d\\b|codex-)[\\w._-]*",
+      "scope": "last-n-lines"
+    }
+  ]
+}

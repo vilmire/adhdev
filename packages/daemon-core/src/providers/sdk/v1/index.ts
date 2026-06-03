@@ -10,6 +10,16 @@
 export * from './types/cli/index.js';
 export * from './types/common/index.js';
 
+// Builders — turn declarative manifest blocks into runtime functions.
+export {
+  buildDetectStatusFromTui,
+  type DetectStatusTuiSpec,
+} from './builders/cli/detect-status.js';
+export {
+  buildParseApprovalFromTui,
+  type ModalTuiSpec,
+} from './builders/cli/parse-approval.js';
+
 // Primitive identifiers — the canonical list.
 // Implementations live under ./primitives/ and are wired in by builders.
 export const V1_PRIMITIVE_CATALOG = Object.freeze({

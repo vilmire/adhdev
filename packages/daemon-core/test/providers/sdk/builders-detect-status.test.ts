@@ -1,0 +1,165 @@
+/**
+ * Tests for buildDetectStatusFromTui.
+ *
+ * Validates the builder against scenarios drawn directly from the 4
+ * production CLI providers' real-world screen captures. These are the
+ * same regressions the sprint-2026-06 fixes addressed; if the builder
+ * can absorb them with declarative spec, it covers ~70% of the
+ * detect_status.js code in the audited providers.
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  buildDetectStatusFromTui,
+  type DetectStatusTuiSpec,
+} from '../../../src/providers/sdk/v1/builders/cli/detect-status.js';
+import type {
+  CliScreenSnapshot,
+  CliStatusInput,
+} from '../../../src/providers/sdk/v1/types/cli/index.js';
+
+function emptyScreen(text: string): CliScreenSnapshot {
+  return {
+    text,
+    lineCount: text.split('\n').length,
+    lines: [],
+    nonEmptyLines: [],
+    firstNonEmptyLineIndex: -1,
+    lastNonEmptyLineIndex: -1,
+    firstNonEmptyLine: null,
+    lastNonEmptyLine: null,
+    promptLineIndex: -1,
+    promptLine: null,
+    linesAbovePrompt: [],
+    linesBelowPrompt: [],
+  };
+}
+
+function statusInput(screenText: string): CliStatusInput {
+  return {
+    tail: screenText.split('\n').slice(-8).join('\n'),
+    screenText,
+    rawBuffer: screenText,
+    isWaitingForResponse: false,
+    screen: emptyScreen(screenText),
+    tailScreen: emptyScreen(screenText),
+  };
+}
+
+describe('buildDetectStatusFromTui — codex-cli-shaped spec', () => {
+  const spec: DetectStatusTuiSpec = {
+    spinner: {
+      $schema: 'adhdev:tui/spinner@1',
+      patterns: [
+        { regex: '(?:Thinking|Working) \\((?:\\d+h\\s+\\d+m\\s+\\d+s|\\d+m\\s+\\d+s|\\d+s)', flags: 'i' },
+        { regex: 'esc to (?:cancel|interrupt|stop)', flags: 'i' },
+      ],
+      scope: 'live-frame-tail',
+      scopeWindowLines: 12,
+    },
+    settledPrompt: {
+      $schema: 'adhdev:tui/settled-prompt@1',
+      regex: '^[›❯>]\\s*$',
+      flags: 'm',
+      withFooter: [{ pattern: '? for shortcuts' }],
+      scope: 'last-n-lines',
+      scopeWindowLines: 8,
+    },
+    modal: {
+      $schema: 'adhdev:tui/modal@1',
+      questionPattern: 'Do you want to (?:proceed|allow|run|make this edit)',
+      buttonPattern: '^[\\s❯>]*\\d+\\.\\s+(.+)$',
+    },
+  };
+
+  const detect = buildDetectStatusFromTui(spec);
+
+  it('returns generating when Working (8m 56s) is on screen', () => {
+    const screen = [
+      '⏺ Implementing the new contract loader',
+      '',
+      'Working (8m 56s • esc to interrupt) · 1 background terminal running',
+      '❯ gpt-5-codex high · /skills',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('generating');
+  });
+
+  it('returns generating when only "esc to interrupt" is visible (lower case)', () => {
+    const screen = ['plenty of prose', 'esc to interrupt', '❯ gpt-5-codex high'].join('\n');
+    expect(detect(statusInput(screen))).toBe('generating');
+  });
+
+  it('returns waiting_approval when the proceed question is on screen', () => {
+    const screen = [
+      'agy wants to run: bash -c "ls"',
+      'Do you want to proceed?',
+      '❯ 1. Yes',
+      '  2. No',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('waiting_approval');
+  });
+
+  it('returns idle when only the settled prompt + footer chrome is visible', () => {
+    const screen = [
+      'Earlier response from the model.',
+      '────────────────────────────────',
+      '>',
+      '────────────────────────────────',
+      '? for shortcuts',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('idle');
+  });
+
+  it('returns generating (not idle) when spinner is visible despite footer also being there', () => {
+    // sprint-2026-06 regression: codex kept model footer visible during Working
+    // and `hasReadyPrompt` falsely fired idle. Builder must respect spinner-first
+    // ordering.
+    const screen = [
+      'Working (12s • esc to interrupt) · /ps',
+      '? for shortcuts',
+      '❯',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('generating');
+  });
+
+  it('returns null when nothing on screen matches any cue', () => {
+    expect(detect(statusInput('totally blank screen\nno cues here'))).toBe(null);
+  });
+});
+
+describe('buildDetectStatusFromTui — claude-cli-shaped spec (braille spinner)', () => {
+  const spec: DetectStatusTuiSpec = {
+    spinner: {
+      $schema: 'adhdev:tui/spinner@1',
+      patterns: [
+        { regex: '[\\u2800-\\u28FF]', description: 'Braille spinner glyphs' },
+        { regex: 'esc to (?:cancel|interrupt|stop)', flags: 'i' },
+      ],
+      scope: 'live-frame-tail',
+      scopeWindowLines: 4,
+    },
+  };
+
+  const detect = buildDetectStatusFromTui(spec);
+
+  it('returns generating when a single braille glyph is present in the live frame tail', () => {
+    expect(detect(statusInput('⣟ Thinking...'))).toBe('generating');
+  });
+
+  it('returns null when braille only appears far above the live frame tail', () => {
+    const screen = ['⣟ very old turn', '', '', '', '', '', '', '', '', 'idle prompt'].join('\n');
+    expect(detect(statusInput(screen))).toBe(null);
+  });
+});
+
+describe('buildDetectStatusFromTui — spec validation', () => {
+  it('rejects an invalid spinner regex with a helpful error', () => {
+    const spec: DetectStatusTuiSpec = {
+      spinner: {
+        $schema: 'adhdev:tui/spinner@1',
+        patterns: [{ regex: '(unclosed' }],
+      },
+    };
+    expect(() => buildDetectStatusFromTui(spec)(statusInput('anything'))).toThrowError(/Invalid regex/);
+  });
+});
