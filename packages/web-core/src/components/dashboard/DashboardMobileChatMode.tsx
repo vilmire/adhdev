@@ -27,6 +27,7 @@ import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
+import { useMutedConversations } from '../../hooks/useMutedConversations'
 
 declare const __APP_VERSION__: string
 
@@ -189,14 +190,27 @@ export default function DashboardMobileChatMode({
         setMachineBackTarget,
     })
 
+    // Mute infrastructure. Coordinator-spawned mesh node conversations are
+    // auto-muted on first sight — the user doesn't need attention pings or
+    // unread bumps for noise sessions launched by Repo Mesh on their behalf.
+    // The bell-icon toggle in the inbox row will let the user mute/unmute
+    // anything else manually.
+    const { isMuted: isConversationMuted, autoMuteIfCoordinator, toggleTarget: toggleMute } = useMutedConversations()
+    useEffect(() => {
+        if (!isStandalone) return
+        for (const item of items) {
+            autoMuteIfCoordinator(item.conversation)
+        }
+    }, [items, isStandalone, autoMuteIfCoordinator])
+
     const attentionItems = useMemo(
-        () => sortMobileInboxItems(items.filter(item => item.requiresAction)),
-        [items],
+        () => sortMobileInboxItems(items.filter(item => item.requiresAction && !isConversationMuted(item.conversation))),
+        [items, isConversationMuted],
     )
 
     const unreadItems = useMemo(
-        () => sortMobileInboxItems(items.filter(item => item.unread && !item.requiresAction)),
-        [items],
+        () => sortMobileInboxItems(items.filter(item => item.unread && !item.requiresAction && !isConversationMuted(item.conversation))),
+        [items, isConversationMuted],
     )
     const workingItems = useMemo(
         () => sortStableMobileLiveItems(
@@ -343,6 +357,8 @@ export default function DashboardMobileChatMode({
                     wsStatus={wsStatus}
                     isConnected={isConnected}
                     isStandalone={isStandalone}
+                    isConversationMuted={isStandalone ? isConversationMuted : undefined}
+                    onToggleMuteConversation={isStandalone ? toggleMute : undefined}
                 />
             )}
         </div>

@@ -1858,7 +1858,25 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
 }
 
 export async function handleReadChat(h: CommandHelpers, args: any): Promise<CommandResult> {
-    const provider = h.getProvider(args?.agentType || args?.providerType);
+    // Resolve provider in order: explicit agentType/providerType > registered session.
+    // Without this fallback, callers that only have a sessionId (e.g. a chat tail
+    // controller that just got handed a session ID over WS) get an empty result
+    // because getProvider(undefined) returns undefined and the rest of the pipeline
+    // bails. This makes the UI look like the session "disappeared".
+    let providerHint: string | undefined = args?.agentType || args?.providerType;
+    if (!providerHint) {
+        const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+        if (targetSessionId) {
+            const session = (h.ctx as any)?.sessionRegistry?.get?.(targetSessionId);
+            if (session && typeof session.providerType === 'string') {
+                providerHint = session.providerType;
+            }
+        }
+        if (!providerHint && h.currentSession?.providerType) {
+            providerHint = h.currentSession.providerType;
+        }
+    }
+    const provider = h.getProvider(providerHint);
     const transport = getTargetTransport(h, provider);
     const historySessionId = getHistorySessionId(h, args);
 

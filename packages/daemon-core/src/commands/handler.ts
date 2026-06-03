@@ -511,6 +511,10 @@ export class DaemonCommandHandler implements CommandHelpers {
             // ─── Script manage ───────────────────
             case 'refresh_scripts': return this.handleRefreshScripts(args);
             case 'list_provider_availability': return this.handleListProviderAvailability(args);
+            case 'install_provider_manifest': return this.handleInstallProviderManifest(args);
+            case 'uninstall_provider_manifest': return this.handleUninstallProviderManifest(args);
+            case 'check_provider_updates': return this.handleCheckProviderUpdates(args);
+            case 'list_installed_providers': return this.handleListInstalledProviders(args);
 
             // ─── Stream commands (stream-commands.ts) ───────────
             case 'select_session': return Stream.handleSelectSession(this, args);
@@ -546,13 +550,15 @@ export class DaemonCommandHandler implements CommandHelpers {
 
     // ─── Misc (kept in handler — too small to extract) ───────
 
+    /**
+     * Reload providers from disk. Does NOT pull from the registry — the user
+     * controls installs explicitly via install_provider_manifest. To upgrade
+     * an installed provider, call install_provider_manifest again with the
+     * desired version (or with no version to pick up the latest from
+     * registry), or use check_provider_updates to see what is out of date.
+     */
     private async handleRefreshScripts(_args: any): Promise<CommandResult> {
         if (this._ctx.providerLoader) {
-            // Try registry first (incremental), fall back to full GitHub tarball
-            const regResult = await this._ctx.providerLoader.fetchFromRegistry().catch(() => ({ updated: false, error: 'registry error' }));
-            if (!regResult.updated && regResult.error) {
-                await this._ctx.providerLoader.fetchLatest().catch(() => {});
-            }
             this._ctx.providerLoader.reload();
             this._ctx.providerLoader.registerToDetector();
             const refreshedInstances = this._ctx.instanceManager
@@ -591,6 +597,467 @@ export class DaemonCommandHandler implements CommandHelpers {
             };
         });
         return { success: true, providers: items };
+    }
+
+    /**
+     * Compute the *Marketplace install root*. This is always
+     * `~/.adhdev/marketplace/` regardless of how ProviderLoader resolved its
+     * userDir (which can point to a sibling adhdev-providers git checkout in
+     * dev). Marketplace-installed manifests must never overwrite files in a
+     * developer checkout, and they should be isolated from upstream/registry
+     * sync so they survive `refresh_scripts`.
+     */
+    private getMarketplaceInstallRoot(): string {
+        const os = require('os') as typeof import('os');
+        const path = require('path') as typeof import('path');
+        return path.join(os.homedir(), '.adhdev', 'marketplace');
+    }
+
+    /**
+     * Download a single provider manifest from the registry and write it to
+     * ~/.adhdev/marketplace/{category}/{type}/provider.json.
+     *
+     * Used by the Marketplace UI's Install button. Verifies SHA-256 checksum
+     * against the registry meta before persisting. Refuses to write outside
+     * the marketplace root.
+     *
+     * Args: { type: string, category?: string, version?: string }
+     * If category/version are omitted, looks up the latest from the registry.
+     */
+    private async handleInstallProviderManifest(args: any): Promise<CommandResult> {
+        if (!this._ctx.providerLoader) {
+            return { success: false, error: 'ProviderLoader not initialized' };
+        }
+        const type = typeof args?.type === 'string' ? args.type : '';
+        if (!type) return { success: false, error: 'type is required' };
+        // Defense in depth: reject any obvious path-traversal in the type.
+        if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(type)) {
+            return { success: false, error: 'invalid type' };
+        }
+
+        const https = require('https') as typeof import('https');
+        const fs = require('fs') as typeof import('fs');
+        const path = require('path') as typeof import('path');
+        const crypto = require('crypto') as typeof import('crypto');
+        const REGISTRY = 'https://api.adhf.dev/api/v1/registry';
+
+        function fetchText(url: string, timeoutMs: number): Promise<string> {
+            return new Promise((resolve, reject) => {
+                const req = https.get(url, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: timeoutMs }, (res) => {
+                    if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+                    const chunks: Buffer[] = [];
+                    res.on('data', (c: Buffer) => chunks.push(c));
+                    res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+            });
+        }
+
+        try {
+            // 1. Look up provider metadata so we know the expected category, version, checksum.
+            const metaBody = await fetchText(`${REGISTRY}/providers/${encodeURIComponent(type)}`, 10000);
+            const meta = JSON.parse(metaBody) as { type: string; category: string; version: string; checksum: string };
+            const category = typeof args?.category === 'string' ? args.category : meta.category;
+            const version = typeof args?.version === 'string' ? args.version : meta.version;
+
+            // Defense in depth on category as well — only known categories.
+            if (!['cli', 'ide', 'extension', 'acp'].includes(category)) {
+                return { success: false, error: `unknown category: ${category}` };
+            }
+
+            // 2. Download the manifest body.
+            const manifestBody = await fetchText(
+                `${REGISTRY}/providers/${encodeURIComponent(type)}/${encodeURIComponent(version)}/download`,
+                30000
+            );
+
+            // 3. Verify checksum.
+            const actualChecksum = crypto.createHash('sha256').update(manifestBody, 'utf-8').digest('hex');
+            if (actualChecksum !== meta.checksum) {
+                return { success: false, error: `checksum mismatch: expected ${meta.checksum}, got ${actualChecksum}` };
+            }
+
+            // 4. Write to the marketplace install root, NOT to ProviderLoader.getUserDir():
+            //    in dev, userDir points at the sibling adhdev-providers git checkout.
+            const installRoot = this.getMarketplaceInstallRoot();
+            const installRootResolved = path.resolve(installRoot);
+            const targetDir = path.resolve(path.join(installRoot, category, type));
+            if (!targetDir.startsWith(installRootResolved + path.sep)) {
+                return { success: false, error: 'install path escaped marketplace root' };
+            }
+            fs.mkdirSync(targetDir, { recursive: true });
+            const targetPath = path.join(targetDir, 'provider.json');
+            fs.writeFileSync(targetPath, manifestBody, 'utf-8');
+
+            // 5. If the manifest declares a `source` GitHub repo, fetch the
+            //    script directories listed in the manifest (defaultScriptDir +
+            //    each compatibility[].scriptDir). Extended-tier providers
+            //    bundle their override JS this way — the registry intentionally
+            //    only stores the manifest JSON, not the script bytes, so a
+            //    third-party can publish a manifest pointing at their own fork
+            //    without pushing files into our R2 bucket.
+            const manifestJson = JSON.parse(manifestBody) as Record<string, any>;
+            const scriptFetch = await this.fetchProviderSources(
+                manifestJson,
+                category,
+                type,
+                targetDir,
+            );
+
+            // Hot-reload so the daemon picks up the new manifest.
+            this._ctx.providerLoader.reload();
+            this._ctx.providerLoader.registerToDetector();
+
+            return {
+                success: true,
+                installed: {
+                    type, category, version, checksum: actualChecksum, path: targetPath,
+                    scriptsFetched: scriptFetch.fetchedCount,
+                    scriptSource: scriptFetch.source,
+                    scriptErrors: scriptFetch.errors,
+                },
+            };
+        } catch (e: any) {
+            return { success: false, error: `install failed: ${e?.message || e}` };
+        }
+    }
+
+    /**
+     * If `manifest.source = { type:'github', repo, ref, subdir? }` is set,
+     * walk each script directory the manifest references and download every
+     * file from the public GitHub raw endpoint. Returns a small summary so
+     * the caller can report what was fetched.
+     *
+     * Best-effort: failures don't reject the install — the manifest itself is
+     * usable for declarative-only providers, and the user still gets a clear
+     * error string back if a needed script is missing.
+     */
+    private async fetchProviderSources(
+        manifest: Record<string, any>,
+        category: string,
+        type: string,
+        targetDir: string,
+    ): Promise<{ fetchedCount: number; source: string | null; errors: string[] }> {
+        const errors: string[] = [];
+        const source = manifest?.source;
+        if (!source || source.type !== 'github' || typeof source.repo !== 'string' || typeof source.ref !== 'string') {
+            return { fetchedCount: 0, source: null, errors };
+        }
+
+        // Collect every script directory the manifest references. v1 manifests
+        // use `defaultScriptDir` and `compatibility[].scriptDir`. We also pull
+        // any override path's directory (e.g. overrides.detectStatus.path =
+        // "scripts/v1/detect_status.js" → fetch the scripts/v1/ directory too).
+        const scriptDirs = new Set<string>();
+        if (typeof manifest.defaultScriptDir === 'string') scriptDirs.add(manifest.defaultScriptDir);
+        if (Array.isArray(manifest.compatibility)) {
+            for (const c of manifest.compatibility) {
+                if (typeof c?.scriptDir === 'string') scriptDirs.add(c.scriptDir);
+            }
+        }
+        if (manifest.overrides && typeof manifest.overrides === 'object' && !Array.isArray(manifest.overrides)) {
+            for (const override of Object.values(manifest.overrides) as Array<Record<string, unknown>>) {
+                const overridePath = override?.path;
+                if (typeof overridePath === 'string' && overridePath.includes('/')) {
+                    const dir = overridePath.substring(0, overridePath.lastIndexOf('/'));
+                    if (dir) scriptDirs.add(dir);
+                }
+            }
+        }
+        if (scriptDirs.size === 0) {
+            return { fetchedCount: 0, source: `${source.repo}@${source.ref}`, errors };
+        }
+
+        const subdir: string = typeof source.subdir === 'string' && source.subdir.length > 0
+            ? source.subdir
+            : `${category}/${type}`;
+        const repo: string = source.repo;
+        const ref: string = source.ref;
+
+        const https = require('https') as typeof import('https');
+        const fs = require('fs') as typeof import('fs');
+        const path = require('path') as typeof import('path');
+
+        function fetchJson(url: string, timeoutMs: number): Promise<any> {
+            return new Promise((resolve, reject) => {
+                const req = https.get(url, {
+                    headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/vnd.github+json' },
+                    timeout: timeoutMs,
+                }, (res) => {
+                    if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+                    const chunks: Buffer[] = [];
+                    res.on('data', (c: Buffer) => chunks.push(c));
+                    res.on('end', () => {
+                        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
+                        catch (e) { reject(e); }
+                    });
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+            });
+        }
+
+        function fetchBinary(url: string, timeoutMs: number): Promise<Buffer> {
+            return new Promise((resolve, reject) => {
+                const req = https.get(url, {
+                    headers: { 'User-Agent': 'adhdev-daemon' },
+                    timeout: timeoutMs,
+                }, (res) => {
+                    // Raw endpoint redirects through codeload — follow the redirect.
+                    if (res.statusCode === 301 || res.statusCode === 302) {
+                        if (res.headers.location) {
+                            return fetchBinary(res.headers.location, timeoutMs).then(resolve, reject);
+                        }
+                    }
+                    if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+                    const chunks: Buffer[] = [];
+                    res.on('data', (c: Buffer) => chunks.push(c));
+                    res.on('end', () => resolve(Buffer.concat(chunks)));
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+            });
+        }
+
+        let fetchedCount = 0;
+
+        // The shared helpers directory (cli/_shared/) is referenced by most
+        // CLI providers via `require('../../../_shared/...')`. Fetch it once
+        // alongside the provider's own scripts so node's require resolution
+        // succeeds at runtime. Best-effort — silent if the source repo has no
+        // _shared dir (e.g. ACP-only repos).
+        const sharedDirRel = `${category}/_shared`;
+        const sharedTargetDir = path.resolve(path.join(targetDir, '../_shared'));
+        const installRootResolved = path.resolve(path.join(targetDir, '../..'));
+        if (sharedTargetDir.startsWith(installRootResolved + path.sep)) {
+            const sharedStack: string[] = [sharedDirRel];
+            while (sharedStack.length) {
+                const relDir = sharedStack.pop()!;
+                const apiUrl = `https://api.github.com/repos/${repo}/contents/${encodeURI(relDir)}?ref=${encodeURIComponent(ref)}`;
+                let entries: Array<{ type: string; path: string; name: string; download_url: string | null }>;
+                try {
+                    entries = await fetchJson(apiUrl, 15000);
+                } catch (e: any) {
+                    // Silent: _shared may not exist on third-party repos
+                    if (relDir === sharedDirRel) break;
+                    errors.push(`list shared ${relDir}: ${e?.message ?? e}`);
+                    continue;
+                }
+                if (!Array.isArray(entries)) continue;
+                for (const entry of entries) {
+                    if (entry.type === 'dir') { sharedStack.push(entry.path); continue; }
+                    if (entry.type !== 'file' || !entry.download_url) continue;
+                    try {
+                        const body = await fetchBinary(entry.download_url, 30000);
+                        // entry.path is like 'cli/_shared/foo.js' — strip 'cli/_shared/' prefix
+                        const relInside = entry.path.startsWith(sharedDirRel + '/')
+                            ? entry.path.slice(sharedDirRel.length + 1)
+                            : entry.path;
+                        const outPath = path.resolve(path.join(sharedTargetDir, relInside));
+                        if (!outPath.startsWith(path.resolve(sharedTargetDir) + path.sep)) continue;
+                        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+                        fs.writeFileSync(outPath, body);
+                        fetchedCount++;
+                    } catch (e: any) {
+                        errors.push(`fetch shared ${entry.path}: ${e?.message ?? e}`);
+                    }
+                }
+            }
+        }
+
+        for (const scriptDir of scriptDirs) {
+            // GitHub Contents API returns the file list under the dir. We
+            // recurse into subdirectories so e.g. scripts/v1/helpers/foo.js is
+            // captured too.
+            const stack: string[] = [`${subdir}/${scriptDir}`];
+            while (stack.length) {
+                const relDir = stack.pop()!;
+                const apiUrl = `https://api.github.com/repos/${repo}/contents/${encodeURI(relDir)}?ref=${encodeURIComponent(ref)}`;
+                let entries: Array<{ type: string; path: string; name: string; download_url: string | null }>;
+                try {
+                    entries = await fetchJson(apiUrl, 15000);
+                } catch (e: any) {
+                    errors.push(`list ${relDir}: ${e?.message ?? e}`);
+                    continue;
+                }
+                if (!Array.isArray(entries)) {
+                    errors.push(`list ${relDir}: unexpected response shape`);
+                    continue;
+                }
+                for (const entry of entries) {
+                    if (entry.type === 'dir') {
+                        stack.push(entry.path);
+                        continue;
+                    }
+                    if (entry.type !== 'file' || !entry.download_url) continue;
+                    try {
+                        const body = await fetchBinary(entry.download_url, 30000);
+                        // entry.path is relative to repo root → strip the repo subdir prefix
+                        // so the path inside targetDir matches the layout the loader expects.
+                        const relInsideProvider = entry.path.startsWith(subdir + '/')
+                            ? entry.path.slice(subdir.length + 1)
+                            : entry.path;
+                        const outPath = path.resolve(path.join(targetDir, relInsideProvider));
+                        // Path-traversal guard.
+                        if (!outPath.startsWith(path.resolve(targetDir) + path.sep)) {
+                            errors.push(`refusing to write outside targetDir: ${entry.path}`);
+                            continue;
+                        }
+                        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+                        fs.writeFileSync(outPath, body);
+                        fetchedCount++;
+                    } catch (e: any) {
+                        errors.push(`fetch ${entry.path}: ${e?.message ?? e}`);
+                    }
+                }
+            }
+        }
+
+        return { fetchedCount, source: `${repo}@${ref}`, errors };
+    }
+
+    /**
+     * Remove a provider manifest from the marketplace install root
+     * (~/.adhdev/marketplace/{category}/{type}/). Refuses to touch anything
+     * outside that root.
+     */
+    private async handleUninstallProviderManifest(args: any): Promise<CommandResult> {
+        const type = typeof args?.type === 'string' ? args.type : '';
+        const category = typeof args?.category === 'string' ? args.category : '';
+        if (!type || !category) return { success: false, error: 'type and category are required' };
+        if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(type)) {
+            return { success: false, error: 'invalid type' };
+        }
+        if (!['cli', 'ide', 'extension', 'acp'].includes(category)) {
+            return { success: false, error: `unknown category: ${category}` };
+        }
+
+        const fs = require('fs') as typeof import('fs');
+        const path = require('path') as typeof import('path');
+
+        try {
+            const installRoot = this.getMarketplaceInstallRoot();
+            const installRootResolved = path.resolve(installRoot);
+            const targetDir = path.resolve(path.join(installRoot, category, type));
+
+            if (!targetDir.startsWith(installRootResolved + path.sep)) {
+                return { success: false, error: 'refusing to delete outside marketplace root' };
+            }
+            if (!fs.existsSync(targetDir)) {
+                return { success: false, error: 'not installed' };
+            }
+
+            fs.rmSync(targetDir, { recursive: true, force: true });
+
+            if (this._ctx.providerLoader) {
+                this._ctx.providerLoader.reload();
+                this._ctx.providerLoader.registerToDetector();
+            }
+
+            return { success: true, removed: { type, category, path: targetDir } };
+        } catch (e: any) {
+            return { success: false, error: `uninstall failed: ${e?.message || e}` };
+        }
+    }
+
+    /**
+     * Return everything currently installed in ~/.adhdev/marketplace/ with its
+     * version. This is the "what does this daemon have" answer used both by
+     * the UI and by the update checker.
+     */
+    private handleListInstalledProviders(_args: any): CommandResult {
+        const fs = require('fs') as typeof import('fs');
+        const path = require('path') as typeof import('path');
+
+        const installRoot = this.getMarketplaceInstallRoot();
+        if (!fs.existsSync(installRoot)) return { success: true, providers: [] };
+
+        const CATEGORIES = ['cli', 'ide', 'extension', 'acp'] as const;
+        const items: Array<{ type: string; category: string; version: string; path: string }> = [];
+
+        for (const category of CATEGORIES) {
+            const categoryDir = path.join(installRoot, category);
+            if (!fs.existsSync(categoryDir)) continue;
+            let entries: string[];
+            try { entries = fs.readdirSync(categoryDir); } catch { continue; }
+            for (const type of entries) {
+                const manifestPath = path.join(categoryDir, type, 'provider.json');
+                if (!fs.existsSync(manifestPath)) continue;
+                try {
+                    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+                    items.push({
+                        type,
+                        category,
+                        version: typeof m.providerVersion === 'string' ? m.providerVersion : '0.0.0',
+                        path: manifestPath,
+                    });
+                } catch {
+                    // Corrupt manifest — skip but don't fail the whole listing.
+                }
+            }
+        }
+        return { success: true, providers: items };
+    }
+
+    /**
+     * For each installed provider, ask the registry for its current latest
+     * version and report whether an update is available. The user can then
+     * call install_provider_manifest to upgrade (it overwrites the file).
+     *
+     * Returns { providers: [{ type, category, installedVersion, latestVersion,
+     *   updateAvailable, error? }] }
+     */
+    private async handleCheckProviderUpdates(_args: any): Promise<CommandResult> {
+        const installed = this.handleListInstalledProviders({});
+        if (!installed.success) return installed;
+
+        const https = require('https') as typeof import('https');
+        const REGISTRY = 'https://api.adhf.dev/api/v1/registry';
+
+        function fetchJson(url: string): Promise<any> {
+            return new Promise((resolve, reject) => {
+                const req = https.get(url, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: 10000 }, (res) => {
+                    if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+                    const chunks: Buffer[] = [];
+                    res.on('data', (c: Buffer) => chunks.push(c));
+                    res.on('end', () => {
+                        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
+                        catch (e) { reject(e); }
+                    });
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+            });
+        }
+
+        const installedList = (installed as unknown as { providers: Array<{ type: string; category: string; version: string }> }).providers;
+        const checks = await Promise.all(
+            installedList.map(async (p) => {
+                try {
+                    const remote = await fetchJson(`${REGISTRY}/providers/${encodeURIComponent(p.type)}`);
+                    const latestVersion = String(remote?.version ?? '');
+                    return {
+                        type: p.type,
+                        category: p.category,
+                        installedVersion: p.version,
+                        latestVersion,
+                        updateAvailable: latestVersion !== '' && latestVersion !== p.version,
+                    };
+                } catch (e: any) {
+                    return {
+                        type: p.type,
+                        category: p.category,
+                        installedVersion: p.version,
+                        latestVersion: null,
+                        updateAvailable: false,
+                        error: e?.message ?? String(e),
+                    };
+                }
+            })
+        );
+
+        return { success: true, providers: checks };
     }
 
     // ─── DevServer HTTP proxy helpers ─────────────────

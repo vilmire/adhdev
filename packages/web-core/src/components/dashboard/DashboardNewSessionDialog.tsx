@@ -640,45 +640,48 @@ export default function DashboardNewSessionDialog({
                     </div>
 
                     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 sm:px-5 sm:py-4 space-y-4">
-                        <LaunchSectionCard title="Machine">
-                            {useMachineDropdown ? (
-                                <select
-                                    aria-label="Machine"
-                                    value={selectedMachine.id}
-                                    onChange={(event) => setSelectedMachineId(event.target.value)}
-                                    className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
-                                    disabled={busy}
-                                >
-                                    {sortedMachines.map(machine => (
-                                        <option key={machine.id} value={machine.id}>
-                                            {getMachineDisplayName(machine, { fallbackId: machine.id })}
-                                        </option>
-                                    ))}
-                                </select>
-                            ) : (
-                                <div className="flex flex-wrap gap-2" role="group" aria-label="Machine">
-                                    {sortedMachines.map(machine => {
-                                        const label = getMachineDisplayName(machine, { fallbackId: machine.id })
-                                        const selected = selectedMachine.id === machine.id
-                                        return (
-                                            <button
-                                                key={machine.id}
-                                                type="button"
-                                                aria-label={`Select machine ${label}`}
-                                                aria-pressed={selected}
-                                                className={`inline-flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-sm transition-colors ${selected ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle bg-bg-secondary/60 text-text-secondary hover:bg-bg-secondary hover:text-text-primary'}`}
-                                                onClick={() => setSelectedMachineId(machine.id)}
-                                                disabled={busy}
-                                                title={label}
-                                            >
-                                                <span className={`h-2 w-2 shrink-0 rounded-full ${machine.status === 'offline' ? 'bg-text-muted' : 'bg-emerald-500'}`} />
-                                                <span className="truncate">{label}</span>
-                                            </button>
-                                        )
-                                    })}
-                                </div>
-                            )}
-                        </LaunchSectionCard>
+                        {/* Machine picker only when more than one machine is connected. */}
+                        {sortedMachines.length > 1 && (
+                            <LaunchSectionCard title="Machine">
+                                {useMachineDropdown ? (
+                                    <select
+                                        aria-label="Machine"
+                                        value={selectedMachine.id}
+                                        onChange={(event) => setSelectedMachineId(event.target.value)}
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
+                                        disabled={busy}
+                                    >
+                                        {sortedMachines.map(machine => (
+                                            <option key={machine.id} value={machine.id}>
+                                                {getMachineDisplayName(machine, { fallbackId: machine.id })}
+                                            </option>
+                                        ))}
+                                    </select>
+                                ) : (
+                                    <div className="flex flex-wrap gap-2" role="group" aria-label="Machine">
+                                        {sortedMachines.map(machine => {
+                                            const label = getMachineDisplayName(machine, { fallbackId: machine.id })
+                                            const selected = selectedMachine.id === machine.id
+                                            return (
+                                                <button
+                                                    key={machine.id}
+                                                    type="button"
+                                                    aria-label={`Select machine ${label}`}
+                                                    aria-pressed={selected}
+                                                    className={`inline-flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-sm transition-colors ${selected ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle bg-bg-secondary/60 text-text-secondary hover:bg-bg-secondary hover:text-text-primary'}`}
+                                                    onClick={() => setSelectedMachineId(machine.id)}
+                                                    disabled={busy}
+                                                    title={label}
+                                                >
+                                                    <span className={`h-2 w-2 shrink-0 rounded-full ${machine.status === 'offline' ? 'bg-text-muted' : 'bg-emerald-500'}`} />
+                                                    <span className="truncate">{label}</span>
+                                                </button>
+                                            )
+                                        })}
+                                    </div>
+                                )}
+                            </LaunchSectionCard>
+                        )}
 
                         <LaunchSectionCard
                             title="Workspace"

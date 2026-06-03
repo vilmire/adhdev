@@ -187,6 +187,7 @@ export { useNotificationPrefs, shouldNotify, getNotificationPrefs, setNotificati
 export type { NotificationPrefs } from './hooks/useNotificationPrefs'
 export { useBrowserNotifications, requestNotificationPermission } from './hooks/useBrowserNotifications'
 export { useHiddenTabs } from './hooks/useHiddenTabs'
+export { useMutedConversations, isConversationMuted } from './hooks/useMutedConversations'
 
 // ── Compat layer (gradual migration) ──
 export { useDaemons, dashboardWS, connectionManager, setupCompat } from './compat'

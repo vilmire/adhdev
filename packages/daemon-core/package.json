@@ -27,7 +27,7 @@
   "scripts": {
     "build": "tsup && npm run build:types",
     "build:types": "tsc -p tsconfig.json --emitDeclarationOnly --declaration --declarationMap false",
-    "dev": "tsup --watch",
+    "dev": "tsup --watch --no-clean",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json"

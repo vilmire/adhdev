@@ -159,7 +159,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
 
     const platformIcon = platform === 'win32' ? '🪟' : platform === 'darwin' ? '🍎' : '🐧'
 
-    // Collect connected IDE/CLI instances for this daemon
+    // Collect connected sessions by transport (IDE via CDP, CLI via PTY, ACP via stdio)
     const connectedIdes = allIdes.filter(i => i.daemonId === ide.id && i.transport === 'cdp-page')
     const connectedClis = allIdes.filter(i => i.daemonId === ide.id && i.transport === 'pty')
     const connectedAcps = allIdes.filter(i => i.daemonId === ide.id && i.transport === 'acp')

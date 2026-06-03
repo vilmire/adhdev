@@ -559,17 +559,11 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 <MachineWorkspaceTab
                                     machine={machine}
                                     machineId={machineId!}
-                                    providers={providers}
                                     ideSessions={ideSessions}
                                     cliSessions={cliSessions}
                                     acpSessions={acpSessions}
-                                actions={actions}
-                                getIcon={getIcon}
-                                initialCategory={workspaceCategoryHint}
-                                initialWorkspaceId={requestedWorkspaceId}
-                                initialWorkspacePath={requestedWorkspacePath}
-                                sendDaemonCommand={sendDaemonCommand}
-                                onOpenGitDialog={handleOpenGitDialog}
+                                    actions={actions}
+                                    sendDaemonCommand={sendDaemonCommand}
                                 />
                             </div>
                         )}
@@ -584,13 +578,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
                         {activeTab === 'overview' && (
                             <OverviewTab
-                                machineId={machineId!}
                                 machine={machine}
                                 ideSessions={ideSessions}
                                 cliSessions={cliSessions}
                                 acpSessions={acpSessions}
-                                actions={actions}
-                                sendDaemonCommand={sendDaemonCommand}
                             />
                         )}
 

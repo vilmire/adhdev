@@ -33,7 +33,7 @@ export default function PaneGroupEmptyState({
     const description = hasRegisteredMachines
         ? DASHBOARD_NEW_SESSION_DESCRIPTION
         : isStandalone
-            ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can open an IDE or launch CLI and ACP sessions.'
+            ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can launch sessions with any installed provider.'
             : 'Install ADHDev on a machine, sign in, and it will show up here.'
 
     if (conversationsCount === 0 && !isSplitMode) {

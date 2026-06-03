@@ -6,8 +6,9 @@ import { useState, useEffect, useCallback } from 'react'
 import type { ProviderSettingsEntry, ProviderInfo } from './types'
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
-import ProviderFixModal from './ProviderFixModal'
 import ProviderCloneModal from './ProviderCloneModal'
+import AddProviderSection from './AddProviderSection'
+import InstalledProviderRow from './InstalledProviderRow'
 
 interface ProvidersTabProps {
     machineId: string
@@ -15,47 +16,13 @@ interface ProvidersTabProps {
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 }
 
-type ProviderMachineCheck = NonNullable<ProviderInfo['lastDetection']>
-
-function isMachineRuntimeProvider(category: string): boolean {
-    return category === 'cli' || category === 'acp'
-}
-
-function getMachineStatusLabel(status?: ProviderInfo['machineStatus']): string {
-    switch (status) {
-        case 'detected': return 'Detected'
-        case 'not_detected': return 'Not detected'
-        case 'enabled_unchecked': return 'Enabled, not checked'
-        case 'disabled': return 'Disabled'
-        default: return 'Disabled'
-    }
-}
-
-function getMachineStatusClass(status?: ProviderInfo['machineStatus']): string {
-    switch (status) {
-        case 'detected': return 'bg-green-500/[0.10] border-green-500/25 text-green-400'
-        case 'not_detected': return 'bg-red-500/[0.10] border-red-500/25 text-red-400'
-        case 'enabled_unchecked': return 'bg-yellow-500/[0.10] border-yellow-500/25 text-yellow-400'
-        case 'disabled':
-        default: return 'bg-white/[0.04] border-white/[0.10] text-text-muted'
-    }
-}
-
-function formatMachineCheck(check?: ProviderMachineCheck): string {
-    if (!check) return 'No result yet'
-    const stage = check.stage || 'check'
-    const outcome = check.ok ? 'OK' : 'Failed'
-    const detail = check.message || check.path || check.command || ''
-    return detail ? `${stage}: ${outcome} — ${detail}` : `${stage}: ${outcome}`
-}
-
 export default function ProvidersTab({ machineId, providers, sendDaemonCommand }: ProvidersTabProps) {
     const [settings, setSettings] = useState<ProviderSettingsEntry[]>([])
     const [loading, setLoading] = useState(false)
     const [savingKey, setSavingKey] = useState<string | null>(null)
     const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('all')
-    const [fixTarget, setFixTarget] = useState<ProviderInfo | null>(null)
     const [showClone, setShowClone] = useState(false)
+    const [showSourceConfig, setShowSourceConfig] = useState(false)
     const [sourceConfig, setSourceConfig] = useState<ProviderSourceConfigPayload | null>(null)
     const [sourceModeInput, setSourceModeInput] = useState<'normal' | 'no-upstream'>('normal')
     const [providerDirInput, setProviderDirInput] = useState('')
@@ -132,6 +99,15 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         await fetchSettings()
     }
 
+    const handleUninstall = async (providerType: string, category: string) => {
+        if (!confirm(`Uninstall ${providerType}? This removes the manifest from ~/.adhdev/marketplace/.`)) return
+        try {
+            await sendDaemonCommand(machineId, 'uninstall_provider_manifest', { type: providerType, category })
+        } finally {
+            await fetchSettings()
+        }
+    }
+
     const handleApplySourceConfig = async () => {
         setSourceSaving(true)
         try {
@@ -154,9 +130,20 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         setSourceSaving(false)
     }
 
+    const filteredSettings = settings.filter(p => filter === 'all' || p.category === filter)
+
     return (
-        <div>
-            <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col gap-3">
+            {/* Add provider — registry catalog browser (collapsible) */}
+            <AddProviderSection
+                machineId={machineId}
+                sendDaemonCommand={sendDaemonCommand}
+                installedTypes={new Set(settings.map(s => s.type))}
+                onInstalled={() => { void fetchSettings() }}
+            />
+
+            {/* Toolbar: filter + create + refresh + advanced toggle */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-1 items-center">
                     <span className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mr-2">Filter</span>
                     {(['all', 'acp', 'cli', 'ide', 'extension'] as const).map(cat => (
@@ -172,264 +159,96 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                 <div className="flex gap-1.5">
                     <button
                         onClick={() => setShowClone(true)}
-                        className="machine-btn text-[10px] bg-green-500/[0.06] border-green-500/20 text-green-400 hover:bg-green-500/[0.12]"
-                    >✨ Create Provider</button>
-                    <button onClick={fetchSettings} disabled={loading} className="machine-btn">
-                        {loading ? '⏳ Loading...' : '↻ Refresh'}
+                        className="machine-btn text-[10px]"
+                        title="Create a new provider from an existing one"
+                    >✨ Create</button>
+                    <button onClick={fetchSettings} disabled={loading} className="machine-btn text-[10px]">
+                        {loading ? '⏳' : '↻'} Refresh
                     </button>
-                </div>
-            </div>
-
-            <div className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle mb-4">
-                <div className="flex items-center justify-between gap-3 mb-3">
-                    <div>
-                        <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">Provider source config</div>
-                        <div className="text-[11px] text-text-muted mt-1">Affects provider resolution, fix/verify flows, and new launches. Running CLI sessions refresh provider scripts/config; process binary changes still apply on next launch.</div>
-                    </div>
-                    <button onClick={fetchSourceConfig} className="machine-btn text-[10px]">↻ Refresh source</button>
-                </div>
-                <div className="grid md:grid-cols-[180px_1fr_auto] gap-3 items-end">
-                    <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
-                        <span className="font-medium text-text-primary">Source mode</span>
-                        <select
-                            value={sourceModeInput}
-                            onChange={e => setSourceModeInput(e.target.value as 'normal' | 'no-upstream')}
-                            className="machine-input text-[11px]"
-                        >
-                            <option value="normal">normal</option>
-                            <option value="no-upstream">no-upstream</option>
-                        </select>
-                    </label>
-                    <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
-                        <span className="font-medium text-text-primary">Explicit providerDir</span>
-                        <input
-                            type="text"
-                            value={providerDirInput}
-                            onChange={e => setProviderDirInput(e.target.value)}
-                            placeholder="Leave blank to use ~/.adhdev/providers"
-                            className="machine-input text-[11px]"
-                        />
-                    </label>
                     <button
-                        onClick={() => void handleApplySourceConfig()}
-                        disabled={sourceSaving}
-                        className="machine-btn text-[10px] bg-violet-500/[0.08] border-violet-500/20 text-violet-300 hover:bg-violet-500/[0.14]"
-                    >{sourceSaving ? 'Applying…' : 'Apply + Reload'}</button>
-                </div>
-                <div className="mt-3 grid gap-1 text-[11px] text-text-muted">
-                    <div><span className="text-text-primary font-medium">Effective user root:</span> {sourceConfig?.userDir || 'loading…'}</div>
-                    <div><span className="text-text-primary font-medium">Upstream root:</span> {sourceConfig?.upstreamDir || 'loading…'}</div>
-                    <div><span className="text-text-primary font-medium">Provider roots:</span> {sourceConfig?.providerRoots?.join(' → ') || 'loading…'}</div>
+                        onClick={() => setShowSourceConfig(v => !v)}
+                        className="machine-btn text-[10px]"
+                        title="Show source configuration (advanced)"
+                    >⚙ Advanced</button>
                 </div>
             </div>
 
-            {/* Bulk Actions — only when filtering by category */}
-            {filter !== 'all' && settings.filter(p => p.category === filter).length > 1 && (() => {
-                const filtered = settings.filter(p => p.category === filter)
-                // Find common boolean settings across all filtered providers
-                const boolKeys = new Map<string, { label: string; onCount: number; total: number }>()
-                for (const prov of filtered) {
-                    for (const s of prov.schema) {
-                        if (s.type !== 'boolean') continue
-                        const existing = boolKeys.get(s.key)
-                        const isOn = !!(prov.values[s.key] ?? s.default)
-                        if (existing) {
-                            existing.onCount += isOn ? 1 : 0
-                            existing.total += 1
-                        } else {
-                            boolKeys.set(s.key, { label: s.label || s.key, onCount: isOn ? 1 : 0, total: 1 })
-                        }
-                    }
-                }
-                // Only show settings that exist in all filtered providers
-                const commonKeys = [...boolKeys.entries()].filter(([, v]) => v.total === filtered.length)
-                if (commonKeys.length === 0) return null
-
-                const handleBulkToggle = async (key: string, value: boolean) => {
-                    for (const prov of filtered) {
-                        await handleSetSetting(prov.type, key, value)
-                    }
-                }
-
-                return (
-                    <div className="px-4 py-3 rounded-xl bg-violet-500/[0.04] border border-violet-500/10 mb-4">
-                        <div className="text-[10px] text-violet-400 font-semibold uppercase tracking-wider mb-2">
-                            Bulk — Apply to all {filter.toUpperCase()} providers ({filtered.length})
+            {/* Advanced: provider source config (collapsed by default) */}
+            {showSourceConfig && (
+                <div className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                        <div>
+                            <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">Provider source config</div>
+                            <div className="text-[11px] text-text-muted mt-1">Where the daemon looks for provider manifests. Affects resolution and reloads.</div>
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                            {commonKeys.map(([key, info]) => {
-                                const allOn = info.onCount === info.total
-                                const allOff = info.onCount === 0
-                                return (
-                                    <div key={key} className="flex items-center gap-1.5 text-[11px]">
-                                        <span className="text-text-secondary font-medium">{info.label}</span>
-                                        <span className="text-[9px] text-text-muted">({info.onCount}/{info.total})</span>
-                                        <button
-                                            onClick={() => void handleBulkToggle(key, true)}
-                                            disabled={allOn}
-                                            className={`machine-btn text-[9px] px-1.5 py-px ${allOn ? 'opacity-40' : 'text-green-400 border-green-500/30'}`}
-                                        >All ON</button>
-                                        <button
-                                            onClick={() => void handleBulkToggle(key, false)}
-                                            disabled={allOff}
-                                            className={`machine-btn text-[9px] px-1.5 py-px ${allOff ? 'opacity-40' : 'text-red-400 border-red-500/30'}`}
-                                        >All OFF</button>
-                                    </div>
-                                )
-                            })}
-                        </div>
+                        <button onClick={fetchSourceConfig} className="machine-btn text-[10px]">↻ Refresh</button>
                     </div>
-                )
-            })()}
+                    <div className="grid md:grid-cols-[180px_1fr_auto] gap-3 items-end">
+                        <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
+                            <span className="font-medium text-text-primary">Source mode</span>
+                            <select
+                                value={sourceModeInput}
+                                onChange={e => setSourceModeInput(e.target.value as 'normal' | 'no-upstream')}
+                                className="machine-input text-[11px]"
+                            >
+                                <option value="normal">normal</option>
+                                <option value="no-upstream">no-upstream</option>
+                            </select>
+                        </label>
+                        <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
+                            <span className="font-medium text-text-primary">Explicit providerDir</span>
+                            <input
+                                type="text"
+                                value={providerDirInput}
+                                onChange={e => setProviderDirInput(e.target.value)}
+                                placeholder="Leave blank to use ~/.adhdev/providers"
+                                className="machine-input text-[11px]"
+                            />
+                        </label>
+                        <button
+                            onClick={() => void handleApplySourceConfig()}
+                            disabled={sourceSaving}
+                            className="machine-btn text-[10px] bg-violet-500/[0.08] border-violet-500/20 text-violet-300 hover:bg-violet-500/[0.14]"
+                        >{sourceSaving ? 'Applying…' : 'Apply + Reload'}</button>
+                    </div>
+                    <div className="mt-3 grid gap-1 text-[10px] text-text-muted">
+                        <div><span className="text-text-secondary font-medium">User root:</span> {sourceConfig?.userDir || '—'}</div>
+                        <div><span className="text-text-secondary font-medium">Upstream root:</span> {sourceConfig?.upstreamDir || '—'}</div>
+                        <div><span className="text-text-secondary font-medium">Provider roots:</span> {sourceConfig?.providerRoots?.join(' → ') || '—'}</div>
+                    </div>
+                </div>
+            )}
 
+            {/* Installed providers list */}
             {loading && settings.length === 0 ? (
-                <div className="p-10 text-center text-text-muted">Loading provider settings...</div>
+                <div className="p-10 text-center text-text-muted">Loading provider settings…</div>
+            ) : filteredSettings.length === 0 ? (
+                <div className="px-4.5 py-8 rounded-xl border border-border-subtle bg-bg-secondary text-center">
+                    <div className="text-[12px] text-text-muted">
+                        {filter === 'all'
+                            ? 'No providers installed yet. Open "Add provider" above to install one.'
+                            : `No ${filter.toUpperCase()} providers installed.`}
+                    </div>
+                </div>
             ) : (
-                <div className="flex flex-col gap-2">
-                    {settings
-                        .filter(p => filter === 'all' || p.category === filter)
-                        .map(prov => (
-                        <div key={prov.type} className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle">
-                            <div className="flex items-center gap-2 mb-2.5">
-                                <span className="text-lg">{prov.icon}</span>
-                                <span className="font-semibold text-[13px] text-text-primary">{prov.displayName}</span>
-                                <span
-                                    className="px-1.5 py-px rounded text-[9px] font-semibold"
-                                    style={{
-                                        background: prov.category === 'acp' ? 'rgba(139,92,246,0.08)' : prov.category === 'cli' ? 'rgba(59,130,246,0.08)' : prov.category === 'ide' ? 'rgba(34,197,94,0.08)' : 'color-mix(in srgb, var(--status-warning) 8%, transparent)',
-                                        color: prov.category === 'acp' ? '#a78bfa' : prov.category === 'cli' ? '#60a5fa' : prov.category === 'ide' ? '#86efac' : 'var(--status-warning)',
-                                    }}
-                                >{prov.category}</span>
-                                {isMachineRuntimeProvider(prov.category) && (() => {
-                                    const providerInfo = providers.find(p => p.type === prov.type)
-                                    const enabled = providerInfo?.enabled === true || prov.values.enabled === true
-                                    const machineStatus = providerInfo?.machineStatus || (enabled ? 'enabled_unchecked' : 'disabled')
-                                    return (
-                                        <>
-                                            <span className={`px-1.5 py-px rounded border text-[9px] font-semibold ${getMachineStatusClass(machineStatus)}`}>
-                                                {getMachineStatusLabel(machineStatus)}
-                                            </span>
-                                            <div className="ml-auto flex items-center gap-1.5">
-                                                <button
-                                                    onClick={() => void handleMachineProviderEnable(prov.type, !enabled)}
-                                                    disabled={savingKey === `${prov.type}.enabled`}
-                                                    className={`machine-btn text-[9px] px-2 py-0.5 ${enabled ? 'text-red-400 border-red-500/25' : 'text-green-400 border-green-500/25'}`}
-                                                >{enabled ? 'Disable' : 'Enable'}</button>
-                                                <button
-                                                    onClick={() => void handleDetectProvider(prov.type)}
-                                                    disabled={!enabled || savingKey === `${prov.type}.detect`}
-                                                    title={enabled ? 'Run detection for the configured executable' : 'Enable this provider before detection'}
-                                                    className={`machine-btn text-[9px] px-2 py-0.5 text-blue-400 border-blue-500/25 ${enabled ? '' : 'opacity-40 cursor-not-allowed'}`}
-                                                >Detect</button>
-                                                <button
-                                                    onClick={() => void handleResetProviderCommand(prov.type)}
-                                                    className="machine-btn text-[9px] px-2 py-0.5"
-                                                >Reset command</button>
-                                            </div>
-                                        </>
-                                    )
-                                })()}
-                                {prov.category === 'ide' && (
-                                    <button
-                                        onClick={() => setFixTarget(providers.find(p => p.type === prov.type) || {
-                                            type: prov.type,
-                                            name: prov.displayName,
-                                            displayName: prov.displayName,
-                                            icon: prov.icon,
-                                            category: prov.category as 'ide' | 'cli' | 'acp' | 'extension',
-                                        })}
-                                        className="ml-auto machine-btn text-[9px] px-2 py-0.5 bg-violet-500/[0.06] border-violet-500/20 text-violet-400 hover:bg-violet-500/[0.12]"
-                                    >🔧 Auto-Fix</button>
-                                )}
-                            </div>
-                            {isMachineRuntimeProvider(prov.category) && (() => {
-                                const providerInfo = providers.find(p => p.type === prov.type)
-                                return (
-                                    <div className="mb-2.5 grid gap-1 rounded-lg border border-white/[0.06] bg-bg-primary/40 px-3 py-2 text-[10px] text-text-muted">
-                                        <div>
-                                            <span className="font-medium text-text-secondary">Detection:</span> {formatMachineCheck(providerInfo?.lastDetection)}
-                                        </div>
-                                        <div>
-                                            <span className="font-medium text-text-secondary">Verification:</span> {formatMachineCheck(providerInfo?.lastVerification)}
-                                        </div>
-                                        <div className="text-[9px] text-text-muted">
-                                            Supported catalog entry only becomes launchable after Enable + Detect succeeds. Custom executable path/args below are machine-local overrides.
-                                        </div>
-                                    </div>
-                                )
-                            })()}
-                            <div className="flex flex-col gap-2">
-                                {prov.schema.map(s => (
-                                    <div key={s.key} className="flex items-center justify-between gap-3">
-                                        <div className="flex-1 min-w-0">
-                                            <div className="text-xs font-medium text-text-primary">
-                                                {s.label || s.key}
-                                                {savingKey === `${prov.type}.${s.key}` && (
-                                                    <span className="ml-1.5 text-[9px] text-violet-500">saving...</span>
-                                                )}
-                                            </div>
-                                            {s.description && <div className="text-[10px] text-text-muted mt-px">{s.description}</div>}
-                                        </div>
-                                        <div className="shrink-0">
-                                            {s.type === 'boolean' ? (
-                                                <button
-                                                    onClick={() => handleSetSetting(prov.type, s.key, !(prov.values[s.key] ?? s.default))}
-                                                    className="w-10 h-[22px] rounded-[11px] border-none relative cursor-pointer transition-colors duration-200"
-                                                    style={{ background: (prov.values[s.key] ?? s.default) ? '#8b5cf6' : 'var(--border-subtle)' }}
-                                                >
-                                                    <div
-                                                        className="w-4 h-4 rounded-full bg-white absolute top-[3px] transition-[left] duration-200 shadow-[0_1px_3px_rgba(0,0,0,0.3)]"
-                                                        style={{ left: (prov.values[s.key] ?? s.default) ? 21 : 3 }}
-                                                    />
-                                                </button>
-                                            ) : s.type === 'number' ? (
-                                                <input
-                                                    type="number"
-                                                    value={Number(prov.values[s.key] ?? s.default ?? 0) || 0}
-                                                    min={s.min}
-                                                    max={s.max}
-                                                    onChange={e => {
-                                                        const v = parseInt(e.target.value) || 0;
-                                                        if (s.min !== undefined && v < s.min) return;
-                                                        if (s.max !== undefined && v > s.max) return;
-                                                        handleSetSetting(prov.type, s.key, v);
-                                                    }}
-                                                    className="machine-input w-20 text-center text-[11px]"
-                                                />
-                                            ) : s.type === 'select' && s.options ? (
-                                                <select
-                                                    value={String(prov.values[s.key] ?? s.default ?? '')}
-                                                    onChange={e => handleSetSetting(prov.type, s.key, e.target.value)}
-                                                    className="machine-input text-[11px]"
-                                                >
-                                                    {s.options.map(o => <option key={o} value={o}>{o}</option>)}
-                                                </select>
-                                            ) : (
-                                                <input
-                                                    type="text"
-                                                    value={String(prov.values[s.key] ?? s.default ?? '')}
-                                                    onBlur={e => handleSetSetting(prov.type, s.key, e.target.value)}
-                                                    className="machine-input w-[120px] text-[11px]"
-                                                />
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
+                <div className="flex flex-col gap-1.5">
+                    {filteredSettings.map(prov => (
+                        <InstalledProviderRow
+                            key={prov.type}
+                            prov={prov}
+                            providerInfo={providers.find(p => p.type === prov.type)}
+                            savingKey={savingKey}
+                            onSetSetting={handleSetSetting}
+                            onEnableToggle={handleMachineProviderEnable}
+                            onDetect={handleDetectProvider}
+                            onResetCommand={handleResetProviderCommand}
+                            onUninstall={handleUninstall}
+                        />
                     ))}
                 </div>
             )}
 
             {/* Modals */}
-            {fixTarget && (
-                <ProviderFixModal
-                    machineId={machineId}
-                    provider={fixTarget}
-                    sendDaemonCommand={sendDaemonCommand}
-                    onClose={() => setFixTarget(null)}
-                />
-            )}
             {showClone && (
                 <ProviderCloneModal
                     machineId={machineId}

@@ -1014,6 +1014,51 @@ class StandaloneServer {
       return;
     }
 
+    // ─── Provider management REST (curl-friendly testing) ───────
+    // GET  /api/v1/providers/installed    → list installed providers + versions
+    // GET  /api/v1/providers/updates      → check_provider_updates result
+    // POST /api/v1/providers/install      → body: { type, category?, version? }
+    // POST /api/v1/providers/uninstall    → body: { type, category }
+    if (apiPath?.startsWith('/providers/')) {
+      const subPath = apiPath.slice('/providers'.length);
+      const router = this.components?.router;
+      if (!router) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'router not initialized' }));
+        return;
+      }
+      void (async () => {
+        try {
+          let cmdType: string | null = null;
+          let body: Record<string, unknown> = {};
+          if (subPath === '/installed' && method === 'GET') {
+            cmdType = 'list_installed_providers';
+          } else if (subPath === '/updates' && method === 'GET') {
+            cmdType = 'check_provider_updates';
+          } else if (subPath === '/install' && method === 'POST') {
+            cmdType = 'install_provider_manifest';
+            body = await this.readJsonBody(req).catch(() => ({}));
+          } else if (subPath === '/uninstall' && method === 'POST') {
+            cmdType = 'uninstall_provider_manifest';
+            body = await this.readJsonBody(req).catch(() => ({}));
+          }
+          if (!cmdType) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'unknown provider endpoint' }));
+            return;
+          }
+          const result = await router.execute(cmdType, body, 'standalone');
+          const ok = (result as { success?: boolean })?.success !== false;
+          res.writeHead(ok ? 200 : 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (e: any) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e?.message ?? String(e) }));
+        }
+      })();
+      return;
+    }
+
     if (apiPath?.startsWith('/mux/')) {
       const muxParts = parsedUrl.pathname.replace(/^\/api\/v1\/mux\//, '').split('/').filter(Boolean);
       const [workspaceSegment, action] = muxParts;

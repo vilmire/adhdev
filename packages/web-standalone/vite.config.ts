@@ -64,6 +64,15 @@ export default defineConfig({
             '/api': 'http://localhost:3847',
             '/auth': 'http://localhost:3847',
             '/ws': { target: 'ws://localhost:3847', ws: true },
+            // Marketplace registry — proxied to production API so the dev origin
+            // (localhost:3000) doesn't hit production CORS. See
+            // StandaloneMarketplace.tsx.
+            '/registry': {
+                target: 'https://api.adhf.dev',
+                changeOrigin: true,
+                secure: true,
+                rewrite: (p: string) => p.replace(/^\/registry/, '/api/v1/registry'),
+            },
         },
     },
 })

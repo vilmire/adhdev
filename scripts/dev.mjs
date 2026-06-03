@@ -205,20 +205,34 @@ function prebuildDaemonCore() {
   }
 }
 
+async function computeDistHash() {
+  try {
+    const crypto = await import('node:crypto');
+    const buf = fs.readFileSync(daemonCoreDistEntry);
+    return crypto.createHash('sha1').update(buf).digest('hex');
+  } catch { return null; }
+}
+
 function watchDaemonCoreDist() {
   if (!fs.existsSync(daemonCoreDistEntry)) return;
-  let lastMtime = fs.statSync(daemonCoreDistEntry).mtimeMs;
+  let lastHash = null;
   let restartTimer = null;
+  // Seed the hash so the very first burst (initial tsup write) doesn't
+  // restart the freshly spawned daemon.
+  computeDistHash().then(h => { lastHash = h; });
+
   fs.watch(path.dirname(daemonCoreDistEntry), { recursive: true }, () => {
     if (shuttingDown) return;
     if (restartTimer) clearTimeout(restartTimer);
     // Debounce: tsup writes multiple files; wait for the burst to settle.
-    restartTimer = setTimeout(() => {
-      try {
-        const m = fs.statSync(daemonCoreDistEntry).mtimeMs;
-        if (m <= lastMtime) return;
-        lastMtime = m;
-      } catch { return; }
+    restartTimer = setTimeout(async () => {
+      // Restart only when content actually changed. IDE auto-format / save
+      // can re-touch the src and make tsup rewrite identical bytes, which
+      // would otherwise kill any sessions the user is in the middle of.
+      const hash = await computeDistHash();
+      if (!hash) return;
+      if (lastHash !== null && hash === lastHash) return;
+      lastHash = hash;
       const daemonSpec = specs.find(s => s.restartOnDistChange);
       const child = daemonSpec && children.get(daemonSpec.name);
       if (!child || !child.pid || !processExists(child.pid)) return;
@@ -232,14 +246,22 @@ function watchDaemonCoreDist() {
 async function main() {
   await cleanupPreviousRun();
 
-  // Ensure daemon-core dist exists before the daemon child starts. The watcher
-  // can only keep dist current; it cannot retroactively create it for a
-  // daemon that already failed to import.
-  if (!fs.existsSync(daemonCoreDistEntry)) {
-    prebuildDaemonCore();
-  }
+  // ALWAYS prebuild daemon-core. The tsup --watch process below clears dist/
+  // ("Cleaning output folder") before its first build emits anything; if the
+  // daemon child started concurrently it would race that clean and crash on
+  // missing dist/index.js. Prebuilding before spawning anything guarantees a
+  // stable dist on disk when the daemon starts.
+  prebuildDaemonCore();
 
+  // Start the watcher (core) first. We don't strictly need to await its first
+  // rebuild — prebuild already populated dist — but starting it before the
+  // daemon means daemon-core src edits get picked up immediately.
+  const coreSpec = specs.find(s => s.name === 'core');
+  if (coreSpec) startChild(coreSpec);
+
+  // Then start the other specs (daemon + web).
   for (const spec of specs) {
+    if (spec.name === 'core') continue;
     startChild(spec);
   }
 

@@ -226,7 +226,12 @@ export class ProviderLoader {
    * Highest-priority editable overrides come first.
    */
   getProviderRoots(): string[] {
-    return [this.userDir, this.upstreamDir];
+    // Order matters: user customs > marketplace installs > upstream auto-sync.
+    // findProviderDirInternal walks this list in order to locate the provider
+    // dir containing the scripts/, so marketplace must be included here even
+    // though loadAll() also reads it directly.
+    const marketplaceDir = path.join(os.homedir(), '.adhdev', 'marketplace');
+    return [this.userDir, marketplaceDir, this.upstreamDir];
   }
 
   getSourceConfig(): ProviderSourceConfigSnapshot {
@@ -338,7 +343,19 @@ export class ProviderLoader {
       this.log('Upstream loading disabled (sourceMode=no-upstream)');
     }
 
- // 2. Load user custom (excluding .upstream — highest priority, never auto-updated)
+ // 2. Load marketplace installs from ~/.adhdev/marketplace/ (overrides upstream,
+ //    but is itself overridden by user customs in step 3). These are providers the
+ //    user explicitly installed via the Marketplace UI. They are NOT touched by
+ //    upstream sync.
+    const marketplaceDir = path.join(os.homedir(), '.adhdev', 'marketplace');
+    if (fs.existsSync(marketplaceDir)) {
+      const marketplaceCount = this.loadDir(marketplaceDir);
+      if (marketplaceCount > 0) {
+        this.log(`Loaded ${marketplaceCount} marketplace-installed providers`);
+      }
+    }
+
+ // 3. Load user custom (excluding .upstream — highest priority, never auto-updated)
     if (fs.existsSync(this.userDir)) {
       const userCount = this.loadDir(this.userDir, ['.upstream']);
       if (userCount > 0) {
@@ -990,7 +1007,12 @@ export class ProviderLoader {
     }
 
  // 3. Composite override (OS + version)
-    if (base.overrides) {
+ //    Legacy shape: base.overrides is an Array<{ when: {os,version}, scripts }>.
+ //    v1 manifests (Phase 3-4) repurposed `overrides` as an object map of
+ //    capability overrides (e.g. { detectStatus: { path, schema } }), which is
+ //    consumed by the SDK builders, not by this resolver. Only iterate when
+ //    the field is in the legacy array shape.
+    if (Array.isArray(base.overrides)) {
       for (const override of base.overrides) {
         const osMatch = !override.when.os || override.when.os === currentOs;
         const verMatch = !override.when.version || (currentVersion && this.matchesVersion(currentVersion, override.when.version));
