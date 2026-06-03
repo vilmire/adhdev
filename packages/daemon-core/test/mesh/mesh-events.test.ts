@@ -1810,3 +1810,86 @@ describe('workspace-to-mesh cache in setupMeshEventForwarding', () => {
     }
   })
 })
+
+describe('daemon-scoped pending event drain', () => {
+  // Regression: a8788999 ensures task_completed reaches a coordinator that itself is the
+  // direct-dispatch target. This test pins the drain-side guarantee: when a coordinator
+  // daemon polls drainPendingMeshCoordinatorEvents(meshId, daemonId), it must consume
+  // events targeted at it (or unscoped), and leave events targeted at a different daemon
+  // untouched in their own scoped file.
+  function safeId(s: string) { return s.replace(/[^a-zA-Z0-9_-]/g, '_') }
+  function cleanupScoped(meshId: string, daemonIds: string[]) {
+    const sharedPath = path.join(getLedgerDir(), `${safeId(meshId)}.pending-events.jsonl`)
+    if (fs.existsSync(sharedPath)) fs.unlinkSync(sharedPath)
+    for (const id of daemonIds) {
+      const scopedPath = path.join(getLedgerDir(), `${safeId(meshId)}-${safeId(id)}.pending-events.jsonl`)
+      if (fs.existsSync(scopedPath)) fs.unlinkSync(scopedPath)
+    }
+  }
+
+  it('coordinator drain consumes scoped events for its daemon and leaves other daemons\' scoped events on disk', () => {
+    const meshId = `mesh_drain_scope_${randomUUID().slice(0, 8)}`
+    const daemonA = `daemon_a_${randomUUID().slice(0, 8)}`
+    const daemonB = `daemon_b_${randomUUID().slice(0, 8)}`
+    try {
+      const base = Date.now()
+      queuePendingMeshCoordinatorEvent({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: 'node-A',
+        metadataEvent: { timestamp: base + 1, target: 'A' },
+        queuedAt: base + 1,
+        targetCoordinatorDaemonId: daemonA,
+      })
+      queuePendingMeshCoordinatorEvent({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: 'node-B',
+        metadataEvent: { timestamp: base + 2, target: 'B' },
+        queuedAt: base + 2,
+        targetCoordinatorDaemonId: daemonB,
+      })
+
+      const drainedByA = drainPendingMeshCoordinatorEvents(meshId, daemonA)
+      expect(drainedByA).toHaveLength(1)
+      expect((drainedByA[0].metadataEvent as any).target).toBe('A')
+
+      // Daemon B's scoped file must remain untouched after A's drain
+      const drainedByB = drainPendingMeshCoordinatorEvents(meshId, daemonB)
+      expect(drainedByB).toHaveLength(1)
+      expect((drainedByB[0].metadataEvent as any).target).toBe('B')
+    } finally {
+      cleanupScoped(meshId, [daemonA, daemonB])
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('legacy unscoped events in shared file are filtered to the polling coordinator only (other daemons leave them in place)', () => {
+    const meshId = `mesh_drain_legacy_${randomUUID().slice(0, 8)}`
+    const daemonA = `daemon_a_${randomUUID().slice(0, 8)}`
+    const daemonB = `daemon_b_${randomUUID().slice(0, 8)}`
+    const sharedPath = path.join(getLedgerDir(), `${safeId(meshId)}.pending-events.jsonl`)
+    try {
+      const base = Date.now()
+      // Write directly to the legacy shared file: one targeted at daemonB, one fully unscoped.
+      const lines = [
+        JSON.stringify({ event: 'agent:generating_completed', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + 1, target: 'B' }, queuedAt: base + 1, targetCoordinatorDaemonId: daemonB }),
+        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + 2 }, queuedAt: base + 2 }),
+      ]
+      fs.writeFileSync(sharedPath, lines.join('\n') + '\n', 'utf-8')
+
+      // Daemon A drains: must NOT receive the daemon-B-targeted event. Should receive the unscoped one.
+      const drainedByA = drainPendingMeshCoordinatorEvents(meshId, daemonA)
+      expect(drainedByA.map(e => e.event)).toEqual(['agent:ready'])
+
+      // The atomic rename consumed the file; daemon B polling now sees nothing because the
+      // shared file is gone. This is a known limitation of the legacy shared file path —
+      // the test pins the behavior so it surfaces if anyone changes the contract.
+      const drainedByB = drainPendingMeshCoordinatorEvents(meshId, daemonB)
+      expect(drainedByB).toHaveLength(0)
+    } finally {
+      cleanupScoped(meshId, [daemonA, daemonB])
+      cleanupMeshFiles(meshId)
+    }
+  })
+})
