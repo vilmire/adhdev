@@ -33,6 +33,26 @@ import { validateProviderDefinition } from './provider-schema.js';
 import type { ProviderSourceMode } from '../config/config.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
 
+/**
+ * Adds a provider-script root to the require whitelist. Wrapped in a
+ * try/catch + null check so a loader hot-path can't crash on a path
+ * that doesn't exist yet or one the whitelist hook rejects.
+ *
+ * The require-whitelist module is loaded lazily on first call. Eagerly
+ * top-level importing it pulls `node:fs.realpathSync.native` into
+ * module evaluation, which breaks unit tests that partially mock `fs`
+ * (e.g. test/commands/get-logs-incremental.test.ts mocks only
+ * existsSync + readFileSync). Lazy load keeps that mock surface valid.
+ */
+function registerProviderScriptRootSafely(root: string | null | undefined): void {
+  if (!root || typeof root !== 'string') return;
+  try {
+    const { registerProviderScriptRoot } =
+      require('./sdk/v1/sandbox/require-whitelist.js') as typeof import('./sdk/v1/sandbox/require-whitelist.js');
+    registerProviderScriptRoot(root);
+  } catch { /* boot-time only — swallow */ }
+}
+
 interface ProviderAvailabilityState {
   installed: boolean;
   detectedPath: string | null;
@@ -1036,6 +1056,10 @@ export class ProviderLoader {
             continue;
           }
           try {
+            // Override scripts go through the same whitelist gate as the
+            // main scripts dir. Use the provider parent root so a v1
+            // override can still require ../_shared helpers.
+            registerProviderScriptRootSafely(path.dirname(path.dirname(providerDir)));
             delete require.cache[require.resolve(fullPath)];
             const fn = require(fullPath);
             const target = typeof fn === 'function' ? fn : (fn && fn[scriptName]);
@@ -1079,6 +1103,13 @@ export class ProviderLoader {
       this.log(`  [loadScriptsFromDir] ${type}: dir not found: ${dir}`);
       return null;
     }
+
+    // Register the provider's *parent root* (e.g. .../adhdev-providers/) so
+    // the require whitelist gates every script + every _shared helper this
+    // provider may reach. Picking the grandparent (one above the category
+    // dir `cli/`) lets sibling helpers in `_shared` resolve while still
+    // blocking `../../etc/...` escapes. Idempotent.
+    registerProviderScriptRootSafely(path.dirname(path.dirname(providerDir)));
 
     // Return cached scripts if available (cleared on reload/watch)
     const cached = this.scriptsCache.get(dir);
@@ -1940,6 +1971,10 @@ export class ProviderLoader {
             const scriptsPath = path.join(d, 'scripts.js');
             if (!hasCompatibility && fs.existsSync(scriptsPath)) {
               try {
+                // Gate the IDE/extension scripts.js (legacy single-file
+                // format) under the same whitelist. `d` here is the
+                // provider dir; its grandparent contains _shared.
+                registerProviderScriptRootSafely(path.dirname(path.dirname(d)));
                 delete require.cache[require.resolve(scriptsPath)];
                 const scripts = require(scriptsPath) as Partial<ProviderScripts>;
                 normalizedProvider.scripts = scripts;
