@@ -181,6 +181,17 @@ export class ProviderCliAdapter implements CliAdapter {
     get cliScripts(): CliScripts { return this.runner.cliScripts; }
 
     /**
+     * Recent script invocations (oldest → newest). Exposed via the
+     * `get_chat_debug_bundle` daemon command so anyone debugging a
+     * stuck-status regression can read what each detectStatus /
+     * parseSession call actually saw and returned, instead of having
+     * to instrument the daemon.
+     */
+    getScriptInvocationTrace() {
+        return this.runner.getInvocationTrace();
+    }
+
+    /**
      * Returns the full raw PTY byte stream captured since adapter start.
      * Used by the `record_provider_pty` IPC command to produce fixtures.
      * Bounded by MAX_ACCUMULATED_BUFFER; older bytes may have been dropped.

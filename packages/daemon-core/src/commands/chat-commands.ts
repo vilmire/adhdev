@@ -1677,6 +1677,9 @@ export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Pr
             ready: typeof adapter.isReady === 'function' ? adapter.isReady() : undefined,
             processing: typeof adapter.isProcessing === 'function' ? adapter.isProcessing() : undefined,
             debugSnapshot: adapterDebugSnapshot,
+            scriptInvocationTrace: typeof (adapter as any).getScriptInvocationTrace === 'function'
+                ? (adapter as any).getScriptInvocationTrace()
+                : undefined,
         } : null,
         readChat,
         frontend: args?.frontendSnapshot && typeof args.frontendSnapshot === 'object' ? args.frontendSnapshot : null,
