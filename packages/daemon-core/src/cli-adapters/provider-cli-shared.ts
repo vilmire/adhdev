@@ -172,6 +172,8 @@ export interface CliProviderModule {
     transcriptAuthority?: 'provider' | 'daemon';
     /** Full context lets provider-owned parsers canonicalize retained history instead of daemon prefix stitching. */
     transcriptContext?: 'full' | 'tail';
+    /** v1 declarative tui block — used by CliScriptRunner to synthesize SDK helpers (declarativeDetectStatus, declarativeParseApproval). */
+    tui?: Record<string, unknown>;
     scripts?: CliScripts;
     spawn: {
         command: string;
