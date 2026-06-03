@@ -229,14 +229,18 @@ export class CliScriptRunner {
     // ─── Internal ─────────────────────────────────────
 
     private invoke<T>(fn: Function, input: any): T {
-        const hasStateFactory = typeof this.scripts.createState === 'function';
-        const expectsState = hasStateFactory || this.scriptState !== null || fn.length >= 2;
-        // SDK is always passed as the 3rd argument. Scripts that don't need
-        // it ignore the extra arg; scripts that do — like codex-cli's
-        // detect_status v1 override — fail closed (return 'idle' forever)
-        // without it, which manifests as sessions stuck in `generating`.
-        return expectsState
-            ? (fn as (state: unknown, input: any, sdk: CliScriptSdk) => T)(this.scriptState, input, this.sdk)
-            : (fn as (input: any, sdk: CliScriptSdk) => T)(input, this.sdk);
+        // Pick the call shape from fn.length so each script gets exactly the
+        // args its signature declares:
+        //   (input)             — v0 single-arg scripts
+        //   (state, input)      — v0 stateful scripts that opt in via createState()
+        //   (state, input, sdk) — v1 extended-tier overrides that consume the SDK
+        const arity = fn.length;
+        if (arity >= 3) {
+            return (fn as (state: unknown, input: any, sdk: CliScriptSdk) => T)(this.scriptState, input, this.sdk);
+        }
+        if (arity === 2) {
+            return (fn as (state: unknown, input: any) => T)(this.scriptState, input);
+        }
+        return (fn as (input: any) => T)(input);
     }
 }
