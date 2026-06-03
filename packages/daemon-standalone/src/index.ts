@@ -64,7 +64,10 @@ import {
   prepareSessionChatTailUpdate,
   prepareSessionModalUpdate,
   runAsyncBatch,
+  startLocalIpcServer,
+  type LocalIpcServerHandle,
 } from '@adhdev/daemon-core';
+import { DEFAULT_DAEMON_PORT, DAEMON_WS_PATH } from '@adhdev/daemon-core';
 import {
   ensureSessionHostReady,
   getStandaloneSessionHostAppName,
@@ -380,6 +383,14 @@ const SESSION_TARGET_COMMANDS = new Set([
 class StandaloneServer {
   private httpServer: ReturnType<typeof createServer> | null = null;
   private wss: WebSocketServer | null = null;
+  /**
+   * IPC server (ws://127.0.0.1:19222/ipc) — same protocol as the cloud
+   * daemon. Lets external MCP clients (codex/claude `--mode ipc`) issue
+   * commands and access mesh tools without a cloud daemon. Null when
+   * the port was already in use; we log a warning in that case but do
+   * not abort the standalone HTTP server.
+   */
+  private ipcServer: LocalIpcServerHandle | null = null;
   private clients = new Set<WebSocket>();
   private wsSubscriptions = new Map<WebSocket, Map<string, ChatTailSubscriptionState>>();
   private wsMachineRuntimeSubscriptions = new Map<WebSocket, Map<string, MachineRuntimeSubscriptionState>>();
@@ -745,6 +756,75 @@ class StandaloneServer {
       });
     });
 
+    // 8.5 Local IPC server on the canonical daemon port (19222). Same
+    //     transport/protocol as the cloud daemon, so codex/claude
+    //     `adhdev mcp --mode ipc` configs work out of the box —
+    //     mesh tools, command routing, broadcasts. If the port is
+    //     already taken (another adhdev daemon running), we log and
+    //     continue without IPC instead of crashing standalone.
+    try {
+      this.ipcServer = await startLocalIpcServer({
+        port: DEFAULT_DAEMON_PORT,
+        buildStatusPayload: () => {
+          if (!this.components) return null;
+          return buildStatusSnapshot({
+            allStates: this.components.instanceManager.collectAllStates(),
+            cdpManagers: this.components.cdpManagers,
+            providerLoader: this.components.providerLoader,
+            detectedIdes: this.components.detectedIdes.value.map((ide) => ({
+              ...ide,
+              path: ide.path ?? undefined,
+            })),
+            instanceId: `standalone_${loadConfig().machineId || 'daemon'}`,
+            version: pkgVersion,
+            profile: 'metadata',
+          }) as unknown as Record<string, unknown>;
+        },
+        buildWelcomePayload: () => ({
+          daemonVersion: pkgVersion,
+          serverConnected: false, // standalone never has a cloud server connection
+          cdpConnected: (this.components?.cdpManagers.size || 0) > 0,
+          localPort: DEFAULT_DAEMON_PORT,
+          cliAgents: this.components
+            ? this.components.instanceManager
+                .collectAllStates()
+                .filter((state: any) => state?.category === 'cli')
+                .map((state: any) => String(state?.instanceId || ''))
+                .filter(Boolean)
+            : [],
+          sessionHostConnected: false,
+          mode: 'standalone',
+        }),
+        handleCommand: async ({ command, args }) => {
+          if (!this.components) {
+            return { success: false, error: 'daemon not ready' };
+          }
+          // Standalone does not implement mesh_relay_command (single-machine
+          // only). Reject explicitly so callers see a clear message.
+          if (command === 'mesh_relay_command') {
+            return {
+              success: false,
+              error: 'mesh_relay_command not supported in standalone mode (single-machine only)',
+            };
+          }
+          const result = await this.components.router.execute(command, args, 'ipc');
+          const errVal = (result as any)?.error;
+          return {
+            success: !!result?.success,
+            result,
+            error: result?.success
+              ? undefined
+              : (typeof errVal === 'string' ? errVal : errVal ? String(errVal) : undefined),
+          };
+        },
+      });
+    } catch (e: any) {
+      const msg = e?.code === 'EADDRINUSE'
+        ? `Port ${DEFAULT_DAEMON_PORT} already in use; MCP --mode ipc disabled for this run. Stop the other daemon to enable.`
+        : `Failed to start local IPC server: ${e?.message || e}`;
+      LOG.warn('IPC', msg);
+    }
+
     console.log('');
     console.log('🚀 ADHDev Standalone Server');
     console.log(`   http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
@@ -760,6 +840,9 @@ class StandaloneServer {
     }
     if (this.passwordConfig) {
       console.log('   🔐 Password auth: enabled');
+    }
+    if (this.ipcServer?.isListening()) {
+      console.log(`   IPC: ws://127.0.0.1:${DEFAULT_DAEMON_PORT}${DAEMON_WS_PATH} (for adhdev mcp --mode ipc)`);
     }
     if (shouldWarnForPublicUnauthenticatedHost({ host, hasTokenAuth: !!this.authToken, hasPasswordAuth: !!this.passwordConfig })) {
       console.warn('   ⚠️  Public host mode is enabled without any auth.');
@@ -2135,6 +2218,12 @@ class StandaloneServer {
     if (this.wss) {
       this.wss.close();
       this.wss = null;
+    }
+
+    // IPC server (19222)
+    if (this.ipcServer) {
+      try { await this.ipcServer.close(); } catch { /* best-effort */ }
+      this.ipcServer = null;
     }
 
     // Shutdown core components
