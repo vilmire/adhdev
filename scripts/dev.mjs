@@ -164,22 +164,18 @@ async function shutdown(exitCode = 0) {
 }
 
 function startChild(spec) {
-  // Process-level hardening for the standalone daemon (c) — see
-  // docs/guides/PROVIDER_SDK.md "Process-level hardening".
-  // `--disallow-code-generation-from-strings` makes `eval('...')` and
-  // `new Function('...')` throw EvalError at runtime, closing the
-  // dynamic-code-generation bypass around the require() whitelist.
-  // Applied ONLY to the daemon child. Vite (web spec) builds an
-  // AsyncFunction from string at startup and crashes with this flag on;
-  // daemon-core (the tsup --watch child) is safe but doesn't need it.
+  // NOTE on `--disallow-code-generation-from-strings`:
+  // We considered enabling this Node flag on the daemon child to close the
+  // eval()/new Function() bypass around the require() whitelist. It cannot
+  // ship: ajv (the v1 manifest validator) compiles schemas to a runtime JS
+  // function via `new Function(...)`, and so does Vite for HMR. With the
+  // flag on, validateCliProviderManifest() throws EvalError mid-launch and
+  // the codex/claude session transitions starting → idle → error
+  // immediately. The whitelist + prototype freeze + process shim already
+  // cover the realistic attack surface; the eval-block was extra hardening
+  // that turned out to break critical infrastructure. Do not re-introduce
+  // without first migrating ajv to ajv-standalone (precompiled validators).
   const env = { ...process.env };
-  if (spec.name === 'daemon') {
-    const hardeningFlag = '--disallow-code-generation-from-strings';
-    const existing = env.NODE_OPTIONS || '';
-    if (!existing.includes(hardeningFlag)) {
-      env.NODE_OPTIONS = existing ? `${existing} ${hardeningFlag}` : hardeningFlag;
-    }
-  }
   const child = spawn(npmCmd, spec.args, {
     cwd: repoRoot,
     env,
