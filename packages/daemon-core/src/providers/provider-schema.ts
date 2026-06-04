@@ -38,6 +38,9 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'sessionIdPattern',
   'historyBehavior',
   'canonicalHistory',
+  // v1 contract spelling; the loader aliases nativeHistory →
+  // canonicalHistory so downstream code reads the legacy name.
+  'nativeHistory',
   'autoFixProfile',
   'ideLevelScripts',
   'allowInputDuringGeneration',
