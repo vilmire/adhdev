@@ -30,6 +30,7 @@ export interface SectionPattern {
 export interface ModalButtonsRule {
     section?: string;
     pattern: string;
+    flags?: string;
     key_for_index: string;
     min_count?: number;
 }
