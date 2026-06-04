@@ -74,6 +74,12 @@ export interface SpecDriverOpts {
     emitTrace?: boolean;
     /** Inject the daemon's PTY transport (typically SessionHostPtyTransportFactory). */
     transportFactory?: PtyTransportFactory;
+    /**
+     * Extra CLI args appended to spec.spawn_args. Used by the daemon to
+     * pass per-launch arguments like `--session-id <uuid>` so the agent
+     * uses the daemon's providerSessionId instead of generating its own.
+     */
+    extraCliArgs?: string[];
 }
 
 export class SpecDriver {
@@ -138,9 +144,11 @@ export class SpecDriver {
     }
 
     private buildAdapterOpts(): TerminalAdapterOpts {
+        const baseArgs = this.spec.spawn_args ?? [];
+        const extra = this.opts.extraCliArgs ?? [];
         return {
             binary: this.spec.binary,
-            args: this.spec.spawn_args,
+            args: [...baseArgs, ...extra],
             cwd: this.opts.workingDir,
             env: { ...(this.spec.env ?? {}), ...(this.opts.extraEnv ?? {}) },
             cols: this.opts.cols ?? 100,
