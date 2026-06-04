@@ -84,10 +84,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const isMachineBlocked = !!machineRetryStatus?.blocked
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
     const [gitDialogTarget, setGitDialogTarget] = useState<{ daemonId: string; workspace: string } | null>(null)
-    const handleOpenGitDialog = useCallback((daemonId: string, workspace: string) => {
+    void useCallback((daemonId: string, workspace: string) => {
         setGitDialogTarget({ daemonId, workspace })
     }, [])
-    const [workspaceCategoryHint, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
+    const [, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
     const recentLaunchActionRef = useRef<(() => Promise<void>) | null>(null)
     const [recentLaunchConfirm, setRecentLaunchConfirm] = useState<{
         title: string
@@ -172,7 +172,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const providers: ProviderInfo[] = machineEntry?.availableProviders || []
     const providerIconMap: Record<string, string> = {}
     for (const p of providers) { providerIconMap[p.type] = p.icon }
-    const getIcon = (type: string) => providerIconMap[type] || ''
+    void ((type: string) => providerIconMap[type] || '')
 
     const machine: MachineData | null = machineEntry ? {
         id: machineEntry.id,
@@ -262,8 +262,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     } | null)
     const requestedMachineTab = locationState?.initialMachineTab
     const requestedWorkspaceCategory = locationState?.initialWorkspaceCategory
-    const requestedWorkspaceId = locationState?.initialWorkspaceId
-    const requestedWorkspacePath = locationState?.initialWorkspacePath
+    void locationState?.initialWorkspaceId
+    void locationState?.initialWorkspacePath
     const effectiveTab: TabId = requestedMachineTab === 'ides' || requestedMachineTab === 'clis' || requestedMachineTab === 'acps'
         ? 'workspace'
         : (requestedMachineTab || defaultTab)

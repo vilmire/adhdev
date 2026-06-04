@@ -10,8 +10,7 @@
  * can edit the manifest directly or use the Reset command + Detect cycle.
  */
 import { useState } from 'react'
-import type { ProviderInfo } from './types'
-import type { ProviderSettingsEntry } from './providerSettings'
+import type { ProviderInfo, ProviderSettingsEntry } from './types'
 
 type ProviderMachineCheck = NonNullable<ProviderInfo['lastDetection']>
 
