@@ -296,7 +296,7 @@ function parseTranscriptFile(
  * `sessionPath` is the absolute path to a `<uuid>.jsonl` file.
  * Returns `null` when the file is missing, empty, or yields no parseable messages.
  */
-export async function readSession(sessionPath: string): Promise<NativeHistorySession | null> {
+export function readSession(sessionPath: string): NativeHistorySession | null {
   if (!sessionPath || !path.isAbsolute(sessionPath)) return null;
 
   const basename = path.basename(sessionPath, '.jsonl');

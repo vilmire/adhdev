@@ -397,11 +397,11 @@ function parsePbFile(
  *
  * Returns `null` when the file is missing, empty, or yields no parseable messages.
  */
-export async function readSession(
+export function readSession(
   sessionPath: string,
   sessionId?: string,
   workspace?: string,
-): Promise<NativeHistorySession | null> {
+): NativeHistorySession | null {
   if (!sessionPath || !path.isAbsolute(sessionPath)) return null;
   if (!fs.existsSync(sessionPath)) return null;
 

@@ -924,12 +924,13 @@ export class ProviderLoader {
     }
     if (providerDir) {
       resolved._resolvedProviderDir = providerDir;
-      // (spec migration) If the provider ships a spec.json, splice its
-      // declarative native_history into the runtime so the existing
-      // chat-history wiring (which expects provider.scripts.readNativeHistory
-      // and provider.nativeHistory) finds it without changes.
+      // (spec migration) If the provider ships a spec.json with a
+      // native_history.reader, point provider.scripts.readNativeHistory at
+      // the existing per-provider reader (claude-cli / codex-cli /
+      // antigravity-cli / hermes-cli). This is the only handoff the
+      // chat-history pipeline needs — the readers themselves already know
+      // their formats and corner cases, we don't reinvent them.
       try {
-        // Lazy-require to keep this provider-loader cold-load light.
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const fs = require('node:fs');
         // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -939,39 +940,16 @@ export class ProviderLoader {
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           const { loadSpec } = require('./spec/loader.js');
           // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const { readNativeHistorySync } = require('./spec/native-history.js');
+          const { createNativeHistoryDispatcher } = require('./native-history/dispatcher.js');
           const r = loadSpec(specPath);
-          if (r.ok && r.spec.native_history) {
+          const readerId = r.ok ? r.spec.native_history?.reader : undefined;
+          if (readerId) {
+            const dispatch = createNativeHistoryDispatcher(readerId);
             resolved.scripts = { ...(resolved.scripts || {}) };
-            (resolved.scripts as any).readNativeHistory = (input: any) => {
-              const res = readNativeHistorySync(r.spec.native_history!, {
-                workingDir: input?.workspace || input?.cwd || process.cwd(),
-                sessionId: input?.sessionId,
-                providerSessionId: input?.providerSessionId,
-              });
-              if (!res) return { messages: [], source: 'native-unavailable' };
-              return {
-                messages: res.messages
-                  .filter((m: any) => m && m.content)
-                  .map((m: any) => ({
-                    // daemon's chat schema only accepts user/assistant/system;
-                    // map tool/function messages to assistant so they still
-                    // surface (they're often tool result echoes worth seeing).
-                    role: (m.role === 'tool' || m.role === 'function') ? 'assistant' : m.role,
-                    content: m.content,
-                    receivedAt: m.timestamp || Date.now(),
-                    kind: 'standard',
-                  })),
-                providerSessionId: input?.providerSessionId,
-                sourcePath: res.sourcePath,
-                sourceMtimeMs: res.sourceMtimeMs,
-                nativeHistoryCoverage: 'full',
-              };
-            };
-            // Tell chat-history.ts to actually call our script.
+            (resolved.scripts as any).readNativeHistory = (input: any) => dispatch(input);
             (resolved as any).nativeHistory = {
-              format: r.spec.native_history.format,
-              watchPath: r.spec.native_history.location?.directory,
+              format: readerId,
+              watchPath: undefined,
               scripts: { readSession: 'readNativeHistory' },
               mode: 'native-source',
             };
