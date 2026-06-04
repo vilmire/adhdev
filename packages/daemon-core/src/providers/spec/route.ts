@@ -33,7 +33,7 @@ export function createCliAdapter(
         if (fs.existsSync(specPath)) {
             try {
                 LOG.info('spec-route', `[${provider.type}] routing through SpecCliAdapter (spec.json present)`);
-                return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv);
+                return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory);
             } catch (err) {
                 LOG.warn('spec-route', `[${provider.type}] spec invalid, falling back to ProviderCliAdapter: ${(err as Error).message}`);
             }
