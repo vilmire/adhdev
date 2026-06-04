@@ -33,6 +33,7 @@ export {
   normalizeMessageIdentity,
   type ParseSessionTuiSpec,
   type TranscriptPtySpec,
+  type SessionIdExtractionSpec,
   type SynthesizedMessage,
   type SynthesizedSession,
 } from './builders/cli/parse-session.js';
