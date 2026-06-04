@@ -79,6 +79,31 @@ export interface DelegateTrigger {
     task_template: string;
 }
 
+export interface NhLocation {
+    directory: string;
+    file_pattern: string;
+    pick: 'newest_by_mtime' | 'by_session_id' | 'by_provider_session_id';
+}
+
+export interface NhSkipRule {
+    field: string;
+    equals?: unknown;
+}
+
+export interface NhExtractor {
+    container_path?: string;
+    role_field?: string;
+    content_field?: string;
+    content_text_path?: string;
+    timestamp_field?: string;
+    skip_if?: NhSkipRule[];
+}
+
+export type NativeHistoryConfig =
+    | { format: 'jsonl_lines'; location: NhLocation; message_extractor?: NhExtractor }
+    | { format: 'json_single'; location: NhLocation; message_extractor?: NhExtractor }
+    | { format: 'antigravity_brain'; location: NhLocation };
+
 export interface CliSpec {
     $schema: 'adhdev:cli/spec@1';
     id: string;
@@ -97,4 +122,5 @@ export interface CliSpec {
     control_bar?: Control[];
     notifications?: NotificationRule[];
     delegate?: DelegateTrigger[];
+    native_history?: NativeHistoryConfig;
 }

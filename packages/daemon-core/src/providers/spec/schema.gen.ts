@@ -117,6 +117,9 @@ export const SCHEMA = {
             "items": {
                 "$ref": "#/definitions/delegateTrigger"
             }
+        },
+        "native_history": {
+            "$ref": "#/definitions/nativeHistory"
         }
     },
     "definitions": {
@@ -384,6 +387,131 @@ export const SCHEMA = {
                 },
                 "body": {
                     "type": "string"
+                }
+            }
+        },
+        "nativeHistory": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "format",
+                        "location"
+                    ],
+                    "properties": {
+                        "format": {
+                            "const": "jsonl_lines"
+                        },
+                        "location": {
+                            "$ref": "#/definitions/nhLocation"
+                        },
+                        "message_extractor": {
+                            "$ref": "#/definitions/nhExtractor"
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "format",
+                        "location"
+                    ],
+                    "properties": {
+                        "format": {
+                            "const": "json_single"
+                        },
+                        "location": {
+                            "$ref": "#/definitions/nhLocation"
+                        },
+                        "message_extractor": {
+                            "$ref": "#/definitions/nhExtractor"
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "format",
+                        "location"
+                    ],
+                    "properties": {
+                        "format": {
+                            "const": "antigravity_brain"
+                        },
+                        "location": {
+                            "$ref": "#/definitions/nhLocation"
+                        }
+                    }
+                }
+            ]
+        },
+        "nhLocation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "directory",
+                "file_pattern",
+                "pick"
+            ],
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "file_pattern": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "pick": {
+                    "type": "string",
+                    "enum": [
+                        "newest_by_mtime",
+                        "by_session_id",
+                        "by_provider_session_id"
+                    ]
+                }
+            }
+        },
+        "nhExtractor": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "container_path": {
+                    "type": "string"
+                },
+                "role_field": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "content_field": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "content_text_path": {
+                    "type": "string"
+                },
+                "timestamp_field": {
+                    "type": "string"
+                },
+                "skip_if": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                            "field"
+                        ],
+                        "properties": {
+                            "field": {
+                                "type": "string",
+                                "minLength": 1
+                            },
+                            "equals": {}
+                        }
+                    }
                 }
             }
         },
