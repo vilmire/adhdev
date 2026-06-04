@@ -63,7 +63,7 @@ describe('list_saved_sessions native-source command surface', () => {
           type: 'codex-cli',
           name: 'Codex CLI',
           category: 'cli',
-          canonicalHistory: {
+          nativeHistory: {
             format: 'codex-provider-native',
             watchPath: '~/.codex/sessions/**/*.jsonl',
             mode: 'native-source',
@@ -135,7 +135,7 @@ describe('list_saved_sessions native-source command surface', () => {
       type: 'codex-cli',
       name: 'Codex CLI',
       category: 'cli',
-      canonicalHistory: {
+      nativeHistory: {
         format: 'codex-provider-native',
         watchPath: '~/.codex/sessions/**/*.jsonl',
         mode: 'native-source',

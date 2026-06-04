@@ -904,7 +904,7 @@ function supportsCliNativeTranscript(providerType: string, provider?: ProviderMo
     // provider.json. We trust that declaration regardless of the legacy
     // allow-list. A2 will additionally require canonicalHistory.contractVersion
     // to be a supported value (transcript-v2.ts).
-    if (provider?.category === 'cli' && isNativeSourceCanonicalHistory(provider?.canonicalHistory)) {
+    if (provider?.category === 'cli' && isNativeSourceCanonicalHistory(provider?.nativeHistory)) {
         return true;
     }
     // Last-resort fallback for early call sites where the provider module is
@@ -1429,7 +1429,7 @@ function summarizeProviderForDebug(provider: ProviderModule | undefined): Record
         name: provider.name,
         category: provider.category,
         version: (provider as any).version,
-        canonicalHistory: provider.canonicalHistory,
+        canonicalHistory: provider.nativeHistory,
         historyBehavior: provider.historyBehavior,
         webviewMatchText: provider.webviewMatchText,
         scriptNames: scripts,
@@ -1809,9 +1809,9 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
             || (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
             || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
         );
-        const result = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)
+        const result = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.nativeHistory)
             ? readCliProviderNativeHistory(agentStr, {
-                canonicalHistory: provider?.canonicalHistory,
+                canonicalHistory: provider?.nativeHistory,
                 historySessionId,
                 workspace,
                 offset: offset || 0,
@@ -1821,7 +1821,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 scripts: provider?.scripts as any,
             })
             : readProviderChatHistory(agentStr, {
-                canonicalHistory: provider?.canonicalHistory,
+                canonicalHistory: provider?.nativeHistory,
                 historySessionId,
                 workspace,
                 offset: offset || 0,
@@ -1830,7 +1830,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 historyBehavior: provider?.historyBehavior,
                 scripts: provider?.scripts as any,
             });
-        if (supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.canonicalHistory)) {
+        if (supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.nativeHistory)) {
             const lookup = (result as any).lookup === 'workspace' ? 'workspace' : 'session';
             const messages = Array.isArray((result as any).messages)
                 ? normalizeNativeHistoryMessages(agentStr, (result as any).messages as ChatMessage[], (result as any)?.providerSessionId)
@@ -1969,7 +1969,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             // ───────────────────────────────────────────────────────────
 
             const supportsNative = supportsCliNativeTranscript(providerType, provider)
-                && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
+                && isNativeSourceCanonicalHistory(provider?.nativeHistory);
             const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h, adapter.cliType);
             const workspace = sessionWorkspace;
             const nativeHistoryLimit = Math.max(
@@ -1995,7 +1995,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             if (supportsNative) {
                 try {
                     nativeHistory = readCliProviderNativeHistory(agentStr, {
-                        canonicalHistory: provider?.canonicalHistory,
+                        canonicalHistory: provider?.nativeHistory,
                         historySessionId: nativeHistorySessionId,
                         workspace,
                         offset: 0,
@@ -2089,7 +2089,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     && (!historyProviderSessionId || historyProviderSessionId === nativeHistorySessionId || historyProviderSessionId === historySessionId);
                 const liveWorkspaceNativeHistory = mayProbeLiveCodexWorkspaceNative
                     ? readLiveCodexWorkspaceNativeHistory(agentStr, {
-                        canonicalHistory: provider?.canonicalHistory,
+                        canonicalHistory: provider?.nativeHistory,
                         workspace,
                         offset: 0,
                         limit: nativeHistoryLimit,
@@ -2200,7 +2200,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     selectedMessageSource: (messageSource as any).selected,
                     messageSource,
                     shouldPreferAdapterMessages: supportsCliNativeTranscript(providerType, provider)
-                        && isNativeSourceCanonicalHistory(provider?.canonicalHistory)
+                        && isNativeSourceCanonicalHistory(provider?.nativeHistory)
                         && (messageSource as any).selected !== 'native-history'
                         && typeof (messageSource as any).fallbackReason === 'string'
                         && (messageSource as any).fallbackReason.startsWith('native_history_')
@@ -2229,10 +2229,10 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 : undefined;
             const intendedWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
             const supportsNative = supportsCliNativeTranscript(agentStr, provider)
-                && isNativeSourceCanonicalHistory(provider?.canonicalHistory);
+                && isNativeSourceCanonicalHistory(provider?.nativeHistory);
             const history = supportsNative
                 ? readCliProviderNativeHistory(agentStr, {
-                    canonicalHistory: provider?.canonicalHistory,
+                    canonicalHistory: provider?.nativeHistory,
                     historySessionId,
                     workspace,
                     offset: 0,
@@ -2242,7 +2242,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     scripts: provider?.scripts as any,
                 })
                 : readProviderChatHistory(agentStr, {
-                    canonicalHistory: provider?.canonicalHistory,
+                    canonicalHistory: provider?.nativeHistory,
                     historySessionId,
                     workspace,
                     offset: 0,

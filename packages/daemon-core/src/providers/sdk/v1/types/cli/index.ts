@@ -258,9 +258,11 @@ export type CliListNativeHistoryFn = () => {
   sessions: CliListNativeHistoryEntry[];
 };
 
-// ─── Canonical history config ──────────────────────────────────────────
+// ─── Native history config ─────────────────────────────────────────────
 
-export interface CliCanonicalHistoryDef {
+export interface CliNativeHistoryDef {
+  /** Built-in adapter $schema (e.g. "adhdev:native-history/claude-jsonl@1"). */
+  $schema?: string;
   format: string;
   watchPath: string;
   mode: 'native-source' | 'daemon-mirror';
@@ -270,6 +272,12 @@ export interface CliCanonicalHistoryDef {
     listSessions?: string;
   };
 }
+
+/**
+ * @deprecated Use {@link CliNativeHistoryDef}. Retained as an alias for one
+ * release so SDK consumers that referenced the v0 name keep compiling.
+ */
+export type CliCanonicalHistoryDef = CliNativeHistoryDef;
 
 // ─── Patterns (legacy fallback detector hints) ─────────────────────────
 
@@ -344,7 +352,9 @@ export interface CliProviderManifest {
   /** Mesh coordinator setup */
   meshCoordinator?: MeshCoordinatorDef;
 
-  /** Native history */
+  /** Native history (v1 canonical field name) */
+  nativeHistory?: CliNativeHistoryDef;
+  /** @deprecated v0 alias for `nativeHistory`. */
   canonicalHistory?: CliCanonicalHistoryDef;
 
   /** Settings (UI toggles persisted to ~/.adhdev/config.json) */

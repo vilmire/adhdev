@@ -1958,15 +1958,20 @@ export class ProviderLoader {
             ...(extensionIdPattern instanceof RegExp ? { extensionIdPattern } : {}),
           };
 
-          // v1 manifest contract calls this block `nativeHistory`; the
-          // daemon's runtime + downstream code still reads
-          // `canonicalHistory` (the legacy name used since v0). Alias
-          // them when only the v1 spelling is present so authors using
-          // the new contract get the same behavior without having to
-          // duplicate the block. If both are set the explicit
-          // canonicalHistory wins — caller signaled it intentionally.
-          if ((normalizedProvider as any).nativeHistory && !(normalizedProvider as any).canonicalHistory) {
-            (normalizedProvider as any).canonicalHistory = (normalizedProvider as any).nativeHistory;
+          // v1 manifests use `nativeHistory` as the canonical field name.
+          // Legacy v0 manifests use `canonicalHistory`. The daemon's
+          // runtime + downstream code reads `provider.nativeHistory`, so
+          // for legacy manifests we copy `canonicalHistory` into
+          // `nativeHistory` here. We also keep `canonicalHistory`
+          // populated in both directions (deprecated alias) so any
+          // external consumers still reading the old name keep working
+          // during the one-release deprecation window.
+          const nh = (normalizedProvider as any).nativeHistory;
+          const ch = (normalizedProvider as any).canonicalHistory;
+          if (nh && !ch) {
+            (normalizedProvider as any).canonicalHistory = nh;
+          } else if (ch && !nh) {
+            (normalizedProvider as any).nativeHistory = ch;
           }
 
           const validation = validateProviderDefinition(normalizedProvider);

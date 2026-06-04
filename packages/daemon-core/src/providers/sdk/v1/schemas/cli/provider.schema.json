@@ -309,13 +309,34 @@
         }
       }
     },
+    "nativeHistory": {
+      "type": "object",
+      "description": "Native transcript adapter declaration. v1 canonical field name. Daemon reads/lists provider-native history files via the named scripts (or the built-in adapter identified by $schema).",
+      "additionalProperties": true,
+      "properties": {
+        "$schema":          { "type": "string" },
+        "format":           { "type": "string" },
+        "watchPath":        { "type": "string" },
+        "mode":             { "enum": ["native-source", "materialized-mirror", "disabled", "daemon-mirror"] },
+        "contractVersion":  { "type": "string" },
+        "scripts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "readSession":  { "type": "string" },
+            "listSessions": { "type": "string" }
+          }
+        }
+      }
+    },
     "canonicalHistory": {
       "type": "object",
-      "additionalProperties": false,
+      "description": "Deprecated v0 alias for `nativeHistory`. The loader copies this block into `nativeHistory` at load time. New manifests should use `nativeHistory` directly.",
+      "additionalProperties": true,
       "properties": {
         "format":           { "type": "string" },
         "watchPath":        { "type": "string" },
-        "mode":             { "enum": ["native-source", "daemon-mirror"] },
+        "mode":             { "enum": ["native-source", "materialized-mirror", "disabled", "daemon-mirror"] },
         "contractVersion":  { "type": "string" },
         "scripts": {
           "type": "object",
@@ -338,11 +359,6 @@
     "tui": {
       "type": "object",
       "description": "Declarative TUI parsing primitives. When present, daemon's builder synthesises detectStatus / parseApproval / parseSession from these blocks. Each block is identified by its $schema.",
-      "additionalProperties": true
-    },
-    "nativeHistory": {
-      "type": "object",
-      "description": "Declarative native-history adapter declaration. Daemon's builder routes readChat history through the named adapter ($schema).",
       "additionalProperties": true
     },
     "overrides": {

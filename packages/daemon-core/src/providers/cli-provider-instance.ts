@@ -1692,7 +1692,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     private syncCanonicalSavedHistoryIfNeeded(): boolean {
         if (!this.providerSessionId) return false;
-        const canonicalHistory = this.provider.canonicalHistory;
+        const canonicalHistory = this.provider.nativeHistory;
         if (!canonicalHistory) return false;
 
         if (isNativeSourceCanonicalHistory(canonicalHistory)) {
@@ -1754,9 +1754,9 @@ export class CliProviderInstance implements ProviderInstance {
     private restorePersistedHistoryFromCurrentSession(): void {
         if (!this.providerSessionId) return;
         this.syncCanonicalSavedHistoryIfNeeded();
-        const restoredHistory = isNativeSourceCanonicalHistory(this.provider.canonicalHistory)
+        const restoredHistory = isNativeSourceCanonicalHistory(this.provider.nativeHistory)
             ? readProviderChatHistory(this.type, {
-                canonicalHistory: this.provider.canonicalHistory,
+                canonicalHistory: this.provider.nativeHistory,
                 historySessionId: this.providerSessionId,
                 workspace: this.workingDir,
                 offset: 0,

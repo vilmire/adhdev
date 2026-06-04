@@ -541,8 +541,16 @@ export interface ProviderModule {
   /** History behavior config — controls message filtering and collapse during replay */
   historyBehavior?: ProviderHistoryBehavior;
   /**
-   * Canonical history sync config — for providers that maintain native history files.
-   * When set, daemon syncs from native format into ADHDev JSONL store on each tick.
+   * Native history config — for providers that maintain native history files.
+   * When set, daemon reads/lists provider-native transcripts directly. This is
+   * the canonical v1 field name; the legacy `canonicalHistory` field name is
+   * still accepted by the loader and aliased onto this field at load time.
+   */
+  nativeHistory?: NativeHistoryConfig;
+  /**
+   * @deprecated Legacy v0 alias for {@link ProviderModule.nativeHistory}.
+   * Loader populates this from `nativeHistory` so existing internal readers
+   * keep working during the transition. Remove after one release.
    */
   canonicalHistory?: ProviderCanonicalHistoryConfig;
   /**
@@ -688,7 +696,7 @@ export interface ProviderHistoryBehavior {
  * daemon-core. They let each provider own native transcript file discovery and
  * parsing while daemon-core only validates/pages the normalized result.
  */
-export interface ProviderCanonicalHistoryScriptsConfig {
+export interface NativeHistoryScriptsConfig {
   /** Reads one native session. Default: 'readNativeHistory'. */
   readSession?: string;
   /** Lists native sessions with summary metadata. Default: 'listNativeHistory'. */
@@ -696,13 +704,19 @@ export interface ProviderCanonicalHistoryScriptsConfig {
 }
 
 /**
- * Canonical history sync config — for providers that maintain their own native history files.
+ * @deprecated Use {@link NativeHistoryScriptsConfig}. Retained as an alias for
+ * one release so external consumers that referenced the old name keep compiling.
+ */
+export type ProviderCanonicalHistoryScriptsConfig = NativeHistoryScriptsConfig;
+
+/**
+ * Native history config — for providers that maintain their own native history files.
  *
  * Preferred mode is provider-owned scripts via `scripts`. `format` is now an
  * opaque provider label retained for diagnostics/backward compatibility; daemon
  * live paths must not branch on provider-specific format values.
  */
-export interface ProviderCanonicalHistoryConfig {
+export interface NativeHistoryConfig {
   /** Opaque provider-owned history format label. */
   format?: string;
   /** Optional native history glob/template for diagnostics only. */
@@ -730,6 +744,12 @@ export interface ProviderCanonicalHistoryConfig {
    */
   contractVersion?: import('./transcript-v2.js').ChatContractVersion;
 }
+
+/**
+ * @deprecated Use {@link NativeHistoryConfig}. Retained as an alias for one
+ * release so external consumers that referenced the old name keep compiling.
+ */
+export type ProviderCanonicalHistoryConfig = NativeHistoryConfig;
 
 /**
  * Auto-implement spawn config — controls how the provider is spawned for autonomous AI-driven
