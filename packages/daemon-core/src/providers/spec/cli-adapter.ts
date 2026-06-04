@@ -46,7 +46,7 @@ export class SpecCliAdapter implements CliAdapter {
     constructor(
         specPath: string,
         workingDir: string,
-        _cliArgs: string[],
+        cliArgs: string[],
         extraEnv: Record<string, string>,
         transportFactory?: PtyTransportFactory,
     ) {
@@ -57,6 +57,12 @@ export class SpecCliAdapter implements CliAdapter {
         this.cliName = this.spec.name;
         this.workingDir = workingDir;
 
+        // cli-manager.ts allocates providerSessionId per launch and threads
+        // it through resume.newSessionArgs as additional cliArgs (e.g.
+        // ["--session-id", "<uuid>"]). We must hand those to SpecDriver
+        // so the agent uses the daemon's id, otherwise (claude case) the
+        // agent generates its own id and the chat-history pipeline can't
+        // pair the on-disk transcript with the live session.
         this.driver = new SpecDriver({
             specPath,
             workingDir,
@@ -64,6 +70,7 @@ export class SpecCliAdapter implements CliAdapter {
             hotReload: true,
             emitTrace: false,
             transportFactory,
+            extraCliArgs: cliArgs,
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));
     }
