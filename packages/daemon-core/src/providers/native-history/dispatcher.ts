@@ -24,6 +24,7 @@ export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-
 export interface NativeHistoryInput {
     agentType?: string;
     sessionId?: string;
+    providerSessionId?: string;
     historySessionId?: string;
     workspace?: string;
     format?: string;
@@ -43,12 +44,23 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
     return (input: NativeHistoryInput) => {
         const workspace = input.workspace || '';
         const sessionId = input.sessionId || input.historySessionId || '';
+        // Caller may pass a providerSessionId (the *provider's own* id, e.g.
+        // the uuid claude writes into the jsonl basename). When present, the
+        // dispatcher only returns a transcript whose file id matches —
+        // otherwise the newest_by_mtime fallback can surface a different
+        // session's chat (round 9 part b: the user reported "previous chat
+        // shows up before I type anything" on every provider).
+        const requestedProviderSid = input.providerSessionId || '';
 
         const sourcePath = resolveSourcePath(reader, workspace, sessionId);
         if (!sourcePath) return null;
 
         const session = readByReader(reader, sourcePath, sessionId, workspace);
         if (!session) return null;
+
+        if (requestedProviderSid && session.providerSessionId && session.providerSessionId !== requestedProviderSid) {
+            return null;
+        }
 
         return {
             messages: session.messages.map((m: any) => ({
@@ -86,9 +98,14 @@ function resolveClaudePath(workspace: string, sessionId: string): string | null 
         const candidate = path.join(dir, `${sessionId}.jsonl`);
         if (fs.existsSync(candidate)) return candidate;
     }
-    // Fallback: newest .jsonl in the directory — claude often allocates its
-    // own session id that doesn't match what the daemon thinks it is.
-    return newestFile(dir, /\.jsonl$/);
+    // No exact match: return null. The newest_by_mtime fallback used to
+    // grab whichever transcript was touched most recently, but that
+    // surfaced a different (often the user's *external* claude session
+    // in the same workspace) chat in the dashboard before the user
+    // typed anything. The right answer is to show nothing until either
+    // the daemon's sessionId actually maps to a file or the caller
+    // passes the correct providerSessionId (round 9 part b).
+    return null;
 }
 
 function resolveCodexPath(workspace: string): string | null {
@@ -102,18 +119,9 @@ function resolveCodexPath(workspace: string): string | null {
         String(now.getUTCDate()).padStart(2, '0'),
     );
     if (fs.existsSync(dir)) {
-        const f = newestFile(dir, /\.jsonl$/);
+        const f = newestRecentFile(dir, /\.jsonl$/);
         if (f) return f;
     }
-    // Yesterday's directory may still own the live session right after midnight.
-    const yesterday = new Date(now.getTime() - 24 * 3600 * 1000);
-    const dirY = path.join(
-        os.homedir(), '.codex', 'sessions',
-        String(yesterday.getUTCFullYear()),
-        String(yesterday.getUTCMonth() + 1).padStart(2, '0'),
-        String(yesterday.getUTCDate()).padStart(2, '0'),
-    );
-    if (fs.existsSync(dirY)) return newestFile(dirY, /\.jsonl$/);
     return null;
 }
 
@@ -122,9 +130,11 @@ function resolveAntigravityPath(workspace: string): string | null {
     // agy brain/<uuid>/.system_generated/logs/transcript.jsonl
     const brainRoot = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
     if (!fs.existsSync(brainRoot)) return null;
+    const cutoff = Date.now() - RECENT_WINDOW_MS;
     const entries = fs.readdirSync(brainRoot, { withFileTypes: true })
         .filter(e => e.isDirectory())
         .map(e => ({ p: path.join(brainRoot, e.name), mtime: safeMtime(path.join(brainRoot, e.name)) }))
+        .filter(e => e.mtime >= cutoff)
         .sort((a, b) => b.mtime - a.mtime);
     for (const e of entries) {
         const t = path.join(e.p, '.system_generated', 'logs', 'transcript.jsonl');
@@ -141,7 +151,7 @@ function resolveHermesPath(workspace: string, sessionId: string): string | null 
         const exact = path.join(dir, `session_${sessionId}.json`);
         if (fs.existsSync(exact)) return exact;
     }
-    return newestFile(dir, /^session_.*\.json$/);
+    return newestRecentFile(dir, /^session_.*\.json$/);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -176,6 +186,26 @@ function newestFile(dir: string, pattern: RegExp): string | null {
         const entries = fs.readdirSync(dir, { withFileTypes: true })
             .filter(e => e.isFile() && pattern.test(e.name))
             .map(e => ({ p: path.join(dir, e.name), mtime: safeMtime(path.join(dir, e.name)) }))
+            .sort((a, b) => b.mtime - a.mtime);
+        return entries[0]?.p ?? null;
+    } catch { return null; }
+}
+
+/**
+ * Like newestFile but only returns a candidate when its mtime is within
+ * the recent activity window. Prevents the dashboard from surfacing a
+ * prior session's transcript when the daemon's sessionId doesn't match
+ * any file on disk (e.g. claude allocates its own uuid; daemon and
+ * agent disagree about what the "current" session is).
+ */
+const RECENT_WINDOW_MS = 5 * 60 * 1000;
+function newestRecentFile(dir: string, pattern: RegExp): string | null {
+    try {
+        const cutoff = Date.now() - RECENT_WINDOW_MS;
+        const entries = fs.readdirSync(dir, { withFileTypes: true })
+            .filter(e => e.isFile() && pattern.test(e.name))
+            .map(e => ({ p: path.join(dir, e.name), mtime: safeMtime(path.join(dir, e.name)) }))
+            .filter(e => e.mtime >= cutoff)
             .sort((a, b) => b.mtime - a.mtime);
         return entries[0]?.p ?? null;
     } catch { return null; }
