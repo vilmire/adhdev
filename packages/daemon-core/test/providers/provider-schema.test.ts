@@ -210,7 +210,7 @@ describe('validateProviderDefinition', () => {
       spawn: { command: 'foo' },
       capabilities: baseCapabilities,
       contractVersion: 2,
-      canonicalHistory: {
+      nativeHistory: {
         format: 'foo-native-jsonl',
         watchPath: '~/.foo/sessions/**/*.jsonl',
         mode: 'native-source',
@@ -232,7 +232,7 @@ describe('validateProviderDefinition', () => {
       spawn: { command: 'foo' },
       capabilities: baseCapabilities,
       contractVersion: 2,
-      canonicalHistory: {
+      nativeHistory: {
         format: '',
         watchPath: '',
         mode: 'unknown-mode',
@@ -242,11 +242,11 @@ describe('validateProviderDefinition', () => {
       },
     })
 
-    expect(result.errors).toContain('canonicalHistory.format must be a non-empty string when provided')
-    expect(result.errors).toContain('canonicalHistory.watchPath must be a non-empty string when provided')
-    expect(result.errors).toContain('canonicalHistory.mode must be one of: native-source, materialized-mirror, disabled')
-    expect(result.errors).toContain('canonicalHistory.scripts.readSession must be a non-empty string')
-    expect(result.errors).toContain('canonicalHistory.scripts.listSessions must be a non-empty string')
+    expect(result.errors).toContain('nativeHistory.format must be a non-empty string when provided')
+    expect(result.errors).toContain('nativeHistory.watchPath must be a non-empty string when provided')
+    expect(result.errors).toContain('nativeHistory.mode must be one of: native-source, materialized-mirror, disabled')
+    expect(result.errors).toContain('nativeHistory.scripts.readSession must be a non-empty string')
+    expect(result.errors).toContain('nativeHistory.scripts.listSessions must be a non-empty string')
   })
 
   it('accepts provider-owned transcript manifest fields without unknown field warnings', () => {

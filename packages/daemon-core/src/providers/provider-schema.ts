@@ -37,10 +37,13 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'approvalPositiveHints',
   'sessionIdPattern',
   'historyBehavior',
-  'canonicalHistory',
-  // v1 contract spelling; the loader aliases nativeHistory →
-  // canonicalHistory so downstream code reads the legacy name.
+  // v1 canonical field name. The loader fills this in for legacy v0
+  // manifests that ship the old `canonicalHistory` spelling.
   'nativeHistory',
+  // Deprecated v0 alias for `nativeHistory`. Kept in the allowed-keys
+  // list so legacy provider.json manifests don't trip the unknown-key
+  // warning during the one-release deprecation window.
+  'canonicalHistory',
   'autoFixProfile',
   'ideLevelScripts',
   'allowInputDuringGeneration',
@@ -133,7 +136,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   }
 
   validateCapabilities(provider as unknown as ProviderModule, controls, errors)
-  validateCanonicalHistory(provider.canonicalHistory, errors)
+  validateNativeHistory(provider.nativeHistory, errors)
   validateMeshCoordinator(provider.meshCoordinator, errors)
 
   for (const control of controls) {
@@ -233,43 +236,43 @@ function validateCapabilities(provider: ProviderModule, controls: ProviderContro
   }
 }
 
-function validateCanonicalHistory(raw: unknown, errors: string[]): void {
+function validateNativeHistory(raw: unknown, errors: string[]): void {
   if (raw === undefined) return
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    errors.push('canonicalHistory must be an object')
+    errors.push('nativeHistory must be an object')
     return
   }
 
-  const canonicalHistory = raw as Record<string, unknown>
-  const format = canonicalHistory.format
+  const nativeHistory = raw as Record<string, unknown>
+  const format = nativeHistory.format
   if (format !== undefined && (typeof format !== 'string' || !format.trim())) {
-    errors.push('canonicalHistory.format must be a non-empty string when provided')
+    errors.push('nativeHistory.format must be a non-empty string when provided')
   }
 
-  const watchPath = canonicalHistory.watchPath
+  const watchPath = nativeHistory.watchPath
   if (watchPath !== undefined && (typeof watchPath !== 'string' || !watchPath.trim())) {
-    errors.push('canonicalHistory.watchPath must be a non-empty string when provided')
+    errors.push('nativeHistory.watchPath must be a non-empty string when provided')
   }
 
-  const mode = canonicalHistory.mode
+  const mode = nativeHistory.mode
   if (mode !== undefined && !['native-source', 'materialized-mirror', 'disabled'].includes(String(mode))) {
-    errors.push('canonicalHistory.mode must be one of: native-source, materialized-mirror, disabled')
+    errors.push('nativeHistory.mode must be one of: native-source, materialized-mirror, disabled')
   }
 
   // Chat transcript contract version (transcript-v2.ts). Absent → treated as
   // v1 by readDeclaredChatContractVersion(). A2 will reject unrecognised
   // values at load time; A1 only validates the field shape.
-  const chatContractVersion = canonicalHistory.contractVersion
+  const chatContractVersion = nativeHistory.contractVersion
   if (chatContractVersion !== undefined
       && chatContractVersion !== '1.0'
       && chatContractVersion !== '2.0') {
-    errors.push(`canonicalHistory.contractVersion must be '1.0' or '2.0' when provided (got ${JSON.stringify(chatContractVersion)})`)
+    errors.push(`nativeHistory.contractVersion must be '1.0' or '2.0' when provided (got ${JSON.stringify(chatContractVersion)})`)
   }
 
-  const scripts = canonicalHistory.scripts
+  const scripts = nativeHistory.scripts
   if (scripts === undefined) return
   if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) {
-    errors.push('canonicalHistory.scripts must be an object')
+    errors.push('nativeHistory.scripts must be an object')
     return
   }
 
@@ -277,7 +280,7 @@ function validateCanonicalHistory(raw: unknown, errors: string[]): void {
   for (const key of ['readSession', 'listSessions']) {
     const value = scriptConfig[key]
     if (typeof value !== 'string' || !value.trim()) {
-      errors.push(`canonicalHistory.scripts.${key} must be a non-empty string`)
+      errors.push(`nativeHistory.scripts.${key} must be a non-empty string`)
     }
   }
 }

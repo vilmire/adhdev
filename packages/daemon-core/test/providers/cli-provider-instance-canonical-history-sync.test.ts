@@ -70,7 +70,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       name: 'Hermes Agent',
       category: 'cli',
       spawn: { command: 'hermes', args: [] },
-      canonicalHistory: {
+      nativeHistory: {
         format: 'hermes-provider-native',
         watchPath: '~/.hermes/sessions/session_{{sessionId}}.json',
         scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
@@ -129,7 +129,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       name: 'Claude Code',
       category: 'cli',
       spawn: { command: 'claude', args: [] },
-      canonicalHistory: {
+      nativeHistory: {
         format: 'claude-provider-native',
         watchPath: '~/.claude/projects/{{workspace}}/{{sessionId}}.jsonl',
         scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
@@ -191,7 +191,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       name: 'Codex CLI',
       category: 'cli',
       spawn: { command: 'codex', args: [] },
-      canonicalHistory: {
+      nativeHistory: {
         format: 'codex-provider-native',
         watchPath: '~/.codex/sessions/**/*.jsonl',
         scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
@@ -256,7 +256,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       name: 'Codex CLI',
       category: 'cli',
       spawn: { command: 'codex', args: [] },
-      canonicalHistory: {
+      nativeHistory: {
         format: 'codex-provider-native',
         watchPath: '~/.codex/sessions/**/*.jsonl',
         mode: 'native-source',
@@ -322,7 +322,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       name: 'Codex CLI',
       category: 'cli',
       spawn: { command: 'codex', args: [] },
-      canonicalHistory: {
+      nativeHistory: {
         format: 'codex-provider-native',
         watchPath: '~/.codex/sessions/**/*.jsonl',
         mode: 'native-source',
@@ -372,7 +372,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       name: 'Hermes Agent',
       category: 'cli',
       spawn: { command: 'hermes', args: [] },
-      canonicalHistory: {
+      nativeHistory: {
         format: 'hermes-provider-native',
         watchPath: '~/.hermes/sessions/session_{{sessionId}}.json',
         scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },

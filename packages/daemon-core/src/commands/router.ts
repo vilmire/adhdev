@@ -3855,7 +3855,7 @@ export class DaemonCommandRouter {
                         : '';
                 const providerMeta = this.deps.providerLoader.resolve?.(providerType) || this.deps.providerLoader.getMeta(providerType);
                 const { sessions: historySessions, hasMore, source } = listProviderHistorySessions(providerType, {
-                    canonicalHistory: providerMeta?.canonicalHistory,
+                    canonicalHistory: providerMeta?.nativeHistory,
                     offset,
                     limit,
                     historyBehavior: providerMeta?.historyBehavior,
