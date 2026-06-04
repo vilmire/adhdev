@@ -297,6 +297,7 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
     const [showCreate, setShowCreate] = useState(false)
     const [createName, setCreateName] = useState('')
     const [createRepoIdentity, setCreateRepoIdentity] = useState('')
+    const [createRepoRemoteUrl, setCreateRepoRemoteUrl] = useState('')
 
     // Add node form
     const [showAddNode, setShowAddNode] = useState(false)
@@ -432,15 +433,20 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
     // ─── Actions ───
     async function handleCreate() {
         if (!daemonId || !createName.trim()) return
+        const remoteUrl = createRepoRemoteUrl.trim()
+        const identity = createRepoIdentity.trim()
+        if (!remoteUrl && !identity) return
         try {
             const res: any = await sendCommand(daemonId, 'create_mesh', {
                 name: createName.trim(),
-                repoIdentity: createRepoIdentity.trim() || undefined,
+                repoRemoteUrl: remoteUrl || undefined,
+                repoIdentity: identity || undefined,
             })
             if (res?.success) {
                 setShowCreate(false)
                 setCreateName('')
                 setCreateRepoIdentity('')
+                setCreateRepoRemoteUrl('')
                 await loadMeshes()
                 setSelectedMeshId(res.mesh?.id || null)
             } else {
@@ -640,7 +646,20 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
                                     autoFocus
                                 />
                             </FormField>
-                            <FormField label="Repo Identity (optional)">
+                            <FormField
+                                label="Repo remote URL (optional)"
+                                hint="Provide a remote URL OR a stable identity. Mesh nodes use this to match the same project across machines."
+                            >
+                                <Input
+                                    value={createRepoRemoteUrl}
+                                    onChange={e => setCreateRepoRemoteUrl(e.target.value)}
+                                    placeholder="https://github.com/user/repo"
+                                />
+                            </FormField>
+                            <FormField
+                                label="Repo identity (optional)"
+                                hint="Provide a remote URL OR a stable identity. Mesh nodes use this to match the same project across machines."
+                            >
                                 <Input
                                     value={createRepoIdentity}
                                     onChange={e => setCreateRepoIdentity(e.target.value)}
@@ -648,10 +667,22 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
                                 />
                             </FormField>
                             <div className="flex gap-2">
-                                <button className="btn btn-primary btn-sm" onClick={handleCreate} disabled={!createName.trim()}>
+                                <button
+                                    className="btn btn-primary btn-sm"
+                                    onClick={handleCreate}
+                                    disabled={!createName.trim() || (!createRepoRemoteUrl.trim() && !createRepoIdentity.trim())}
+                                >
                                     Create
                                 </button>
-                                <button className="btn btn-secondary btn-sm" onClick={() => setShowCreate(false)}>
+                                <button
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => {
+                                        setShowCreate(false)
+                                        setCreateName('')
+                                        setCreateRepoIdentity('')
+                                        setCreateRepoRemoteUrl('')
+                                    }}
+                                >
                                     Cancel
                                 </button>
                             </div>
