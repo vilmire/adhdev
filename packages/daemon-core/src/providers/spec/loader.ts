@@ -11,11 +11,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import Ajv from 'ajv';
-import { createRequire } from 'node:module';
 import type { CliSpec } from './types.js';
-
-const require = createRequire(import.meta.url);
-const schema = require('./schema.json');
+import { SCHEMA as schema } from './schema.gen.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validate = ajv.compile<CliSpec>(schema);

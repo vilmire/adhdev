@@ -467,6 +467,19 @@ export {
   type IpcStatusPayload,
 } from './ipc/local-ipc-server.js';
 
+// ── CLI Spec (adhdev:cli/spec@1) ──
+export { evaluate as evaluateSpec, evaluate } from './providers/spec/evaluator.js';
+export { loadSpec, resolveSpecPath } from './providers/spec/loader.js';
+export type {
+    CliSpec, SpecState, ControlAction, Control,
+    NotificationRule, DelegateTrigger, Section,
+} from './providers/spec/types.js';
+export type { SpecEvaluation, TraceEntry } from './providers/spec/evaluator.js';
+export { SpecDriver } from './providers/spec/driver.js';
+export type { DashboardEvent, DashboardCommand, SpecDriverOpts } from './providers/spec/driver.js';
+export { TerminalAdapter } from './providers/spec/adapter.js';
+export type { TerminalAdapterOpts, TerminalAdapterHandlers } from './providers/spec/adapter.js';
+
 // ── Provider SDK (v1) — selective re-exports for external tooling ──
 // Tooling (registry publish, dashboard validators, the e2e harness) needs
 // the manifest validator, the builder catalog, and the contract version.
