@@ -22,9 +22,12 @@ import * as path from 'node:path';
 import { SpecDriver, type DashboardEvent } from './driver.js';
 import { loadSpec } from './loader.js';
 import type { CliSpec } from './types.js';
+import { readNativeHistory, type NativeMessage } from './native-history.js';
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import { LOG } from '../../logging/logger.js';
+
+const NATIVE_HISTORY_REFRESH_MS = 1500;
 
 export class SpecCliAdapter implements CliAdapter {
     readonly cliType: string;
@@ -41,6 +44,10 @@ export class SpecCliAdapter implements CliAdapter {
     private partialResponse = '';
     private exited = false;
     private spawned = false;
+    private cachedMessages: ChatMessage[] = [];
+    private lastNativeFetchAt = 0;
+    private nativeFetchInFlight = false;
+    private providerSessionId: string | undefined;
 
     constructor(
         specPath: string,
@@ -79,18 +86,22 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     getStatus(): CliAdapterStatus {
-        if (this.exited) return { status: 'stopped', messages: [], activeModal: null };
-        if (!this.spawned) return { status: 'starting', messages: [], activeModal: null };
+        if (this.exited) return { status: 'stopped', messages: this.cachedMessages, activeModal: null };
+        if (!this.spawned) return { status: 'starting', messages: this.cachedMessages, activeModal: null };
+
+        // Refresh native history lazily — the watch_path is cheap to stat,
+        // but parsing a full session.jsonl every call would be wasteful.
+        this.maybeRefreshNativeHistory();
 
         const state = this.latestState;
-        if (!state) return { status: 'starting', messages: [], activeModal: null };
+        if (!state) return { status: 'starting', messages: this.cachedMessages, activeModal: null };
 
         const modal = this.latestModal;
         const lc = state.id.toLowerCase();
         if (modal) {
             return {
                 status: 'waiting_approval',
-                messages: [],
+                messages: this.cachedMessages,
                 activeModal: {
                     message: modal.title ?? state.label,
                     buttons: modal.buttons.map(b => b.label),
@@ -98,9 +109,34 @@ export class SpecCliAdapter implements CliAdapter {
             };
         }
         if (/busy|generating|working|running|thinking/i.test(lc + ' ' + state.label)) {
-            return { status: 'generating', messages: [], activeModal: null };
+            return { status: 'generating', messages: this.cachedMessages, activeModal: null };
         }
-        return { status: 'idle', messages: [], activeModal: null };
+        return { status: 'idle', messages: this.cachedMessages, activeModal: null };
+    }
+
+    private maybeRefreshNativeHistory(): void {
+        if (!this.spec.native_history) return;
+        const now = Date.now();
+        if (this.nativeFetchInFlight) return;
+        if (now - this.lastNativeFetchAt < NATIVE_HISTORY_REFRESH_MS) return;
+        this.nativeFetchInFlight = true;
+        this.lastNativeFetchAt = now;
+        readNativeHistory(this.spec.native_history, {
+            workingDir: this.workingDir,
+            providerSessionId: this.providerSessionId,
+        }).then((res) => {
+            this.nativeFetchInFlight = false;
+            if (!res) return;
+            const next = res.messages.map((m, i) => toChatMessage(m, i));
+            if (!sameMessages(this.cachedMessages, next)) {
+                this.cachedMessages = next;
+                LOG.debug('SpecAdapter', `[${this.cliType}] native_history loaded ${next.length} messages from ${res.sourcePath}`);
+                this.statusCallback?.();
+            }
+        }).catch((err) => {
+            this.nativeFetchInFlight = false;
+            LOG.debug('SpecAdapter', `[${this.cliType}] native_history error: ${(err as Error).message}`);
+        });
     }
 
     getScriptParsedStatus(): unknown {
@@ -185,7 +221,15 @@ export class SpecCliAdapter implements CliAdapter {
     getRuntimeMetadata(): unknown {
         return { runtimeId: this.spec.id, runtimeKey: this.spec.id, displayName: this.spec.name };
     }
-    updateRuntimeMeta(): void { /* runtime metadata is daemon-side only in spec model */ }
+    updateRuntimeMeta(meta?: Record<string, unknown>): void {
+        if (meta && typeof meta.providerSessionId === 'string') {
+            this.providerSessionId = meta.providerSessionId;
+            // New session — drop cached history so the next getStatus
+            // re-reads against the new session id.
+            this.cachedMessages = [];
+            this.lastNativeFetchAt = 0;
+        }
+    }
     refreshProviderDefinition(): void { /* hot reload handled by SpecDriver fs.watch */ }
 
     private handleEvent(ev: DashboardEvent): void {
@@ -218,4 +262,21 @@ export class SpecCliAdapter implements CliAdapter {
                 return;
         }
     }
+}
+
+function toChatMessage(m: NativeMessage, index: number): ChatMessage {
+    return {
+        id: m.id ?? `msg_${index}`,
+        role: m.role,
+        content: m.content,
+    } as ChatMessage;
+}
+
+function sameMessages(a: ChatMessage[], b: ChatMessage[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i].id !== b[i].id || a[i].role !== b[i].role) return false;
+        if ((a[i] as any).content !== (b[i] as any).content) return false;
+    }
+    return true;
 }
