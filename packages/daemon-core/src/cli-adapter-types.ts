@@ -13,6 +13,9 @@ export interface CliAdapterStatus {
         message: string;
         buttons: string[];
     } | null;
+    providerSessionId?: string;
+    errorMessage?: string;
+    errorReason?: string;
 }
 
 export interface AcpAdapterHandle {
@@ -40,7 +43,7 @@ export interface CliAdapter {
     spawn(): Promise<void>;
     sendMessage(text: string, options?: { force?: boolean }): Promise<void>;
     forceSendMessage?(text: string): Promise<void>;
-    getStatus(): CliAdapterStatus;
+    getStatus(options?: { allowParse?: boolean }): CliAdapterStatus;
     getScriptParsedStatus?(): unknown;
     getDebugSnapshot?(): unknown;
     invokeScript?(scriptName: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -63,4 +66,15 @@ export interface CliAdapter {
     setOnPtyData?(callback: (data: string) => void): void;
     writeRaw?(data: string): void;
     resize?(cols: number, rows: number): void;
+    // ── Runtime metadata used by CliProviderInstance for session tracking ──
+    getRuntimeMetadata?(): unknown;
+    updateRuntimeMeta?(meta: Record<string, unknown>): void;
+    refreshProviderDefinition?(provider: unknown): void;
+    // ── Optional auxiliary fields some daemon paths read off the status ──
+}
+
+export interface CliAdapterStatusOptional {
+    providerSessionId?: string;
+    errorMessage?: string;
+    errorReason?: string;
 }
