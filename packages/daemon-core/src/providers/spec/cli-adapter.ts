@@ -23,6 +23,7 @@ import { loadSpec } from './loader.js';
 import type { CliSpec } from './types.js';
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
+import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { LOG } from '../../logging/logger.js';
 
 export class SpecCliAdapter implements CliAdapter {
@@ -47,6 +48,7 @@ export class SpecCliAdapter implements CliAdapter {
         workingDir: string,
         _cliArgs: string[],
         extraEnv: Record<string, string>,
+        transportFactory?: PtyTransportFactory,
     ) {
         const res = loadSpec(specPath);
         if (!res.ok) throw new Error(`spec invalid (${specPath}): ${res.errors.join('; ')}`);
@@ -61,6 +63,7 @@ export class SpecCliAdapter implements CliAdapter {
             extraEnv,
             hotReload: true,
             emitTrace: false,
+            transportFactory,
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));
     }

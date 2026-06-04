@@ -37,6 +37,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { TerminalAdapter, type TerminalAdapterOpts } from './adapter.js';
+import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { evaluate, type SpecEvaluation, type TraceEntry } from './evaluator.js';
 import { loadSpec } from './loader.js';
 import type { CliSpec, Control, DelegateTrigger } from './types.js';
@@ -71,6 +72,8 @@ export interface SpecDriverOpts {
     hotReload?: boolean;
     /** Set true to forward trace entries on every state_changed. */
     emitTrace?: boolean;
+    /** Inject the daemon's PTY transport (typically SessionHostPtyTransportFactory). */
+    transportFactory?: PtyTransportFactory;
 }
 
 export class SpecDriver {
@@ -142,6 +145,7 @@ export class SpecDriver {
             env: { ...(this.spec.env ?? {}), ...(this.opts.extraEnv ?? {}) },
             cols: this.opts.cols ?? 100,
             rows: this.opts.rows ?? 30,
+            transportFactory: this.opts.transportFactory,
         };
     }
 

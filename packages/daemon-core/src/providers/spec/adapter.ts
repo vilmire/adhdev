@@ -24,7 +24,7 @@
 'use strict';
 
 import { Terminal } from '@xterm/headless';
-import { NodePtyTransportFactory, type PtyRuntimeTransport } from '../../cli-adapters/pty-transport.js';
+import { NodePtyTransportFactory, type PtyRuntimeTransport, type PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 
 export interface TerminalAdapterOpts {
     binary: string;
@@ -37,6 +37,15 @@ export interface TerminalAdapterOpts {
     screenChangeDebounceMs?: number;
     /** tick() period. 0 disables ticks. */
     tickIntervalMs?: number;
+    /**
+     * Optional PTY transport factory. When the daemon supplies a
+     * SessionHostPtyTransportFactory (standalone runs the PTY inside the
+     * session-host so the runtime/<sid>/snapshot endpoint can serve it),
+     * forward it here. Without it the PTY spawns locally inside the
+     * daemon process and the dashboard's terminal pane reports
+     * "Runtime terminal unavailable: Unknown session".
+     */
+    transportFactory?: PtyTransportFactory;
 }
 
 export interface TerminalAdapterHandlers {
@@ -50,7 +59,7 @@ export interface TerminalAdapterHandlers {
 export class TerminalAdapter {
     private term: Terminal;
     private pty: PtyRuntimeTransport | null = null;
-    private factory = new NodePtyTransportFactory();
+    private factory: PtyTransportFactory;
     private cols: number;
     private rows: number;
     private screenDebounceMs: number;
@@ -67,6 +76,7 @@ export class TerminalAdapter {
         this.rows = opts.rows ?? 30;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
+        this.factory = opts.transportFactory ?? new NodePtyTransportFactory();
         this.term = new Terminal({ cols: this.cols, rows: this.rows, allowProposedApi: true, scrollback: 1000 });
     }
 
