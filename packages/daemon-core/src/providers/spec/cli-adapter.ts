@@ -72,6 +72,7 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     async sendMessage(text: string): Promise<void> {
+        LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''})`);
         this.driver.dispatch({ kind: 'send_message', text });
     }
 
@@ -191,6 +192,7 @@ export class SpecCliAdapter implements CliAdapter {
             case 'state_changed':
                 this.latestState = ev.state;
                 this.latestModal = ev.modal;
+                LOG.info('SpecAdapter', `[${this.cliType}] state=${ev.state.id} (${ev.state.label}) modal=${ev.modal ? `${ev.modal.buttons.length}-buttons` : 'none'}${ev.state.title ? ` title=${JSON.stringify(ev.state.title)}` : ''}`);
                 this.statusCallback?.();
                 return;
             case 'pty_data':
