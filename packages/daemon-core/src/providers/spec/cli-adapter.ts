@@ -72,7 +72,9 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     async sendMessage(text: string): Promise<void> {
-        LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''})`);
+        // Content-free at info — the prompt body is user data.
+        LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length})`);
+        LOG.debug('SpecAdapter', `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''}`);
         this.driver.dispatch({ kind: 'send_message', text });
     }
 
@@ -192,7 +194,14 @@ export class SpecCliAdapter implements CliAdapter {
             case 'state_changed':
                 this.latestState = ev.state;
                 this.latestModal = ev.modal;
-                LOG.info('SpecAdapter', `[${this.cliType}] state=${ev.state.id} (${ev.state.label}) modal=${ev.modal ? `${ev.modal.buttons.length}-buttons` : 'none'}${ev.state.title ? ` title=${JSON.stringify(ev.state.title)}` : ''}`);
+                // info-level keeps only spec-defined identifiers (state.id /
+                // state.label / button count). The extracted title can carry
+                // user data — file paths, command text, ticket titles — so
+                // it stays at debug.
+                LOG.info('SpecAdapter', `[${this.cliType}] state=${ev.state.id} (${ev.state.label}) modal=${ev.modal ? `${ev.modal.buttons.length}-buttons` : 'none'}`);
+                if (ev.state.title) {
+                    LOG.debug('SpecAdapter', `[${this.cliType}] state.title=${JSON.stringify(ev.state.title)}`);
+                }
                 this.statusCallback?.();
                 return;
             case 'pty_data':
