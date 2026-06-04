@@ -146,6 +146,58 @@ describe('buildParseSessionFromTui', () => {
         const r = parse({ buffer, rawBuffer: buffer, screenText: buffer, tail: buffer });
         expect(r.status).toBe('idle');
     });
+
+    // ─── tui/session-id-extraction@1 ───────────────────────────────────────
+    // Verifies the new primitive: when a manifest declares a regex with a
+    // capture group, the synth result must surface the captured group as
+    // `providerSessionId`. When the regex is absent the field stays unset.
+
+    it('omits providerSessionId when sessionIdExtraction is not configured', () => {
+        const buffer = '> hi\n• reply\n>\n';
+        const r = parse({ buffer, rawBuffer: buffer, screenText: buffer, tail: buffer });
+        expect(r.providerSessionId).toBeUndefined();
+        expect(Object.prototype.hasOwnProperty.call(r, 'providerSessionId')).toBe(false);
+    });
+
+    it('extracts providerSessionId from the codex-style footer using the documented regex', () => {
+        const codexTui = {
+            ...tui,
+            sessionIdExtraction: {
+                $schema: 'adhdev:tui/session-id-extraction@1' as const,
+                // Same pattern shipped in the schema examples and documented in
+                // the SDK guide — capture group 1 = UUID.
+                regex: '(?:gpt-|o\\d|codex-)[^·]+·[^·]+·\\s*([0-9a-f-]{36})',
+                scope: 'tail' as const,
+                label: 'codex-footer',
+            },
+        };
+        const codexParse = buildParseSessionFromTui(codexTui as any);
+        const buffer = [
+            '> draft a haiku',
+            '• sure, here goes…',
+            '',
+            'gpt-5.5 high · ~/Work/adhdev · 019e8e58-4bd2-7c80-8f5b-b49b6c0e25fa',
+        ].join('\n');
+        const r = codexParse({ buffer, rawBuffer: buffer, screenText: buffer, tail: buffer });
+        expect(r.providerSessionId).toBe('019e8e58-4bd2-7c80-8f5b-b49b6c0e25fa');
+    });
+
+    it('leaves providerSessionId unset when the extraction regex does not match', () => {
+        const codexTui = {
+            ...tui,
+            sessionIdExtraction: {
+                $schema: 'adhdev:tui/session-id-extraction@1' as const,
+                regex: 'session id:\\s*([0-9a-f-]{36})',
+                flags: 'i',
+                scope: 'tail' as const,
+            },
+        };
+        const codexParse = buildParseSessionFromTui(codexTui as any);
+        const buffer = '> hi\n• reply with no session footer\n>\n';
+        const r = codexParse({ buffer, rawBuffer: buffer, screenText: buffer, tail: buffer });
+        expect(r.providerSessionId).toBeUndefined();
+        expect(Object.prototype.hasOwnProperty.call(r, 'providerSessionId')).toBe(false);
+    });
 });
 
 // ─── normalizeMessageIdentity ──────────────────────────────────────────────

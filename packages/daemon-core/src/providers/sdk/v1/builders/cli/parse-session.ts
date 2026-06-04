@@ -48,12 +48,21 @@ export interface TranscriptPtySpec {
     scope?: 'screen' | 'buffer' | 'tail'
 }
 
+export interface SessionIdExtractionSpec {
+    $schema?: 'adhdev:tui/session-id-extraction@1'
+    regex: string
+    flags?: string
+    scope?: 'screen' | 'tail' | 'buffer'
+    label?: string
+}
+
 export interface ParseSessionTuiSpec {
     spinner?: any
     settledPrompt?: any
     modal?: ModalTuiSpec
     dispatchOrder?: any
     transcriptPty: TranscriptPtySpec
+    sessionIdExtraction?: SessionIdExtractionSpec
 }
 
 // ─── Output shape ────────────────────────────────
@@ -73,6 +82,7 @@ export interface SynthesizedSession {
     parsedStatus: string | null
     transcriptAuthority?: 'provider' | 'daemon'
     coverage?: 'full' | 'tail' | 'current-turn'
+    providerSessionId?: string
 }
 
 // ─── ANSI / line helpers ─────────────────────────
@@ -176,6 +186,16 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
         : () => null
     const parseApproval = spec.modal ? buildParseApprovalFromTui(spec.modal) : () => null
 
+    // Optional session-id extraction (tui/session-id-extraction@1). Compile once
+    // so each parseSession call is a single regex.exec on the chosen scope.
+    const sessionIdRe = spec.sessionIdExtraction
+        ? new RegExp(
+            spec.sessionIdExtraction.regex,
+            spec.sessionIdExtraction.flags ?? 'i',
+        )
+        : null
+    const sessionIdScope: TranscriptPtySpec['scope'] = spec.sessionIdExtraction?.scope ?? 'tail'
+
     return function parseSession(input: any): SynthesizedSession {
         // status + modal first
         const status = detectStatus(input as any) ?? 'idle'
@@ -236,12 +256,21 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
             if (cont) last.content = last.content ? `${last.content}\n${cont}` : cont
         }
 
-        return {
+        const result: SynthesizedSession = {
             status,
             messages,
             activeModal: modal,
             modal,
             parsedStatus: status,
         }
+
+        if (sessionIdRe) {
+            const haystack = stripAnsi(pickInputText(input, sessionIdScope))
+            const match = haystack.match(sessionIdRe)
+            const captured = match?.[1]?.trim()
+            if (captured) result.providerSessionId = captured
+        }
+
+        return result
     }
 }

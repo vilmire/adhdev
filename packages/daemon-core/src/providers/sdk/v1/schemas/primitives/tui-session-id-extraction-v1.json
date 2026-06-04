@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adhdev:tui/session-id-extraction@1",
+  "title": "tui/session-id-extraction — v1",
+  "description": "Declares a regex that captures the provider-issued session UUID off the PTY chrome (e.g. codex footer `gpt-5.5 high · ~/Work/adhdev · 019e8e58-4bd2-7c80-8f5b-b49b6c0e25fa`). The builder runs the regex over the chosen scope's text and exposes the captured group (1) as `providerSessionId` on the parseSession result, so downstream native-history lookup can locate the matching transcript file (`~/.codex/sessions/*-019e8e58-...jsonl`, `~/.claude/projects/*/<uuid>.jsonl`, etc.). Without this primitive a manifest had to ship a scripts/v1 override or fall back to v0 scripts/1.0 just to surface a session id — that's the gap this closes.",
+  "type": "object",
+  "required": ["$schema", "regex"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "const": "adhdev:tui/session-id-extraction@1"
+    },
+    "regex": {
+      "type": "string",
+      "description": "ECMAScript regex source. Capture group 1 must hold the session identifier."
+    },
+    "flags": {
+      "type": "string",
+      "pattern": "^[gimsuy]*$",
+      "default": "i"
+    },
+    "scope": {
+      "default": "tail",
+      "enum": ["screen", "tail", "buffer"],
+      "description": "Which input view to search. `tail` (default) covers the recent buffer where chrome footers usually live; `screen` is just the visible frame; `buffer` is the full scrollback."
+    },
+    "label": {
+      "type": "string",
+      "description": "Optional tag included in debug traces — handy when a manifest declares more than one extraction candidate during authoring."
+    }
+  },
+  "examples": [
+    {
+      "$schema": "adhdev:tui/session-id-extraction@1",
+      "regex": "(?:gpt-|o\\d|codex-)[^·]+·[^·]+·\\s*([0-9a-f-]{36})",
+      "scope": "tail",
+      "label": "codex-footer"
+    },
+    {
+      "$schema": "adhdev:tui/session-id-extraction@1",
+      "regex": "session id:\\s*([0-9a-f-]{36})",
+      "flags": "i",
+      "scope": "buffer"
+    }
+  ]
+}
