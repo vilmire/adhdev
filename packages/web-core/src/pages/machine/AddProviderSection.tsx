@@ -89,11 +89,17 @@ interface AddProviderSectionProps {
 
 function getRegistryBase(): string {
     // Dev (vite proxy): /registry → https://api.adhf.dev/api/v1/registry
-    // Build: env override > preview > production
-    if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
-        return '/registry'
+    if (typeof window === 'undefined') return 'https://api.adhf.dev/api/v1/registry'
+    const host = window.location.hostname
+    if (host === 'localhost' || host === '127.0.0.1') return '/registry'
+    // Production cloud dashboard → production API
+    if (host === 'adhf.dev' || host === 'adhdev-web.pages.dev') {
+        return 'https://api.adhf.dev/api/v1/registry'
     }
-    return 'https://api.adhf.dev/api/v1/registry'
+    // Preview cloud dashboard (dev.adhf.dev) and any other host → preview API.
+    // Keeps preview isolated from production data and avoids cross-origin
+    // failure when the dashboard is served from a non-production host.
+    return 'https://api-preview.adhf.dev/api/v1/registry'
 }
 
 export default function AddProviderSection({
