@@ -229,7 +229,21 @@ export function RepoMeshHermesMcpConfig({
     )
 }
 
-export default function RepoMesh() {
+/**
+ * Props for the shared RepoMesh page.
+ *
+ * `hideHostPairing` is the single-machine escape hatch: the Mesh Host
+ * pairing section drives multi-machine join flows (one host, remote
+ * members). In standalone mode that pairing is meaningless — there is
+ * only ever one machine. Setting this prop hides the section and the
+ * effects that fetch its state, keeping the page free of dead buttons.
+ */
+export interface RepoMeshProps {
+    /** When true, the "Mesh Host pairing" section is omitted. */
+    hideHostPairing?: boolean;
+}
+
+export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}) {
     const { sendCommand } = useTransport()
     const { ides } = useBaseDaemons()
 
@@ -374,7 +388,12 @@ export default function RepoMesh() {
 
     useEffect(() => { void loadMeshes() }, [loadMeshes])
     useEffect(() => { void loadQueue(selectedMeshId) }, [loadQueue, selectedMeshId])
-    useEffect(() => { void loadHostPairing(selectedMeshId) }, [loadHostPairing, selectedMeshId])
+    useEffect(() => {
+        // Skip the Mesh Host pairing fetch in single-machine mode — the
+        // backend rejects the command and the network round-trip is wasted.
+        if (hideHostPairing) return;
+        void loadHostPairing(selectedMeshId);
+    }, [loadHostPairing, selectedMeshId, hideHostPairing])
 
     async function loadMeshGraph() {
         if (!daemonId || !selectedMeshId) return
@@ -682,7 +701,7 @@ export default function RepoMesh() {
         >
             {error && <AlertBanner variant="error" className="mb-4">{error}</AlertBanner>}
 
-            <Section
+            {!hideHostPairing && <Section
                 title="Mesh Host pairing"
                 description="Standalone manual pairing. Save a Mesh Host address/token, apply the join to the host command endpoint, then check persisted status."
             >
@@ -759,7 +778,7 @@ export default function RepoMesh() {
                         </div>
                     </div>
                 </div>
-            </Section>
+            </Section>}
 
             <Section
                 title="Policy"
