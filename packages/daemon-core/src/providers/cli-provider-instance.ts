@@ -728,13 +728,17 @@ export class CliProviderInstance implements ProviderInstance {
         };
     }
 
-    getSessionModalState(): SessionModalState {
+    getSessionModalState(sessionId?: string): SessionModalState {
         const adapterStatus = this.adapter.getStatus({ allowParse: false });
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
         const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
         return {
-            id: this.instanceId,
+            // Honor the caller-supplied sessionId — InstanceMgr rejects the
+            // projection when projected.id !== requested sessionId, and
+            // this.instanceId is the manager's internal key, not the public
+            // sessionId the dashboard subscribes by.
+            id: sessionId ?? this.instanceId,
             status: visibleStatus,
             title: dirName,
             activeModal: autoApproveActive ? null : adapterStatus.activeModal,
