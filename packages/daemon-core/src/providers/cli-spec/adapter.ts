@@ -19,9 +19,8 @@
 'use strict';
 
 import { evaluateScreen, resolveChoiceKey, type CliSpec, type Verdict } from './evaluate.js';
+import { createScreenSink, type ScreenSink } from './screen.js';
 import type { PtyRuntimeTransport, PtyTransportFactory, PtySpawnOptions } from '../../cli-adapters/pty-transport.js';
-
-const MAX_BUFFER = 64 * 1024;
 
 export interface SpecAdapterEvents {
     onVerdict(verdict: Verdict): void;
@@ -30,7 +29,7 @@ export interface SpecAdapterEvents {
 
 export class SpecAdapter {
     private pty: PtyRuntimeTransport | null = null;
-    private buffer = '';
+    private sink: ScreenSink | null = null;
     private lastSignature: string | null = null;
     private lastStatus: Verdict['status'] | null = null;
 
@@ -41,9 +40,14 @@ export class SpecAdapter {
 
     spawn(factory: PtyTransportFactory, opts: PtySpawnOptions): void {
         const args = this.spec.spawn_args ?? [];
+        this.sink = createScreenSink({ cols: opts.cols, rows: opts.rows });
         this.pty = factory.spawn(this.spec.binary, args, opts);
         this.pty.onData((chunk) => this.feed(chunk));
-        this.pty.onExit((info) => this.events.onExit(typeof info.exitCode === 'number' ? info.exitCode : null));
+        this.pty.onExit((info) => {
+            this.events.onExit(typeof info.exitCode === 'number' ? info.exitCode : null);
+            this.sink?.dispose();
+            this.sink = null;
+        });
     }
 
     /** Send a user-typed message and submit it. */
@@ -63,18 +67,18 @@ export class SpecAdapter {
     kill(): void {
         try { this.pty?.kill?.(); } catch { /* ignore */ }
         this.pty = null;
+        this.sink?.dispose();
+        this.sink = null;
     }
 
     /** Most recent verdict the adapter would emit if evaluated now. */
     evaluate(): Verdict {
-        return evaluateScreen(this.buffer, this.spec);
+        const screen = this.sink?.snapshot() ?? '';
+        return evaluateScreen(screen, this.spec);
     }
 
     private feed(chunk: string): void {
-        this.buffer += chunk;
-        if (this.buffer.length > MAX_BUFFER) {
-            this.buffer = this.buffer.slice(this.buffer.length - MAX_BUFFER);
-        }
+        this.sink?.write(chunk);
         const verdict = this.evaluate();
         // Notify on any change of status OR change of decision signature.
         // Same status with the same decision content is a no-op repaint;
