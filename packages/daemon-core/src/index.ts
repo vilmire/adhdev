@@ -470,6 +470,12 @@ export {
 // ── CLI Spec (adhdev:cli/spec@1) ──
 export { evaluate as evaluateSpec, evaluate } from './providers/spec/evaluator.js';
 export { loadSpec, resolveSpecPath } from './providers/spec/loader.js';
+export { createNativeHistoryDispatcher } from './providers/native-history/index.js';
+export type { ReaderId } from './providers/native-history/index.js';
+export {
+    readClaudeCliSession, readCodexCliSession,
+    readAntigravityCliSession, readHermesCliSession,
+} from './providers/native-history/index.js';
 export type {
     CliSpec, SpecState, ControlAction, Control,
     NotificationRule, DelegateTrigger, Section,

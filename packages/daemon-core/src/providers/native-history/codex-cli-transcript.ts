@@ -302,7 +302,7 @@ function parseSessionFile(
  * under ~/.codex/sessions/.
  * Returns `null` when the file is missing, empty, or yields no parseable messages.
  */
-export async function readSession(sessionPath: string): Promise<NativeHistorySession | null> {
+export function readSession(sessionPath: string): NativeHistorySession | null {
   if (!sessionPath || !path.isAbsolute(sessionPath)) return null;
   if (!fs.existsSync(sessionPath)) return null;
 
