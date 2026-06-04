@@ -5556,7 +5556,13 @@ export class DaemonCommandRouter {
                     const meshHost = resolveMeshHostStatus(mesh);
 
                     const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
-                    const pendingCoordinatorEventCount = getPendingMeshCoordinatorEvents(meshId).length;
+                    // See (B3) below: scope the peek to this daemon when the
+                    // caller doesn't tell us, otherwise scoped events look
+                    // missing and we falsely return a stale cache.
+                    const peekScope = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
+                        ? args.coordinatorDaemonId.trim()
+                        : (this.deps.statusInstanceId || undefined);
+                    const pendingCoordinatorEventCount = getPendingMeshCoordinatorEvents(meshId, peekScope).length;
                     const hadAggregateCache = this.aggregateMeshStatusCache.has(meshId);
                     if (!refreshRequested && pendingCoordinatorEventCount === 0) {
                         const cachedStatus = this.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
@@ -5903,12 +5909,18 @@ export class DaemonCommandRouter {
                         nodeStatuses.push(status);
                     }
 
-                    // (B3) Pass coordinatorDaemonId when the caller declares
-                    // it so v1.5 unicast routing (targetCoordinatorDaemonId)
-                    // delivers events to the right coordinator.
+                    // (B3) Resolve the coordinator daemon scope for the drain.
+                    // Emit-time always tags events with the worker's
+                    // targetCoordinatorDaemonId and writes them to the
+                    // scoped pending-events file. If the caller (MCP tool,
+                    // dashboard, etc.) doesn't tell us which coordinator
+                    // they're running under, fall back to *this daemon's*
+                    // ID — the caller reached us over our IPC/WS, so they
+                    // are by definition under this daemon. Falling back to
+                    // undefined would silently miss every scoped event.
                     const callerCoordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
                         ? args.coordinatorDaemonId.trim()
-                        : undefined;
+                        : (this.deps.statusInstanceId || undefined);
                     const pendingCoordinatorEvents = drainPendingMeshCoordinatorEvents(meshId, callerCoordinatorDaemonId);
                     const previewFreshness = (() => {
                         const localRepoRoot = nodeStatuses
