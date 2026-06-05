@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ChatControlsSection from './ChatControlsSection';
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
+import SessionInfoButton from './SessionInfoButton';
 import { getVisibleBarControls } from './ControlsBar';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
 import { useTransport } from '../../context/TransportContext';
@@ -418,6 +419,9 @@ export default function ChatPane({
                         <span className="chat-activity-toggle-count">{activityToggleCount}</span>
                     )}
                 </button>
+                <div className="ml-auto flex items-center gap-1">
+                    <SessionInfoButton sessionId={activeConv.sessionId} daemonId={activeConv.daemonId} />
+                </div>
             </div>
             <ChatMessageList
                 messages={allMessages}
