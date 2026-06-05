@@ -90,19 +90,24 @@ interface AddProviderSectionProps {
 function getRegistryBase(): string {
     if (typeof window === 'undefined') return 'https://api.adhf.dev/api/v1/registry'
     const host = window.location.hostname
-    // Production cloud dashboard → production API directly. The cloud
-    // dashboard's own origin (adhf.dev / pages.dev) is already on the
-    // server's CORS allowlist, so direct fetches are fine.
+    const port = window.location.port
+    // Standalone daemon serves the UI itself on port 3847 (or whatever was
+    // configured) and does NOT proxy /registry. Detect it explicitly and go
+    // straight to the production registry over CORS. Without this check we
+    // hit the SPA's catch-all index.html and JSON.parse blows up with
+    // "The string did not match the expected pattern" — which is what users
+    // were seeing when they clicked Add Provider in standalone mode.
+    if (port === '3847') return 'https://api.adhf.dev/api/v1/registry'
+    // Cloud dev (vite proxy at :3000): /registry → upstream API.
+    if (host === 'localhost' || host === '127.0.0.1') return '/registry'
+    // Production cloud dashboard → production API.
     if (host === 'adhf.dev' || host === 'adhdev-web.pages.dev') {
         return 'https://api.adhf.dev/api/v1/registry'
     }
-    // Everything else — cloud dev (vite proxy on :3000), standalone daemon
-    // (any origin: localhost, LAN IP, reverse-proxied custom domain,
-    // Tailscale, …), preview dashboard — uses a same-origin `/registry`
-    // path. In cloud dev the vite proxy forwards it. In standalone the
-    // daemon's HTTP server reverse-proxies it (see Round 44). Either way
-    // the browser never has to deal with CORS for the registry.
-    return '/registry'
+    // Preview cloud dashboard (dev.adhf.dev) and any other host → preview API.
+    // Keeps preview isolated from production data and avoids cross-origin
+    // failure when the dashboard is served from a non-production host.
+    return 'https://api-preview.adhf.dev/api/v1/registry'
 }
 
 export default function AddProviderSection({
