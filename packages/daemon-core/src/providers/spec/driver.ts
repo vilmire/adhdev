@@ -213,9 +213,10 @@ export class SpecDriver {
         // back). The hold lives on the driver, not the evaluator, so the
         // spec author doesn't have to think about debouncing.
         let evState = ev.state;
+        const busyHoldMs = this.spec.debounce?.busy_hold_ms ?? BUSY_HOLD_MS;
         if (this.currentStateId === 'busy' && evState.id === 'idle') {
             const ageMs = Date.now() - this.lastBusyAt;
-            if (ageMs < BUSY_HOLD_MS) {
+            if (ageMs < busyHoldMs) {
                 // Pin to the last seen busy state directly — currentEval can
                 // already be idle at this point (it tracks the previous tick,
                 // which during the flicker is just as likely to be idle as
