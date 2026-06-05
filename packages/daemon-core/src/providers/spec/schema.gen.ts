@@ -393,9 +393,6 @@ export const SCHEMA = {
         "nativeHistory": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-                "reader"
-            ],
             "properties": {
                 "reader": {
                     "type": "string",
@@ -405,7 +402,65 @@ export const SCHEMA = {
                         "antigravity-cli",
                         "hermes-cli"
                     ]
-                }
+                },
+                "source": {
+                    "oneOf": [
+                        { "$ref": "#/definitions/nativeHistoryJsonlSource" },
+                        { "$ref": "#/definitions/nativeHistorySqliteSource" }
+                    ]
+                },
+                "override_path": { "type": "string", "minLength": 1 }
+            }
+        },
+        "nativeHistoryMessageMap": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "content"],
+            "properties": {
+                "role": { "type": "string", "minLength": 1 },
+                "content": { "type": "string", "minLength": 1 },
+                "content_strip": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                },
+                "content_unwrap": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                },
+                "timestamp_ms": { "type": "string", "minLength": 1 },
+                "kind": { "type": "string", "minLength": 1 }
+            }
+        },
+        "nativeHistoryJsonlSource": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "path", "message_map"],
+            "properties": {
+                "kind": { "const": "jsonl" },
+                "path": { "type": "string", "minLength": 1 },
+                "file_pattern": { "type": "string", "minLength": 1 },
+                "recent_window_ms": { "type": "integer", "minimum": 0 },
+                "session_id_from": { "type": "string", "enum": ["filename_uuid", "first_record"] },
+                "session_id_path": { "type": "string", "minLength": 1 },
+                "message_filter": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["where"],
+                    "properties": { "where": { "type": "string", "minLength": 1 } }
+                },
+                "message_map": { "$ref": "#/definitions/nativeHistoryMessageMap" }
+            }
+        },
+        "nativeHistorySqliteSource": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "path", "session_query", "message_query", "message_map"],
+            "properties": {
+                "kind": { "const": "sqlite" },
+                "path": { "type": "string", "minLength": 1 },
+                "session_query": { "type": "string", "minLength": 1 },
+                "message_query": { "type": "string", "minLength": 1 },
+                "message_map": { "$ref": "#/definitions/nativeHistoryMessageMap" }
             }
         },
         "delegateTrigger": {
