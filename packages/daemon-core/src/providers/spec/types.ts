@@ -218,5 +218,13 @@ export interface CliSpec {
          *  Absorbs per-frame flicker in TUIs that stream output through
          *  the same region as the spinner. */
         busy_hold_ms?: number;
+        /** Min time after start() before a send_message is allowed to
+         *  reach the PTY. Banner paints + auth flows + skill listings
+         *  can keep the agent unable to accept input for several seconds
+         *  even though the idle regex matches a transient empty prompt.
+         *  Send_messages issued before this window are queued and drained
+         *  once the window passes and an idle state has actually been
+         *  observed. */
+        startup_grace_ms?: number;
     };
 }
