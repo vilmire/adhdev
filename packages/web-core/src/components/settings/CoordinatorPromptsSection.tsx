@@ -55,7 +55,10 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
         setLoading(true)
         setError(null)
         try {
-            const result: any = await sendCommand(daemonId, 'list_coordinator_prompts', {})
+            const raw: any = await sendCommand(daemonId, 'list_coordinator_prompts', {})
+            // Cloud transport wraps once; standalone returns the daemon body
+            // directly. See TransportContext jsdoc for the canonical warning.
+            const result = (raw?.result && typeof raw.result === 'object') ? raw.result : raw
             if (!result?.success) {
                 setError(result?.error || 'Failed to load')
                 return
@@ -85,7 +88,8 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
         setError(null)
         try {
             const content = drafts[key]?.[kind] || ''
-            const result: any = await sendCommand(daemonId, 'write_coordinator_prompt', { key, kind, content })
+            const raw: any = await sendCommand(daemonId, 'write_coordinator_prompt', { key, kind, content })
+            const result = (raw?.result && typeof raw.result === 'object') ? raw.result : raw
             if (!result?.success) {
                 setError(result?.error || 'Save failed')
                 return
