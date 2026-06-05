@@ -34,6 +34,13 @@ export interface NativeHistoryInput {
     providerSessionId?: string;
     historySessionId?: string;
     workspace?: string;
+    /** Daemon-side wall clock at the moment the session was registered.
+     *  Native-history file lookups use this as the lower bound: any file
+     *  whose mtime is before the current session started can't be from
+     *  this session, so it's excluded from newest-recent matching. The
+     *  caller (chat-history pipeline) populates this from the session
+     *  registry; specs/executor never need to know how it's sourced. */
+    sessionStartedAtMs?: number;
     args?: Record<string, unknown>;
 }
 
@@ -79,16 +86,22 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     //     glob, pick the newest matching file across all matches. Lets
     //     specs like ~/.gemini/antigravity-cli/brain/*/.system_generated/logs
     //     resolve transparently without a per-provider override.
+    // The session-start cutoff guarantees a fresh dashboard view can't
+    // pick up a transcript file from a session that ended before this
+    // one started. recent_window_ms only controls how far back we'd
+    // otherwise look for a matching file; the session-start floor wins
+    // when it's later.
+    const sessionFloor = typeof input.sessionStartedAtMs === 'number' ? input.sessionStartedAtMs : 0;
     let sourcePath: string | null = null;
     if (resolved.includes('*')) {
-        sourcePath = newestRecentFileAcrossGlob(resolved, filePat, windowMs);
+        sourcePath = newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
     } else {
         let stat: fs.Stats | null = null;
         try { stat = fs.statSync(resolved); } catch { return null; }
         if (stat.isFile()) {
             sourcePath = resolved;
         } else if (stat.isDirectory()) {
-            sourcePath = newestRecentFile(resolved, filePat, windowMs);
+            sourcePath = newestRecentFile(resolved, filePat, windowMs, sessionFloor);
         }
     }
     if (!sourcePath) return null;
@@ -161,7 +174,30 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
 
     try {
         let sessionRow: any;
-        try { sessionRow = db.prepare(src.session_query).get(); } catch { return null; }
+        try {
+            // session_query may reference `?` to receive the session's
+            // start-time floor in seconds (e.g. WHERE started_at >= ?).
+            // That gives spec authors a robust way to keep prior-session
+            // rows out of a fresh dashboard view without inventing their
+            // own time arithmetic in SQL. When the caller didn't pass a
+            // session floor (i.e. no live session is associated with the
+            // call), we use 0 so spec queries that bind `?` still produce
+            // a sane result rather than choking the whole executor.
+            const sessionFloorSeconds = typeof input.sessionStartedAtMs === 'number'
+                ? Math.floor(input.sessionStartedAtMs / 1000)
+                : 0;
+            const stmt = db.prepare(src.session_query);
+            // better-sqlite3 throws when the param count doesn't match,
+            // so try the bound form first and fall back to the no-arg
+            // form if the query doesn't reference `?`. This avoids
+            // depending on a parameterCount property that better-sqlite3
+            // doesn't expose.
+            try {
+                sessionRow = stmt.get(sessionFloorSeconds);
+            } catch {
+                sessionRow = stmt.get();
+            }
+        } catch { return null; }
         if (!sessionRow) return null;
         // First column of the first row is the session id.
         const sessionIdRaw = Object.values(sessionRow)[0];
@@ -288,9 +324,9 @@ function walkAllDirs(root: string, out: string[]): void {
     }
 }
 
-function newestRecentFileAcrossGlob(template: string, pattern: RegExp, windowMs: number): string | null {
+function newestRecentFileAcrossGlob(template: string, pattern: RegExp, windowMs: number, sessionFloorMs = 0): string | null {
     const dirs = expandDirGlob(template);
-    const cutoff = Date.now() - windowMs;
+    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
     let best: { p: string; mtime: number } | null = null;
     for (const d of dirs) {
         let entries: fs.Dirent[];
@@ -306,10 +342,10 @@ function newestRecentFileAcrossGlob(template: string, pattern: RegExp, windowMs:
     return best ? best.p : null;
 }
 
-function newestRecentFile(dir: string, pattern: RegExp, windowMs: number): string | null {
+function newestRecentFile(dir: string, pattern: RegExp, windowMs: number, sessionFloorMs = 0): string | null {
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
-    const cutoff = Date.now() - windowMs;
+    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
     let best: { p: string; mtime: number } | null = null;
     for (const e of entries) {
         if (!e.isFile() || !pattern.test(e.name)) continue;

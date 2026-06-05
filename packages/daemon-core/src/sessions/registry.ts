@@ -8,6 +8,9 @@ export interface SessionRuntimeTarget {
     cdpManagerKey?: string;
     adapterKey?: string;
     instanceKey?: string;
+    /** Wall clock at register time. native-history readers use it as a
+     *  cutoff so a fresh session can't show records from a prior one. */
+    spawnedAtMs?: number;
 }
 
 export class SessionRegistry {

@@ -42,6 +42,11 @@ export class SpecCliAdapter implements CliAdapter {
     private exited = false;
     private spawned = false;
     private providerSessionId: string | undefined;
+    /** Wall clock at the moment spawn() ran. Used as the cutoff for
+     *  native-history file selection so a prior session's transcript
+     *  can't leak into this session before the agent has written its
+     *  own records. */
+    private spawnedAtMs = 0;
 
     constructor(
         specPath: string,
@@ -79,6 +84,7 @@ export class SpecCliAdapter implements CliAdapter {
         if (this.spawned) return;
         this.driver.start();
         this.spawned = true;
+        this.spawnedAtMs = Date.now();
     }
 
     async sendMessage(text: string): Promise<void> {
@@ -252,7 +258,12 @@ export class SpecCliAdapter implements CliAdapter {
         };
     }
     getRuntimeMetadata(): unknown {
-        return { runtimeId: this.spec.id, runtimeKey: this.spec.id, displayName: this.spec.name };
+        return {
+            runtimeId: this.spec.id,
+            runtimeKey: this.spec.id,
+            displayName: this.spec.name,
+            spawnedAtMs: this.spawnedAtMs,
+        };
     }
     updateRuntimeMeta(meta?: Record<string, unknown>): void {
         if (meta && typeof meta.providerSessionId === 'string') {
