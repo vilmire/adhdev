@@ -27,16 +27,24 @@ export function createCliAdapter(
     extraEnv: Record<string, string>,
     transportFactory?: PtyTransportFactory,
 ): CliAdapter {
+    // Prefer the path provider-loader already resolved (it walks the
+    // compatibility[i].spec → specs/default.json → spec.json chain).
+    // Fall back to the legacy spec.json-in-provider-dir lookup if the
+    // loader didn't attach one — keeps out-of-tree providers that still
+    // use the original layout working.
+    const resolvedSpecPath = (provider as unknown as { _resolvedSpecPath?: string })._resolvedSpecPath;
     const dir = (provider as unknown as { _resolvedProviderDir?: string })._resolvedProviderDir;
-    if (dir) {
-        const specPath = path.join(dir, 'spec.json');
-        if (fs.existsSync(specPath)) {
-            try {
-                LOG.info('spec-route', `[${provider.type}] routing through SpecCliAdapter (spec.json present)`);
-                return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory);
-            } catch (err) {
-                LOG.warn('spec-route', `[${provider.type}] spec invalid, falling back to ProviderCliAdapter: ${(err as Error).message}`);
-            }
+    let specPath: string | undefined = resolvedSpecPath && fs.existsSync(resolvedSpecPath) ? resolvedSpecPath : undefined;
+    if (!specPath && dir) {
+        const legacy = path.join(dir, 'spec.json');
+        if (fs.existsSync(legacy)) specPath = legacy;
+    }
+    if (specPath) {
+        try {
+            LOG.info('spec-route', `[${provider.type}] routing through SpecCliAdapter (${path.relative(dir || '', specPath) || specPath})`);
+            return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory);
+        } catch (err) {
+            LOG.warn('spec-route', `[${provider.type}] spec invalid, falling back to ProviderCliAdapter: ${(err as Error).message}`);
         }
     }
     return new ProviderCliAdapter(provider, workingDir, cliArgs, extraEnv, transportFactory) as unknown as CliAdapter;

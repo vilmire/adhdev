@@ -1110,18 +1110,25 @@ export class ProviderLoader {
         //   3. spec.json — legacy single-spec layout
         // Missing files fall through silently to the next candidate.
         const candidates: string[] = [];
-        if (Array.isArray((base as any).compatibility) && currentVersion) {
+        if (Array.isArray((base as any).compatibility)) {
           for (const entry of (base as any).compatibility) {
             if (typeof entry?.spec !== 'string') continue;
-            if (!entry.ideVersion || this.matchesVersion(currentVersion, entry.ideVersion)) {
-              candidates.push(path.join(providerDir, entry.spec));
-            }
+            // If currentVersion is unknown (cli-manager hasn't probed yet)
+            // we still let compatibility entries that don't pin a version
+            // through, plus any entry whose pin matches.
+            const matches = !entry.ideVersion
+              || (currentVersion && this.matchesVersion(currentVersion, entry.ideVersion))
+              || !currentVersion;
+            if (matches) candidates.push(path.join(providerDir, entry.spec));
           }
         }
         candidates.push(path.join(providerDir, 'specs', 'default.json'));
         candidates.push(path.join(providerDir, 'spec.json'));
         const specPath = candidates.find((p: string) => fs.existsSync(p));
         if (specPath) {
+          // Hand the resolved spec path off to route.ts via a hidden field
+          // so the routing layer doesn't have to repeat the candidate walk.
+          (resolved as any)._resolvedSpecPath = specPath;
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           const { loadSpec } = require('./spec/loader.js');
           const r = loadSpec(specPath);
