@@ -110,6 +110,11 @@ export class SpecDriver {
      *  because the evaluator already moved past busy by the time the hold
      *  kicks in. */
     private lastBusyState: SpecEvaluation['state'] | null = null;
+    /** Timer that re-runs evaluate() once the hold window expires. Needed
+     *  because the PTY stops emitting once the agent finishes; without an
+     *  explicit wake-up there's nothing to trigger the busy → idle
+     *  downshift. */
+    private busyExpiryTimer: ReturnType<typeof setTimeout> | null = null;
     private specWatcher: fs.FSWatcher | null = null;
 
     constructor(private readonly opts: SpecDriverOpts) {
@@ -200,6 +205,19 @@ export class SpecDriver {
         this.reevaluate(true);
     }
 
+    /** Re-arm the timer that wakes the driver up after BUSY_HOLD_MS so it
+     *  can decide whether to downshift to idle. Always uses the most recent
+     *  hold value so a spec hot-reload that shortens the hold takes effect
+     *  on the next busy entry. Safe to call repeatedly; only the last call
+     *  fires. */
+    private scheduleBusyExpiry(holdMs: number): void {
+        if (this.busyExpiryTimer) clearTimeout(this.busyExpiryTimer);
+        this.busyExpiryTimer = setTimeout(() => {
+            this.busyExpiryTimer = null;
+            this.reevaluate();
+        }, Math.max(holdMs + 50, 100));
+    }
+
     private reevaluate(forceEmit = false): void {
         const screen = this.adapter.snapshot();
         const ev = evaluate(this.spec, screen);
@@ -227,6 +245,12 @@ export class SpecDriver {
         if (evState.id === 'busy') {
             this.lastBusyAt = Date.now();
             this.lastBusyState = evState;
+            // Schedule a re-evaluation when the hold window expires. PTYs
+            // typically stop emitting once the agent stops printing (the
+            // footer settles), so without an explicit timer the driver
+            // never wakes up to downshift to idle and the dashboard sees
+            // status stuck at generating long after the turn ended.
+            this.scheduleBusyExpiry(busyHoldMs);
         }
 
         const changed = forceEmit
