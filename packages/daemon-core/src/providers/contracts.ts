@@ -393,7 +393,60 @@ export interface ProviderMeshCoordinatorConfig {
     /** Copyable setup template. Supports {{meshId}}, {{adhdevMcpCommand}}, {{workspace}}, {{serverName}}. */
     template?: string;
   };
+  /**
+   * How the coordinator system prompt reaches the launched CLI. Replaces the
+   * old hard-coded `if (cliType === 'claude-cli') push --append-system-prompt`
+   * branches in router.ts: a new CLI now ships its injection rule in its
+   * provider.v1.json, no daemon code change needed. Users can override the
+   * rendered prompt or the injection mechanism per-provider; if omitted, no
+   * system prompt is injected (safe default — won't crash spawn with a flag
+   * the CLI doesn't recognize).
+   */
+  systemPromptInjection?: MeshCoordinatorSystemPromptInjection;
 }
+
+/**
+ * Declarative description of how a CLI accepts a session-scoped system prompt.
+ *
+ * Modes:
+ *   - cli_arg          → push `flag` + prompt onto spawn args                (Claude)
+ *   - config_override  → push `flag` + a templated key=value config override (Codex)
+ *   - context_file     → write prompt into a workspace markdown the CLI
+ *                        auto-loads as project context                       (Gemini, Antigravity)
+ *   - env_var          → expose prompt to the spawned process as $name       (Hermes)
+ *
+ * The prompt text is templated with `{prompt}` (raw) or `{prompt_json}`
+ * (JSON-encoded for embedding inside config-override strings).
+ */
+export type MeshCoordinatorSystemPromptInjection =
+  | {
+      mode: 'cli_arg';
+      /** Spawn-args flag, e.g. '--append-system-prompt'. The prompt becomes the next argv. */
+      flag: string;
+    }
+  | {
+      mode: 'config_override';
+      /** Spawn-args flag, e.g. '-c'. Followed by `template` with placeholders rendered. */
+      flag: string;
+      /** Template using {prompt} or {prompt_json}, e.g. 'developer_instructions={prompt_json}'. */
+      template: string;
+    }
+  | {
+      mode: 'context_file';
+      /** Workspace-relative file path the CLI auto-loads, e.g. 'AGENTS.md' or 'GEMINI.md'. */
+      path: string;
+      /**
+       * Optional wrapper around the prompt. Use `{prompt}` placeholder. Existing
+       * wrapper-delimited blocks are replaced rather than duplicated, so re-launching
+       * a coordinator doesn't pile up copies. If omitted, the prompt is appended raw.
+       */
+      wrapper?: string;
+    }
+  | {
+      mode: 'env_var';
+      /** Env-var name, e.g. 'HERMES_EPHEMERAL_SYSTEM_PROMPT'. */
+      name: string;
+    };
 
 export interface ProviderCompatibilityEntry {
   ideVersion: string;

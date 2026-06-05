@@ -5269,53 +5269,43 @@ export class DaemonCommandRouter {
                             };
                         }
 
-                        // Run the provider's MCP registration command.
+                        // Run the provider's MCP registration command under a
+                        // PTY. Some providers (agy, future bubbletea CLIs)
+                        // refuse to run without /dev/tty, so pipe-only
+                        // execFileSync silently no-ops the registration and
+                        // the coordinator ends up without any mcp tools. With
+                        // a real PTY the registration goes through and the
+                        // exit code tells us whether it actually persisted.
+                        let mcpRegistrationOk = false;
                         try {
-                            const { execFileSync: execCmdSync } = await import('node:child_process');
+                            const { execUnderPty } = await import('./mesh-coordinator.js');
                             const cmdParts = coordinatorSetup.command.trim().split(/\s+/);
                             const [regCmd, ...regArgs] = cmdParts;
-                            LOG.info('MeshCoordinator', `Running MCP registration: ${coordinatorSetup.command}`);
-                            execCmdSync(regCmd, regArgs, { stdio: 'pipe', timeout: 15_000 });
+                            LOG.info('MeshCoordinator', `Running MCP registration (pty): ${coordinatorSetup.command}`);
+                            const ptyResult = await execUnderPty(regCmd, regArgs, { cwd: workspace, timeoutMs: 20_000 });
+                            if (ptyResult.timedOut) {
+                                LOG.warn('MeshCoordinator', `MCP registration timed out — last output:\n${ptyResult.output.slice(-2000)}`);
+                            } else if (ptyResult.exitCode === 0) {
+                                mcpRegistrationOk = true;
+                                LOG.info('MeshCoordinator', `MCP registration succeeded (exit=0)`);
+                            } else {
+                                // Non-fatal — many providers return non-zero on duplicate registration.
+                                LOG.warn('MeshCoordinator', `MCP registration exit=${ptyResult.exitCode} signal=${ptyResult.signal} — output:\n${ptyResult.output.slice(-2000)}`);
+                            }
                         } catch (error: any) {
-                            // Non-fatal — server may already be registered (providers return exit 1 on duplicate).
-                            LOG.warn('MeshCoordinator', `MCP registration command failed (may be pre-registered): ${error?.message || error}`);
+                            LOG.warn('MeshCoordinator', `MCP registration command failed: ${error?.message || error}`);
                         }
 
-                        // Inject system prompt using provider-native methods.
-                        // Codex: -c 'instructions="..."' CLI config override
-                        // Gemini: write GEMINI.md to workspace (auto-loaded as context)
+                        // Inject system prompt declaratively from provider.v1.json.
                         const cliCmdArgs: string[] = [];
                         const cliCmdEnv: Record<string, string> = {};
                         if (cliCmdSystemPrompt) {
-                            if (cliType === 'codex-cli') {
-                                // Codex reads `developer_instructions` from config.toml as system instructions.
-                                // The -c flag overrides a config key for this session only.
-                                cliCmdArgs.push('-c', `developer_instructions=${JSON.stringify(cliCmdSystemPrompt)}`);
-                            } else if (cliType === 'gemini-cli') {
-                                // Gemini CLI auto-loads GEMINI.md from CWD as project context.
-                                // Write a temporary GEMINI.md to the workspace before launch.
-                                try {
-                                    const { writeFileSync: wfs, existsSync: efs, readFileSync: rfs } = await import('node:fs');
-                                    const geminiMdPath = `${workspace}/GEMINI.md`;
-                                    const marker = '<!-- adhdev-mesh-coordinator-prompt -->';
-                                    const markerEnd = '<!-- /adhdev-mesh-coordinator-prompt -->';
-                                    const block = `${marker}\n${cliCmdSystemPrompt}\n${markerEnd}`;
-                                    if (efs(geminiMdPath)) {
-                                        const existing = rfs(geminiMdPath, 'utf-8');
-                                        // Replace existing block or append
-                                        const replaced = existing.replace(
-                                            new RegExp(`${marker}[\\s\\S]*?${markerEnd}`, 'g'),
-                                            block,
-                                        );
-                                        wfs(geminiMdPath, replaced.includes(marker) ? replaced : `${existing}\n\n${block}`);
-                                    } else {
-                                        wfs(geminiMdPath, block);
-                                    }
-                                    LOG.info('MeshCoordinator', `Wrote coordinator prompt to ${workspace}/GEMINI.md`);
-                                } catch (e: any) {
-                                    LOG.warn('MeshCoordinator', `Could not write GEMINI.md: ${e?.message || e}`);
-                                }
-                            }
+                            const { applyMeshCoordinatorSystemPromptInjection } = await import('./mesh-coordinator.js');
+                            applyMeshCoordinatorSystemPromptInjection(
+                                cliCmdSystemPrompt,
+                                providerMeta?.meshCoordinator?.systemPromptInjection,
+                                { cliArgs: cliCmdArgs, launchEnv: cliCmdEnv, workspace, cliType },
+                            );
                         }
 
                         const cliCmdLaunch: any = await this.deps.cliManager.handleCliCommand('launch_cli', {
@@ -5351,7 +5341,7 @@ export class DaemonCommandRouter {
                             cliType,
                             workspace,
                             sessionId: cliCmdSessionId,
-                            mcpRegistered: true,
+                            mcpRegistered: mcpRegistrationOk,
                         };
                     }
 
@@ -5488,11 +5478,12 @@ export class DaemonCommandRouter {
                         launchEnv.HERMES_IGNORE_USER_CONFIG = '';
                     }
                     if (systemPrompt) {
-                        if (configFormat === 'hermes_config_yaml') {
-                            launchEnv.HERMES_EPHEMERAL_SYSTEM_PROMPT = systemPrompt;
-                        } else {
-                            cliArgs.push('--append-system-prompt', systemPrompt);
-                        }
+                        const { applyMeshCoordinatorSystemPromptInjection } = await import('./mesh-coordinator.js');
+                        applyMeshCoordinatorSystemPromptInjection(
+                            systemPrompt,
+                            providerMeta?.meshCoordinator?.systemPromptInjection,
+                            { cliArgs, launchEnv, workspace, cliType },
+                        );
                     }
                     if (cliType === 'claude-cli') {
                         cliArgs.push('--mcp-config', coordinatorSetup.configPath);

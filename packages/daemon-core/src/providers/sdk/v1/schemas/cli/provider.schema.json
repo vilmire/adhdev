@@ -306,6 +306,19 @@
             "instructions":        { "type": "string" },
             "template":            { "type": "string" }
           }
+        },
+        "systemPromptInjection": {
+          "description": "How the coordinator system prompt reaches the launched CLI. Replaces hard-coded router branches per CLI type; users may override the prompt body or the injection mechanism here.",
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["mode", "flag"],
+              "properties": { "mode": { "const": "cli_arg" }, "flag": { "type": "string" } } },
+            { "type": "object", "additionalProperties": false, "required": ["mode", "flag", "template"],
+              "properties": { "mode": { "const": "config_override" }, "flag": { "type": "string" }, "template": { "type": "string" } } },
+            { "type": "object", "additionalProperties": false, "required": ["mode", "path"],
+              "properties": { "mode": { "const": "context_file" }, "path": { "type": "string" }, "wrapper": { "type": "string" } } },
+            { "type": "object", "additionalProperties": false, "required": ["mode", "name"],
+              "properties": { "mode": { "const": "env_var" }, "name": { "type": "string" } } }
+          ]
         }
       }
     },
