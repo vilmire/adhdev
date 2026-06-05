@@ -82,6 +82,17 @@ export interface SpecDriverOpts {
     extraCliArgs?: string[];
 }
 
+/** Min time to stay in busy after the evaluator last reports it. Most TUIs
+ *  flicker their busy spinner on and off as layout reflows (claude streams
+ *  body text in the same region where the spinner lives, so the spinner
+ *  disappears mid-response and the footer-only frames score as idle). The
+ *  hold turns short idle gaps inside a single turn into "still busy", at
+ *  the cost of looking busy for a couple seconds after a turn actually
+ *  ends. Pick something long enough to cover the longest claude streaming
+ *  gap we've observed (~5s between spinner refreshes) without dragging
+ *  the post-turn idle indication noticeably. */
+const BUSY_HOLD_MS = 6000;
+
 export class SpecDriver {
     private spec!: CliSpec;
     private adapter!: TerminalAdapter;
@@ -90,6 +101,15 @@ export class SpecDriver {
     private currentEval: SpecEvaluation | null = null;
     private pickerInProgress: { control_id: string; phase: 'waiting'; spec: Control } | null = null;
     private delegateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    /** Timestamp of the last time the evaluator returned busy. Used to debounce
+     *  the busy → idle transition (see reevaluate). */
+    private lastBusyAt = 0;
+    /** The exact busy state object we last saw — held alongside lastBusyAt so
+     *  the hold can re-emit the same { id: 'busy', label, title } payload the
+     *  dashboard already learned about. currentEval can't fill this role
+     *  because the evaluator already moved past busy by the time the hold
+     *  kicks in. */
+    private lastBusyState: SpecEvaluation['state'] | null = null;
     private specWatcher: fs.FSWatcher | null = null;
 
     constructor(private readonly opts: SpecDriverOpts) {
@@ -183,8 +203,33 @@ export class SpecDriver {
     private reevaluate(forceEmit = false): void {
         const screen = this.adapter.snapshot();
         const ev = evaluate(this.spec, screen);
+
+        // Busy hold: many TUIs flicker between busy and idle every frame
+        // (claude in particular — its token counter appears and disappears
+        // as the layout reflows). Once we see busy, hold that state for
+        // BUSY_HOLD_MS before allowing a downshift to idle. Any state
+        // *other* than idle clears the hold immediately (approval is
+        // strictly more interesting than busy, so it shouldn't be held
+        // back). The hold lives on the driver, not the evaluator, so the
+        // spec author doesn't have to think about debouncing.
+        let evState = ev.state;
+        if (this.currentStateId === 'busy' && evState.id === 'idle') {
+            const ageMs = Date.now() - this.lastBusyAt;
+            if (ageMs < BUSY_HOLD_MS) {
+                // Pin to the last seen busy state directly — currentEval can
+                // already be idle at this point (it tracks the previous tick,
+                // which during the flicker is just as likely to be idle as
+                // busy), so we can't rely on it to recover the busy label.
+                evState = this.lastBusyState ?? evState;
+            }
+        }
+        if (evState.id === 'busy') {
+            this.lastBusyAt = Date.now();
+            this.lastBusyState = evState;
+        }
+
         const changed = forceEmit
-            || ev.state.id !== this.currentStateId
+            || evState.id !== this.currentStateId
             || !shallowSameModal(ev, this.currentEval)
             || !shallowSameControls(ev, this.currentEval);
 
@@ -194,15 +239,15 @@ export class SpecDriver {
 
         this.currentEval = ev;
         if (changed) {
-            this.currentStateId = ev.state.id;
+            this.currentStateId = evState.id;
             this.emit({
                 kind: 'state_changed',
-                state: ev.state,
+                state: evState,
                 modal: ev.modal ? { title: ev.modal.title, buttons: ev.modal.buttons.map(b => ({ index: b.index, label: b.label })) } : null,
                 controls: ev.controls.map(c => ({ id: c.id, label: c.label, action_type: c.actionType })),
             });
             for (const n of ev.notifications) this.emit({ kind: 'notification', id: n.id, title: n.title, body: n.body });
-            this.armOrCancelDelegateTimers(ev.state.id);
+            this.armOrCancelDelegateTimers(evState.id);
             if (this.opts.emitTrace) this.emit({ kind: 'spec_trace', entries: ev.trace });
         }
     }
