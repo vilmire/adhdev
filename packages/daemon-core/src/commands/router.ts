@@ -5147,6 +5147,19 @@ export class DaemonCommandRouter {
             case 'launch_mesh_coordinator': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 let cliType = typeof args?.cliType === 'string' ? args.cliType.trim() : '';
+                // Optional per-launch system-prompt addition. Dashboard or API
+                // callers (e.g. when spawning a mesh-node-specific coordinator)
+                // can pass extra context that gets appended to the rendered
+                // default prompt under the "## Additional Context" section.
+                // Going through buildCoordinatorSystemPrompt's userInstruction
+                // means user-level override files (~/.adhdev/coordinator-prompts)
+                // and this per-launch addition compose cleanly: an override
+                // wins outright, but if there's no override, the default
+                // prompt + the optional append.md file + this extra context
+                // all stack in declared order.
+                const extraSystemPrompt = typeof args?.extraSystemPrompt === 'string'
+                    ? args.extraSystemPrompt.trim()
+                    : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
 
                 try {
@@ -5257,7 +5270,7 @@ export class DaemonCommandRouter {
                         // Build coordinator prompt first — fail closed on errors.
                         let cliCmdSystemPrompt = '';
                         try {
-                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType });
+                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined });
                         } catch (error: any) {
                             const message = error?.message || String(error);
                             LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
@@ -5362,7 +5375,7 @@ export class DaemonCommandRouter {
                     // broken mesh state is visible instead of silently launching with weaker rules.
                     let systemPrompt = '';
                     try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType });
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined });
                     } catch (error: any) {
                         const message = error?.message || String(error);
                         LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);

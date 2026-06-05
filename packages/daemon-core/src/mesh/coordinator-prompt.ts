@@ -8,7 +8,22 @@
  *   3. How to orchestrate work across nodes
  *
  * The prompt is generated dynamically from the current mesh state.
+ *
+ * User customization:
+ *   ~/.adhdev/coordinator-prompts/<cliType>.md         — full override
+ *   ~/.adhdev/coordinator-prompts/<cliType>.append.md  — appended to default
+ *   ~/.adhdev/coordinator-prompts/default.md           — full override (any CLI)
+ *   ~/.adhdev/coordinator-prompts/default.append.md    — appended to default (any CLI)
+ *
+ * CLI-specific files take precedence over default.* files. The override file
+ * still gets the node/policy facts substituted via the same {{placeholders}}
+ * the daemon understands; an override that doesn't reference them just gets
+ * a static prompt, which is also fine.
  */
+
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import type {
     LocalMeshEntry,
@@ -29,6 +44,17 @@ export interface CoordinatorPromptContext {
 
 export function buildCoordinatorSystemPrompt(ctx: CoordinatorPromptContext): string {
     const { mesh, status, userInstruction, coordinatorCliType } = ctx;
+
+    // User-level override comes first, before we bother building the default.
+    // If the user gave us an override file, that's the whole prompt — we still
+    // expand {{mesh}}, {{nodes}}, {{policy}} placeholders against current
+    // state so an override can stay templated. An override file without
+    // placeholders is fine too; the prompt just becomes static.
+    const override = readUserPromptFile(coordinatorCliType, 'md');
+    if (override !== null) {
+        return expandPromptPlaceholders(override, ctx);
+    }
+
     const sections: string[] = [];
 
     // ── Identity ──
@@ -70,7 +96,85 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
         sections.push(mesh.coordinator.systemPromptSuffix);
     }
 
+    // User-level append runs after the daemon's default has been assembled.
+    // Same placeholder expansion as the override path so users can reference
+    // mesh state in their append text.
+    const append = readUserPromptFile(coordinatorCliType, 'append.md');
+    if (append !== null) {
+        sections.push(expandPromptPlaceholders(append, ctx));
+    }
+
     return sections.join('\n\n');
+}
+
+/**
+ * Look up a user-customization file under ~/.adhdev/coordinator-prompts/.
+ *
+ * Lookup order:
+ *   1. <cliType>.<suffix>   — provider-specific
+ *   2. default.<suffix>     — shared across providers
+ *
+ * Returns null when neither exists; an empty/whitespace-only file is also
+ * treated as "no override" so users can drop in a stub without affecting
+ * behavior. Read errors (permission, IO) are swallowed and logged-as-null
+ * intentionally: a broken override file should never block coordinator
+ * launch, it should just behave as if the file weren't there.
+ */
+function readUserPromptFile(cliType: string | undefined, suffix: string): string | null {
+    const dir = path.join(os.homedir(), '.adhdev', 'coordinator-prompts');
+    const candidates: string[] = [];
+    if (cliType) candidates.push(path.join(dir, `${cliType}.${suffix}`));
+    candidates.push(path.join(dir, `default.${suffix}`));
+    for (const p of candidates) {
+        try {
+            const text = fs.readFileSync(p, 'utf8');
+            if (text.trim()) return text;
+        } catch { /* missing file is the common case — keep going */ }
+    }
+    return null;
+}
+
+/**
+ * Expand `{{placeholder}}` tokens against current mesh state.
+ *
+ * Tokens we support today:
+ *   {{meshName}}        — mesh.name
+ *   {{repo}}            — mesh.repoIdentity
+ *   {{defaultBranch}}   — mesh.defaultBranch or empty
+ *   {{cliType}}         — coordinator CLI type or empty
+ *   {{nodes}}           — full node section (status if known, otherwise config)
+ *   {{policy}}          — full policy section
+ *   {{tools}}           — the canonical tools table
+ *   {{workflow}}        — the canonical orchestration workflow
+ *   {{rules}}           — the canonical rules section (with coordinatorNote)
+ *   {{toolExposurePreflight}} — the MCP-missing preflight reminder
+ *
+ * Unknown tokens are left as-is — that way typos are obvious in the rendered
+ * prompt instead of silently disappearing. Tokens are not recursive: an
+ * expanded value's own {{...}} content stays literal.
+ */
+function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContext): string {
+    const { mesh, status, coordinatorCliType } = ctx;
+    const nodesSection = status?.nodes?.length
+        ? buildNodeStatusSection(status.nodes)
+        : mesh.nodes.length
+            ? buildNodeConfigSection(mesh)
+            : '## Nodes\nNo nodes configured yet. Ask the user to add nodes with `adhdev mesh add-node`.';
+    const replacements: Record<string, string> = {
+        meshName: mesh.name,
+        repo: mesh.repoIdentity,
+        defaultBranch: mesh.defaultBranch || '',
+        cliType: coordinatorCliType || '',
+        nodes: nodesSection,
+        policy: buildPolicySection({ ...DEFAULT_MESH_POLICY, ...(mesh.policy || {}) }),
+        tools: TOOLS_SECTION,
+        workflow: WORKFLOW_SECTION,
+        rules: buildRulesSection(coordinatorCliType),
+        toolExposurePreflight: TOOL_EXPOSURE_PREFLIGHT_SECTION,
+    };
+    return template.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (m, key) => {
+        return Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : m;
+    });
 }
 
 // ─── Section Builders ───────────────────────────
