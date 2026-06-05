@@ -42,19 +42,68 @@ export interface CoordinatorPromptContext {
     coordinatorCliType?: string;
 }
 
+/**
+ * Compose the final coordinator prompt from four layers, in this precedence:
+ *
+ *   1. Per-launch `extraSystemPrompt` (always appended, as "## Additional
+ *      Context"). Never wins as a base — it's launch-scope context.
+ *   2. Mesh-level append (`mesh.coordinator.systemPromptAppend` or the legacy
+ *      `systemPromptSuffix`). Stacks after whichever base won.
+ *   3. User-file append (`~/.adhdev/coordinator-prompts/<cli>.append.md` or
+ *      `default.append.md`). Also stacks; same placeholder expansion as the
+ *      override path.
+ *   4. Base prompt, picked in this order:
+ *      a. `mesh.coordinator.systemPromptOverride` (mesh-level override)
+ *      b. user-file override (`~/.adhdev/coordinator-prompts/<cli>.md` or
+ *         `default.md`)
+ *      c. daemon default (assembled from identity/nodes/policy/tools/…)
+ *
+ * That layering lets a user customize prompts at three increasing scopes
+ * (machine, mesh, single launch) without losing the daemon's stock rules.
+ */
 export function buildCoordinatorSystemPrompt(ctx: CoordinatorPromptContext): string {
-    const { mesh, status, userInstruction, coordinatorCliType } = ctx;
+    const { mesh, userInstruction, coordinatorCliType } = ctx;
 
-    // User-level override comes first, before we bother building the default.
-    // If the user gave us an override file, that's the whole prompt — we still
-    // expand {{mesh}}, {{nodes}}, {{policy}} placeholders against current
-    // state so an override can stay templated. An override file without
-    // placeholders is fine too; the prompt just becomes static.
-    const override = readUserPromptFile(coordinatorCliType, 'md');
-    if (override !== null) {
-        return expandPromptPlaceholders(override, ctx);
+    // ── Pick the base prompt ──
+    const meshOverride = mesh.coordinator?.systemPromptOverride?.trim();
+    let base: string;
+    if (meshOverride) {
+        base = expandPromptPlaceholders(meshOverride, ctx);
+    } else {
+        const userOverride = readUserPromptFile(coordinatorCliType, 'md');
+        if (userOverride !== null) {
+            base = expandPromptPlaceholders(userOverride, ctx);
+        } else {
+            base = buildDefaultCoordinatorPrompt(ctx);
+        }
     }
 
+    const sections: string[] = [base];
+
+    // ── User-level append runs after whichever base won ──
+    const userAppend = readUserPromptFile(coordinatorCliType, 'append.md');
+    if (userAppend !== null) {
+        sections.push(expandPromptPlaceholders(userAppend, ctx));
+    }
+
+    // ── Mesh-level append (prefer the new field, fall back to the legacy alias) ──
+    const meshAppend = (mesh.coordinator?.systemPromptAppend
+        ?? mesh.coordinator?.systemPromptSuffix)?.trim();
+    if (meshAppend) {
+        sections.push(expandPromptPlaceholders(meshAppend, ctx));
+    }
+
+    // ── Per-launch context lands last so it's the most recent thing the
+    //     agent reads. Marked as Additional Context, not a rule update. ──
+    if (userInstruction) {
+        sections.push(`## Additional Context\n${userInstruction}`);
+    }
+
+    return sections.join('\n\n');
+}
+
+function buildDefaultCoordinatorPrompt(ctx: CoordinatorPromptContext): string {
+    const { mesh, status, coordinatorCliType } = ctx;
     const sections: string[] = [];
 
     // ── Identity ──
@@ -86,23 +135,6 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
 
     // ── Rules ──
     sections.push(buildRulesSection(coordinatorCliType));
-
-    // ── User instruction ──
-    if (userInstruction) {
-        sections.push(`## Additional Context\n${userInstruction}`);
-    }
-
-    if (mesh.coordinator?.systemPromptSuffix) {
-        sections.push(mesh.coordinator.systemPromptSuffix);
-    }
-
-    // User-level append runs after the daemon's default has been assembled.
-    // Same placeholder expansion as the override path so users can reference
-    // mesh state in their append text.
-    const append = readUserPromptFile(coordinatorCliType, 'append.md');
-    if (append !== null) {
-        sections.push(expandPromptPlaceholders(append, ctx));
-    }
 
     return sections.join('\n\n');
 }
@@ -201,6 +233,10 @@ function buildNodeStatusSection(nodes: RepoMeshNodeStatus[]): string {
         lines.push(`- ${healthIcon} **${n.machineLabel}** (nodeId: \`${n.nodeId}\`)`);
         lines.push(`  workspace: \`${n.workspace}\`${context ? ` | ${context}` : ''} | ${branch} | ${sessions}`);
         if (n.error) lines.push(`  ⚠️ ${n.error}`);
+        const nodePrompt = typeof (n as any).systemPrompt === 'string' ? (n as any).systemPrompt.trim() : '';
+        if (nodePrompt) {
+            lines.push(`  📌 Node instruction: ${indentFollowing(nodePrompt, '     ')}`);
+        }
     }
     return lines.join('\n');
 }
@@ -221,9 +257,24 @@ function buildNodeConfigSection(mesh: LocalMeshEntry): string {
         const explicitLabel = explicitMachineLabel ? ` label: **${explicitMachineLabel}** |` : '';
         const providerPriority = n.policy?.providerPriority?.length ? ` | providers: ${n.policy.providerPriority.join(', ')}` : '';
         lines.push(`- ${explicitLabel} nodeId: \`${n.id}\` | workspace: \`${n.workspace}\`${n.daemonId ? ` | daemon: \`${n.daemonId}\`` : ''}${providerPriority}${suffix}`);
+        const nodePrompt = typeof (n as any).systemPrompt === 'string' ? (n as any).systemPrompt.trim() : '';
+        if (nodePrompt) {
+            lines.push(`  📌 Node instruction: ${indentFollowing(nodePrompt, '     ')}`);
+        }
     }
     lines.push('', '_Use `mesh_status` to probe live health before delegating work._');
     return lines.join('\n');
+}
+
+/**
+ * Indent every line after the first by `pad`. Used so multi-line node
+ * instructions still visually nest under the node bullet without the
+ * second line dangling at column zero.
+ */
+function indentFollowing(text: string, pad: string): string {
+    const lines = text.split('\n');
+    if (lines.length === 1) return lines[0];
+    return [lines[0], ...lines.slice(1).map(l => pad + l)].join('\n');
 }
 
 function buildPolicySection(policy: RepoMeshPolicy): string {
@@ -323,6 +374,7 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Converge branches.** After worktree tasks: refine/fast-forward, or classify as \`pushed_feature_branch_needs_merge\` / \`blocked_review\` / \`cleanup_candidate\` / \`not_mergeable\`. Clean up with \`mesh_remove_node\`.
 - **Refinery is config-driven.** \`mesh_refine_node\` must run validation from \`.adhdev/refine.{json,yaml,yml}\` or \`repo-mesh.refine.*\`. Heuristics are scaffolding only.
 - **Submodule reachability = publish-needed.** \`submodule_reachability_failed\` → classify as \`blocked_review\`, request user approval to push to submodule main, then rerun \`mesh_refine_node\`.
+- **Honor per-node instructions.** When a node carries a 📌 Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words — quote it verbatim so the worker agent sees exactly what the user wrote.
 - **Never fabricate tool results.** Always call the actual tool.
 - **Keep the user informed.** One or two sentences after each delegation round.${coordinatorNote}`;
 }

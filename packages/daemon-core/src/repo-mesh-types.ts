@@ -247,7 +247,28 @@ export interface RepoMeshCoordinatorConfig {
     providerType?: string;
     /** Preferred node to run coordinator on (null = auto) */
     preferredNodeId?: string;
-    /** Additional system prompt context for coordinator */
+    /**
+     * Full mesh-level override for the coordinator system prompt. When set,
+     * replaces the daemon's rendered default and any user-file override
+     * (~/.adhdev/coordinator-prompts/<cli>.md). The per-launch
+     * extraSystemPrompt still composes on top — it always lands last as
+     * Additional Context. Supports the same {{placeholders}} the daemon's
+     * default template uses ({{meshName}}, {{repo}}, {{nodes}}, …).
+     */
+    systemPromptOverride?: string;
+    /**
+     * Mesh-level append. Composes after whichever base prompt won
+     * (override → user-file override → daemon default). Use this when you
+     * want extra rules for THIS mesh but otherwise the standard prompt is
+     * fine. Stacks with the user-file append (`<cli>.append.md`) — both
+     * apply if both are set.
+     */
+    systemPromptAppend?: string;
+    /**
+     * @deprecated Use systemPromptAppend. Kept as a fallback alias so
+     * existing meshes.json files keep working without a migration step;
+     * the daemon prefers systemPromptAppend when both are present.
+     */
     systemPromptSuffix?: string;
 }
 
@@ -284,6 +305,15 @@ export interface LocalMeshNodeEntry {
     machineId?: string;
     userOverrides: Partial<RepoMeshNodeCapabilities>;
     policy: RepoMeshNodePolicy;
+    /**
+     * Per-node instruction surfaced in the coordinator prompt so the LLM
+     * knows what each node is for (e.g. "this is the staging mirror — run
+     * only smoke tests here", or "use opus on this node, sonnet elsewhere").
+     * Empty/missing: omitted silently from the rendered prompt, no rule
+     * line about it gets added. The coordinator forwards/honors it when
+     * delegating; we don't enforce it at the daemon level.
+     */
+    systemPrompt?: string;
     /** For single-machine mesh: same daemon, different worktree */
     isLocalWorktree?: boolean;
     /** Branch this worktree tracks (set when created via clone_mesh_node) */
@@ -362,6 +392,8 @@ export interface RepoMeshNodeStatus {
     machineStatus?: string;
     isLocalWorktree?: boolean;
     worktreeBranch?: string;
+    /** Mirrored from LocalMeshNodeEntry.systemPrompt for coordinator-prompt rendering. */
+    systemPrompt?: string;
     health: RepoMeshNodeHealth;
     git?: GitRepoStatus;
     /**

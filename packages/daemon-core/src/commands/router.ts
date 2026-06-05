@@ -4786,7 +4786,14 @@ export class DaemonCommandRouter {
                             delete (policy as any).providerPriority;
                         }
                     }
-                    const node = updateNode(meshId, nodeId, { policy: policy as any });
+                    const patch: Record<string, unknown> = { policy: policy as any };
+                    if (typeof args?.systemPrompt === 'string') {
+                        const trimmed = (args.systemPrompt as string).trim();
+                        patch.systemPrompt = trimmed || undefined;
+                    } else if (args?.systemPrompt === null) {
+                        patch.systemPrompt = undefined;
+                    }
+                    const node = updateNode(meshId, nodeId, patch as any);
                     if (!node) return { success: false, error: 'Mesh node not found' };
                     return { success: true, node };
                 } catch (e: any) {

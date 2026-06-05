@@ -484,7 +484,14 @@ export function removeNode(meshId: string, nodeId: string): boolean {
 export function updateNode(
     meshId: string,
     nodeId: string,
-    opts: { userOverrides?: Partial<RepoMeshNodeCapabilities>; policy?: RepoMeshNodePolicy; worktreeBootstrap?: LocalMeshNodeEntry['worktreeBootstrap'] },
+    opts: {
+        userOverrides?: Partial<RepoMeshNodeCapabilities>;
+        policy?: RepoMeshNodePolicy;
+        worktreeBootstrap?: LocalMeshNodeEntry['worktreeBootstrap'];
+        /** Per-node instruction surfaced in the coordinator prompt. Pass an
+         *  empty string or undefined to clear it. */
+        systemPrompt?: string;
+    },
 ): LocalMeshNodeEntry | undefined {
     const config = loadMeshConfig();
     const mesh = config.meshes.find(m => m.id === meshId);
@@ -496,6 +503,14 @@ export function updateNode(
     if (opts.userOverrides) node.userOverrides = { ...node.userOverrides, ...opts.userOverrides };
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
     if (opts.worktreeBootstrap) node.worktreeBootstrap = opts.worktreeBootstrap;
+    if (Object.prototype.hasOwnProperty.call(opts, 'systemPrompt')) {
+        // Honor explicit clears: { systemPrompt: undefined } drops the field.
+        if (opts.systemPrompt && opts.systemPrompt.trim()) {
+            node.systemPrompt = opts.systemPrompt;
+        } else {
+            delete node.systemPrompt;
+        }
+    }
     mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(config);
     return node;
