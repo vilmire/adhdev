@@ -924,40 +924,6 @@ export class ProviderLoader {
     }
     if (providerDir) {
       resolved._resolvedProviderDir = providerDir;
-      // (spec migration) If the provider ships a spec.json with a
-      // native_history.reader, point provider.scripts.readNativeHistory at
-      // the existing per-provider reader (claude-cli / codex-cli /
-      // antigravity-cli / hermes-cli). This is the only handoff the
-      // chat-history pipeline needs — the readers themselves already know
-      // their formats and corner cases, we don't reinvent them.
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const fs = require('node:fs');
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const path = require('node:path');
-        const specPath = path.join(providerDir, 'spec.json');
-        if (fs.existsSync(specPath)) {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const { loadSpec } = require('./spec/loader.js');
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const { createNativeHistoryDispatcher } = require('./native-history/dispatcher.js');
-          const r = loadSpec(specPath);
-          const readerId = r.ok ? r.spec.native_history?.reader : undefined;
-          if (readerId) {
-            const dispatch = createNativeHistoryDispatcher(readerId);
-            resolved.scripts = { ...(resolved.scripts || {}) };
-            (resolved.scripts as any).readNativeHistory = (input: any) => dispatch(input);
-            (resolved as any).nativeHistory = {
-              format: readerId,
-              watchPath: undefined,
-              scripts: { readSession: 'readNativeHistory' },
-              mode: 'native-source',
-            };
-          }
-        }
-      } catch (err) {
-        // Best-effort — spec wiring failure must not break legacy providers.
-      }
     }
 
  // 1. Apply OS override
@@ -1118,6 +1084,78 @@ export class ProviderLoader {
       };
     }
 
+    // (spec migration) Late-binding spec.json native-history hook. Runs
+    // *after* every script-loading path (compatibility / defaultScriptDir /
+    // overrides) so it deterministically wins over a legacy v1 scripts.js
+    // export. Three modes, picked by spec.json's native_history block:
+    //   1. source     — declarative jsonl/sqlite executor (new-provider path,
+    //                   no daemon change needed for new on-disk formats)
+    //   2. override_path — provider-supplied reader file (escape hatch for
+    //                   exotic formats); module default-exports a reader fn
+    //   3. reader     — built-in reader id (claude-cli / codex-cli /
+    //                   antigravity-cli / hermes-cli), kept for backwards
+    //                   compatibility with the four shipped providers
+    if (providerDir) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require('node:fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const path = require('node:path');
+        const specPath = path.join(providerDir, 'spec.json');
+        if (fs.existsSync(specPath)) {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const { loadSpec } = require('./spec/loader.js');
+          const r = loadSpec(specPath);
+          const nh = r.ok ? r.spec.native_history : undefined;
+          if (nh) {
+            let reader: ((input: any) => any) | null = null;
+            let format = 'spec';
+
+            if (nh.source) {
+              // eslint-disable-next-line @typescript-eslint/no-var-requires
+              const { executeNativeHistory } = require('./spec/native-history-executor.js');
+              format = `spec-${nh.source.kind}`;
+              reader = (input: any) => executeNativeHistory(nh, input);
+            } else if (nh.override_path) {
+              const overrideFile = path.resolve(providerDir, nh.override_path);
+              if (fs.existsSync(overrideFile)) {
+                try {
+                  registerProviderScriptRootSafely(path.dirname(path.dirname(providerDir)));
+                  delete require.cache[require.resolve(overrideFile)];
+                  // eslint-disable-next-line @typescript-eslint/no-var-requires
+                  const mod = require(overrideFile);
+                  const fn = typeof mod === 'function' ? mod : (mod && typeof mod.default === 'function' ? mod.default : null);
+                  if (fn) {
+                    format = 'spec-override';
+                    reader = (input: any) => fn(input);
+                  }
+                } catch { /* fall through — leave native unavailable */ }
+              }
+            } else if (nh.reader) {
+              // eslint-disable-next-line @typescript-eslint/no-var-requires
+              const { createNativeHistoryDispatcher } = require('./native-history/dispatcher.js');
+              const dispatch = createNativeHistoryDispatcher(nh.reader);
+              format = nh.reader;
+              reader = (input: any) => dispatch(input);
+            }
+
+            if (reader) {
+              resolved.scripts = { ...(resolved.scripts || {}) };
+              (resolved.scripts as any).readNativeHistory = reader;
+              (resolved as any).nativeHistory = {
+                format,
+                watchPath: undefined,
+                scripts: { readSession: 'readNativeHistory' },
+                mode: 'native-source',
+              };
+            }
+          }
+        }
+      } catch {
+        // Best-effort — spec wiring failure must not break legacy providers.
+      }
+    }
+
     return resolved;
   }
 
@@ -1128,13 +1166,17 @@ export class ProviderLoader {
   private loadScriptsFromDir(type: string, scriptDir: string): Partial<ProviderScripts> | null {
     const providerDir = this.findProviderDirInternal(type);
     if (!providerDir) {
-      this.log(`  [loadScriptsFromDir] ${type}: providerDir not found`);
+      // No provider dir for this type — a spec-only provider with no
+      // legacy scripts/v1 layout is a normal configuration, not a
+      // problem to surface at INFO. resolve() calls this on every
+      // request; INFO spam every 200ms drowns out the real signal.
+      this.debugLog(`[loadScriptsFromDir] ${type}: providerDir not found`);
       return null;
     }
 
     const dir = path.join(providerDir, scriptDir);
     if (!fs.existsSync(dir)) {
-      this.log(`  [loadScriptsFromDir] ${type}: dir not found: ${dir}`);
+      this.debugLog(`[loadScriptsFromDir] ${type}: dir not found: ${dir}`);
       return null;
     }
 
@@ -1155,7 +1197,7 @@ export class ProviderLoader {
       try {
         delete require.cache[require.resolve(scriptsJs)];
         const loaded = require(scriptsJs);
-        this.log(`  [loadScriptsFromDir] ${type}: loaded scripts.js from ${dir} (${Object.keys(loaded).length} exports)`);
+        this.debugLog(`[loadScriptsFromDir] ${type}: loaded scripts.js from ${dir} (${Object.keys(loaded).length} exports)`);
         this.scriptsCache.set(dir, loaded);
         return loaded;
       } catch (e) {
