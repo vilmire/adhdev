@@ -5429,13 +5429,15 @@ export class DaemonCommandRouter {
                         // Inject system prompt declaratively from provider.v1.json.
                         const cliCmdArgs: string[] = [];
                         const cliCmdEnv: Record<string, string> = {};
+                        let cliCmdContextFilePath: string | undefined;
                         if (cliCmdSystemPrompt) {
                             const { applyMeshCoordinatorSystemPromptInjection } = await import('./mesh-coordinator.js');
-                            applyMeshCoordinatorSystemPromptInjection(
+                            const effect = applyMeshCoordinatorSystemPromptInjection(
                                 cliCmdSystemPrompt,
                                 providerMeta?.meshCoordinator?.systemPromptInjection,
                                 { cliArgs: cliCmdArgs, launchEnv: cliCmdEnv, workspace, cliType },
                             );
+                            cliCmdContextFilePath = effect.contextFilePath;
                         }
 
                         const cliCmdLaunch: any = await this.deps.cliManager.handleCliCommand('launch_cli', {
@@ -5445,6 +5447,22 @@ export class DaemonCommandRouter {
                             env: Object.keys(cliCmdEnv).length > 0 ? cliCmdEnv : undefined,
                             settings: { meshCoordinatorFor: meshId },
                         });
+
+                        // R48 inject-then-remove. Spawn was just kicked off above; agy and
+                        // gemini-cli read AGENTS.md / GEMINI.md exactly once at startup and
+                        // cache it for the rest of the session, so we can safely strip
+                        // the wrapper from disk shortly after launch. That keeps any
+                        // worker session launched into the same workspace later from
+                        // picking up our wrapper block.
+                        if (cliCmdLaunch?.success && cliCmdContextFilePath) {
+                            const stripPath = cliCmdContextFilePath;
+                            setTimeout(() => {
+                                void import('./mesh-coordinator.js').then(({ stripCoordinatorWrapperFile }) => {
+                                    stripCoordinatorWrapperFile(stripPath);
+                                    LOG.info('MeshCoordinator', `Stripped wrapper from ${stripPath} after launch settle (cli_command)`);
+                                }).catch(() => { /* best-effort */ });
+                            }, 5000);
+                        }
 
                         if (!cliCmdLaunch?.success) {
                             return { success: false, error: cliCmdLaunch?.error || 'Failed to launch CLI session' };
@@ -5623,13 +5641,15 @@ export class DaemonCommandRouter {
                         launchEnv.HERMES_HOME = dirname(mcpConfigPath);
                         launchEnv.HERMES_IGNORE_USER_CONFIG = '';
                     }
+                    let autoImportContextFilePath: string | undefined;
                     if (systemPrompt) {
                         const { applyMeshCoordinatorSystemPromptInjection } = await import('./mesh-coordinator.js');
-                        applyMeshCoordinatorSystemPromptInjection(
+                        const effect = applyMeshCoordinatorSystemPromptInjection(
                             systemPrompt,
                             providerMeta?.meshCoordinator?.systemPromptInjection,
                             { cliArgs, launchEnv, workspace, cliType },
                         );
+                        autoImportContextFilePath = effect.contextFilePath;
                     }
                     if (cliType === 'claude-cli') {
                         cliArgs.push('--mcp-config', coordinatorSetup.configPath);
@@ -5647,6 +5667,20 @@ export class DaemonCommandRouter {
                             meshCoordinatorFor: meshId
                         }
                     });
+
+                    // R48 inject-then-remove. See the cli_command branch for context;
+                    // same idea: strip the wrapper from disk ~5s after launch so the
+                    // user's AGENTS.md / GEMINI.md is untouched the moment any
+                    // worker session opens up in the same workspace.
+                    if (launchResult?.success && autoImportContextFilePath) {
+                        const stripPath = autoImportContextFilePath;
+                        setTimeout(() => {
+                            void import('./mesh-coordinator.js').then(({ stripCoordinatorWrapperFile }) => {
+                                stripCoordinatorWrapperFile(stripPath);
+                                LOG.info('MeshCoordinator', `Stripped wrapper from ${stripPath} after launch settle (auto_import)`);
+                            }).catch(() => { /* best-effort */ });
+                        }, 5000);
+                    }
 
                     if (!launchResult?.success) {
                         return { success: false, error: launchResult?.error || 'Failed to launch CLI session' };
