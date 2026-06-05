@@ -638,6 +638,7 @@ export class DaemonCliManager {
                 transport: 'pty',
                 adapterKey: key,
                 instanceKey: key,
+                spawnedAtMs: Date.now(),
             });
         } catch (spawnErr: any) {
             LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);

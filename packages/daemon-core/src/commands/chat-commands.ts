@@ -1003,6 +1003,22 @@ function hasSafeNativeHistoryMapping(args: {
 // other. historySessionId (the provider-native session key) is required to
 // establish ownership. hasSafeNativeHistoryMapping() enforces the same
 // invariant after the read; both guards must hold for native history to be used.
+/**
+ * Pull the session's spawnedAtMs out of the registry. Native-history
+ * file pickers use it as a "files older than this can't be from this
+ * session" floor; without it a fresh dashboard view would inherit the
+ * previous session's transcript whenever its file happened to be the
+ * newest match. Returns undefined when the session isn't registered
+ * (e.g. read_chat before the live session was wired up) — the executor
+ * treats undefined as "no floor".
+ */
+function sessionStartedAtMsFromRegistry(h: CommandHelpers, targetSessionId: string | undefined): number | undefined {
+    const sid = typeof targetSessionId === 'string' ? targetSessionId.trim() : '';
+    if (!sid) return undefined;
+    const target = h.ctx?.sessionRegistry?.get?.(sid);
+    return typeof target?.spawnedAtMs === 'number' ? target.spawnedAtMs : undefined;
+}
+
 function readCliProviderNativeHistory(agentStr: string, args: {
     canonicalHistory?: ProviderModule['canonicalHistory'];
     historySessionId?: string;
@@ -1013,6 +1029,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     historyBehavior?: ProviderModule['historyBehavior'];
     scripts?: ProviderScripts;
     excludeInProgressTurn?: boolean;
+    sessionStartedAtMs?: number;
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
     if (!args.historySessionId) {
         return {
@@ -1033,6 +1050,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         historyBehavior: args.historyBehavior,
         scripts: args.scripts as any,
         excludeInProgressTurn: args.excludeInProgressTurn,
+        sessionStartedAtMs: args.sessionStartedAtMs,
     });
     // Native transcripts are keyed by provider/runtime session identity. Falling
     // back to workspace makes concurrent local Codex/Hermes sessions alias each
@@ -1819,6 +1837,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 excludeRecentCount,
                 historyBehavior: provider?.historyBehavior,
                 scripts: provider?.scripts as any,
+                sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
             })
             : readProviderChatHistory(agentStr, {
                 canonicalHistory: provider?.nativeHistory,
@@ -2004,6 +2023,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         historyBehavior: provider?.historyBehavior,
                         scripts: provider?.scripts as any,
                         excludeInProgressTurn: returnedStatus === 'waiting_approval',
+                        sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
                     });
                 } catch (error: any) {
                     nativeHistoryError = error;
@@ -2240,6 +2260,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     excludeRecentCount: 0,
                     historyBehavior: provider?.historyBehavior,
                     scripts: provider?.scripts as any,
+                    sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
                 })
                 : readProviderChatHistory(agentStr, {
                     canonicalHistory: provider?.nativeHistory,

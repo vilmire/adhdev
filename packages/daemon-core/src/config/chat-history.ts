@@ -1421,6 +1421,7 @@ function callProviderNativeHistoryRead(
     historySessionId: string | undefined,
     workspace?: string,
     excludeInProgressTurn?: boolean,
+    sessionStartedAtMs?: number,
 ): ProviderNativeHistoryReadResult | null {
     const fn = getProviderNativeHistoryScript(scripts, canonicalHistory, 'readSession');
     if (!fn) return null;
@@ -1433,7 +1434,8 @@ function callProviderNativeHistoryRead(
         format: canonicalHistory?.format,
         watchPath: canonicalHistory?.watchPath,
         excludeInProgressTurn: excludeInProgressTurn === true,
-        args: { sessionId: normalizedSessionId, historySessionId: normalizedSessionId, workspace, excludeInProgressTurn: excludeInProgressTurn === true },
+        sessionStartedAtMs,
+        args: { sessionId: normalizedSessionId, historySessionId: normalizedSessionId, workspace, excludeInProgressTurn: excludeInProgressTurn === true, sessionStartedAtMs },
     });
     if (!result || typeof result !== 'object') return null;
     const records = normalizeProviderNativeHistoryRecords(agentType, normalizedSessionId, (result as any).messages || (result as any).records);
@@ -1456,11 +1458,12 @@ function buildNativeHistoryReadResult(
     historySessionId: string | undefined,
     workspace?: string,
     excludeInProgressTurn?: boolean,
+    sessionStartedAtMs?: number,
 ): ProviderNativeHistoryReadResult | null {
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
     const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
     if (!canonicalHistory || (!normalizedSessionId && !normalizedWorkspace) || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
-    return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn);
+    return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn, sessionStartedAtMs);
 }
 
 function materializeNativeHistoryToMirror(
@@ -1517,6 +1520,7 @@ export function readProviderChatHistory(
         historyBehavior?: ProviderHistoryBehavior;
         scripts?: ProviderNativeHistoryScripts;
         excludeInProgressTurn?: boolean;
+        sessionStartedAtMs?: number;
     } = {},
 ): {
     messages: HistoryMessage[];
@@ -1530,7 +1534,7 @@ export function readProviderChatHistory(
     unavailableReason?: string;
 } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
-        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn);
+        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs);
         if (!nativeResult) return { messages: [], hasMore: false, source: 'native-unavailable' };
         return {
             ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior),
