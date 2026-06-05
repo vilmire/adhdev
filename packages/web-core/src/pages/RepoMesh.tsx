@@ -277,6 +277,14 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
     const [savingPolicy, setSavingPolicy] = useState(false)
     const [savingNodePolicyId, setSavingNodePolicyId] = useState<string | null>(null)
     const [nodeProviderPriorityDrafts, setNodeProviderPriorityDrafts] = useState<ProviderPriorityDrafts>({})
+    // Local draft state for the coordinator-prompt fields. We don't commit on
+    // every keystroke (would send a server roundtrip per character); the
+    // explicit Save button calls update_mesh / update_mesh_node. The drafts
+    // are seeded from the loaded mesh whenever selectedMesh changes.
+    const [coordinatorPromptDraft, setCoordinatorPromptDraft] = useState<{ override: string; append: string }>({ override: '', append: '' })
+    const [savingCoordinatorPrompt, setSavingCoordinatorPrompt] = useState(false)
+    const [nodeSystemPromptDrafts, setNodeSystemPromptDrafts] = useState<Record<string, string>>({})
+    const [savingNodeSystemPromptId, setSavingNodeSystemPromptId] = useState<string | null>(null)
     const [meshQueue, setMeshQueue] = useState<MeshQueueEntry[]>([])
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
 
@@ -309,6 +317,18 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
     useEffect(() => {
         setNodeProviderPriorityDrafts(Object.fromEntries(
             (selectedMesh?.nodes || []).map(node => [node.id, readNodeProviderPriority(node)]),
+        ))
+    }, [selectedMesh])
+
+    useEffect(() => {
+        const coord = (selectedMesh as any)?.coordinator || {}
+        setCoordinatorPromptDraft({
+            override: typeof coord.systemPromptOverride === 'string' ? coord.systemPromptOverride : '',
+            append: typeof coord.systemPromptAppend === 'string' ? coord.systemPromptAppend
+                : typeof coord.systemPromptSuffix === 'string' ? coord.systemPromptSuffix : '',
+        })
+        setNodeSystemPromptDrafts(Object.fromEntries(
+            (selectedMesh?.nodes || []).map(node => [node.id, typeof (node as any).systemPrompt === 'string' ? (node as any).systemPrompt : '']),
         ))
     }, [selectedMesh])
 
@@ -524,6 +544,70 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
             setError(e?.message || 'Policy update failed')
         } finally {
             setSavingPolicy(false)
+        }
+    }
+
+    async function handleSaveCoordinatorPrompt() {
+        if (!daemonId || !selectedMeshId) return
+        const existingCoord = ((selectedMesh as any)?.coordinator || {}) as Record<string, unknown>
+        // Empty string clears the override; the daemon-side helper trims and
+        // drops empty values, so this lets the user explicitly "reset to
+        // default" by clearing the textarea.
+        const nextCoord: Record<string, unknown> = { ...existingCoord }
+        if (coordinatorPromptDraft.override.trim()) {
+            nextCoord.systemPromptOverride = coordinatorPromptDraft.override
+        } else {
+            delete nextCoord.systemPromptOverride
+        }
+        if (coordinatorPromptDraft.append.trim()) {
+            nextCoord.systemPromptAppend = coordinatorPromptDraft.append
+        } else {
+            delete nextCoord.systemPromptAppend
+        }
+        // Migrate away from the legacy field on save: if the user had a
+        // systemPromptSuffix value, it lands in systemPromptAppend now and
+        // the old key is dropped so the rendered prompt isn't double-counted.
+        delete nextCoord.systemPromptSuffix
+        try {
+            setSavingCoordinatorPrompt(true)
+            setError(null)
+            const res: any = await sendCommand(daemonId, 'update_mesh', {
+                meshId: selectedMeshId,
+                coordinator: nextCoord,
+            })
+            if (res?.success === false) {
+                setError(res.error || 'Coordinator prompt save failed')
+                return
+            }
+            await loadMeshes()
+        } catch (e: any) {
+            setError(e?.message || 'Coordinator prompt save failed')
+        } finally {
+            setSavingCoordinatorPrompt(false)
+        }
+    }
+
+    async function handleSaveNodeSystemPrompt(node: MeshNode) {
+        if (!daemonId || !selectedMeshId) return
+        const next = (nodeSystemPromptDrafts[node.id] || '').trim()
+        try {
+            setSavingNodeSystemPromptId(node.id)
+            setError(null)
+            const res: any = await sendCommand(daemonId, 'update_mesh_node', {
+                meshId: selectedMeshId,
+                nodeId: node.id,
+                // Empty string explicitly clears the field daemon-side.
+                systemPrompt: next,
+            })
+            if (res?.success === false) {
+                setError(res.error || 'Node instruction save failed')
+                return
+            }
+            await loadMeshes()
+        } catch (e: any) {
+            setError(e?.message || 'Node instruction save failed')
+        } finally {
+            setSavingNodeSystemPromptId(null)
         }
     }
 
@@ -917,6 +1001,62 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
                 {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving policy...</div>}
             </Section>
 
+            {/* Coordinator prompt — mesh-level override + append.
+                Daemon composes precedence as: per-launch extraSystemPrompt
+                (last), this mesh-level append, user-file append
+                (~/.adhdev/coordinator-prompts/<cli>.append.md), then the base
+                = this override OR user-file override OR daemon default. */}
+            <Section
+                title="Coordinator prompt"
+                description="Customize the system prompt for mesh coordinator sessions. Leave both fields empty to use the daemon's built-in prompt. Supports placeholders: {{meshName}}, {{repo}}, {{defaultBranch}}, {{cliType}}, {{nodes}}, {{policy}}, {{tools}}, {{workflow}}, {{rules}}, {{toolExposurePreflight}}."
+            >
+                <FormField
+                    label="Override (replaces default)"
+                    hint="When set, REPLACES the daemon's default base prompt for this mesh. Use placeholders if you still want node/policy/tools to render. Leave empty to keep the default."
+                >
+                    <textarea
+                        className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
+                        rows={6}
+                        value={coordinatorPromptDraft.override}
+                        onChange={e => setCoordinatorPromptDraft(d => ({ ...d, override: e.target.value }))}
+                        disabled={savingCoordinatorPrompt}
+                        placeholder="(empty — daemon default applies)"
+                    />
+                </FormField>
+                <FormField
+                    label="Append (added after the base)"
+                    hint="Always added after whichever base prompt wins. Use this for mesh-specific rules that should layer on top of the default."
+                >
+                    <textarea
+                        className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
+                        rows={4}
+                        value={coordinatorPromptDraft.append}
+                        onChange={e => setCoordinatorPromptDraft(d => ({ ...d, append: e.target.value }))}
+                        disabled={savingCoordinatorPrompt}
+                        placeholder="(empty — nothing appended at mesh layer)"
+                    />
+                </FormField>
+                <div className="mt-3 flex items-center gap-2">
+                    <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => void handleSaveCoordinatorPrompt()}
+                        disabled={savingCoordinatorPrompt}
+                    >
+                        {savingCoordinatorPrompt ? 'Saving…' : 'Save coordinator prompt'}
+                    </button>
+                    <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setCoordinatorPromptDraft({ override: '', append: '' })}
+                        disabled={savingCoordinatorPrompt}
+                        title="Clear both fields. Click Save to commit the reset."
+                    >
+                        Clear
+                    </button>
+                </div>
+            </Section>
+
             {/* Graph */}
             <Section
                 title="Visualization"
@@ -1076,6 +1216,36 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
                                                     {priorityStatus.launchBlockedMessage && (
                                                         <span className="ml-2 text-amber-400">({priorityStatus.launchBlockedMessage})</span>
                                                     )}
+                                                </div>
+                                            </FormField>
+                                            <FormField
+                                                label="Node instruction (optional)"
+                                                hint="Surfaced in the coordinator system prompt as 📌 Node instruction. The coordinator quotes it verbatim when delegating tasks to this node."
+                                            >
+                                                <textarea
+                                                    className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
+                                                    rows={3}
+                                                    value={nodeSystemPromptDrafts[node.id] ?? ''}
+                                                    onChange={event => {
+                                                        const next = event.target.value
+                                                        setNodeSystemPromptDrafts(prev => ({ ...prev, [node.id]: next }))
+                                                    }}
+                                                    onClick={event => event.stopPropagation()}
+                                                    disabled={savingNodeSystemPromptId === node.id}
+                                                    placeholder="e.g. 'Run only smoke tests here', 'Use opus on this node'"
+                                                />
+                                                <div className="mt-2 flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-secondary btn-sm shrink-0"
+                                                        onClick={event => {
+                                                            event.stopPropagation()
+                                                            void handleSaveNodeSystemPrompt(node)
+                                                        }}
+                                                        disabled={savingNodeSystemPromptId === node.id}
+                                                    >
+                                                        {savingNodeSystemPromptId === node.id ? 'Saving…' : 'Save instruction'}
+                                                    </button>
                                                 </div>
                                             </FormField>
                                         </div>
