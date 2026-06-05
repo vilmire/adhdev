@@ -4088,24 +4088,36 @@ export class DaemonCommandRouter {
                 const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim()
                     : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
                 if (!sessionId) return { success: false, error: 'targetSessionId required' };
+                // Fetch both lookups up front. We used to bail with "Session not
+                // found" when sessionRegistry forgot the SID (auto-cleanup,
+                // daemon restart with the session not yet restored, etc), which
+                // hid the coordinator-side metadata even though the
+                // coordinator-registry still has it. Now we return whichever
+                // side we have. The dashboard renders "no coordinator-specific
+                // prompt" only when *neither* side knows the session.
                 const target = this.deps.sessionRegistry.get(sessionId);
-                if (!target) return { success: false, error: 'Session not found', sessionId };
-                const adapter = this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter;
+                const coord = getCoordinatorForSession(sessionId);
+                if (!target && !coord) return { success: false, error: 'Session not found', sessionId };
+                const adapter = target
+                    ? this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter
+                    : undefined;
                 const runtimeMeta = (adapter && typeof (adapter as any).getRuntimeMetadata === 'function')
                     ? (adapter as any).getRuntimeMetadata()
                     : undefined;
-                const coord = getCoordinatorForSession(sessionId);
-                const providerMetaForSession = this.deps.providerLoader.resolve?.(target.providerType) || this.deps.providerLoader.getMeta(target.providerType);
+                const providerType = target?.providerType || coord?.cliType || '';
+                const providerMetaForSession = providerType
+                    ? this.deps.providerLoader.resolve?.(providerType) || this.deps.providerLoader.getMeta(providerType)
+                    : undefined;
                 return {
                     success: true,
                     session: {
                         sessionId,
-                        providerType: target.providerType,
+                        providerType,
                         providerName: providerMetaForSession?.name,
-                        transport: target.transport,
-                        workspace: (target as any).workspace,
-                        spawnedAtMs: (target as any).spawnedAtMs,
-                        providerSessionId: (target as any).providerSessionId,
+                        transport: target?.transport,
+                        workspace: (target as any)?.workspace || coord?.workspace,
+                        spawnedAtMs: (target as any)?.spawnedAtMs || coord?.startedAt,
+                        providerSessionId: (target as any)?.providerSessionId,
                         runtimeMetadata: runtimeMeta,
                     },
                     coordinator: coord ? {
