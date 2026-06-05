@@ -102,6 +102,17 @@ function validateRefs(spec: CliSpec): string[] {
         if (!stateIds.has(d.when_state)) errs.push(`delegate[${d.id}].when_state "${d.when_state}" unknown`);
     }
 
+    // native_history: exactly one of {reader, source, override_path}.
+    const nh = spec.native_history;
+    if (nh) {
+        const modes = (['reader', 'source', 'override_path'] as const).filter(k => (nh as Record<string, unknown>)[k] !== undefined);
+        if (modes.length === 0) {
+            errs.push('native_history must set exactly one of {reader, source, override_path}');
+        } else if (modes.length > 1) {
+            errs.push(`native_history sets ${modes.length} modes (${modes.join(', ')}); pick exactly one`);
+        }
+    }
+
     return errs;
 }
 
