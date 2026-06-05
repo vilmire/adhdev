@@ -1106,6 +1106,27 @@ export class ProviderLoader {
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           const { loadSpec } = require('./spec/loader.js');
           const r = loadSpec(specPath);
+          // Stub each control_bar entry as a provider.scripts.<id>. The
+          // upstream invoke_provider_script gate checks that the script
+          // name exists on provider.scripts before calling adapter.invokeScript;
+          // for spec providers the *actual* dispatch happens inside
+          // SpecCliAdapter.invokeScript which maps the name to control_bar.
+          // The stub is just a presence marker so the gate doesn't reject.
+          if (r.ok) {
+            const controls = r.spec.control_bar ?? [];
+            if (controls.length > 0) {
+              resolved.scripts = { ...(resolved.scripts || {}) };
+              for (const ctl of controls) {
+                if (!(resolved.scripts as any)[ctl.id]) {
+                  (resolved.scripts as any)[ctl.id] = (..._args: unknown[]) => ({
+                    __spec_control: true,
+                    controlId: ctl.id,
+                    actionType: ctl.action.type,
+                  });
+                }
+              }
+            }
+          }
           const nh = r.ok ? r.spec.native_history : undefined;
           if (nh) {
             let reader: ((input: any) => any) | null = null;
