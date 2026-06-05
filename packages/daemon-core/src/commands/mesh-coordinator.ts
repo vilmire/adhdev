@@ -270,41 +270,49 @@ function resolveMcpPort(explicitPort?: number): number | undefined {
  * (the previous fallback unconditionally pushed --append-system-prompt onto
  * every non-Claude CLI, which crashed agy on launch).
  */
+export interface CoordinatorInjectionEffect {
+  /** Absolute path the daemon wrote a wrapper-blocked file to. Only set for
+   *  context_file injection. R48 schedules a strip after launch so workers
+   *  don't see the wrapper on disk; R47's unregister cleanup uses it as a
+   *  fallback if the timer never fires (process crash, etc). */
+  contextFilePath?: string
+}
+
 export function applyMeshCoordinatorSystemPromptInjection(
   systemPrompt: string,
   injection: MeshCoordinatorSystemPromptInjection | undefined,
   ctx: { cliArgs: string[]; launchEnv: Record<string, string>; workspace: string; cliType: string },
-): void {
-  if (!systemPrompt || !injection) return
-  applyInjectionRule(systemPrompt, injection, ctx)
+): CoordinatorInjectionEffect {
+  if (!systemPrompt || !injection) return {}
+  return applyInjectionRule(systemPrompt, injection, ctx)
 }
 
 function applyInjectionRule(
   systemPrompt: string,
   injection: MeshCoordinatorSystemPromptInjection,
   ctx: { cliArgs: string[]; launchEnv: Record<string, string>; workspace: string; cliType: string },
-): void {
+): CoordinatorInjectionEffect {
   switch (injection.mode) {
     case 'cli_arg': {
-      if (!injection.flag) return
+      if (!injection.flag) return {}
       ctx.cliArgs.push(injection.flag, systemPrompt)
-      return
+      return {}
     }
     case 'config_override': {
-      if (!injection.flag || !injection.template) return
+      if (!injection.flag || !injection.template) return {}
       const rendered = injection.template
         .replace(/\{prompt_json\}/g, JSON.stringify(systemPrompt))
         .replace(/\{prompt\}/g, systemPrompt)
       ctx.cliArgs.push(injection.flag, rendered)
-      return
+      return {}
     }
     case 'env_var': {
-      if (!injection.name) return
+      if (!injection.name) return {}
       ctx.launchEnv[injection.name] = systemPrompt
-      return
+      return {}
     }
     case 'context_file': {
-      if (!injection.path) return
+      if (!injection.path) return {}
       const target = isAbsolute(injection.path)
         ? injection.path
         : join(ctx.workspace, injection.path)
@@ -348,16 +356,59 @@ function applyInjectionRule(
           writeFileSync(target, rendered, 'utf-8')
         }
         LOG.info('MeshCoordinator', `Wrote coordinator prompt to ${target} (${ctx.cliType})`)
+        return { contextFilePath: target }
       } catch (error: any) {
         LOG.warn('MeshCoordinator', `Could not write ${target}: ${error?.message || error}`)
+        return {}
       }
-      return
     }
     default:
       // Unknown future mode — skip silently. Adding the new mode is a spec-
       // language extension, not a runtime crash.
-      return
+      return {}
   }
+}
+
+/**
+ * Strip the daemon's wrapper block from a context_file we previously wrote.
+ *
+ * Used in two places:
+ *   1. R48 inject-then-remove: ~5s after spawn, after agy/gemini have read
+ *      the file into their in-memory system-prompt cache. Removing it from
+ *      disk at that point doesn't affect the running coordinator but keeps
+ *      worker sessions (or fresh non-coordinator launches) in the same
+ *      workspace from picking up our wrapper.
+ *   2. R47 unregister fallback: if the timer never fires (process crash,
+ *      kill -9), coordinator-registry.unregisterMeshCoordinator runs the
+ *      same logic when its entry is dropped.
+ *
+ * Idempotent: missing file is fine, missing sentinels are fine, returns
+ * silently. Leaves user-authored content outside the sentinels intact.
+ * Deletes the file outright if our wrapper was the only content.
+ */
+export function stripCoordinatorWrapperFile(filePath: string): void {
+  const OPEN = '<!-- adhdev-mesh-coordinator-prompt -->'
+  const CLOSE = '<!-- /adhdev-mesh-coordinator-prompt -->'
+  try {
+    if (!existsSync(filePath)) return
+    const existing = readFileSync(filePath, 'utf-8')
+    const openIdx = existing.indexOf(OPEN)
+    if (openIdx < 0) return
+    const closeIdx = existing.indexOf(CLOSE, openIdx)
+    if (closeIdx < 0) return
+    const remaining = (existing.slice(0, openIdx) + existing.slice(closeIdx + CLOSE.length))
+      .replace(/^\s*\n+/, '')
+      .replace(/\n+\s*$/, '')
+    if (!remaining.trim()) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const fs = require('node:fs')
+        fs.unlinkSync(filePath)
+      } catch { /* best-effort */ }
+    } else {
+      writeFileSync(filePath, remaining + '\n', 'utf-8')
+    }
+  } catch { /* best-effort */ }
 }
 
 export interface PtyExecResult {

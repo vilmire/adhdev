@@ -105,23 +105,8 @@ export function unregisterMeshCoordinator(sessionId: string): void {
     const filePath = `${workspace.replace(/\/$/, '')}/${target}`;
     try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const fs = require('node:fs');
-        if (!fs.existsSync(filePath)) return;
-        const existing: string = fs.readFileSync(filePath, 'utf-8');
-        const OPEN = '<!-- adhdev-mesh-coordinator-prompt -->';
-        const CLOSE = '<!-- /adhdev-mesh-coordinator-prompt -->';
-        const openIdx = existing.indexOf(OPEN);
-        if (openIdx < 0) return;
-        const closeIdx = existing.indexOf(CLOSE, openIdx);
-        if (closeIdx < 0) return;
-        const remaining = (existing.slice(0, openIdx) + existing.slice(closeIdx + CLOSE.length))
-            .replace(/^\s*\n+/, '')
-            .replace(/\n+\s*$/, '');
-        if (!remaining.trim()) {
-            try { fs.unlinkSync(filePath); } catch { /* best-effort */ }
-        } else {
-            try { fs.writeFileSync(filePath, remaining + '\n', 'utf-8'); } catch { /* best-effort */ }
-        }
+        const { stripCoordinatorWrapperFile } = require('../commands/mesh-coordinator.js');
+        stripCoordinatorWrapperFile(filePath);
     } catch { /* best-effort cleanup; never throw out of unregister */ }
 }
 
