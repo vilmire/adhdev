@@ -83,6 +83,14 @@ export interface SpecDriverOpts {
     extraCliArgs?: string[];
 }
 
+/** How long after start() to ignore "idle" readings before treating one
+ *  as a real prompt-ready signal. Most TUIs paint a banner + tool list +
+ *  status line on startup that can briefly score as "no state matches →
+ *  default idle"; firing a send_keys into that buffer gets the input
+ *  wiped when the banner clears. 2s covers the slow agents (hermes,
+ *  agy) without delaying snappy ones (claude/codex) by much. */
+const STARTUP_GRACE_MS = 2500;
+
 /** Min time to stay in busy after the evaluator last reports it. Most TUIs
  *  flicker their busy spinner on and off as layout reflows (claude streams
  *  body text in the same region where the spinner lives, so the spinner
@@ -99,6 +107,14 @@ export class SpecDriver {
     private adapter!: TerminalAdapter;
     private listeners = new Set<(ev: DashboardEvent) => void>();
     private currentStateId: string | null = null;
+    /** Have we ever seen the spec's idle state *after* the startup grace
+     *  window? Until we do, the agent's startup banner may still be
+     *  painting and any send_message we forward to the PTY will be wiped
+     *  when the banner clears the screen. Queue + drain on first valid
+     *  idle. */
+    private idleSeenOnce = false;
+    private startedAtMs = 0;
+    private pendingSends: string[] = [];
     private currentEval: SpecEvaluation | null = null;
     private pickerInProgress: { control_id: string; phase: 'waiting'; spec: Control } | null = null;
     private delegateTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -138,7 +154,18 @@ export class SpecDriver {
         return () => { this.listeners.delete(listener); };
     }
 
-    start(): void { this.adapter.start(); }
+    start(): void {
+        this.startedAtMs = Date.now();
+        this.adapter.start();
+        // Make sure we always re-evaluate once the startup grace has
+        // expired. Without an explicit wake-up the PTY can go quiet
+        // immediately after the banner paints (agy: the screen stays at
+        // the input prompt forever), there's no on_screen_changed event
+        // to trigger reevaluate, and any send_message we queued during
+        // the grace window would never drain.
+        const graceMs = this.spec.debounce?.startup_grace_ms ?? STARTUP_GRACE_MS;
+        setTimeout(() => this.reevaluate(), graceMs + 100);
+    }
 
     dispatch(cmd: DashboardCommand): void {
         switch (cmd.kind) {
@@ -265,6 +292,24 @@ export class SpecDriver {
         if (this.pickerInProgress) this.tryAdvancePicker(screen);
 
         this.currentEval = ev;
+        // First time we ever see idle (or any non-busy non-startup state),
+        // flush any queued send_message calls that arrived before the
+        // agent finished painting its banner. Subsequent idle/busy
+        // toggles don't retrigger.
+        // Wait at least the spec's startup_grace_ms after start() so we
+        // don't treat a transient "matches no state, default idle"
+        // reading during the banner paint as a real idle. After that,
+        // the first non-busy observation is a real prompt-ready signal
+        // and we drain any queued send_message calls.
+        const graceMs = this.spec.debounce?.startup_grace_ms ?? STARTUP_GRACE_MS;
+        const sinceStart = Date.now() - this.startedAtMs;
+        if (!this.idleSeenOnce && evState.id !== 'busy' && sinceStart >= graceMs) {
+            this.idleSeenOnce = true;
+            const queued = this.pendingSends.splice(0);
+            for (const text of queued) {
+                setTimeout(() => this.actuallySendMessage(text), 50);
+            }
+        }
         if (changed) {
             this.currentStateId = evState.id;
             this.emit({
@@ -309,6 +354,17 @@ export class SpecDriver {
     // ────────────────────────────────────────────────────────────────────
 
     private handleSendMessage(text: string): void {
+        if (!this.idleSeenOnce) {
+            // Agent is still drawing its startup banner. Queue and drain
+            // when we see idle so we don't fire keystrokes into a buffer
+            // that's about to be cleared.
+            this.pendingSends.push(text);
+            return;
+        }
+        this.actuallySendMessage(text);
+    }
+
+    private actuallySendMessage(text: string): void {
         const sm = this.spec.send_message;
         const perChar = sm.delay_ms_per_char ?? 0;
         const beforeSubmit = sm.delay_ms_before_submit ?? 0;

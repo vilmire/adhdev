@@ -187,11 +187,6 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
                 ? Math.floor(input.sessionStartedAtMs / 1000)
                 : 0;
             const stmt = db.prepare(src.session_query);
-            // better-sqlite3 throws when the param count doesn't match,
-            // so try the bound form first and fall back to the no-arg
-            // form if the query doesn't reference `?`. This avoids
-            // depending on a parameterCount property that better-sqlite3
-            // doesn't expose.
             try {
                 sessionRow = stmt.get(sessionFloorSeconds);
             } catch {
