@@ -87,12 +87,19 @@ export default function SessionInfoDialog({ sessionId, daemonId, onClose }: Prop
         setError(null)
         try {
             const raw = await sendCommand(daemonId, 'get_session_info', { targetSessionId: sessionId })
-            const result = (raw && typeof raw === 'object' ? raw : {}) as SessionInfoResponse
-            if (!result?.success) {
-                setError(result?.error || 'Failed to load session info')
+            // Cloud transport wraps the daemon response once
+            // ({ success, result: { success, ... } }) while standalone returns
+            // the daemon body directly. TransportContext's jsdoc warns about
+            // this; reading top-level `.success` only worked for standalone,
+            // so the cloud path rendered "no coordinator" even when the daemon
+            // returned coordinator metadata.
+            const envelope = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+            const inner = (envelope.result && typeof envelope.result === 'object' ? envelope.result : envelope) as SessionInfoResponse
+            if (!inner?.success) {
+                setError(inner?.error || 'Failed to load session info')
                 setData(null)
             } else {
-                setData(result)
+                setData(inner)
             }
         } catch (e: any) {
             setError(e?.message || String(e))
