@@ -17,6 +17,20 @@ export interface CoordinatorRegistryEntry {
     sessionId: string;
     workspace?: string;
     startedAt: number;
+    /** CLI type used to launch the coordinator (claude-cli / codex-cli / …). */
+    cliType?: string;
+    /** Final system prompt sent to the coordinator after all overrides, appends,
+     *  and extraSystemPrompt have been applied. Surfaced via the session-info
+     *  endpoint so users can audit exactly what prompt the agent saw. */
+    systemPrompt?: string;
+    /** Per-launch extraSystemPrompt the caller passed in, if any. Stored
+     *  separately from `systemPrompt` so the UI can show what the user
+     *  added vs. what the daemon's default template produced. */
+    extraSystemPrompt?: string;
+    /** How the prompt was actually injected (cli_arg / context_file / …). */
+    injection?: { mode: string; target?: string };
+    /** Path of the MCP config file the daemon wrote for this session. */
+    mcpConfigPath?: string;
 }
 
 const _registry = new Map<string, CoordinatorRegistryEntry>();

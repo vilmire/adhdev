@@ -38,7 +38,7 @@ import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../l
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
 import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
 import { buildSessionEntries } from '../status/builders.js';
-import { registerMeshCoordinator } from '../mesh/coordinator-registry.js';
+import { registerMeshCoordinator, getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
@@ -4077,6 +4077,49 @@ export class DaemonCommandRouter {
                 };
             }
 
+            // Session-info popup data. Aggregates whatever the daemon knows
+            // about a single live session into one envelope so the dashboard
+            // doesn't need to stitch together status + coordinator registry +
+            // session registry on the client. Includes the actual system
+            // prompt that was injected at launch when the session is a mesh
+            // coordinator — that's the "what prompt did the agent see?"
+            // question the info-icon dialog is meant to answer.
+            case 'get_session_info': {
+                const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim()
+                    : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
+                if (!sessionId) return { success: false, error: 'targetSessionId required' };
+                const target = this.deps.sessionRegistry.get(sessionId);
+                if (!target) return { success: false, error: 'Session not found', sessionId };
+                const adapter = this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter;
+                const runtimeMeta = (adapter && typeof (adapter as any).getRuntimeMetadata === 'function')
+                    ? (adapter as any).getRuntimeMetadata()
+                    : undefined;
+                const coord = getCoordinatorForSession(sessionId);
+                const providerMetaForSession = this.deps.providerLoader.resolve?.(target.providerType) || this.deps.providerLoader.getMeta(target.providerType);
+                return {
+                    success: true,
+                    session: {
+                        sessionId,
+                        providerType: target.providerType,
+                        providerName: providerMetaForSession?.name,
+                        transport: target.transport,
+                        workspace: (target as any).workspace,
+                        spawnedAtMs: (target as any).spawnedAtMs,
+                        providerSessionId: (target as any).providerSessionId,
+                        runtimeMetadata: runtimeMeta,
+                    },
+                    coordinator: coord ? {
+                        meshId: coord.meshId,
+                        startedAt: coord.startedAt,
+                        cliType: coord.cliType,
+                        systemPrompt: coord.systemPrompt,
+                        extraSystemPrompt: coord.extraSystemPrompt,
+                        injection: coord.injection,
+                        mcpConfigPath: coord.mcpConfigPath,
+                    } : null,
+                };
+            }
+
             case 'mark_session_seen': {
                 const sessionId = args?.sessionId;
                 if (!sessionId || typeof sessionId !== 'string') {
@@ -5336,7 +5379,23 @@ export class DaemonCommandRouter {
                         LOG.info('MeshCoordinator', `Launched ${cliType} coordinator (cli_command) for mesh ${meshId}`);
                         const cliCmdSessionId = cliCmdLaunch.sessionId || cliCmdLaunch.id;
                         if (cliCmdSessionId) {
-                            registerMeshCoordinator({ meshId, sessionId: cliCmdSessionId, workspace, startedAt: Date.now() });
+                            const cliCmdInjectionDecl = providerMeta?.meshCoordinator?.systemPromptInjection;
+                            registerMeshCoordinator({
+                                meshId,
+                                sessionId: cliCmdSessionId,
+                                workspace,
+                                startedAt: Date.now(),
+                                cliType,
+                                systemPrompt: cliCmdSystemPrompt || undefined,
+                                extraSystemPrompt: extraSystemPrompt || undefined,
+                                injection: cliCmdInjectionDecl ? {
+                                    mode: cliCmdInjectionDecl.mode,
+                                    target: 'flag' in cliCmdInjectionDecl ? cliCmdInjectionDecl.flag
+                                        : 'name' in cliCmdInjectionDecl ? cliCmdInjectionDecl.name
+                                        : 'path' in cliCmdInjectionDecl ? cliCmdInjectionDecl.path
+                                        : undefined,
+                                } : undefined,
+                            });
                         }
                         try {
                             const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
@@ -5522,7 +5581,24 @@ export class DaemonCommandRouter {
                     LOG.info('MeshCoordinator', `Launched ${cliType} coordinator for mesh ${meshId} in ${workspace}`);
                     const launchSessionId = launchResult.sessionId || launchResult.id;
                     if (launchSessionId) {
-                        registerMeshCoordinator({ meshId, sessionId: launchSessionId, workspace, startedAt: Date.now() });
+                        const autoImportInjectionDecl = providerMeta?.meshCoordinator?.systemPromptInjection;
+                        registerMeshCoordinator({
+                            meshId,
+                            sessionId: launchSessionId,
+                            workspace,
+                            startedAt: Date.now(),
+                            cliType,
+                            systemPrompt: systemPrompt || undefined,
+                            extraSystemPrompt: extraSystemPrompt || undefined,
+                            mcpConfigPath,
+                            injection: autoImportInjectionDecl ? {
+                                mode: autoImportInjectionDecl.mode,
+                                target: 'flag' in autoImportInjectionDecl ? autoImportInjectionDecl.flag
+                                    : 'name' in autoImportInjectionDecl ? autoImportInjectionDecl.name
+                                    : 'path' in autoImportInjectionDecl ? autoImportInjectionDecl.path
+                                    : undefined,
+                            } : undefined,
+                        });
                     }
 
                     // Record coordinator launch in task ledger
