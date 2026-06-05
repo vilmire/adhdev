@@ -88,11 +88,19 @@ interface AddProviderSectionProps {
 }
 
 function getRegistryBase(): string {
-    // Dev (vite proxy): /registry → https://api.adhf.dev/api/v1/registry
     if (typeof window === 'undefined') return 'https://api.adhf.dev/api/v1/registry'
     const host = window.location.hostname
+    const port = window.location.port
+    // Standalone daemon serves the UI itself on port 3847 (or whatever was
+    // configured) and does NOT proxy /registry. Detect it explicitly and go
+    // straight to the production registry over CORS. Without this check we
+    // hit the SPA's catch-all index.html and JSON.parse blows up with
+    // "The string did not match the expected pattern" — which is what users
+    // were seeing when they clicked Add Provider in standalone mode.
+    if (port === '3847') return 'https://api.adhf.dev/api/v1/registry'
+    // Cloud dev (vite proxy at :3000): /registry → upstream API.
     if (host === 'localhost' || host === '127.0.0.1') return '/registry'
-    // Production cloud dashboard → production API
+    // Production cloud dashboard → production API.
     if (host === 'adhf.dev' || host === 'adhdev-web.pages.dev') {
         return 'https://api.adhf.dev/api/v1/registry'
     }
@@ -146,7 +154,20 @@ export default function AddProviderSection({
         setLoading(true); setError(null)
         let cancelled = false
         fetch(buildUrl(0))
-            .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+            .then(async r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`)
+                // The dashboard's SPA fallback returns index.html on any
+                // unknown route, so an HTML response here means the request
+                // went to the daemon's static-file server (or any other
+                // non-registry origin) instead of an actual registry.
+                // JSON.parse on HTML would surface as the deeply unhelpful
+                // "did not match the expected pattern" Safari/Webkit message.
+                const ct = r.headers.get('content-type') || ''
+                if (!ct.includes('json')) {
+                    throw new Error(`registry returned ${ct || 'unknown'} (expected JSON). Check that the registry endpoint is reachable from this host.`)
+                }
+                return r.json()
+            })
             .then((data: { providers: ProviderMeta[]; total?: number }) => {
                 if (cancelled) return
                 setProviders(data.providers ?? [])
@@ -170,6 +191,8 @@ export default function AddProviderSection({
             try {
                 const resp = await fetch(buildUrl(offset))
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+                const ct = resp.headers.get('content-type') || ''
+                if (!ct.includes('json')) throw new Error(`registry returned ${ct || 'unknown'}`)
                 const data = await resp.json() as { providers: ProviderMeta[]; total?: number }
                 setProviders(prev => [...prev, ...(data.providers ?? [])])
                 setTotal(data.total ?? total)
