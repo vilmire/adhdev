@@ -120,6 +120,17 @@ export const SCHEMA = {
         },
         "native_history": {
             "$ref": "#/definitions/nativeHistory"
+        },
+        "cli_version_range": {
+            "type": "string",
+            "minLength": 1
+        },
+        "debounce": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "busy_hold_ms": { "type": "integer", "minimum": 0 }
+            }
         }
     },
     "definitions": {

@@ -189,6 +189,13 @@ export interface CliSpec {
     binary: string;
     spawn_args?: string[];
     env?: Record<string, string>;
+    /**
+     * Optional version constraint this spec is authored for, e.g. ">=2.1.0".
+     * Pure metadata used by tooling/UI — the actual version-to-spec match
+     * happens in provider-loader via the manifest's compatibility array.
+     * Spec authors include this so a misrouted spec is easy to spot.
+     */
+    cli_version_range?: string;
     send_message: {
         submit_key: string;
         delay_ms_before_submit?: number;
@@ -201,4 +208,15 @@ export interface CliSpec {
     notifications?: NotificationRule[];
     delegate?: DelegateTrigger[];
     native_history?: NativeHistoryConfig;
+    /**
+     * Per-spec debounce knobs. Defaults are conservative (busy_hold_ms
+     * 6000) and live in SpecDriver. Spec authors override here when a
+     * particular CLI flickers slower/faster than the default.
+     */
+    debounce?: {
+        /** Min time to stay in busy after the evaluator last reported it.
+         *  Absorbs per-frame flicker in TUIs that stream output through
+         *  the same region as the spinner. */
+        busy_hold_ms?: number;
+    };
 }

@@ -1101,8 +1101,27 @@ export class ProviderLoader {
         const fs = require('node:fs');
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const path = require('node:path');
-        const specPath = path.join(providerDir, 'spec.json');
-        if (fs.existsSync(specPath)) {
+        // Pick the right spec file for the detected CLI version. Resolution
+        // order:
+        //   1. compatibility[i].spec where ideVersion matches currentVersion
+        //      (lets a provider ship specs/2.0.json, specs/2.1.json, etc.
+        //      alongside the matching scriptDir)
+        //   2. specs/default.json — explicit fallback
+        //   3. spec.json — legacy single-spec layout
+        // Missing files fall through silently to the next candidate.
+        const candidates: string[] = [];
+        if (Array.isArray((base as any).compatibility) && currentVersion) {
+          for (const entry of (base as any).compatibility) {
+            if (typeof entry?.spec !== 'string') continue;
+            if (!entry.ideVersion || this.matchesVersion(currentVersion, entry.ideVersion)) {
+              candidates.push(path.join(providerDir, entry.spec));
+            }
+          }
+        }
+        candidates.push(path.join(providerDir, 'specs', 'default.json'));
+        candidates.push(path.join(providerDir, 'spec.json'));
+        const specPath = candidates.find((p: string) => fs.existsSync(p));
+        if (specPath) {
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           const { loadSpec } = require('./spec/loader.js');
           const r = loadSpec(specPath);
