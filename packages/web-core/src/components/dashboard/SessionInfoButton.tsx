@@ -23,6 +23,11 @@ export default function SessionInfoButton({ sessionId, daemonId }: Props) {
                 title="Session info — system prompt, MCP config, spawned at, …"
                 aria-label="Session info"
                 className="inline-flex items-center justify-center w-6 h-6 rounded-full text-text-secondary hover:text-text-primary hover:bg-surface-secondary text-sm leading-none"
+                /* The parent activity-toggle-bar disables pointer events so the
+                   floating overlay doesn't steal clicks from the chat body
+                   underneath. Re-enable them on the button itself or the click
+                   never lands. */
+                style={{ pointerEvents: 'auto' }}
             >
                 ⓘ
             </button>
