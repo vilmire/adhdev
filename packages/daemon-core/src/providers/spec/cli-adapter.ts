@@ -190,8 +190,53 @@ export class SpecCliAdapter implements CliAdapter {
     clearHistory(): void { /* no transcript buffer yet */ }
     updateRuntimeSettings(): void { /* no runtime settings in spec model yet */ }
     setServerConn(): void { /* server conn unused by SpecDriver */ }
-    invokeScript(): Promise<unknown> {
-        return Promise.resolve({ status: 'not_supported', reason: 'spec providers expose actions via control_bar, not script invocation' });
+    /**
+     * Map an invokeScript(name, args) call onto a control_bar entry.
+     *
+     * scriptName is matched against control.id. The control's action.type
+     * drives the dispatch:
+     *
+     *   send_keys     → click_control                   (e.g. stop)
+     *   open_picker   → click_control then resolve when extract_choices
+     *                   surface; choice index comes from args.choiceIndex
+     *                   or args.choice (string label match), defaulting to 0
+     *   attach_image  → attach_image dispatch; expects args.blob (data url
+     *                   or base64) and args.mime
+     *
+     * Callers that pass an unknown control id get a { not_found } response.
+     * No control matched, no driver call — keeps the surface honest.
+     */
+    invokeScript(scriptName: string, args?: Record<string, unknown>): Promise<unknown> {
+        const controls = this.spec.control_bar ?? [];
+        const ctl = controls.find(c => c.id === scriptName);
+        if (!ctl) {
+            return Promise.resolve({ ok: false, error: `unknown control: ${scriptName}` });
+        }
+        // Args may arrive as either { blob, mime } (direct invocation) or
+        // { params: { blob, mime } } (when the dashboard wraps script args
+        // in a params bag). Look at both.
+        const flat: Record<string, unknown> = { ...(args || {}) };
+        if (args && typeof args.params === 'object' && args.params) {
+            Object.assign(flat, args.params as Record<string, unknown>);
+        }
+        const action = ctl.action;
+        if (action.type === 'attach_image') {
+            const blob = typeof flat.blob === 'string' ? flat.blob : '';
+            const mime = typeof flat.mime === 'string' ? flat.mime : 'image/png';
+            if (!blob) return Promise.resolve({ ok: false, error: 'attach_image requires args.blob (base64 or data URL)' });
+            this.driver.dispatch({ kind: 'attach_image', blob, mime });
+            return Promise.resolve({ ok: true, effects: [{ type: 'attached_image', controlId: ctl.id }] });
+        }
+        // send_keys + open_picker both route through click_control. For
+        // open_picker the dashboard sees the picker modal arrive via a
+        // state_changed event, then submits the choice using
+        // resolveModal/click_modal_button. invokeScript's synchronous
+        // return is just an acknowledgement that the trigger fired.
+        this.driver.dispatch({ kind: 'click_control', control_id: ctl.id, payload: flat });
+        const effects: { type: string; controlId: string }[] = [];
+        if (action.type === 'open_picker') effects.push({ type: 'opened_picker', controlId: ctl.id });
+        else if (action.type === 'send_keys') effects.push({ type: 'sent_keys', controlId: ctl.id });
+        return Promise.resolve({ ok: true, effects });
     }
     getDebugSnapshot(): unknown {
         return {
