@@ -1081,43 +1081,6 @@ class StandaloneServer {
       return;
     }
 
-    // ─── Provider registry reverse proxy ─────────────────────────────
-    //
-    // The dashboard's Add Provider browser calls `/registry/*` against
-    // this daemon and we forward server-to-server to the production
-    // registry. This avoids the browser ever doing a cross-origin fetch,
-    // which means it works for *any* origin the user serves the dashboard
-    // from — localhost, 127.0.0.1, LAN IP, custom domain behind a reverse
-    // proxy, Tailscale, etc. Previously the browser fetched the production
-    // API directly and was blocked by CORS for anything not on the static
-    // whitelist (most setups).
-    //
-    // GET only — registry is read-only catalog data; nothing here can
-    // mutate state. No auth required either: the registry is public.
-    if (url.startsWith('/registry/') && method === 'GET') {
-      const registryBase = process.env.ADHDEV_REGISTRY_BASE?.trim() || 'https://api.adhf.dev/api/v1/registry';
-      // Strip the local /registry prefix; the upstream is already mounted
-      // at /registry on its own side of the host.
-      const upstreamPath = url.slice('/registry'.length) || '/';
-      void (async () => {
-        try {
-          const upstreamUrl = `${registryBase}${upstreamPath}`;
-          const upstream = await fetch(upstreamUrl, { method: 'GET' });
-          // Mirror status + body + content-type. Don't copy CORS headers
-          // (they'd be wrong for this hop) and don't copy hop-by-hop
-          // headers like content-encoding (fetch already decoded).
-          const contentType = upstream.headers.get('content-type') || 'application/json';
-          const body = await upstream.arrayBuffer();
-          res.writeHead(upstream.status, { 'Content-Type': contentType });
-          res.end(Buffer.from(body));
-        } catch (error: any) {
-          res.writeHead(502, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: error?.message || String(error) }));
-        }
-      })();
-      return;
-    }
-
     if (url.startsWith('/api/') && !this.isRequestAuthenticated(req, url)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Unauthorized. Provide dashboard session cookie or token auth.' }));
