@@ -156,7 +156,11 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     writeRaw(data: string): void {
-        this.driver.dispatch({ kind: 'send_message', text: data });
+        // Raw pty input — typed characters, escape codes, arrow keys —
+        // goes straight to the underlying terminal. send_message would
+        // append submit_key after every chunk, which is why typing in
+        // the dashboard terminal felt like "enter on every keystroke".
+        this.driver.dispatch({ kind: 'pty_write', data });
     }
 
     resize(cols: number, rows: number): void {

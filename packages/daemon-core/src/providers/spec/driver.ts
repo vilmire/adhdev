@@ -55,6 +55,7 @@ export type DashboardEvent =
 
 export type DashboardCommand =
     | { kind: 'send_message'; text: string }
+    | { kind: 'pty_write'; data: string }
     | { kind: 'click_control'; control_id: string; payload?: unknown }
     | { kind: 'click_modal_button'; index: number }
     | { kind: 'attach_image'; blob: string; mime: string }
@@ -142,6 +143,7 @@ export class SpecDriver {
     dispatch(cmd: DashboardCommand): void {
         switch (cmd.kind) {
             case 'send_message': this.handleSendMessage(cmd.text); return;
+            case 'pty_write': this.adapter.send_keys(cmd.data); return;
             case 'click_control': this.handleClickControl(cmd.control_id, cmd.payload); return;
             case 'click_modal_button': this.handleClickModalButton(cmd.index); return;
             case 'attach_image': this.handleAttachImage(cmd.blob, cmd.mime); return;
