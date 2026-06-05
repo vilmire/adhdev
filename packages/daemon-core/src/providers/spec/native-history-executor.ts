@@ -41,6 +41,15 @@ export interface NativeHistoryInput {
      *  caller (chat-history pipeline) populates this from the session
      *  registry; specs/executor never need to know how it's sourced. */
     sessionStartedAtMs?: number;
+    /** Env overrides the daemon set on the spawned CLI. The mesh
+     *  coordinator points hermes at a per-coordinator HERMES_HOME so
+     *  the hermes process writes its state.db into a tmp directory
+     *  instead of ~/.hermes. expandPath consults this map before
+     *  process.env so the native-history reader follows the spawned
+     *  child's view of HERMES_HOME / similar overrides; without it
+     *  the reader would always look at ~/.hermes and miss every
+     *  coordinator-session transcript. */
+    envOverrides?: Record<string, string>;
     args?: Record<string, unknown>;
 }
 
@@ -235,7 +244,17 @@ function expandPath(template: string, input: NativeHistoryInput): string | null 
     if (out.startsWith('~/') || out === '~') {
         out = path.join(os.homedir(), out.slice(2));
     }
-    out = out.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_m, name) => process.env[name] ?? '');
+    // ${VAR} expands from envOverrides (the spawned child's view) first,
+    // then process.env. ${VAR:-fallback} keeps the bash-style default
+    // so spec authors can say e.g. ${HERMES_HOME:-~/.hermes}/state.db
+    // and have it work both for coordinator-launched sessions (where
+    // HERMES_HOME is set to a tmpdir) and normal sessions.
+    out = out.replace(/\$\{([A-Z_][A-Z0-9_]*)(?::-(.*?))?\}/g, (_m, name, fallback) => {
+        const v = input.envOverrides?.[name] ?? process.env[name];
+        return v != null && v !== '' ? v : (fallback ?? '');
+    });
+    // Re-expand ~ in case the fallback used it.
+    if (out.startsWith('~/')) out = path.join(os.homedir(), out.slice(2));
     const now = new Date();
     const vars: Record<string, string> = {
         cwd: input.workspace ?? '',

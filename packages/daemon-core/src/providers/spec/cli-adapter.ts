@@ -47,6 +47,16 @@ export class SpecCliAdapter implements CliAdapter {
      *  can't leak into this session before the agent has written its
      *  own records. */
     private spawnedAtMs = 0;
+    /** Env vars the daemon set on the spawned child. Mesh coordinator
+     *  points hermes at a per-coordinator HERMES_HOME so the dashboard's
+     *  native-history reader needs that override to find the right
+     *  state.db; without it the reader sees ~/.hermes/state.db which
+     *  the coordinator-launched hermes never writes to. The choice to
+     *  redirect HERMES_HOME is a workaround for an unresolved hermes
+     *  upstream feature gap (see hermes-agent#23130 — runtime-supplied
+     *  MCP config), so this routing keeps the dashboard honest until
+     *  hermes ships a runtime MCP override. */
+    private spawnedEnv: Record<string, string> = {};
 
     constructor(
         specPath: string,
@@ -61,6 +71,7 @@ export class SpecCliAdapter implements CliAdapter {
         this.cliType = this.spec.id;
         this.cliName = this.spec.name;
         this.workingDir = workingDir;
+        this.spawnedEnv = { ...extraEnv };
 
         // cli-manager.ts allocates providerSessionId per launch and threads
         // it through resume.newSessionArgs as additional cliArgs (e.g.
@@ -263,6 +274,7 @@ export class SpecCliAdapter implements CliAdapter {
             runtimeKey: this.spec.id,
             displayName: this.spec.name,
             spawnedAtMs: this.spawnedAtMs,
+            spawnedEnv: this.spawnedEnv,
         };
     }
     updateRuntimeMeta(meta?: Record<string, unknown>): void {

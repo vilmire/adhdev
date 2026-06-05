@@ -1019,6 +1019,25 @@ function sessionStartedAtMsFromRegistry(h: CommandHelpers, targetSessionId: stri
     return typeof target?.spawnedAtMs === 'number' ? target.spawnedAtMs : undefined;
 }
 
+/**
+ * Pull the env vars the daemon set when it spawned this session's CLI.
+ * Mesh coordinator points hermes at a per-coordinator HERMES_HOME so
+ * the native-history reader needs that override to find the right
+ * state.db; without it the reader sees ~/.hermes/state.db and misses
+ * every coordinator-session transcript.
+ *
+ * Returns undefined when no SpecCliAdapter is in play (legacy
+ * providers / CDP) or when the adapter exposes no spawn env.
+ */
+function sessionSpawnEnvFromAdapter(h: CommandHelpers, targetSessionId: string | undefined): Record<string, string> | undefined {
+    const adapter = getTargetedCliAdapter(h, { targetSessionId }, undefined);
+    if (!adapter || typeof adapter.getRuntimeMetadata !== 'function') return undefined;
+    const meta = adapter.getRuntimeMetadata() as Record<string, unknown> | undefined;
+    const env = meta && typeof meta === 'object' ? (meta as Record<string, unknown>).spawnedEnv : undefined;
+    return env && typeof env === 'object' ? env as Record<string, string> : undefined;
+}
+
+
 function readCliProviderNativeHistory(agentStr: string, args: {
     canonicalHistory?: ProviderModule['canonicalHistory'];
     historySessionId?: string;
@@ -1030,6 +1049,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     scripts?: ProviderScripts;
     excludeInProgressTurn?: boolean;
     sessionStartedAtMs?: number;
+    envOverrides?: Record<string, string>;
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
     if (!args.historySessionId) {
         return {
@@ -1051,6 +1071,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         scripts: args.scripts as any,
         excludeInProgressTurn: args.excludeInProgressTurn,
         sessionStartedAtMs: args.sessionStartedAtMs,
+        envOverrides: args.envOverrides,
     });
     // Native transcripts are keyed by provider/runtime session identity. Falling
     // back to workspace makes concurrent local Codex/Hermes sessions alias each
@@ -1838,6 +1859,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 historyBehavior: provider?.historyBehavior,
                 scripts: provider?.scripts as any,
                 sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
+                envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
             })
             : readProviderChatHistory(agentStr, {
                 canonicalHistory: provider?.nativeHistory,
@@ -2024,6 +2046,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         scripts: provider?.scripts as any,
                         excludeInProgressTurn: returnedStatus === 'waiting_approval',
                         sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
+                envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
                     });
                 } catch (error: any) {
                     nativeHistoryError = error;
@@ -2261,6 +2284,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     historyBehavior: provider?.historyBehavior,
                     scripts: provider?.scripts as any,
                     sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
+                envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
                 })
                 : readProviderChatHistory(agentStr, {
                     canonicalHistory: provider?.nativeHistory,
