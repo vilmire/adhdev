@@ -15,6 +15,7 @@ import { validateReadChatResultPayload } from '../providers/read-chat-contract.j
 import { pickApprovalButton } from '../providers/approval-utils.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { isNativeSourceCanonicalHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
+import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import { LOG, getRecentLogs } from '../logging/logger.js';
 import { getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { buildChatMessageSignature, hashSignatureParts } from '../chat/chat-signatures.js';
@@ -322,6 +323,82 @@ function shouldPreserveNativeIdentity(providerType: string, sessionId: string, m
             && turnKey.startsWith(`${providerType}:native-turn:${sessionId}:`);
     }
     return true;
+}
+
+/**
+ * Drop the synthetic "user" message some CLIs surface in their native
+ * transcript when the daemon injects a coordinator system prompt
+ * (codex puts the AGENTS.md / developer_instructions block in as
+ * role=user; agy/claude/hermes have similar artifacts). The user can
+ * opt back into seeing it via the provider setting
+ * `showCoordinatorSystemPrompt`. Default is off — the prompt is still
+ * fully visible from the chat-header ⓘ "Session info" dialog.
+ *
+ * Matching rules:
+ *   1. Setting must be off (default).
+ *   2. There must be a registered coordinator entry for the session.
+ *   3. The candidate message is filtered when its role is user OR
+ *      system and its content either contains the prompt body verbatim,
+ *      OR contains the well-known coordinator marker
+ *      `adhdev-mesh-coordinator-prompt`. The marker covers context-file
+ *      cases (agy AGENTS.md / gemini GEMINI.md) where the CLI may wrap
+ *      its own preamble around our block. Verbatim-content covers
+ *      codex's developer_instructions echo.
+ *
+ * Returns the messages array unchanged when none of the rules match,
+ * so this is safe to apply unconditionally to every read_chat result.
+ */
+function maybeHideCoordinatorPromptMessage(
+    h: CommandHelpers,
+    providerType: string,
+    sessionId: string | undefined,
+    messages: ChatMessage[],
+): ChatMessage[] {
+    if (!Array.isArray(messages) || messages.length === 0) return messages;
+    if (!sessionId) return messages;
+    const loader = h.ctx?.providerLoader;
+    if (!loader) return messages;
+    let showSetting: unknown = undefined;
+    try {
+        showSetting = (loader as any).getSettingValue?.(providerType, 'showCoordinatorSystemPrompt');
+    } catch { /* unknown setting key for this provider — fall through */ }
+    if (showSetting === true) return messages;
+    const coord = getCoordinatorForSession(sessionId);
+    if (!coord) return messages;
+    const promptBody = typeof coord.systemPrompt === 'string' ? coord.systemPrompt : '';
+    const MARKER = 'adhdev-mesh-coordinator-prompt';
+    const filtered = messages.filter(m => {
+        const role = String((m as any)?.role || '').toLowerCase();
+        if (role !== 'user' && role !== 'system') return true;
+        const content = flattenContent((m as any)?.content);
+        if (!content) return true;
+        if (content.includes(MARKER)) return false;
+        if (promptBody && content.includes(promptBody.slice(0, Math.min(400, promptBody.length)))) return false;
+        return true;
+    });
+    if (filtered.length !== messages.length) {
+        LOG.debug('ChatFilter', `[${providerType}] hid ${messages.length - filtered.length} coordinator-prompt message(s) from ${sessionId}`);
+    }
+    return filtered;
+}
+
+/**
+ * Convenience wrapper used at every native-history call site: normalize +
+ * conditionally drop the coordinator system-prompt message. Avoids
+ * duplicating the filter at four read_chat code paths.
+ */
+function normalizeAndFilterNativeHistory(
+    h: CommandHelpers,
+    providerType: string,
+    args: any,
+    messages: ChatMessage[],
+    nativeSessionId?: string,
+): ChatMessage[] {
+    const normalized = normalizeNativeHistoryMessages(providerType, messages, nativeSessionId);
+    const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId
+        : typeof args?.sessionId === 'string' ? args.sessionId
+        : undefined;
+    return maybeHideCoordinatorPromptMessage(h, providerType, sessionId, normalized);
 }
 
 function normalizeNativeHistoryMessages(providerType: string, messages: ChatMessage[], nativeSessionId?: string): ChatMessage[] {
@@ -1329,7 +1406,7 @@ function collapseAdjacentDuplicateChatMessages(messages: ChatMessage[]): ChatMes
     return result;
 }
 
-function buildReadChatCommandResult(payload: Record<string, any>, args: any): CommandResult {
+function buildReadChatCommandResult(payload: Record<string, any>, args: any, h?: CommandHelpers): CommandResult {
     let validatedPayload: Record<string, any>;
     const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === 'object'
         ? payload.debugReadChat
@@ -1343,7 +1420,23 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
         return { success: false, error: error?.message || String(error) };
     }
     const messages = normalizeReadChatMessages(validatedPayload);
-    const visibleMessages = filterUserFacingChatMessages(messages);
+    // Last-mile coordinator-prompt filter. Different read_chat code paths
+    // produce the final messages array (native-history main path, codex
+    // exact-runtime-mirror fallback, daemon-side pty-parser, etc), so
+    // applying it here means we don't have to thread the filter through
+    // every one. Driven by the provider setting `showCoordinatorSystemPrompt`
+    // + the coordinator-registry entry for the target session.
+    const sessionIdHint = typeof args?.targetSessionId === 'string' ? args.targetSessionId
+        : typeof args?.sessionId === 'string' ? args.sessionId
+        : '';
+    const providerHint = typeof args?.cliType === 'string' ? args.cliType
+        : typeof args?.providerType === 'string' ? args.providerType
+        : typeof args?.agentType === 'string' ? args.agentType
+        : '';
+    const filteredMessages = h
+        ? maybeHideCoordinatorPromptMessage(h, providerHint, sessionIdHint, messages)
+        : messages;
+    const visibleMessages = filterUserFacingChatMessages(filteredMessages);
     const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
     const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
     const preservedPayloadFields = Object.fromEntries(Object.entries(payload).filter(([key]) => shouldPreserveReadChatPayloadField(key)));
@@ -1874,7 +1967,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
         if (supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.nativeHistory)) {
             const lookup = (result as any).lookup === 'workspace' ? 'workspace' : 'session';
             const messages = Array.isArray((result as any).messages)
-                ? normalizeNativeHistoryMessages(agentStr, (result as any).messages as ChatMessage[], (result as any)?.providerSessionId)
+                ? normalizeAndFilterNativeHistory(h, agentStr, args, (result as any).messages as ChatMessage[], (result as any)?.providerSessionId)
                 : [];
             const historyProviderSessionId = typeof (result as any)?.providerSessionId === 'string'
                 ? (result as any).providerSessionId
@@ -2057,7 +2150,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             // 2. Compute safeMapping with the same rules the v1 code used so the
             //    machine sees the same observation it always would have.
             const nativeMessages: ChatMessage[] = nativeHistory && Array.isArray(nativeHistory.messages)
-                ? normalizeNativeHistoryMessages(agentStr, nativeHistory.messages as ChatMessage[], nativeHistory.providerSessionId)
+                ? normalizeAndFilterNativeHistory(h, agentStr, args, nativeHistory.messages as ChatMessage[], nativeHistory.providerSessionId)
                 : [];
             const historyProviderSessionId = typeof nativeHistory?.providerSessionId === 'string'
                 ? nativeHistory.providerSessionId
@@ -2142,7 +2235,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     })
                     : null;
                 const liveWorkspaceNativeMessages = Array.isArray((liveWorkspaceNativeHistory as any)?.messages)
-                    ? normalizeNativeHistoryMessages(agentStr, (liveWorkspaceNativeHistory as any).messages as ChatMessage[], (liveWorkspaceNativeHistory as any)?.providerSessionId)
+                    ? normalizeAndFilterNativeHistory(h, agentStr, args, (liveWorkspaceNativeHistory as any).messages as ChatMessage[], (liveWorkspaceNativeHistory as any)?.providerSessionId)
                     : [];
                 const liveWorkspaceNativeProviderSessionId = typeof (liveWorkspaceNativeHistory as any)?.providerSessionId === 'string'
                     ? (liveWorkspaceNativeHistory as any).providerSessionId
@@ -2257,7 +2350,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ...(selectedProviderSessionId ? { providerSessionId: selectedProviderSessionId } : {}),
                 ...(selectedTranscriptAuthority ? { transcriptAuthority: selectedTranscriptAuthority } : {}),
                 ...(selectedCoverage ? { coverage: selectedCoverage } : {}),
-            }, args);
+            }, args, h);
         }
         // History-only path (no adapter). Same source-decision contract as
         // the adapter path above, but with no PTY messages — the machine
@@ -2298,7 +2391,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 });
             const lookup = (history as any)?.lookup === 'workspace' ? 'workspace' : 'session';
             const historyMessages = Array.isArray((history as any)?.messages)
-                ? normalizeNativeHistoryMessages(agentStr, (history as any).messages as ChatMessage[], (history as any)?.providerSessionId)
+                ? normalizeAndFilterNativeHistory(h, agentStr, args, (history as any).messages as ChatMessage[], (history as any)?.providerSessionId)
                 : [];
             const historyProviderSessionId = typeof (history as any)?.providerSessionId === 'string'
                 ? (history as any).providerSessionId
@@ -2352,7 +2445,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     ? { transcriptAuthority: (provider?.historyBehavior as any).transcriptAuthority }
                     : {}),
                 coverage: 'tail',
-            }, args);
+            }, args, h);
         } catch (error: any) {
             return { success: false, error: error?.message || `${transport} adapter not found` };
         }
@@ -2392,7 +2485,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return buildReadChatCommandResult(validated as Record<string, any>, args);
+                    return buildReadChatCommandResult(validated as Record<string, any>, args, h);
                 }
                 if (!extensionReadChatError) {
                     extensionReadChatError = 'extension read_chat returned a non-object payload';
@@ -2431,7 +2524,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         messages: stream.messages || [],
                         status: stream.status,
                         agentType: stream.agentType,
-                    }, args);
+                    }, args, h);
                 }
             }
         }
@@ -2471,7 +2564,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return buildReadChatCommandResult(validated as Record<string, any>, args);
+                    return buildReadChatCommandResult(validated as Record<string, any>, args, h);
                 }
                 if (!webviewReadChatError) {
                     webviewReadChatError = 'webview read_chat returned a non-object payload';
@@ -2521,7 +2614,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return buildReadChatCommandResult(validated as Record<string, any>, args);
+                    return buildReadChatCommandResult(validated as Record<string, any>, args, h);
                 }
                 if (!ideReadChatError) {
                     ideReadChatError = 'ide read_chat returned a non-object payload';

@@ -118,6 +118,12 @@ export default function SessionInfoDialog({ sessionId, daemonId, onClose }: Prop
             aria-label="Session info"
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
             onClick={onClose}
+            /* SessionInfoButton's parent (the chat-activity-toggle-bar) has
+               pointer-events: none so the bar doesn't steal clicks from the
+               chat body. We portal-by-fixed-positioning visually, but the DOM
+               parent chain still inherits that, so clicks on the backdrop —
+               and on Close/✕ — would silently fall through. Re-enable here. */
+            style={{ pointerEvents: 'auto' }}
         >
             <div
                 className="bg-[var(--surface-primary)] text-text-primary border border-border-default rounded-lg shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col"
@@ -178,10 +184,10 @@ export default function SessionInfoDialog({ sessionId, daemonId, onClose }: Prop
                                 <Row k="MCP config" v={<Mono>{data.coordinator.mcpConfigPath}</Mono>} />
                             )}
                             {data.coordinator.extraSystemPrompt && (
-                                <Block title="Per-launch extra prompt" body={data.coordinator.extraSystemPrompt} />
+                                <Block title="Per-launch extra prompt" body={data.coordinator.extraSystemPrompt} defaultOpen />
                             )}
                             {data.coordinator.systemPrompt && (
-                                <Block title="Final system prompt" body={data.coordinator.systemPrompt} collapsed />
+                                <Block title="Final system prompt (click to expand)" body={data.coordinator.systemPrompt} />
                             )}
                         </Section>
                     )}
@@ -232,19 +238,20 @@ function Mono({ children }: { children: React.ReactNode }) {
     return <code className="font-mono text-xs">{children}</code>
 }
 
-function Block({ title, body, collapsed }: { title: string; body: string; collapsed?: boolean }) {
-    const [open, setOpen] = useState(!collapsed)
+function Block({ title, body, defaultOpen = false }: { title: string; body: string; defaultOpen?: boolean }) {
+    const [open, setOpen] = useState(defaultOpen)
     return (
         <div className="mt-2">
             <button
                 type="button"
                 onClick={() => setOpen(o => !o)}
                 className="text-xs uppercase tracking-wide text-text-secondary hover:text-text-primary"
+                style={{ pointerEvents: 'auto' }}
             >
-                {open ? '▾' : '▸'} {title} ({body.length.toLocaleString()} chars)
+                {open ? '▾' : '▸'} {title}
             </button>
             {open && (
-                <pre className="mt-1 p-2 bg-[var(--surface-secondary)] border border-border-subtle rounded text-xs whitespace-pre-wrap overflow-x-auto max-h-72 overflow-y-auto">
+                <pre className="mt-1 p-2 bg-[var(--surface-secondary)] border border-border-subtle rounded text-xs whitespace-pre-wrap overflow-x-auto max-h-96 overflow-y-auto">
                     {body}
                 </pre>
             )}
