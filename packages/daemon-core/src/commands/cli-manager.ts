@@ -638,7 +638,17 @@ export class DaemonCliManager {
                 transport: 'pty',
                 adapterKey: key,
                 instanceKey: key,
-                spawnedAtMs: Date.now(),
+                // attachExisting === true means we're restoring an already-spawned
+                // hosted runtime after a daemon restart, not starting a fresh PTY.
+                // The real spawn time is in the past and we don't have it on the
+                // restored descriptor; pinning spawnedAtMs to Date.now() in that
+                // case would push the native-history session-floor cutoff past
+                // every existing transcript file, so the agy/hermes/claude reader
+                // would return null even though the transcript on disk is fresh.
+                // 0 disables the floor for this session — recent_window_ms in the
+                // spec still bounds how far back we look. Fresh launches still
+                // get a proper floor so prior-session leak protection holds.
+                spawnedAtMs: attachExisting ? 0 : Date.now(),
             });
         } catch (spawnErr: any) {
             LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);
