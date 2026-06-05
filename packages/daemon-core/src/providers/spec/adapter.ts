@@ -23,7 +23,22 @@
  */
 'use strict';
 
-import { Terminal } from '@xterm/headless';
+// @xterm/headless ships as CJS only but stamps __esModule = true on its
+// export object, so tsup's __toESM helper neither synthesizes a `default`
+// property (it sees the __esModule marker and trusts it) nor preserves
+// the named `Terminal` export through a plain ESM-style
+// `import { Terminal } from '@xterm/headless'`. The first symptom we saw
+// from this was the published `adhdev` CLI exploding with
+// "Named export 'Terminal' not found" inside the mcp ipc bootstrap.
+//
+// Pull Terminal off the namespace import (which tsup compiles into a
+// shim that *does* see the package's own Terminal property) instead.
+// Type-only import keeps the .d.ts surface honest.
+import type { Terminal as TerminalType } from '@xterm/headless';
+import * as xtermHeadlessNs from '@xterm/headless';
+const TerminalCtor: { new (...args: unknown[]): TerminalType } =
+    (xtermHeadlessNs as any).Terminal
+    ?? (xtermHeadlessNs as any).default?.Terminal;
 import { NodePtyTransportFactory, type PtyRuntimeTransport, type PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 
 export interface TerminalAdapterOpts {
@@ -57,7 +72,7 @@ export interface TerminalAdapterHandlers {
 }
 
 export class TerminalAdapter {
-    private term: Terminal;
+    private term: TerminalType;
     private pty: PtyRuntimeTransport | null = null;
     private factory: PtyTransportFactory;
     private cols: number;
@@ -77,7 +92,7 @@ export class TerminalAdapter {
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         this.factory = opts.transportFactory ?? new NodePtyTransportFactory();
-        this.term = new Terminal({ cols: this.cols, rows: this.rows, allowProposedApi: true, scrollback: 1000 });
+        this.term = new TerminalCtor({ cols: this.cols, rows: this.rows, allowProposedApi: true, scrollback: 1000 });
     }
 
     start(): void {
