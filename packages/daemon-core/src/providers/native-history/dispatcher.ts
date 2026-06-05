@@ -144,13 +144,15 @@ function resolveAntigravityPath(workspace: string): string | null {
 }
 
 function resolveHermesPath(workspace: string, sessionId: string): string | null {
-    void workspace;
+    void workspace; void sessionId;
+    // Hermes ≥ 0.14 persists all chat to ~/.hermes/state.db (SQLite). The
+    // db file is the "path" we hand to the reader — it pulls the newest
+    // source='cli' session inside readSession.
+    const dbPath = path.join(os.homedir(), '.hermes', 'state.db');
+    if (fs.existsSync(dbPath)) return dbPath;
+    // Legacy fallback: pre-db hermes wrote per-session JSON dumps.
     const dir = path.join(os.homedir(), '.hermes', 'sessions');
     if (!fs.existsSync(dir)) return null;
-    if (sessionId) {
-        const exact = path.join(dir, `session_${sessionId}.json`);
-        if (fs.existsSync(exact)) return exact;
-    }
     return newestRecentFile(dir, /^session_.*\.json$/);
 }
 
