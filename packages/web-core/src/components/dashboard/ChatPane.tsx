@@ -39,7 +39,6 @@ import {
     CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY,
     filterChatActivityMessages,
     readChatActivityVisiblePreference,
-    writeChatActivityVisiblePreference,
 } from './chat-activity-visibility';
 
 export interface ChatPaneProps {
@@ -307,14 +306,6 @@ export default function ChatPane({
         visibleLiveCount,
     ]);
 
-    const handleActivityToggle = useCallback(() => {
-        setShowActivityMessages((current) => {
-            const next = !current;
-            writeChatActivityVisiblePreference(next);
-            return next;
-        });
-    }, []);
-
     useEffect(() => {
         const onStorage = (event: StorageEvent) => {
             if (event.key !== CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY) return;
@@ -405,20 +396,11 @@ export default function ChatPane({
     return (
         <div className="flex-1 min-h-0 w-full flex flex-col">
             {/* Message Stream */}
+{/* Compact chat header. The old Activity toggle lived here but it didn't carry
+                its weight — activity rows already follow the user's preference, and the
+                button just added noise above every chat. The session-info (ⓘ) action
+                takes its place: same row, right-aligned, opens SessionInfoDialog. */}
             <div className="chat-activity-toggle-bar">
-                <button
-                    type="button"
-                    className={`chat-activity-toggle ${showActivityMessages ? 'chat-activity-toggle-active' : ''}`}
-                    onClick={handleActivityToggle}
-                    aria-pressed={showActivityMessages}
-                    title="Show tool, terminal, and runtime activity rows"
-                >
-                    <span className="chat-activity-toggle-dot" />
-                    Activity
-                    {activityToggleCount > 0 && (
-                        <span className="chat-activity-toggle-count">{activityToggleCount}</span>
-                    )}
-                </button>
                 <div className="ml-auto flex items-center gap-1">
                     <SessionInfoButton sessionId={activeConv.sessionId} daemonId={activeConv.daemonId} />
                 </div>
