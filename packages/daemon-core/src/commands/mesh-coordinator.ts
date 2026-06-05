@@ -270,32 +270,13 @@ function resolveMcpPort(explicitPort?: number): number | undefined {
  * (the previous fallback unconditionally pushed --append-system-prompt onto
  * every non-Claude CLI, which crashed agy on launch).
  */
-/**
- * Default injection rules for providers whose provider.v1.json hasn't been
- * upgraded to declare `systemPromptInjection` yet. These match the historical
- * hard-coded behavior so removing the router if-else ladder doesn't regress
- * the existing providers. Once each provider ships its own declaration, drop
- * the entry from here. Spec authors should never need to read this table —
- * it's a transitional shim, not the canonical source.
- */
-const LEGACY_INJECTION_DEFAULTS: Record<string, MeshCoordinatorSystemPromptInjection> = {
-  'hermes-cli': { mode: 'env_var', name: 'HERMES_EPHEMERAL_SYSTEM_PROMPT' },
-  'gemini-cli': {
-    mode: 'context_file',
-    path: 'GEMINI.md',
-    wrapper: '<!-- adhdev-mesh-coordinator-prompt -->\n{prompt}\n<!-- /adhdev-mesh-coordinator-prompt -->',
-  },
-}
-
 export function applyMeshCoordinatorSystemPromptInjection(
   systemPrompt: string,
   injection: MeshCoordinatorSystemPromptInjection | undefined,
   ctx: { cliArgs: string[]; launchEnv: Record<string, string>; workspace: string; cliType: string },
 ): void {
-  if (!systemPrompt) return
-  const rule = injection ?? LEGACY_INJECTION_DEFAULTS[ctx.cliType]
-  if (!rule) return
-  applyInjectionRule(systemPrompt, rule, ctx)
+  if (!systemPrompt || !injection) return
+  applyInjectionRule(systemPrompt, injection, ctx)
 }
 
 function applyInjectionRule(
