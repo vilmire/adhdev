@@ -134,6 +134,26 @@ describe('claude-cli v1 manifest — declarative detect_status', () => {
     });
   });
 
+  it('does not parse assistant prose numbered lists as approval buttons', () => {
+    const screen = [
+      '⏺ Here is the decision matrix:',
+      '',
+      'Do you want to proceed with the stricter option set?',
+      '',
+      '1. Keep the current broad detector and accept occasional false positives.',
+      '2. Narrow the detector and verify real approval prompts still work.',
+      '3. Add telemetry before changing behavior.',
+      '',
+      'My recommendation is option 2 because it directly addresses the stuck state.',
+      '',
+      '────────────────────────────────────────────────────────────────────────────────',
+      '❯',
+      '? for shortcuts',
+    ].join('\n');
+
+    expect(parseApproval(approvalInput(screen))).toBeNull();
+  });
+
   it('returns waiting_approval for "Do you want to proceed?"', () => {
     const screen = [
       'agy wants to make this edit',
