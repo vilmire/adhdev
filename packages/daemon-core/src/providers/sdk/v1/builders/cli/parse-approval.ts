@@ -44,6 +44,7 @@ export interface ModalTuiSpec {
   questionVariants?: ModalQuestionVariant[];
   buttonPattern: string;
   buttonFlags?: string;
+  buttonLabelGroup?: number;
   /**
    * Optional fallback for terminals that render all options on a single line
    * (e.g. Antigravity feedback survey: `[0] skip [1] yes [2] no [3] still using`).
@@ -136,12 +137,16 @@ function extractButtons(
 ): string[] {
   const buttonRe = compile(spec.buttonPattern, spec.buttonFlags ?? 'm');
   const out: string[] = [];
+  const labelGroup = Number.isInteger(spec.buttonLabelGroup) && (spec.buttonLabelGroup ?? 0) > 0
+    ? spec.buttonLabelGroup!
+    : 1;
   let i = windowStart;
   while (i < windowEnd) {
     const line = lines[i];
     const m = buttonRe.exec(line);
-    if (m && m[1]) {
-      let label = m[1].trim();
+    const captured = m?.[labelGroup] ?? (labelGroup === 1 && m && m.length > 2 ? m[m.length - 1] : undefined);
+    if (m && captured) {
+      let label = captured.trim();
       // Continuation lines: when enabled, append indented lines below until
       // the next button or blank.
       if (spec.continuationLines) {

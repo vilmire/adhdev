@@ -68,6 +68,27 @@ describe('buildParseApprovalFromTui — codex-cli-style modal', () => {
     });
   });
 
+  it('uses an explicit label capture group when selection markers are captured separately', () => {
+    const parseWithMarkerGroup = buildParseApprovalFromTui({
+      $schema: 'adhdev:tui/modal@1',
+      questionPattern: 'This command requires approval',
+      buttonPattern: '^\\s*([❯›>]\\s*)?\\d+[.)]\\s+(.+)$',
+      buttonLabelGroup: 2,
+      scope: 'window-around-question',
+    });
+    const screen = [
+      'Bash(rm -rf /tmp/example)',
+      'This command requires approval',
+      '❯ 1. Yes, allow once',
+      '  2. No, cancel',
+    ].join('\n');
+
+    expect(parseWithMarkerGroup(input(screen))).toEqual({
+      message: 'This command requires approval',
+      buttons: ['Yes, allow once', 'No, cancel'],
+    });
+  });
+
   it('returns null when no question is visible', () => {
     const screen = ['Just some prose', 'with no modal at all'].join('\n');
     expect(parse(input(screen))).toBeNull();

@@ -76,6 +76,10 @@ function approvalInput(screenText: string): CliApprovalInput {
   };
 }
 
+function getTui(manifest: Record<string, any>): Record<string, any> {
+  return manifest.tui ?? manifest.primitives?.tui;
+}
+
 describe('codex-cli v1 manifest — declarative builders', () => {
   if (!existsSync(MANIFEST_PATH)) {
     it.skip('manifest not found — skipping', () => undefined);
@@ -83,15 +87,16 @@ describe('codex-cli v1 manifest — declarative builders', () => {
   }
 
   const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf-8'));
+  const tui = getTui(manifest);
   const detectSpec: DetectStatusTuiSpec = {
-    spinner: manifest.tui.spinner,
-    settledPrompt: manifest.tui.settledPrompt,
-    modal: manifest.tui.modal,
-    dispatchOrder: manifest.tui.dispatchOrder,
+    spinner: tui.spinner,
+    settledPrompt: tui.settledPrompt,
+    modal: tui.modal,
+    dispatchOrder: tui.dispatchOrder,
   };
   const detect = buildDetectStatusFromTui(detectSpec);
-  const parseModal = buildParseApprovalFromTui(manifest.tui.modal);
-  const parseSquash = buildParseApprovalFromSquash(manifest.tui.approvalSquash);
+  const parseModal = buildParseApprovalFromTui(tui.modal);
+  const parseSquash = buildParseApprovalFromSquash(tui.approvalSquash);
 
   // ─── detect_status verdicts ─────────────────────────────────────────────
 
@@ -107,6 +112,18 @@ describe('codex-cli v1 manifest — declarative builders', () => {
 
   it('returns waiting_approval for "Allow Codex to run"', () => {
     const screen = ['codex wants to run: ls', 'Allow Codex to run this command?', '❯ 1. Approve and run', '  2. Deny'].join('\n');
+    expect(detect(statusInput(screen))).toBe('waiting_approval');
+  });
+
+  it('returns waiting_approval for the current shell escalation prompt', () => {
+    const screen = [
+      'Would you like to run the following command?',
+      '$ curl -I https://example.com',
+      '› 1. Yes, proceed (y)',
+      "  2. Yes, and don't ask again for commands that start with `curl -I` (p)",
+      '  3. No, and tell Codex what to do differently (esc)',
+      'Press enter to confirm or esc to cancel',
+    ].join('\n');
     expect(detect(statusInput(screen))).toBe('waiting_approval');
   });
 
@@ -138,6 +155,24 @@ describe('codex-cli v1 manifest — declarative builders', () => {
     const result = parseModal(approvalInput(screen));
     expect(result?.message).toMatch(/Allow command/i);
     expect(result?.buttons).toEqual(['Approve and run', 'Deny']);
+  });
+
+  it('extracts current shell approval labels without the selection pointer', () => {
+    const screen = [
+      'Would you like to run the following command?',
+      '$ curl -I https://example.com',
+      '› 1. Yes, proceed (y)',
+      "  2. Yes, and don't ask again for commands that start with `curl -I` (p)",
+      '  3. No, and tell Codex what to do differently (esc)',
+      'Press enter to confirm or esc to cancel',
+    ].join('\n');
+    const result = parseModal(approvalInput(screen));
+    expect(result?.message).toBe('Would you like to run the following command?');
+    expect(result?.buttons).toEqual([
+      'Yes, proceed (y)',
+      "Yes, and don't ask again for commands that start with `curl -I` (p)",
+      'No, and tell Codex what to do differently (esc)',
+    ]);
   });
 
   // ─── parse_approval-squash (compacted rendering) ────────────────────────

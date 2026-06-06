@@ -30,6 +30,10 @@ import type {
   ResolvedProvider,
 } from './contracts.js';
 import { validateProviderDefinition } from './provider-schema.js';
+import {
+  loadProvidersActive,
+  resolveActiveSource,
+} from './external-sources.js';
 import type { ProviderSourceMode } from '../config/config.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
 
@@ -430,10 +434,6 @@ export class ProviderLoader {
         }
       } else {
         // New layout: external/<source-name>/<category>/<type>/…
-        const {
-          loadProvidersActive,
-          resolveActiveSource,
-        } = require('./external-sources.js') as typeof import('./external-sources.js');
         const activeFile = loadProvidersActive();
         let totalLoaded = 0;
         const ambiguousTypes: { type: string; chosen: string; candidates: string[] }[] = [];

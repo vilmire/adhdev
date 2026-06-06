@@ -6,7 +6,7 @@
  * regressed.
  */
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { analyzeOverrideTaint } from '../../../src/providers/sdk/v1/validators/taint.js';
@@ -15,9 +15,22 @@ const claudeV1Override = resolve(
   __dirname,
   '../../../../../../adhdev-providers/cli/claude-cli/scripts/v1/detect_status.js',
 );
+const claudeManifest = resolve(
+  __dirname,
+  '../../../../../../adhdev-providers/cli/claude-cli/provider.v1.json',
+);
 
 describe('claude-cli v1 residual override', () => {
-  it('exists at the documented migration path', () => {
+  it('does not declare a missing residual detectStatus override', () => {
+    if (!existsSync(claudeManifest)) return;
+    const manifest = JSON.parse(readFileSync(claudeManifest, 'utf-8'));
+    const override = manifest?.overrides?.detectStatus;
+    if (!override) {
+      expect(existsSync(claudeV1Override)).toBe(false);
+      return;
+    }
+    const overridePath = typeof override === 'string' ? override : override.path;
+    expect(overridePath).toBe('scripts/v1/detect_status.js');
     expect(existsSync(claudeV1Override)).toBe(true);
   });
 

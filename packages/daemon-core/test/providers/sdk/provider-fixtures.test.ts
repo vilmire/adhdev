@@ -70,10 +70,17 @@ function ptyExists(expectedJsonPath: string): boolean {
   }
 }
 
+function getTui(manifest: Record<string, any>): Record<string, any> {
+  return manifest.tui ?? manifest.primitives?.tui;
+}
+
 // ─── Handler builders ──────────────────────────────────────────────────────
 
 function buildHandlersFromManifest(manifest: Record<string, unknown>): CliProviderHandlers {
-  const tui = manifest.tui as Record<string, unknown>;
+  const tui = getTui(manifest as Record<string, any>);
+  if (!tui) {
+    throw new Error('Provider manifest does not declare tui primitives');
+  }
   const detect = buildDetectStatusFromTui({
     spinner: tui.spinner as DetectStatusTuiSpec['spinner'],
     settledPrompt: tui.settledPrompt as DetectStatusTuiSpec['settledPrompt'],
