@@ -556,6 +556,24 @@ function hasDispatchAfterTerminal(meshId: string, sessionId: string, terminalId:
     return false;
 }
 
+function hasUnterminalDirectDispatchLedgerEntry(meshId: string, sessionId: string): boolean {
+    // Some dispatch paths can persist task_dispatched before the direct-dispatch DB row is
+    // available. Recover routing from ledger order so coordinator self-targets still emit
+    // task_completed and pendingCoordinatorEvents.
+    const entries = readLedgerEntries(meshId, { tail: 200 });
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry.sessionId !== sessionId) continue;
+        if (entry.kind === 'task_completed' || entry.kind === 'task_failed' || entry.kind === 'task_stalled') {
+            return false;
+        }
+        if (entry.kind === 'task_dispatched' && entry.payload?.source === 'direct') {
+            return true;
+        }
+    }
+    return false;
+}
+
 function buildLongGeneratingCompletionReconciliation(args: {
     meshId: string;
     nodeId?: string;
@@ -1627,7 +1645,7 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         if (coordinatorMeshId) {
             try {
                 const activeDispatches = getActiveDirectDispatches(coordinatorMeshId);
-                if (activeDispatches.some(d => d.sessionId === instanceId)) {
+                if (activeDispatches.some(d => d.sessionId === instanceId) || hasUnterminalDirectDispatchLedgerEntry(coordinatorMeshId, instanceId)) {
                     meshIdFromDirectDispatch = coordinatorMeshId;
                 }
             } catch { /* best-effort */ }

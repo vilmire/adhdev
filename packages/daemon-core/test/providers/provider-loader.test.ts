@@ -159,7 +159,7 @@ describe('ProviderLoader source root selection', () => {
       upstreamDir: path.join(homedir(), '.adhdev', 'providers', '.upstream'),
       providerRoots: [
         path.join(homedir(), '.adhdev', 'providers'),
-        path.join(homedir(), '.adhdev', 'marketplace'),
+        path.join(homedir(), '.adhdev', 'external'),
         path.join(homedir(), '.adhdev', 'providers', '.upstream'),
       ],
     });

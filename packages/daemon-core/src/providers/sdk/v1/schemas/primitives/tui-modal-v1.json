@@ -36,6 +36,12 @@
       "type": "string",
       "description": "Regex source matching a single button line. Capture group 1 is the button label. Example: `^[\\s❯>]*\\d+\\.\\s+(.+)$`."
     },
+    "buttonLabelGroup": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Capture group number to use as the button label when `buttonPattern` contains non-label groups such as selected-row markers."
+    },
     "buttonFlags": {
       "type": "string",
       "pattern": "^[gimsuy]*$",

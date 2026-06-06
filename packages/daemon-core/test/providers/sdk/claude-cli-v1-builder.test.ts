@@ -18,8 +18,13 @@ import {
   buildDetectStatusFromTui,
   type DetectStatusTuiSpec,
 } from '../../../src/providers/sdk/v1/builders/cli/detect-status.js';
+import {
+  buildParseApprovalFromTui,
+  type ModalTuiSpec,
+} from '../../../src/providers/sdk/v1/builders/cli/parse-approval.js';
 import type {
   CliScreenSnapshot,
+  CliApprovalInput,
   CliStatusInput,
 } from '../../../src/providers/sdk/v1/types/cli/index.js';
 
@@ -56,6 +61,18 @@ function statusInput(screenText: string): CliStatusInput {
   };
 }
 
+function approvalInput(screenText: string): CliApprovalInput {
+  return {
+    buffer: screenText,
+    screenText,
+    rawBuffer: screenText,
+    tail: screenText.split('\n').slice(-12).join('\n'),
+    screen: emptyScreen(screenText),
+    bufferScreen: emptyScreen(screenText),
+    tailScreen: emptyScreen(screenText),
+  };
+}
+
 describe('claude-cli v1 manifest — declarative detect_status', () => {
   if (!existsSync(MANIFEST_PATH)) {
     it.skip('manifest not found — skipping', () => undefined);
@@ -69,6 +86,7 @@ describe('claude-cli v1 manifest — declarative detect_status', () => {
     modal: manifest.tui.modal,
   };
   const detect = buildDetectStatusFromTui(spec);
+  const parseApproval = buildParseApprovalFromTui(manifest.tui.modal as ModalTuiSpec);
 
   it('returns generating when braille spinner is in the live frame', () => {
     const screen = ['⣟ Thinking...', 'esc to interrupt'].join('\n');
@@ -99,6 +117,21 @@ describe('claude-cli v1 manifest — declarative detect_status', () => {
       '  3. Always allow',
     ].join('\n');
     expect(detect(statusInput(screen))).toBe('waiting_approval');
+  });
+
+  it('extracts Claude approval labels from the provider-declared label capture group', () => {
+    const screen = [
+      '⏺ Bash(rm -rf /tmp/example)',
+      'This command requires approval',
+      '❯ 1. Yes, allow once',
+      '  2. Yes, and always allow',
+      '  3. No, cancel',
+    ].join('\n');
+
+    expect(parseApproval(approvalInput(screen))).toEqual({
+      message: 'This command requires approval',
+      buttons: ['Yes, allow once', 'Yes, and always allow', 'No, cancel'],
+    });
   });
 
   it('returns waiting_approval for "Do you want to proceed?"', () => {

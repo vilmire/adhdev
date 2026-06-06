@@ -8,9 +8,29 @@ import type { CliSpec } from '../../../src/providers/spec/types.js';
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
 
 function loadSpecFor(provider: string): CliSpec {
-    const res = loadSpec(path.join(REPO_ROOT, 'adhdev-providers/cli', provider, 'spec.json'));
+    const providerDir = path.join(REPO_ROOT, 'adhdev-providers/cli', provider);
+    const manifestPath = path.join(providerDir, 'provider.v1.json');
+    let specPath = path.join(providerDir, 'spec.json');
+    if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const declaredSpec = manifest?.compatibility?.find((entry: any) => typeof entry?.spec === 'string')?.spec;
+        if (declaredSpec) specPath = path.join(providerDir, declaredSpec);
+    }
+    const res = loadSpec(specPath);
     if (!res.ok) throw new Error(`spec load failed for ${provider}: ${res.errors.join('; ')}`);
     return res.spec;
+}
+
+function loadSpecResultFor(provider: string) {
+    const providerDir = path.join(REPO_ROOT, 'adhdev-providers/cli', provider);
+    const manifestPath = path.join(providerDir, 'provider.v1.json');
+    let specPath = path.join(providerDir, 'spec.json');
+    if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const declaredSpec = manifest?.compatibility?.find((entry: any) => typeof entry?.spec === 'string')?.spec;
+        if (declaredSpec) specPath = path.join(providerDir, declaredSpec);
+    }
+    return loadSpec(specPath);
 }
 
 function loadFixture(provider: string, name: string): any {
@@ -80,6 +100,32 @@ describe('spec evaluator — codex-cli', () => {
         expect(ev.modal!.buttons.length).toBeGreaterThanOrEqual(2);
         expect(ev.modal!.buttons[0].label).toContain('Update now');
     });
+
+    it('recognizes the current Codex shell approval prompt', () => {
+        const screen = [
+            'Would you like to run the following command?',
+            '',
+            'Reason: Allow the exact curl command to access the network.',
+            '',
+            '$ curl -I https://example.com',
+            '',
+            '› 1. Yes, proceed (y)',
+            "  2. Yes, and don't ask again for commands that start with `curl -I` (p)",
+            '  3. No, and tell Codex what to do differently (esc)',
+            '',
+            'Press enter to confirm or esc to cancel',
+            '›',
+        ].join('\n');
+        const ev = evaluate(spec, screen);
+        expect(ev.state.id).toBe('approval');
+        expect(ev.modal?.title).toBe('Would you like to run the following command?');
+        expect(ev.modal?.buttons.map(button => button.label)).toEqual([
+            'Yes, proceed (y)',
+            "Yes, and don't ask again for commands that start with `curl -I` (p)",
+            'No, and tell Codex what to do differently (esc)',
+        ]);
+        expect(ev.modal?.buttons[0].key).toBe('1\r');
+    });
 });
 
 describe('spec loader — strict validation', () => {
@@ -118,7 +164,7 @@ describe('spec loader — strict validation', () => {
     });
 
     it('accepts both providers shipped in this repo', () => {
-        expect(loadSpec(path.join(REPO_ROOT, 'adhdev-providers/cli/claude-cli/spec.json')).ok).toBe(true);
-        expect(loadSpec(path.join(REPO_ROOT, 'adhdev-providers/cli/codex-cli/spec.json')).ok).toBe(true);
+        expect(loadSpecResultFor('claude-cli').ok).toBe(true);
+        expect(loadSpecResultFor('codex-cli').ok).toBe(true);
     });
 });

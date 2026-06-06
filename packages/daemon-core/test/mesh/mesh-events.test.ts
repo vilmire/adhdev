@@ -589,6 +589,75 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('forwards completion for a coordinator direct-dispatch target when only ledger dispatch evidence exists', () => {
+    const meshId = `mesh_coordinator_ledger_direct_dispatch_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node_self',
+        sessionId: 'coordinator-session-self',
+        providerType: 'codex-cli',
+        payload: {
+          source: 'direct',
+          via: 'p2p_direct',
+          taskId: 'task_ledger_only_direct',
+          message: 'do work',
+          targetSessionId: 'coordinator-session-self',
+        },
+      })
+
+      let listener: ((event: any) => void) | undefined
+      const coordinatorState = {
+        instanceId: 'coordinator-session-self',
+        workspace: '/repo/main',
+        settings: { meshCoordinatorFor: meshId },
+      }
+      const coordinator = {
+        category: 'cli',
+        getState: vi.fn(() => coordinatorState),
+        onEvent: vi.fn(),
+      }
+      const instanceManager = {
+        onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
+        getInstance: vi.fn(() => coordinator),
+        getByCategory: vi.fn((category: string) => category === 'cli' ? [coordinator] : []),
+      }
+      const components = { instanceManager } as any
+      setupMeshEventForwarding(components)
+
+      listener!({
+        event: 'agent:generating_completed',
+        instanceId: 'coordinator-session-self',
+        targetSessionId: 'coordinator-session-self',
+        providerType: 'codex-cli',
+        providerSessionId: 'codex-history-1',
+        finalSummary: 'task done',
+      })
+
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({
+        event: 'agent:generating_completed',
+        meshId,
+        metadataEvent: {
+          targetSessionId: 'coordinator-session-self',
+          providerType: 'codex-cli',
+          providerSessionId: 'codex-history-1',
+          finalSummary: 'task done',
+        },
+      })
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect(completedEntry).toBeTruthy()
+      expect(completedEntry?.sessionId).toBe('coordinator-session-self')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('does not inject completion event for unrelated CLI sessions without mesh metadata', () => {
     // Sessions without meshNodeFor or launchedByCoordinator must not be forwarded,
     // even if getMeshByRepo returns a mesh for the same workspace.

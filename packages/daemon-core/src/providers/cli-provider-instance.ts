@@ -729,7 +729,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     getSessionModalState(sessionId?: string): SessionModalState {
-        const adapterStatus = this.adapter.getStatus({ allowParse: false });
+        const adapterStatus = this.adapter.getStatus({ allowParse: true });
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
         const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';

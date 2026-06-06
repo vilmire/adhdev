@@ -148,6 +148,37 @@ describe('CliProviderInstance provider session recovery', () => {
     expect(enabledByDefault.shouldAutoApprove()).toBe(false)
   })
 
+  it('allows lightweight approval parsing for session modal subscriptions', () => {
+    const instance = new CliProviderInstance({
+      type: 'claude-cli',
+      name: 'Claude Code',
+      category: 'cli',
+      spawn: { command: 'claude', args: [] },
+    } as any, '/workspaces/repo', [], 'runtime-session-1')
+    const getStatus = vi.fn(() => ({
+      status: 'waiting_approval',
+      messages: [],
+      activeModal: {
+        message: 'This command requires approval',
+        buttons: ['Yes, allow once', 'No, cancel'],
+      },
+    }))
+    instance.adapter = {
+      getStatus,
+    } as any
+
+    expect(instance.getSessionModalState('runtime-session-1')).toEqual({
+      id: 'runtime-session-1',
+      status: 'waiting_approval',
+      title: 'repo',
+      activeModal: {
+        message: 'This command requires approval',
+        buttons: ['Yes, allow once', 'No, cancel'],
+      },
+    })
+    expect(getStatus).toHaveBeenCalledWith({ allowParse: true })
+  })
+
   it('auto-approves a changed Claude approval modal even inside the prior approval busy window', () => {
     vi.useFakeTimers()
     try {

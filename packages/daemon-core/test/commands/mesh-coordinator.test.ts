@@ -66,6 +66,10 @@ describe('resolveMeshCoordinatorSetup', () => {
           path: '.mcp.json',
           serverName: 'adhdev-mesh',
         },
+        systemPromptInjection: {
+          mode: 'cli_arg',
+          flag: '--append-system-prompt',
+        },
       },
     }
 
@@ -256,6 +260,10 @@ describe('resolveMeshCoordinatorSetup', () => {
           instructions: 'Add this MCP server to Hermes config under mcp_servers.',
           template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - mcp\n      - --mode\n      - ipc\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
         },
+        systemPromptInjection: {
+          mode: 'env_var',
+          name: 'HERMES_EPHEMERAL_SYSTEM_PROMPT',
+        },
       },
     }
     const result = resolveMeshCoordinatorSetup({ provider, meshId: 'mesh_hermes_cap', workspace: '/repo' })
@@ -314,6 +322,10 @@ describe('resolveMeshCoordinatorSetup', () => {
           format: 'claude_mcp_json',
           path: '.mcp.json',
           serverName: 'adhdev-mesh',
+        },
+        systemPromptInjection: {
+          mode: 'cli_arg',
+          flag: '--append-system-prompt',
         },
       },
     }
@@ -667,6 +679,10 @@ describe('resolveMeshCoordinatorSetup', () => {
           instructions: 'Hermes CLI does not auto-import repo-local .mcp.json. Add this MCP server to Hermes config under mcp_servers, then start a fresh Hermes session.',
           template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - mcp\n      - --mode\n      - ipc\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
         },
+        systemPromptInjection: {
+          mode: 'env_var',
+          name: 'HERMES_EPHEMERAL_SYSTEM_PROMPT',
+        },
       },
     }
     const cliManager = {
@@ -827,6 +843,10 @@ describe('resolveMeshCoordinatorSetup', () => {
           format: 'claude_mcp_json',
           path: '.mcp.json',
           serverName: 'adhdev-mesh',
+        },
+        systemPromptInjection: {
+          mode: 'cli_arg',
+          flag: '--append-system-prompt',
         },
       },
     }
@@ -1411,6 +1431,10 @@ describe('claude-cli coordinator provider capability', () => {
           path: '.mcp.json',
           serverName: 'adhdev-mesh',
         },
+        systemPromptInjection: {
+          mode: 'cli_arg',
+          flag: '--append-system-prompt',
+        },
       },
     }
 
@@ -1468,6 +1492,10 @@ describe('claude-cli coordinator provider capability', () => {
           format: 'claude_mcp_json',
           path: '.mcp.json',
           serverName: 'adhdev-mesh',
+        },
+        systemPromptInjection: {
+          mode: 'cli_arg',
+          flag: '--append-system-prompt',
         },
       },
     }

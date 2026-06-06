@@ -2969,6 +2969,7 @@ export async function meshSendTask(
             if (result.success) {
                 // Record dispatch in ledger so task_history is accurate
                 const dispatchedSessionId = args.session_id || result.sessionId;
+                const dispatchedAt = new Date().toISOString();
                 try {
                     const providerType = result.providerType || cached?.providerType;
                     appendLedgerEntry(ctx.mesh.id, {
@@ -2982,6 +2983,16 @@ export async function meshSendTask(
                             providerType,
                             targetSessionId: dispatchedSessionId,
                         }),
+                    });
+                    insertDirectDispatch(ctx.mesh.id, {
+                        taskId,
+                        nodeId: args.node_id,
+                        sessionId: dispatchedSessionId,
+                        providerType: providerType || undefined,
+                        message: args.message,
+                        taskMode: taskMode || undefined,
+                        via: 'p2p_direct',
+                        dispatchedAt,
                     });
                 } catch { /* best-effort */ }
             }
