@@ -13,6 +13,7 @@ export type ExistingSessionLike = Partial<SessionEntryWithInboxMarkers> & {
   sessionCapabilities?: SessionEntry['capabilities']
   summaryMetadata?: any
   activeChat?: SessionEntry['activeChat']
+  activeInteractivePrompt?: SessionEntry['activeInteractivePrompt']
   completionMarker?: string
   seenCompletionMarker?: string
   settings?: Record<string, any>
@@ -91,6 +92,7 @@ export function mergeSessionEntrySummary(
     capabilities: session.capabilities ?? (existingEntry?.sessionCapabilities as SessionEntry['capabilities']) ?? existingEntry?.capabilities ?? [],
     cdpConnected: session.cdpConnected ?? existingEntry?.cdpConnected,
     activeChat: mergeActiveChatData(session.activeChat, existingEntry?.activeChat),
+    activeInteractivePrompt: session.activeInteractivePrompt ?? existingEntry?.activeInteractivePrompt ?? null,
     controlValues: session.controlValues ?? existingEntry?.controlValues,
     providerControls: session.providerControls ?? existingEntry?.providerControls,
     summaryMetadata: session.summaryMetadata ?? existingEntry?.summaryMetadata,

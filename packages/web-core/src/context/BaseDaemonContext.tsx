@@ -11,6 +11,7 @@
  */
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
 import type { DaemonData, SessionEntry, WebVersionUpdateReason } from '../types'
+import type { InteractivePrompt } from '../interactive-prompt/types'
 import { webDebugStore } from '../debug/webDebugStore'
 import { summarizeDaemonEntriesForDebug } from '../debug/entryDebugSummary'
 import { mergeActiveChatData, mergeSessionEntryChildren } from '../utils/session-entry-merge'
@@ -106,6 +107,7 @@ const ActionsCtx = createContext<BaseDaemonActions>({
 function payloadRichness(ide: DaemonData): number {
     let score = 0;
     if (ide.activeChat !== undefined) score += 4;      // P2P/chat-rich payloads carry this explicitly
+    if (ide.activeInteractivePrompt !== undefined) score += 2;
     if (ide.childSessions?.length) score += 2;  // child session data
     if (ide.workspace) score += 1;             // workspace info
     if (ide.machine) score += 1;      // machine info (daemon entry)
@@ -345,6 +347,7 @@ function buildWeakMetadataUpdate(
         'controlValues',
         'providerControls',
         'summaryMetadata',
+        'activeInteractivePrompt',
         'lastMessagePreview',
         'lastMessageRole',
         'lastMessageAt',
@@ -606,6 +609,7 @@ export interface CompactSessionEntry {
     controlValues?: DaemonData['controlValues']
     providerControls?: DaemonData['providerControls']
     summaryMetadata?: DaemonData['summaryMetadata']
+    activeInteractivePrompt?: InteractivePrompt | null
 }
 
 export interface CompactDaemon {
@@ -658,6 +662,7 @@ function normalizeCompactSession(session: CompactSessionEntry): SessionEntry {
         summaryMetadata: session.summaryMetadata,
         completionMarker: session.completionMarker,
         seenCompletionMarker: session.seenCompletionMarker,
+        activeInteractivePrompt: session.activeInteractivePrompt ?? null,
     } as SessionEntry
 }
 
@@ -732,6 +737,7 @@ export function expandCompactDaemons(
                 title: ide.title,
                 workspace: ide.workspace || null,
                 activeChat: mergeActiveChatData(ide.activeChat, null),
+                ...(ide.activeInteractivePrompt !== undefined && { activeInteractivePrompt: ide.activeInteractivePrompt }),
                 childSessions,
                 ...(ide.lastMessagePreview !== undefined && { lastMessagePreview: ide.lastMessagePreview }),
                 ...(ide.lastMessageRole !== undefined && { lastMessageRole: ide.lastMessageRole }),
@@ -771,6 +777,7 @@ export function expandCompactDaemons(
                 mode: 'chat',
                 workspace: cli.workspace || '',
                 activeChat: mergeActiveChatData(cli.activeChat, null),
+                ...(cli.activeInteractivePrompt !== undefined && { activeInteractivePrompt: cli.activeInteractivePrompt }),
                 ...(cli.runtimeKey !== undefined && { runtimeKey: cli.runtimeKey }),
                 ...(cli.runtimeDisplayName !== undefined && { runtimeDisplayName: cli.runtimeDisplayName }),
                 ...(cli.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: cli.runtimeWorkspaceLabel }),
@@ -815,6 +822,7 @@ export function expandCompactDaemons(
                 mode: 'chat',
                 workspace: acp.workspace || '',
                 activeChat: mergeActiveChatData(acp.activeChat, null),
+                ...(acp.activeInteractivePrompt !== undefined && { activeInteractivePrompt: acp.activeInteractivePrompt }),
                 ...(acp.runtimeKey !== undefined && { runtimeKey: acp.runtimeKey }),
                 ...(acp.runtimeDisplayName !== undefined && { runtimeDisplayName: acp.runtimeDisplayName }),
                 ...(acp.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: acp.runtimeWorkspaceLabel }),
