@@ -192,6 +192,34 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('dedupes the same approval event before ledger and coordinator delivery', () => {
+    const meshId = `mesh_approval_dedupe_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit, coordinator } = createComponents(meshId)
+
+      setupMeshEventForwarding(components)
+      const approvalEvent = {
+        event: 'agent:waiting_approval',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        modalMessage: 'Allow git commit?',
+        modalButtons: ['Allow once', 'Reject'],
+        timestamp: 12346,
+      }
+      emit(approvalEvent)
+      emit(approvalEvent)
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_approval_needed')).toHaveLength(1)
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('marks the assigned queue task completed when a completion event only carries instanceId', () => {
     const meshId = `mesh_completion_fallback_${Date.now()}`
     try {

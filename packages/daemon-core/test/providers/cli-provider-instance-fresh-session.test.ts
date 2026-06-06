@@ -668,6 +668,135 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       vi.useRealTimers()
     }
   })
+
+  it('closes approval-resolved idle once, dedupes modal redraws, and preserves mesh metadata', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-06T01:00:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'codex-cli',
+        name: 'Codex CLI',
+        category: 'cli',
+        spawn: { command: 'codex', args: [] },
+      } as any, '/tmp/project', [], 'runtime-session-approval') as any
+      const events: any[] = []
+      const meshSettings = {
+        meshNodeFor: 'mesh-approval',
+        meshNodeId: 'node-approval',
+        launchedByCoordinator: true,
+      }
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+      instance.settings = meshSettings
+
+      let status = 'generating'
+      let parsedStatus = 'generating'
+      let activeModal: any = null
+      const adapter: any = {
+        currentTurnScope: { responseEpoch: 1 },
+        isWaitingForResponse: true,
+        chatMessagesOwnedExternally: true,
+        getStatus: () => ({ status, activeModal, messages: [] }),
+        getScriptParsedStatus: () => ({ status: parsedStatus, activeModal, messages: [] }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+        getScreenText: () => '',
+      }
+      instance.adapter = adapter
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+
+      const approval = {
+        message: 'Allow git commit?',
+        buttons: ['Allow once', 'Reject'],
+      }
+      status = 'waiting_approval'
+      parsedStatus = 'waiting_approval'
+      activeModal = approval
+      instance.detectStatusTransition()
+
+      status = 'idle'
+      parsedStatus = 'idle'
+      activeModal = null
+      instance.detectStatusTransition()
+
+      status = 'waiting_approval'
+      parsedStatus = 'waiting_approval'
+      activeModal = approval
+      instance.detectStatusTransition()
+
+      status = 'idle'
+      parsedStatus = 'idle'
+      activeModal = null
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+
+      expect(events.filter((event) => event.event === 'agent:waiting_approval')).toHaveLength(1)
+      expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(1)
+      expect(instance.getState().settings).toEqual(meshSettings)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('completes after approval returns to generating and then settles idle', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-06T01:05:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'codex-cli',
+        name: 'Codex CLI',
+        category: 'cli',
+        spawn: { command: 'codex', args: [] },
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+
+      let status = 'generating'
+      let parsedStatus = 'generating'
+      let activeModal: any = null
+      const adapter: any = {
+        currentTurnScope: { responseEpoch: 1 },
+        isWaitingForResponse: true,
+        chatMessagesOwnedExternally: true,
+        getStatus: () => ({ status, activeModal, messages: [] }),
+        getScriptParsedStatus: () => ({ status: parsedStatus, activeModal, messages: [] }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+        getScreenText: () => '',
+      }
+      instance.adapter = adapter
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+
+      status = 'waiting_approval'
+      parsedStatus = 'waiting_approval'
+      activeModal = { message: 'Allow command?', buttons: ['Allow', 'Reject'] }
+      instance.detectStatusTransition()
+
+      status = 'generating'
+      parsedStatus = 'generating'
+      activeModal = null
+      instance.detectStatusTransition()
+
+      adapter.currentTurnScope = null
+      adapter.isWaitingForResponse = false
+      status = 'idle'
+      parsedStatus = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+
+      expect(events.filter((event) => event.event === 'agent:waiting_approval')).toHaveLength(1)
+      expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('CliProviderInstance incremental history persistence', () => {

@@ -508,6 +508,33 @@ function isDuplicateMeshCompletionEvent(args: {
     return false;
 }
 
+function isDuplicateMeshApprovalEvent(args: {
+    meshId: string;
+    sessionId: string;
+    providerType?: string;
+    timestamp?: number | null;
+    modalMessage?: string;
+    modalButtons?: unknown;
+}): boolean {
+    const modalButtons = Array.isArray(args.modalButtons)
+        ? args.modalButtons.map(button => String(button).trim()).filter(Boolean)
+        : [];
+    const approvalIdentity = Number.isFinite(args.timestamp)
+        ? String(args.timestamp)
+        : JSON.stringify({ message: args.modalMessage || '', buttons: modalButtons });
+    if (!approvalIdentity || approvalIdentity === '{"message":"","buttons":[]}') return false;
+    const fingerprint = [
+        args.meshId,
+        'agent:waiting_approval',
+        args.sessionId,
+        args.providerType || '',
+        approvalIdentity,
+    ].join('::');
+    if (hasFingerprintSeen(fingerprint)) return true;
+    recordFingerprintSeen(fingerprint);
+    return false;
+}
+
 function isDuplicateRefineTerminalEvent(meshId: string, eventName: string, metadataEvent: Record<string, unknown>): boolean {
     const fingerprint = buildRefineTerminalEventFingerprint(meshId, eventName, metadataEvent);
     if (!fingerprint) return false;
@@ -1214,6 +1241,20 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     }
 
     const eventTimestamp = readEventTimestamp(args.metadataEvent.timestamp);
+    if (args.event === 'agent:waiting_approval' && eventSessionId) {
+        const duplicateApproval = isDuplicateMeshApprovalEvent({
+            meshId: args.meshId,
+            sessionId: eventSessionId,
+            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+            timestamp: eventTimestamp,
+            modalMessage: readNonEmptyString(args.metadataEvent.modalMessage) || undefined,
+            modalButtons: args.metadataEvent.modalButtons,
+        });
+        if (duplicateApproval) {
+            LOG.info('MeshEvents', `Suppressed duplicate approval event for mesh ${args.meshId} session ${eventSessionId}`);
+            return { success: true, forwarded: 0, suppressed: true, duplicateApproval: true };
+        }
+    }
     if (args.event === 'agent:generating_completed' && eventSessionId) {
         const terminal = findRecentTerminalLedgerEvidence({
             meshId: args.meshId,
