@@ -69,6 +69,8 @@ export interface MeshWorkQueueEntry {
     targetNodeId?: string;
     /** If specified, only this runtime session can claim the task */
     targetSessionId?: string;
+    /** If specified, a node must expose all tags before it can claim the task. */
+    requiredTags?: string[];
     /** The node that actually claimed and is executing the task */
     assignedNodeId?: string;
     /** The session currently executing the task */
@@ -99,6 +101,49 @@ export interface MeshQueueMutationOptions {
     ownerRole?: RepoMeshDaemonRole;
 }
 
+export function normalizeMeshCapabilityTags(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set<string>();
+    return value
+        .map(tag => typeof tag === 'string' ? tag.trim() : '')
+        .filter(Boolean)
+        .filter(tag => {
+            if (seen.has(tag)) return false;
+            seen.add(tag);
+            return true;
+        });
+}
+
+function firstProviderPriority(policy: unknown): string | undefined {
+    const raw = policy && typeof policy === 'object' && !Array.isArray(policy)
+        ? (policy as Record<string, unknown>).providerPriority
+        : undefined;
+    if (!Array.isArray(raw)) return undefined;
+    return raw.find(type => typeof type === 'string' && type.trim())?.trim();
+}
+
+export function buildMeshNodeCapabilityTags(
+    node: { capabilities?: unknown; policy?: unknown } | undefined,
+    providerType?: string,
+): string[] {
+    const provider = typeof providerType === 'string' && providerType.trim()
+        ? providerType.trim()
+        : firstProviderPriority(node?.policy);
+    return normalizeMeshCapabilityTags([
+        ...(Array.isArray(node?.capabilities) ? node.capabilities : []),
+        `os=${process.platform}`,
+        `arch=${process.arch}`,
+        ...(provider ? [`provider=${provider}`] : []),
+    ]);
+}
+
+export function nodeSatisfiesRequiredTags(requiredTags: unknown, capabilityTags: unknown): boolean {
+    const required = normalizeMeshCapabilityTags(requiredTags);
+    if (required.length === 0) return true;
+    const available = new Set(normalizeMeshCapabilityTags(capabilityTags));
+    return required.every(tag => available.has(tag));
+}
+
 function withQueueLock<T>(_meshId: string, fn: () => T): T {
     return BeadsDB.getInstance().transaction(fn);
 }
@@ -117,7 +162,7 @@ function writeQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
 export function enqueueTask(
     meshId: string,
     message: string,
-    opts?: { targetNodeId?: string; targetSessionId?: string; taskMode?: MeshTaskMode | string } & MeshQueueMutationOptions,
+    opts?: { targetNodeId?: string; targetSessionId?: string; taskMode?: MeshTaskMode | string; requiredTags?: string[] } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry {
     requireMeshHostQueueOwner(opts);
     const modeValidation = validateMeshTaskModeRequest(opts?.taskMode, message);
@@ -132,6 +177,7 @@ export function enqueueTask(
         taskMode: modeValidation.taskMode,
         targetNodeId: opts?.targetNodeId,
         targetSessionId: opts?.targetSessionId,
+        requiredTags: normalizeMeshCapabilityTags(opts?.requiredTags),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     };
@@ -153,8 +199,8 @@ export function getMeshQueueRevision(meshId: string): string {
 /**
  * Find the next pending task that this node is allowed to claim, and mark it as assigned.
  */
-export function claimNextTask(meshId: string, nodeId: string, sessionId: string): MeshWorkQueueEntry | null {
-    return BeadsDB.getInstance().claimNextQueueTask(meshId, nodeId, sessionId);
+export function claimNextTask(meshId: string, nodeId: string, sessionId: string, capabilityTags?: string[]): MeshWorkQueueEntry | null {
+    return BeadsDB.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags);
 }
 
 /**

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ALL_MESH_TOOLS, MESH_CLEANUP_SESSIONS_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL } from '../src/tools/mesh-tools.js';
+import { ALL_MESH_TOOLS, MESH_CLEANUP_SESSIONS_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL } from '../src/tools/mesh-tools.js';
 
 test('mesh_fast_forward_node schema registers the safe direct fast-forward surface', () => {
   assert.equal(MESH_FAST_FORWARD_NODE_TOOL.name, 'mesh_fast_forward_node');
@@ -11,6 +11,13 @@ test('mesh_fast_forward_node schema registers the safe direct fast-forward surfa
   assert.equal(MESH_FAST_FORWARD_NODE_TOOL.inputSchema.properties.dry_run.type, 'boolean');
   assert.equal(MESH_FAST_FORWARD_NODE_TOOL.inputSchema.properties.update_submodules.type, 'boolean');
   assert.match(MESH_FAST_FORWARD_NODE_TOOL.description, /Never pushes, rebases, resets, cleans/);
+});
+
+test('mesh_enqueue_task schema exposes optional capability tag requirements', () => {
+  assert.equal(MESH_ENQUEUE_TASK_TOOL.name, 'mesh_enqueue_task');
+  assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.requiredTags.type, 'array');
+  assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.type, 'array');
+  assert.match(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.requiredTags.description, /provider=codex-cli/);
 });
 
 test('mesh_launch_session schema maps providers, keeps type optional, and has no claude default', () => {

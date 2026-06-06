@@ -7,7 +7,7 @@ import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getLedgerDir, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
-import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches } from './mesh-work-queue.js';
 import { BeadsDB } from './beads-db.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 
@@ -670,7 +670,10 @@ export function tryAssignQueueTask(
     sessionId: string,
     providerType: string
 ): boolean {
-    const task = claimNextTask(meshId, nodeId, sessionId);
+    const mesh = getMeshWithCache(components, meshId);
+    const node = mesh?.nodes.find((n: any) => n.id === nodeId);
+    const capabilityTags = buildMeshNodeCapabilityTags(node, providerType);
+    const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags);
     if (!task) {
         return false;
     }
@@ -678,9 +681,6 @@ export function tryAssignQueueTask(
     LOG.info('MeshQueue', `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
 
     // Check if the node is remote
-    const mesh = getMeshWithCache(components, meshId);
-    const node = mesh?.nodes.find((n: any) => n.id === nodeId);
-    
     // If the node is explicitly remote and we have a dispatch mechanism, route via P2P
     if (node?.daemonId && components.dispatchMeshCommand) {
         const isLocalNode = components.cliManager.adapters.has(sessionId);

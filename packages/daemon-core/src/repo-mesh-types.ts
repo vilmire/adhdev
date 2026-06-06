@@ -303,6 +303,8 @@ export interface LocalMeshNodeEntry {
     daemonId?: string;
     /** Machine registry ID that owns this workspace, when known. */
     machineId?: string;
+    /** Operator-defined capability tags used by mesh queue matching. */
+    capabilities?: string[];
     userOverrides: Partial<RepoMeshNodeCapabilities>;
     policy: RepoMeshNodePolicy;
     /**

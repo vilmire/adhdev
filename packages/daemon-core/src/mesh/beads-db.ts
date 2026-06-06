@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { createRequire } from 'module';
 import { getLedgerDir } from './mesh-ledger.js';
+import { nodeSatisfiesRequiredTags } from './mesh-work-queue.js';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
@@ -280,34 +281,40 @@ export class BeadsDB {
     }
 
     // O(1) claim: transaction ensures only one session claims a pending task
-    claimNextQueueTask(meshId: string, nodeId: string, sessionId: string): MeshWorkQueueEntry | null {
+    claimNextQueueTask(meshId: string, nodeId: string, sessionId: string, capabilityTags: string[] = []): MeshWorkQueueEntry | null {
         return this.transaction(() => {
             this.ensureLegacyQueueMigrated(meshId);
             if (this.hasActiveAssignment(meshId, sessionId, nodeId)) return null;
 
             // Priority: session-targeted > node-targeted (no session) > unconstrained
-            const row = (
+            const rows = [
+                ...(
                 this.db.prepare(`
                     SELECT payload FROM mesh_queue
                     WHERE mesh_id = ? AND status = 'pending' AND target_session_id = ?
-                    ORDER BY created_at ASC LIMIT 1
-                `).get(meshId, sessionId) as { payload: string } | undefined
-            ) || (
+                    ORDER BY created_at ASC
+                `).all(meshId, sessionId) as Array<{ payload: string }>
+                ),
+                ...(
                 this.db.prepare(`
                     SELECT payload FROM mesh_queue
                     WHERE mesh_id = ? AND status = 'pending' AND target_node_id = ? AND target_session_id IS NULL
-                    ORDER BY created_at ASC LIMIT 1
-                `).get(meshId, nodeId) as { payload: string } | undefined
-            ) || (
+                    ORDER BY created_at ASC
+                `).all(meshId, nodeId) as Array<{ payload: string }>
+                ),
+                ...(
                 this.db.prepare(`
                     SELECT payload FROM mesh_queue
                     WHERE mesh_id = ? AND status = 'pending' AND target_node_id IS NULL AND target_session_id IS NULL
-                    ORDER BY created_at ASC LIMIT 1
-                `).get(meshId) as { payload: string } | undefined
-            );
-            if (!row) return null;
+                    ORDER BY created_at ASC
+                `).all(meshId) as Array<{ payload: string }>
+                ),
+            ];
+            const entry = rows
+                .map(row => JSON.parse(row.payload) as MeshWorkQueueEntry)
+                .find(candidate => nodeSatisfiesRequiredTags(candidate.requiredTags, capabilityTags));
+            if (!entry) return null;
 
-            const entry = JSON.parse(row.payload) as MeshWorkQueueEntry;
             const now = new Date().toISOString();
             entry.status = 'assigned';
             entry.assignedNodeId = nodeId;

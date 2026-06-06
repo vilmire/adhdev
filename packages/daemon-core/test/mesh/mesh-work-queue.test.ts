@@ -129,6 +129,22 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(c2?.id).to.equal(t1.id);
     });
 
+    it('only lets nodes claim tasks whose required tags are satisfied', () => {
+        const gpuTask = enqueueTask(meshId, 'gpu task', {
+            requiredTags: ['gpu', 'provider=codex-cli', 'gpu'],
+        });
+        const generalTask = enqueueTask(meshId, 'general task');
+
+        expect(gpuTask.requiredTags).to.deep.equal(['gpu', 'provider=codex-cli']);
+
+        const mismatch = claimNextTask(meshId, 'node-basic', 'session-basic', ['provider=codex-cli']);
+        expect(mismatch?.id).to.equal(generalTask.id);
+
+        const matched = claimNextTask(meshId, 'node-gpu', 'session-gpu', ['gpu', 'provider=codex-cli', 'os=darwin']);
+        expect(matched?.id).to.equal(gpuTask.id);
+        expect(matched?.assignedNodeId).to.equal('node-gpu');
+    });
+
     it('should only claim session-targeted tasks if the runtime session matches', () => {
         const t1 = enqueueTask(meshId, 'session targeted task', {
             targetNodeId: 'node-target',

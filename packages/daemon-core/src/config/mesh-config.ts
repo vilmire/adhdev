@@ -42,6 +42,20 @@ function loadMeshConfig(): LocalMeshConfig {
     }
 }
 
+function normalizeCapabilityTags(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const seen = new Set<string>();
+    const tags = value
+        .map(tag => typeof tag === 'string' ? tag.trim() : '')
+        .filter(Boolean)
+        .filter(tag => {
+            if (seen.has(tag)) return false;
+            seen.add(tag);
+            return true;
+        });
+    return tags.length ? tags : undefined;
+}
+
 function saveMeshConfig(config: LocalMeshConfig): void {
     const path = getMeshConfigPath();
     writeFileSync(path, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
@@ -423,6 +437,7 @@ export interface AddNodeOptions {
     repoRoot?: string;
     daemonId?: string;
     machineId?: string;
+    capabilities?: string[];
     userOverrides?: Partial<RepoMeshNodeCapabilities>;
     policy?: RepoMeshNodePolicy;
     isLocalWorktree?: boolean;
@@ -452,6 +467,7 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
         repoRoot: opts.repoRoot,
         daemonId: opts.daemonId,
         machineId: opts.machineId,
+        capabilities: normalizeCapabilityTags(opts.capabilities),
         userOverrides: opts.userOverrides || {},
         policy: opts.policy || {},
         isLocalWorktree: opts.isLocalWorktree,
