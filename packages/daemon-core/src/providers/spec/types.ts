@@ -33,6 +33,7 @@ export interface ModalButtonsRule {
     flags?: string;
     key_for_index: string;
     min_count?: number;
+    continuation_lines?: boolean;
 }
 
 export interface SpecState {

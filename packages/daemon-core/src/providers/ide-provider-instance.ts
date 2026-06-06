@@ -20,7 +20,7 @@ import { LOG } from '../logging/logger.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
 import { validateReadChatResultPayload } from './read-chat-contract.js';
 import type { ChatMessage } from '../types.js';
-import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
+import { formatAutoApprovalMessage, pickAutoApprovalButton } from './approval-utils.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { getProviderSessionCapabilities, IDE_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
@@ -708,7 +708,7 @@ export class IdeProviderInstance implements ProviderInstance {
 
         this.autoApproveBusy = true;
         try {
-            const { label: targetButton } = pickApprovalButton(_chatData?.activeModal?.buttons, this.provider);
+            const { label: targetButton } = pickAutoApprovalButton(_chatData?.activeModal?.buttons);
 
             const script = scriptFn({ action: 'approve', button: targetButton, buttonText: targetButton });
             if (!script) return;

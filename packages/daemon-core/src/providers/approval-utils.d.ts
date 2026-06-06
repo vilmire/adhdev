@@ -4,4 +4,8 @@ export declare function pickApprovalButton(buttons: string[] | null | undefined,
     index: number;
     label: string;
 };
+export declare function pickAutoApprovalButton(buttons: string[] | null | undefined): {
+    index: number;
+    label: string;
+};
 export declare function formatAutoApprovalMessage(modalMessage?: string, buttonLabel?: string): string;

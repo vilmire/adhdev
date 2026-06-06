@@ -66,6 +66,14 @@ export function pickApprovalButton(
     return { index: -1, label: '' };
 }
 
+export function pickAutoApprovalButton(
+    buttons: string[] | null | undefined,
+): { index: number; label: string } {
+    const labels = (buttons || []).map((button) => String(button || '').trim());
+    const index = labels.findIndex(Boolean);
+    return index >= 0 ? { index, label: labels[index] } : { index: -1, label: '' };
+}
+
 export function formatAutoApprovalMessage(modalMessage?: string, buttonLabel?: string): string {
     const lines = [`Auto-approved${buttonLabel ? `: ${buttonLabel}` : ''}`];
     const cleanMessage = String(modalMessage || '').trim();

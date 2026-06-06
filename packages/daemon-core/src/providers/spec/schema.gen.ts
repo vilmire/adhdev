@@ -269,6 +269,10 @@ export const SCHEMA = {
                             "type": "integer",
                             "minimum": 1,
                             "default": 2
+                        },
+                        "continuation_lines": {
+                            "type": "boolean",
+                            "default": false
                         }
                     }
                 }

@@ -122,6 +122,67 @@ describe('buildParseApprovalFromTui — codex-cli-style modal', () => {
   });
 });
 
+describe('buildParseApprovalFromTui — claude-cli marker group labels', () => {
+  const parse = buildParseApprovalFromTui({
+    $schema: 'adhdev:tui/modal@1',
+    questionPattern: 'Do you want to (?:proceed|allow|run|make this edit|create|overwrite)',
+    questionFlags: 'i',
+    buttonPattern: '^\\s*([❯›>]\\s*)?\\d+[.)]\\s+(.+)$',
+    buttonLabelGroup: 2,
+    buttonFlags: 'm',
+    scope: 'window-around-question',
+    scopeWindowLines: 16,
+  });
+
+  it('extracts Bash approval labels without the selected marker', () => {
+    const screen = [
+      'Bash command',
+      'ls /etc',
+      'Do you want to proceed?',
+      '❯ 1. Yes',
+      '  2. Yes, allow reading from etc/ from this project',
+      '  3. No',
+    ].join('\n');
+
+    expect(parse(input(screen))).toEqual({
+      message: 'Do you want to proceed?',
+      buttons: ['Yes', 'Yes, allow reading from etc/ from this project', 'No'],
+    });
+  });
+
+  it('extracts Write approval labels without the selected marker', () => {
+    const screen = [
+      'Write(/tmp/adhdev-claude-approval-test.txt)',
+      'Create file',
+      'Do you want to create adhdev-claude-approval-test.txt?',
+      '❯ 1. Yes',
+      '  2. Yes, allow all edits in tmp/ during this session (shift+tab)',
+      '  3. No',
+    ].join('\n');
+
+    expect(parse(input(screen))).toEqual({
+      message: 'Do you want to create adhdev-claude-approval-test.txt?',
+      buttons: ['Yes', 'Yes, allow all edits in tmp/ during this session (shift+tab)', 'No'],
+    });
+  });
+
+  it('extracts WebFetch approval labels without the selected marker', () => {
+    const screen = [
+      'Fetch',
+      'Claude wants to fetch content from example.com',
+      'Do you want to allow Claude to fetch this content?',
+      '❯ 1. Yes',
+      "  2. Yes, and don't ask again for example.com",
+      '  3. No, and tell Claude what to do differently (esc)',
+    ].join('\n');
+
+    expect(parse(input(screen))).toEqual({
+      message: 'Do you want to allow Claude to fetch this content?',
+      buttons: ['Yes', "Yes, and don't ask again for example.com", 'No, and tell Claude what to do differently (esc)'],
+    });
+  });
+});
+
 describe('buildParseApprovalFromTui — antigravity-style with continuation lines', () => {
   const spec: ModalTuiSpec = {
     $schema: 'adhdev:tui/modal@1',

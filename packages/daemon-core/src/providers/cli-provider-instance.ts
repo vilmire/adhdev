@@ -22,7 +22,7 @@ import { ChatHistoryWriter, isNativeSourceCanonicalHistory, materializeProviderN
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
-import { formatAutoApprovalMessage, pickApprovalButton, looksLikeActiveApprovalPromptText } from './approval-utils.js';
+import { formatAutoApprovalMessage, pickApprovalButton, pickAutoApprovalButton, looksLikeActiveApprovalPromptText } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
@@ -1092,9 +1092,9 @@ export class CliProviderInstance implements ProviderInstance {
         if (!modal || buttons.length === 0) {
             return autoApproveActive;
         }
-        const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, this.provider);
+        const { index: buttonIndex, label: buttonLabel } = pickAutoApprovalButton(buttons);
         if (buttonIndex < 0) {
-            // No positive button matched — don't pick a random index, just
+            // No concrete button matched — don't pick a random index, just
             // surface the modal so the user can decide.
             return autoApproveActive;
         }
