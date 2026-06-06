@@ -201,8 +201,6 @@ export type {
   RepoMeshRefineConfig,
   RepoMeshRefineValidationCommandConfig,
 } from './mesh/refine-config.js';
-export { syncMeshes } from './mesh/mesh-sync.js';
-export type { MeshSyncTransport, MeshSyncResult, RemoteMeshRecord } from './mesh/mesh-sync.js';
 
 // ── Mesh Task Ledger ──
 export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEvidence, normalizeMeshWorkerResult, readLedgerEntries, readLedgerSlice, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, MAX_LEDGER_SLICE_LIMIT } from './mesh/mesh-ledger.js';
