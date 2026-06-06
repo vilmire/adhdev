@@ -540,6 +540,16 @@ export interface AvailableProviderInfo {
     sourceLayer?: 'user' | 'upstream' | 'external';
     /** For external providers, the source-name namespace it came from. */
     sourceName?: string | null;
+    /** Manifest-declared version, e.g. "1.2.1". */
+    providerVersion?: string;
+    /** Underlying executable name (CLI/binary providers). */
+    binary?: string;
+    /** Lifecycle label from the manifest: "Stable", "Beta", … */
+    status?: string;
+    /** One-line provider description from the manifest. */
+    details?: string;
+    /** Manifest-declared links: homepage, docs, repo, … */
+    links?: Record<string, string>;
 }
 
 export type ProviderTrust =

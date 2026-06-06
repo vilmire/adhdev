@@ -7,7 +7,6 @@ import type { ProviderSettingsEntry, ProviderInfo } from './types'
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
 import ProviderCloneModal from './ProviderCloneModal'
-import AddProviderSection from './AddProviderSection'
 import InstalledProviderRow from './InstalledProviderRow'
 import SourcesPanel from './SourcesPanel'
 
@@ -101,15 +100,6 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         await fetchSettings()
     }
 
-    const handleUninstall = async (providerType: string, category: string) => {
-        if (!confirm(`Uninstall ${providerType}? This removes the manifest from ~/.adhdev/marketplace/.`)) return
-        try {
-            await sendDaemonCommand(machineId, 'uninstall_provider_manifest', { type: providerType, category })
-        } finally {
-            await fetchSettings()
-        }
-    }
-
     const handleApplySourceConfig = async () => {
         setSourceSaving(true)
         try {
@@ -136,14 +126,6 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
 
     return (
         <div className="flex flex-col gap-3">
-            {/* Add provider — registry catalog browser (collapsible) */}
-            <AddProviderSection
-                machineId={machineId}
-                sendDaemonCommand={sendDaemonCommand}
-                installedTypes={new Set(settings.map(s => s.type))}
-                onInstalled={() => { void fetchSettings() }}
-            />
-
             {/* Toolbar: filter + create + refresh + advanced toggle */}
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-1 items-center">
@@ -258,7 +240,6 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                             onEnableToggle={handleMachineProviderEnable}
                             onDetect={handleDetectProvider}
                             onResetCommand={handleResetProviderCommand}
-                            onUninstall={handleUninstall}
                         />
                     ))}
                 </div>

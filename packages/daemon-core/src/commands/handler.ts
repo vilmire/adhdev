@@ -614,26 +614,30 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * Compute the *external install root*. This is always
-     * `~/.adhdev/external/` regardless of how ProviderLoader resolved its
-     * userDir (which can point to a sibling adhdev-providers git checkout in
-     * dev). External (3rd-party) manifests must never overwrite files in a
-     * developer checkout, and they should be isolated from upstream/registry
-     * sync so they survive `refresh_scripts`.
+     * Compute the *upstream cache root*. install_provider_manifest writes
+     * official-registry manifests here so the daemon's standard upstream
+     * layer picks them up — no special handling needed at load time, and
+     * the manifests inherit the official-trust badge instead of the
+     * untrusted-external one.
+     *
+     * Path matches ProviderLoader.upstreamDir but we recompute it from
+     * homedir() so this method stays usable in dev where userDir can
+     * point at a sibling git checkout.
      */
-    private getExternalInstallRoot(): string {
+    private getUpstreamInstallRoot(): string {
         const os = require('os') as typeof import('os');
         const path = require('path') as typeof import('path');
-        return path.join(os.homedir(), '.adhdev', 'external');
+        return path.join(os.homedir(), '.adhdev', 'providers', '.upstream');
     }
 
     /**
      * Download a single provider manifest from the registry and write it to
-     * ~/.adhdev/external/{category}/{type}/provider.json.
+     * ~/.adhdev/providers/.upstream/{category}/{type}/provider.json.
      *
-     * Used by the Dashboard's "Add from registry" button. Verifies SHA-256
-     * checksum against the registry meta before persisting. Refuses to write
-     * outside the external root.
+     * Used by standalone onboarding to seed the upstream cache with the
+     * default provider set on first launch. Verifies SHA-256 checksum
+     * against the registry meta before persisting. Refuses to write
+     * outside the upstream root.
      *
      * Args: { type: string, category?: string, version?: string }
      * If category/version are omitted, looks up the latest from the registry.
@@ -692,13 +696,13 @@ export class DaemonCommandHandler implements CommandHelpers {
                 return { success: false, error: `checksum mismatch: expected ${meta.checksum}, got ${actualChecksum}` };
             }
 
-            // 4. Write to the external install root, NOT to ProviderLoader.getUserDir():
+            // 4. Write to the upstream cache root, NOT to ProviderLoader.getUserDir():
             //    in dev, userDir points at the sibling adhdev-providers git checkout.
-            const installRoot = this.getExternalInstallRoot();
+            const installRoot = this.getUpstreamInstallRoot();
             const installRootResolved = path.resolve(installRoot);
             const targetDir = path.resolve(path.join(installRoot, category, type));
             if (!targetDir.startsWith(installRootResolved + path.sep)) {
-                return { success: false, error: 'install path escaped external root' };
+                return { success: false, error: 'install path escaped upstream root' };
             }
             fs.mkdirSync(targetDir, { recursive: true });
             // v1 vs v0 manifest selection — v1 manifests carry an SDK
@@ -981,9 +985,12 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * Remove a provider manifest from the external install root
-     * (~/.adhdev/external/{category}/{type}/). Refuses to touch anything
-     * outside that root.
+     * Remove a provider manifest from the upstream cache root
+     * (~/.adhdev/providers/.upstream/{category}/{type}/). Refuses to touch
+     * anything outside that root. Used by onboarding to opt out of a
+     * provider the user doesn't want; the dashboard no longer exposes a
+     * per-provider uninstall button (external sources are removed as a
+     * whole via remove_provider_source).
      */
     private async handleUninstallProviderManifest(args: any): Promise<CommandResult> {
         const type = typeof args?.type === 'string' ? args.type : '';
@@ -1000,12 +1007,12 @@ export class DaemonCommandHandler implements CommandHelpers {
         const path = require('path') as typeof import('path');
 
         try {
-            const installRoot = this.getExternalInstallRoot();
+            const installRoot = this.getUpstreamInstallRoot();
             const installRootResolved = path.resolve(installRoot);
             const targetDir = path.resolve(path.join(installRoot, category, type));
 
             if (!targetDir.startsWith(installRootResolved + path.sep)) {
-                return { success: false, error: 'refusing to delete outside external root' };
+                return { success: false, error: 'refusing to delete outside upstream root' };
             }
             if (!fs.existsSync(targetDir)) {
                 return { success: false, error: 'not installed' };
@@ -1025,7 +1032,7 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * Return everything currently installed in ~/.adhdev/external/ with its
+     * Return everything currently installed in the upstream cache with its
      * version. This is the "what does this daemon have" answer used both by
      * the UI and by the update checker.
      */
@@ -1033,7 +1040,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         const fs = require('fs') as typeof import('fs');
         const path = require('path') as typeof import('path');
 
-        const installRoot = this.getExternalInstallRoot();
+        const installRoot = this.getUpstreamInstallRoot();
         if (!fs.existsSync(installRoot)) return { success: true, providers: [] };
 
         const CATEGORIES = ['cli', 'ide', 'extension', 'acp'] as const;

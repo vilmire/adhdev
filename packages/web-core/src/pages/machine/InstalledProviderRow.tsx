@@ -4,7 +4,7 @@
  * Default state: compact line with icon, name, category badge, machine status
  * badge, Enable/Disable toggle, and an expand toggle. Expanded state shows
  * detection details + per-provider settings + secondary actions (Detect,
- * Reset command, Uninstall).
+ * Reset command).
  *
  * No Auto-Fix button. That feature was over-scoped for this surface; users
  * can edit the manifest directly or use the Reset command + Detect cycle.
@@ -55,7 +55,6 @@ interface InstalledProviderRowProps {
     onEnableToggle: (providerType: string, enabled: boolean) => Promise<void>
     onDetect: (providerType: string) => Promise<void>
     onResetCommand: (providerType: string) => Promise<void>
-    onUninstall: (providerType: string, category: string) => Promise<void>
 }
 
 export default function InstalledProviderRow({
@@ -66,7 +65,6 @@ export default function InstalledProviderRow({
     onEnableToggle,
     onDetect,
     onResetCommand,
-    onUninstall,
 }: InstalledProviderRowProps) {
     const [expanded, setExpanded] = useState(false)
     const enabled = providerInfo?.enabled === true || prov.values.enabled === true
@@ -120,6 +118,47 @@ export default function InstalledProviderRow({
             {/* Expanded body */}
             {expanded && (
                 <div className="border-t border-border-subtle px-4 py-3 flex flex-col gap-3">
+                    {/* Details: manifest metadata + source identity. Pulled
+                        from the daemon's status broadcast — no extra round-trip. */}
+                    <div className="grid gap-1 text-[10px] text-text-muted">
+                        <div><span className="text-text-secondary font-medium">Type:</span> <span className="font-mono">{prov.type}</span></div>
+                        {(providerInfo as any)?.providerVersion && (
+                            <div><span className="text-text-secondary font-medium">Version:</span> {(providerInfo as any).providerVersion}</div>
+                        )}
+                        {(providerInfo as any)?.binary && (
+                            <div><span className="text-text-secondary font-medium">Binary:</span> <span className="font-mono">{(providerInfo as any).binary}</span></div>
+                        )}
+                        {(providerInfo as any)?.status && (
+                            <div><span className="text-text-secondary font-medium">Status:</span> {(providerInfo as any).status}</div>
+                        )}
+                        {(providerInfo as any)?.details && (
+                            <div><span className="text-text-secondary font-medium">Details:</span> {(providerInfo as any).details}</div>
+                        )}
+                        {(providerInfo as any)?.sourceLayer && (
+                            <div>
+                                <span className="text-text-secondary font-medium">Source:</span>{' '}
+                                {(providerInfo as any).sourceLayer}
+                                {(providerInfo as any).sourceName ? ` · ${(providerInfo as any).sourceName}` : ''}
+                            </div>
+                        )}
+                        {(providerInfo as any)?.trust && (providerInfo as any)?.trustDescription && (
+                            <div><span className="text-text-secondary font-medium">Trust:</span> {(providerInfo as any).trustDescription}</div>
+                        )}
+                        {(providerInfo as any)?.links && Object.keys((providerInfo as any).links).length > 0 && (
+                            <div>
+                                <span className="text-text-secondary font-medium">Links:</span>{' '}
+                                {Object.entries((providerInfo as any).links).map(([k, v]) => (
+                                    <a
+                                        key={k}
+                                        href={String(v)}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-violet-400 hover:underline mr-2"
+                                    >{k}</a>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                     {isRuntime && (
                         <div className="grid gap-1 text-[10px] text-text-muted">
                             <div><span className="text-text-secondary font-medium">Detection:</span> {formatCheck(providerInfo?.lastDetection)}</div>
@@ -207,11 +246,6 @@ export default function InstalledProviderRow({
                                 >Reset command</button>
                             </>
                         )}
-                        <button
-                            onClick={() => void onUninstall(prov.type, prov.category)}
-                            className="machine-btn text-[10px] px-2 py-0.5 text-red-400 border-red-500/25 ml-auto"
-                            title="Remove manifest from ~/.adhdev/marketplace/"
-                        >Uninstall</button>
                     </div>
                 </div>
             )}
