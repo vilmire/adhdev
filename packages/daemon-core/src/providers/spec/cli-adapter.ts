@@ -26,8 +26,11 @@ import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { LOG } from '../../logging/logger.js';
 import {
+    buildClaudeInteractiveTuiAnswerSteps,
     buildClaudeInteractiveToolResult,
     detectClaudeAskUserQuestionPromptFromJson,
+    detectClaudeAskUserQuestionPromptFromTuiPages,
+    type ClaudeInteractiveTuiPage,
     type InteractivePrompt,
     type InteractivePromptResponse,
 } from '../types/interactive-prompt.js';
@@ -55,6 +58,8 @@ export class SpecCliAdapter implements CliAdapter {
     private ptyDataCallback: ((data: string) => void) | null = null;
     private partialResponse = '';
     private activeInteractivePrompt: InteractivePrompt | null = null;
+    private interactivePromptTransport: 'stream-json' | 'tui' | null = null;
+    private claudeTuiPromptCaptureInFlight = false;
     private jsonLineTail = '';
     private exited = false;
     private spawned = false;
@@ -226,11 +231,21 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     async setInteractivePromptResponse(response: InteractivePromptResponse): Promise<void> {
-        if (this.activeInteractivePrompt?.promptId === response.promptId) {
-            this.activeInteractivePrompt = null;
-        }
+        const prompt = this.activeInteractivePrompt;
+        if (!prompt || prompt.promptId !== response.promptId) throw new Error('Interactive prompt response does not match active prompt');
         if (this.cliType !== 'claude-cli') return;
-        this.driver.dispatch({ kind: 'pty_write', data: `${buildClaudeInteractiveToolResult(response)}\n` });
+        if (this.interactivePromptTransport === 'tui') {
+            const steps = buildClaudeInteractiveTuiAnswerSteps(prompt, response);
+            for (const step of steps) {
+                this.driver.dispatch({ kind: 'pty_write', data: step });
+                await new Promise(resolve => setTimeout(resolve, 180));
+            }
+        } else {
+            this.driver.dispatch({ kind: 'pty_write', data: `${buildClaudeInteractiveToolResult(response)}\n` });
+        }
+        this.activeInteractivePrompt = null;
+        this.interactivePromptTransport = null;
+        this.statusCallback?.();
     }
 
     isApprovalRecentlyResolved(): boolean { return false; }
@@ -325,10 +340,12 @@ export class SpecCliAdapter implements CliAdapter {
                 if (ev.state.title) {
                     LOG.debug('SpecAdapter', `[${this.cliType}] state.title=${JSON.stringify(ev.state.title)}`);
                 }
+                this.maybeCaptureClaudeTuiPrompt();
                 this.statusCallback?.();
                 return;
             case 'pty_data':
                 this.detectInteractivePromptFromPtyChunk(ev.chunk);
+                this.maybeCaptureClaudeTuiPrompt();
                 try { this.ptyDataCallback?.(ev.chunk); } catch { /* ignore */ }
                 return;
             case 'exit':
@@ -357,10 +374,57 @@ export class SpecCliAdapter implements CliAdapter {
                 const prompt = detectClaudeAskUserQuestionPromptFromJson(parsed, this.cliType);
                 if (!prompt) continue;
                 this.activeInteractivePrompt = prompt;
+                this.interactivePromptTransport = 'stream-json';
                 this.statusCallback?.();
             } catch {
                 // PTY output is not guaranteed to be machine JSON.
             }
         }
+    }
+
+    private maybeCaptureClaudeTuiPrompt(): void {
+        if (this.cliType !== 'claude-cli'
+            || this.activeInteractivePrompt
+            || this.claudeTuiPromptCaptureInFlight) return;
+        const screenText = this.driver.snapshot();
+        const headers = this.readClaudeTuiHeaders(screenText);
+        if (headers.length === 0 || !screenText.includes('Enter to select')) return;
+        this.claudeTuiPromptCaptureInFlight = true;
+        void this.captureClaudeTuiPrompt(screenText, headers).finally(() => {
+            this.claudeTuiPromptCaptureInFlight = false;
+        });
+    }
+
+    private readClaudeTuiHeaders(screenText: string): string[] {
+        const navLine = screenText.split(/\r?\n/).find(line => line.includes('✔ Submit') && /[☐☒]/.test(line));
+        if (!navLine) return [];
+        const headers: string[] = [];
+        for (const match of navLine.matchAll(/[☐☒]\s+(.+?)(?=\s+[☐☒]|\s+✔\s+Submit)/g)) {
+            const header = match[1]?.trim();
+            if (header) headers.push(header);
+        }
+        return headers;
+    }
+
+    private async captureClaudeTuiPrompt(firstScreen: string, headers: string[]): Promise<void> {
+        const pages: ClaudeInteractiveTuiPage[] = [{ screenText: firstScreen, header: headers[0] }];
+        for (let index = 1; index < headers.length; index += 1) {
+            this.driver.dispatch({ kind: 'pty_write', data: '\t' });
+            await new Promise(resolve => setTimeout(resolve, 120));
+            pages.push({ screenText: this.driver.snapshot(), header: headers[index] });
+        }
+        for (let index = headers.length - 1; index > 0; index -= 1) {
+            this.driver.dispatch({ kind: 'pty_write', data: '\x1b[Z' });
+            await new Promise(resolve => setTimeout(resolve, 80));
+        }
+
+        const prompt = detectClaudeAskUserQuestionPromptFromTuiPages(pages, {
+            promptId: `ask-user-${this.providerSessionId || 'claude'}-${Date.now()}`,
+            providerType: this.cliType,
+        });
+        if (!prompt) return;
+        this.activeInteractivePrompt = prompt;
+        this.interactivePromptTransport = 'tui';
+        this.statusCallback?.();
     }
 }

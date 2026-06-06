@@ -132,6 +132,122 @@ export function buildClaudeInteractiveToolResult(response: InteractivePromptResp
   });
 }
 
+export interface ClaudeInteractiveTuiPage {
+  screenText: string;
+  header?: string;
+}
+
+function claudeTuiQuestionHeaders(screenText: string): string[] {
+  const navLine = screenText.split(/\r?\n/).find(line => line.includes('✔ Submit') && /[☐☒]/.test(line));
+  if (!navLine) return [];
+  const headers: string[] = [];
+  const pattern = /[☐☒]\s+(.+?)(?=\s+[☐☒]|\s+✔\s+Submit)/g;
+  for (const match of navLine.matchAll(pattern)) {
+    const header = readString(match[1]);
+    if (header) headers.push(header);
+  }
+  return headers;
+}
+
+function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
+  const lines = page.screenText.split(/\r?\n/);
+  let navIndex = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].includes('✔ Submit') && /[☐☒]/.test(lines[i])) {
+      navIndex = i;
+      break;
+    }
+  }
+  if (navIndex < 0 || !page.screenText.includes('Enter to select')) return null;
+
+  let question = '';
+  let questionLineIndex = -1;
+  for (let i = navIndex + 1; i < lines.length; i += 1) {
+    const candidate = lines[i].trim();
+    if (!candidate || /^─+$/.test(candidate)) continue;
+    if (candidate === 'Review your answers' || candidate === 'Ready to submit your answers?') return null;
+    question = candidate;
+    questionLineIndex = i;
+    break;
+  }
+  if (!question) return null;
+
+  const options: InteractiveOption[] = [];
+  let allowFreeform = false;
+  const optionPattern = /^\s*(?:[❯›>]\s*)?(\d+)\.\s+(.+?)\s*$/;
+  for (let i = questionLineIndex + 1; i < lines.length; i += 1) {
+    const match = lines[i].match(optionPattern);
+    if (!match) continue;
+    const label = match[2].trim();
+    if (/^Type something\.?$/i.test(label)) {
+      allowFreeform = true;
+      continue;
+    }
+    if (/^Chat about this$/i.test(label)) continue;
+
+    let description: string | undefined;
+    const nextLine = lines[i + 1]?.trim();
+    if (nextLine
+      && !optionPattern.test(lines[i + 1])
+      && !/^─+$/.test(nextLine)
+      && !/^Enter to select\b/.test(nextLine)) {
+      description = nextLine;
+    }
+    options.push({ label, ...(description ? { description } : {}) });
+  }
+  if (options.length === 0) return null;
+
+  const header = readString(page.header);
+  return {
+    questionId: `q${index + 1}`,
+    question,
+    ...(header ? { header } : {}),
+    multiSelect: /Space to select|toggle selections/i.test(page.screenText),
+    options,
+    ...(allowFreeform ? { allowFreeform: true } : {}),
+  };
+}
+
+export function detectClaudeAskUserQuestionPromptFromTuiPages(
+  pages: ClaudeInteractiveTuiPage[],
+  options: { promptId: string; providerType?: string; createdAt?: number },
+): InteractivePrompt | null {
+  if (pages.length === 0) return null;
+  const headers = claudeTuiQuestionHeaders(pages[0].screenText);
+  const questions = pages.map((page, index) => parseClaudeInteractiveTuiQuestion({
+    ...page,
+    header: page.header || headers[index],
+  }, index)).filter((question): question is InteractiveQuestion => !!question);
+  if (questions.length !== pages.length) return null;
+  return {
+    promptId: options.promptId,
+    origin: 'cli',
+    providerType: options.providerType || 'claude-cli',
+    createdAt: options.createdAt || Date.now(),
+    questions,
+  };
+}
+
+export function buildClaudeInteractiveTuiAnswerSteps(
+  prompt: InteractivePrompt,
+  response: InteractivePromptResponse,
+): string[] {
+  if (response.promptId !== prompt.promptId) throw new Error('Interactive prompt response does not match active prompt');
+  const steps: string[] = [];
+  for (const question of prompt.questions) {
+    if (question.multiSelect) throw new Error('Claude TUI multi-select prompts are not supported yet');
+    const answer = response.answers[question.questionId];
+    if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
+    if (answer.freeformText) throw new Error('Claude TUI freeform answers are not supported yet');
+    if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
+    const selectedIndex = question.options.findIndex(option => option.label === answer.selectedLabels[0]);
+    if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
+    steps.push(`${'\x1b[B'.repeat(selectedIndex)}\r`);
+  }
+  steps.push('\r');
+  return steps;
+}
+
 export function interactivePromptFromClaudeAskUserQuestion(input: unknown, options: {
   promptId: string;
   providerType: string;
