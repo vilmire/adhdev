@@ -2282,6 +2282,11 @@ export class ProviderLoader {
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
           if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
+          // `examples/` is a documentation / scaffold tree (e.g. stub-cli),
+          // not a real provider source. SDK authors copy from here when
+          // writing a new provider; daemon-core tests reference the
+          // manifest by path. Keep it off the dashboard's provider list.
+          if (d === dir && entry.name === 'examples') continue;
           if (excludeDirs && d === dir && excludeDirs.includes(entry.name)) continue;
           scan(path.join(d, entry.name));
         }

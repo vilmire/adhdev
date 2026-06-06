@@ -148,6 +148,11 @@ function buildAvailableProviders(
         _sourceTrust?: AvailableProviderInfo['trust'];
         _sourceLayer?: AvailableProviderInfo['sourceLayer'];
         _sourceName?: string | null;
+        providerVersion?: string;
+        binary?: string;
+        status?: string;
+        details?: string;
+        links?: Record<string, string>;
     }> = providerLoader.getAvailableProviderInfos?.() || providerLoader.getAll();
     // Trust helpers come from daemon-core; resolve them lazily so the
     // status snapshot path stays loadable in older bundles that don't
@@ -183,6 +188,11 @@ function buildAvailableProviders(
             } : {}),
             ...(sourceLayer ? { sourceLayer } : {}),
             ...(sourceName ? { sourceName } : {}),
+            ...(provider.providerVersion ? { providerVersion: provider.providerVersion } : {}),
+            ...(provider.binary ? { binary: provider.binary } : {}),
+            ...(provider.status ? { status: provider.status } : {}),
+            ...(provider.details ? { details: provider.details } : {}),
+            ...(provider.links ? { links: provider.links } : {}),
         };
     });
 }
