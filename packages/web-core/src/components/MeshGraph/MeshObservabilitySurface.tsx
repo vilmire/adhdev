@@ -40,6 +40,13 @@ type GitHistoryState = {
     entries: GitLogEntry[]
 }
 
+type HealPreviewState = {
+    phase: 'dry_run' | 'execute'
+    code?: string
+    error?: string | null
+    executed?: boolean
+}
+
 const EMPTY_LEDGER_SUMMARY = { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 }
 
 const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
@@ -299,6 +306,8 @@ export default function MeshObservabilitySurface({
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
     const [gitHistoryByWorkspace, setGitHistoryByWorkspace] = useState<Record<string, GitHistoryState>>({})
+    const [healPreview, setHealPreview] = useState<HealPreviewState | null>(null)
+    const [healingNodeId, setHealingNodeId] = useState<string | null>(null)
 
     const nodeStatusById = useMemo(() => new Map(canonicalStatus.nodes.map(node => [node.nodeId, node])), [canonicalStatus.nodes])
     const graphNodeById = useMemo(() => new Map(canonicalGraph.nodes.map(node => [node.id, node])), [canonicalGraph.nodes])
@@ -366,11 +375,71 @@ export default function MeshObservabilitySurface({
     const selectedGitWorkspace = selectedGitRequest?.workspace ?? null
     const selectedGitHistory = selectedGitWorkspace ? gitHistoryByWorkspace[selectedGitWorkspace] ?? null : null
     const selectedHeadSummary = summarizeSelectedHead(selectedNodeStatus, selectedGitHistory?.entries ?? [])
+    const selectedHealDaemonId = selectedGraphNode?.daemonId ?? selectedNodeStatus?.daemonId ?? daemonId ?? null
+    const canHealSelectedNode = !!(
+        selectedGraphNode
+        && sendDaemonCommand
+        && selectedHealDaemonId
+        && selectedGraphNode.type !== 'submoduleNode'
+        && selectedGraphNode.behind > 0
+        && selectedGraphNode.ahead === 0
+        && selectedGraphNode.dirtyFiles === 0
+        && !selectedGraphNode.dirty
+        && !selectedGraphNode.hasConflicts
+        && selectedGraphNode.upstreamStatus === 'fresh'
+    )
 
     const closeGraphDetail = useCallback(() => {
         setSelectedNodeId(null)
         setDetailSelection(null)
+        setHealPreview(null)
     }, [])
+
+    useEffect(() => {
+        setHealPreview(null)
+    }, [selectedNodeId])
+
+    const handleHealSelectedNode = useCallback(async () => {
+        if (!selectedGraphNode || !selectedHealDaemonId || !sendDaemonCommand || !canHealSelectedNode) return
+        setHealingNodeId(selectedGraphNode.id)
+        setHealPreview(null)
+        try {
+            const dryRun = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
+                meshId: canonicalStatus.meshId,
+                nodeId: selectedGraphNode.id,
+                dryRun: true,
+                execute: false,
+            })
+            setHealPreview({
+                phase: 'dry_run',
+                code: typeof dryRun?.code === 'string' ? dryRun.code : undefined,
+                error: typeof dryRun?.operationError === 'string' ? dryRun.operationError : null,
+                executed: dryRun?.executed === true,
+            })
+            if (!dryRun?.success || dryRun.code !== 'fast_forward_available') return
+            const ok = window.confirm(`Apply fast-forward for ${selectedGraphNode.label}?`)
+            if (!ok) return
+            const executed = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
+                meshId: canonicalStatus.meshId,
+                nodeId: selectedGraphNode.id,
+                dryRun: false,
+                execute: true,
+            })
+            setHealPreview({
+                phase: 'execute',
+                code: typeof executed?.code === 'string' ? executed.code : undefined,
+                error: typeof executed?.operationError === 'string' ? executed.operationError : null,
+                executed: executed?.executed === true,
+            })
+        } catch (error) {
+            setHealPreview({
+                phase: 'dry_run',
+                error: error instanceof Error ? error.message : 'fast-forward failed',
+            })
+        } finally {
+            setHealingNodeId(null)
+        }
+    }, [canHealSelectedNode, canonicalStatus.meshId, selectedGraphNode, selectedHealDaemonId, sendDaemonCommand])
 
     useEffect(() => {
         if (!selectedGraphNode) return
@@ -551,13 +620,25 @@ export default function MeshObservabilitySurface({
                                         <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphNode.label}</div>
                                         <div className={`mt-1 font-mono text-[11px] ${meshTheme.textMuted}`}>{selectedGraphNode.id.slice(0, 16)}</div>
                                     </div>
-                                    <button
-                                        type="button"
-                                        onClick={closeGraphDetail}
-                                        className={meshTheme.isDark ? 'rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-slate-200 transition hover:bg-white/[0.08]' : 'rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:bg-slate-50'}
-                                    >
-                                        Close
-                                    </button>
+                                    <div className="flex shrink-0 items-center gap-2">
+                                        {selectedGraphNode.behind > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => { void handleHealSelectedNode() }}
+                                                disabled={!canHealSelectedNode || healingNodeId === selectedGraphNode.id}
+                                                className={meshTheme.isDark ? 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-45' : 'rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45'}
+                                            >
+                                                {healingNodeId === selectedGraphNode.id ? 'Checking' : 'Heal'}
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={closeGraphDetail}
+                                            className={meshTheme.isDark ? 'rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-slate-200 transition hover:bg-white/[0.08]' : 'rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:bg-slate-50'}
+                                        >
+                                            Close
+                                        </button>
+                                    </div>
                                 </div>
                                 <div className="mb-3 flex flex-wrap gap-2">
                                     <Badge label={selectedNodeStatus?.health ?? selectedGraphNode.health} tone={healthTone(selectedNodeStatus?.health ?? selectedGraphNode.health)} />
@@ -641,6 +722,12 @@ export default function MeshObservabilitySurface({
                                     <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
                                         <div className="font-medium">Follow-up</div>
                                         <div className="mt-1">{selectedGraphNode.branchConvergence.nextStep}</div>
+                                    </div>
+                                )}
+                                {healPreview && (
+                                    <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-xs text-emerald-100' : 'mt-3 rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-800'}>
+                                        <div className="font-medium">{healPreview.phase === 'execute' ? 'Heal result' : 'Heal preview'}</div>
+                                        <div className="mt-1">{healPreview.code ?? healPreview.error ?? 'No result code returned.'}</div>
                                     </div>
                                 )}
                             </section>

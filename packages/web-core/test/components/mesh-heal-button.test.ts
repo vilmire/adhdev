@@ -1,0 +1,20 @@
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const source = readFileSync(
+  join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface.tsx'),
+  'utf-8',
+)
+
+describe('MeshObservabilitySurface heal action', () => {
+  it('keeps mesh node healing dry-run first with explicit confirmation before execute', () => {
+    expect(source).toContain('fast_forward_mesh_node')
+    expect(source).toContain('dryRun: true')
+    expect(source).toContain("dryRun.code !== 'fast_forward_available'")
+    expect(source).toContain('window.confirm')
+    expect(source).toContain('execute: true')
+    expect(source).toContain('selectedGraphNode.behind > 0')
+    expect(source).toContain('selectedGraphNode.dirtyFiles === 0')
+  })
+})
