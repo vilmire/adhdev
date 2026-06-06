@@ -521,6 +521,45 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     }
   })
 
+  it('does not emit short completion for providers that require final assistant evidence', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'codex-cli',
+        name: 'Codex CLI',
+        category: 'cli',
+        spawn: { command: 'codex', args: [] },
+        requiresFinalAssistantBeforeIdle: true,
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+
+      let status = 'generating'
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({
+          status,
+          title: 'Codex CLI',
+          messages: [],
+        }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      status = 'idle'
+      instance.detectStatusTransition()
+
+      expect(events.map((event) => event.event)).not.toContain('agent:generating_completed')
+      expect(instance.lastStatus).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('emits completion with timeout diagnostics if idle parser never exposes a final assistant turn', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))

@@ -1256,17 +1256,21 @@ export class CliProviderInstance implements ProviderInstance {
                     // started/completed pair is suppressed (too short for visible UI update).
                     let shortFinalSummary: string | undefined;
                     try { shortFinalSummary = extractFinalSummaryFromMessages(this.adapter?.getScriptParsedStatus()?.messages); } catch { /* best-effort */ }
-                    this.pushEvent({
-                        event: 'agent:generating_completed',
-                        chatTitle,
-                        duration: 0,
-                        timestamp: now,
-                        finalSummary: shortFinalSummary,
-                        completionDiagnostic: {
-                            reason: 'short_generating_suppressed',
-                            shortDurationMs,
-                        },
-                    });
+                    if ((this.provider as any).requiresFinalAssistantBeforeIdle === true && !shortFinalSummary) {
+                        LOG.info('CLI', `[${this.type}] suppressed short completion without final assistant evidence`);
+                    } else {
+                        this.pushEvent({
+                            event: 'agent:generating_completed',
+                            chatTitle,
+                            duration: 0,
+                            timestamp: now,
+                            finalSummary: shortFinalSummary,
+                            completionDiagnostic: {
+                                reason: 'short_generating_suppressed',
+                                shortDurationMs,
+                            },
+                        });
+                    }
                 } else {
                     // Debounce completed, then require the rich transcript path that read_chat
                     // uses to show an idle turn whose last user-facing message is assistant.
