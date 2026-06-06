@@ -31,6 +31,7 @@ import {
     buildMeshAsyncRefineJobs,
     buildMeshLedgerReconciliationEvidence,
     buildMeshLedgerReplicaEvidence,
+    buildMeshNodeCapabilityTags,
     buildP2pRelayFailurePayload,
     cancelTask,
     classifyP2pRelayFailure,
@@ -43,6 +44,8 @@ import {
     insertDirectDispatch,
     isP2pRelayTransportFailure,
     markStaleDirectDispatches,
+    nodeSatisfiesRequiredTags,
+    normalizeMeshCapabilityTags,
     readLedgerEntries,
     readLedgerSlice,
     requeueTask,
@@ -1889,6 +1892,8 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             message: { type: 'string', description: 'The task instruction for the agent.' },
             task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch.' },
             taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
+            requiredTags: { type: 'array', items: { type: 'string' }, description: 'Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu.' },
+            required_tags: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for requiredTags.' },
         },
         required: ['message'],
     },
@@ -2616,16 +2621,17 @@ export async function meshListNodes(ctx: MeshContext): Promise<string> {
 
 export async function meshEnqueueTask(
     ctx: MeshContext,
-    args: { message: string; task_mode?: string; taskMode?: string },
+    args: { message: string; task_mode?: string; taskMode?: string; requiredTags?: string[]; required_tags?: string[] },
 ): Promise<string> {
     const taskMode = readString(args.task_mode) || readString(args.taskMode);
+    const requiredTags = normalizeMeshCapabilityTags(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
     try {
-        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode });
+        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags });
 
         // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
         if (isLocalTransport(ctx.transport) && !(ctx.transport instanceof IpcTransport)) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-            return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode });
+            return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
         }
 
         // ── IpcTransport (Cloud Mesh): the queue file lives on THIS machine only.
@@ -2641,6 +2647,7 @@ export async function meshEnqueueTask(
             for (const node of ctx.mesh.nodes) {
                 const isLocalNode = isLocalControlPlaneNode(ctx, node);
                 if (isLocalNode || !node.daemonId) continue;
+                if (!nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node))) continue;
 
                 dispatchPromises.push(
                     ipcDispatchToRemoteAgent(ctx, node, { message: args.message })
@@ -2689,11 +2696,11 @@ export async function meshEnqueueTask(
             // Fire-and-forget — don't block the coordinator response
             Promise.all(dispatchPromises).catch(() => {});
 
-            return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode });
+            return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
         }
 
         // ── CloudTransport fallback ───────────────────────────────────────────────
-        return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode });
+        return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
     } catch (e: any) {
         const message = e?.message || String(e);
         if (message.includes('live_debug_readonly_guardrail_violation')) {
