@@ -393,17 +393,90 @@ export class ProviderLoader {
       this.log('Upstream loading disabled (sourceMode=no-upstream)');
     }
 
- // 2. Load external providers from ~/.adhdev/external/ (3rd-party git sources).
- //    Overrides upstream but is itself overridden by user customs in step 3.
- //    Providers here originate from non-official git URLs that the user added;
- //    any non-spec manifest (tui block / overrides / scriptDir) runs JS the
- //    daemon hasn't audited, so dashboards must surface an "untrusted source"
- //    badge before letting the user enable them.
+ // 2. Load external providers from ~/.adhdev/external/<source-name>/
+ //    (3rd-party git sources). Overrides upstream but is itself overridden
+ //    by user customs in step 3.
+ //
+ //    Each registered source is a separate subdirectory so two sources can
+ //    both expose the same provider type without overwriting each other.
+ //    When more than one source provides the same type, providers-active.json
+ //    chooses the active one; without an explicit choice we deterministically
+ //    pick the first in disk-walk order and log the ambiguity so the user
+ //    can resolve it from the dashboard.
+ //
+ //    Any non-spec manifest (tui block / overrides / scriptDir) coming from
+ //    an external source runs JavaScript the daemon hasn't audited, so
+ //    dashboards must surface an "untrusted source" badge before letting
+ //    the user enable them.
     const externalDir = path.join(os.homedir(), '.adhdev', 'external');
     if (fs.existsSync(externalDir)) {
-      const externalCount = this.loadDir(externalDir);
-      if (externalCount > 0) {
-        this.log(`Loaded ${externalCount} external providers (3rd-party sources)`);
+      // Legacy layout (pre-source-namespace): manifests sit directly at
+      // external/<category>/<type>/. Detect by presence of category dirs at
+      // the root and migrate inline by treating the whole tree as a single
+      // implicit source. Loader behavior unchanged for legacy callers.
+      const rootEntries = (() => {
+        try { return fs.readdirSync(externalDir, { withFileTypes: true }); }
+        catch { return [] as fs.Dirent[]; }
+      })();
+      const KNOWN_CATEGORIES = new Set(['cli', 'ide', 'extension', 'acp']);
+      const looksLegacy = rootEntries.some(e => e.isDirectory() && KNOWN_CATEGORIES.has(e.name));
+      if (looksLegacy) {
+        // Tree shape predates per-source dirs — treat the whole thing as a
+        // single anonymous source so existing installs keep working until
+        // they're migrated to a real source registration.
+        const externalCount = this.loadDir(externalDir);
+        if (externalCount > 0) {
+          this.log(`Loaded ${externalCount} external providers (legacy unnamed source)`);
+        }
+      } else {
+        // New layout: external/<source-name>/<category>/<type>/…
+        const {
+          loadProvidersActive,
+          resolveActiveSource,
+        } = require('./external-sources.js') as typeof import('./external-sources.js');
+        const activeFile = loadProvidersActive();
+        let totalLoaded = 0;
+        const ambiguousTypes: { type: string; chosen: string; candidates: string[] }[] = [];
+        // Per-source load, then filter by active-selection: for each type
+        // present in more than one source, only the active source's copy
+        // is left in this.providers.
+        for (const sourceEntry of rootEntries) {
+          if (!sourceEntry.isDirectory()) continue;
+          const sourceDir = path.join(externalDir, sourceEntry.name);
+          const sourceLoaded = this.loadDir(sourceDir);
+          if (sourceLoaded > 0) {
+            totalLoaded += sourceLoaded;
+            this.log(`Loaded ${sourceLoaded} providers from external source "${sourceEntry.name}"`);
+          }
+        }
+        // Resolve ambiguities — when the same type came from multiple
+        // sources, the last load wins by default. Replay with the active
+        // selection so the user-chosen source ends up winning.
+        for (const [type] of this.providers) {
+          const prov = this.providers.get(type);
+          if (!prov) continue;
+          const resolved = resolveActiveSource(prov.category, type, activeFile);
+          if (resolved.candidates.length <= 1) continue;
+          if (resolved.ambiguous) {
+            ambiguousTypes.push({ type, chosen: resolved.source ?? '?', candidates: resolved.candidates });
+          }
+          if (resolved.source && resolved.source !== '?') {
+            const sourceDir = path.join(externalDir, resolved.source);
+            // Reload only this source's copy of the conflicting type so it
+            // overwrites whatever else won the initial pass.
+            const reloadCount = this.loadDir(sourceDir);
+            // reloadCount is a sanity check — we expect ≥1
+            if (reloadCount === 0) {
+              this.log(`Active source "${resolved.source}" no longer provides ${type}`);
+            }
+          }
+        }
+        if (totalLoaded > 0) {
+          this.log(`Loaded ${totalLoaded} external providers (3rd-party sources)`);
+        }
+        for (const a of ambiguousTypes) {
+          this.log(`Ambiguous provider "${a.type}" — provided by [${a.candidates.join(', ')}], defaulted to "${a.chosen}". Set the active source from the dashboard to silence this warning.`);
+        }
       }
     }
 

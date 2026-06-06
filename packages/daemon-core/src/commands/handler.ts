@@ -515,6 +515,10 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'uninstall_provider_manifest': return this.handleUninstallProviderManifest(args);
             case 'check_provider_updates': return this.handleCheckProviderUpdates(args);
             case 'list_installed_providers': return this.handleListInstalledProviders(args);
+            case 'add_provider_source': return this.handleAddProviderSource(args);
+            case 'remove_provider_source': return this.handleRemoveProviderSource(args);
+            case 'list_provider_sources': return this.handleListProviderSources(args);
+            case 'set_active_provider_source': return this.handleSetActiveProviderSource(args);
 
             // ─── Stream commands (stream-commands.ts) ───────────
             case 'select_session': return Stream.handleSelectSession(this, args);
@@ -1110,6 +1114,214 @@ export class DaemonCommandHandler implements CommandHelpers {
         );
 
         return { success: true, providers: checks };
+    }
+
+    // ─── External provider sources (3rd-party git URLs) ──────────────
+
+    /**
+     * Register a new external provider source. The daemon clones the repo
+     * to ~/.adhdev/external/<name>/, walks it once to detect provided
+     * types, and surfaces any conflicts with already-installed types so
+     * the dashboard can ask the user how to resolve them.
+     *
+     * Args: { url: string, ref?: string, name?: string }
+     *   - url: https://, git@, or any git-cloneable URL
+     *   - ref: branch/tag/commit (default "main")
+     *   - name: short identifier (default derived from URL)
+     *
+     * Returns: { source, providers, conflicts }
+     *   - conflicts: list of types this new source provides that another
+     *     source already exposes. UI uses this to prompt for active-source
+     *     selection before the load takes effect.
+     */
+    private async handleAddProviderSource(args: any): Promise<CommandResult> {
+        const url = typeof args?.url === 'string' ? args.url.trim() : '';
+        if (!url) return { success: false, error: 'url is required' };
+        const ref = typeof args?.ref === 'string' && args.ref.trim() ? args.ref.trim() : 'main';
+        const ext = require('../providers/external-sources.js') as typeof import('../providers/external-sources.js');
+        const requestedName = typeof args?.name === 'string' && args.name.trim() ? args.name.trim() : ext.deriveSourceName(url);
+        if (!/^@[a-z0-9_-]+$/i.test(requestedName)) {
+            return { success: false, error: 'name must match @[a-z0-9_-]+' };
+        }
+
+        const fs = require('node:fs') as typeof import('node:fs');
+        const path = require('node:path') as typeof import('node:path');
+        const { spawnSync } = require('node:child_process') as typeof import('node:child_process');
+
+        const file = ext.loadExternalSources();
+        if (file.sources.some(s => s.name === requestedName)) {
+            return { success: false, error: `source name "${requestedName}" is already registered` };
+        }
+        if (file.sources.some(s => s.url === url && s.ref === ref)) {
+            return { success: false, error: `source url+ref already registered (use a different name to track another ref)` };
+        }
+
+        const sourceDir = path.join(ext.externalRoot(), requestedName);
+        if (!fs.existsSync(ext.externalRoot())) fs.mkdirSync(ext.externalRoot(), { recursive: true });
+        if (fs.existsSync(sourceDir)) {
+            return { success: false, error: `directory already exists: ${sourceDir} (rename or remove first)` };
+        }
+
+        const clone = spawnSync('git', ['clone', '--depth=1', '--branch', ref, url, sourceDir], {
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: 60_000,
+        });
+        if (clone.status !== 0) {
+            try { fs.rmSync(sourceDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+            return { success: false, error: `git clone failed: ${(clone.stderr || clone.stdout || '').trim() || 'unknown error'}` };
+        }
+
+        const source: import('../providers/external-sources.js').ExternalSource = {
+            name: requestedName,
+            url,
+            ref,
+            addedAt: new Date().toISOString(),
+        };
+        ext.saveExternalSources({ schema: 1, sources: [...file.sources, source] });
+
+        // Detect type-level conflicts with what's already on disk after this clone.
+        const inventory = ext.inventoryExternalSources();
+        const conflicts: { category: string; type: string; sources: string[] }[] = [];
+        const newEntry = inventory.find(e => e.sourceName === requestedName);
+        if (newEntry) {
+            for (const [category, types] of Object.entries(newEntry.providers)) {
+                for (const type of types) {
+                    const sources = ext.sourcesProviding(category, type);
+                    if (sources.length > 1) conflicts.push({ category, type, sources });
+                }
+            }
+        }
+
+        // Hot-reload so the daemon picks up the new providers immediately.
+        if (this._ctx.providerLoader) {
+            this._ctx.providerLoader.reload();
+            this._ctx.providerLoader.registerToDetector();
+        }
+
+        return {
+            success: true,
+            source,
+            providers: newEntry?.providers ?? {},
+            conflicts,
+        };
+    }
+
+    /**
+     * Remove a registered external source. Deletes the clone directory and
+     * any active-source entry pointing to it.
+     *
+     * Args: { name: string }
+     */
+    private async handleRemoveProviderSource(args: any): Promise<CommandResult> {
+        const name = typeof args?.name === 'string' ? args.name.trim() : '';
+        if (!name) return { success: false, error: 'name is required' };
+        const ext = require('../providers/external-sources.js') as typeof import('../providers/external-sources.js');
+
+        const fs = require('node:fs') as typeof import('node:fs');
+        const path = require('node:path') as typeof import('node:path');
+        const file = ext.loadExternalSources();
+        const match = file.sources.find(s => s.name === name);
+        if (!match) return { success: false, error: `source "${name}" not registered` };
+
+        const sourceDir = path.join(ext.externalRoot(), name);
+        if (fs.existsSync(sourceDir)) {
+            try { fs.rmSync(sourceDir, { recursive: true, force: true }); }
+            catch (e: any) { return { success: false, error: `failed to delete ${sourceDir}: ${e?.message || e}` }; }
+        }
+
+        ext.saveExternalSources({
+            schema: 1,
+            sources: file.sources.filter(s => s.name !== name),
+        });
+
+        // Drop any active-source entries that pointed at this source.
+        const active = ext.loadProvidersActive();
+        const filteredActive: Record<string, string> = {};
+        for (const [type, src] of Object.entries(active.active)) {
+            if (src !== name) filteredActive[type] = src;
+        }
+        ext.saveProvidersActive({ schema: 1, active: filteredActive });
+
+        if (this._ctx.providerLoader) {
+            this._ctx.providerLoader.reload();
+            this._ctx.providerLoader.registerToDetector();
+        }
+
+        return { success: true, removed: { name } };
+    }
+
+    /**
+     * List registered external sources + each source's currently installed
+     * providers + the active selection for any conflicting types. Used by
+     * the dashboard's "Sources" tab.
+     */
+    private handleListProviderSources(_args: any): CommandResult {
+        const ext = require('../providers/external-sources.js') as typeof import('../providers/external-sources.js');
+        const file = ext.loadExternalSources();
+        const inventory = ext.inventoryExternalSources();
+        const active = ext.loadProvidersActive();
+
+        // Build a per-source view + flag types that have ambiguity.
+        const sources = file.sources.map(s => {
+            const inv = inventory.find(e => e.sourceName === s.name);
+            return {
+                ...s,
+                providers: inv?.providers ?? {},
+            };
+        });
+
+        // Compute conflicts globally — any type provided by ≥ 2 sources.
+        const conflictMap = new Map<string, { category: string; sources: string[] }>();
+        for (const inv of inventory) {
+            for (const [category, types] of Object.entries(inv.providers)) {
+                for (const type of types) {
+                    const candidates = ext.sourcesProviding(category, type);
+                    if (candidates.length > 1 && !conflictMap.has(type)) {
+                        conflictMap.set(type, { category, sources: candidates });
+                    }
+                }
+            }
+        }
+        const conflicts = [...conflictMap.entries()].map(([type, info]) => ({
+            type,
+            category: info.category,
+            candidates: info.sources,
+            active: active.active[type] ?? null,
+        }));
+
+        return { success: true, sources, conflicts };
+    }
+
+    /**
+     * Pick which source's copy of a conflicting provider type is active.
+     * Other sources' copies stay on disk but the loader ignores them.
+     *
+     * Args: { type: string, sourceName: string }
+     */
+    private handleSetActiveProviderSource(args: any): CommandResult {
+        const type = typeof args?.type === 'string' ? args.type.trim() : '';
+        const sourceName = typeof args?.sourceName === 'string' ? args.sourceName.trim() : '';
+        if (!type || !sourceName) return { success: false, error: 'type and sourceName are required' };
+        const ext = require('../providers/external-sources.js') as typeof import('../providers/external-sources.js');
+
+        // Validate: the source must actually provide that type.
+        const inventory = ext.inventoryExternalSources();
+        const entry = inventory.find(e => e.sourceName === sourceName);
+        if (!entry) return { success: false, error: `source "${sourceName}" not found` };
+        const provided = Object.values(entry.providers).some(types => types.includes(type));
+        if (!provided) return { success: false, error: `source "${sourceName}" does not provide type "${type}"` };
+
+        const active = ext.loadProvidersActive();
+        active.active[type] = sourceName;
+        ext.saveProvidersActive(active);
+
+        if (this._ctx.providerLoader) {
+            this._ctx.providerLoader.reload();
+            this._ctx.providerLoader.registerToDetector();
+        }
+
+        return { success: true, type, sourceName };
     }
 
     // ─── DevServer HTTP proxy helpers ─────────────────
