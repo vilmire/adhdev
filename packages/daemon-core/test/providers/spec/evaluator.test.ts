@@ -126,6 +126,43 @@ describe('spec evaluator — codex-cli', () => {
         ]);
         expect(ev.modal?.buttons[0].key).toBe('1\r');
     });
+
+    it('recognizes wrapped Codex shell escalation prompts and preserves labels', () => {
+        const screen = [
+            'Earlier transcript line 1',
+            'Earlier transcript line 2',
+            'Earlier transcript line 3',
+            'Earlier transcript line 4',
+            'Earlier transcript line 5',
+            'Earlier transcript line 6',
+            'Earlier transcript line 7',
+            'Earlier transcript line 8',
+            'Earlier transcript line 9',
+            'Would you like to run the following command?',
+            '',
+            'Reason: The patched standalone is listening on 127.0.0.1:3848 but sandbox curl cannot connect;',
+            'allow reading the local smoke-test status outside the sandbox?',
+            '',
+            '$ curl -sS http://127.0.0.1:3848/api/v1/status | node -e "let',
+            '  s=\'\';process.stdin.on(\'data\',d=>s+=d);process.stdin.on(\'end\',()=>{const',
+            '  j=JSON.parse(s);console.log(JSON.stringify(j.sessions?.[0]?.activeModal));})"',
+            '› 1. Yes, proceed (y)',
+            '  2. Yes, and don\'t ask again for commands that start with `node -e "let',
+            '     s=\'\';process.stdin.on(\'data\',d=>s+=d);process.stdin.on(\'end\',()=>{const',
+            '     j=JSON.parse(s);console.log(JSON.stringify(j.sessions?.[0]?.activeModal));})"` (p)',
+            '  3. No, and tell Codex what to do differently (esc)',
+            'Press enter to confirm or esc to cancel',
+            '›',
+        ].join('\n');
+        const ev = evaluate(spec, screen);
+        expect(ev.state.id).toBe('approval');
+        expect(ev.modal?.title).toBe('Would you like to run the following command?');
+        expect(ev.modal?.buttons.map(button => button.label)).toEqual([
+            'Yes, proceed (y)',
+            'Yes, and don\'t ask again for commands that start with `node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d);process.stdin.on(\'end\',()=>{const j=JSON.parse(s);console.log(JSON.stringify(j.sessions?.[0]?.activeModal));})"` (p)',
+            'No, and tell Codex what to do differently (esc)',
+        ]);
+    });
 });
 
 describe('spec loader — strict validation', () => {

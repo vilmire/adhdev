@@ -122,7 +122,8 @@
                         "pattern": { "type": "string", "minLength": 1 },
                         "flags": { "type": "string" },
                         "key_for_index": { "type": "string", "minLength": 1 },
-                        "min_count": { "type": "integer", "minimum": 1, "default": 2 }
+                        "min_count": { "type": "integer", "minimum": 1, "default": 2 },
+                        "continuation_lines": { "type": "boolean", "default": false }
                     }
                 }
             }

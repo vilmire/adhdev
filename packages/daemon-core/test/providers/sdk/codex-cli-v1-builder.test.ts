@@ -175,6 +175,30 @@ describe('codex-cli v1 manifest — declarative builders', () => {
     ]);
   });
 
+  it('extracts wrapped shell escalation labels from the label capture group', () => {
+    const screen = [
+      'Would you like to run the following command?',
+      'Reason: The patched standalone is listening on 127.0.0.1:3848 but sandbox curl cannot connect;',
+      'allow reading the local smoke-test status outside the sandbox?',
+      '$ curl -sS http://127.0.0.1:3848/api/v1/status | node -e "let',
+      '  s=\'\';process.stdin.on(\'data\',d=>s+=d);process.stdin.on(\'end\',()=>{const',
+      '  j=JSON.parse(s);console.log(JSON.stringify(j.sessions?.[0]?.activeModal));})"',
+      '› 1. Yes, proceed (y)',
+      '  2. Yes, and don\'t ask again for commands that start with `node -e "let',
+      '     s=\'\';process.stdin.on(\'data\',d=>s+=d);process.stdin.on(\'end\',()=>{const',
+      '     j=JSON.parse(s);console.log(JSON.stringify(j.sessions?.[0]?.activeModal));})"` (p)',
+      '  3. No, and tell Codex what to do differently (esc)',
+      'Press enter to confirm or esc to cancel',
+    ].join('\n');
+    const result = parseModal(approvalInput(screen));
+    expect(result?.message).toBe('Would you like to run the following command?');
+    expect(result?.buttons).toEqual([
+      'Yes, proceed (y)',
+      'Yes, and don\'t ask again for commands that start with `node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d);process.stdin.on(\'end\',()=>{const j=JSON.parse(s);console.log(JSON.stringify(j.sessions?.[0]?.activeModal));})"` (p)',
+      'No, and tell Codex what to do differently (esc)',
+    ]);
+  });
+
   // ─── parse_approval-squash (compacted rendering) ────────────────────────
 
   it('recovers the trust-folder modal from a fully compacted single-line blob', () => {

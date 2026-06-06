@@ -125,6 +125,11 @@ function compilePattern(ref: { pattern: string; flags?: string }): RegExp {
     return new RegExp(ref.pattern, flags.includes('g') ? flags : flags + 'g');
 }
 
+function compileLinePattern(ref: { pattern: string; flags?: string }): RegExp {
+    const flags = (ref.flags ?? 'm').replace(/g/g, '');
+    return new RegExp(ref.pattern, flags);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // State matching
 // ────────────────────────────────────────────────────────────────────────────
@@ -162,16 +167,41 @@ function extractModal(
 ): ModalSnapshot | null {
     if (!state.modal_buttons) return null;
     const hay = sectionText(sections, state.modal_buttons.section, fullScreen);
-    const re = compilePattern(state.modal_buttons);
     const buttons: { index: number; label: string; key: string }[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(hay)) !== null) {
-        const idx = Number(m[1]);
-        const label = String(m[2] ?? '').trim();
-        if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
-        if (buttons.some(b => b.index === idx)) continue;
-        const key = state.modal_buttons.key_for_index.replace(/\{index\}/g, String(idx));
-        buttons.push({ index: idx, label, key });
+    if (state.modal_buttons.continuation_lines) {
+        const re = compileLinePattern(state.modal_buttons);
+        const lines = hay.split('\n');
+        for (let i = 0; i < lines.length; i += 1) {
+            const m = re.exec(lines[i]);
+            if (!m) continue;
+            const idx = Number(m[1]);
+            let label = String(m[2] ?? '').trim();
+            if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
+            let j = i + 1;
+            while (j < lines.length) {
+                const next = lines[j];
+                if (!next.trim()) break;
+                if (re.test(next)) break;
+                if (!/^\s+/.test(next)) break;
+                label += ' ' + next.trim();
+                j += 1;
+            }
+            if (buttons.some(b => b.index === idx)) continue;
+            const key = state.modal_buttons.key_for_index.replace(/\{index\}/g, String(idx));
+            buttons.push({ index: idx, label, key });
+            i = j - 1;
+        }
+    } else {
+        const re = compilePattern(state.modal_buttons);
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(hay)) !== null) {
+            const idx = Number(m[1]);
+            const label = String(m[2] ?? '').trim();
+            if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
+            if (buttons.some(b => b.index === idx)) continue;
+            const key = state.modal_buttons.key_for_index.replace(/\{index\}/g, String(idx));
+            buttons.push({ index: idx, label, key });
+        }
     }
     buttons.sort((a, b) => a.index - b.index);
     const minCount = state.modal_buttons.min_count ?? 2;
