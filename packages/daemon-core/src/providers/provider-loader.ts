@@ -215,6 +215,33 @@ export class ProviderLoader {
       sourceMode: options?.sourceMode,
       disableUpstream: options?.disableUpstream,
     });
+
+    // One-time migration: ~/.adhdev/marketplace → ~/.adhdev/external.
+    // The directory was renamed when the "marketplace" install model was
+    // dropped in favour of explicit external git sources. Best-effort:
+    // if the rename fails we leave both dirs in place and log so the user
+    // can investigate.
+    this.migrateMarketplaceDirToExternal();
+  }
+
+  private migrateMarketplaceDirToExternal(): void {
+    try {
+      const home = os.homedir();
+      const oldDir = path.join(home, '.adhdev', 'marketplace');
+      const newDir = path.join(home, '.adhdev', 'external');
+      if (!fs.existsSync(oldDir)) return;
+      if (fs.existsSync(newDir)) {
+        // Both exist — don't merge. Leave old in place; surface in logs so
+        // the user can decide what to keep. Loader still loads from
+        // external/ only, so old marketplace/ becomes inert.
+        this.log(`Migration skipped: both ~/.adhdev/marketplace and ~/.adhdev/external exist (marketplace dir is now inert and can be removed manually).`);
+        return;
+      }
+      fs.renameSync(oldDir, newDir);
+      this.log(`Migrated ~/.adhdev/marketplace → ~/.adhdev/external (one-time rename after provider source-layer cleanup).`);
+    } catch (e: any) {
+      this.log(`Marketplace→external migration failed: ${e?.message || e}`);
+    }
   }
 
   private log(msg: string): void {
@@ -246,12 +273,12 @@ export class ProviderLoader {
    * Highest-priority editable overrides come first.
    */
   getProviderRoots(): string[] {
-    // Order matters: user customs > marketplace installs > upstream auto-sync.
-    // findProviderDirInternal walks this list in order to locate the provider
-    // dir containing the scripts/, so marketplace must be included here even
-    // though loadAll() also reads it directly.
-    const marketplaceDir = path.join(os.homedir(), '.adhdev', 'marketplace');
-    return [this.userDir, marketplaceDir, this.upstreamDir];
+    // Order matters: user customs > external (3rd-party sources) > upstream
+    // (official auto-sync). findProviderDirInternal walks this list in order
+    // to locate the provider dir containing the scripts/, so external must
+    // be included here even though loadAll() also reads it directly.
+    const externalDir = path.join(os.homedir(), '.adhdev', 'external');
+    return [this.userDir, externalDir, this.upstreamDir];
   }
 
   getSourceConfig(): ProviderSourceConfigSnapshot {
@@ -343,16 +370,19 @@ export class ProviderLoader {
 
  /**
  * Load all providers (3-tier priority)
- * 1. .upstream/ (GitHub auto-download — primary source)
- * 2. User custom (~/.adhdev/providers/ excluding .upstream)
- * User custom always wins (highest priority).
+ * 1. ~/.adhdev/providers/.upstream/ — official git, auto-synced
+ * 2. ~/.adhdev/external/ — 3rd-party git sources, user-added,
+ *    bundled providers may include arbitrary JS (untrusted by default)
+ * 3. ~/.adhdev/providers/ (excluding .upstream) — user-authored customs,
+ *    always wins
+ * Highest priority listed last (overwrites earlier loads).
  * If .upstream/ is empty, call fetchLatest() before loadAll().
  */
   loadAll(): void {
     this.providers.clear();
     this.providerAvailability.clear();
 
- // 1. Load upstream (GitHub auto-download — primary source)
+ // 1. Load upstream (GitHub auto-download — primary official source)
     let upstreamCount = 0;
     if (!this.disableUpstream && fs.existsSync(this.upstreamDir)) {
       upstreamCount = this.loadDir(this.upstreamDir);
@@ -363,15 +393,17 @@ export class ProviderLoader {
       this.log('Upstream loading disabled (sourceMode=no-upstream)');
     }
 
- // 2. Load marketplace installs from ~/.adhdev/marketplace/ (overrides upstream,
- //    but is itself overridden by user customs in step 3). These are providers the
- //    user explicitly installed via the Marketplace UI. They are NOT touched by
- //    upstream sync.
-    const marketplaceDir = path.join(os.homedir(), '.adhdev', 'marketplace');
-    if (fs.existsSync(marketplaceDir)) {
-      const marketplaceCount = this.loadDir(marketplaceDir);
-      if (marketplaceCount > 0) {
-        this.log(`Loaded ${marketplaceCount} marketplace-installed providers`);
+ // 2. Load external providers from ~/.adhdev/external/ (3rd-party git sources).
+ //    Overrides upstream but is itself overridden by user customs in step 3.
+ //    Providers here originate from non-official git URLs that the user added;
+ //    any non-spec manifest (tui block / overrides / scriptDir) runs JS the
+ //    daemon hasn't audited, so dashboards must surface an "untrusted source"
+ //    badge before letting the user enable them.
+    const externalDir = path.join(os.homedir(), '.adhdev', 'external');
+    if (fs.existsSync(externalDir)) {
+      const externalCount = this.loadDir(externalDir);
+      if (externalCount > 0) {
+        this.log(`Loaded ${externalCount} external providers (3rd-party sources)`);
       }
     }
 

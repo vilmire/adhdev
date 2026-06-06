@@ -344,7 +344,7 @@ function canonicalize(p: string): string | null {
                 ? nodeFs.realpathSync.native(resolved)
                 : nodeFs.realpathSync(resolved);
         } catch {
-            // Root may not exist yet (e.g. marketplace dir created lazily);
+            // Root may not exist yet (e.g. external dir created lazily);
             // we still register the resolved path so future requires from
             // inside are gated once the directory shows up.
             return resolved;

@@ -143,7 +143,7 @@ export const V1_PRIMITIVE_CATALOG = Object.freeze({
   ],
 } as const);
 
-/** Aggregate flat list — for marketplace catalog endpoint. */
+/** Aggregate flat list — for provider catalog endpoints. */
 export const V1_ALL_PRIMITIVES: ReadonlyArray<string> = Object.freeze(
   Object.values(V1_PRIMITIVE_CATALOG).flat(),
 );

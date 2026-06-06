@@ -575,8 +575,8 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * Return per-provider availability so a Marketplace UI can show
-     * "Installed" badges. Reuses the existing detection state from
+     * Return per-provider availability so the dashboard's provider catalog
+     * can show "Installed" badges. Reuses the existing detection state from
      * ProviderLoader.getMachineProviderStatus() — no probing is triggered.
      */
     private handleListProviderAvailability(_args: any): CommandResult {
@@ -600,26 +600,26 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * Compute the *Marketplace install root*. This is always
-     * `~/.adhdev/marketplace/` regardless of how ProviderLoader resolved its
+     * Compute the *external install root*. This is always
+     * `~/.adhdev/external/` regardless of how ProviderLoader resolved its
      * userDir (which can point to a sibling adhdev-providers git checkout in
-     * dev). Marketplace-installed manifests must never overwrite files in a
+     * dev). External (3rd-party) manifests must never overwrite files in a
      * developer checkout, and they should be isolated from upstream/registry
      * sync so they survive `refresh_scripts`.
      */
-    private getMarketplaceInstallRoot(): string {
+    private getExternalInstallRoot(): string {
         const os = require('os') as typeof import('os');
         const path = require('path') as typeof import('path');
-        return path.join(os.homedir(), '.adhdev', 'marketplace');
+        return path.join(os.homedir(), '.adhdev', 'external');
     }
 
     /**
      * Download a single provider manifest from the registry and write it to
-     * ~/.adhdev/marketplace/{category}/{type}/provider.json.
+     * ~/.adhdev/external/{category}/{type}/provider.json.
      *
-     * Used by the Marketplace UI's Install button. Verifies SHA-256 checksum
-     * against the registry meta before persisting. Refuses to write outside
-     * the marketplace root.
+     * Used by the Dashboard's "Add from registry" button. Verifies SHA-256
+     * checksum against the registry meta before persisting. Refuses to write
+     * outside the external root.
      *
      * Args: { type: string, category?: string, version?: string }
      * If category/version are omitted, looks up the latest from the registry.
@@ -678,13 +678,13 @@ export class DaemonCommandHandler implements CommandHelpers {
                 return { success: false, error: `checksum mismatch: expected ${meta.checksum}, got ${actualChecksum}` };
             }
 
-            // 4. Write to the marketplace install root, NOT to ProviderLoader.getUserDir():
+            // 4. Write to the external install root, NOT to ProviderLoader.getUserDir():
             //    in dev, userDir points at the sibling adhdev-providers git checkout.
-            const installRoot = this.getMarketplaceInstallRoot();
+            const installRoot = this.getExternalInstallRoot();
             const installRootResolved = path.resolve(installRoot);
             const targetDir = path.resolve(path.join(installRoot, category, type));
             if (!targetDir.startsWith(installRootResolved + path.sep)) {
-                return { success: false, error: 'install path escaped marketplace root' };
+                return { success: false, error: 'install path escaped external root' };
             }
             fs.mkdirSync(targetDir, { recursive: true });
             // v1 vs v0 manifest selection — v1 manifests carry an SDK
@@ -792,6 +792,17 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (Array.isArray(manifest.compatibility)) {
             for (const c of manifest.compatibility) {
                 if (typeof c?.scriptDir === 'string') scriptDirs.add(c.scriptDir);
+                // Spec-driven providers (claude/codex/agy/…) point at a
+                // single specs/<version>.json instead of a scriptDir.
+                // The whole specs/ directory needs to come down so the
+                // spec adapter can resolve the file at runtime — without
+                // this, install_provider_manifest leaves the marketplace
+                // copy spec-less and provider-loader falls back to the
+                // legacy tui-based ProviderCliAdapter.
+                if (typeof c?.spec === 'string' && c.spec.includes('/')) {
+                    const dir = c.spec.substring(0, c.spec.lastIndexOf('/'));
+                    if (dir) scriptDirs.add(dir);
+                }
             }
         }
         if (manifest.overrides && typeof manifest.overrides === 'object' && !Array.isArray(manifest.overrides)) {
@@ -956,8 +967,8 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * Remove a provider manifest from the marketplace install root
-     * (~/.adhdev/marketplace/{category}/{type}/). Refuses to touch anything
+     * Remove a provider manifest from the external install root
+     * (~/.adhdev/external/{category}/{type}/). Refuses to touch anything
      * outside that root.
      */
     private async handleUninstallProviderManifest(args: any): Promise<CommandResult> {
@@ -975,12 +986,12 @@ export class DaemonCommandHandler implements CommandHelpers {
         const path = require('path') as typeof import('path');
 
         try {
-            const installRoot = this.getMarketplaceInstallRoot();
+            const installRoot = this.getExternalInstallRoot();
             const installRootResolved = path.resolve(installRoot);
             const targetDir = path.resolve(path.join(installRoot, category, type));
 
             if (!targetDir.startsWith(installRootResolved + path.sep)) {
-                return { success: false, error: 'refusing to delete outside marketplace root' };
+                return { success: false, error: 'refusing to delete outside external root' };
             }
             if (!fs.existsSync(targetDir)) {
                 return { success: false, error: 'not installed' };
@@ -1000,7 +1011,7 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * Return everything currently installed in ~/.adhdev/marketplace/ with its
+     * Return everything currently installed in ~/.adhdev/external/ with its
      * version. This is the "what does this daemon have" answer used both by
      * the UI and by the update checker.
      */
@@ -1008,7 +1019,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         const fs = require('fs') as typeof import('fs');
         const path = require('path') as typeof import('path');
 
-        const installRoot = this.getMarketplaceInstallRoot();
+        const installRoot = this.getExternalInstallRoot();
         if (!fs.existsSync(installRoot)) return { success: true, providers: [] };
 
         const CATEGORIES = ['cli', 'ide', 'extension', 'acp'] as const;
