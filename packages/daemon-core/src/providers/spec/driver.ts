@@ -180,6 +180,10 @@ export class SpecDriver {
         }
     }
 
+    snapshot(): string {
+        return this.adapter.snapshot();
+    }
+
     shutdown(): void {
         for (const t of this.delegateTimers.values()) clearTimeout(t);
         this.delegateTimers.clear();
