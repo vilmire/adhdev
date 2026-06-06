@@ -12,6 +12,7 @@ export interface MeshFastForwardNodeArgs {
   updateSubmodules?: boolean;
   submoduleIgnorePaths?: string[];
   timeoutMs?: number;
+  trigger?: 'manual' | 'idle_auto' | string;
 }
 
 export interface MeshFastForwardPlannedStep {
@@ -40,11 +41,12 @@ export interface MeshFastForwardResult {
   finalBranchConvergenceState?: Record<string, unknown>;
   operationError?: string;
   ledgerError?: string;
+  trigger?: string;
 }
 
 type MeshFastForwardBase = Pick<
   MeshFastForwardResult,
-  'workspace' | 'dryRun' | 'updateSubmodules' | 'plannedSteps'
+  'workspace' | 'dryRun' | 'updateSubmodules' | 'plannedSteps' | 'trigger'
 > & Pick<Partial<MeshFastForwardResult>, 'nodeId' | 'meshId'>;
 
 const STATUS_OPTIONS = { refreshUpstream: true, includeSubmodules: true, timeoutMs: 15_000 } as const;
@@ -54,6 +56,7 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
   const nodeId = normalizeOptionalString(args.nodeId);
   const meshId = normalizeOptionalString(args.meshId);
   const requestedBranch = normalizeOptionalString(args.branch);
+  const trigger = normalizeOptionalString(args.trigger) || 'manual';
   const updateSubmodules = args.updateSubmodules === true;
   const dryRun = args.dryRun === true || args.execute !== true;
   const plannedSteps = buildPlannedSteps(updateSubmodules);
@@ -64,6 +67,7 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
     dryRun,
     updateSubmodules,
     plannedSteps,
+    trigger,
   };
 
   if (!workspace) {
@@ -78,11 +82,13 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
 
   const earlyBlockers = collectPreflightBlockers(current, requestedBranch);
   if (earlyBlockers.length > 0) {
-    return {
+    const result: MeshFastForwardResult = {
       ...block(base, chooseBlockCode(current, earlyBlockers), earlyBlockers),
       current,
       finalBranchConvergenceState: buildConvergenceState(current, codeToConvergenceStatus(chooseBlockCode(current, earlyBlockers))),
     };
+    await appendFastForwardLedger(result, 'blocked');
+    return result;
   }
 
   if (current.behind === 0) {
@@ -129,6 +135,7 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
       preStatus: current,
       finalBranchConvergenceState: buildConvergenceState(current, 'fast_forward_available'),
     };
+    await appendFastForwardLedger(result, 'dry_run');
     return result;
   }
 
@@ -393,7 +400,7 @@ function formatGitError(error: unknown): string {
   return String(error);
 }
 
-async function appendFastForwardLedger(result: MeshFastForwardResult, outcome: 'noop' | 'blocked' | 'executed' | 'failed'): Promise<void> {
+async function appendFastForwardLedger(result: MeshFastForwardResult, outcome: 'noop' | 'blocked' | 'dry_run' | 'executed' | 'failed'): Promise<void> {
   if (!result.meshId) return;
   try {
     const { appendLedgerEntry } = await import('./mesh-ledger.js');
@@ -402,6 +409,7 @@ async function appendFastForwardLedger(result: MeshFastForwardResult, outcome: '
       ...(result.nodeId ? { nodeId: result.nodeId } : {}),
       payload: {
         operation: 'mesh_fast_forward_node',
+        trigger: result.trigger || 'manual',
         outcome,
         code: result.code,
         workspace: result.workspace,

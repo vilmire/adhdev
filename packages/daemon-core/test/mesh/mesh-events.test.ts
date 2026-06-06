@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
+import { tmpdir } from 'os'
 
 const meshConfigMocks = vi.hoisted(() => ({
   getMesh: vi.fn(),
@@ -10,6 +11,10 @@ const meshConfigMocks = vi.hoisted(() => ({
 
 const detectCliMocks = vi.hoisted(() => ({
   detectCLI: vi.fn(),
+}))
+
+const fastForwardMocks = vi.hoisted(() => ({
+  fastForwardMeshNode: vi.fn(),
 }))
 
 vi.mock('../../src/config/mesh-config.js', () => ({
@@ -21,7 +26,11 @@ vi.mock('../../src/detection/cli-detector.js', () => ({
   detectCLI: detectCliMocks.detectCLI,
 }))
 
-import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
+  fastForwardMeshNode: fastForwardMocks.fastForwardMeshNode,
+}))
+
+import { __resetIdleAutoFastForwardForTests, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetBeadsDBForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 
@@ -73,6 +82,8 @@ function cleanupMeshFiles(meshId: string) {
   const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
   __clearMeshQueueForTests(meshId)
   __resetBeadsDBForTests()
+  __resetIdleAutoFastForwardForTests()
+  fastForwardMocks.fastForwardMeshNode.mockReset()
   if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
   if (fs.existsSync(ledgerPath)) fs.unlinkSync(ledgerPath)
   if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
@@ -321,6 +332,83 @@ describe('setupMeshEventForwarding', () => {
       })
     } finally {
       cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('runs a throttled idle auto fast-forward before assigning the next queue task', async () => {
+    const meshId = `mesh_idle_auto_ff_${Date.now()}`
+    const workspace = fs.mkdtempSync(path.join(tmpdir(), 'adhdev-idle-auto-ff-'))
+    try {
+      await new Promise(resolve => setImmediate(resolve))
+      __resetIdleAutoFastForwardForTests()
+      fastForwardMocks.fastForwardMeshNode.mockReset()
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      fastForwardMocks.fastForwardMeshNode
+        .mockResolvedValueOnce({
+          success: true,
+          code: 'fast_forward_available',
+          allowed: true,
+          dryRun: true,
+          willRun: false,
+          executed: false,
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          code: 'fast_forward_applied',
+          allowed: true,
+          dryRun: false,
+          willRun: true,
+          executed: true,
+        })
+
+      const nextTask = enqueueTask(meshId, 'next queued task')
+      const { components, emit } = createComponents(meshId)
+      components.cliManager = {
+        handleCliCommand: vi.fn(async () => ({ success: true })),
+      }
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:ready',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+      })
+
+      await vi.waitFor(() => {
+        expect(fastForwardMocks.fastForwardMeshNode).toHaveBeenCalledTimes(2)
+        expect(getQueue(meshId).find(task => task.id === nextTask.id)?.status).toBe('assigned')
+      })
+      expect(fastForwardMocks.fastForwardMeshNode.mock.calls[0][0]).toMatchObject({
+        meshId,
+        nodeId: 'node_child_1',
+        workspace,
+        dryRun: true,
+        trigger: 'idle_auto',
+      })
+      expect(fastForwardMocks.fastForwardMeshNode.mock.calls[1][0]).toMatchObject({
+        meshId,
+        nodeId: 'node_child_1',
+        workspace,
+        execute: true,
+        trigger: 'idle_auto',
+      })
+
+      emit({
+        event: 'agent:ready',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+      })
+      await new Promise(resolve => setImmediate(resolve))
+      expect(fastForwardMocks.fastForwardMeshNode).toHaveBeenCalledTimes(2)
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(workspace, { recursive: true, force: true })
     }
   })
 

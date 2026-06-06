@@ -9,6 +9,7 @@ import { appendLedgerEntry, buildTaskCompletionEvidence, getLedgerDir, getSessio
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches } from './mesh-work-queue.js';
 import { BeadsDB } from './beads-db.js';
+import { fastForwardMeshNode } from './mesh-fast-forward.js';
 
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
@@ -33,6 +34,8 @@ const remoteIdleSessions = new Map<string, RemoteIdleSession>(); // key: `${node
 // meshNodeFor. Cache results for 5 seconds to avoid repeated config reads.
 const meshByWorkspaceCache = new Map<string, { mesh: any; cachedAt: number }>();
 const MESH_WORKSPACE_CACHE_TTL_MS = 5_000;
+const IDLE_AUTO_FAST_FORWARD_THROTTLE_MS = 30 * 60 * 1000;
+const idleAutoFastForwardLastAttempt = new Map<string, number>();
 
 function getCachedMeshByWorkspace(workspace: string): any {
     const now = Date.now();
@@ -45,6 +48,10 @@ function getCachedMeshByWorkspace(workspace: string): any {
 
 function readWorkerResultMetadata(event: Record<string, unknown>): Record<string, unknown> | undefined {
     return readRecord(event.workerResult) || readRecord(event.meshWorkerResult) || readRecord(event.structuredResult);
+}
+
+export function __resetIdleAutoFastForwardForTests(): void {
+    idleAutoFastForwardLastAttempt.clear();
 }
 
 function sweepExpiredRemoteIdleSessions(): void {
@@ -1061,6 +1068,72 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     await maybeAutoLaunchOneQueueSession(components, meshId, mesh);
 }
 
+async function maybeAutoFastForwardIdleNode(components: DaemonComponents, args: {
+    meshId: string;
+    nodeId: string;
+    sessionId?: string;
+    providerType?: string;
+}): Promise<void> {
+    const mesh = getMeshWithCache(components, args.meshId);
+    const node = mesh?.nodes?.find((candidate: any) => candidate?.id === args.nodeId || candidate?.nodeId === args.nodeId);
+    const workspace = readNonEmptyString(node?.workspace);
+    if (!workspace) return;
+    if (!existsSync(workspace)) return;
+
+    const throttleKey = `${args.meshId}:${args.nodeId}`;
+    const now = Date.now();
+    const lastAttempt = idleAutoFastForwardLastAttempt.get(throttleKey) || 0;
+    if (now - lastAttempt < IDLE_AUTO_FAST_FORWARD_THROTTLE_MS) return;
+    idleAutoFastForwardLastAttempt.set(throttleKey, now);
+
+    const submoduleIgnorePaths = Array.isArray(node?.policy?.submoduleIgnorePaths)
+        ? node.policy.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string')
+        : undefined;
+    try {
+        const dryRun = await fastForwardMeshNode({
+            meshId: args.meshId,
+            nodeId: args.nodeId,
+            workspace,
+            execute: false,
+            dryRun: true,
+            updateSubmodules: false,
+            submoduleIgnorePaths,
+            trigger: 'idle_auto',
+        });
+        if (!dryRun || dryRun.code !== 'fast_forward_available' || dryRun.allowed !== true) return;
+        await fastForwardMeshNode({
+            meshId: args.meshId,
+            nodeId: args.nodeId,
+            workspace,
+            execute: true,
+            dryRun: false,
+            updateSubmodules: false,
+            submoduleIgnorePaths,
+            trigger: 'idle_auto',
+        });
+    } catch (e: any) {
+        LOG.warn('MeshFastForward', `Idle auto fast-forward check failed for ${args.nodeId}: ${e?.message || e}`);
+    }
+}
+
+function runIdleMaintenanceThenAssignQueue(components: DaemonComponents, args: {
+    meshId: string;
+    nodeId: string;
+    sessionId: string;
+    providerType: string;
+}): void {
+    setImmediate(() => {
+        maybeAutoFastForwardIdleNode(components, args)
+            .finally(() => {
+                try {
+                    tryAssignQueueTask(components, args.meshId, args.nodeId, args.sessionId, args.providerType);
+                } catch (e: any) {
+                    LOG.warn('MeshQueue', `Failed to assign idle queue task after maintenance for ${args.nodeId}: ${e?.message || e}`);
+                }
+            });
+    });
+}
+
 function buildMeshSystemMessage(args: {
     event: string;
     nodeLabel: string;
@@ -1313,9 +1386,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             updateDirectDispatchStatus(args.meshId, sessionId, 'completed');
             setImmediate(() => cleanupTerminalDirectDispatches());
             if (nodeId && providerType) {
-                setImmediate(() => {
-                    tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
-                });
+                runIdleMaintenanceThenAssignQueue(components, { meshId: args.meshId, nodeId, sessionId, providerType });
             }
         }
     } else if (args.event === 'agent:ready') {
@@ -1370,8 +1441,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 expiresAt: Date.now() + REMOTE_IDLE_SESSION_TTL_MS,
             });
             setImmediate(() => {
-                const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
-                if (assigned) remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
+                maybeAutoFastForwardIdleNode(components, { meshId: args.meshId, nodeId, sessionId, providerType })
+                    .finally(() => {
+                        try {
+                            const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
+                            if (assigned) remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
+                        } catch (e: any) {
+                            LOG.warn('MeshQueue', `Failed to assign idle queue task after maintenance for ${nodeId}: ${e?.message || e}`);
+                        }
+                    });
             });
         }
     } else if (args.event === 'agent:generating_started') {
