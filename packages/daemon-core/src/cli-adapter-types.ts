@@ -5,6 +5,7 @@
  */
 
 import type { ChatMessage } from './types.js';
+import type { InteractivePrompt, InteractivePromptResponse } from './providers/types/interactive-prompt.js';
 
 export interface CliAdapterStatus {
     status?: string;
@@ -13,6 +14,7 @@ export interface CliAdapterStatus {
         message: string;
         buttons: string[];
     } | null;
+    activeInteractivePrompt?: InteractivePrompt | null;
     providerSessionId?: string;
     errorMessage?: string;
     errorReason?: string;
@@ -60,6 +62,7 @@ export interface CliAdapter {
     setServerConn?(serverConn: unknown): void;
     clearHistory?(): void;
     resolveAction?(data: unknown): Promise<void>;
+    setInteractivePromptResponse?(response: InteractivePromptResponse): Promise<void>;
     resolveModal?(buttonIndex: number): void;
     isApprovalRecentlyResolved?(): boolean;
  // Raw PTY I/O (for terminal view)

@@ -25,6 +25,12 @@ import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { LOG } from '../../logging/logger.js';
+import {
+    buildClaudeInteractiveToolResult,
+    detectClaudeAskUserQuestionPromptFromJson,
+    type InteractivePrompt,
+    type InteractivePromptResponse,
+} from '../types/interactive-prompt.js';
 
 export class SpecCliAdapter implements CliAdapter {
     readonly cliType: string;
@@ -48,6 +54,8 @@ export class SpecCliAdapter implements CliAdapter {
     private statusCallback: (() => void) | null = null;
     private ptyDataCallback: ((data: string) => void) | null = null;
     private partialResponse = '';
+    private activeInteractivePrompt: InteractivePrompt | null = null;
+    private jsonLineTail = '';
     private exited = false;
     private spawned = false;
     private providerSessionId: string | undefined;
@@ -115,15 +123,15 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     getStatus(): CliAdapterStatus {
-        if (this.exited) return { status: 'stopped', messages: [], activeModal: null };
-        if (!this.spawned) return { status: 'starting', messages: [], activeModal: null };
+        if (this.exited) return { status: 'stopped', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
+        if (!this.spawned) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
 
         // Refresh native history lazily — the watch_path is cheap to stat,
         // but parsing a full session.jsonl every call would be wasteful.
         this.maybeRefreshNativeHistory();
 
         const state = this.latestState;
-        if (!state) return { status: 'starting', messages: [], activeModal: null };
+        if (!state) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
 
         const modal = this.latestModal;
         const lc = state.id.toLowerCase();
@@ -135,12 +143,13 @@ export class SpecCliAdapter implements CliAdapter {
                     message: modal.title ?? state.label,
                     buttons: modal.buttons.map(b => b.label),
                 },
+                activeInteractivePrompt: this.activeInteractivePrompt,
             };
         }
         if (/busy|generating|working|running|thinking/i.test(lc + ' ' + state.label)) {
-            return { status: 'generating', messages: [], activeModal: null };
+            return { status: 'generating', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
         }
-        return { status: 'idle', messages: [], activeModal: null };
+        return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
     }
 
     private maybeRefreshNativeHistory(): void {
@@ -216,6 +225,14 @@ export class SpecCliAdapter implements CliAdapter {
         this.resolveModal(target);
     }
 
+    async setInteractivePromptResponse(response: InteractivePromptResponse): Promise<void> {
+        if (this.activeInteractivePrompt?.promptId === response.promptId) {
+            this.activeInteractivePrompt = null;
+        }
+        if (this.cliType !== 'claude-cli') return;
+        this.driver.dispatch({ kind: 'pty_write', data: `${buildClaudeInteractiveToolResult(response)}\n` });
+    }
+
     isApprovalRecentlyResolved(): boolean { return false; }
     clearHistory(): void { /* no transcript buffer yet */ }
     updateRuntimeSettings(): void { /* no runtime settings in spec model yet */ }
@@ -274,6 +291,7 @@ export class SpecCliAdapter implements CliAdapter {
             spec_id: this.spec.id,
             current_state: this.latestState,
             current_modal: this.latestModal,
+            activeInteractivePrompt: this.activeInteractivePrompt,
             exited: this.exited,
         };
     }
@@ -310,6 +328,7 @@ export class SpecCliAdapter implements CliAdapter {
                 this.statusCallback?.();
                 return;
             case 'pty_data':
+                this.detectInteractivePromptFromPtyChunk(ev.chunk);
                 try { this.ptyDataCallback?.(ev.chunk); } catch { /* ignore */ }
                 return;
             case 'exit':
@@ -323,5 +342,25 @@ export class SpecCliAdapter implements CliAdapter {
                 return;
         }
     }
-}
 
+    private detectInteractivePromptFromPtyChunk(chunk: string): void {
+        if (this.cliType !== 'claude-cli' || !chunk) return;
+        this.jsonLineTail += chunk;
+        if (this.jsonLineTail.length > 64 * 1024) this.jsonLineTail = this.jsonLineTail.slice(-64 * 1024);
+        const lines = this.jsonLineTail.split(/\r?\n/);
+        this.jsonLineTail = lines.pop() || '';
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('{') || !trimmed.includes('AskUserQuestion')) continue;
+            try {
+                const parsed = JSON.parse(trimmed);
+                const prompt = detectClaudeAskUserQuestionPromptFromJson(parsed, this.cliType);
+                if (!prompt) continue;
+                this.activeInteractivePrompt = prompt;
+                this.statusCallback?.();
+            } catch {
+                // PTY output is not guaranteed to be machine JSON.
+            }
+        }
+    }
+}

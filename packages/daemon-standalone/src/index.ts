@@ -68,6 +68,9 @@ import {
   withRawTerminalAttachment,
   type NamedKey,
   type LocalIpcServerHandle,
+  normalizeInteractivePromptResponse,
+  type InteractivePrompt,
+  type InteractivePromptResponse,
 } from '@adhdev/daemon-core';
 import { DEFAULT_DAEMON_PORT, DAEMON_WS_PATH } from '@adhdev/daemon-core';
 import {
@@ -105,6 +108,11 @@ import {
   isRawTerminalApiPath,
   type RawTerminalHttpService,
 } from './raw-terminal-http.js';
+import {
+  handleInteractivePromptHttpRequest,
+  isInteractivePromptApiPath,
+  type InteractivePromptHttpService,
+} from './interactive-prompt-http.js';
 
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
@@ -445,6 +453,38 @@ class StandaloneServer {
         { endpoint, sessionId, mode: 'write' },
         attachment => attachment.writeKeys(keys),
       ),
+    };
+  }
+
+  private interactivePromptService(): InteractivePromptHttpService {
+    const resolveInstanceKey = (sessionId: string): string | null => {
+      if (this.components?.instanceManager.getInstance(sessionId)) return sessionId;
+      const states = this.components?.instanceManager.collectAllStates() || [];
+      const match = states.find((state: any) =>
+        state?.instanceId === sessionId
+        || state?.providerSessionId === sessionId
+        || state?.activeChat?.id === sessionId
+      );
+      return typeof (match as any)?.instanceId === 'string' ? (match as any).instanceId : null;
+    };
+    const getPromptFromState = (sessionId: string): InteractivePrompt | null => {
+      const states = this.components?.instanceManager.collectAllStates() || [];
+      const match = states.find((state: any) =>
+        state?.instanceId === sessionId
+        || state?.providerSessionId === sessionId
+        || state?.activeChat?.id === sessionId
+      );
+      return ((match as any)?.activeInteractivePrompt || (match as any)?.activeChat?.activeInteractivePrompt || null) as InteractivePrompt | null;
+    };
+    return {
+      getPrompt: async (sessionId) => getPromptFromState(sessionId),
+      resolvePrompt: async (sessionId, response: InteractivePromptResponse) => {
+        const instanceKey = resolveInstanceKey(sessionId);
+        if (!instanceKey) throw new Error(`Unknown session: ${sessionId}`);
+        const normalized = normalizeInteractivePromptResponse(response);
+        this.components?.instanceManager.sendEvent(instanceKey, 'interactive_prompt_response', normalized);
+        this.scheduleBroadcastStatus();
+      },
     };
   }
 
@@ -1125,6 +1165,20 @@ class StandaloneServer {
         res,
         parsedUrl,
         service: this.rawTerminalService(),
+      }).catch((error: any) => {
+        if (res.headersSent) return;
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: error?.message || String(error) }));
+      });
+      return;
+    }
+
+    if (isInteractivePromptApiPath(parsedUrl.pathname)) {
+      void handleInteractivePromptHttpRequest({
+        req,
+        res,
+        parsedUrl,
+        service: this.interactivePromptService(),
       }).catch((error: any) => {
         if (res.headersSent) return;
         res.writeHead(500, { 'Content-Type': 'application/json' });

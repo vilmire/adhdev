@@ -56,6 +56,7 @@ import type {
     GitWorkspaceUpdate,
     WorkspaceGitSubscriptionParams,
 } from './git/git-types.js';
+import type { InteractivePrompt } from './providers/types/interactive-prompt.js';
 
 export type {
     GitCommandName,
@@ -110,6 +111,7 @@ export interface ReadChatSyncResult {
     status: string;
     title?: string;
     activeModal?: { message: string; buttons: string[] } | null;
+    activeInteractivePrompt?: InteractivePrompt | null;
     /**
      * Chat source provenance from ChatSourceMachine (A2). Carries the
      * selected source, transition cause, lock state, and legacy
@@ -372,6 +374,7 @@ export interface SessionEntry {
     runtimeRecoveryState?: string | null;
     resume?: ProviderResumeCapability;
     activeChat: SessionActiveChatData | null;
+    activeInteractivePrompt?: InteractivePrompt | null;
     capabilities?: SessionCapability[];
     /** Effective message input/media support for this session. Defaults fail-closed to text-only. */
     messageInput?: MessageInputSupport;

@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope, type InputPart } from './contracts.js';
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
+import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, type InteractivePrompt } from './types/interactive-prompt.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import { createCliAdapter } from './spec/route.js';
@@ -350,6 +351,7 @@ export class CliProviderInstance implements ProviderInstance {
     private suppressIdleHistoryReplay = false;
     private errorMessage: string | undefined = undefined;
     private errorReason: ProviderErrorReason | undefined = undefined;
+    private activeInteractivePrompt: InteractivePrompt | null = null;
 
     private presentationMode: 'terminal' | 'chat';
     private providerSessionId?: string;
@@ -525,6 +527,9 @@ export class CliProviderInstance implements ProviderInstance {
         // parseSession), with provider-loader.ts updated to store script source strings
         // alongside the loaded function references for extended-legacy providers.
         const adapterStatus = this.adapter.getStatus();
+        if (Object.prototype.hasOwnProperty.call(adapterStatus, 'activeInteractivePrompt')) {
+            this.activeInteractivePrompt = adapterStatus.activeInteractivePrompt ?? null;
+        }
         let parsedStatus: any = null;
         let parseErrorMessage: string | undefined;
         if (typeof this.adapter.getScriptParsedStatus === 'function') {
@@ -674,8 +679,10 @@ export class CliProviderInstance implements ProviderInstance {
                 status: activeChatStatus,
                 messages: statusMessages,
                 activeModal: autoApproveActive ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
+                activeInteractivePrompt: this.activeInteractivePrompt,
                 inputContent: '',
             },
+            activeInteractivePrompt: this.activeInteractivePrompt,
             workspace: this.workingDir,
             instanceId: this.instanceId,
             providerSessionId: this.providerSessionId,
@@ -771,6 +778,32 @@ export class CliProviderInstance implements ProviderInstance {
             void this.adapter.resolveAction(data).catch((e: any) => {
                 LOG.warn('CLI', `[${this.type}] resolve_action failed: ${e?.message || e}`);
             });
+        } else if (event === 'interactive_prompt' && data) {
+            const prompt = normalizeInteractivePrompt(data);
+            if (prompt) {
+                this.activeInteractivePrompt = prompt;
+                this.events.push({
+                    event: 'interactive_prompt',
+                    timestamp: Date.now(),
+                    promptId: prompt.promptId,
+                });
+            }
+        } else if (event === 'interactive_prompt_response' && data) {
+            try {
+                const response = normalizeInteractivePromptResponse(data);
+                if (this.activeInteractivePrompt?.promptId === response.promptId) {
+                    this.activeInteractivePrompt = null;
+                }
+                if (typeof this.adapter.setInteractivePromptResponse !== 'function') {
+                    LOG.warn('CLI', `[${this.type}] interactive_prompt_response ignored: adapter does not support interactive prompts`);
+                    return;
+                }
+                void this.adapter.setInteractivePromptResponse(response).catch((e: any) => {
+                    LOG.warn('CLI', `[${this.type}] interactive_prompt_response failed: ${e?.message || e}`);
+                });
+            } catch (e: any) {
+                LOG.warn('CLI', `[${this.type}] invalid interactive_prompt_response: ${e?.message || e}`);
+            }
         } else if (event === 'provider_state_patch' && data && typeof data === 'object') {
             this.applyProviderResponse(data, { phase: 'immediate' });
         }

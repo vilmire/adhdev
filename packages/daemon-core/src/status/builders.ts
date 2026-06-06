@@ -326,6 +326,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         mode: state.mode,
         resume: state.resume,
         activeChat,
+        ...(state.activeInteractivePrompt ? { activeInteractivePrompt: state.activeInteractivePrompt } : {}),
         ...(summaryMetadata && { summaryMetadata }),
         ...(includeSessionMetadata && {
             capabilities: state.mode === 'terminal' ? PTY_SESSION_CAPABILITIES : CLI_CHAT_SESSION_CAPABILITIES,
