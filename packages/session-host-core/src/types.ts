@@ -36,6 +36,21 @@ export interface SessionBufferSnapshot {
   rows?: number;
 }
 
+export interface SessionTerminalState {
+  cursor: { row: number; col: number };
+  altScreen: boolean;
+  pasteMode: boolean;
+  rawMode: boolean;
+  scrollRegion: { top: number; bot: number };
+  cols: number;
+  rows: number;
+}
+
+export interface SessionTerminalSnapshot {
+  text: string;
+  state: SessionTerminalState;
+}
+
 export interface SessionBufferState {
   scrollbackBytes: number;
   snapshotSeq: number;
@@ -133,6 +148,10 @@ export interface ReleaseWritePayload {
 export interface GetSnapshotPayload {
   sessionId: string;
   sinceSeq?: number;
+}
+
+export interface GetTerminalSnapshotPayload {
+  sessionId: string;
 }
 
 export interface ClearSessionBufferPayload {
@@ -241,6 +260,7 @@ export type SessionHostRequest =
   | { type: 'acquire_write'; payload: AcquireWritePayload }
   | { type: 'release_write'; payload: ReleaseWritePayload }
   | { type: 'get_snapshot'; payload: GetSnapshotPayload }
+  | { type: 'get_terminal_snapshot'; payload: GetTerminalSnapshotPayload }
   | { type: 'clear_session_buffer'; payload: ClearSessionBufferPayload }
   | { type: 'update_session_meta'; payload: UpdateSessionMetaPayload }
   | { type: 'get_host_diagnostics'; payload?: GetHostDiagnosticsPayload }
@@ -264,6 +284,7 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'acquire_write',
   'release_write',
   'get_snapshot',
+  'get_terminal_snapshot',
   'clear_session_buffer',
   'update_session_meta',
   'get_host_diagnostics',

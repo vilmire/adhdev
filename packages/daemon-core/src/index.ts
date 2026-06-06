@@ -428,6 +428,13 @@ export type { CliAdapter } from './cli-adapter-types.js';
 export { NodePtyTransportFactory } from './cli-adapters/pty-transport.js';
 export type { PtyRuntimeTransport, PtyTransportFactory, PtySpawnOptions } from './cli-adapters/pty-transport.js';
 export { SessionHostPtyTransportFactory } from './cli-adapters/session-host-transport.js';
+export {
+  RawTerminalAttachment,
+  namedKeyToAnsi,
+  namedKeysToAnsi,
+  withRawTerminalAttachment,
+} from './cli-adapters/raw-terminal-io.js';
+export type { NamedKey, RawTerminalAttachmentOptions, RawTerminalSessionHostClient } from './cli-adapters/raw-terminal-io.js';
 export type { HostedCliRuntimeDescriptor, CliTransportFactoryParams } from './commands/cli-manager.js';
 export {
   DEFAULT_SESSION_HOST_APP_NAME,
