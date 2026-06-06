@@ -4,6 +4,7 @@ import { execSync } from 'child_process';
 import type { ProviderResumeCapability } from '../providers/contracts.js';
 import type { ChatMessageKind } from '../providers/chat-message-normalization.js';
 import type { ChatBubbleState } from '../types.js';
+import type { InteractivePrompt } from '../providers/types/interactive-prompt.js';
 import { sanitizeSpawnEnv } from './spawn-env.js';
 
 export interface CliChatMessage {
@@ -28,6 +29,7 @@ export interface CliSessionStatus {
     messages: CliChatMessage[];
     workingDir: string;
     activeModal: { message: string; buttons: string[] } | null;
+    activeInteractivePrompt?: InteractivePrompt | null;
     pendingOutboundCount?: number;
     pendingOutboundMessages?: Array<{
         id: string;

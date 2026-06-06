@@ -12,6 +12,7 @@ import type { ProviderModule, ProviderSettingDef, ProviderResumeCapability } fro
 import type { AcpConfigOption, AcpMode, ProviderControlSchema, ProviderSummaryMetadata, SessionCapability } from '../shared-types.js';
 import type { MessageInputSupport } from './provider-input-support.js';
 import type { ChatMessage } from '../types.js';
+import type { InteractivePrompt } from './types/interactive-prompt.js';
 
 // ─── ProviderState — Discriminated union by category ─────────────
 
@@ -47,6 +48,7 @@ export interface ActiveChatData {
     status: string;
     messages: ChatMessage[];
     activeModal: { message: string; buttons: string[] } | null;
+    activeInteractivePrompt?: InteractivePrompt | null;
     inputContent?: string;
 }
 
@@ -72,6 +74,7 @@ interface ProviderStateBase {
     status: ProviderStatus;
  /** chat data */
     activeChat: ActiveChatData | null;
+    activeInteractivePrompt?: InteractivePrompt | null;
  /** Workspace — project path or name (all categories) */
     workspace?: string | null;
     /** Runtime info (real-time detection) */

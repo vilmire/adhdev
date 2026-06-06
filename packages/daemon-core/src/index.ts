@@ -85,6 +85,21 @@ export type {
   InputMediaType,
 } from './shared-types.js';
 
+export type {
+  InteractivePrompt,
+  InteractiveQuestion,
+  InteractiveOption,
+  InteractivePromptResponse,
+  InteractiveAnswer,
+} from './providers/types/interactive-prompt.js';
+export {
+  normalizeInteractivePrompt,
+  normalizeInteractivePromptResponse,
+  buildClaudeInteractiveToolResult,
+  interactivePromptFromClaudeAskUserQuestion,
+  detectClaudeAskUserQuestionPromptFromJson,
+} from './providers/types/interactive-prompt.js';
+
 // ── Repo Mesh Types (cross-package) ──
 export type {
   RepoMesh,

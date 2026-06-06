@@ -16,6 +16,7 @@
 
 import * as os from 'os';
 import type { CliAdapter } from '../cli-adapter-types.js';
+import type { InteractivePromptResponse } from '../providers/types/interactive-prompt.js';
 import { LOG } from '../logging/logger.js';
 import { getDebugRuntimeConfig } from '../logging/debug-config.js';
 import { TerminalScreen } from './terminal-screen.js';
@@ -1074,6 +1075,11 @@ export class ProviderCliAdapter implements CliAdapter {
             return;
         }
         await this.sendMessage(promptText);
+    }
+
+    async setInteractivePromptResponse(_response: InteractivePromptResponse): Promise<void> {
+        // Legacy TUI providers do not currently expose an interactive prompt
+        // protocol. Spec-backed claude-cli implements the first real wiring.
     }
 
     private isSubmitStuck(normalizedPromptSnippet: string): boolean {
