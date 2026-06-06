@@ -966,7 +966,15 @@ export class CliProviderInstance implements ProviderInstance {
             return { reason: `parsed_status:${parsedStatus}`, terminal: isCliGeneratingLikeStatus(parsedStatus) };
         }
         if (parsed?.activeModal || parsed?.modal) return { reason: 'parsed_modal_active', terminal: true };
-        if (!this.completionHasFinalAssistantMessage(parsed?.messages)) return { reason: 'missing_final_assistant' };
+        // SpecCliAdapter never populates parsed.messages — chat history flows
+        // through the daemon's native-history pipeline, not the status hook.
+        // Skipping the final-assistant gate avoids a 30s stall on every turn
+        // for spec-routed providers (agy / codex / claude / hermes).
+        const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
+        if (!adapterOwnsMessagesElsewhere
+            && !this.completionHasFinalAssistantMessage(parsed?.messages)) {
+            return { reason: 'missing_final_assistant' };
+        }
 
         // Guard: if the screen still shows an approval/choice prompt as the last visible text,
         // the turn is not complete even if the parsed status says idle and there is an assistant

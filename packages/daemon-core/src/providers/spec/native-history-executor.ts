@@ -256,9 +256,20 @@ function expandPath(template: string, input: NativeHistoryInput): string | null 
     // Re-expand ~ in case the fallback used it.
     if (out.startsWith('~/')) out = path.join(os.homedir(), out.slice(2));
     const now = new Date();
+    // claude (and a couple of other Anthropic-CLI–style providers) writes
+    // its per-cwd transcript under the *resolved* path
+    // (/private/tmp/foo, not /tmp/foo on macOS where /tmp -> /private/tmp).
+    // Without realpath, the spec template `~/.claude/projects/{cwd_dashed}/…`
+    // builds `-tmp-foo` and never finds the actual `-private-tmp-foo` dir.
+    const workspaceRaw = input.workspace ?? '';
+    let workspaceResolved = workspaceRaw;
+    if (workspaceRaw) {
+        try { workspaceResolved = fs.realpathSync(workspaceRaw); }
+        catch { /* path may not exist yet — keep the raw value */ }
+    }
     const vars: Record<string, string> = {
-        cwd: input.workspace ?? '',
-        cwd_dashed: (input.workspace ?? '').replace(/\//g, '-'),
+        cwd: workspaceResolved,
+        cwd_dashed: workspaceResolved.replace(/\//g, '-'),
         session_id: input.providerSessionId || input.sessionId || input.historySessionId || '',
         yyyy: String(now.getUTCFullYear()),
         mm: String(now.getUTCMonth() + 1).padStart(2, '0'),

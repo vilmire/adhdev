@@ -30,6 +30,15 @@ export class SpecCliAdapter implements CliAdapter {
     readonly cliType: string;
     readonly cliName: string;
     readonly workingDir: string;
+    /**
+     * Marker the daemon's finalization gate checks: `getStatus()` returns
+     * `messages: []` by design here (chat history lives in the daemon's
+     * native-history pipeline, not the adapter). Without this flag,
+     * cli-provider-instance's `missing_final_assistant` gate would stall
+     * every turn until the 30s safety timeout because it expects the
+     * adapter to surface the final assistant message.
+     */
+    readonly chatMessagesOwnedExternally = true as const;
 
     private driver: SpecDriver;
     private spec: CliSpec;
