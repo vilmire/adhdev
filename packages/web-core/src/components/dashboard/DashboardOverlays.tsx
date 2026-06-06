@@ -68,7 +68,7 @@ interface DashboardOverlaysProps {
         open: boolean
         onClose: () => void
     }
-    interactivePrompt: UseInteractivePromptResult
+    interactivePrompt?: UseInteractivePromptResult
 }
 
 export default function DashboardOverlays({
@@ -143,11 +143,11 @@ export default function DashboardOverlays({
             />
 
             <InteractivePromptModal
-                promptSession={interactivePrompt.promptSession}
-                isSubmitting={interactivePrompt.isSubmitting}
-                error={interactivePrompt.responseError}
-                onSubmit={interactivePrompt.submit}
-                onCancel={interactivePrompt.cancel}
+                promptSession={interactivePrompt?.promptSession ?? null}
+                isSubmitting={interactivePrompt?.isSubmitting ?? false}
+                error={interactivePrompt?.responseError ?? null}
+                onSubmit={interactivePrompt?.submit ?? (async () => {})}
+                onCancel={interactivePrompt?.cancel ?? (() => {})}
             />
 
             {onboarding.open && <OnboardingModal onClose={onboarding.onClose} />}

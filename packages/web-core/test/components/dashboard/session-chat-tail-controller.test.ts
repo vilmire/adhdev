@@ -420,6 +420,84 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
+  it('ignores chat-tail updates whose session id does not match the controller target', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-a',
+      historySessionId: 'history-a',
+      subscriptionKey: 'daemon:daemon-1:session:session-a',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:session-a',
+      sessionId: 'session-b',
+      historySessionId: 'history-b',
+      messages: [{ role: 'assistant', content: 'session b should not bleed', id: 'b-1', timestamp: 1 } as any],
+    }))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: false,
+    })
+
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:session-a',
+      sessionId: 'session-a',
+      historySessionId: 'history-a',
+      messages: [{ role: 'assistant', content: 'session a transcript', id: 'a-1', timestamp: 2 } as any],
+    }))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      hasLiveSnapshot: true,
+      liveMessages: [expect.objectContaining({ content: 'session a transcript' })],
+    })
+  })
+
+  it('ignores chat-tail updates whose history session id does not match the active chat', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'runtime-1',
+      historySessionId: 'chat-a',
+      subscriptionKey: 'daemon:daemon-1:session:runtime-1',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:runtime-1',
+      sessionId: 'runtime-1',
+      historySessionId: 'chat-b',
+      messages: [{ role: 'assistant', content: 'chat b should not overwrite chat a', id: 'b-1', timestamp: 1 } as any],
+    }))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: false,
+    })
+
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:runtime-1',
+      sessionId: 'runtime-1',
+      historySessionId: 'chat-a',
+      messages: [{ role: 'assistant', content: 'chat a transcript', id: 'a-1', timestamp: 2 } as any],
+    }))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      hasLiveSnapshot: true,
+      liveMessages: [expect.objectContaining({ content: 'chat a transcript' })],
+    })
+  })
+
   it('can clear retained chat-tail snapshots immediately after an explicit new chat action', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

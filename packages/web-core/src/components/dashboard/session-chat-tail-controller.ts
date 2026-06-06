@@ -196,6 +196,11 @@ function readChatTailUpdateMessages(update: SessionChatTailUpdate): DashboardMes
   return Array.isArray(tailMessages) ? tailMessages as DashboardMessage[] : []
 }
 
+function readUpdateStringField(update: SessionChatTailUpdate, field: 'sessionId' | 'historySessionId'): string {
+  const value = (update as SessionChatTailUpdate & Record<typeof field, unknown>)[field]
+  return typeof value === 'string' ? value : ''
+}
+
 export class SessionChatTailController {
   private manager: SubscriptionManager
   private sendData?: (daemonId: string, data: any) => boolean
@@ -377,6 +382,11 @@ export class SessionChatTailController {
 
   private handleUpdate(update: SessionChatTailUpdate): void {
     if (update.error) return
+    const updateSessionId = readUpdateStringField(update, 'sessionId')
+    if (updateSessionId && updateSessionId !== this.sessionId) return
+
+    const updateHistorySessionId = readUpdateStringField(update, 'historySessionId')
+    if (updateHistorySessionId && this.historySessionId && updateHistorySessionId !== this.historySessionId) return
 
     const nextMessages = readChatTailUpdateMessages(update)
     const incomingMessageSource = (update as SessionChatTailUpdate & { messageSource?: Record<string, unknown> }).messageSource
