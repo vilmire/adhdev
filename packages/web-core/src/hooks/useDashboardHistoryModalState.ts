@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { SetURLSearchParams } from 'react-router-dom'
+import { useLaunchCli } from '../context/LaunchCliContext'
 
 import type { ActiveConversation } from '../components/dashboard/types'
 import { isAcpConv, isCliConv } from '../components/dashboard/types'
@@ -43,6 +44,7 @@ export function useDashboardHistoryModalState({
   setClearedTabs,
   setSearchParams,
 }: UseDashboardHistoryModalStateOptions) {
+  const { launchCli } = useLaunchCli()
   const [historyModalOpen, setHistoryModalOpen] = useState(false)
   const [savedHistorySessions, setSavedHistorySessions] = useState<SavedSessionHistoryEntry[]>([])
   const [savedHistoryFilters, setSavedHistoryFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState())
@@ -142,7 +144,7 @@ export function useDashboardHistoryModalState({
     const cliType = getConversationProviderType(historyTargetConv)
     try {
       setResumingSavedHistorySessionId(session.providerSessionId)
-      const raw: any = await sendDaemonCommand(routeTarget, 'launch_cli', {
+      const raw: any = await launchCli(routeTarget, {
         cliType,
         dir: session.workspace,
         resumeSessionId: session.providerSessionId,

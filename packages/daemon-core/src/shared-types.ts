@@ -525,7 +525,29 @@ export interface AvailableProviderInfo {
     lastVerification?: MachineProviderCheckResult;
     /** Provider-declared Repo Mesh coordinator/MCP behavior. */
     meshCoordinator?: ProviderMeshCoordinatorConfig;
+    /**
+     * Provider trust classification — derived from the on-disk layer the
+     * manifest came from and the shape of the manifest. Dashboards use
+     * this to render a trust badge and gate activation of
+     * `external-untrusted` providers behind a confirm modal.
+     */
+    trust?: ProviderTrust;
+    /** Daemon-side human-readable description of the trust value. */
+    trustDescription?: string;
+    /** True when activation needs a user-side confirmation step. */
+    requiresConfirmation?: boolean;
+    /** Which on-disk layer the manifest lives in. */
+    sourceLayer?: 'user' | 'upstream' | 'external';
+    /** For external providers, the source-name namespace it came from. */
+    sourceName?: string | null;
 }
+
+export type ProviderTrust =
+    | 'user-custom'
+    | 'trusted'
+    | 'trusted-with-scripts'
+    | 'external-safe'
+    | 'external-untrusted';
 
 export interface MachineProviderCheckResult {
     ok: boolean;

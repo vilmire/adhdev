@@ -8,6 +8,7 @@ import { useState, useCallback, useRef } from 'react'
 import { formatIdeType } from '../../utils/daemon-utils'
 import { eventManager } from '../../managers/EventManager'
 import type { LogEntry, IdeSessionEntry } from './types'
+import { useLaunchCli } from '../../context/LaunchCliContext'
 
 export interface LaunchPickState {
     cliType: string
@@ -38,6 +39,7 @@ interface UseMachineActionsOpts {
 }
 
 export function useMachineActions({ machineId, registeredMachineId, sendDaemonCommand, onNicknameSynced, logsEndRef }: UseMachineActionsOpts) {
+    const { launchCli } = useLaunchCli()
     const [logs, setLogs] = useState<LogEntry[]>([])
     const [launchingIde, setLaunchingIde] = useState<string | null>(null)
     const [launchingAgentType, setLaunchingAgentType] = useState<string | null>(null)
@@ -107,7 +109,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             else if (useDefaultWorkspace) body.useDefaultWorkspace = true
             else if (useHome) body.useHome = true
             if (resumeSessionId) body.resumeSessionId = resumeSessionId
-            const res: any = await sendDaemonCommand(machineId, 'launch_cli', body)
+            const res: any = await launchCli(machineId, body)
             const payload = res?.result || res
             if (res?.success) {
                 addLog('info', `${cliType} launched`, true)

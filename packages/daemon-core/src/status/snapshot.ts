@@ -145,21 +145,46 @@ function buildAvailableProviders(
         lastDetection?: AvailableProviderInfo['lastDetection'];
         lastVerification?: AvailableProviderInfo['lastVerification'];
         meshCoordinator?: AvailableProviderInfo['meshCoordinator'];
+        _sourceTrust?: AvailableProviderInfo['trust'];
+        _sourceLayer?: AvailableProviderInfo['sourceLayer'];
+        _sourceName?: string | null;
     }> = providerLoader.getAvailableProviderInfos?.() || providerLoader.getAll();
-    return providers.map((provider) => ({
-        type: provider.type,
-        name: provider.displayName || provider.type,
-        displayName: provider.displayName || provider.type,
-        icon: provider.icon || '💻',
-        category: provider.category,
-        ...(provider.installed !== undefined ? { installed: provider.installed } : {}),
-        ...(provider.detectedPath !== undefined ? { detectedPath: provider.detectedPath } : {}),
-        ...(provider.enabled !== undefined ? { enabled: provider.enabled } : {}),
-        ...(provider.machineStatus !== undefined ? { machineStatus: provider.machineStatus } : {}),
-        ...(provider.lastDetection !== undefined ? { lastDetection: provider.lastDetection } : {}),
-        ...(provider.lastVerification !== undefined ? { lastVerification: provider.lastVerification } : {}),
-        ...(provider.meshCoordinator !== undefined ? { meshCoordinator: provider.meshCoordinator } : {}),
-    }));
+    // Trust helpers come from daemon-core; resolve them lazily so the
+    // status snapshot path stays loadable in older bundles that don't
+    // ship provider-trust yet.
+    let describeTrust: (trust: AvailableProviderInfo['trust']) => string = () => '';
+    let requiresConfirmation: (trust: AvailableProviderInfo['trust']) => boolean = () => false;
+    try {
+        const mod = require('../providers/provider-trust.js') as typeof import('../providers/provider-trust.js');
+        describeTrust = mod.describeTrust as typeof describeTrust;
+        requiresConfirmation = mod.requiresConfirmation as typeof requiresConfirmation;
+    } catch { /* enrichment only */ }
+    return providers.map((provider) => {
+        const trust = (provider as any)._sourceTrust as AvailableProviderInfo['trust'] | undefined;
+        const sourceLayer = (provider as any)._sourceLayer as AvailableProviderInfo['sourceLayer'] | undefined;
+        const sourceName = (provider as any)._sourceName as string | null | undefined;
+        return {
+            type: provider.type,
+            name: provider.displayName || provider.type,
+            displayName: provider.displayName || provider.type,
+            icon: provider.icon || '💻',
+            category: provider.category,
+            ...(provider.installed !== undefined ? { installed: provider.installed } : {}),
+            ...(provider.detectedPath !== undefined ? { detectedPath: provider.detectedPath } : {}),
+            ...(provider.enabled !== undefined ? { enabled: provider.enabled } : {}),
+            ...(provider.machineStatus !== undefined ? { machineStatus: provider.machineStatus } : {}),
+            ...(provider.lastDetection !== undefined ? { lastDetection: provider.lastDetection } : {}),
+            ...(provider.lastVerification !== undefined ? { lastVerification: provider.lastVerification } : {}),
+            ...(provider.meshCoordinator !== undefined ? { meshCoordinator: provider.meshCoordinator } : {}),
+            ...(trust ? {
+                trust,
+                trustDescription: describeTrust(trust),
+                requiresConfirmation: requiresConfirmation(trust),
+            } : {}),
+            ...(sourceLayer ? { sourceLayer } : {}),
+            ...(sourceName ? { sourceName } : {}),
+        };
+    });
 }
 
 export function buildMachineInfo(profile: 'full' | 'live' | 'metadata' = 'full'): MachineInfo {

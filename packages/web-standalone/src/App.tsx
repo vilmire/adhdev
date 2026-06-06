@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { TransportProvider, MachineDetail, Dashboard, RepoMesh, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
+import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
@@ -221,6 +221,7 @@ export default function App() {
                 <StandaloneAuthGate>
                     <StandaloneDaemonProvider>
                         <TransportProvider value={transportValue}>
+                            <LaunchCliProvider sendDaemonCommand={sendCommandViaWs}>
                             <StandaloneLayout>
                                 <OnboardingGate />
                                 <Routes>
@@ -234,6 +235,7 @@ export default function App() {
                                     <Route path="*" element={<Navigate to="/dashboard" replace />} />
                                 </Routes>
                             </StandaloneLayout>
+                            </LaunchCliProvider>
                         </TransportProvider>
                     </StandaloneDaemonProvider>
                 </StandaloneAuthGate>
