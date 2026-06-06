@@ -13,6 +13,22 @@ import { useState } from 'react'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
 
+/**
+ * Validate a provider-manifest URL before rendering it as an anchor.
+ * Manifests from external/untrusted sources could otherwise smuggle
+ * `javascript:` / `data:` URIs into the catalog. We accept only http/
+ * https; anything else collapses to a non-link.
+ */
+function safeHttpHref(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null
+    try {
+        const u = new URL(raw)
+        return (u.protocol === 'https:' || u.protocol === 'http:') ? u.toString() : null
+    } catch {
+        return null
+    }
+}
+
 type ProviderMachineCheck = NonNullable<ProviderInfo['lastDetection']>
 
 const STATUS_LABEL: Record<string, string> = {
@@ -144,20 +160,28 @@ export default function InstalledProviderRow({
                         {(providerInfo as any)?.trust && (providerInfo as any)?.trustDescription && (
                             <div><span className="text-text-secondary font-medium">Trust:</span> {(providerInfo as any).trustDescription}</div>
                         )}
-                        {(providerInfo as any)?.links && Object.keys((providerInfo as any).links).length > 0 && (
-                            <div>
-                                <span className="text-text-secondary font-medium">Links:</span>{' '}
-                                {Object.entries((providerInfo as any).links).map(([k, v]) => (
-                                    <a
-                                        key={k}
-                                        href={String(v)}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="text-violet-400 hover:underline mr-2"
-                                    >{k}</a>
-                                ))}
-                            </div>
-                        )}
+                        {(() => {
+                            const links = (providerInfo as any)?.links as Record<string, unknown> | undefined
+                            if (!links) return null
+                            const safe = Object.entries(links)
+                                .map(([k, v]) => ({ k, href: safeHttpHref(v) }))
+                                .filter((e): e is { k: string; href: string } => e.href !== null)
+                            if (safe.length === 0) return null
+                            return (
+                                <div>
+                                    <span className="text-text-secondary font-medium">Links:</span>{' '}
+                                    {safe.map(({ k, href }) => (
+                                        <a
+                                            key={k}
+                                            href={href}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-violet-400 hover:underline mr-2"
+                                        >{k}</a>
+                                    ))}
+                                </div>
+                            )
+                        })()}
                     </div>
                     {isRuntime && (
                         <div className="grid gap-1 text-[10px] text-text-muted">
