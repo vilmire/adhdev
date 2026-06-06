@@ -37,6 +37,7 @@ export { ApiProvider, useApi } from './context/ApiContext'
 // ── Context: Transport (P2P / HTTP abstraction) ──
 export { TransportProvider, useTransport } from './context/TransportContext'
 export type { TransportContextValue } from './context/TransportContext'
+export { LaunchCliProvider, useLaunchCli } from './context/LaunchCliContext'
 
 // ── API Client Factory ──
 export { createApiClient } from './base-api'

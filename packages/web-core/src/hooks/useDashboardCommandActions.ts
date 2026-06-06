@@ -1,5 +1,6 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react'
 import { useDashboardMeshOverrides } from '../context/DashboardMeshContext'
+import { useLaunchCli } from '../context/LaunchCliContext'
 
 import type { ActiveConversation } from '../components/dashboard/types'
 import {
@@ -63,6 +64,7 @@ export function useDashboardCommandActions({
   setCliViewModeOverrides,
 }: UseDashboardCommandActionsOptions) {
   const meshOverrides = useDashboardMeshOverrides()
+  const { launchCli } = useLaunchCli()
   const handleBrowseMachineDirectory = useCallback(async (machineId: string, path: string): Promise<BrowseDirectoryResult> => (
     browseMachineDirectories(sendDaemonCommand, machineId, path)
   ), [sendDaemonCommand])
@@ -117,7 +119,7 @@ export function useDashboardCommandActions({
       if (opts?.resumeSessionId?.trim()) payload.resumeSessionId = opts.resumeSessionId.trim()
       if (Array.isArray(opts?.cliArgs) && opts.cliArgs.length > 0) payload.cliArgs = opts.cliArgs
       if (opts?.initialModel?.trim()) payload.initialModel = opts.initialModel.trim()
-      const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
+      const res: any = await launchCli(machineId, payload)
       const result = res?.result || res
       const launchedSessionId = result?.sessionId || result?.id
       if (res?.success && launchedSessionId) {
@@ -158,7 +160,7 @@ export function useDashboardCommandActions({
       }
       return { ok: false, error: error instanceof Error ? error.message : `Could not launch ${kind.toUpperCase()} session` }
     }
-  }, [onOpenSession, sendDaemonCommand, trackPendingLaunch])
+  }, [launchCli, sendDaemonCommand, trackPendingLaunch])
 
   // Cloud override: route through the selected daemon; standalone: local daemon list_meshes
   const handleListMachineMeshes = useCallback(async (machineId: string): Promise<MeshLaunchOption[]> => {

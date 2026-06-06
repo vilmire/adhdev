@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { NavigateFunction } from 'react-router-dom'
 import type { DaemonData } from '../../types'
+import { useLaunchCli } from '../../context/LaunchCliContext'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 import { browseMachineDirectories, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import type { ActiveConversation } from './types'
@@ -48,6 +49,7 @@ export function useDashboardMobileMachineActions({
     ides,
     conversations,
 }: UseDashboardMobileMachineActionsOptions) {
+    const { launchCli } = useLaunchCli()
     const [machineActionState, setMachineActionState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
     const [machineActionMessage, setMachineActionMessage] = useState('')
     const [pendingWorkspaceLaunch, setPendingWorkspaceLaunch] = useState<PendingWorkspaceLaunch | null>(null)
@@ -158,7 +160,7 @@ export function useDashboardMobileMachineActions({
             if (opts?.resumeSessionId) payload.resumeSessionId = opts.resumeSessionId
             if (opts?.args?.trim()) payload.cliArgs = opts.args.trim().split(/\s+/).filter(Boolean)
             if (opts?.model?.trim()) payload.initialModel = opts.model.trim()
-            const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
+            const res: any = await launchCli(machineId, payload)
             const result = res?.result || res
             const launchedSessionId = result?.sessionId || result?.id
             if (res?.success && launchedSessionId) {

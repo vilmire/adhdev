@@ -11,6 +11,7 @@
  */
 import { useState } from 'react'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
+import TrustBadge, { type ProviderTrust } from './TrustBadge'
 
 type ProviderMachineCheck = NonNullable<ProviderInfo['lastDetection']>
 
@@ -92,6 +93,13 @@ export default function InstalledProviderRow({
                 <span className={`text-[9px] font-semibold px-1.5 py-px rounded border ${CATEGORY_BG[prov.category] ?? 'border-border-subtle text-text-muted'}`}>
                     {prov.category.toUpperCase()}
                 </span>
+                {(providerInfo as any)?.trust && (
+                    <TrustBadge
+                        trust={(providerInfo as any).trust as ProviderTrust}
+                        sourceName={(providerInfo as any).sourceName ?? null}
+                        description={(providerInfo as any).trustDescription}
+                    />
+                )}
                 {isRuntime && (
                     <span className={`text-[9px] font-semibold px-1.5 py-px rounded border ${STATUS_CLASS[machineStatus] ?? STATUS_CLASS.disabled}`}>
                         {STATUS_LABEL[machineStatus] ?? machineStatus}

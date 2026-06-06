@@ -9,6 +9,7 @@ import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type Pro
 import ProviderCloneModal from './ProviderCloneModal'
 import AddProviderSection from './AddProviderSection'
 import InstalledProviderRow from './InstalledProviderRow'
+import SourcesPanel from './SourcesPanel'
 
 interface ProvidersTabProps {
     machineId: string
@@ -22,6 +23,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
     const [savingKey, setSavingKey] = useState<string | null>(null)
     const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('all')
     const [showClone, setShowClone] = useState(false)
+    const [showSources, setShowSources] = useState(false)
     const [showSourceConfig, setShowSourceConfig] = useState(false)
     const [sourceConfig, setSourceConfig] = useState<ProviderSourceConfigPayload | null>(null)
     const [sourceModeInput, setSourceModeInput] = useState<'normal' | 'no-upstream'>('normal')
@@ -158,6 +160,11 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                 </div>
                 <div className="flex gap-1.5">
                     <button
+                        onClick={() => setShowSources(v => !v)}
+                        className={`machine-btn text-[10px] ${showSources ? 'bg-sky-500/[0.10] border-sky-500/30 text-sky-300' : ''}`}
+                        title="Manage 3rd-party provider sources"
+                    >🌐 Sources</button>
+                    <button
                         onClick={() => setShowClone(true)}
                         className="machine-btn text-[10px]"
                         title="Create a new provider from an existing one"
@@ -172,6 +179,15 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                     >⚙ Advanced</button>
                 </div>
             </div>
+
+            {/* External provider sources (3rd-party git URLs) */}
+            {showSources && (
+                <SourcesPanel
+                    machineId={machineId}
+                    sendDaemonCommand={sendDaemonCommand}
+                    onChange={() => { void fetchSettings() }}
+                />
+            )}
 
             {/* Advanced: provider source config (collapsed by default) */}
             {showSourceConfig && (
