@@ -49,6 +49,38 @@ describe('interactive prompt utilities', () => {
     })
   })
 
+  it('keeps scoped prompt lookup isolated to the requested session', () => {
+    const otherPrompt = {
+      ...prompt,
+      promptId: 'prompt-2',
+      questions: [{ questionId: 'q-other', question: 'Other session?', options: [{ label: 'Yes' }] }],
+    }
+    const entries: DaemonData[] = [
+      {
+        id: 'daemon-1:cli:session-a',
+        daemonId: 'daemon-1',
+        sessionId: 'session-a',
+        type: 'claude-cli',
+        status: 'waiting_approval',
+        activeInteractivePrompt: prompt,
+      } as DaemonData,
+      {
+        id: 'daemon-1:cli:session-b',
+        daemonId: 'daemon-1',
+        sessionId: 'session-b',
+        type: 'claude-cli',
+        status: 'waiting_approval',
+        activeInteractivePrompt: otherPrompt,
+      } as DaemonData,
+    ]
+
+    expect(findInteractivePromptSession(entries, 'session-a')).toMatchObject({
+      sessionId: 'session-a',
+      prompt,
+    })
+    expect(findInteractivePromptSession(entries, 'missing-session')).toBeNull()
+  })
+
   it('builds daemon-compatible responses from selected labels and freeform text', () => {
     expect(buildInteractivePromptResponse(prompt, {
       q1: { selectedLabels: ['Approve'] },
