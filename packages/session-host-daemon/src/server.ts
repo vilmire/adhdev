@@ -196,6 +196,8 @@ export class SessionHostServer extends EventEmitter {
         }
         case 'get_snapshot':
           return { success: true, result: this.getSnapshot(request.payload.sessionId, request.payload.sinceSeq) };
+        case 'get_terminal_snapshot':
+          return { success: true, result: this.requireRuntime(request.payload.sessionId).getTerminalSnapshot() };
         case 'get_host_diagnostics':
           return { success: true, result: this.getHostDiagnostics(request.payload) };
         case 'clear_session_buffer': {

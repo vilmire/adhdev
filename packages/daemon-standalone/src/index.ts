@@ -65,6 +65,8 @@ import {
   prepareSessionModalUpdate,
   runAsyncBatch,
   startLocalIpcServer,
+  withRawTerminalAttachment,
+  type NamedKey,
   type LocalIpcServerHandle,
 } from '@adhdev/daemon-core';
 import { DEFAULT_DAEMON_PORT, DAEMON_WS_PATH } from '@adhdev/daemon-core';
@@ -98,6 +100,11 @@ import {
   STANDALONE_CDP_SCAN_INTERVAL_MS,
 } from '../../daemon-core/src/runtime-defaults.js';
 import type { SessionModalState } from '../../daemon-core/src/providers/provider-instance.js';
+import {
+  handleRawTerminalHttpRequest,
+  isRawTerminalApiPath,
+  type RawTerminalHttpService,
+} from './raw-terminal-http.js';
 
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
@@ -418,6 +425,28 @@ class StandaloneServer {
   private devServer: Awaited<ReturnType<typeof startDaemonDevSupport>> | null = null;
   private sessionHostEndpoint: SessionHostEndpoint | null = null;
   private sessionHostControl: StandaloneSessionHostControlPlane | null = null;
+
+  private rawTerminalService(): RawTerminalHttpService {
+    const endpoint = this.sessionHostEndpoint || undefined;
+    return {
+      readScreen: (sessionId) => withRawTerminalAttachment(
+        { endpoint, sessionId, mode: 'read' },
+        attachment => attachment.readScreenText(),
+      ),
+      readState: (sessionId) => withRawTerminalAttachment(
+        { endpoint, sessionId, mode: 'read' },
+        attachment => attachment.readState(),
+      ),
+      writeInput: (sessionId, text) => withRawTerminalAttachment(
+        { endpoint, sessionId, mode: 'write' },
+        attachment => attachment.writeInput(text),
+      ),
+      writeKeys: (sessionId, keys: readonly NamedKey[]) => withRawTerminalAttachment(
+        { endpoint, sessionId, mode: 'write' },
+        attachment => attachment.writeKeys(keys),
+      ),
+    };
+  }
 
   private isRecoverableSessionHostError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
@@ -1089,6 +1118,20 @@ class StandaloneServer {
 
     // ─── API Routes (v1) ───
     const apiPath = url.startsWith('/api/v1/') ? url.slice(7) : null; // /api/v1/status → /status
+
+    if (isRawTerminalApiPath(parsedUrl.pathname)) {
+      void handleRawTerminalHttpRequest({
+        req,
+        res,
+        parsedUrl,
+        service: this.rawTerminalService(),
+      }).catch((error: any) => {
+        if (res.headersSent) return;
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: error?.message || String(error) }));
+      });
+      return;
+    }
 
     if (apiPath === '/status' && method === 'GET') {
       const status = this.getStatus(getSharedSnapshot());

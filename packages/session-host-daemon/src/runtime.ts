@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
-import type { CreateSessionPayload } from '@adhdev/session-host-core';
+import type { CreateSessionPayload, SessionTerminalSnapshot } from '@adhdev/session-host-core';
 import {
   sanitizeSpawnEnv,
   ensureNodePtySpawnHelperPermissions,
@@ -14,6 +14,7 @@ type TerminalMirrorHandle = {
   write(data: string | Uint8Array): void;
   resize(cols: number, rows: number): void;
   formatVT(): string;
+  formatPlainText(): string;
   getCursorPosition(): { col: number; row: number };
   dispose(): void;
 };
@@ -22,6 +23,7 @@ type GhosttyTerminalHandle = {
   write(data: string | Uint8Array): void;
   resize(cols: number, rows: number): void;
   formatVT(): string;
+  formatPlainText(options?: { trim?: boolean }): string;
   getCursorPosition(): { col: number; row: number };
   dispose(): void;
 };
@@ -105,7 +107,8 @@ function formatXtermViewportPlain(terminal: XtermTerminal, rows: number): string
 
   for (let i = start; i < end; i++) {
     const line = buffer.getLine(i);
-    lines.push(line ? line.translateToString(true) : '');
+    const raw = line ? line.translateToString(false) : '';
+    lines.push(raw.replace(/\s+$/, ''));
   }
 
   let first = 0;
@@ -185,6 +188,9 @@ function createXtermMirror(options: { cols: number; rows: number; scrollback: nu
       if (serializer) return serializeXtermViewport(terminal, serializer, currentRows);
       return formatXtermViewportPlain(terminal, currentRows);
     },
+    formatPlainText(): string {
+      return formatXtermViewportPlain(terminal, currentRows).replace(/\r\n/g, '\n');
+    },
     getCursorPosition(): { col: number; row: number } {
       const buffer = terminal.buffer.active;
       return {
@@ -224,6 +230,9 @@ function normalizeGhosttyBinding(mod: any): GhosttyBinding | null {
         },
         formatVT(): string {
           return viewportSnapshot.formatVT();
+        },
+        formatPlainText(): string {
+          return viewportSnapshot.formatPlainText();
         },
         getCursorPosition(): { col: number; row: number } {
           if (typeof handle.getCursorPosition === 'function') return handle.getCursorPosition() as { col: number; row: number };
@@ -278,12 +287,16 @@ function getTerminalMirrorFactory(): (options: { cols: number; rows: number; scr
 export class PtySessionRuntime {
   readonly sessionId: string;
   readonly payload: CreateSessionPayload;
-  readonly cols: number;
-  readonly rows: number;
+  private cols: number;
+  private rows: number;
 
   private ptyProcess: IPty | null = null;
   private screenMirror: TerminalMirrorHandle | null = null;
   private pendingQueryScanTail = '';
+  private terminalModeScanTail = '';
+  private altScreen = false;
+  private pasteMode = false;
+  private scrollRegion: { top: number; bot: number };
   private onDataCallback: (data: string) => void;
   private onExitCallback: (exitCode: number | null) => void;
 
@@ -292,6 +305,7 @@ export class PtySessionRuntime {
     this.payload = options.payload;
     this.cols = resolveSessionHostCols(options.payload.cols);
     this.rows = resolveSessionHostRows(options.payload.rows);
+    this.scrollRegion = { top: 0, bot: this.rows - 1 };
     this.onDataCallback = options.onData;
     this.onExitCallback = options.onExit;
   }
@@ -330,6 +344,7 @@ export class PtySessionRuntime {
 
     this.ptyProcess.onData((data: string) => {
       this.screenMirror?.write(data);
+      this.trackTerminalModes(data);
       this.respondToTerminalQueries(data);
       this.onDataCallback(data);
     });
@@ -339,6 +354,7 @@ export class PtySessionRuntime {
       this.screenMirror?.dispose();
       this.screenMirror = null;
       this.pendingQueryScanTail = '';
+      this.terminalModeScanTail = '';
       this.onExitCallback(exitCode ?? null);
     });
 
@@ -353,6 +369,12 @@ export class PtySessionRuntime {
   resize(cols: number, rows: number): void {
     if (!this.ptyProcess) throw new Error(`Session not running: ${this.sessionId}`);
     this.ptyProcess.resize(cols, rows);
+    this.cols = Math.max(1, cols | 0);
+    this.rows = Math.max(1, rows | 0);
+    this.scrollRegion = {
+      top: Math.min(this.scrollRegion.top, this.rows - 1),
+      bot: Math.min(Math.max(this.scrollRegion.top, this.scrollRegion.bot), this.rows - 1),
+    };
     this.screenMirror?.resize(cols, rows);
   }
 
@@ -379,6 +401,61 @@ export class PtySessionRuntime {
 
   getSnapshotText(): string {
     return this.screenMirror?.formatVT() || '';
+  }
+
+  getTerminalSnapshot(): SessionTerminalSnapshot {
+    if (!this.ptyProcess || !this.screenMirror) {
+      throw new Error(`Session not running: ${this.sessionId}`);
+    }
+    const cursor = this.screenMirror.getCursorPosition();
+    return {
+      text: this.screenMirror.formatPlainText(),
+      state: {
+        cursor: {
+          row: Math.max(0, cursor.row | 0),
+          col: Math.max(0, cursor.col | 0),
+        },
+        altScreen: this.altScreen,
+        pasteMode: this.pasteMode,
+        rawMode: true,
+        scrollRegion: { ...this.scrollRegion },
+        cols: this.cols,
+        rows: this.rows,
+      },
+    };
+  }
+
+  private trackTerminalModes(data: string): void {
+    if (!data) return;
+    const combined = this.terminalModeScanTail + data;
+    const privateMode = /\x1b\[\?([0-9;]*)([hl])/g;
+    let privateMatch: RegExpExecArray | null;
+    while ((privateMatch = privateMode.exec(combined)) !== null) {
+      const enabled = privateMatch[2] === 'h';
+      for (const mode of privateMatch[1].split(';')) {
+        if (mode === '47' || mode === '1047' || mode === '1049') this.altScreen = enabled;
+        if (mode === '2004') this.pasteMode = enabled;
+      }
+    }
+
+    const scrollRegion = /\x1b\[(\d*)(?:;(\d*))?r/g;
+    let scrollMatch: RegExpExecArray | null;
+    while ((scrollMatch = scrollRegion.exec(combined)) !== null) {
+      const top = scrollMatch[1] ? Number.parseInt(scrollMatch[1], 10) - 1 : 0;
+      const bot = scrollMatch[2] ? Number.parseInt(scrollMatch[2], 10) - 1 : this.rows - 1;
+      this.scrollRegion = {
+        top: Math.max(0, Math.min(this.rows - 1, top)),
+        bot: Math.max(0, Math.min(this.rows - 1, bot)),
+      };
+      if (this.scrollRegion.bot < this.scrollRegion.top) {
+        this.scrollRegion = { top: 0, bot: this.rows - 1 };
+      }
+    }
+
+    const lastEscape = combined.lastIndexOf('\x1b');
+    this.terminalModeScanTail = lastEscape >= 0 && combined.length - lastEscape < 64
+      ? combined.slice(lastEscape)
+      : '';
   }
 
   private respondToTerminalQueries(data: string): void {

@@ -145,7 +145,7 @@ export async function ensureSessionHostReady(): Promise<SessionHostEndpoint> {
       appName: SESSION_HOST_APP_NAME,
       spawnHost,
       timeoutMs: SESSION_HOST_START_TIMEOUT_MS,
-      requiredRequestTypes: ['delete_session'],
+      requiredRequestTypes: ['delete_session', 'get_terminal_snapshot'],
     });
   } catch (error) {
     stopSessionHost();
@@ -153,7 +153,7 @@ export async function ensureSessionHostReady(): Promise<SessionHostEndpoint> {
       appName: SESSION_HOST_APP_NAME,
       spawnHost,
       timeoutMs: SESSION_HOST_START_TIMEOUT_MS,
-      requiredRequestTypes: ['delete_session'],
+      requiredRequestTypes: ['delete_session', 'get_terminal_snapshot'],
     }).catch((retryError) => {
       const initialMessage = error instanceof Error ? error.message : String(error);
       const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);

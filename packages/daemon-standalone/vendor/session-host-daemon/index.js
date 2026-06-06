@@ -82,7 +82,8 @@ function formatXtermViewportPlain(terminal, rows) {
   const lines = [];
   for (let i = start; i < end; i++) {
     const line = buffer.getLine(i);
-    lines.push(line ? line.translateToString(true) : "");
+    const raw = line ? line.translateToString(false) : "";
+    lines.push(raw.replace(/\s+$/, ""));
   }
   let first = 0;
   let last = lines.length;
@@ -145,6 +146,9 @@ function createXtermMirror(options) {
       if (serializer) return serializeXtermViewport(terminal, serializer, currentRows);
       return formatXtermViewportPlain(terminal, currentRows);
     },
+    formatPlainText() {
+      return formatXtermViewportPlain(terminal, currentRows).replace(/\r\n/g, "\n");
+    },
     getCursorPosition() {
       const buffer = terminal.buffer.active;
       return {
@@ -176,6 +180,9 @@ function normalizeGhosttyBinding(mod) {
         },
         formatVT() {
           return viewportSnapshot.formatVT();
+        },
+        formatPlainText() {
+          return viewportSnapshot.formatPlainText();
         },
         getCursorPosition() {
           if (typeof handle.getCursorPosition === "function") return handle.getCursorPosition();
@@ -225,6 +232,10 @@ var PtySessionRuntime = class {
   ptyProcess = null;
   screenMirror = null;
   pendingQueryScanTail = "";
+  terminalModeScanTail = "";
+  altScreen = false;
+  pasteMode = false;
+  scrollRegion;
   onDataCallback;
   onExitCallback;
   constructor(options) {
@@ -232,6 +243,7 @@ var PtySessionRuntime = class {
     this.payload = options.payload;
     this.cols = (0, import_session_host_core.resolveSessionHostCols)(options.payload.cols);
     this.rows = (0, import_session_host_core.resolveSessionHostRows)(options.payload.rows);
+    this.scrollRegion = { top: 0, bot: this.rows - 1 };
     this.onDataCallback = options.onData;
     this.onExitCallback = options.onExit;
   }
@@ -263,6 +275,7 @@ var PtySessionRuntime = class {
     });
     this.ptyProcess.onData((data) => {
       this.screenMirror?.write(data);
+      this.trackTerminalModes(data);
       this.respondToTerminalQueries(data);
       this.onDataCallback(data);
     });
@@ -271,6 +284,7 @@ var PtySessionRuntime = class {
       this.screenMirror?.dispose();
       this.screenMirror = null;
       this.pendingQueryScanTail = "";
+      this.terminalModeScanTail = "";
       this.onExitCallback(exitCode ?? null);
     });
     return this.ptyProcess.pid;
@@ -282,6 +296,12 @@ var PtySessionRuntime = class {
   resize(cols, rows) {
     if (!this.ptyProcess) throw new Error(`Session not running: ${this.sessionId}`);
     this.ptyProcess.resize(cols, rows);
+    this.cols = Math.max(1, cols | 0);
+    this.rows = Math.max(1, rows | 0);
+    this.scrollRegion = {
+      top: Math.min(this.scrollRegion.top, this.rows - 1),
+      bot: Math.min(Math.max(this.scrollRegion.top, this.scrollRegion.bot), this.rows - 1)
+    };
     this.screenMirror?.resize(cols, rows);
   }
   stop() {
@@ -304,6 +324,55 @@ var PtySessionRuntime = class {
   }
   getSnapshotText() {
     return this.screenMirror?.formatVT() || "";
+  }
+  getTerminalSnapshot() {
+    if (!this.ptyProcess || !this.screenMirror) {
+      throw new Error(`Session not running: ${this.sessionId}`);
+    }
+    const cursor = this.screenMirror.getCursorPosition();
+    return {
+      text: this.screenMirror.formatPlainText(),
+      state: {
+        cursor: {
+          row: Math.max(0, cursor.row | 0),
+          col: Math.max(0, cursor.col | 0)
+        },
+        altScreen: this.altScreen,
+        pasteMode: this.pasteMode,
+        rawMode: true,
+        scrollRegion: { ...this.scrollRegion },
+        cols: this.cols,
+        rows: this.rows
+      }
+    };
+  }
+  trackTerminalModes(data) {
+    if (!data) return;
+    const combined = this.terminalModeScanTail + data;
+    const privateMode = /\x1b\[\?([0-9;]*)([hl])/g;
+    let privateMatch;
+    while ((privateMatch = privateMode.exec(combined)) !== null) {
+      const enabled = privateMatch[2] === "h";
+      for (const mode of privateMatch[1].split(";")) {
+        if (mode === "47" || mode === "1047" || mode === "1049") this.altScreen = enabled;
+        if (mode === "2004") this.pasteMode = enabled;
+      }
+    }
+    const scrollRegion = /\x1b\[(\d*)(?:;(\d*))?r/g;
+    let scrollMatch;
+    while ((scrollMatch = scrollRegion.exec(combined)) !== null) {
+      const top = scrollMatch[1] ? Number.parseInt(scrollMatch[1], 10) - 1 : 0;
+      const bot = scrollMatch[2] ? Number.parseInt(scrollMatch[2], 10) - 1 : this.rows - 1;
+      this.scrollRegion = {
+        top: Math.max(0, Math.min(this.rows - 1, top)),
+        bot: Math.max(0, Math.min(this.rows - 1, bot))
+      };
+      if (this.scrollRegion.bot < this.scrollRegion.top) {
+        this.scrollRegion = { top: 0, bot: this.rows - 1 };
+      }
+    }
+    const lastEscape = combined.lastIndexOf("\x1B");
+    this.terminalModeScanTail = lastEscape >= 0 && combined.length - lastEscape < 64 ? combined.slice(lastEscape) : "";
   }
   respondToTerminalQueries(data) {
     if (!this.ptyProcess || !this.screenMirror || !data) return;
@@ -518,6 +587,8 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
         }
         case "get_snapshot":
           return { success: true, result: this.getSnapshot(request.payload.sessionId, request.payload.sinceSeq) };
+        case "get_terminal_snapshot":
+          return { success: true, result: this.requireRuntime(request.payload.sessionId).getTerminalSnapshot() };
         case "get_host_diagnostics":
           return { success: true, result: this.getHostDiagnostics(request.payload) };
         case "clear_session_buffer": {
