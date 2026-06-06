@@ -948,18 +948,28 @@ export class ProviderLoader {
 
         for (const entry of compat) {
           if (this.matchesVersion(currentVersion, entry.ideVersion)) {
-            const loaded = this.loadScriptsFromDir(type, entry.scriptDir);
-            if (loaded) {
-              resolved.scripts = loaded;
-              this.debugLog(`  [compatibility] ${type} v${currentVersion} → ${entry.scriptDir}`);
-              resolved._resolvedScriptDir = entry.scriptDir;
-              resolved._resolvedScriptsSource = `compatibility:${entry.ideVersion}`;
-              if (providerDir) {
-                const fullDir = path.join(providerDir, entry.scriptDir);
-                resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
-                  ? path.join(fullDir, 'scripts.js')
-                  : fullDir;
+            // entry.scriptDir is optional now — spec-driven providers (agy,
+            // codex on >=0.137, claude on >=2.1) only ship `spec` here, so
+            // there's nothing to load from the filesystem. SpecCliAdapter
+            // takes over via the `spec` path later in this method.
+            if (entry.scriptDir) {
+              const loaded = this.loadScriptsFromDir(type, entry.scriptDir);
+              if (loaded) {
+                resolved.scripts = loaded;
+                this.debugLog(`  [compatibility] ${type} v${currentVersion} → ${entry.scriptDir}`);
+                resolved._resolvedScriptDir = entry.scriptDir;
+                resolved._resolvedScriptsSource = `compatibility:${entry.ideVersion}`;
+                if (providerDir) {
+                  const fullDir = path.join(providerDir, entry.scriptDir);
+                  resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
+                    ? path.join(fullDir, 'scripts.js')
+                    : fullDir;
+                }
+                matched = true;
               }
+            } else {
+              // Spec-only entry — still counts as a match so the
+              // defaultScriptDir fallback below doesn't kick in.
               matched = true;
             }
             break; // first match wins
