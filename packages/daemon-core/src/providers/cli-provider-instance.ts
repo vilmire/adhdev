@@ -42,6 +42,7 @@ type CompletedDebouncePending = {
     duration: number;
     timestamp: number;
     firstObservedAt: number;
+    previousStatus: string;
     loggedBlockReason?: string;
 };
 
@@ -329,7 +330,7 @@ export class CliProviderInstance implements ProviderInstance {
     private monitor: StatusMonitor;
     private generatingDebounceTimer: NodeJS.Timeout | null = null;
     private generatingDebouncePending: { chatTitle: string; timestamp: number } | null = null;
-    private lastApprovalEventAt = 0;
+    private lastApprovalEventFingerprint = '';
     private autoApproveBusy = false;
     private autoApproveBusyTimer: NodeJS.Timeout | null = null;
     private lastAutoApprovalSignature = '';
@@ -972,13 +973,16 @@ export class CliProviderInstance implements ProviderInstance {
         return true;
     }
 
-    private getCompletedFinalizationBlock(latestVisibleStatus: string): CompletedFinalizationBlock | null {
+    private getCompletedFinalizationBlock(latestVisibleStatus: string, pending: CompletedDebouncePending): CompletedFinalizationBlock | null {
         if (latestVisibleStatus !== 'idle') return { reason: `status:${latestVisibleStatus}`, terminal: true };
 
         const adapterAny = this.adapter as any;
-        if (adapterAny?.isWaitingForResponse === true) return { reason: 'adapter_waiting_for_response', terminal: true };
-        if (adapterAny?.currentTurnScope) return { reason: 'adapter_turn_scope_active', terminal: true };
-        if (this.hasAdapterPendingResponse()) return { reason: 'adapter_pending_response', terminal: true };
+        const approvalResolvedIdle = pending.previousStatus === 'waiting_approval';
+        if (!approvalResolvedIdle) {
+            if (adapterAny?.isWaitingForResponse === true) return { reason: 'adapter_waiting_for_response', terminal: true };
+            if (adapterAny?.currentTurnScope) return { reason: 'adapter_turn_scope_active', terminal: true };
+            if (this.hasAdapterPendingResponse()) return { reason: 'adapter_pending_response', terminal: true };
+        }
 
         const partial = typeof this.adapter.getPartialResponse === 'function'
             ? this.adapter.getPartialResponse()
@@ -1020,7 +1024,7 @@ export class CliProviderInstance implements ProviderInstance {
             if (screenText) {
                 const tailLines = screenText.split(/\r?\n/).slice(-16).join('\n');
                 if (looksLikeActiveApprovalPromptText(tailLines)) {
-                    return { reason: 'screen_shows_approval_prompt', terminal: false };
+                    return { reason: 'screen_shows_approval_prompt', terminal: approvalResolvedIdle };
                 }
             }
         } catch { /* defensive: screen text read is best-effort */ }
@@ -1050,7 +1054,7 @@ export class CliProviderInstance implements ProviderInstance {
             return;
         }
 
-        const block = this.getCompletedFinalizationBlock(latestVisibleStatus);
+        const block = this.getCompletedFinalizationBlock(latestVisibleStatus, pending);
         if (block) {
             const blockReason = block.reason;
             const waitedMs = Date.now() - pending.firstObservedAt;
@@ -1084,6 +1088,7 @@ export class CliProviderInstance implements ProviderInstance {
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
             this.generatingStartedAt = 0;
+            this.lastApprovalEventFingerprint = '';
             return;
         }
 
@@ -1098,6 +1103,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.completedDebouncePending = null;
         this.completedDebounceTimer = null;
         this.generatingStartedAt = 0;
+        this.lastApprovalEventFingerprint = '';
     }
 
     private maybeAutoApproveStatus(adapterStatus: any, now = Date.now()): boolean {
@@ -1216,10 +1222,14 @@ export class CliProviderInstance implements ProviderInstance {
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
                 const modal = adapterStatus.activeModal;
                 LOG.info('CLI', `[${this.type}] approval modal: "${modal?.message?.slice(0, 80) ?? 'none'}"`);
-                // Only push event if not already in waiting_approval (prevent flood from rapid cycles)
-                const approvalCooldown = 5000;
-                if (this.lastStatus !== 'waiting_approval' && (!this.lastApprovalEventAt || now - this.lastApprovalEventAt > approvalCooldown)) {
-                    this.lastApprovalEventAt = now;
+                const approvalFingerprint = JSON.stringify({
+                    message: typeof modal?.message === 'string' ? modal.message.trim() : '',
+                    buttons: Array.isArray(modal?.buttons) ? modal.buttons.map((button: unknown) => String(button).trim()) : [],
+                });
+                // PTY redraws can briefly leave waiting_approval and then re-enter it.
+                // Keep one coordinator event per logical modal until the turn completes.
+                if (this.lastStatus !== 'waiting_approval' && approvalFingerprint !== this.lastApprovalEventFingerprint) {
+                    this.lastApprovalEventFingerprint = approvalFingerprint;
                     this.appendRuntimeSystemMessage(
                         this.formatApprovalRequestMessage(modal?.message, modal?.buttons),
                         `approval_request:${now}`,
@@ -1260,7 +1270,13 @@ export class CliProviderInstance implements ProviderInstance {
                 } else {
                     // Debounce completed, then require the rich transcript path that read_chat
                     // uses to show an idle turn whose last user-facing message is assistant.
-                    this.completedDebouncePending = { chatTitle, duration, timestamp: now, firstObservedAt: now };
+                    this.completedDebouncePending = {
+                        chatTitle,
+                        duration,
+                        timestamp: now,
+                        firstObservedAt: now,
+                        previousStatus: this.lastStatus,
+                    };
                     this.scheduleCompletedDebounceFlush(3000);
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {
