@@ -1099,6 +1099,25 @@ export class DaemonCliManager {
                         env: args?.env,
                     })
                     : null;
+                // Untrusted-provider gate: an external source that ships JS
+                // hooks needs explicit user confirmation before its first
+                // launch. Dashboards add `confirmExternalUntrusted: true` to
+                // the launch args after showing the trust modal. Without
+                // that ack we refuse to spawn and tell the caller why.
+                const provLookup = this.providerLoader.getMeta(this.providerLoader.resolveAlias(cliType)) as any;
+                const provTrust = provLookup?._sourceTrust;
+                if (provTrust === 'external-untrusted' && args?.confirmExternalUntrusted !== true) {
+                    return {
+                        success: false,
+                        error: 'untrusted_external_provider',
+                        provider: {
+                            type: provLookup?.type ?? cliType,
+                            sourceName: provLookup?._sourceName ?? null,
+                            trust: provTrust,
+                        },
+                        hint: 'Resend launch_cli with confirmExternalUntrusted=true after the user explicitly approves running JavaScript from this 3rd-party source.',
+                    };
+                }
                 const started = await this.startSession(
                     cliType,
                     dir,

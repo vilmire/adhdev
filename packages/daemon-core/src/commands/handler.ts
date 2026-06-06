@@ -587,10 +587,15 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (!this._ctx.providerLoader) {
             return { success: false, error: 'ProviderLoader not initialized' };
         }
+        const { describeTrust, requiresConfirmation } =
+            require('../providers/provider-trust.js') as typeof import('../providers/provider-trust.js');
         const loader = this._ctx.providerLoader;
         const items = loader.getAll().map((provider) => {
             const machineConfig = loader.getMachineProviderConfig(provider.type);
             const lastDetection = machineConfig.lastDetection;
+            const trust = (provider as any)._sourceTrust ?? 'trusted';
+            const layer = (provider as any)._sourceLayer ?? 'upstream';
+            const sourceName = (provider as any)._sourceName ?? null;
             return {
                 type: provider.type,
                 category: provider.category,
@@ -598,6 +603,11 @@ export class DaemonCommandHandler implements CommandHelpers {
                 installed: lastDetection?.ok === true,
                 detectedPath: lastDetection?.path ?? null,
                 checkedAt: lastDetection?.checkedAt ?? null,
+                trust,
+                trustDescription: describeTrust(trust),
+                requiresConfirmation: requiresConfirmation(trust),
+                sourceLayer: layer,
+                sourceName,
             };
         });
         return { success: true, providers: items };
@@ -1138,6 +1148,25 @@ export class DaemonCommandHandler implements CommandHelpers {
         const url = typeof args?.url === 'string' ? args.url.trim() : '';
         if (!url) return { success: false, error: 'url is required' };
         const ref = typeof args?.ref === 'string' && args.ref.trim() ? args.ref.trim() : 'main';
+
+        // Defense in depth against argv flag-smuggling: reject anything that
+        // looks like a git option in either positional. The `--` end-of-options
+        // sentinel below catches accidental cases, but rejecting early gives
+        // a clear error message and stops obviously malicious inputs from
+        // even touching git.
+        if (url.startsWith('-')) return { success: false, error: 'url must not start with "-"' };
+        if (ref.startsWith('-')) return { success: false, error: 'ref must not start with "-"' };
+        // Whitelist the protocols we'll forward to git. Anything else
+        // (file://, ext-protocol-handlers, …) is refused outright.
+        if (!/^(https?:\/\/|git@[a-z0-9._-]+:)[a-z0-9._@:/~\-]+$/i.test(url)) {
+            return { success: false, error: 'url must be https://… or git@host:… and contain only URL-safe characters' };
+        }
+        // Refs are git refnames — letters, digits, slashes, dots, underscores,
+        // dashes. Rejects e.g. spaces, semicolons, backticks, shell metas.
+        if (!/^[A-Za-z0-9._/-]+$/.test(ref)) {
+            return { success: false, error: 'ref must contain only [A-Za-z0-9._/-]' };
+        }
+
         const ext = require('../providers/external-sources.js') as typeof import('../providers/external-sources.js');
         const requestedName = typeof args?.name === 'string' && args.name.trim() ? args.name.trim() : ext.deriveSourceName(url);
         if (!/^@[a-z0-9_-]+$/i.test(requestedName)) {
@@ -1162,7 +1191,10 @@ export class DaemonCommandHandler implements CommandHelpers {
             return { success: false, error: `directory already exists: ${sourceDir} (rename or remove first)` };
         }
 
-        const clone = spawnSync('git', ['clone', '--depth=1', '--branch', ref, url, sourceDir], {
+        // `--` sentinel after the option list so any future regex-bypassing
+        // url that *did* start with `-` would still be treated as a path
+        // by git rather than an option.
+        const clone = spawnSync('git', ['clone', '--depth=1', '--branch', ref, '--', url, sourceDir], {
             encoding: 'utf-8',
             stdio: ['ignore', 'pipe', 'pipe'],
             timeout: 60_000,

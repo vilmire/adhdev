@@ -2237,14 +2237,40 @@ export class ProviderLoader {
               }
             }
 
+            // Classify trust based on which on-disk layer this manifest
+            // came from + whether it ships JavaScript hooks. The dashboard
+            // uses this to render trust badges; non-spec external manifests
+            // need an explicit user confirm before activation.
+            const externalDirAbs = path.join(os.homedir(), '.adhdev', 'external');
+            const layer: 'user' | 'upstream' | 'external' = d.startsWith(externalDirAbs)
+              ? 'external'
+              : (d.startsWith(this.userDir) && !d.includes('.upstream') ? 'user' : 'upstream');
+            try {
+              const { inspectManifestShape, classifyTrust } =
+                require('./provider-trust.js') as typeof import('./provider-trust.js');
+              const shape = inspectManifestShape(mod as Record<string, unknown>);
+              const trust = classifyTrust(layer, shape);
+              (normalizedProvider as any)._sourceLayer = layer;
+              (normalizedProvider as any)._sourceTrust = trust;
+              (normalizedProvider as any)._manifestShape = shape;
+              // For external-namespaced layouts (external/<source>/…) record
+              // which source the manifest came from so dashboards can name
+              // it in the trust badge.
+              if (layer === 'external') {
+                const rel = path.relative(externalDirAbs, d);
+                const firstSeg = rel.split(path.sep)[0];
+                if (firstSeg && firstSeg !== '..') (normalizedProvider as any)._sourceName = firstSeg;
+              }
+            } catch { /* best-effort — trust is enrichment, not gating */ }
+
             const existed = this.providers.has(normalizedProvider.type);
             this.providers.set(normalizedProvider.type, normalizedProvider);
             count++;
-            // Identify source tier for debugging
-            const source = d.startsWith(this.userDir) && !d.includes('.upstream')
-              ? 'user' : 'upstream';
+            const source = (normalizedProvider as any)._sourceLayer ?? 'upstream';
             const overrideWarning = existed && source === 'user' ? ' ⚠ OVERRIDES upstream' : '';
-            this.log(`  ${existed ? '🔄' : '✅'} ${normalizedProvider.type} (${normalizedProvider.category}) — ${normalizedProvider.name} [${source}]${overrideWarning}`);
+            const sourceName = (normalizedProvider as any)._sourceName;
+            const sourceLabel = sourceName ? `${source}/${sourceName}` : source;
+            this.log(`  ${existed ? '🔄' : '✅'} ${normalizedProvider.type} (${normalizedProvider.category}) — ${normalizedProvider.name} [${sourceLabel}]${overrideWarning}`);
           }
         } catch (e) {
           this.log(`⚠ Failed to load ${jsonPath}: ${(e as Error).message}`);
