@@ -237,14 +237,15 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["scriptDir"],
+        "required": ["ideVersion"],
         "additionalProperties": false,
         "properties": {
           "ideVersion": { "type": "string", "description": "SemVer range." },
-          "scriptDir":  { "type": "string", "pattern": "^scripts/[^/]+$" }
+          "scriptDir":  { "type": "string", "pattern": "^scripts/[^/]+$" },
+          "spec":       { "type": "string", "pattern": "^specs/[^/]+\\.json$", "description": "Path to declarative spec.json driving SpecCliAdapter for this version range." }
         }
       },
-      "description": "Maps installed agent versions to script subdirectories."
+      "description": "Maps installed agent versions to script subdirectories and/or declarative specs."
     },
     "defaultScriptDir": {
       "type": "string",

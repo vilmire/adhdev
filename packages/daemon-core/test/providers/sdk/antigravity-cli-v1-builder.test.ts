@@ -28,19 +28,34 @@ describe('antigravity-cli spec — state + modal regression', () => {
     if (!res.ok) throw new Error(`spec invalid: ${res.errors.join('; ')}`);
     const spec = res.spec;
 
-    it('busy: "Using Tool" anywhere on screen', () => {
-        const screen = ['Using Tool: Bash', 'some output'].join('\n');
-        expect(evaluate(spec, screen).state.id).toBe('busy');
-    });
-
-    it('busy: "Thinking" cue', () => {
-        const screen = ['Thinking…', 'more text'].join('\n');
-        expect(evaluate(spec, screen).state.id).toBe('busy');
-    });
-
-    it('busy: braille spinner glyph', () => {
+    it('busy: braille spinner glyph (live-frame transient — agy spinner char)', () => {
         const screen = ['previous prose', 'previous prose', '⣟ Reading file…', 'a', 'b'].join('\n');
         expect(evaluate(spec, screen).state.id).toBe('busy');
+    });
+
+    it('busy: footer "esc to cancel" while turn is running', () => {
+        const screen = ['some prose', '', '────────', '> what next', '────────', 'esc to cancel'].join('\n');
+        expect(evaluate(spec, screen).state.id).toBe('busy');
+    });
+
+    it('NOT busy: scrollback contains old "Using Tool" / "Prioritizing Tool" but footer is idle', () => {
+        // The v0 spec mistakenly matched these on full-screen, so a completed
+        // turn that left "Prioritizing Tool Usage" in the transcript pinned
+        // the state to busy forever. Only the live-frame braille glyph or
+        // the footer's "esc to cancel" should mean generating.
+        const screen = [
+            '> say hello in 5 words',
+            '',
+            '▸ Thought for 4s, 337 tokens',
+            '  Prioritizing Tool Usage',
+            '  Hello, how are you today?',
+            '',
+            '────────',
+            '>',
+            '────────',
+            '? for shortcuts',
+        ].join('\n');
+        expect(evaluate(spec, screen).state.id).toBe('idle');
     });
 
     it('idle: settled prompt + "? for shortcuts" footer visible', () => {
