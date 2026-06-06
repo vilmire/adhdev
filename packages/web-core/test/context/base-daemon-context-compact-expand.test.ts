@@ -39,6 +39,46 @@ describe('expandCompactDaemons', () => {
     ])
   })
 
+  it('preserves active interactive prompts from compact daemon sessions', () => {
+    const prompt = {
+      promptId: 'prompt-1',
+      origin: 'cli' as const,
+      providerType: 'claude-cli',
+      createdAt: 123,
+      questions: [{
+        questionId: 'q1',
+        question: 'Approve?',
+        multiSelect: false,
+        options: [{ label: 'Yes' }],
+      }],
+    }
+    const result = expandCompactDaemons([
+      {
+        id: 'machine-prompt',
+        type: 'adhdev-daemon',
+        timestamp: 100,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'claude-cli',
+            providerName: 'Claude',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'waiting_approval',
+            title: 'Claude',
+            workspace: '/repo',
+            activeInteractivePrompt: prompt,
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[])
+
+    expect(result.entries.find(entry => entry.id === 'machine-prompt:cli:cli-1')).toMatchObject({
+      activeInteractivePrompt: prompt,
+    })
+  })
+
   it('clones active chat message arrays from compact payloads so appended transcript tails force a reconcile', () => {
     const sharedMessages = [
       { role: 'assistant' as const, content: 'older reply', id: 'msg-1', receivedAt: 1 },

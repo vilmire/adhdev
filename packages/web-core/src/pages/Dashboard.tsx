@@ -31,6 +31,7 @@ import { useDashboardDesktopAutoRead } from '../hooks/useDashboardDesktopAutoRea
 import { useDashboardHistoryModalState } from '../hooks/useDashboardHistoryModalState'
 import { useDashboardOverlayDialogsState } from '../hooks/useDashboardOverlayDialogsState'
 import { useDashboardPendingLaunch } from '../hooks/useDashboardPendingLaunch'
+import { useInteractivePrompt } from '../hooks/useInteractivePrompt'
 
 import TerminalBackendBanner from '../components/dashboard/TerminalBackendBanner'
 import DashboardMainView from '../components/dashboard/DashboardMainView'
@@ -365,6 +366,7 @@ export default function Dashboard() {
         setToasts,
         resolveConversationByTarget,
     })
+    const interactivePrompt = useInteractivePrompt()
 
     // ─── Command Handlers (header/history use activeConv) ──────
     const {
@@ -596,6 +598,7 @@ export default function Dashboard() {
                         setShowOnboarding(false)
                     },
                 }}
+                interactivePrompt={interactivePrompt}
             />
         </div>
     )

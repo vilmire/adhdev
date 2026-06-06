@@ -10,6 +10,8 @@ import HistoryModal, { type SavedSessionHistoryEntry } from './HistoryModal'
 import type { SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
 import CliStopDialog from './CliStopDialog'
 import ToastContainer, { type Toast } from './ToastContainer'
+import InteractivePromptModal from '../interactive-prompt/InteractivePromptModal'
+import type { UseInteractivePromptResult } from '../../hooks/useInteractivePrompt'
 
 interface DashboardOverlaysProps {
     historyModal: {
@@ -66,6 +68,7 @@ interface DashboardOverlaysProps {
         open: boolean
         onClose: () => void
     }
+    interactivePrompt: UseInteractivePromptResult
 }
 
 export default function DashboardOverlays({
@@ -75,6 +78,7 @@ export default function DashboardOverlays({
     connectionBanner,
     toastOverlay,
     onboarding,
+    interactivePrompt,
 }: DashboardOverlaysProps) {
     return (
         <>
@@ -136,6 +140,14 @@ export default function DashboardOverlays({
                 toasts={toastOverlay.toasts}
                 onDismiss={toastOverlay.onDismiss}
                 onClickToast={toastOverlay.onClick}
+            />
+
+            <InteractivePromptModal
+                promptSession={interactivePrompt.promptSession}
+                isSubmitting={interactivePrompt.isSubmitting}
+                error={interactivePrompt.responseError}
+                onSubmit={interactivePrompt.submit}
+                onCancel={interactivePrompt.cancel}
             />
 
             {onboarding.open && <OnboardingModal onClose={onboarding.onClose} />}

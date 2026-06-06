@@ -17,6 +17,7 @@ import type {
     TerminalBackendStatus,
     MessageInputSupport,
 } from '@adhdev/daemon-core';
+import type { InteractivePrompt } from '@adhdev/daemon-core';
 
 // Re-export shared types for convenience
 export type {
@@ -137,6 +138,7 @@ export interface BaseDaemonData {
     terminals?: number;
     chats?: WebChatInfo[];
     activeChat?: SessionEntry['activeChat'];
+    activeInteractivePrompt?: InteractivePrompt | null;
     workspace?: string | null;
     git?: GitCompactSummary;
     runtimeKey?: string;

@@ -56,6 +56,7 @@ function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: st
             completionMarker: entry.completionMarker,
             seenCompletionMarker: entry.seenCompletionMarker,
             settings: entry.settings,
+            activeInteractivePrompt: entry.activeInteractivePrompt,
         })
 
         for (const child of entry.childSessions || []) {
@@ -198,6 +199,7 @@ export function statusPayloadToEntries(
                 status: child.status,
             })),
             activeChat: mergedSession.activeChat,
+            ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
             chats: [],
             cdpConnected: mergedSession.cdpConnected,
             ...(mergedSession.lastMessagePreview !== undefined && { lastMessagePreview: mergedSession.lastMessagePreview }),
@@ -241,6 +243,7 @@ export function statusPayloadToEntries(
             mode: mergedSession.mode || existingEntry?.mode || 'terminal',
             workspace: mergedSession.workspace || '',
             activeChat: mergedSession.activeChat,
+            ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
             ...(mergedSession.resume !== undefined && { resume: mergedSession.resume }),
             ...(mergedSession.runtimeKey !== undefined && { runtimeKey: mergedSession.runtimeKey }),
             ...(mergedSession.runtimeDisplayName !== undefined && { runtimeDisplayName: mergedSession.runtimeDisplayName }),
@@ -289,6 +292,7 @@ export function statusPayloadToEntries(
             mode: 'chat',
             workspace: mergedSession.workspace || '',
             activeChat: mergedSession.activeChat,
+            ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
             ...(mergedSession.runtimeKey !== undefined && { runtimeKey: mergedSession.runtimeKey }),
             ...(mergedSession.runtimeDisplayName !== undefined && { runtimeDisplayName: mergedSession.runtimeDisplayName }),
             ...(mergedSession.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: mergedSession.runtimeWorkspaceLabel }),

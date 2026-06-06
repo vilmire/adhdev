@@ -69,6 +69,7 @@ import { homedir, hostname as osHostname } from 'os';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
+import { normalizeInteractivePromptResponse } from '../providers/types/interactive-prompt.js';
 
 type ReleaseChannel = 'stable' | 'preview';
 const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
@@ -3654,6 +3655,20 @@ export class DaemonCommandRouter {
                     : undefined;
                 const events = drainPendingMeshCoordinatorEvents(meshId || undefined, coordinatorDaemonId);
                 return { success: true, events };
+            }
+
+            case 'interactive_prompt_response': {
+                const sessionId = typeof args?.targetSessionId === 'string' && args.targetSessionId.trim()
+                    ? args.targetSessionId.trim()
+                    : typeof args?.sessionId === 'string' && args.sessionId.trim()
+                        ? args.sessionId.trim()
+                        : '';
+                if (!sessionId) return { success: false, error: 'targetSessionId required' };
+                const response = normalizeInteractivePromptResponse(args?.response ?? args);
+                const instance = this.deps.instanceManager.getInstance(sessionId);
+                if (!instance) return { success: false, error: `No running instance for session ${sessionId}` };
+                this.deps.instanceManager.sendEvent(sessionId, 'interactive_prompt_response', response);
+                return { success: true };
             }
 
             case 'launch_cli':

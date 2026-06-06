@@ -14,6 +14,13 @@ export type {
     DashboardStatusEventPayload,
     DaemonStatusEventPayload,
 } from './types'
+export type {
+    InteractiveAnswer,
+    InteractiveOption,
+    InteractivePrompt,
+    InteractivePromptResponse,
+    InteractiveQuestion,
+} from './interactive-prompt/types'
 
 // ── Context: Daemon State ──
 export {
@@ -65,6 +72,7 @@ export { default as ConnectionBadge } from './components/ConnectionBadge'
 export { default as StatCard } from './components/StatCard'
 export { default as ProgressBar } from './components/ProgressBar'
 export { default as RemoteView } from './components/RemoteView'
+export { default as InteractivePromptModal } from './components/interactive-prompt/InteractivePromptModal'
 
 export { default as ScreenshotToolbar } from './components/ScreenshotToolbar'
 export type { ScreenshotToolbarProps } from './components/ScreenshotToolbar'
@@ -190,6 +198,7 @@ export type { NotificationPrefs } from './hooks/useNotificationPrefs'
 export { useBrowserNotifications, requestNotificationPermission } from './hooks/useBrowserNotifications'
 export { useHiddenTabs } from './hooks/useHiddenTabs'
 export { useMutedConversations, isConversationMuted } from './hooks/useMutedConversations'
+export { useInteractivePrompt } from './hooks/useInteractivePrompt'
 
 // ── Compat layer (gradual migration) ──
 export { useDaemons, dashboardWS, connectionManager, setupCompat } from './compat'
