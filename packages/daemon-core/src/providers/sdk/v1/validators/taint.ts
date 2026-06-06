@@ -2,7 +2,7 @@
  * Static taint analyzer for extended-tier override JS.
  *
  * Goal: classify the override JS shipped with an extended-tier provider into
- * one of three risk tiers, so the marketplace + daemon trust prompt can
+ * one of three risk tiers, so the dashboard + daemon trust prompt can
  * surface accurate language to the operator instead of a single generic
  * "this provider contains JS" warning.
  *

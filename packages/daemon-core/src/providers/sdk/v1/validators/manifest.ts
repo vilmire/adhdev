@@ -9,7 +9,7 @@
  * offending field without guessing.
  *
  * Validation lives in the SDK layer (not in provider-loader) so dashboards,
- * registry workers, and the marketplace publish flow can all reuse the
+ * registry workers, and the provider publish flow can all reuse the
  * same code path and produce identical error messages.
  */
 
