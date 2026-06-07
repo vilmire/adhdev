@@ -44,6 +44,8 @@ type CompletedDebouncePending = {
     firstObservedAt: number;
     previousStatus: string;
     loggedBlockReason?: string;
+    loggedTranscriptProbe?: boolean;
+    transcriptProbeHistory?: ExternalTranscriptProbe[];
 };
 
 function isIdleStatus(value: unknown): boolean {
@@ -68,6 +70,17 @@ type CompletionFinalAssistantEvidence = {
     present: boolean;
     messages: unknown[];
     source: 'parsed' | 'external-native' | 'unavailable';
+};
+
+type ExternalTranscriptProbe = {
+    readAt: number;
+    msgCount: number;
+    lastRole: string | null;
+    lastKind: string | null;
+    contentLen: number;
+    sourcePath: string | null;
+    sourceMtimeMs: number | null;
+    mtimeAgeMs: number | null;
 };
 
 const COMPLETED_FINALIZATION_RETRY_MS = 1000;
@@ -855,6 +868,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     private completedDebounceTimer: NodeJS.Timeout | null = null;
     private completedDebouncePending: CompletedDebouncePending | null = null;
+    private lastExternalCompletionProbe: ExternalTranscriptProbe | null = null;
 
     private async enforceFreshSessionLaunchIfNeeded(): Promise<void> {
         const scriptName = getForcedNewSessionScriptName(this.provider, this.launchMode);
@@ -896,12 +910,44 @@ export class CliProviderInstance implements ProviderInstance {
         return true;
     }
 
+    private buildExternalTranscriptProbe(messages: unknown[], sourcePath?: string, sourceMtimeMs?: number): ExternalTranscriptProbe {
+        const visibleMessages = messages.filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
+        const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
+        const readAt = Date.now();
+        const mtimeMs = Number(sourceMtimeMs) || 0;
+        return {
+            readAt,
+            msgCount: messages.length,
+            lastRole: typeof lastVisible?.role === 'string' ? lastVisible.role.trim().toLowerCase() : null,
+            lastKind: typeof (lastVisible as any)?.kind === 'string' ? (lastVisible as any).kind : null,
+            contentLen: lastVisible ? flattenContent(lastVisible.content).trim().length : 0,
+            sourcePath: typeof sourcePath === 'string' && sourcePath ? sourcePath : null,
+            sourceMtimeMs: mtimeMs || null,
+            mtimeAgeMs: mtimeMs ? Math.max(0, readAt - mtimeMs) : null,
+        };
+    }
+
+    private recordPendingTranscriptProbe(pending: CompletedDebouncePending): ExternalTranscriptProbe | null {
+        const probe = this.lastExternalCompletionProbe;
+        if (!probe) return null;
+        const history = pending.transcriptProbeHistory || [];
+        const last = history[history.length - 1];
+        if (!last || last.readAt !== probe.readAt || last.msgCount !== probe.msgCount || last.lastRole !== probe.lastRole || last.contentLen !== probe.contentLen) {
+            history.push(probe);
+            pending.transcriptProbeHistory = history.slice(-5);
+        }
+        return probe;
+    }
+
     private readExternalCompletionMessages(): unknown[] | null {
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         if (!adapterOwnsMessagesElsewhere) return null;
         if (!this.providerSessionId) return null;
         if (!isNativeSourceCanonicalHistory(this.provider.nativeHistory)) return null;
 
+        if (this.lastExternalCompletionProbe?.sourcePath) {
+            try { fs.statSync(this.lastExternalCompletionProbe.sourcePath); } catch { /* best-effort metadata refresh */ }
+        }
         const restoredHistory = readProviderChatHistory(this.type, {
             canonicalHistory: this.provider.nativeHistory,
             historySessionId: this.providerSessionId,
@@ -911,8 +957,17 @@ export class CliProviderInstance implements ProviderInstance {
             historyBehavior: this.provider.historyBehavior,
             scripts: this.provider.scripts as any,
             sessionStartedAtMs: this.startedAt,
+            forceRefresh: true,
         });
-        if (restoredHistory.source !== 'provider-native') return null;
+        if (restoredHistory.source !== 'provider-native') {
+            this.lastExternalCompletionProbe = null;
+            return null;
+        }
+        this.lastExternalCompletionProbe = this.buildExternalTranscriptProbe(
+            restoredHistory.messages,
+            restoredHistory.sourcePath,
+            restoredHistory.sourceMtimeMs,
+        );
         return restoredHistory.messages;
     }
 
@@ -963,6 +1018,9 @@ export class CliProviderInstance implements ProviderInstance {
         }
 
         const evidence = this.completionFinalAssistantEvidence(parsed?.messages);
+        if (evidence.source === 'external-native') {
+            this.recordPendingTranscriptProbe(args.pending);
+        }
         const visibleMessages = (Array.isArray(evidence.messages) ? evidence.messages : [])
             .filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
         const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
@@ -994,6 +1052,7 @@ export class CliProviderInstance implements ProviderInstance {
             pendingTimestamp: args.pending.timestamp,
             pendingDurationSec: args.pending.duration,
             previousBlockReason: args.pending.loggedBlockReason || null,
+            transcriptProbeHistory: args.pending.transcriptProbeHistory || [],
         };
     }
 
@@ -1066,6 +1125,11 @@ export class CliProviderInstance implements ProviderInstance {
         if (!finalAssistantEvidence.present) {
             if (adapterOwnsMessagesElsewhere) {
                 if (finalAssistantEvidence.source === 'external-native') {
+                    const probe = this.recordPendingTranscriptProbe(pending);
+                    if (probe && !pending.loggedTranscriptProbe) {
+                        LOG.info('CLI', `[${this.type}] external transcript probe: msgCount=${probe.msgCount} lastRole=${probe.lastRole || 'none'} lastKind=${probe.lastKind || 'none'} contentLen=${probe.contentLen} sourceMtime=${probe.sourceMtimeMs ?? 'unknown'} mtimeAge=${probe.mtimeAgeMs ?? 'unknown'}ms`);
+                        pending.loggedTranscriptProbe = true;
+                    }
                     return { reason: 'missing_final_assistant', terminal: true };
                 }
                 // SpecCliAdapter never populates parsed.messages — chat history flows

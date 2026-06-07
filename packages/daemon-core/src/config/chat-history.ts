@@ -1423,6 +1423,7 @@ function callProviderNativeHistoryRead(
     excludeInProgressTurn?: boolean,
     sessionStartedAtMs?: number,
     envOverrides?: Record<string, string>,
+    forceRefresh?: boolean,
 ): ProviderNativeHistoryReadResult | null {
     const fn = getProviderNativeHistoryScript(scripts, canonicalHistory, 'readSession');
     if (!fn) return null;
@@ -1437,7 +1438,8 @@ function callProviderNativeHistoryRead(
         excludeInProgressTurn: excludeInProgressTurn === true,
         sessionStartedAtMs,
         envOverrides,
-        args: { sessionId: normalizedSessionId, historySessionId: normalizedSessionId, workspace, excludeInProgressTurn: excludeInProgressTurn === true, sessionStartedAtMs, envOverrides },
+        forceRefresh: forceRefresh === true,
+        args: { sessionId: normalizedSessionId, historySessionId: normalizedSessionId, workspace, excludeInProgressTurn: excludeInProgressTurn === true, sessionStartedAtMs, envOverrides, forceRefresh: forceRefresh === true },
     });
     if (!result || typeof result !== 'object') return null;
     const records = normalizeProviderNativeHistoryRecords(agentType, normalizedSessionId, (result as any).messages || (result as any).records);
@@ -1462,11 +1464,12 @@ function buildNativeHistoryReadResult(
     excludeInProgressTurn?: boolean,
     sessionStartedAtMs?: number,
     envOverrides?: Record<string, string>,
+    forceRefresh?: boolean,
 ): ProviderNativeHistoryReadResult | null {
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
     const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
     if (!canonicalHistory || (!normalizedSessionId && !normalizedWorkspace) || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
-    return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides);
+    return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh);
 }
 
 function materializeNativeHistoryToMirror(
@@ -1525,6 +1528,7 @@ export function readProviderChatHistory(
         excludeInProgressTurn?: boolean;
         sessionStartedAtMs?: number;
         envOverrides?: Record<string, string>;
+        forceRefresh?: boolean;
     } = {},
 ): {
     messages: HistoryMessage[];
@@ -1538,7 +1542,7 @@ export function readProviderChatHistory(
     unavailableReason?: string;
 } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
-        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides);
+        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh);
         if (!nativeResult) return { messages: [], hasMore: false, source: 'native-unavailable' };
         return {
             ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior),

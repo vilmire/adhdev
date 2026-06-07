@@ -29,6 +29,7 @@ export interface NativeHistoryInput {
     workspace?: string;
     format?: string;
     watchPath?: string;
+    forceRefresh?: boolean;
     args?: Record<string, unknown>;
 }
 
@@ -54,6 +55,9 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
 
         const sourcePath = resolveSourcePath(reader, workspace, sessionId);
         if (!sourcePath) return null;
+        if (input.forceRefresh === true || input.args?.forceRefresh === true) {
+            try { fs.statSync(sourcePath); } catch { /* best-effort metadata refresh */ }
+        }
 
         const session = readByReader(reader, sourcePath, sessionId, workspace);
         if (!session) return null;

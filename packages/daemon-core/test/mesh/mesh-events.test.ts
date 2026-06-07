@@ -1630,6 +1630,63 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
+  it('duplicate completion suppression respects newer dispatch', () => {
+    const meshId = `mesh_duplicate_respects_newer_dispatch_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      const queuedTask = enqueueTask(meshId, 'first queue task')
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'shared-claude-session-id',
+        finalSummary: 'first task done',
+      })
+
+      expect(readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')).toHaveLength(1)
+      expect(getQueue(meshId)[0]).toMatchObject({ id: queuedTask.id, status: 'completed' })
+
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        payload: {
+          source: 'queue',
+          taskId: 'newer-dispatch-ledger-only',
+          message: 'second task after prior terminal',
+        },
+      })
+
+      const completion = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'shared-claude-session-id',
+        finalSummary: 'second task done',
+      })
+
+      expect(completion).toMatchObject({ success: true })
+      expect(completion).not.toMatchObject({ suppressed: true })
+      expect(readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')).toHaveLength(2)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('still suppresses genuine duplicate completion that has no new dispatch after prior terminal', () => {
     // Safety: verify the existing duplicate-suppression safeguard is not broken.
     // A second identical generating_completed with no intervening task_dispatched must still be suppressed.
