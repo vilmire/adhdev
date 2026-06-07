@@ -221,4 +221,51 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       },
     })).toEqual(['\r', '\r', '\r']);
   });
+
+  it('captures Claude v2.1 single-question numbered-choice screens without submit headers', () => {
+    const screen = [
+      '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+      '           Opus 4.7 (1M context) with high effort · Claude Max',
+      '  ▘▘ ▝▝    ~/Work/adhdev',
+      '',
+      '❯ ## Task: 가위바위보',
+      '',
+      '⏺ 안녕하세요! 가위바위보 한 판 해요.',
+      '────────────────────────────────────────────────────────────────',
+      ' ☐ 가위바위보 ',
+      '',
+      '무엇을 내시겠어요?',
+      '',
+      '❯ 1. ✊ 바위',
+      '     주먹',
+      '  2. ✌️  가위',
+      '     검지와 중지',
+      '  3. ✋  보',
+      '     손바닥',
+      '  4. Type something.',
+      '────────────────────────────────────────────────────────────────',
+      '  5. Chat about this',
+      '',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'single-tui-prompt', createdAt: 1234 });
+
+    expect(prompt?.questions).toHaveLength(1);
+    expect(prompt?.questions[0]).toEqual({
+      questionId: 'q1',
+      header: '가위바위보',
+      question: '무엇을 내시겠어요?',
+      multiSelect: false,
+      options: [
+        { label: '✊ 바위', description: '주먹' },
+        { label: '✌️  가위', description: '검지와 중지' },
+        { label: '✋  보', description: '손바닥' },
+        { label: 'Type something.' },
+      ],
+      allowFreeform: true,
+    });
+  });
 });

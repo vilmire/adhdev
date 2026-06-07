@@ -137,6 +137,8 @@ export interface ClaudeInteractiveTuiPage {
   header?: string;
 }
 
+const CLAUDE_TUI_OPTION_PATTERN = /^\s*(?:[❯›>]\s*)?(\d+)\.\s+(.+?)\s*$/;
+
 function claudeTuiQuestionHeaders(screenText: string): string[] {
   const navLine = screenText.split(/\r?\n/).find(line => line.includes('✔ Submit') && /[☐☒]/.test(line));
   if (!navLine) return [];
@@ -149,6 +151,103 @@ function claudeTuiQuestionHeaders(screenText: string): string[] {
   return headers;
 }
 
+function isClaudeTuiSelectFooter(text: string): boolean {
+  return /Enter to select/i.test(text) && /Esc to cancel/i.test(text);
+}
+
+function readClaudeHeaderLine(lines: string[], beforeIndex: number): string | undefined {
+  for (let i = beforeIndex; i >= 0; i -= 1) {
+    const candidate = lines[i].trim();
+    if (!candidate) continue;
+    const match = candidate.match(/^[☐☒]\s+(.+?)\s*$/);
+    if (match?.[1]) return readString(match[1]);
+    if (/^─+$/.test(candidate)) break;
+  }
+  return undefined;
+}
+
+function readClaudeOptionDescription(lines: string[], optionLineIndex: number): string | undefined {
+  const nextLine = lines[optionLineIndex + 1];
+  const next = nextLine?.trim();
+  if (!next
+    || CLAUDE_TUI_OPTION_PATTERN.test(nextLine)
+    || /^─+$/.test(next)
+    || /^Enter to select\b/i.test(next)
+    || /^[☐☒]\s+/.test(next)) {
+    return undefined;
+  }
+  return next;
+}
+
+function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
+  if (!isClaudeTuiSelectFooter(page.screenText)) return null;
+  if (!/Type something\.?|Chat about this/i.test(page.screenText)) return null;
+
+  const lines = page.screenText.split(/\r?\n/);
+  let footerIndex = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (/Enter to select/i.test(lines[i])) {
+      footerIndex = i;
+      break;
+    }
+  }
+  if (footerIndex < 0) return null;
+
+  let optionBlockEnd = footerIndex - 1;
+  for (let i = footerIndex - 1; i >= 0; i -= 1) {
+    if (/^─+$/.test(lines[i].trim())) {
+      optionBlockEnd = i - 1;
+      break;
+    }
+  }
+
+  const optionLineIndexes: number[] = [];
+  for (let i = optionBlockEnd; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (CLAUDE_TUI_OPTION_PATTERN.test(line)) {
+      optionLineIndexes.push(i);
+      continue;
+    }
+    if (optionLineIndexes.length > 0 && (!line.trim() || /^─+$/.test(line.trim()))) break;
+  }
+  optionLineIndexes.reverse();
+  if (optionLineIndexes.length === 0) return null;
+
+  const firstOptionIndex = optionLineIndexes[0];
+  let question = '';
+  for (let i = firstOptionIndex - 1; i >= 0; i -= 1) {
+    const candidate = lines[i].trim();
+    if (!candidate || /^─+$/.test(candidate) || /^[☐☒]\s+/.test(candidate)) continue;
+    question = candidate;
+    break;
+  }
+  if (!question) return null;
+
+  const options: InteractiveOption[] = [];
+  let allowFreeform = false;
+  for (const optionLineIndex of optionLineIndexes) {
+    const match = lines[optionLineIndex].match(CLAUDE_TUI_OPTION_PATTERN);
+    if (!match) continue;
+    const label = match[2].trim();
+    if (/^Chat about this$/i.test(label)) continue;
+    if (/^Type something\.?$/i.test(label)) allowFreeform = true;
+
+    const description = readClaudeOptionDescription(lines, optionLineIndex);
+    options.push({ label, ...(description ? { description } : {}) });
+  }
+  if (options.length === 0) return null;
+
+  const header = readString(page.header) || readClaudeHeaderLine(lines, firstOptionIndex - 1);
+  return {
+    questionId: `q${index + 1}`,
+    question,
+    ...(header ? { header } : {}),
+    multiSelect: /Space to select|toggle selections/i.test(page.screenText),
+    options,
+    ...(allowFreeform ? { allowFreeform: true } : {}),
+  };
+}
+
 function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
   const lines = page.screenText.split(/\r?\n/);
   let navIndex = -1;
@@ -158,7 +257,8 @@ function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index
       break;
     }
   }
-  if (navIndex < 0 || !page.screenText.includes('Enter to select')) return null;
+  if (navIndex < 0) return parseClaudeHeaderlessInteractiveTuiQuestion(page, index);
+  if (!page.screenText.includes('Enter to select')) return null;
 
   let question = '';
   let questionLineIndex = -1;
@@ -174,9 +274,8 @@ function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index
 
   const options: InteractiveOption[] = [];
   let allowFreeform = false;
-  const optionPattern = /^\s*(?:[❯›>]\s*)?(\d+)\.\s+(.+?)\s*$/;
   for (let i = questionLineIndex + 1; i < lines.length; i += 1) {
-    const match = lines[i].match(optionPattern);
+    const match = lines[i].match(CLAUDE_TUI_OPTION_PATTERN);
     if (!match) continue;
     const label = match[2].trim();
     if (/^Type something\.?$/i.test(label)) {
@@ -188,7 +287,7 @@ function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index
     let description: string | undefined;
     const nextLine = lines[i + 1]?.trim();
     if (nextLine
-      && !optionPattern.test(lines[i + 1])
+      && !CLAUDE_TUI_OPTION_PATTERN.test(lines[i + 1])
       && !/^─+$/.test(nextLine)
       && !/^Enter to select\b/.test(nextLine)) {
       description = nextLine;

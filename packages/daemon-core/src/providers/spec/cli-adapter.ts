@@ -19,6 +19,7 @@
 'use strict';
 
 import { SpecDriver, type DashboardEvent } from './driver.js';
+import { evaluate } from './evaluator.js';
 import { loadSpec } from './loader.js';
 import type { CliSpec } from './types.js';
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
@@ -164,7 +165,11 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     getScriptParsedStatus(): unknown {
-        return this.getStatus();
+        const status = this.getStatus();
+        return {
+            ...status,
+            messages: this.readClaudeScreenAssistantMessages(),
+        };
     }
 
     getPartialResponse(): string {
@@ -405,13 +410,62 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
+    private readCurrentScreenSections(screenText: string): Record<string, string> {
+        try {
+            const ev = evaluate(this.spec, screenText);
+            return Object.fromEntries(ev.sections.map(section => [section.id, section.text]));
+        } catch {
+            return {};
+        }
+    }
+
+    private readClaudeScreenAssistantMessages(): ChatMessage[] {
+        if (this.cliType !== 'claude-cli') return [];
+        let screenText = '';
+        try {
+            screenText = this.driver.snapshot();
+        } catch {
+            return [];
+        }
+        const sections = this.readCurrentScreenSections(screenText);
+        const body = sections.body || screenText;
+        const messages: ChatMessage[] = [];
+        const seen = new Set<string>();
+        for (const line of body.split(/\r?\n/)) {
+            const match = line.match(/^\s*⏺\s+(.+?)\s*$/);
+            const content = match?.[1]?.trim();
+            if (!content || seen.has(content)) continue;
+            seen.add(content);
+            messages.push({
+                role: 'assistant',
+                kind: 'standard',
+                content,
+                source: 'assistant_text',
+                userFacing: true,
+                bubbleState: 'final',
+            });
+        }
+        return messages;
+    }
+
     private maybeCaptureClaudeTuiPrompt(): void {
         if (this.cliType !== 'claude-cli'
             || this.activeInteractivePrompt
             || this.claudeTuiPromptCaptureInFlight) return;
         const screenText = this.driver.snapshot();
         const headers = this.readClaudeTuiHeaders(screenText);
-        if (headers.length === 0 || !screenText.includes('Enter to select')) return;
+        if (!screenText.includes('Enter to select')) return;
+        if (headers.length === 0) {
+            const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([{ screenText }], {
+                promptId: `ask-user-${this.providerSessionId || 'claude'}-${Date.now()}`,
+                providerType: this.cliType,
+            });
+            if (!prompt) return;
+            this.activeInteractivePrompt = prompt;
+            this.interactivePromptTransport = 'tui';
+            this.statusCallback?.();
+            return;
+        }
         this.claudeTuiPromptCaptureInFlight = true;
         void this.captureClaudeTuiPrompt(screenText, headers).finally(() => {
             this.claudeTuiPromptCaptureInFlight = false;
