@@ -231,8 +231,18 @@ export function evaluate(spec: CliSpec, screenText: string): SpecEvaluation {
     for (const st of spec.states) {
         const { matched, title } = matchState(st, sections, screenText, trace);
         if (!matched) continue;
+        const extractedModal = extractModal(st, sections, screenText, title, trace);
+        // If the state declares modal_buttons but extraction failed (button
+        // count below min_count, or text-was-mistaken-for-modal), do not
+        // promote the state. Otherwise we would surface a phantom approval
+        // built from arbitrary screen text — see claude-cli numbered-list
+        // false-positive on 2026-06-07.
+        if (st.modal_buttons && !extractedModal) {
+            trace.push({ kind: 'state_skip', text: `state[${st.id}] matched but modal_buttons extraction failed — not promoting` });
+            continue;
+        }
         activeState = { id: st.id, label: st.label, title };
-        modal = extractModal(st, sections, screenText, title, trace);
+        modal = extractedModal;
         break;
     }
 
