@@ -1,6 +1,6 @@
 {
   "name": "adhdev",
-  "version": "0.9.82-rc.72",
+  "version": "0.9.82",
   "private": true,
   "description": "Agent Dashboard Hub for Dev — control your AI coding agents from anywhere",
   "workspaces": [
