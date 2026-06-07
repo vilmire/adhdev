@@ -4896,6 +4896,11 @@ export class DaemonCommandRouter {
                     }
                     const node = updateNode(meshId, nodeId, patch as any);
                     if (!node) return { success: false, error: 'Mesh node not found' };
+                    // Provider priority / systemPrompt changes don't touch
+                    // the queue revision, so without a manual bust the
+                    // cached aggregate keeps surfacing pre-update values
+                    // (priority chip, coordinator prompt preview, etc.).
+                    this.invalidateAggregateMeshStatus(meshId);
                     return { success: true, node };
                 } catch (e: any) {
                     return { success: false, error: e.message };
@@ -5064,6 +5069,11 @@ export class DaemonCommandRouter {
                     let removed = false;
                     if (meshRecord?.inline) {
                         removed = this.removeInlineMeshNode(meshId, mesh, nodeId);
+                        // Inline meshes share the same aggregate snapshot cache as
+                        // local-config meshes; without this bust the removed node
+                        // keeps showing up in the dashboard graph until the cache
+                        // ages out on its own.
+                        if (removed) this.invalidateAggregateMeshStatus(meshId);
                     } else {
                         const { removeNode } = await import('../config/mesh-config.js');
                         removed = removeNode(meshId, nodeId);
