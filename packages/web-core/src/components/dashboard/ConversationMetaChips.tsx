@@ -40,10 +40,8 @@ export default function ConversationMetaChips({
     const meshQueueStats = conversation.meshQueueStats;
     const isMeshCoordinator = conversation.coordinator?.meshId || conversation.settings?.meshCoordinatorFor;
 
-    if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !isMeshNode && !meshQueueStats) {
-        return null;
-    }
-
+    // All hooks must be called unconditionally to keep React's hook-order
+    // invariant. The empty-state short-circuit lives below the hook block.
     const handleOpenMachine = useCallback(() => {
         if (onOpenMachine) {
             onOpenMachine()
@@ -62,6 +60,10 @@ export default function ConversationMetaChips({
         if (!targetKey) return
         navigate(getDashboardActiveTabHref(targetKey))
     }, [conversation, navigate, onOpenNativeConversation])
+
+    if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !isMeshNode && !meshQueueStats) {
+        return null;
+    }
 
     return (
         <div className={`conversation-meta-chips ${className}`.trim()}>
