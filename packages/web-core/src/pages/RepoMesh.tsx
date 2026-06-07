@@ -1112,12 +1112,54 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
                             <button onClick={() => setShowAddNode(false)} className="text-text-muted cursor-pointer bg-transparent border-none"><IconX size={16} /></button>
                         </div>
                         <FormField label="Workspace Path">
-                            <Input
-                                value={nodeWorkspace}
-                                onChange={e => setNodeWorkspace(e.target.value)}
-                                placeholder="/Users/dev/projects/myapp"
-                                autoFocus
-                            />
+                            {(() => {
+                                // Surface workspaces the daemon already knows about (the
+                                // same list the dashboard's new-session dialog uses) so the
+                                // operator doesn't have to retype a path from memory.
+                                // Free-text remains available — the picker just seeds the
+                                // input.
+                                const knownWorkspaces: Array<{ id?: string; path: string; label?: string | null }>
+                                    = Array.isArray((daemon as any)?.workspaces) ? (daemon as any).workspaces : []
+                                const datalistId = `mesh-add-node-workspaces-${selectedMeshId || 'new'}`
+                                return (
+                                    <>
+                                        <Input
+                                            value={nodeWorkspace}
+                                            onChange={e => setNodeWorkspace(e.target.value)}
+                                            placeholder={knownWorkspaces[0]?.path || '/Users/dev/projects/myapp'}
+                                            list={knownWorkspaces.length > 0 ? datalistId : undefined}
+                                            autoFocus
+                                        />
+                                        {knownWorkspaces.length > 0 && (
+                                            <>
+                                                <datalist id={datalistId}>
+                                                    {knownWorkspaces.map(workspace => (
+                                                        <option
+                                                            key={workspace.id || workspace.path}
+                                                            value={workspace.path}
+                                                        >
+                                                            {workspace.label || workspace.path}
+                                                        </option>
+                                                    ))}
+                                                </datalist>
+                                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                                    {knownWorkspaces.slice(0, 6).map(workspace => (
+                                                        <button
+                                                            key={workspace.id || workspace.path}
+                                                            type="button"
+                                                            onClick={() => setNodeWorkspace(workspace.path)}
+                                                            className="text-[11px] px-2 py-0.5 rounded-full border border-border-subtle hover:border-accent-primary/50 text-text-muted hover:text-text-primary transition-colors bg-transparent cursor-pointer"
+                                                            title={workspace.path}
+                                                        >
+                                                            {workspace.label || workspace.path.split('/').filter(Boolean).pop() || workspace.path}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </>
+                                        )}
+                                    </>
+                                )
+                            })()}
                         </FormField>
                         <FormField
                             label="Provider Priority"
