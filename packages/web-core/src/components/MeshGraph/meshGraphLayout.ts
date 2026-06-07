@@ -8,31 +8,26 @@
 
 import ELK, { type ElkExtendedEdge, type ElkNode, type LayoutOptions } from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphData, MeshGraphNode } from './types'
-import {
-    formatMeshGraphAheadBehind,
-    getMeshGraphAttentionBadge,
-    getMeshGraphCalloutText,
-    shouldShowMeshGraphCallout,
-} from './meshGraphViewModel'
+import { formatMeshGraphAheadBehind } from './meshGraphViewModel'
 
 export const MESH_GRAPH_LAYOUT = {
     worktreeCardWidth: 256,
-    submoduleCardWidth: 228,
-    minWorktreeCardHeight: 174,
-    minSubmoduleCardHeight: 146,
-    maxEstimatedCardHeight: 304,
-    layerGap: 220,
-    nodeGap: 82,
-    edgeLabelBuffer: 180,
+    submoduleCardWidth: 256,
+    minWorktreeCardHeight: 110,
+    minSubmoduleCardHeight: 110,
+    maxEstimatedCardHeight: 110,
+    layerGap: 200,
+    nodeGap: 72,
+    edgeLabelBuffer: 160,
     placeholderTopOffset: 0,
 } as const
 
 export const MESH_GRAPH_LAYOUT_COMPACT = {
     worktreeCardWidth: 188,
-    submoduleCardWidth: 164,
-    minWorktreeCardHeight: 68,
-    minSubmoduleCardHeight: 56,
-    maxEstimatedCardHeight: 120,
+    submoduleCardWidth: 188,
+    minWorktreeCardHeight: 88,
+    minSubmoduleCardHeight: 88,
+    maxEstimatedCardHeight: 88,
     layerGap: 160,
     nodeGap: 52,
     edgeLabelBuffer: 120,
@@ -47,29 +42,67 @@ export const MESH_GRAPH_EDGE_LABEL = {
     horizontalPadding: 18,
 } as const
 
-export const MESH_GRAPH_LAYOUT_DIRECTION = 'RIGHT' as const
+export type MeshGraphDirection = 'LR' | 'TB'
 
-export const MESH_GRAPH_ELK_OPTIONS: LayoutOptions = {
-    'elk.algorithm': 'layered',
-    'elk.direction': MESH_GRAPH_LAYOUT_DIRECTION,
-    'elk.edgeRouting': 'ORTHOGONAL',
-    'elk.spacing.nodeNode': String(MESH_GRAPH_LAYOUT.nodeGap),
-    'elk.layered.spacing.nodeNodeBetweenLayers': String(MESH_GRAPH_LAYOUT.layerGap),
-    'elk.layered.spacing.edgeNodeBetweenLayers': String(MESH_GRAPH_LAYOUT.edgeLabelBuffer),
-    'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
-    'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
-    'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-    'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
-    'elk.layered.cycleBreaking.strategy': 'GREEDY',
-    'elk.layered.mergeEdges': 'false',
-    'elk.randomSeed': '1',
+export const MESH_GRAPH_LAYOUT_DIRECTION: MeshGraphDirection = 'LR'
+
+function elkDirection(dir: MeshGraphDirection): 'RIGHT' | 'DOWN' {
+    return dir === 'TB' ? 'DOWN' : 'RIGHT'
 }
 
-export const MESH_GRAPH_ELK_OPTIONS_COMPACT: LayoutOptions = {
-    ...MESH_GRAPH_ELK_OPTIONS,
-    'elk.spacing.nodeNode': String(MESH_GRAPH_LAYOUT_COMPACT.nodeGap),
-    'elk.layered.spacing.nodeNodeBetweenLayers': String(MESH_GRAPH_LAYOUT_COMPACT.layerGap),
-    'elk.layered.spacing.edgeNodeBetweenLayers': String(MESH_GRAPH_LAYOUT_COMPACT.edgeLabelBuffer),
+interface MeshGraphLayoutShape {
+    readonly worktreeCardWidth: number
+    readonly submoduleCardWidth: number
+    readonly minWorktreeCardHeight: number
+    readonly minSubmoduleCardHeight: number
+    readonly maxEstimatedCardHeight: number
+    readonly layerGap: number
+    readonly nodeGap: number
+    readonly edgeLabelBuffer: number
+    readonly placeholderTopOffset: number
+}
+
+function elkOptionsFor(layout: MeshGraphLayoutShape, dir: MeshGraphDirection): LayoutOptions {
+    return {
+        'elk.algorithm': 'layered',
+        'elk.direction': elkDirection(dir),
+        'elk.edgeRouting': 'ORTHOGONAL',
+        'elk.spacing.nodeNode': String(layout.nodeGap),
+        'elk.layered.spacing.nodeNodeBetweenLayers': String(layout.layerGap),
+        'elk.layered.spacing.edgeNodeBetweenLayers': String(layout.edgeLabelBuffer),
+        'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
+        'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+        'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+        'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+        'elk.layered.cycleBreaking.strategy': 'GREEDY',
+        'elk.layered.mergeEdges': 'false',
+        'elk.randomSeed': '1',
+    }
+}
+
+export const MESH_GRAPH_ELK_OPTIONS: LayoutOptions = elkOptionsFor(MESH_GRAPH_LAYOUT, 'LR')
+
+export const MESH_GRAPH_ELK_OPTIONS_COMPACT: LayoutOptions = elkOptionsFor(MESH_GRAPH_LAYOUT_COMPACT, 'LR')
+
+/**
+ * Heuristic: TB reads better when there are many nodes but the dominant
+ * connection pattern is shallow fan-out (few hops, many siblings). LR wins
+ * when there's a real left-to-right pipeline. Anything else, leave LR.
+ */
+export function pickMeshGraphDirection(data: MeshGraphData): MeshGraphDirection {
+    const nodeCount = data.nodes.length
+    if (nodeCount < 8) return 'LR'
+    const outDegree = new Map<string, number>()
+    for (const edge of data.edges) {
+        outDegree.set(edge.source, (outDegree.get(edge.source) ?? 0) + 1)
+    }
+    let maxFanOut = 0
+    for (const count of outDegree.values()) {
+        if (count > maxFanOut) maxFanOut = count
+    }
+    // Wide fan-out from a single hub on dense graphs → TB usually wins.
+    if (maxFanOut >= Math.max(6, Math.floor(nodeCount / 2))) return 'TB'
+    return 'LR'
 }
 
 type MeshGraphLayoutNodeKind = 'meshNode'
@@ -92,59 +125,27 @@ export interface MeshGraphLayoutBounds {
     height: number
 }
 
+export interface MeshGraphLayoutEdgePoint {
+    x: number
+    y: number
+}
+
+export interface MeshGraphLayoutEdgeRoute {
+    id: string
+    source: string
+    target: string
+    points: MeshGraphLayoutEdgePoint[]
+}
+
 export interface MeshGraphLayoutResult {
     nodes: MeshGraphLayoutNode[]
     bounds: MeshGraphLayoutBounds[]
+    edgeRoutes: Map<string, MeshGraphLayoutEdgeRoute>
     columnGap: number
     layoutOptions: LayoutOptions
 }
 
 const elk = new ELK()
-
-function estimateTextLines(value: string | null | undefined, charsPerLine: number, maxLines: number): number {
-    const text = (value || '').trim()
-    if (!text) return 0
-    return Math.max(1, Math.min(maxLines, Math.ceil(text.length / charsPerLine)))
-}
-
-const BADGE_WIDTH_APPROX_PX = 6.2 // chars/px at 10px sans-serif
-const BADGE_H_PAD_PX = 20 // px-2 * 2 sides
-
-function estimateBadgeWidth(text: string): number {
-    return Math.ceil(text.length * BADGE_WIDTH_APPROX_PX) + BADGE_H_PAD_PX
-}
-
-function estimateBadgeRows(node: MeshGraphNode, cardWidth: number): number {
-    const contentWidth = cardWidth - 32 // px-4 * 2 sides
-    const badges: string[] = []
-    badges.push(node.health.replace(/_/g, ' '))
-    if (node.type === 'submoduleNode') {
-        badges.push('submodule')
-    } else {
-        badges.push(node.locality === 'remote' ? 'remote' : 'local')
-    }
-    if (node.branch && node.type !== 'submoduleNode') badges.push(node.branch)
-    if (node.submoduleCommit && node.type === 'submoduleNode') badges.push(node.submoduleCommit.slice(0, 7))
-    if (node.dirty) badges.push(node.type === 'submoduleNode' ? 'local changes' : `${node.dirtyFiles} dirty`)
-    if (node.outOfSync) badges.push('out of sync')
-    if (node.hasConflicts) badges.push('conflicts')
-    if (node.type !== 'submoduleNode' && node.upstream && node.upstreamStatus !== 'fresh') badges.push('upstream unverified')
-    if (node.isOrphan) badges.push('needs follow-up')
-
-    let rows = 0
-    let rowWidth = 0
-    for (const badge of badges) {
-        const w = estimateBadgeWidth(badge) + 6 // gap-1.5 = 6px
-        if (rowWidth > 0 && rowWidth + w > contentWidth) {
-            rows += 1
-            rowWidth = w
-        } else {
-            rowWidth += w
-        }
-    }
-    if (rowWidth > 0) rows += 1
-    return Math.max(1, rows)
-}
 
 export function getMeshGraphNodeCardWidth(node: MeshGraphNode, compact = false): number {
     const layout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
@@ -181,42 +182,12 @@ export function getNodeSummaryForLayout(node: MeshGraphNode): string {
 
 export function estimateMeshGraphNodeHeight(node: MeshGraphNode, compact = false): number {
     const layout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
-    if (compact) {
-        const attentionBadge = getMeshGraphAttentionBadge(node)
-        const isDefaultBranchNode = node.type === 'defaultBranchNode'
-        const hasBranchBadge = !attentionBadge && node.branch && node.type !== 'submoduleNode'
-        // py-2.5*2=20 + title~16 + subtitle~14 + (attention mt-1.5+18=24 | branch mt-1+14=16 | nothing~0)
-        const estimated = 20
-            + 16
-            + (isDefaultBranchNode ? 0 : 14)
-            + (attentionBadge ? 24 : hasBranchBadge ? 16 : 0)
-        const minHeight = node.type === 'submoduleNode'
-            ? layout.minSubmoduleCardHeight
-            : layout.minWorktreeCardHeight
-        return Math.min(layout.maxEstimatedCardHeight, Math.max(minHeight, Math.ceil(estimated)))
-    }
-    const width = getMeshGraphNodeCardWidth(node)
-    const charsPerLine = node.type === 'submoduleNode' ? 24 : 30
-    const badgeRows = estimateBadgeRows(node, width)
-    const titleLines = estimateTextLines(node.label, charsPerLine, 2)
-    const subtitleLines = estimateTextLines(node.type === 'submoduleNode' ? node.submodulePath : node.machineLabel || node.workspace, charsPerLine, 2)
-    const summaryLines = estimateTextLines(getNodeSummaryForLayout(node), charsPerLine + 4, 3)
-    const attentionBadge = getMeshGraphAttentionBadge(node)
-    const calloutText = shouldShowMeshGraphCallout(node) ? getMeshGraphCalloutText(node) : null
-    const calloutLines = estimateTextLines(calloutText, Math.max(24, Math.floor(width / 8)), 4)
-
-    const estimated = 52
-        + titleLines * 18
-        + subtitleLines * 14
-        + (attentionBadge ? 30 : 0)
-        + badgeRows * 24
-        + Math.max(22, summaryLines * 18)
-        + (calloutLines > 0 ? 22 + calloutLines * 16 : 0)
-
-    const minHeight = node.type === 'submoduleNode'
-        ? layout.minSubmoduleCardHeight
-        : layout.minWorktreeCardHeight
-    return Math.min(layout.maxEstimatedCardHeight, Math.max(minHeight, Math.ceil(estimated)))
+    // Fixed-tier height: every card in a given mode occupies the same vertical box.
+    // Prevents ELK from staggering layer boundaries by per-node badge/callout count,
+    // which is what made same-layer nodes look X-misaligned. The card itself uses
+    // overflow handling for content that exceeds the box.
+    void node
+    return layout.maxEstimatedCardHeight
 }
 
 function compareNodes(a: MeshGraphNode, b: MeshGraphNode): number {
@@ -356,7 +327,8 @@ function getOrderedGraphNodes(data: MeshGraphData): MeshGraphNode[] {
     return [...sortedNodes, createPlaceholderNode(defaultAnchor, data)]
 }
 
-export function buildMeshGraphElkInput(data: MeshGraphData, layoutOptions: LayoutOptions = MESH_GRAPH_ELK_OPTIONS, compact = false): ElkNode {
+export function buildMeshGraphElkInput(data: MeshGraphData, layoutOptions: LayoutOptions = MESH_GRAPH_ELK_OPTIONS, compact = false, _direction: MeshGraphDirection = 'LR'): ElkNode {
+    void _direction
     const nodes = getOrderedGraphNodes(data)
     const nodeIds = new Set(nodes.map(node => node.id))
     const children: ElkNode[] = nodes.map(node => ({
@@ -388,11 +360,12 @@ function calculateColumnGap(bounds: MeshGraphLayoutBounds[], compact = false): n
     return Math.min(...xs.slice(1).map((x, index) => x - xs[index]))
 }
 
-export async function buildMeshGraphLayout(data: MeshGraphData, compact = false): Promise<MeshGraphLayoutResult> {
-    const layoutOptions = compact ? MESH_GRAPH_ELK_OPTIONS_COMPACT : MESH_GRAPH_ELK_OPTIONS
+export async function buildMeshGraphLayout(data: MeshGraphData, compact = false, direction: MeshGraphDirection = 'LR'): Promise<MeshGraphLayoutResult> {
+    const baseLayout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
+    const layoutOptions = elkOptionsFor(baseLayout, direction)
     const graphNodes = getOrderedGraphNodes(data)
     const graphNodeById = new Map(graphNodes.map(node => [node.id, node]))
-    const elkGraph = await elk.layout(buildMeshGraphElkInput(data, layoutOptions, compact))
+    const elkGraph = await elk.layout(buildMeshGraphElkInput(data, layoutOptions, compact, direction))
     const layoutNodes = (elkGraph.children ?? [])
         .map(node => {
             const graphNode = graphNodeById.get(node.id)
@@ -410,9 +383,28 @@ export async function buildMeshGraphLayout(data: MeshGraphData, compact = false)
     layoutNodes.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
 
     const bounds = layoutNodes.map(node => makeBounds(node.graphNode, node.position.x, node.position.y))
+
+    const edgeRoutes = new Map<string, MeshGraphLayoutEdgeRoute>()
+    for (const elkEdge of elkGraph.edges ?? []) {
+        const sections = elkEdge.sections
+        if (!sections || sections.length === 0) continue
+        const section = sections[0]
+        const source = elkEdge.sources?.[0]
+        const target = elkEdge.targets?.[0]
+        if (!source || !target) continue
+        const points: MeshGraphLayoutEdgePoint[] = []
+        points.push({ x: Math.round(section.startPoint.x), y: Math.round(section.startPoint.y) })
+        for (const bend of section.bendPoints ?? []) {
+            points.push({ x: Math.round(bend.x), y: Math.round(bend.y) })
+        }
+        points.push({ x: Math.round(section.endPoint.x), y: Math.round(section.endPoint.y) })
+        edgeRoutes.set(elkEdge.id, { id: elkEdge.id, source, target, points })
+    }
+
     return {
         nodes: layoutNodes,
         bounds,
+        edgeRoutes,
         columnGap: calculateColumnGap(bounds, compact),
         layoutOptions: { ...layoutOptions },
     }

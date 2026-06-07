@@ -51,7 +51,7 @@ describe('dashboard mesh graph dialog wiring', () => {
 
         expect(dialogSource).toContain('meshTheme.dialogBodyClass')
         expect(surfaceSource).toContain('Click a node only when you want drill-down details. The graph itself now carries the convergence state.')
-        expect(graphViewSource).toContain('Focused on the main path first · drag or scroll to pan')
+        expect(graphViewSource).toContain('drag or scroll to pan')
         expect(surfaceSource).toContain('role="dialog"')
         expect(surfaceSource).toContain('onClick={closeGraphDetail}')
         expect(surfaceSource).toContain('absolute inset-x-3 bottom-3 top-20')

@@ -343,7 +343,12 @@ describe('compact mode layout', () => {
 })
 
 describe('badge row estimation (overlap guard)', () => {
-    it('accounts for wide badges like "upstream unverified" that force extra row wrapping', () => {
+    it('returns the fixed tier height regardless of badge count (no per-node estimation)', () => {
+        // Policy change 2026-06-07: card heights are fixed tiers (standard/compact)
+        // to keep ELK layer boundaries aligned. Badge overflow is handled by the
+        // card chrome (expand on hover/select) rather than by per-node height
+        // estimation. So a "heavy" node and a "light" node must report the same
+        // height in a given mode.
         const heavyNode = node('heavy', {
             health: 'dirty',
             dirty: true,
@@ -354,11 +359,11 @@ describe('badge row estimation (overlap guard)', () => {
             branch: 'feature/my-branch-name-that-is-somewhat-long',
             locality: 'remote',
         })
-        const defaultHeight = estimateMeshGraphNodeHeight(heavyNode, false)
-        const minHeight = MESH_GRAPH_LAYOUT.minWorktreeCardHeight
-        // A node with upstream unverified + orphan + long branch + dirty should estimate
-        // more than the minimum height since it has many wide badges that wrap
-        expect(defaultHeight).toBeGreaterThan(minHeight)
+        const lightNode = node('light', { health: 'online' })
+        expect(estimateMeshGraphNodeHeight(heavyNode, false))
+            .toBe(MESH_GRAPH_LAYOUT.maxEstimatedCardHeight)
+        expect(estimateMeshGraphNodeHeight(lightNode, false))
+            .toBe(MESH_GRAPH_LAYOUT.maxEstimatedCardHeight)
     })
 
     it('gives taller height estimate when badges include wide labels like "upstream unverified"', () => {
