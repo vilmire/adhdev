@@ -64,6 +64,12 @@ type CompletedFinalizationBlock = {
     terminal?: boolean;
 };
 
+type CompletionFinalAssistantEvidence = {
+    present: boolean;
+    messages: unknown[];
+    source: 'parsed' | 'external-native' | 'unavailable';
+};
+
 const COMPLETED_FINALIZATION_RETRY_MS = 1000;
 const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
 
@@ -890,6 +896,56 @@ export class CliProviderInstance implements ProviderInstance {
         return true;
     }
 
+    private readExternalCompletionMessages(): unknown[] | null {
+        const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
+        if (!adapterOwnsMessagesElsewhere) return null;
+        if (!this.providerSessionId) return null;
+        if (!isNativeSourceCanonicalHistory(this.provider.nativeHistory)) return null;
+
+        const restoredHistory = readProviderChatHistory(this.type, {
+            canonicalHistory: this.provider.nativeHistory,
+            historySessionId: this.providerSessionId,
+            workspace: this.workingDir,
+            offset: 0,
+            limit: Number.MAX_SAFE_INTEGER,
+            historyBehavior: this.provider.historyBehavior,
+            scripts: this.provider.scripts as any,
+            sessionStartedAtMs: this.startedAt,
+        });
+        if (restoredHistory.source !== 'provider-native') return null;
+        return restoredHistory.messages;
+    }
+
+    private completionFinalAssistantEvidence(parsedMessages: unknown): CompletionFinalAssistantEvidence {
+        if (this.completionHasFinalAssistantMessage(parsedMessages)) {
+            return {
+                present: true,
+                messages: Array.isArray(parsedMessages) ? parsedMessages : [],
+                source: 'parsed',
+            };
+        }
+
+        const externalMessages = this.readExternalCompletionMessages();
+        if (externalMessages) {
+            return {
+                present: this.completionHasFinalAssistantMessage(externalMessages),
+                messages: externalMessages,
+                source: 'external-native',
+            };
+        }
+
+        return {
+            present: false,
+            messages: Array.isArray(parsedMessages) ? parsedMessages : [],
+            source: 'unavailable',
+        };
+    }
+
+    private completionFinalSummary(parsedMessages: unknown): string | undefined {
+        const evidence = this.completionFinalAssistantEvidence(parsedMessages);
+        return extractFinalSummaryFromMessages(evidence.messages as any);
+    }
+
     private buildCompletedFinalizationDiagnostic(args: {
         blockReason: string;
         latestStatus?: any;
@@ -906,7 +962,8 @@ export class CliProviderInstance implements ProviderInstance {
             parseError = error?.message || String(error);
         }
 
-        const visibleMessages = (Array.isArray(parsed?.messages) ? parsed.messages : [])
+        const evidence = this.completionFinalAssistantEvidence(parsed?.messages);
+        const visibleMessages = (Array.isArray(evidence.messages) ? evidence.messages : [])
             .filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
         const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
         const lastVisibleRole = typeof lastVisible?.role === 'string' ? lastVisible.role.trim().toLowerCase() : null;
@@ -926,7 +983,8 @@ export class CliProviderInstance implements ProviderInstance {
             latestVisibleStatus: args.latestVisibleStatus,
             parsedStatus: typeof parsed?.status === 'string' ? parsed.status : (parseError ? 'parse_error' : 'unknown'),
             parseError: parseError || undefined,
-            finalAssistantPresent: this.completionHasFinalAssistantMessage(parsed?.messages),
+            finalAssistantPresent: evidence.present,
+            finalAssistantEvidenceSource: evidence.source,
             visibleMessageCount: visibleMessages.length,
             lastVisibleRole,
             lastVisibleKind,
@@ -1003,14 +1061,26 @@ export class CliProviderInstance implements ProviderInstance {
             return { reason: `parsed_status:${parsedStatus}`, terminal: isCliGeneratingLikeStatus(parsedStatus) };
         }
         if (parsed?.activeModal || parsed?.modal) return { reason: 'parsed_modal_active', terminal: true };
-        // SpecCliAdapter never populates parsed.messages — chat history flows
-        // through the daemon's native-history pipeline, not the status hook.
-        // Skipping the final-assistant gate avoids a 30s stall on every turn
-        // for spec-routed providers (agy / codex / claude / hermes).
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
-        if (!adapterOwnsMessagesElsewhere
-            && !this.completionHasFinalAssistantMessage(parsed?.messages)) {
-            return { reason: 'missing_final_assistant' };
+        const finalAssistantEvidence = this.completionFinalAssistantEvidence(parsed?.messages);
+        if (!finalAssistantEvidence.present) {
+            if (adapterOwnsMessagesElsewhere) {
+                if (finalAssistantEvidence.source === 'external-native') {
+                    return { reason: 'missing_final_assistant', terminal: true };
+                }
+                // SpecCliAdapter never populates parsed.messages — chat history flows
+                // through the daemon's native-history pipeline, not the status hook.
+                // If that pipeline is unavailable, keep the old skip behavior for
+                // providers that have not opted into strict final-assistant evidence.
+                if ((this.provider as any).requiresFinalAssistantBeforeIdle === true) {
+                    return { reason: 'missing_final_assistant', terminal: true };
+                }
+            } else {
+                return {
+                    reason: 'missing_final_assistant',
+                    terminal: (this.provider as any).requiresFinalAssistantBeforeIdle === true,
+                };
+            }
         }
 
         // Guard: if the screen still shows an approval/choice prompt as the last visible text,
@@ -1082,7 +1152,7 @@ export class CliProviderInstance implements ProviderInstance {
                 timestamp: pending.timestamp,
                 finalSummary: blockReason.startsWith('parsed_status:')
                     ? ''
-                    : extractFinalSummaryFromMessages(this.adapter?.getScriptParsedStatus()?.messages),
+                    : this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
                 completionDiagnostic,
             });
             this.completedDebouncePending = null;
@@ -1098,7 +1168,7 @@ export class CliProviderInstance implements ProviderInstance {
             chatTitle: pending.chatTitle,
             duration: pending.duration,
             timestamp: pending.timestamp,
-            finalSummary: extractFinalSummaryFromMessages(this.adapter?.getScriptParsedStatus()?.messages),
+            finalSummary: this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
         });
         this.completedDebouncePending = null;
         this.completedDebounceTimer = null;
@@ -1255,8 +1325,14 @@ export class CliProviderInstance implements ProviderInstance {
                     // Emit completion for mesh task association even though the UI generating
                     // started/completed pair is suppressed (too short for visible UI update).
                     let shortFinalSummary: string | undefined;
-                    try { shortFinalSummary = extractFinalSummaryFromMessages(this.adapter?.getScriptParsedStatus()?.messages); } catch { /* best-effort */ }
-                    if ((this.provider as any).requiresFinalAssistantBeforeIdle === true && !shortFinalSummary) {
+                    let shortEvidenceSource: CompletionFinalAssistantEvidence['source'] = 'unavailable';
+                    try {
+                        const parsedMessages = this.adapter?.getScriptParsedStatus()?.messages;
+                        const evidence = this.completionFinalAssistantEvidence(parsedMessages);
+                        shortEvidenceSource = evidence.source;
+                        shortFinalSummary = extractFinalSummaryFromMessages(evidence.messages as any);
+                    } catch { /* best-effort */ }
+                    if (((this.provider as any).requiresFinalAssistantBeforeIdle === true || shortEvidenceSource === 'external-native') && !shortFinalSummary) {
                         LOG.info('CLI', `[${this.type}] suppressed short completion without final assistant evidence`);
                     } else {
                         this.pushEvent({
@@ -1268,6 +1344,7 @@ export class CliProviderInstance implements ProviderInstance {
                             completionDiagnostic: {
                                 reason: 'short_generating_suppressed',
                                 shortDurationMs,
+                                finalAssistantEvidenceSource: shortEvidenceSource,
                             },
                         });
                     }

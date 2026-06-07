@@ -1,6 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CliProviderInstance, getForcedNewSessionScriptName, waitForCliAdapterReady } from '../../src/providers/cli-provider-instance.js'
 
+function providerNativeHistoryScripts(readMessages: () => Array<Record<string, unknown>> | null) {
+  return {
+    readNativeHistory: () => {
+      const messages = readMessages()
+      if (!messages) return null
+      return {
+        messages,
+        sourcePath: '/provider/native/session.jsonl',
+        sourceMtimeMs: 1_800_000_000_000,
+        providerSessionId: '3d991780-74a1-4e97-8c2e-c38719794b9d',
+        nativeHistoryCoverage: 'full',
+      }
+    },
+  }
+}
+
 describe('getForcedNewSessionScriptName', () => {
   it('uses a provider new-session action when launch mode is new and no explicit new-session args exist', () => {
     const provider = {
@@ -555,6 +571,115 @@ describe('CliProviderInstance lightweight hot chat state', () => {
 
       expect(events.map((event) => event.event)).not.toContain('agent:generating_completed')
       expect(instance.lastStatus).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not emit short completion for claude external-native startup transcript without assistant output', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-07T00:00:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'claude-cli',
+        name: 'Claude Code',
+        category: 'cli',
+        spawn: { command: 'claude', args: [] },
+        nativeHistory: {
+          format: 'claude-jsonl',
+          watchPath: '~/.claude/projects/**/*.jsonl',
+          mode: 'native-source',
+          scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+        },
+        scripts: providerNativeHistoryScripts(() => [
+          { role: 'user', kind: 'standard', content: 'AskUserQuestion prompt', receivedAt: 1_800_000_001_000 },
+        ]),
+      } as any, '/tmp/project', [], 'runtime-claude', undefined, {
+        providerSessionId: '3d991780-74a1-4e97-8c2e-c38719794b9d',
+        launchMode: 'new',
+      }) as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+
+      let status = 'generating'
+      instance.adapter = {
+        chatMessagesOwnedExternally: true,
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({ status: 'idle', title: 'Claude Code', messages: [] }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      status = 'idle'
+      instance.detectStatusTransition()
+
+      expect(events.map((event) => event.event)).not.toContain('agent:generating_completed')
+      expect(instance.lastStatus).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('waits for claude external-native assistant evidence before completing a fresh turn', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-07T00:05:00Z'))
+    try {
+      let nativeMessages: Array<Record<string, unknown>> = [
+        { role: 'user', kind: 'standard', content: 'AskUserQuestion prompt', receivedAt: 1_800_000_001_000 },
+      ]
+      const instance = new CliProviderInstance({
+        type: 'claude-cli',
+        name: 'Claude Code',
+        category: 'cli',
+        spawn: { command: 'claude', args: [] },
+        nativeHistory: {
+          format: 'claude-jsonl',
+          watchPath: '~/.claude/projects/**/*.jsonl',
+          mode: 'native-source',
+          scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+        },
+        scripts: providerNativeHistoryScripts(() => nativeMessages),
+      } as any, '/tmp/project', [], 'runtime-claude', undefined, {
+        providerSessionId: '3d991780-74a1-4e97-8c2e-c38719794b9d',
+        launchMode: 'new',
+      }) as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+
+      let status = 'generating'
+      instance.adapter = {
+        chatMessagesOwnedExternally: true,
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({ status: 'idle', title: 'Claude Code', messages: [] }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+      expect(events.map((event) => event.event)).toContain('agent:generating_started')
+
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(35_000)
+
+      expect(events.map((event) => event.event)).not.toContain('agent:generating_completed')
+
+      nativeMessages = [
+        ...nativeMessages,
+        { role: 'assistant', kind: 'standard', content: 'I choose rock. You win.', receivedAt: 1_800_000_002_000 },
+      ]
+      vi.advanceTimersByTime(1000)
+
+      const completed = events.find((event) => event.event === 'agent:generating_completed')
+      expect(completed).toMatchObject({
+        finalSummary: 'I choose rock. You win.',
+      })
     } finally {
       vi.useRealTimers()
     }

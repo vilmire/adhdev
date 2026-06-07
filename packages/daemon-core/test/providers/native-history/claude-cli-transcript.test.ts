@@ -116,6 +116,32 @@ describe('claude-cli-transcript — readSession', () => {
     expect(visible[1].kind).toBe('standard');
   });
 
+  it('ignores startup metadata, attachments, and ai-title records without fabricating assistant output', async () => {
+    const sessionId = 'a1b2c3d4-0000-0000-0000-000000000020';
+    const filePath = writeTranscript(sessionId, [
+      { type: 'mode', sessionId, timestamp: 1_800_000_000_000 },
+      { type: 'permission-mode', sessionId, timestamp: 1_800_000_000_100 },
+      userLine('AskUserQuestion prompt', sessionId, 1_800_000_001_000, '/workspaces/myproject'),
+      { type: 'attachment', sessionId, timestamp: 1_800_000_001_100, filePath: '/tmp/a.png' },
+      { type: 'attachment', sessionId, timestamp: 1_800_000_001_200, filePath: '/tmp/b.png' },
+      { type: 'attachment', sessionId, timestamp: 1_800_000_001_300, filePath: '/tmp/c.png' },
+      { type: 'ai-title', sessionId, timestamp: 1_800_000_001_400, title: 'Rock paper scissors' },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/claude-cli-transcript.js');
+    const result = await readSession(filePath);
+
+    expect(result).not.toBeNull();
+    const visible = result!.messages.filter((m) => m.kind !== 'session_start');
+    expect(visible).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        kind: 'standard',
+        content: 'AskUserQuestion prompt',
+      }),
+    ]);
+  });
+
   it('parses a multi-turn conversation with tool_use and tool_result blocks', async () => {
     const sessionId = 'a1b2c3d4-0000-0000-0000-000000000003';
     const filePath = writeTranscript(sessionId, [
