@@ -217,7 +217,19 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
   let question = '';
   for (let i = firstOptionIndex - 1; i >= 0; i -= 1) {
     const candidate = lines[i].trim();
-    if (!candidate || /^─+$/.test(candidate) || /^[☐☒]\s+/.test(candidate)) continue;
+    if (!candidate || /^─+$/.test(candidate)) continue;
+    // Standalone ☐/☒ markers (decorative section dividers in the headered
+    // variant) are not the question — keep skipping them.
+    if (/^[☐☒]\s*$/.test(candidate)) continue;
+    // The headerless variant introduced in claude-cli >=2.1 prefixes the
+    // actual question with `☐ ` (e.g. "☐ RPS R1 1라운드 — …"). Previously
+    // we skipped any ☐/☒ line and returned null, never opening the picker.
+    // Strip the marker so the dashboard label matches the on-screen text.
+    const markerMatch = candidate.match(/^[☐☒]\s+(.+)$/);
+    if (markerMatch) {
+      question = markerMatch[1].trim();
+      break;
+    }
     question = candidate;
     break;
   }

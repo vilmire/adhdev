@@ -110,6 +110,10 @@ export function prepareSessionChatTailUpdate(
   const messages = fullMessages
   const title = typeof result.title === 'string' ? result.title : undefined
   const activeModal = normalizeChatTailActiveModal(result.activeModal)
+  const activeInteractivePrompt = (result as { activeInteractivePrompt?: unknown }).activeInteractivePrompt
+  const promptForUpdate = activeInteractivePrompt && typeof activeInteractivePrompt === 'object'
+    ? activeInteractivePrompt as Record<string, unknown>
+    : null
   const status = typeof result.status === 'string' ? result.status : 'idle'
   // (A3) messageSource passthrough. v1 deliberately dropped this on the
   // subscription wire so the frontend had to infer source from message
@@ -126,6 +130,7 @@ export function prepareSessionChatTailUpdate(
     status,
     ...(title ? { title } : {}),
     ...(activeModal ? { activeModal } : {}),
+    ...(promptForUpdate ? { activeInteractivePrompt: promptForUpdate } : {}),
   })
   const seq = input.seq + 1
 
@@ -154,6 +159,7 @@ export function prepareSessionChatTailUpdate(
       status,
       ...(title ? { title } : {}),
       ...(activeModal ? { activeModal } : {}),
+      ...(promptForUpdate ? { activeInteractivePrompt: promptForUpdate as any } : {}),
       ...(messageSource ? { messageSource } : {}),
     },
   }

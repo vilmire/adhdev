@@ -1613,8 +1613,10 @@ function summarizeStateForDebug(state: any): Record<string, unknown> | null {
             title: activeChat.title,
             messageCount: Array.isArray(activeChat.messages) ? activeChat.messages.length : undefined,
             activeModal: activeChat.activeModal,
+            activeInteractivePrompt: activeChat.activeInteractivePrompt ?? null,
             messagesTail: Array.isArray(activeChat.messages) ? activeChat.messages.slice(-10) : undefined,
         } : null,
+        activeInteractivePrompt: (state as { activeInteractivePrompt?: unknown }).activeInteractivePrompt ?? null,
         controlValues: state.controlValues,
         summaryMetadata: state.summaryMetadata,
     };
