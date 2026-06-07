@@ -151,7 +151,7 @@ export class SpecCliAdapter implements CliAdapter {
                 activeInteractivePrompt: this.activeInteractivePrompt,
             };
         }
-        if (/busy|generating|working|running|thinking/i.test(lc + ' ' + state.label)) {
+        if (lc === 'busy' || lc === 'generating') {
             return { status: 'generating', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
         }
         return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
@@ -301,6 +301,27 @@ export class SpecCliAdapter implements CliAdapter {
         return Promise.resolve({ ok: true, effects });
     }
     getDebugSnapshot(): unknown {
+        let screen = '';
+        let sections: Record<string, string> | undefined;
+        try {
+            screen = this.driver.snapshot();
+            const lines = screen.split('\n');
+            sections = {};
+            for (const sec of this.spec.layout?.sections ?? []) {
+                const from = (sec as any).from_top;
+                const fromBottom = (sec as any).from_bottom;
+                let start = 0;
+                let end = lines.length;
+                if (typeof from === 'number') start = Math.max(0, from);
+                else if (typeof fromBottom === 'number') start = Math.max(0, lines.length - fromBottom);
+                const until = (sec as any).until;
+                if (until && typeof until === 'object' && typeof until.section === 'string') {
+                    const ref = (this.spec.layout?.sections ?? []).find((s: any) => s.id === until.section) as any;
+                    if (ref && typeof ref.from_bottom === 'number') end = Math.max(start, lines.length - ref.from_bottom);
+                }
+                sections[(sec as any).id] = lines.slice(start, end).join('\n');
+            }
+        } catch { /* best-effort */ }
         return {
             cliType: this.cliType,
             spec_id: this.spec.id,
@@ -308,6 +329,8 @@ export class SpecCliAdapter implements CliAdapter {
             current_modal: this.latestModal,
             activeInteractivePrompt: this.activeInteractivePrompt,
             exited: this.exited,
+            screen,
+            sections,
         };
     }
     getRuntimeMetadata(): unknown {
