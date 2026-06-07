@@ -608,6 +608,166 @@ function hasUnterminalDirectDispatchLedgerEntry(meshId: string, sessionId: strin
     return false;
 }
 
+function findDirectDispatchLedgerEntry(args: {
+    meshId: string;
+    taskId: string;
+    sessionId?: string;
+}): { id: string; timestamp: string; nodeId?: string; sessionId?: string; providerType?: string; payload: Record<string, unknown> } | null {
+    const entries = readLedgerEntries(args.meshId, { tail: 500 });
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry.kind !== 'task_dispatched') continue;
+        const payloadTaskId = readNonEmptyString(entry.payload?.taskId);
+        if (payloadTaskId !== args.taskId) continue;
+        if (args.sessionId && entry.sessionId && entry.sessionId !== args.sessionId) continue;
+        return {
+            id: entry.id,
+            timestamp: entry.timestamp,
+            nodeId: entry.nodeId,
+            sessionId: entry.sessionId,
+            providerType: entry.providerType,
+            payload: entry.payload || {},
+        };
+    }
+    return null;
+}
+
+function hasTerminalLedgerAfterDispatch(args: {
+    meshId: string;
+    taskId: string;
+    sessionId?: string;
+    dispatchEntryId?: string;
+    dispatchTimestamp?: string;
+}): boolean {
+    const entries = readLedgerEntries(args.meshId, { tail: 500 });
+    let afterDispatch = !args.dispatchEntryId && !args.dispatchTimestamp;
+    const dispatchTime = args.dispatchTimestamp ? new Date(args.dispatchTimestamp).getTime() : Number.NaN;
+    for (const entry of entries) {
+        if (!afterDispatch) {
+            if (args.dispatchEntryId && entry.id === args.dispatchEntryId) {
+                afterDispatch = true;
+                continue;
+            }
+            if (!args.dispatchEntryId && Number.isFinite(dispatchTime)) {
+                const entryTime = new Date(entry.timestamp).getTime();
+                if (Number.isFinite(entryTime) && entryTime >= dispatchTime) afterDispatch = true;
+            }
+            if (!afterDispatch) continue;
+        }
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
+        const terminalTaskId = readNonEmptyString(entry.payload?.taskId);
+        if (terminalTaskId && terminalTaskId === args.taskId) return true;
+        if (terminalTaskId && terminalTaskId !== args.taskId) continue;
+        if (args.sessionId && entry.sessionId === args.sessionId) return true;
+    }
+    return false;
+}
+
+export function reconcileDirectDispatchCompletionFromTranscript(args: {
+    meshId: string;
+    nodeId?: string;
+    sessionId: string;
+    providerType?: string;
+    providerSessionId?: string;
+    taskId: string;
+    finalSummary: string;
+    transcriptMessageAt?: string;
+    completedAt?: string;
+    targetCoordinatorDaemonId?: string;
+    source?: string;
+}): { reconciled: boolean; kind?: MeshLedgerKind; alreadyTerminal?: boolean; workerResult?: unknown; ledgerEntryId?: string; reason?: string } {
+    const finalSummary = readNonEmptyString(args.finalSummary);
+    if (!args.meshId || !args.taskId || !args.sessionId || !finalSummary) {
+        return { reconciled: false, reason: 'missing_required_completion_evidence' };
+    }
+
+    const dispatch = findDirectDispatchLedgerEntry({
+        meshId: args.meshId,
+        taskId: args.taskId,
+        sessionId: args.sessionId,
+    });
+    if (hasTerminalLedgerAfterDispatch({
+        meshId: args.meshId,
+        taskId: args.taskId,
+        sessionId: args.sessionId,
+        dispatchEntryId: dispatch?.id,
+        dispatchTimestamp: dispatch?.timestamp,
+    })) {
+        return { reconciled: false, alreadyTerminal: true, reason: 'terminal_ledger_entry_exists' };
+    }
+
+    const nodeId = readNonEmptyString(args.nodeId) || dispatch?.nodeId;
+    const providerType = readNonEmptyString(args.providerType) || dispatch?.providerType || readNonEmptyString(dispatch?.payload.providerType);
+    const completedAt = args.completedAt || new Date().toISOString();
+    const evidence = buildTaskCompletionEvidence({
+        event: 'agent:generating_completed',
+        nodeId: nodeId || 'unknown',
+        sessionId: args.sessionId,
+        providerType,
+        providerSessionId: readNonEmptyString(args.providerSessionId),
+        finalSummary,
+        completedAt,
+    });
+    const workerResult = evidence.workerResult;
+    const dispatchTime = dispatch?.timestamp ? new Date(dispatch.timestamp).getTime() : Number.NaN;
+    const transcriptTime = args.transcriptMessageAt ? new Date(args.transcriptMessageAt).getTime() : Number.NaN;
+    const transcriptAfterDispatch = Number.isFinite(dispatchTime) && Number.isFinite(transcriptTime) && transcriptTime >= dispatchTime;
+    if (workerResult.source !== 'final_summary_json' && !transcriptAfterDispatch) {
+        return { reconciled: false, reason: 'transcript_not_proven_after_dispatch' };
+    }
+    const workerFailed = workerResult.status === 'failed' || (workerResult.status !== 'completed' && workerResult.errors.length > 0);
+    const kind: MeshLedgerKind = workerFailed ? 'task_failed' : 'task_completed';
+
+    const entry = appendLedgerEntry(args.meshId, {
+        kind,
+        nodeId: nodeId || undefined,
+        sessionId: args.sessionId,
+        providerType: providerType || undefined,
+        payload: {
+            event: 'agent:generating_completed',
+            source: args.source || 'direct_task_transcript_reconciliation',
+            taskId: args.taskId,
+            providerSessionId: readNonEmptyString(args.providerSessionId),
+            finalSummary,
+            workerResult,
+            completionDiagnostic: {
+                reason: 'direct_task_transcript_reconciliation',
+                dispatchEntryId: dispatch?.id,
+                dispatchTimestamp: dispatch?.timestamp,
+                transcriptMessageAt: readNonEmptyString(args.transcriptMessageAt),
+                transcriptFinalAssistantPresent: true,
+            },
+            evidence,
+        },
+    });
+    updateDirectDispatchStatus(args.meshId, args.sessionId, kind === 'task_completed' ? 'completed' : 'failed');
+    setImmediate(() => cleanupTerminalDirectDispatches());
+    queuePendingMeshCoordinatorEvent({
+        event: kind === 'task_completed' ? 'agent:generating_completed' : 'agent:stopped',
+        meshId: args.meshId,
+        nodeLabel: nodeId ? `Node '${nodeId}'` : 'Remote agent',
+        nodeId: nodeId || undefined,
+        metadataEvent: {
+            targetSessionId: args.sessionId,
+            providerType: providerType || undefined,
+            providerSessionId: readNonEmptyString(args.providerSessionId),
+            finalSummary,
+            taskId: args.taskId,
+            workerResult,
+            completionDiagnostic: {
+                reason: 'direct_task_transcript_reconciliation',
+                terminalLedgerKind: kind,
+                terminalLedgerId: entry.id,
+            },
+        },
+        coordinatorMessage: undefined,
+        queuedAt: Date.now(),
+        ...(readNonEmptyString(args.targetCoordinatorDaemonId) ? { targetCoordinatorDaemonId: readNonEmptyString(args.targetCoordinatorDaemonId) } : {}),
+    });
+
+    return { reconciled: true, kind, workerResult, ledgerEntryId: entry.id };
+}
+
 function buildLongGeneratingCompletionReconciliation(args: {
     meshId: string;
     nodeId?: string;

@@ -229,7 +229,7 @@ export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHost
 // export type { MeshGraph, MeshGraphNode, MeshGraphEdge, MeshGraphNodeType, MeshGraphEdgeType } from './mesh/mesh-visualization.js';
 
 // ── Mesh Events ──
-export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
+export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript } from './mesh/mesh-events.js';
 export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
 
 // ── Mesh P2P Relay Failure Classification ──

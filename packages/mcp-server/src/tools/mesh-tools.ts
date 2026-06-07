@@ -20,7 +20,7 @@ import { CloudTransport } from '../transports/cloud.js';
 import { IpcTransport } from '../transports/ipc.js';
 import { isLocalTransport } from '../transports/mode.js';
 import type { McpTransport } from '../transports/mode.js';
-import { compactChatPayload } from './chat-compact.js';
+import { compactChatPayload, isCoordinatorVisibleMessage, messageContent } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
@@ -48,6 +48,7 @@ import {
     normalizeMeshCapabilityTags,
     readLedgerEntries,
     readLedgerSlice,
+    reconcileDirectDispatchCompletionFromTranscript,
     requeueTask,
     validateMeshTaskModeRequest,
 } from '@adhdev/daemon-core';
@@ -650,6 +651,147 @@ function unwrapCommandPayload(value: any): any {
         current = nested;
     }
     return current;
+}
+
+function isDirectDispatchLedgerEntry(entry: any): boolean {
+    if (entry?.kind !== 'task_dispatched') return false;
+    const payload = entry.payload || {};
+    const via = readString(payload.via);
+    return payload.source === 'direct' || via === 'p2p_direct' || via === 'local_direct' || via === 'mesh_send_task';
+}
+
+function readMessageTimestampIso(message: any): string | undefined {
+    for (const value of [message?.timestamp, message?.createdAt, message?.created_at, message?.updatedAt, message?.time]) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            const ms = value > 10_000_000_000 ? value : value * 1000;
+            return new Date(ms).toISOString();
+        }
+        if (typeof value === 'string' && value.trim()) {
+            const ms = new Date(value.trim()).getTime();
+            if (Number.isFinite(ms)) return new Date(ms).toISOString();
+        }
+    }
+    return undefined;
+}
+
+function readFinalAssistantTranscriptEvidence(payload: any): { finalSummary?: string; transcriptMessageAt?: string } {
+    const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
+    const finalAssistant = [...rawMessages]
+        .reverse()
+        .filter(isCoordinatorVisibleMessage)
+        .find((message: any) => {
+            const role = String(message?.role ?? '').toLowerCase();
+            return (role === 'assistant' || role === 'agent') && messageContent(message).trim();
+        });
+    const finalSummary = messageContent(finalAssistant).trim()
+        || (typeof payload?.summary === 'string' && payload.summary.trim() ? payload.summary.trim() : undefined);
+    return {
+        finalSummary,
+        transcriptMessageAt: finalAssistant ? readMessageTimestampIso(finalAssistant) : undefined,
+    };
+}
+
+function findNodeSession(nodes: any[], nodeId?: string | null, sessionId?: string | null): { node?: any; session?: any } {
+    if (!nodeId || !sessionId) return {};
+    const node = nodes.find((candidate: any) => readString(candidate?.id) === nodeId || readString(candidate?.nodeId) === nodeId);
+    if (!node) return {};
+    const sessions = Array.isArray(node.sessions) ? node.sessions : [];
+    const session = sessions.find((candidate: any) => readSessionRecordId(candidate) === sessionId);
+    return { node, session };
+}
+
+function buildDirectDispatchReconciliationCandidates(directDispatches: any[], ledgerEntries: any[]): any[] {
+    const candidates: any[] = [];
+    const seenTaskIds = new Set<string>();
+    for (const dispatch of directDispatches || []) {
+        const taskId = readString(dispatch?.taskId);
+        if (!taskId || seenTaskIds.has(taskId)) continue;
+        seenTaskIds.add(taskId);
+        candidates.push(dispatch);
+    }
+    for (const entry of ledgerEntries || []) {
+        if (!isDirectDispatchLedgerEntry(entry)) continue;
+        const taskId = readString(entry.payload?.taskId);
+        if (!taskId || seenTaskIds.has(taskId)) continue;
+        seenTaskIds.add(taskId);
+        candidates.push({
+            taskId,
+            nodeId: entry.nodeId,
+            sessionId: entry.sessionId,
+            providerType: entry.providerType || readString(entry.payload?.providerType),
+            message: readString(entry.payload?.message),
+            dispatchedAt: entry.timestamp,
+            via: readString(entry.payload?.via),
+        });
+    }
+    return candidates;
+}
+
+async function reconcileDirectDispatchesFromTranscriptEvidence(
+    ctx: MeshContext,
+    liveNodes: any[],
+    directDispatches: any[],
+    ledgerEntries: any[],
+): Promise<{ attempted: number; reconciled: number; skipped: number }> {
+    let attempted = 0;
+    let reconciled = 0;
+    let skipped = 0;
+    const candidates = buildDirectDispatchReconciliationCandidates(directDispatches, ledgerEntries);
+    for (const dispatch of candidates) {
+        const taskId = readString(dispatch?.taskId);
+        const nodeId = readString(dispatch?.nodeId);
+        const sessionId = readString(dispatch?.sessionId);
+        if (!taskId || !nodeId || !sessionId) {
+            skipped += 1;
+            continue;
+        }
+        const { session } = findNodeSession(liveNodes, nodeId, sessionId);
+        if (!session || !isIdleSessionRecord(session)) {
+            skipped += 1;
+            continue;
+        }
+        const node = await findOptionalNodeWithRefresh(ctx, nodeId).catch(() => null);
+        if (!node) {
+            skipped += 1;
+            continue;
+        }
+        const providerType = readString(dispatch?.providerType) || resolveSessionProviderType(session);
+        const providerSessionId = readString(session?.providerSessionId)
+            || readString(session?.activeChat?.providerSessionId)
+            || readString(session?.settings?.providerSessionId)
+            || resolveMeshSessionProviderMetadata(ctx, nodeId, sessionId)?.providerSessionId;
+        attempted += 1;
+        try {
+            const readResult = await commandForNode(ctx, node, 'read_chat', {
+                sessionId,
+                targetSessionId: sessionId,
+                workspace: node.workspace,
+                ...(providerType ? { agentType: providerType, providerType } : {}),
+                ...(providerSessionId ? { providerSessionId } : {}),
+                tailLimit: 10,
+            });
+            const payload = unwrapCommandPayload(readResult);
+            if (payload?.success === false) continue;
+            const evidence = readFinalAssistantTranscriptEvidence(payload);
+            if (!evidence.finalSummary) continue;
+            const result = reconcileDirectDispatchCompletionFromTranscript({
+                meshId: ctx.mesh.id,
+                nodeId,
+                sessionId,
+                providerType,
+                providerSessionId: readString(payload?.providerSessionId) || providerSessionId,
+                taskId,
+                finalSummary: evidence.finalSummary,
+                transcriptMessageAt: evidence.transcriptMessageAt,
+                targetCoordinatorDaemonId: ctx.localDaemonId,
+                source: 'mcp_mesh_status_transcript_reconciliation',
+            });
+            if (result.reconciled) reconciled += 1;
+        } catch {
+            skipped += 1;
+        }
+    }
+    return { attempted, reconciled, skipped };
 }
 
 function isTerminalSessionRecord(session: any): boolean {
@@ -2234,7 +2376,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     await refreshMeshFromDaemon(ctx);
     const { mesh, transport } = ctx;
 
-    const ledgerSummary = getLedgerSummary(mesh.id);
+    let ledgerSummary = getLedgerSummary(mesh.id);
 
     // Probe all nodes in parallel — git_status + session collection per node are independent.
     const results = await Promise.all(mesh.nodes.map(async (node) => {
@@ -2395,11 +2537,19 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         return entry;
     }));
 
-    const ledgerEntries = readLedgerEntries(mesh.id, { tail: 200 });
+    let ledgerEntries = readLedgerEntries(mesh.id, { tail: 200 });
+    let directDispatches = getActiveDirectDispatches(mesh.id);
+    const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, results, directDispatches, ledgerEntries);
+    if (directReconciliation.reconciled > 0) {
+        ledgerEntries = readLedgerEntries(mesh.id, { tail: 200 });
+        directDispatches = getActiveDirectDispatches(mesh.id);
+        ledgerSummary = getLedgerSummary(mesh.id);
+    }
     const activeWorkEvidence = buildMeshActiveWork({
         meshId: mesh.id,
         queue: getQueue(mesh.id),
         ledgerEntries,
+        directDispatches,
         nodes: results,
     });
 
@@ -2725,10 +2875,16 @@ export async function meshViewQueue(
         const visibleSummary = buildQueueStatusSummary(queue);
         const maintenance = buildQueueMaintenanceReport(fullQueue);
         const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+        let ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
+        let directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+        const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);
+        if (directReconciliation.reconciled > 0) {
+            ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
+            directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+        }
         // Mark dispatched entries with no session activity after 30 min as stale.
         markStaleDirectDispatches(ctx.mesh.id);
-        const ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
-        const directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+        directDispatches = getActiveDirectDispatches(ctx.mesh.id);
         const activeWorkEvidence = buildMeshActiveWork({
             meshId: ctx.mesh.id,
             queue: fullQueue,

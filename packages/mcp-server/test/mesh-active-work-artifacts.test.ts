@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHistory, meshViewQueue } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, enqueueTask, getLedgerDir, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
+import { appendLedgerEntry, buildTaskCompletionEvidence, drainPendingMeshCoordinatorEvents, enqueueTask, getLedgerDir, insertDirectDispatch, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 
 function cleanupMesh(meshId: string): void {
@@ -57,6 +57,25 @@ function createRemoteCtx(meshId: string) {
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        status: {
+          sessions: [{
+            id: 'sess-direct',
+            providerType: 'hermes-cli',
+            status: 'generating',
+            settings: {
+              meshNodeFor: meshId,
+              meshNodeId: 'node-remote',
+              meshCoordinatorDaemonId: 'daemon-coordinator',
+            },
+          }],
+        },
+      };
+    }
+    if (command === 'agent_command') return { success: true };
+    if (command === 'git_status') return { success: true, status: { isGitRepo: true, isDirty: false, branch: 'feat/direct-active' } };
     throw new Error(`unexpected direct command: ${command}`);
   };
 
@@ -86,6 +105,119 @@ function createRemoteCtx(meshId: string) {
   };
 
   return { ctx: { mesh, transport, localDaemonId: 'daemon-coordinator', localMachineId: 'machine-coordinator' }, calls };
+}
+
+function createIdleTranscriptCtx(meshId: string, finalSummary: string) {
+  const assistantTimestamp = '2026-06-07T20:40:00.000Z';
+  const mesh = {
+    id: meshId,
+    name: 'Direct Transcript Completion',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [{
+      id: 'node-transcript',
+      workspace: '/tmp/transcript-repo',
+      repoRoot: '/tmp/transcript-repo',
+      daemonId: 'daemon-transcript',
+      machineId: 'machine-transcript',
+      userOverrides: {},
+      policy: { providerPriority: ['hermes-cli'] },
+      sessions: [{
+        id: 'sess-transcript',
+        providerType: 'hermes-cli',
+        status: 'idle',
+        providerSessionId: 'provider-transcript-1',
+        settings: {
+          meshNodeFor: meshId,
+          meshNodeId: 'node-transcript',
+          meshCoordinatorDaemonId: 'daemon-coordinator',
+        },
+      }],
+    }],
+  };
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId?: string; command: string; args: Record<string, unknown> }> = [];
+
+  transport.command = async (command, args = {}) => {
+    calls.push({ command, args });
+    if (command === 'get_mesh') return { success: true, mesh };
+    if (command === 'get_pending_mesh_events') {
+      return { success: true, events: drainPendingMeshCoordinatorEvents(meshId, 'daemon-coordinator') };
+    }
+    if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
+    if (command === 'get_status_metadata') {
+      return { success: true, status: { sessions: mesh.nodes[0].sessions } };
+    }
+    if (command === 'read_chat') {
+      return {
+        success: true,
+        providerSessionId: 'provider-transcript-1',
+        status: 'idle',
+        messages: [
+          { role: 'user', content: 'restore approved file', timestamp: '2026-06-07T20:37:21.000Z' },
+          { role: 'assistant', content: finalSummary, timestamp: assistantTimestamp },
+        ],
+      };
+    }
+    if (command === 'git_status') return { success: true, status: { isGitRepo: true, isDirty: false, branch: 'fix/direct-transcript' } };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'get_status_metadata') {
+      return { success: true, status: { sessions: mesh.nodes[0].sessions } };
+    }
+    if (command === 'read_chat') {
+      return {
+        success: true,
+        providerSessionId: 'provider-transcript-1',
+        status: 'idle',
+        messages: [
+          { role: 'user', content: 'restore approved file', timestamp: '2026-06-07T20:37:21.000Z' },
+          { role: 'assistant', content: finalSummary, timestamp: assistantTimestamp },
+        ],
+      };
+    }
+    if (command === 'git_status') return { success: true, status: { isGitRepo: true, isDirty: false, branch: 'fix/direct-transcript' } };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  return { ctx: { mesh, transport, localDaemonId: 'daemon-coordinator', localMachineId: 'machine-coordinator' }, calls };
+}
+
+function seedDirectTranscriptDispatch(meshId: string, taskId: string): void {
+  const dispatchedAt = '2026-06-07T20:37:21.000Z';
+  appendLedgerEntry(meshId, {
+    kind: 'task_dispatched',
+    nodeId: 'node-transcript',
+    sessionId: 'sess-transcript',
+    providerType: 'hermes-cli',
+    payload: {
+      source: 'direct',
+      via: 'mesh_send_task',
+      taskId,
+      message: 'restore approved file',
+      dispatchedToIdleSession: true,
+    },
+  });
+  insertDirectDispatch(meshId, {
+    taskId,
+    nodeId: 'node-transcript',
+    sessionId: 'sess-transcript',
+    providerType: 'hermes-cli',
+    message: 'restore approved file',
+    via: 'mesh_send_task',
+    dispatchedToIdleSession: true,
+    dispatchedAt,
+  });
 }
 
 test('direct mesh_send_task is visible as source=direct active work in status and active queue view', async () => {
@@ -134,6 +266,93 @@ test('direct mesh_send_task is visible as source=direct active work in status an
     assert.equal(activeView.pollingGuidance.eventSurface, 'pendingCoordinatorEvents');
     assert.equal(typeof activeView.pollingGuidance.doNotPollBefore, 'string');
     assert.ok(calls.some(call => call.command === 'agent_command'));
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('mesh_status reconciles idle direct dispatch completion from final transcript JSON exactly once', async () => {
+  const meshId = 'mesh-direct-transcript-status-completion-test';
+  cleanupMesh(meshId);
+  const taskId = 'direct-transcript-status-task';
+  const finalSummary = [
+    'Restored the approved file and verified the workspace is clean.',
+    '```json',
+    JSON.stringify({
+      status: 'completed',
+      changedFiles: ['packages/example/src/file.ts'],
+      gitStatus: { branch: 'fix/direct-transcript', dirty: false },
+      validationResults: [{ command: 'git status --short', status: 'passed' }],
+      errors: [],
+      nextAction: 'none',
+    }),
+    '```',
+  ].join('\n');
+  const { ctx, calls } = createIdleTranscriptCtx(meshId, finalSummary);
+
+  try {
+    seedDirectTranscriptDispatch(meshId, taskId);
+
+    const status = JSON.parse(await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true, includeTerminalDirectWork: true }));
+    assert.equal(calls.some(call => call.command === 'read_chat'), true);
+    assert.equal(status.staleDirectWork.some((entry: any) => entry.taskId === taskId), false);
+    assert.equal(status.activeWork.some((entry: any) => entry.taskId === taskId), false);
+    assert.equal(status.terminalDirectWork.some((entry: any) => entry.taskId === taskId && entry.terminalKind === 'task_completed'), true);
+    assert.equal(status.activeWorkSummary.staleDirectUnacknowledgedCount, undefined);
+    assert.equal(status.ledgerSummary.taskCompleted, 1);
+    assert.equal(status.pendingCoordinatorEvents.length, 1);
+    assert.equal(status.pendingCoordinatorEvents[0].event, 'agent:generating_completed');
+    assert.equal(status.pendingCoordinatorEvents[0].metadataEvent.taskId, taskId);
+
+    const entriesAfterFirstStatus = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed' && entry.payload?.taskId === taskId);
+    assert.equal(entriesAfterFirstStatus.length, 1);
+    assert.equal(entriesAfterFirstStatus[0].payload?.evidence?.workerResult?.source, 'final_summary_json');
+
+    const secondStatus = JSON.parse(await meshStatus(ctx as any, { includeTerminalDirectWork: true }));
+    const entriesAfterSecondStatus = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed' && entry.payload?.taskId === taskId);
+    assert.equal(entriesAfterSecondStatus.length, 1);
+    assert.equal(secondStatus.pendingCoordinatorEvents, undefined);
+    assert.equal(secondStatus.terminalDirectWork.some((entry: any) => entry.taskId === taskId && entry.terminalKind === 'task_completed'), true);
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('mesh_view_queue reconciles transcript-backed idle direct dispatch before stale unacknowledged classification', async () => {
+  const meshId = 'mesh-direct-transcript-view-queue-completion-test';
+  cleanupMesh(meshId);
+  const taskId = 'direct-transcript-view-queue-task';
+  const finalSummary = [
+    'Final investigation result.',
+    '```json',
+    JSON.stringify({
+      status: 'completed',
+      changedFiles: [],
+      validationResults: [{ command: 'npm test -- mesh-active-work-artifacts', status: 'passed' }],
+      errors: [],
+      nextAction: 'done',
+    }),
+    '```',
+  ].join('\n');
+  const { ctx } = createIdleTranscriptCtx(meshId, finalSummary);
+
+  try {
+    seedDirectTranscriptDispatch(meshId, taskId);
+
+    const activeView = JSON.parse(await meshViewQueue(ctx as any, { view: 'active' }));
+    assert.equal(activeView.staleDirectWork.some((entry: any) => entry.taskId === taskId), false);
+    assert.equal(activeView.activeWork.some((entry: any) => entry.taskId === taskId), false);
+    assert.equal(activeView.activeWorkSummary.staleDirectUnacknowledgedCount, undefined);
+
+    const terminalEntries = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed' && entry.payload?.taskId === taskId);
+    assert.equal(terminalEntries.length, 1);
+
+    const detailedStatus = JSON.parse(await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true, includeTerminalDirectWork: true }));
+    assert.equal(detailedStatus.staleDirectWork.some((entry: any) => entry.taskId === taskId), false);
+    assert.equal(detailedStatus.terminalDirectWork.some((entry: any) => entry.taskId === taskId && entry.terminalKind === 'task_completed'), true);
+
+    const terminalEntriesAfterStatus = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed' && entry.payload?.taskId === taskId);
+    assert.equal(terminalEntriesAfterStatus.length, 1);
   } finally {
     cleanupMesh(meshId);
   }
