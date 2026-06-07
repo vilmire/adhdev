@@ -312,8 +312,18 @@ export class ProviderInstanceManager {
      *  the stamp was applied. */
     attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string }): boolean {
         const inst = this.instances.get(instanceId);
-        if (!inst || typeof inst.attachMeshAssignment !== 'function') return false;
+        if (!inst || typeof inst.attachMeshAssignment !== 'function') {
+            try {
+                const { LOG } = require('../logging/logger.js');
+                LOG.warn?.('MeshDispatch', `attachMeshAssignment skipped: instance ${instanceId} ${inst ? 'has no attach method' : 'not found'}`);
+            } catch { /* noop */ }
+            return false;
+        }
         inst.attachMeshAssignment(assignment);
+        try {
+            const { LOG } = require('../logging/logger.js');
+            LOG.info?.('MeshDispatch', `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ''} task=${assignment.taskId || ''}`);
+        } catch { /* noop */ }
         return true;
     }
 

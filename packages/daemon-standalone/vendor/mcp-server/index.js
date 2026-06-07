@@ -1092,7 +1092,8 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
       agentType: resolvedProviderType,
       cliType: resolvedProviderType,
       action: "send_chat",
-      message: args.message
+      message: args.message,
+      ...args.meshContext ? { meshContext: args.meshContext } : {}
     });
     const dispatchPayload = unwrapCommandPayload(dispatchResult);
     if (dispatchPayload?.success === false || dispatchResult?.success === false) {
@@ -1724,7 +1725,9 @@ var MESH_ENQUEUE_TASK_TOOL = {
     properties: {
       message: { type: "string", description: "The task instruction for the agent." },
       task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch." },
-      taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." }
+      taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
+      requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu." },
+      required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." }
     },
     required: ["message"]
   }
@@ -2364,12 +2367,13 @@ async function meshListNodes(ctx) {
 }
 async function meshEnqueueTask(ctx, args) {
   const taskMode = readString(args.task_mode) || readString(args.taskMode);
+  const requiredTags = (0, import_daemon_core.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
   try {
-    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode });
+    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags });
     if (isLocalTransport(ctx.transport) && !(ctx.transport instanceof IpcTransport)) {
       ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
       });
-      return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode });
+      return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
     }
     if (ctx.transport instanceof IpcTransport) {
       ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
@@ -2378,6 +2382,7 @@ async function meshEnqueueTask(ctx, args) {
       for (const node of ctx.mesh.nodes) {
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (isLocalNode || !node.daemonId) continue;
+        if (!(0, import_daemon_core.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core.buildMeshNodeCapabilityTags)(node))) continue;
         dispatchPromises.push(
           ipcDispatchToRemoteAgent(ctx, node, { message: args.message }).then((result) => {
             if (result.success) {
@@ -2424,9 +2429,9 @@ async function meshEnqueueTask(ctx, args) {
       }
       Promise.all(dispatchPromises).catch(() => {
       });
-      return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode });
+      return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
     }
-    return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode });
+    return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
   } catch (e) {
     const message = e?.message || String(e);
     if (message.includes("live_debug_readonly_guardrail_violation")) {
@@ -2639,10 +2644,16 @@ async function meshSendTask(ctx, args) {
         session_id: args.session_id,
         message: args.message,
         providerType: cached?.providerType,
-        verifiedSession: explicitTargetSession
+        verifiedSession: explicitTargetSession,
+        meshContext: {
+          meshId: ctx.mesh.id,
+          nodeId: args.node_id,
+          taskId
+        }
       });
       if (result2.success) {
         const dispatchedSessionId = args.session_id || result2.sessionId;
+        const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
         try {
           const providerType = result2.providerType || cached?.providerType;
           (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
@@ -2656,6 +2667,16 @@ async function meshSendTask(ctx, args) {
               providerType,
               targetSessionId: dispatchedSessionId
             })
+          });
+          (0, import_daemon_core.insertDirectDispatch)(ctx.mesh.id, {
+            taskId,
+            nodeId: args.node_id,
+            sessionId: dispatchedSessionId,
+            providerType: providerType || void 0,
+            message: args.message,
+            taskMode: taskMode || void 0,
+            via: "p2p_direct",
+            dispatchedAt
           });
         } catch {
         }
@@ -2746,13 +2767,20 @@ async function meshSendTask(ctx, args) {
         });
       }
       const sessionWasIdle = explicitTargetSession ? isIdleSessionRecord(explicitTargetSession) : false;
+      const taskId = (0, import_node_crypto.randomUUID)();
+      const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
       const dispatchResult = await commandForNode(ctx, node, "agent_command", {
         targetSessionId: args.session_id,
         agentType: resolvedProviderType,
         cliType: resolvedProviderType,
         providerType: resolvedProviderType,
         action: "send_chat",
-        message: args.message
+        message: args.message,
+        meshContext: {
+          meshId: ctx.mesh.id,
+          nodeId: args.node_id,
+          taskId
+        }
       });
       const dispatchPayload = unwrapCommandPayload(dispatchResult);
       if (dispatchPayload?.success === false || dispatchResult?.success === false) {
@@ -2765,8 +2793,6 @@ async function meshSendTask(ctx, args) {
           error: dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task"
         });
       }
-      const taskId = (0, import_node_crypto.randomUUID)();
-      const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
       try {
         (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
           kind: "task_dispatched",
@@ -5098,7 +5124,7 @@ async function startMcpServer(opts) {
     const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {}, ...coordinatorHostname ? { coordinatorHostname } : {} };
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
     const server2 = new import_server.Server(
-      { name: "adhdev-mcp-server", version: "0.9.81" },
+      { name: "adhdev-mcp-server", version: "0.9.82" },
       { capabilities: { tools: {}, resources: {} } }
     );
     const { ListResourcesRequestSchema, ReadResourceRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");
