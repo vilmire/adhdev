@@ -102,6 +102,36 @@ const STARTUP_GRACE_MS = 2500;
  *  the post-turn idle indication noticeably. */
 const BUSY_HOLD_MS = 6000;
 
+/** Minimum delay between the prompt body and the submit_key in send_message.
+ *  Claude / antigravity specs ship without an explicit delay_ms_before_submit
+ *  and their TUIs sometimes drop the `\r` event when it arrives in the same
+ *  PTY chunk as the text body — the prompt sits visible in the input field
+ *  but is never submitted until the user hits Enter manually. 200ms matches
+ *  codex's explicit setting and is barely perceptible to a human caller. */
+const SUBMIT_DELAY_FLOOR_MS = 200;
+
+function countNewlines(s: string): number {
+    let n = 0;
+    for (let i = 0; i < s.length; i += 1) if (s.charCodeAt(i) === 10) n += 1;
+    return n;
+}
+
+/**
+ * Pick the effective delay (ms) to wait between writing the prompt body and
+ * writing the submit_key. Exported for tests; production callers go through
+ * actuallySendMessage. Floors to SUBMIT_DELAY_FLOOR_MS so specs that omit
+ * delay_ms_before_submit (e.g. claude, antigravity) still get baseline
+ * protection against the paste→submit race. Adds line-count bonus so
+ * multi-line prompts get more settling time on TUIs that re-render per
+ * embedded `\n`.
+ */
+export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text: string): number {
+    const lines = countNewlines(text);
+    const linesBonus = Math.min(800, lines * 80);
+    const spec = typeof specBeforeSubmit === 'number' && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
+    return Math.max(spec, SUBMIT_DELAY_FLOOR_MS + linesBonus);
+}
+
 export class SpecDriver {
     private spec!: CliSpec;
     private adapter!: TerminalAdapter;
@@ -371,7 +401,15 @@ export class SpecDriver {
     private actuallySendMessage(text: string): void {
         const sm = this.spec.send_message;
         const perChar = sm.delay_ms_per_char ?? 0;
-        const beforeSubmit = sm.delay_ms_before_submit ?? 0;
+        // Floor the gap between text and submit_key. Without this, claude /
+        // antigravity specs (which leave delay_ms_before_submit unset)
+        // race: text bytes and `\r` arrive back-to-back, the TUI processes
+        // the `\r` while still digesting the text input, and the prompt
+        // sits visible in the input field but never submits — the user has
+        // to press Enter manually. Scale with line count so multi-line
+        // pastes (which take longer for the TUI to render) get more
+        // settling time.
+        const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text);
         if (perChar === 0) {
             this.adapter.send_keys(text);
             if (beforeSubmit > 0) setTimeout(() => this.adapter.send_keys(sm.submit_key), beforeSubmit);
