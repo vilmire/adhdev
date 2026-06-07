@@ -1769,6 +1769,25 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                 }
             } catch { /* best-effort */ }
             if (!meshIdFromDirectDispatch) return;
+        } else {
+            // Plain session (no meshNodeFor / meshCoordinatorFor / launchedByCoordinator)
+            // that received a direct dispatch via mesh_send_task: the dispatcher logs
+            // the dispatch against the workspace-resolved mesh but never stamps the
+            // target session's settings. Without this fallback, the worker's
+            // generating_completed event silently drops here and task_completed
+            // never lands in the ledger — coordinator sees the task as still in
+            // flight forever. Resolve the mesh via workspace and accept the event
+            // when an active direct dispatch points at this session.
+            const workspaceMesh = getCachedMeshByWorkspace(workspace);
+            const workspaceMeshId = readNonEmptyString(workspaceMesh?.id);
+            if (workspaceMeshId) {
+                try {
+                    const activeDispatches = getActiveDirectDispatches(workspaceMeshId);
+                    if (activeDispatches.some(d => d.sessionId === instanceId) || hasUnterminalDirectDispatchLedgerEntry(workspaceMeshId, instanceId)) {
+                        meshIdFromDirectDispatch = workspaceMeshId;
+                    }
+                } catch { /* best-effort */ }
+            }
         }
 
         const meshIdFromRuntime = readNonEmptyString(settings.meshNodeFor) || meshIdFromDirectDispatch;
