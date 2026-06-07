@@ -101,16 +101,27 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     // otherwise look for a matching file; the session-start floor wins
     // when it's later.
     const sessionFloor = typeof input.sessionStartedAtMs === 'number' ? input.sessionStartedAtMs : 0;
+    // When multiple concurrent CLI sessions in the same workspace each create
+    // their own rollout (e.g. two codex-cli sessions both writing into
+    // ~/.codex/sessions/{date}), `newestRecentFile` picks the same file for
+    // every reader and the daemon sessions cross-alias each other. Prefer
+    // session-meta-aware matching: the candidate whose meta.cwd matches the
+    // workspace AND whose meta.timestamp is closest to (or within
+    // spawnGraceMs of) the daemon's spawn time wins. Falls back to mtime
+    // ordering when no candidate exposes a usable session_meta.
+    const workspaceHint = typeof input.workspace === 'string' && input.workspace.trim() ? input.workspace.trim() : '';
     let sourcePath: string | null = null;
     if (resolved.includes('*')) {
-        sourcePath = newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
+        sourcePath = pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint)
+            || newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
     } else {
         let stat: fs.Stats | null = null;
         try { stat = fs.statSync(resolved); } catch { /* fall through to date-walk fallback */ }
         if (stat && stat.isFile()) {
             sourcePath = resolved;
         } else if (stat && stat.isDirectory()) {
-            sourcePath = newestRecentFile(resolved, filePat, windowMs, sessionFloor);
+            sourcePath = pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint)
+                || newestRecentFile(resolved, filePat, windowMs, sessionFloor);
         }
         // Date-templated directories (e.g. ~/.codex/sessions/{yyyy}/{mm}/{dd})
         // expand to today's UTC dir. A session started before UTC midnight
@@ -119,7 +130,8 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         // or doesn't exist yet, walk the last 3 UTC days at the same depth
         // and pick the newest matching rollout across all of them.
         if (!sourcePath && hasDateTemplateSegment(src.path)) {
-            sourcePath = newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor);
+            sourcePath = pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint)
+                || newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor);
         }
     }
     if (!sourcePath) return null;
@@ -467,6 +479,161 @@ function newestRecentFile(dir: string, pattern: RegExp, windowMs: number, sessio
 
 function safeMtimeMs(p: string): number {
     try { return Math.floor(fs.statSync(p).mtimeMs); } catch { return 0; }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Per-session rollout binding
+//
+// Reads the first JSONL line of a candidate file and returns a `session_meta`
+// payload if present. Codex-cli writes
+//   {"timestamp":"...","type":"session_meta","payload":{"id":...,"cwd":...,
+//    "timestamp":"..."}}
+// as the first record. Other providers that don't follow this convention
+// return null and fall back to the mtime-based picker.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface CandidateMeta {
+    cwd?: string;
+    sessionTimestampMs?: number;
+}
+
+function readCandidateSessionMeta(filePath: string): CandidateMeta | null {
+    try {
+        // Read only the first line — meta is always the first JSONL record
+        // and full file reads here would scale O(files × file_size).
+        const fd = fs.openSync(filePath, 'r');
+        try {
+            const buf = Buffer.alloc(8192);
+            const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
+            if (bytes <= 0) return null;
+            const text = buf.subarray(0, bytes).toString('utf8');
+            const nl = text.indexOf('\n');
+            const firstLine = (nl >= 0 ? text.slice(0, nl) : text).trim();
+            if (!firstLine) return null;
+            const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+            if (String(parsed.type ?? '') !== 'session_meta') return null;
+            const payload = parsed.payload && typeof parsed.payload === 'object'
+                ? (parsed.payload as Record<string, unknown>)
+                : null;
+            if (!payload) return null;
+            const cwd = typeof payload.cwd === 'string' ? payload.cwd : undefined;
+            const tsRaw = payload.timestamp;
+            const tsMs = typeof tsRaw === 'string'
+                ? Date.parse(tsRaw)
+                : typeof tsRaw === 'number'
+                    ? (tsRaw < 1e12 ? Math.floor(tsRaw * 1000) : Math.floor(tsRaw))
+                    : NaN;
+            return {
+                cwd,
+                sessionTimestampMs: Number.isFinite(tsMs) ? tsMs : undefined,
+            };
+        } finally {
+            fs.closeSync(fd);
+        }
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Spawn-bind grace window: an on-disk rollout whose session_meta.timestamp
+ * lands within ±SPAWN_BIND_GRACE_MS of the daemon's spawnedAtMs is treated
+ * as belonging to that daemon session. 10s is long enough to absorb codex
+ * binary startup latency on cold caches and short enough that two
+ * back-to-back launches don't both fall inside the same window.
+ */
+const SPAWN_BIND_GRACE_MS = 10_000;
+
+function pickBoundFromEntries(
+    candidatePaths: string[],
+    sessionFloorMs: number,
+    workspaceHint: string,
+): string | null {
+    if (!sessionFloorMs || !workspaceHint || candidatePaths.length === 0) return null;
+    // Resolve workspaceHint to handle macOS /tmp → /private/tmp aliasing, the
+    // same way expandPath does for the template substitution. Without this
+    // the daemon's `/Users/foo/repo` and codex's `/private/Users/foo/repo`
+    // never compare equal and disambiguation silently fails.
+    let workspaceResolved = workspaceHint;
+    try { workspaceResolved = fs.realpathSync(workspaceHint); } catch { /* keep raw */ }
+    let best: { p: string; diff: number } | null = null;
+    for (const p of candidatePaths) {
+        const meta = readCandidateSessionMeta(p);
+        if (!meta || !meta.cwd || meta.sessionTimestampMs == null) continue;
+        let candidateCwd = meta.cwd;
+        try { candidateCwd = fs.realpathSync(meta.cwd); } catch { /* keep raw */ }
+        if (candidateCwd !== workspaceResolved && meta.cwd !== workspaceHint) continue;
+        const diff = Math.abs(meta.sessionTimestampMs - sessionFloorMs);
+        if (diff > SPAWN_BIND_GRACE_MS) continue;
+        if (!best || diff < best.diff) best = { p, diff };
+    }
+    return best ? best.p : null;
+}
+
+function listMatchingFiles(dir: string, pattern: RegExp): string[] {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+    const out: string[] = [];
+    for (const e of entries) {
+        if (!e.isFile() || !pattern.test(e.name)) continue;
+        out.push(path.join(dir, e.name));
+    }
+    return out;
+}
+
+function pickSessionBoundFile(
+    dir: string,
+    pattern: RegExp,
+    windowMs: number,
+    sessionFloorMs: number,
+    workspaceHint: string,
+): string | null {
+    if (!sessionFloorMs || !workspaceHint) return null;
+    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs - SPAWN_BIND_GRACE_MS);
+    const files = listMatchingFiles(dir, pattern).filter(p => safeMtimeMs(p) >= cutoff);
+    return pickBoundFromEntries(files, sessionFloorMs, workspaceHint);
+}
+
+function pickSessionBoundFileAcrossGlob(
+    template: string,
+    pattern: RegExp,
+    windowMs: number,
+    sessionFloorMs: number,
+    workspaceHint: string,
+): string | null {
+    if (!sessionFloorMs || !workspaceHint) return null;
+    const dirs = expandDirGlob(template);
+    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs - SPAWN_BIND_GRACE_MS);
+    const files: string[] = [];
+    for (const d of dirs) {
+        for (const p of listMatchingFiles(d, pattern)) {
+            if (safeMtimeMs(p) >= cutoff) files.push(p);
+        }
+    }
+    return pickBoundFromEntries(files, sessionFloorMs, workspaceHint);
+}
+
+function pickSessionBoundFileAcrossDateWindow(
+    template: string,
+    input: NativeHistoryInput,
+    pattern: RegExp,
+    windowMs: number,
+    sessionFloorMs: number,
+    workspaceHint: string,
+): string | null {
+    if (!sessionFloorMs || !workspaceHint) return null;
+    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs - SPAWN_BIND_GRACE_MS);
+    const files: string[] = [];
+    for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
+        const dayMs = sessionFloorMs - dayOffset * 24 * 60 * 60 * 1000;
+        const dayInput: NativeHistoryInput = { ...input, sessionStartedAtMs: sessionFloorMs };
+        const resolved = expandPathForDate(template, dayInput, new Date(dayMs));
+        if (!resolved) continue;
+        for (const p of listMatchingFiles(resolved, pattern)) {
+            if (safeMtimeMs(p) >= cutoff) files.push(p);
+        }
+    }
+    return pickBoundFromEntries(files, sessionFloorMs, workspaceHint);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
