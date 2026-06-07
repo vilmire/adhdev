@@ -106,11 +106,20 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         sourcePath = newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
     } else {
         let stat: fs.Stats | null = null;
-        try { stat = fs.statSync(resolved); } catch { return null; }
-        if (stat.isFile()) {
+        try { stat = fs.statSync(resolved); } catch { /* fall through to date-walk fallback */ }
+        if (stat && stat.isFile()) {
             sourcePath = resolved;
-        } else if (stat.isDirectory()) {
+        } else if (stat && stat.isDirectory()) {
             sourcePath = newestRecentFile(resolved, filePat, windowMs, sessionFloor);
+        }
+        // Date-templated directories (e.g. ~/.codex/sessions/{yyyy}/{mm}/{dd})
+        // expand to today's UTC dir. A session started before UTC midnight
+        // keeps appending to its previous-day file, so today's dir never
+        // contains the live transcript. When the templated dir is empty
+        // or doesn't exist yet, walk the last 3 UTC days at the same depth
+        // and pick the newest matching rollout across all of them.
+        if (!sourcePath && hasDateTemplateSegment(src.path)) {
+            sourcePath = newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor);
         }
     }
     if (!sourcePath) return null;
@@ -365,6 +374,80 @@ function newestRecentFileAcrossGlob(template: string, pattern: RegExp, windowMs:
         }
     }
     return best ? best.p : null;
+}
+
+function hasDateTemplateSegment(template: string): boolean {
+    return /\{yyyy\}|\{mm\}|\{dd\}/.test(template);
+}
+
+/**
+ * Walk the last N UTC days of a date-templated path (e.g.
+ * `~/.codex/sessions/{yyyy}/{mm}/{dd}`) and return the newest matching
+ * file across all of them. Codex sessions started just before UTC
+ * midnight keep writing to their original day's file even after the
+ * date rolls over, so today's expanded dir alone misses the live
+ * transcript.
+ */
+function newestRecentFileAcrossDateWindow(
+    template: string,
+    input: NativeHistoryInput,
+    pattern: RegExp,
+    windowMs: number,
+    sessionFloorMs: number,
+): string | null {
+    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
+    let best: { p: string; mtime: number } | null = null;
+    for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
+        const dayMs = Date.now() - dayOffset * 24 * 60 * 60 * 1000;
+        const dayInput: NativeHistoryInput = { ...input, sessionStartedAtMs: sessionFloorMs };
+        const resolved = expandPathForDate(template, dayInput, new Date(dayMs));
+        if (!resolved) continue;
+        let entries: fs.Dirent[];
+        try { entries = fs.readdirSync(resolved, { withFileTypes: true }); } catch { continue; }
+        for (const e of entries) {
+            if (!e.isFile() || !pattern.test(e.name)) continue;
+            const p = path.join(resolved, e.name);
+            const mtime = safeMtimeMs(p);
+            if (mtime < cutoff) continue;
+            if (!best || mtime > best.mtime) best = { p, mtime };
+        }
+    }
+    return best ? best.p : null;
+}
+
+function expandPathForDate(template: string, input: NativeHistoryInput, day: Date): string | null {
+    // Reuse expandPath logic but stamp {yyyy}/{mm}/{dd} from the given day.
+    if (!template) return null;
+    let out = template;
+    if (out.startsWith('~/') || out === '~') {
+        out = path.join(os.homedir(), out.slice(2));
+    }
+    out = out.replace(/\$\{([A-Z_][A-Z0-9_]*)(?::-(.*?))?\}/g, (_m, name, fallback) => {
+        const v = input.envOverrides?.[name] ?? process.env[name];
+        return v != null && v !== '' ? v : (fallback ?? '');
+    });
+    if (out.startsWith('~/')) out = path.join(os.homedir(), out.slice(2));
+    const workspaceRaw = input.workspace ?? '';
+    let workspaceResolved = workspaceRaw;
+    if (workspaceRaw) {
+        try { workspaceResolved = fs.realpathSync(workspaceRaw); } catch { /* keep raw */ }
+    }
+    const vars: Record<string, string> = {
+        cwd: workspaceResolved,
+        cwd_dashed: workspaceResolved.replace(/\//g, '-'),
+        session_id: input.providerSessionId || input.sessionId || input.historySessionId || '',
+        yyyy: String(day.getUTCFullYear()),
+        mm: String(day.getUTCMonth() + 1).padStart(2, '0'),
+        dd: String(day.getUTCDate()).padStart(2, '0'),
+    };
+    let missing = false;
+    out = out.replace(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (_m, name) => {
+        const v = vars[name] ?? '';
+        if (!v) missing = true;
+        return v;
+    });
+    if (missing) return null;
+    return out;
 }
 
 function newestRecentFile(dir: string, pattern: RegExp, windowMs: number, sessionFloorMs = 0): string | null {
