@@ -4852,6 +4852,13 @@ export class DaemonCommandRouter {
                         ...(role ? { role } : {}),
                     });
                     if (!node) return { success: false, error: 'Mesh not found' };
+                    // mesh_status hands back a coordinator-memory aggregate
+                    // snapshot keyed on (meshId, queueRevision). Adding a
+                    // node touches neither, so without an explicit cache
+                    // bust the dashboard graph keeps rendering the pre-add
+                    // node list (empty for a fresh mesh) even after the
+                    // user clicks Refresh.
+                    this.invalidateAggregateMeshStatus(meshId);
                     return { success: true, node };
                 } catch (e: any) {
                     return { success: false, error: e.message };
