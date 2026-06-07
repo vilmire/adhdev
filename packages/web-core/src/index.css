@@ -34,6 +34,9 @@
 
     --color-accent: var(--accent-primary);
     --color-accent-light: var(--accent-primary-light);
+    --color-accent-primary: var(--accent-primary);
+    --color-accent-primary-light: var(--accent-primary-light);
+    --color-accent-on-primary: var(--accent-on-primary);
     --color-accent-secondary: var(--accent-secondary);
 
     --color-status-online: var(--status-online);

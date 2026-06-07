@@ -54,7 +54,7 @@ function OptionButton({
     >
       <span className="flex items-start gap-2">
         <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
-          selected ? 'border-accent-primary bg-accent-primary text-white' : 'border-border-secondary'
+          selected ? 'border-accent-primary bg-accent-primary text-accent-on-primary' : 'border-border-secondary'
         }`}>
           {selected ? <IconCheckCircle size={12} /> : null}
         </span>
