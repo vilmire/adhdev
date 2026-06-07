@@ -1,10 +1,5 @@
 export type CompactChatMessage = Record<string, any>;
 
-function isAssistantLike(message: any): boolean {
-  const role = String(message?.role ?? '').toLowerCase();
-  return role === 'assistant' || role === 'agent';
-}
-
 export function messageContent(message: any): string {
   const content = message?.content;
   if (typeof content === 'string') return content;
@@ -29,15 +24,7 @@ export function buildCompactMessageTail(
   visibleMessages: CompactChatMessage[],
   opts: { summary?: string; finalAssistant?: CompactChatMessage | undefined; limit: number },
 ): CompactChatMessage[] {
-  const summary = typeof opts.summary === 'string' ? opts.summary.trim() : '';
-  const shouldOmitSummaryMessage = !!summary
-    && !!opts.finalAssistant
-    && isAssistantLike(opts.finalAssistant)
-    && messageContent(opts.finalAssistant).trim() === summary;
-  const sourceMessages = shouldOmitSummaryMessage
-    ? visibleMessages.filter((message) => message !== opts.finalAssistant)
-    : visibleMessages;
-  return sourceMessages.slice(-opts.limit);
+  return visibleMessages.slice(-opts.limit);
 }
 
 export function compactChatPayload(

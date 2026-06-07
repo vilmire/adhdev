@@ -2030,9 +2030,10 @@ test('mesh_read_chat compact mode filters tool/internal chatter and returns the 
 
   assert.equal(payload.compact, true);
   assert.equal(payload.totalMessages, 5);
-  assert.equal(payload.messages.length, 1);
+  assert.equal(payload.messages.length, 2);
   assert.deepEqual(payload.messages.map((m: any) => m.content), [
     'do the task',
+    'Final summary: implemented V1 and tests pass',
   ]);
   assert.equal(payload.summary, 'Final summary: implemented V1 and tests pass');
 });
@@ -2081,7 +2082,8 @@ test('mesh_read_chat compact removed-node recovery returns ledger summary withou
   assert.equal(payload.success, true);
   assert.equal(payload.recoveredFromLedger, true);
   assert.equal(payload.summary, longSummary);
-  assert.deepEqual(payload.messages, []);
+  assert.equal(payload.messages.length, 1);
+  assert.equal(payload.messages[0].content, longSummary);
   assert.equal(payload.providerSessionId, 'provider-finished');
 });
 

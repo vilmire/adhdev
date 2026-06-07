@@ -41,7 +41,7 @@ test('readChat compact json filters tool terminal and internal messages', async 
   assert.equal(parsed.summary, 'Final summary only');
   assert.deepEqual(
     parsed.messages.map((message: { content: string }) => message.content),
-    ['please summarize'],
+    ['please summarize', 'Final summary only'],
   );
 });
 

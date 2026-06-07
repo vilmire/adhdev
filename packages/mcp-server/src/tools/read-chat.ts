@@ -100,11 +100,17 @@ function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'js
   }
 
   if ((format === 'text' || format === undefined) && compact && compactPayload) {
-    const lines = outputMessages.slice(-limit).map((m: any) => {
+    const summaryText = typeof compactPayload.summary === 'string' ? compactPayload.summary.trim() : '';
+    const tail = outputMessages.slice(-limit);
+    const lastIndex = tail.length - 1;
+    const lines = tail.flatMap((m: any, idx: number) => {
       const role = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Agent' : m.role;
       const content = messageContent(m);
+      if (idx === lastIndex && (role === 'Agent' || m.role === 'agent') && summaryText && content.trim() === summaryText) {
+        return [];
+      }
       const truncated = content.length > 500 ? `${content.slice(0, 500)}…` : content;
-      return `[${role}] ${truncated}`;
+      return [`[${role}] ${truncated}`];
     });
     if (compactPayload.summary) {
       const truncatedSummary = compactPayload.summary.length > 500
