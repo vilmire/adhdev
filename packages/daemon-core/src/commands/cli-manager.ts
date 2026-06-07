@@ -1272,6 +1272,22 @@ export class DaemonCliManager {
                     } else if (currentStatus === 'starting') {
                         currentStatus = getEffectiveAgentSendStatus(adapter);
                     }
+                    // Stamp mesh direct-dispatch assignment on the target
+                    // instance BEFORE sending the prompt so the completion
+                    // event has a routing marker by the time it fires.
+                    // mesh_send_task --direct ships meshContext for plain CLI
+                    // sessions that were never launched as mesh delegates.
+                    const meshContext = (args as any)?.meshContext;
+                    if (meshContext && typeof meshContext === 'object' && typeof meshContext.meshId === 'string' && meshContext.meshId) {
+                        const targetInstanceId = key;
+                        try {
+                            this.deps.getInstanceManager()?.attachMeshAssignmentToInstance(targetInstanceId, {
+                                meshId: meshContext.meshId,
+                                ...(typeof meshContext.nodeId === 'string' && meshContext.nodeId ? { nodeId: meshContext.nodeId } : {}),
+                                ...(typeof meshContext.taskId === 'string' && meshContext.taskId ? { taskId: meshContext.taskId } : {}),
+                            });
+                        } catch { /* best-effort */ }
+                    }
                     const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
                     const provider = this.providerLoader.resolve(agentType) || this.providerLoader.getMeta(agentType);
                     if (provider?.category === 'acp') {

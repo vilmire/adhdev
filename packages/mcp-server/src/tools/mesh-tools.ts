@@ -943,7 +943,7 @@ function buildCoordinatorP2pRelayFailure(
 async function ipcDispatchToRemoteAgent(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
-    args: { session_id?: string; message: string; providerType?: string; verifiedSession?: any },
+    args: { session_id?: string; message: string; providerType?: string; verifiedSession?: any; meshContext?: { meshId: string; nodeId?: string; taskId?: string } },
 ): Promise<RemoteAgentDispatchResult> {
     const transport = ctx.transport as IpcTransport;
     const daemonId = node.daemonId!;
@@ -1049,6 +1049,7 @@ async function ipcDispatchToRemoteAgent(
             cliType: resolvedProviderType,
             action: 'send_chat',
             message: args.message,
+            ...(args.meshContext ? { meshContext: args.meshContext } : {}),
         });
         const dispatchPayload = unwrapCommandPayload(dispatchResult);
         if (dispatchPayload?.success === false || dispatchResult?.success === false) {
@@ -2972,6 +2973,11 @@ export async function meshSendTask(
                 message: args.message,
                 providerType: cached?.providerType,
                 verifiedSession: explicitTargetSession,
+                meshContext: {
+                    meshId: ctx.mesh.id,
+                    nodeId: args.node_id,
+                    taskId,
+                },
             });
             if (result.success) {
                 // Record dispatch in ledger so task_history is accurate
@@ -3103,6 +3109,15 @@ export async function meshSendTask(
             const sessionWasIdle = explicitTargetSession
                 ? isIdleSessionRecord(explicitTargetSession)
                 : false;
+            const taskId = randomUUID();
+            const dispatchedAt = new Date().toISOString();
+            // Stamp the mesh assignment via meshContext so the daemon can
+            // attach it to the target instance BEFORE prompt injection.
+            // setupMeshEventForwarding reads state.settings.meshNodeFor +
+            // meshActiveTaskId to route completion events back. Without
+            // this, plain CLI sessions targeted by mesh_send_task --direct
+            // would silently drop generating_completed and the coordinator
+            // would never observe task_completed.
             const dispatchResult = await commandForNode(ctx, node, 'agent_command', {
                 targetSessionId: args.session_id,
                 agentType: resolvedProviderType,
@@ -3110,6 +3125,11 @@ export async function meshSendTask(
                 providerType: resolvedProviderType,
                 action: 'send_chat',
                 message: args.message,
+                meshContext: {
+                    meshId: ctx.mesh.id,
+                    nodeId: args.node_id,
+                    taskId,
+                },
             });
             const dispatchPayload = unwrapCommandPayload(dispatchResult);
             if (dispatchPayload?.success === false || dispatchResult?.success === false) {
@@ -3122,8 +3142,6 @@ export async function meshSendTask(
                     error: dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task',
                 });
             }
-            const taskId = randomUUID();
-            const dispatchedAt = new Date().toISOString();
             try {
                 appendLedgerEntry(ctx.mesh.id, {
                     kind: 'task_dispatched',

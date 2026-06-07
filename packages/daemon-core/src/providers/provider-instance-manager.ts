@@ -306,6 +306,26 @@ export class ProviderInstanceManager {
         return updated;
     }
 
+    /** Stamp a mesh assignment on a single instance (used by mesh_send_task
+     *  --direct so the worker's completion event has a coordinator routing
+     *  marker in state.settings). Returns true if the instance existed and
+     *  the stamp was applied. */
+    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string }): boolean {
+        const inst = this.instances.get(instanceId);
+        if (!inst || typeof inst.attachMeshAssignment !== 'function') return false;
+        inst.attachMeshAssignment(assignment);
+        return true;
+    }
+
+    /** Clear a mesh assignment after the dispatched task reaches a terminal
+     *  state (generating_completed / stopped / failed). */
+    detachMeshAssignmentFromInstance(instanceId: string): boolean {
+        const inst = this.instances.get(instanceId);
+        if (!inst || typeof inst.detachMeshAssignment !== 'function') return false;
+        inst.detachMeshAssignment();
+        return true;
+    }
+
     refreshProviderDefinitions(resolveProvider: (providerType: string) => unknown): number {
         let refreshed = 0;
         for (const instance of this.instances.values()) {

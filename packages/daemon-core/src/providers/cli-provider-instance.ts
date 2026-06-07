@@ -86,6 +86,15 @@ type ExternalTranscriptProbe = {
 const COMPLETED_FINALIZATION_RETRY_MS = 1000;
 const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
 
+/** Events that signal a dispatched mesh task has reached a terminal state.
+ *  Detach the mesh assignment after emitting one of these so the worker's
+ *  next unrelated turn doesn't impersonate another completion. */
+const TERMINAL_MESH_EVENTS = new Set([
+    'agent:generating_completed',
+    'agent:stopped',
+    'agent:ready',
+]);
+
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
     'image/png': '.png',
     'image/jpeg': '.jpg',
@@ -780,6 +789,39 @@ export class CliProviderInstance implements ProviderInstance {
             longGeneratingAlert: this.settings.longGeneratingAlert !== false,
             longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
         });
+    }
+
+    /**
+     * Stamp a direct-dispatch mesh assignment on this instance.
+     * setupMeshEventForwarding reads settings.meshNodeFor + meshActiveTaskId to
+     * route generating_completed back to the originating coordinator. Without
+     * this stamp, mesh_send_task --direct targets a plain CLI session whose
+     * completion events silently drop because the forwarder has nothing to
+     * match against.
+     */
+    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string }): void {
+        if (!assignment?.meshId) return;
+        this.settings = {
+            ...this.settings,
+            meshNodeFor: assignment.meshId,
+            ...(assignment.nodeId ? { meshNodeId: assignment.nodeId } : {}),
+            ...(assignment.taskId ? { meshActiveTaskId: assignment.taskId } : {}),
+        };
+        this.adapter.updateRuntimeSettings?.(this.settings);
+    }
+
+    /**
+     * Clear a previously-attached mesh assignment after the task reaches a
+     * terminal state. Leaving meshNodeFor pinned would route this session's
+     * subsequent unrelated turns (e.g. ad-hoc dashboard chats) to the
+     * coordinator as if they were task completions.
+     */
+    detachMeshAssignment(): void {
+        if (!this.settings.meshNodeFor && !this.settings.meshActiveTaskId && !this.settings.meshNodeId) return;
+        const { meshNodeFor, meshNodeId, meshActiveTaskId, ...rest } = this.settings;
+        void meshNodeFor; void meshNodeId; void meshActiveTaskId;
+        this.settings = rest;
+        this.adapter.updateRuntimeSettings?.(this.settings);
     }
 
     onEvent(event: string, data?: any): void {
@@ -1513,9 +1555,18 @@ export class CliProviderInstance implements ProviderInstance {
         };
         if (this.context?.emitProviderEvent) {
             this.context.emitProviderEvent(enrichedEvent);
-            return;
+        } else {
+            this.events.push(enrichedEvent);
         }
-        this.events.push(enrichedEvent);
+        // Auto-detach a direct-dispatch mesh assignment once the dispatched
+        // task reaches a terminal state. Leaving meshNodeFor pinned would
+        // route this session's next unrelated turn (a dashboard chat) into
+        // the coordinator as if it were the completion of another task.
+        // We schedule after the emit so the originating coordinator still
+        // observes the completion event with its routing marker intact.
+        if (TERMINAL_MESH_EVENTS.has(event.event) && this.settings.meshActiveTaskId) {
+            try { this.detachMeshAssignment(); } catch { /* best-effort */ }
+        }
     }
 
     private flushEvents(): ProviderEvent[] {
