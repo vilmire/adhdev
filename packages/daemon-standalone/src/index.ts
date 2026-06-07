@@ -2343,6 +2343,39 @@ class StandaloneServer {
 // ─── CLI ───
 
 async function main(): Promise<void> {
+  // Isolate standalone state from the cloud `adhdev daemon` running on the
+  // same machine. Without this, both processes would share
+  // ~/.adhdev/mesh-ledger/ (pending events, beads-db, etc.) and a worker on
+  // the standalone process would queue completion events in a file the cloud
+  // coordinator never drains — completion events silently disappear from the
+  // coordinator's chat. Honor an explicit ADHDEV_CONFIG_DIR so power users can
+  // still point both processes at a shared dir on purpose; default to a
+  // dedicated `~/.adhdev-standalone` otherwise. Set BEFORE any module that
+  // reads getConfigDir() at import time has a chance to cache the location.
+  if (!process.env.ADHDEV_CONFIG_DIR || !process.env.ADHDEV_CONFIG_DIR.trim()) {
+    process.env.ADHDEV_CONFIG_DIR = path.join(os.homedir(), '.adhdev-standalone');
+  }
+
+  // One-time non-destructive migration hint: if the new isolated dir is empty
+  // but the legacy shared dir holds mesh state, point the user at a manual
+  // copy. We don't auto-move because the cloud daemon may still be using it.
+  try {
+    const isolatedDir = process.env.ADHDEV_CONFIG_DIR;
+    const legacyLedger = path.join(os.homedir(), '.adhdev', 'mesh-ledger');
+    const isolatedExists = fs.existsSync(isolatedDir);
+    const isolatedEmpty = !isolatedExists
+      || fs.readdirSync(isolatedDir).filter(name => name !== '.DS_Store').length === 0;
+    const legacyHasLedger = fs.existsSync(legacyLedger)
+      && fs.readdirSync(legacyLedger).some(name => name.endsWith('.jsonl'));
+    if (isolatedEmpty && legacyHasLedger) {
+      const line = 'ℹ standalone now stores its state under ' + isolatedDir
+        + '. If you want to carry over prior mesh ledger from ~/.adhdev/mesh-ledger,'
+        + ' copy ~/.adhdev/mesh-ledger to ' + path.join(isolatedDir, 'mesh-ledger')
+        + ' once and restart. (Set ADHDEV_CONFIG_DIR=~/.adhdev to keep the legacy location.)';
+      process.stderr.write(line + '\n');
+    }
+  } catch { /* best-effort hint */ }
+
   const helperMode = await maybeRunDaemonUpgradeHelperFromEnv();
   if (helperMode) {
     return;
