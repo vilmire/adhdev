@@ -222,6 +222,41 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     })).toEqual(['\r', '\r', '\r']);
   });
 
+  it('captures the headerless picker variant where ☐ marker prefixes the question line', () => {
+    // claude-cli >=2.1 ships a compact variant where the section header and
+    // the question share one line (e.g. "☐ RPS R1 1라운드 — 가위바위보!").
+    // The pre-fix parser unconditionally skipped every ☐/☒ line walking up
+    // from the options, returned null, and the dashboard never showed the
+    // picker UI. Pin the new behaviour: strip the marker, keep the text.
+    const screen = [
+      '☐ RPS R1 1라운드 — 가위바위보! 무엇을 내시겠어요?',
+      '❯ 1. 가위 ✌     보를 이기고 바위에 집니다',
+      '  2. 바위 ✊     가위를 이기고 보에 집니다',
+      '  3. 보 ✋     바위를 이기고 가위에 집니다',
+      '  4. Type something.',
+      '────────────────────────────────────────────────',
+      '  5. Chat about thisEnter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'rps-tui-prompt', createdAt: 1234 });
+
+    expect(prompt?.questions).toHaveLength(1);
+    expect(prompt?.questions[0]).toMatchObject({
+      questionId: 'q1',
+      question: 'RPS R1 1라운드 — 가위바위보! 무엇을 내시겠어요?',
+      multiSelect: false,
+      options: [
+        { label: '가위 ✌     보를 이기고 바위에 집니다' },
+        { label: '바위 ✊     가위를 이기고 보에 집니다' },
+        { label: '보 ✋     바위를 이기고 가위에 집니다' },
+        { label: 'Type something.' },
+      ],
+      allowFreeform: true,
+    });
+  });
+
   it('captures Claude v2.1 single-question numbered-choice screens without submit headers', () => {
     const screen = [
       '▗ ▗   ▖ ▖  Claude Code v2.1.153',
