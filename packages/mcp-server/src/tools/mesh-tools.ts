@@ -794,6 +794,55 @@ async function reconcileDirectDispatchesFromTranscriptEvidence(
     return { attempted, reconciled, skipped };
 }
 
+async function triggerMeshQueueAndReport(
+    ctx: MeshContext,
+    node?: LocalMeshNodeEntry,
+    opts?: { localNode?: boolean },
+): Promise<Record<string, unknown> | undefined> {
+    if (!(isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport)) return undefined;
+    try {
+        let raw: any;
+        if (ctx.transport instanceof IpcTransport && node?.daemonId && opts?.localNode === false) {
+            raw = await ctx.transport.meshCommand(node.daemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id });
+        } else if (isLocalTransport(ctx.transport)) {
+            raw = await ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id });
+        } else {
+            return undefined;
+        }
+        const payload = unwrapCommandPayload(raw);
+        const trigger = payload?.trigger && typeof payload.trigger === 'object' ? payload.trigger : payload;
+        return trigger && typeof trigger === 'object' ? trigger : { success: true };
+    } catch (e: any) {
+        return {
+            success: false,
+            error: e?.message || String(e),
+        };
+    }
+}
+
+function buildQueueTriggerGuidance(queueTrigger: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+    if (!queueTrigger || queueTrigger.claimed === true) return undefined;
+    if (queueTrigger.success === false) {
+        return {
+            queueClaimed: false,
+            queueDispatchState: 'trigger_failed',
+            nextAction: 'Do not assume the queued task is running. Check mesh_view_queue and daemon connectivity before redispatching.',
+        };
+    }
+    if (queueTrigger.noIdleMeshSessionAvailable === true) {
+        return {
+            queueClaimed: false,
+            queueDispatchState: 'pending_no_idle_mesh_session',
+            nextAction: 'The task is queued but not running. Launch a managed worker with mesh_launch_session, or wait for a delegated session to become ready and trigger the queue again.',
+        };
+    }
+    return {
+        queueClaimed: false,
+        queueDispatchState: 'pending_or_waiting_for_ready',
+        nextAction: 'The task is queued but this trigger did not claim it. Use mesh_view_queue for the current active-work source of truth before retrying.',
+    };
+}
+
 function isTerminalSessionRecord(session: any): boolean {
     const status = typeof session?.status === 'string' ? session.status.toLowerCase() : '';
     const lifecycle = typeof session?.lifecycle === 'string' ? session.lifecycle.toLowerCase() : '';
@@ -812,18 +861,31 @@ function isMeshOwnedDelegateSession(session: any, meshId: string, nodeId: string
     const settings = session?.settings;
     const sessionMeshId = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
     const sessionNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
-    // meshNodeFor is the primary ownership signal. meshCoordinatorDaemonId is required for
-    // relay safety on remote nodes but NOT for local ownership matching — older coordinator
-    // versions may have launched sessions without it. Allow those sessions as mesh-owned delegates.
+    // meshNodeFor is the primary ownership signal. Relay safety is checked separately
+    // for remote dispatch because older local delegates may not carry coordinator
+    // daemon metadata.
     if (sessionMeshId !== meshId) return false;
     return !sessionNodeId || sessionNodeId === nodeId;
+}
+
+function hasRemoteRelayMetadata(session: any): boolean {
+    return Boolean(
+        readString(session?.settings?.meshCoordinatorDaemonId)
+        || readString(session?.meta?.meshCoordinatorDaemonId)
+        || readString(session?.metadata?.meshCoordinatorDaemonId)
+        || readString(session?.meshCoordinatorDaemonId),
+    );
+}
+
+function isRelaySafeRemoteDelegateSession(session: any, meshId: string, nodeId: string): boolean {
+    return isMeshOwnedDelegateSession(session, meshId, nodeId) && hasRemoteRelayMetadata(session);
 }
 
 function chooseDispatchableSession(sessions: any[], providerType: string, meshId: string, nodeId: string): any | undefined {
     const live = sessions.filter(session => !isTerminalSessionRecord(session));
     const matchingProvider = (session: any) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
     const meshSessions = live.filter((session: any) =>
-        isMeshOwnedDelegateSession(session, meshId, nodeId)
+        isRelaySafeRemoteDelegateSession(session, meshId, nodeId)
     );
     return meshSessions.find(session => isIdleSessionRecord(session) && matchingProvider(session))
         || meshSessions.find(matchingProvider)
@@ -1102,7 +1164,7 @@ async function ipcDispatchToRemoteAgent(
     // relay-safe mesh-owned worker before we dispatch into it.
     if (sessionId && args.verifiedSession) {
         const explicitSession = args.verifiedSession;
-        if (!isMeshOwnedDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
+        if (!isRelaySafeRemoteDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
             return buildRelayUnsafeRemoteSessionFailure(
                 ctx,
                 node,
@@ -1138,7 +1200,7 @@ async function ipcDispatchToRemoteAgent(
                         nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ''}) or retry without session_id so Repo Mesh can target a live delegate session.`,
                     };
                 }
-                if (!isMeshOwnedDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
+                if (!isRelaySafeRemoteDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
                     return buildRelayUnsafeRemoteSessionFailure(
                         ctx,
                         node,
@@ -1362,8 +1424,10 @@ function buildNodeMachineIdentity(ctx: MeshContext, node: LocalMeshNodeEntry): R
 function nodeHasLocalDaemonEvidence(ctx: MeshContext, node: any): boolean {
     const isLocal = (session: any) => {
         if (!session || typeof session !== 'object') return false;
-        if (ctx.localDaemonId && session.settings?.meshCoordinatorDaemonId === ctx.localDaemonId) return true;
-        if (session.launchedByCoordinator === true) return true;
+        // meshCoordinatorDaemonId identifies where a worker should relay completion events.
+        // Remote workers also point this at the local coordinator, so it is not locality evidence.
+        // Likewise launchedByCoordinator only proves the coordinator created the session, not
+        // that the session is running on this daemon.
         if (ctx.localDaemonId && session.runtime?.owner === ctx.localDaemonId) return true;
         if (ctx.localDaemonId && session.daemonClient?.daemonId === ctx.localDaemonId) return true;
         return false;
@@ -2781,8 +2845,17 @@ export async function meshEnqueueTask(
 
         // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
         if (isLocalTransport(ctx.transport) && !(ctx.transport instanceof IpcTransport)) {
-            ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-            return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
+            const queueTrigger = await triggerMeshQueueAndReport(ctx);
+            return JSON.stringify({
+                success: true,
+                source: 'queue',
+                taskId: task.id,
+                status: task.status,
+                taskMode: task.taskMode,
+                requiredTags: task.requiredTags,
+                queueTrigger,
+                ...buildQueueTriggerGuidance(queueTrigger),
+            });
         }
 
         // ── IpcTransport (Cloud Mesh): the queue file lives on THIS machine only.
@@ -2791,7 +2864,7 @@ export async function meshEnqueueTask(
         //    directly P2P-dispatch to the first idle session found (enqueue-and-push).
         if (ctx.transport instanceof IpcTransport) {
             // 1. Trigger local queue for local node pick-up
-            ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
+            const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
             // 2. For each remote node, directly dispatch to an idle session via P2P
             const dispatchPromises: Promise<void>[] = [];
@@ -2847,7 +2920,16 @@ export async function meshEnqueueTask(
             // Fire-and-forget — don't block the coordinator response
             Promise.all(dispatchPromises).catch(() => {});
 
-            return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
+            return JSON.stringify({
+                success: true,
+                source: 'queue',
+                taskId: task.id,
+                status: task.status,
+                taskMode: task.taskMode,
+                requiredTags: task.requiredTags,
+                queueTrigger,
+                ...buildQueueTriggerGuidance(queueTrigger),
+            });
         }
 
         // ── CloudTransport fallback ───────────────────────────────────────────────
@@ -2926,6 +3008,15 @@ export async function meshViewQueue(
             activeWorkSummary: activeWorkEvidence.summary,
             ...(pollingGuidance ? { pollingGuidance } : {}),
             summary,
+            visibleSummary,
+            activeCounts: summary.activeCounts,
+            historicalCounts: summary.historicalCounts,
+            visibleActiveCounts: visibleSummary.activeCounts,
+            visibleHistoricalCounts: visibleSummary.historicalCounts,
+            activeCount: summary.activeCount,
+            historicalCount: summary.historicalCount,
+            visibleActiveCount: visibleSummary.activeCount,
+            visibleHistoricalCount: visibleSummary.historicalCount,
             staleAssignedTasks,
             staleAssignedCount: (maintenance as any).staleAssignedCount,
             queueMaintenance: maintenance,
@@ -3348,16 +3439,25 @@ export async function meshSendTask(
             taskMode,
         });
 
-        if (isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport) {
-            ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-        }
+        const queueTrigger = isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport
+            ? await triggerMeshQueueAndReport(ctx)
+            : undefined;
 
         // Also drain any pending coordinator events so the caller sees them inline
         const pendingEvents = isLocalTransport(ctx.transport)
             ? drainPendingMeshCoordinatorEvents(ctx.mesh.id, ctx.localDaemonId)
             : [];
 
-        const result: Record<string, unknown> = { success: true, source: 'queue', nodeId: args.node_id, taskId: task.id, status: task.status, taskMode: task.taskMode };
+        const result: Record<string, unknown> = {
+            success: true,
+            source: 'queue',
+            nodeId: args.node_id,
+            taskId: task.id,
+            status: task.status,
+            taskMode: task.taskMode,
+            queueTrigger,
+            ...buildQueueTriggerGuidance(queueTrigger),
+        };
         if (pendingEvents.length > 0) {
             result.pendingCoordinatorEvents = pendingEvents;
         }
@@ -3564,17 +3664,17 @@ export async function meshLaunchSession(
             });
         } catch { /* ledger append is best-effort */ }
 
-        // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks
-        if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
-            ctx.transport.meshCommand(node.daemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-        } else if (isLocalTransport(ctx.transport)) {
-            ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-        }
+        // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks.
+        // Surface the trigger result so coordinators can distinguish "session launched"
+        // from "queued work actually claimed by that session".
+        const queueTrigger = await triggerMeshQueueAndReport(ctx, node, { localNode: isLocalNode });
 
         return JSON.stringify({
             ...launchPayload,
             resolvedProviderType,
             ...(providerSessionId ? { providerSessionId } : {}),
+            queueTrigger,
+            ...buildQueueTriggerGuidance(queueTrigger),
         }, null, 2);
     } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
         let resolvedProviderType = typeof args.type === 'string' && args.type.trim() ? args.type : '';

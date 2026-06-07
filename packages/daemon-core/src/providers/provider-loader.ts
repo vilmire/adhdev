@@ -36,6 +36,9 @@ import {
 } from './external-sources.js';
 import type { ProviderSourceMode } from '../config/config.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
+import { loadSpec } from './spec/loader.js';
+import { executeNativeHistory } from './spec/native-history-executor.js';
+import { createNativeHistoryDispatcher, type ReaderId } from './native-history/dispatcher.js';
 
 /**
  * Adds a provider-script root to the require whitelist. Wrapped in a
@@ -1244,8 +1247,6 @@ export class ProviderLoader {
           // Hand the resolved spec path off to route.ts via a hidden field
           // so the routing layer doesn't have to repeat the candidate walk.
           (resolved as any)._resolvedSpecPath = specPath;
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const { loadSpec } = require('./spec/loader.js');
           const r = loadSpec(specPath);
           // Stub each control_bar entry as a provider.scripts.<id>. The
           // upstream invoke_provider_script gate checks that the script
@@ -1274,8 +1275,6 @@ export class ProviderLoader {
             let format = 'spec';
 
             if (nh.source) {
-              // eslint-disable-next-line @typescript-eslint/no-var-requires
-              const { executeNativeHistory } = require('./spec/native-history-executor.js');
               format = `spec-${nh.source.kind}`;
               reader = (input: any) => executeNativeHistory(nh, input);
             } else if (nh.override_path) {
@@ -1294,9 +1293,7 @@ export class ProviderLoader {
                 } catch { /* fall through — leave native unavailable */ }
               }
             } else if (nh.reader) {
-              // eslint-disable-next-line @typescript-eslint/no-var-requires
-              const { createNativeHistoryDispatcher } = require('./native-history/dispatcher.js');
-              const dispatch = createNativeHistoryDispatcher(nh.reader);
+              const dispatch = createNativeHistoryDispatcher(nh.reader as ReaderId);
               format = nh.reader;
               reader = (input: any) => dispatch(input);
             }

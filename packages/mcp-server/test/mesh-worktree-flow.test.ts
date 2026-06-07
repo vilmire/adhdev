@@ -110,6 +110,132 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.equal(calls[3].command, 'remove_mesh_node');
 });
 
+test('mesh_launch_session includes queue trigger claim state in the response', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    calls.push({ command, args });
+    if (command === 'launch_cli') return { success: true, sessionId: 'session-worker-1' };
+    if (command === 'trigger_mesh_queue') {
+      return {
+        success: true,
+        trigger: {
+          success: true,
+          meshId: 'mesh-launch-trigger',
+          pendingBefore: 1,
+          assignedBefore: 0,
+          pendingAfter: 1,
+          assignedAfter: 0,
+          claimed: false,
+          newlyAssignedTasks: [],
+          localIdleSessionsChecked: 0,
+          remoteIdleSessionsChecked: 0,
+          skippedSessions: [],
+          autoLaunchStarted: false,
+          noIdleMeshSessionAvailable: true,
+        },
+      };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+
+  const result = JSON.parse(await meshLaunchSession({
+    mesh: {
+      id: 'mesh-launch-trigger',
+      name: 'Launch Trigger Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-local',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+    localDaemonId: 'daemon-local',
+  } as any, { node_id: 'node-local', type: 'codex-cli' }));
+
+  assert.equal(result.success, true);
+  assert.equal(result.sessionId, 'session-worker-1');
+  assert.equal(result.queueTrigger.claimed, false);
+  assert.equal(result.queueDispatchState, 'pending_no_idle_mesh_session');
+  assert.deepEqual(calls.map(call => call.command), ['launch_cli', 'trigger_mesh_queue']);
+});
+
+test('mesh_send_task queue response includes trigger claim state', async () => {
+  const meshId = `mesh-send-trigger-${Date.now()}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    if (command === 'trigger_mesh_queue') {
+      return {
+        success: true,
+        trigger: {
+          success: true,
+          meshId,
+          pendingBefore: 1,
+          assignedBefore: 0,
+          pendingAfter: 0,
+          assignedAfter: 1,
+          claimed: true,
+          newlyAssignedTasks: [{ id: 'task-1', nodeId: 'node-local', sessionId: 'session-worker-1' }],
+          localIdleSessionsChecked: 1,
+          remoteIdleSessionsChecked: 0,
+          skippedSessions: [],
+          autoLaunchStarted: false,
+        },
+      };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+  const result = JSON.parse(await meshSendTask({
+    mesh: {
+      id: meshId,
+      name: 'Send Trigger Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-local',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+    localDaemonId: 'daemon-local',
+  } as any, {
+    node_id: 'node-local',
+    message: 'queued task',
+  }));
+
+  assert.equal(result.success, true);
+  assert.equal(result.source, 'queue');
+  assert.equal(result.queueTrigger.claimed, true);
+  assert.equal(result.queueDispatchState, undefined);
+});
+
 test('mesh_clone_node keeps cloned worktrees visible after list/status refresh by syncing the coordinator daemon cache', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;

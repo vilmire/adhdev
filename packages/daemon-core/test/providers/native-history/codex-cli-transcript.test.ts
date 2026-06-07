@@ -40,6 +40,7 @@ function writeCodexSession(
   payloadLines: TimestampedPayload[],
   subdir = 'sessions',
   workspace = '/workspaces/project',
+  sessionTimestamp = 1_800_000_000_000,
 ): string {
   const dir = path.join(tmpDir, '.codex', subdir);
   fs.mkdirSync(dir, { recursive: true });
@@ -47,8 +48,8 @@ function writeCodexSession(
 
   const metaLine = JSON.stringify({
     type: 'session_meta',
-    timestamp: 1_800_000_000_000,
-    payload: { id: sessionId, cwd: workspace },
+    timestamp: sessionTimestamp,
+    payload: { id: sessionId, cwd: workspace, timestamp: sessionTimestamp },
   });
 
   let lineTs = 1_800_000_001_000;
@@ -326,5 +327,128 @@ describe('codex-cli-transcript — listSessions', () => {
     expect(result).toHaveLength(2);
     expect(result[0].sessionId).toBe(newerSid);
     expect(result[1].sessionId).toBe(olderSid);
+  });
+});
+
+describe('native-history dispatcher — codex-cli exact session lookup', () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-codex-dispatcher-'));
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = '';
+  });
+
+  it('reads the requested Codex session even when another session is newer', async () => {
+    const requestedSid = 'aaaaaaaa-3333-0000-0000-000000000001';
+    const newerSid = 'bbbbbbbb-4444-0000-0000-000000000002';
+
+    const requestedPath = writeCodexSession(requestedSid, [
+      msgPayload('user', 'prompt A', 1_800_000_001_000),
+      msgPayload('assistant', 'reply A', 1_800_000_002_000),
+    ], 'sessions/2026/06/08', '/workspaces/project');
+    const newerPath = writeCodexSession(newerSid, [
+      msgPayload('user', 'prompt B', 1_800_000_003_000),
+      msgPayload('assistant', 'reply B', 1_800_000_004_000),
+    ], 'sessions/2026/06/08', '/workspaces/project');
+    fs.utimesSync(requestedPath, new Date(1_800_000_002_000), new Date(1_800_000_002_000));
+    fs.utimesSync(newerPath, new Date(1_800_000_004_000), new Date(1_800_000_004_000));
+
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    const readCodex = createNativeHistoryDispatcher('codex-cli');
+    const result = readCodex({
+      agentType: 'codex-cli',
+      sessionId: requestedSid,
+      historySessionId: requestedSid,
+      workspace: '/workspaces/project',
+      watchPath: '~/.codex/sessions',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.providerSessionId).toBe(requestedSid);
+    expect(result!.sourcePath).toBe(requestedPath);
+    expect(result!.messages.some((m) => m.content === 'reply A')).toBe(true);
+    expect(result!.messages.some((m) => m.content === 'reply B')).toBe(false);
+  });
+
+  it('does not fall back to the newest Codex file when a requested session is missing', async () => {
+    const existingSid = 'cccccccc-5555-0000-0000-000000000003';
+    const missingSid = 'dddddddd-6666-0000-0000-000000000004';
+
+    writeCodexSession(existingSid, [
+      msgPayload('user', 'prompt existing', 1_800_000_001_000),
+      msgPayload('assistant', 'reply existing', 1_800_000_002_000),
+    ], 'sessions/2026/06/08', '/workspaces/project');
+
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    const readCodex = createNativeHistoryDispatcher('codex-cli');
+    const result = readCodex({
+      agentType: 'codex-cli',
+      sessionId: missingSid,
+      historySessionId: missingSid,
+      workspace: '/workspaces/project',
+      watchPath: '~/.codex/sessions',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('binds id-less concurrent Codex runtimes by workspace and spawn timestamp', async () => {
+    const mainSid = 'eeeeeeee-7777-0000-0000-000000000005';
+    const worktreeSid = 'ffffffff-8888-0000-0000-000000000006';
+    const mainWorkspace = path.join(tmpDir, 'main');
+    const worktreeWorkspace = path.join(tmpDir, 'worktree');
+    fs.mkdirSync(mainWorkspace, { recursive: true });
+    fs.mkdirSync(worktreeWorkspace, { recursive: true });
+    const spawnedAt = Date.now();
+
+    writeCodexSession(mainSid, [
+      msgPayload('assistant', 'main answer', spawnedAt + 100),
+    ], 'sessions/2026/06/08', mainWorkspace, spawnedAt);
+    writeCodexSession(worktreeSid, [
+      msgPayload('assistant', 'worktree answer', spawnedAt + 200),
+    ], 'sessions/2026/06/08', worktreeWorkspace, spawnedAt + 50);
+
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    const readCodex = createNativeHistoryDispatcher('codex-cli');
+    const main = readCodex({
+      workspace: mainWorkspace,
+      sessionStartedAtMs: spawnedAt,
+    });
+    const worktree = readCodex({
+      workspace: worktreeWorkspace,
+      sessionStartedAtMs: spawnedAt,
+    });
+
+    expect(main?.providerSessionId).toBe(mainSid);
+    expect(main?.messages.map((m) => m.content)).toContain('main answer');
+    expect(worktree?.providerSessionId).toBe(worktreeSid);
+    expect(worktree?.messages.map((m) => m.content)).toContain('worktree answer');
+    expect(worktree?.messages.every((m) => m.workspace === worktreeWorkspace)).toBe(true);
+  });
+
+  it('binds same-workspace Codex runtimes to the closest spawn timestamp', async () => {
+    const firstSid = '11111111-9999-0000-0000-000000000007';
+    const secondSid = '22222222-aaaa-0000-0000-000000000008';
+    const workspace = path.join(tmpDir, 'project');
+    fs.mkdirSync(workspace, { recursive: true });
+    const firstSpawnedAt = Date.now();
+    const secondSpawnedAt = firstSpawnedAt + 2_000;
+
+    writeCodexSession(firstSid, [
+      msgPayload('assistant', 'first answer', firstSpawnedAt + 100),
+    ], 'sessions/2026/06/08', workspace, firstSpawnedAt + 50);
+    writeCodexSession(secondSid, [
+      msgPayload('assistant', 'second answer', secondSpawnedAt + 100),
+    ], 'sessions/2026/06/08', workspace, secondSpawnedAt + 50);
+
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    const readCodex = createNativeHistoryDispatcher('codex-cli');
+
+    expect(readCodex({ workspace, sessionStartedAtMs: firstSpawnedAt })?.providerSessionId).toBe(firstSid);
+    expect(readCodex({ workspace, sessionStartedAtMs: secondSpawnedAt })?.providerSessionId).toBe(secondSid);
   });
 });

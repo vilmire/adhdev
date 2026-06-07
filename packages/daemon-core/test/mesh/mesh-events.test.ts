@@ -1190,6 +1190,67 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('reports queue trigger claim state and skipped non-idle sessions', async () => {
+    const meshId = `mesh_trigger_report_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      enqueueTask(meshId, 'targeted task waiting for stopped session', {
+        targetNodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-stopped',
+      })
+      const stoppedSource = {
+        category: 'cli',
+        getState: vi.fn(() => ({
+          instanceId: 'runtime-session-stopped',
+          workspace: '/repo/worktree-a',
+          status: 'stopped',
+          type: 'hermes-cli',
+          settings: {
+            meshNodeFor: meshId,
+            meshNodeId: 'node_child_1',
+            launchedByCoordinator: true,
+          },
+        })),
+      }
+      const components = {
+        instanceManager: {
+          getByCategory: vi.fn((category: string) => category === 'cli' ? [stoppedSource] : []),
+        },
+        cliManager: {
+          adapters: new Map(),
+          handleCliCommand: vi.fn(),
+        },
+      } as any
+
+      const result = await triggerMeshQueue(components, meshId)
+
+      expect(result).toMatchObject({
+        success: true,
+        meshId,
+        pendingBefore: 1,
+        pendingAfter: 1,
+        claimed: false,
+        localIdleSessionsChecked: 0,
+        noIdleMeshSessionAvailable: true,
+      })
+      expect(result.skippedSessions).toEqual([{
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-stopped',
+        reason: 'terminal_session',
+        status: 'stopped',
+      }])
+      expect(getQueue(meshId)[0].status).toBe('pending')
+      expect(components.cliManager.handleCliCommand).not.toHaveBeenCalled()
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('auto-launches one provider session for a pending task when no idle session exists', async () => {
     const meshId = `mesh_auto_launch_${Date.now()}`
     try {

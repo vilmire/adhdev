@@ -6,10 +6,11 @@ import { join } from 'node:path';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHistory, meshViewQueue } from '../src/tools/mesh-tools.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, drainPendingMeshCoordinatorEvents, enqueueTask, getLedgerDir, insertDirectDispatch, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
-import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
+import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 
 function cleanupMesh(meshId: string): void {
   __clearMeshQueueForTests(meshId);
+  __clearDirectDispatchesForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
   for (const suffix of ['.jsonl', '.queue.json', '.queue.lock', '.pending-events.jsonl']) {
     const path = join(getLedgerDir(), `${safe}${suffix}`);

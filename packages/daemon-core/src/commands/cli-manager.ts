@@ -1305,6 +1305,10 @@ export class DaemonCliManager {
                     } else {
                         await adapter.sendMessage(message);
                     }
+                    const targetInstance = this.deps.getInstanceManager()?.getInstance(key) as
+                        | { recordAcknowledgedUserInput?: (input: unknown) => void }
+                        | undefined;
+                    targetInstance?.recordAcknowledgedUserInput?.(input);
                     return {
                         success: true,
                         status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : 'generating',

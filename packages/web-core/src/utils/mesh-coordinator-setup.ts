@@ -30,15 +30,18 @@ export function renderCoordinatorTemplate(
         workspace?: string | null
         serverName?: string | null
         adhdevMcpCommand?: string | null
+        adhdevMcpArgs?: string | null
     },
 ): string {
+    const meshId = values.meshId || ''
     const resolvedValues: Record<string, string> = {
-        meshId: values.meshId || '',
+        meshId,
         workspace: values.workspace || '',
         serverName: values.serverName || 'adhdev-mesh',
         adhdevMcpCommand: values.adhdevMcpCommand || 'adhdev-mcp',
+        adhdevMcpArgs: values.adhdevMcpArgs || `mcp --mode ipc --repo-mesh ${meshId}`,
     }
-    return template.replace(/\{\{\s*(meshId|workspace|serverName|adhdevMcpCommand)\s*\}\}/g, (_, key: string) => resolvedValues[key] || '')
+    return template.replace(/\{\{\s*(meshId|workspace|serverName|adhdevMcpCommand|adhdevMcpArgs)\s*\}\}/g, (_, key: string) => resolvedValues[key] || '')
 }
 
 export function buildManualCoordinatorSetup(
@@ -47,6 +50,7 @@ export function buildManualCoordinatorSetup(
         meshId?: string | null
         workspace?: string | null
         adhdevMcpCommand?: string | null
+        adhdevMcpArgs?: string | null
     } = {},
 ): MeshCoordinatorManualSetup | null {
     const mcpConfig = metadata?.mcpConfig

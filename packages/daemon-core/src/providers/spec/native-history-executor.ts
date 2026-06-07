@@ -58,6 +58,7 @@ export interface NativeHistoryMessage {
     content: string;
     receivedAt: number;
     kind?: string;
+    workspace?: string;
 }
 
 export interface NativeHistoryResult {
@@ -66,6 +67,7 @@ export interface NativeHistoryResult {
     sourcePath: string;
     sourceMtimeMs: number;
     nativeHistoryCoverage?: 'full' | 'partial' | 'best-effort';
+    workspace?: string;
 }
 
 const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
@@ -87,6 +89,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
 
     const windowMs = typeof src.recent_window_ms === 'number' ? src.recent_window_ms : 5 * 60_000;
     const filePat = src.file_pattern ? globToRegex(src.file_pattern) : /.*\.jsonl$/;
+    const requestedSessionId = readRequestedSessionId(input);
 
     // path can be:
     //   - a concrete file  → used as-is
@@ -112,7 +115,8 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     const workspaceHint = typeof input.workspace === 'string' && input.workspace.trim() ? input.workspace.trim() : '';
     let sourcePath: string | null = null;
     if (resolved.includes('*')) {
-        sourcePath = pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint)
+        sourcePath = pickExactSessionFileAcrossGlob(resolved, filePat, requestedSessionId)
+            || pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint)
             || newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
     } else {
         let stat: fs.Stats | null = null;
@@ -120,18 +124,18 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         if (stat && stat.isFile()) {
             sourcePath = resolved;
         } else if (stat && stat.isDirectory()) {
-            sourcePath = pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint)
-                || newestRecentFile(resolved, filePat, windowMs, sessionFloor);
+            sourcePath = pickExactSessionFile(resolved, filePat, requestedSessionId)
+                || (requestedSessionId ? null : pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint))
+                || (requestedSessionId ? null : newestRecentFile(resolved, filePat, windowMs, sessionFloor));
         }
         // Date-templated directories (e.g. ~/.codex/sessions/{yyyy}/{mm}/{dd})
-        // expand to today's UTC dir. A session started before UTC midnight
-        // keeps appending to its previous-day file, so today's dir never
-        // contains the live transcript. When the templated dir is empty
-        // or doesn't exist yet, walk the last 3 UTC days at the same depth
-        // and pick the newest matching rollout across all of them.
+        // can drift from the provider's chosen calendar day because CLIs
+        // disagree on local-vs-UTC date buckets. Search nearby date dirs
+        // before falling back to non-exact matching.
         if (!sourcePath && hasDateTemplateSegment(src.path)) {
-            sourcePath = pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint)
-                || newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor);
+            sourcePath = pickExactSessionFileAcrossDateWindow(src.path, input, filePat, requestedSessionId)
+                || (requestedSessionId ? null : pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint))
+                || (requestedSessionId ? null : newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor));
         }
     }
     if (!sourcePath) return null;
@@ -139,6 +143,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     const mtime = safeMtimeMs(sourcePath);
     const lines = readJsonlLines(sourcePath);
     if (lines.length === 0) return null;
+    const transcriptWorkspace = readSessionMetaWorkspace(lines);
 
     // session id: filename uuid or extracted from first record
     let providerSessionId: string | undefined;
@@ -150,7 +155,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         if (m) providerSessionId = m[1];
     }
 
-    const requested = input.providerSessionId || '';
+    const requested = requestedSessionId || '';
     if (requested && providerSessionId && providerSessionId !== requested) return null;
 
     const filter = src.message_filter ? compileWhere(src.message_filter.where) : null;
@@ -159,7 +164,10 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         const rec = lines[i];
         if (filter && !filter(rec)) continue;
         const msg = projectMessage(rec, src.message_map, i, lines.length, mtime);
-        if (msg) messages.push(msg);
+        if (msg) {
+            if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
+            messages.push(msg);
+        }
     }
     if (messages.length === 0) return null;
 
@@ -169,7 +177,17 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         sourcePath,
         sourceMtimeMs: mtime,
         nativeHistoryCoverage: 'full',
+        workspace: transcriptWorkspace,
     };
+}
+
+function readSessionMetaWorkspace(lines: any[]): string | undefined {
+    for (const record of lines.slice(0, 5)) {
+        if (String(record?.type ?? '') !== 'session_meta') continue;
+        const cwd = typeof record?.payload?.cwd === 'string' ? record.payload.cwd.trim() : '';
+        if (cwd) return cwd;
+    }
+    return undefined;
 }
 
 function readJsonlLines(p: string): any[] {
@@ -292,9 +310,9 @@ function expandPath(template: string, input: NativeHistoryInput): string | null 
         cwd: workspaceResolved,
         cwd_dashed: workspaceResolved.replace(/\//g, '-'),
         session_id: input.providerSessionId || input.sessionId || input.historySessionId || '',
-        yyyy: String(now.getUTCFullYear()),
-        mm: String(now.getUTCMonth() + 1).padStart(2, '0'),
-        dd: String(now.getUTCDate()).padStart(2, '0'),
+        yyyy: String(now.getFullYear()),
+        mm: String(now.getMonth() + 1).padStart(2, '0'),
+        dd: String(now.getDate()).padStart(2, '0'),
     };
     // Replace {var}. If a referenced variable is empty (e.g. session_id
     // before the agent has allocated one), return null so the caller
@@ -393,12 +411,10 @@ function hasDateTemplateSegment(template: string): boolean {
 }
 
 /**
- * Walk the last N UTC days of a date-templated path (e.g.
+ * Walk nearby local calendar days of a date-templated path (e.g.
  * `~/.codex/sessions/{yyyy}/{mm}/{dd}`) and return the newest matching
- * file across all of them. Codex sessions started just before UTC
- * midnight keep writing to their original day's file even after the
- * date rolls over, so today's expanded dir alone misses the live
- * transcript.
+ * file across all of them. Providers differ on local-vs-UTC date buckets,
+ * so today's expanded dir alone can miss a live transcript.
  */
 function newestRecentFileAcrossDateWindow(
     template: string,
@@ -409,8 +425,8 @@ function newestRecentFileAcrossDateWindow(
 ): string | null {
     const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
     let best: { p: string; mtime: number } | null = null;
-    for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
-        const dayMs = Date.now() - dayOffset * 24 * 60 * 60 * 1000;
+    for (const dayOffset of [0, -1, 1, -2, 2]) {
+        const dayMs = Date.now() + dayOffset * 24 * 60 * 60 * 1000;
         const dayInput: NativeHistoryInput = { ...input, sessionStartedAtMs: sessionFloorMs };
         const resolved = expandPathForDate(template, dayInput, new Date(dayMs));
         if (!resolved) continue;
@@ -448,9 +464,9 @@ function expandPathForDate(template: string, input: NativeHistoryInput, day: Dat
         cwd: workspaceResolved,
         cwd_dashed: workspaceResolved.replace(/\//g, '-'),
         session_id: input.providerSessionId || input.sessionId || input.historySessionId || '',
-        yyyy: String(day.getUTCFullYear()),
-        mm: String(day.getUTCMonth() + 1).padStart(2, '0'),
-        dd: String(day.getUTCDate()).padStart(2, '0'),
+        yyyy: String(day.getFullYear()),
+        mm: String(day.getMonth() + 1).padStart(2, '0'),
+        dd: String(day.getDate()).padStart(2, '0'),
     };
     let missing = false;
     out = out.replace(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (_m, name) => {
@@ -479,6 +495,56 @@ function newestRecentFile(dir: string, pattern: RegExp, windowMs: number, sessio
 
 function safeMtimeMs(p: string): number {
     try { return Math.floor(fs.statSync(p).mtimeMs); } catch { return 0; }
+}
+
+function readRequestedSessionId(input: NativeHistoryInput): string {
+    const raw = input.providerSessionId || input.sessionId || input.historySessionId || '';
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    return UUID_RE.test(value) ? value : '';
+}
+
+function filenameUuid(filePath: string): string {
+    const match = path.basename(filePath).match(UUID_RE);
+    return match?.[1] || '';
+}
+
+function pickExactSessionFile(dir: string, pattern: RegExp, requestedSessionId: string): string | null {
+    if (!requestedSessionId) return null;
+    const files = listMatchingFiles(dir, pattern)
+        .filter(p => filenameUuid(p).toLowerCase() === requestedSessionId.toLowerCase())
+        .sort((a, b) => safeMtimeMs(b) - safeMtimeMs(a));
+    return files[0] || null;
+}
+
+function pickExactSessionFileAcrossGlob(template: string, pattern: RegExp, requestedSessionId: string): string | null {
+    if (!requestedSessionId) return null;
+    const dirs = expandDirGlob(template);
+    const matches: string[] = [];
+    for (const d of dirs) {
+        const found = pickExactSessionFile(d, pattern, requestedSessionId);
+        if (found) matches.push(found);
+    }
+    matches.sort((a, b) => safeMtimeMs(b) - safeMtimeMs(a));
+    return matches[0] || null;
+}
+
+function pickExactSessionFileAcrossDateWindow(
+    template: string,
+    input: NativeHistoryInput,
+    pattern: RegExp,
+    requestedSessionId: string,
+): string | null {
+    if (!requestedSessionId) return null;
+    const matches: string[] = [];
+    for (const dayOffset of [0, -1, 1, -2, 2]) {
+        const dayMs = Date.now() + dayOffset * 24 * 60 * 60 * 1000;
+        const resolved = expandPathForDate(template, input, new Date(dayMs));
+        if (!resolved) continue;
+        const found = pickExactSessionFile(resolved, pattern, requestedSessionId);
+        if (found) matches.push(found);
+    }
+    matches.sort((a, b) => safeMtimeMs(b) - safeMtimeMs(a));
+    return matches[0] || null;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -624,8 +690,8 @@ function pickSessionBoundFileAcrossDateWindow(
     if (!sessionFloorMs || !workspaceHint) return null;
     const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs - SPAWN_BIND_GRACE_MS);
     const files: string[] = [];
-    for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
-        const dayMs = sessionFloorMs - dayOffset * 24 * 60 * 60 * 1000;
+    for (const dayOffset of [0, -1, 1, -2, 2]) {
+        const dayMs = sessionFloorMs + dayOffset * 24 * 60 * 60 * 1000;
         const dayInput: NativeHistoryInput = { ...input, sessionStartedAtMs: sessionFloorMs };
         const resolved = expandPathForDate(template, dayInput, new Date(dayMs));
         if (!resolved) continue;

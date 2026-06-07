@@ -222,6 +222,41 @@ function resolveCliNativeHistorySessionId(args: any, currentHistorySessionId: st
     return current || parsed || undefined;
 }
 
+function shouldSkipLiveCliNativeHistoryWithoutProviderSession(args: {
+    adapter?: CliAdapter | null;
+    providerType?: string;
+    readChatArgs: any;
+    nativeHistorySessionId?: string;
+    parsedProviderSessionId?: string;
+}): boolean {
+    const explicit = getExplicitHistorySessionId(args.readChatArgs);
+    if (explicit) return false;
+
+    const targetSessionId = typeof args.readChatArgs?.targetSessionId === 'string'
+        ? args.readChatArgs.targetSessionId.trim()
+        : '';
+    if (!targetSessionId) return false;
+
+    const resolved = typeof args.nativeHistorySessionId === 'string'
+        ? args.nativeHistorySessionId.trim()
+        : '';
+    if (!resolved || resolved !== targetSessionId) return false;
+
+    const parsed = typeof args.parsedProviderSessionId === 'string'
+        ? args.parsedProviderSessionId.trim()
+        : '';
+    if (parsed) return false;
+
+    const cliType = args.adapter?.cliType || args.providerType || '';
+    if (cliType !== 'codex-cli') return false;
+
+    // A live Codex session starts with only the daemon runtime UUID. That UUID
+    // is not the provider-native rollout id, so using it for native history
+    // lets the file picker fall back to the newest same-workspace transcript
+    // and makes concurrent fresh sessions all show the same old conversation.
+    return !!args.adapter;
+}
+
 function getInteractionId(args: any): string | undefined {
     return typeof args?._interactionId === 'string' && args._interactionId.trim()
         ? args._interactionId.trim()
@@ -444,6 +479,7 @@ function normalizeNativeHistoryMessages(providerType: string, messages: ChatMess
             ...message,
             role: role === 'human' ? 'user' : (role || 'assistant'),
             kind: isSystemSessionStart ? 'system' : kind,
+            ...(nativeIdentitySessionId ? { historySessionId: nativeIdentitySessionId } : {}),
             providerUnitKey,
             bubbleId: typeof message.bubbleId === 'string' && message.bubbleId.trim()
                 && preserveNativeIdentity
@@ -604,6 +640,7 @@ function decideCliReadChatSource(args: {
     nativeHistoryResult: any | null;
     nativeHistoryError?: unknown;
     safeMapping: boolean;
+    trustedExactNativeIdentity?: boolean;
     sessionWorkspace?: string;
     intendedWorkspace?: string;
     ptyMessages: ChatMessage[];
@@ -617,7 +654,26 @@ function decideCliReadChatSource(args: {
     const supportsNative = supportsCliNativeTranscript(args.providerType, args.provider);
     const observation = buildObservationForCli(args, supportsNative);
     const sessionKey = chatSourceSessionKey(args.providerType, args.sessionId);
-    const decision = CHAT_SOURCE_REGISTRY.observe(sessionKey, observation);
+    let decision = CHAT_SOURCE_REGISTRY.observe(sessionKey, observation);
+
+    // A restored runtime can briefly expose different native slices while the
+    // provider transcript settles (for example, startup/system rows may be
+    // filtered after the first read). The source machine correctly treats a
+    // shrinking slice as regression, but an exact provider-session lookup with
+    // no PTY transcript has no safer fallback. Re-bootstrap only this proven
+    // identity so the chat does not disappear after daemon restart.
+    if (
+        decision.selected === 'pty-parser'
+        && args.trustedExactNativeIdentity === true
+        && args.safeMapping
+        && args.ptyMessages.length === 0
+        && observation.kind === 'native_present'
+        && observation.coverage !== 'partial'
+        && observation.messages.length > 0
+    ) {
+        CHAT_SOURCE_REGISTRY.clear(sessionKey);
+        decision = CHAT_SOURCE_REGISTRY.observe(sessionKey, observation);
+    }
 
     const nativeMessages: ChatMessage[] = observation.kind === 'native_present'
         ? extractNativeMessagesFromResult(args.providerType, args.nativeHistoryResult)
@@ -1034,6 +1090,17 @@ function hasSafeNativeHistoryMapping(args: {
 
     const explicitSessionId = String(args.historySessionId || args.providerSessionId || '').trim();
     if (explicitSessionId) {
+        const expectedWorkspace = normalizeComparableWorkspace(args.workspace);
+        const declaredWorkspaces = args.nativeMessages
+            .map((message: any) => normalizeComparableWorkspace(message?.workspace))
+            .filter(Boolean);
+        if (
+            expectedWorkspace
+            && declaredWorkspaces.length > 0
+            && !declaredWorkspaces.some((workspace) => workspace === expectedWorkspace)
+        ) {
+            return false;
+        }
         const messageSessionIds = args.nativeMessages
             .map((message: any) => typeof message?.historySessionId === 'string' ? message.historySessionId.trim() : '')
             .filter(Boolean);
@@ -1128,7 +1195,12 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     sessionStartedAtMs?: number;
     envOverrides?: Record<string, string>;
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
-    if (!args.historySessionId) {
+    const canBindFromLiveSession = !args.historySessionId
+        && typeof args.sessionStartedAtMs === 'number'
+        && args.sessionStartedAtMs > 0
+        && typeof args.workspace === 'string'
+        && args.workspace.trim().length > 0;
+    if (!args.historySessionId && !canBindFromLiveSession) {
         return {
             messages: [],
             hasMore: false,
@@ -1150,10 +1222,17 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         sessionStartedAtMs: args.sessionStartedAtMs,
         envOverrides: args.envOverrides,
     });
-    // Native transcripts are keyed by provider/runtime session identity. Falling
-    // back to workspace makes concurrent local Codex/Hermes sessions alias each
-    // other when they share the same cwd.
-    return { ...(sessionHistory as any), lookup: 'session' };
+    const boundProviderSessionId = typeof (sessionHistory as any)?.providerSessionId === 'string'
+        ? (sessionHistory as any).providerSessionId.trim()
+        : '';
+    // A fresh live session can be bound without a provider id when the native
+    // reader matched both cwd and session_meta.timestamp to spawnedAtMs.
+    return {
+        ...(sessionHistory as any),
+        lookup: args.historySessionId || (canBindFromLiveSession && boundProviderSessionId)
+            ? 'session'
+            : 'workspace',
+    };
 }
 
 function readLiveCodexWorkspaceNativeHistory(agentStr: string, args: {
@@ -2117,11 +2196,21 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ? resolveCliNativeHistorySessionId(args, historySessionId, providerSessionId)
                 : undefined;
             const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+            const skipLiveNativeHistoryWithoutProviderSession = shouldSkipLiveCliNativeHistoryWithoutProviderSession({
+                adapter,
+                providerType,
+                readChatArgs: args,
+                nativeHistorySessionId,
+                parsedProviderSessionId: providerSessionId,
+            });
+            const nativeHistoryReadSessionId = skipLiveNativeHistoryWithoutProviderSession
+                ? undefined
+                : nativeHistorySessionId;
             const exactNativeHistoryScope = Boolean(
                 (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
                 || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
                 || providerSessionId
-                || (nativeHistorySessionId && nativeHistorySessionId !== targetSessionId)
+                || (nativeHistoryReadSessionId && nativeHistoryReadSessionId !== targetSessionId)
                 || ((h.currentSession as any)?.sessionId === args?.targetSessionId && typeof (h.currentSession as any)?.providerSessionId === 'string' && (h.currentSession as any).providerSessionId.trim())
             );
 
@@ -2132,7 +2221,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 try {
                     nativeHistory = readCliProviderNativeHistory(agentStr, {
                         canonicalHistory: provider?.nativeHistory,
-                        historySessionId: nativeHistorySessionId,
+                        historySessionId: nativeHistoryReadSessionId,
                         workspace,
                         offset: 0,
                         limit: nativeHistoryLimit,
@@ -2151,20 +2240,21 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
 
             // 2. Compute safeMapping with the same rules the v1 code used so the
             //    machine sees the same observation it always would have.
-            const nativeMessages: ChatMessage[] = nativeHistory && Array.isArray(nativeHistory.messages)
+            let nativeMessages: ChatMessage[] = nativeHistory && Array.isArray(nativeHistory.messages)
                 ? normalizeAndFilterNativeHistory(h, agentStr, args, nativeHistory.messages as ChatMessage[], nativeHistory.providerSessionId)
                 : [];
-            const historyProviderSessionId = typeof nativeHistory?.providerSessionId === 'string'
+            const sessionStartedAtMs = sessionStartedAtMsFromRegistry(h, args?.targetSessionId);
+            let historyProviderSessionId = typeof nativeHistory?.providerSessionId === 'string'
                 ? nativeHistory.providerSessionId
-                : readHistorySessionIdFromMessages(nativeMessages) || nativeHistorySessionId || historySessionId;
-            const lookup = nativeHistory?.lookup === 'workspace' ? 'workspace' : 'session';
-            const nativeHistorySessionForMapping = adapter.cliType === 'antigravity-cli'
+                : readHistorySessionIdFromMessages(nativeMessages) || nativeHistoryReadSessionId || historySessionId;
+            let lookup = nativeHistory?.lookup === 'workspace' ? 'workspace' : 'session';
+            let nativeHistorySessionForMapping = adapter.cliType === 'antigravity-cli'
                 && historyProviderSessionId
-                && nativeHistorySessionId
-                && historyProviderSessionId !== nativeHistorySessionId
+                && nativeHistoryReadSessionId
+                && historyProviderSessionId !== nativeHistoryReadSessionId
                 ? undefined
-                : nativeHistorySessionId;
-            const safeMapping = supportsNative && nativeHistory
+                : nativeHistoryReadSessionId;
+            let safeMapping = supportsNative && nativeHistory
                 ? hasSafeNativeHistoryMapping({
                     historySessionId: lookup === 'workspace' ? undefined : nativeHistorySessionForMapping,
                     providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId || providerSessionId,
@@ -2174,6 +2264,64 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     requireWorkspaceContentOverlap: lookup === 'workspace' && !exactNativeHistoryScope,
                 })
                 : false;
+            if (skipLiveNativeHistoryWithoutProviderSession && (!safeMapping || returnedMessages.length === 0)) {
+                nativeHistory = null;
+                nativeMessages = [];
+                historyProviderSessionId = undefined;
+                lookup = 'session';
+                safeMapping = false;
+            }
+            const mayRetryUnsafeAutoDetectedCodexSession = adapter.cliType === 'codex-cli'
+                && !getExplicitHistorySessionId(args)
+                && Boolean(sessionStartedAtMs && sessionStartedAtMs > 0)
+                && !skipLiveNativeHistoryWithoutProviderSession
+                && !safeMapping;
+            if (mayRetryUnsafeAutoDetectedCodexSession) {
+                try {
+                    nativeHistory = readCliProviderNativeHistory(agentStr, {
+                        canonicalHistory: provider?.nativeHistory,
+                        historySessionId: undefined,
+                        workspace,
+                        offset: 0,
+                        limit: nativeHistoryLimit,
+                        excludeRecentCount: 0,
+                        historyBehavior: provider?.historyBehavior,
+                        scripts: provider?.scripts as any,
+                        excludeInProgressTurn: returnedStatus === 'waiting_approval',
+                        sessionStartedAtMs,
+                        envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                    });
+                    nativeHistoryError = undefined;
+                    nativeMessages = nativeHistory && Array.isArray(nativeHistory.messages)
+                        ? normalizeAndFilterNativeHistory(h, agentStr, args, nativeHistory.messages as ChatMessage[], nativeHistory.providerSessionId)
+                        : [];
+                    historyProviderSessionId = typeof nativeHistory?.providerSessionId === 'string'
+                        ? nativeHistory.providerSessionId
+                        : readHistorySessionIdFromMessages(nativeMessages);
+                    lookup = nativeHistory?.lookup === 'workspace' ? 'workspace' : 'session';
+                    nativeHistorySessionForMapping = undefined;
+                    safeMapping = supportsNative && nativeHistory
+                        ? hasSafeNativeHistoryMapping({
+                            historySessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
+                            providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
+                            workspace,
+                            nativeMessages,
+                            ptyMessages: returnedMessages,
+                            requireWorkspaceContentOverlap: lookup === 'workspace' && !exactNativeHistoryScope,
+                        })
+                        : false;
+                } catch (error: any) {
+                    nativeHistoryError = error;
+                    nativeHistory = null;
+                    nativeMessages = [];
+                    historyProviderSessionId = undefined;
+                    safeMapping = false;
+                }
+            }
+            const trustedExactNativeIdentity = lookup !== 'workspace'
+                && Boolean(nativeHistoryReadSessionId)
+                && Boolean(historyProviderSessionId)
+                && nativeHistoryReadSessionId === historyProviderSessionId;
 
             // 3. Drive ChatSourceMachine — one observation per readChat call,
             //    keyed by (providerType, sessionKey-for-this-call). targetSessionId
@@ -2193,6 +2341,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 nativeHistoryResult: nativeHistory,
                 nativeHistoryError,
                 safeMapping,
+                trustedExactNativeIdentity,
                 sessionWorkspace,
                 intendedWorkspace,
                 ptyMessages: returnedMessages,
@@ -2207,6 +2356,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 selectedProviderSessionId = historyProviderSessionId || providerSessionId;
                 selectedTranscriptAuthority = 'provider';
                 selectedCoverage = nativeHistory?.hasMore ? 'tail' : 'full';
+                if (selectedProviderSessionId && selectedProviderSessionId !== providerSessionId) {
+                    adapter.updateRuntimeMeta?.({ providerSessionId: selectedProviderSessionId });
+                }
             } else if (supportsNative) {
                 // Native not selected. Two preserved v1 fallbacks before settling
                 // on PTY: (a) Codex-only live workspace native probe; (b) unsafe-
@@ -2224,7 +2376,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     && liveCurrentRuntimePtySafe
                     && !(typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
                     && !(providerSessionId && providerSessionId.trim())
-                    && (!historyProviderSessionId || historyProviderSessionId === nativeHistorySessionId || historyProviderSessionId === historySessionId);
+                    && !nativeHistoryReadSessionId
+                    && (!historyProviderSessionId || historyProviderSessionId === nativeHistoryReadSessionId || historyProviderSessionId === historySessionId)
+                    && !skipLiveNativeHistoryWithoutProviderSession;
                 const liveWorkspaceNativeHistory = mayProbeLiveCodexWorkspaceNative
                     ? readLiveCodexWorkspaceNativeHistory(agentStr, {
                         canonicalHistory: provider?.nativeHistory,
@@ -2269,6 +2423,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         selectedProviderSessionId = liveWorkspaceNativeProviderSessionId || providerSessionId;
                         selectedTranscriptAuthority = 'provider';
                         selectedCoverage = (liveWorkspaceNativeHistory as any).hasMore ? 'tail' : 'full';
+                        if (selectedProviderSessionId && selectedProviderSessionId !== providerSessionId) {
+                            adapter.updateRuntimeMeta?.({ providerSessionId: selectedProviderSessionId });
+                        }
                         messageSource = liveDecision.messageSource;
                         (messageSource as any).selectedDaemonSource = 'live-workspace-native-history';
                         (messageSource as any).runtimeMappingSafe = true;
@@ -2406,6 +2563,10 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     nativeMessages: historyMessages,
                 })
                 : false;
+            const trustedExactNativeIdentity = lookup !== 'workspace'
+                && Boolean(historySessionId)
+                && Boolean(historyProviderSessionId)
+                && historySessionId === historyProviderSessionId;
 
             const machineSessionKey = String(
                 args?.targetSessionId
@@ -2420,6 +2581,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 sessionId: machineSessionKey,
                 nativeHistoryResult: history,
                 safeMapping,
+                trustedExactNativeIdentity,
                 sessionWorkspace: workspace,
                 intendedWorkspace,
                 ptyMessages: [],

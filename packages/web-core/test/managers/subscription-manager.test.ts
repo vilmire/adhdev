@@ -40,4 +40,23 @@ describe('SubscriptionManager', () => {
 
         expect(unsubscribe.initialSendAccepted).toBe(true)
     })
+
+    it('re-sends an existing subscription when its params change under the same topic key', () => {
+        const manager = new SubscriptionManager()
+        const sendData = vi.fn().mockReturnValue(true)
+        const first = createSubscribeRequest()
+        const second: SubscribeRequest = {
+            ...first,
+            params: {
+                ...first.params,
+                limit: 30,
+            },
+        }
+
+        manager.subscribe({ sendData }, 'daemon-1', first, vi.fn())
+        manager.subscribe({ sendData }, 'daemon-1', second, vi.fn())
+
+        expect(sendData).toHaveBeenCalledTimes(2)
+        expect(sendData.mock.calls[1]?.[1]).toEqual(second)
+    })
 })

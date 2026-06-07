@@ -390,7 +390,7 @@ export interface ProviderMeshCoordinatorConfig {
     requiresRestart?: boolean;
     /** User-facing setup explanation for manual modes. */
     instructions?: string;
-    /** Copyable setup template. Supports {{meshId}}, {{adhdevMcpCommand}}, {{workspace}}, {{serverName}}. */
+    /** Copyable setup template. Supports {{meshId}}, {{adhdevMcpCommand}}, {{adhdevMcpArgs}}, {{workspace}}, {{serverName}}. */
     template?: string;
   };
   /**

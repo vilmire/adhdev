@@ -64,6 +64,7 @@ function getMessageTime(message: unknown): number {
 type CompletedFinalizationBlock = {
     reason: string;
     terminal?: boolean;
+    allowTimeout?: boolean;
 };
 
 type CompletionFinalAssistantEvidence = {
@@ -613,7 +614,12 @@ export class CliProviderInstance implements ProviderInstance {
         if (suppressFreshLaunchStartupReplay) {
             parsedMessages = [];
         }
-        const activeChatId = this.providerSessionId || runtime?.runtimeId || this.instanceId;
+        // Adapter runtime metadata is transport-owned and is not guaranteed to
+        // identify this conversation. Spec adapters historically exposed the
+        // provider spec id (for example "codex-cli") as runtimeId, which made
+        // concurrent sessions share one activeChat identity until their native
+        // provider session ids were discovered.
+        const activeChatId = this.providerSessionId || this.instanceId;
         const historyMessageCount = Number.isFinite(parsedStatus?.historyMessageCount)
             ? Math.max(0, Number(parsedStatus.historyMessageCount))
             : null;
@@ -1164,6 +1170,7 @@ export class CliProviderInstance implements ProviderInstance {
         if (parsed?.activeModal || parsed?.modal) return { reason: 'parsed_modal_active', terminal: true };
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         const finalAssistantEvidence = this.completionFinalAssistantEvidence(parsed?.messages);
+        const allowMissingAssistantTimeout = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
         if (!finalAssistantEvidence.present) {
             if (adapterOwnsMessagesElsewhere) {
                 if (finalAssistantEvidence.source === 'external-native') {
@@ -1172,19 +1179,20 @@ export class CliProviderInstance implements ProviderInstance {
                         LOG.info('CLI', `[${this.type}] external transcript probe: msgCount=${probe.msgCount} lastRole=${probe.lastRole || 'none'} lastKind=${probe.lastKind || 'none'} contentLen=${probe.contentLen} sourceMtime=${probe.sourceMtimeMs ?? 'unknown'} mtimeAge=${probe.mtimeAgeMs ?? 'unknown'}ms`);
                         pending.loggedTranscriptProbe = true;
                     }
-                    return { reason: 'missing_final_assistant', terminal: true };
+                    return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout };
                 }
                 // SpecCliAdapter never populates parsed.messages — chat history flows
                 // through the daemon's native-history pipeline, not the status hook.
                 // If that pipeline is unavailable, keep the old skip behavior for
                 // providers that have not opted into strict final-assistant evidence.
                 if ((this.provider as any).requiresFinalAssistantBeforeIdle === true) {
-                    return { reason: 'missing_final_assistant', terminal: true };
+                    return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout };
                 }
             } else {
                 return {
                     reason: 'missing_final_assistant',
                     terminal: (this.provider as any).requiresFinalAssistantBeforeIdle === true,
+                    allowTimeout: allowMissingAssistantTimeout,
                 };
             }
         }
@@ -1234,7 +1242,7 @@ export class CliProviderInstance implements ProviderInstance {
         if (block) {
             const blockReason = block.reason;
             const waitedMs = Date.now() - pending.firstObservedAt;
-            if (block.terminal || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS) {
+            if ((block.terminal && !block.allowTimeout) || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS) {
                 if (pending.loggedBlockReason !== blockReason) {
                     LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
                     pending.loggedBlockReason = blockReason;

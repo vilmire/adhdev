@@ -36,6 +36,14 @@ import {
     type InteractivePromptResponse,
 } from '../types/interactive-prompt.js';
 
+function stripAnsi(text: string): string {
+    // eslint-disable-next-line no-control-regex
+    return String(text || '')
+        .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
+        .replace(/\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g, '')
+        .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
 export class SpecCliAdapter implements CliAdapter {
     readonly cliType: string;
     readonly cliName: string;
@@ -129,15 +137,16 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     getStatus(): CliAdapterStatus {
-        if (this.exited) return { status: 'stopped', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
-        if (!this.spawned) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
+        const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
+        if (this.exited) return { status: 'stopped', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
+        if (!this.spawned) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
 
         // Refresh native history lazily — the watch_path is cheap to stat,
         // but parsing a full session.jsonl every call would be wasteful.
         this.maybeRefreshNativeHistory();
 
         const state = this.latestState;
-        if (!state) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
+        if (!state) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
 
         const modal = this.latestModal;
         const lc = state.id.toLowerCase();
@@ -150,12 +159,13 @@ export class SpecCliAdapter implements CliAdapter {
                     buttons: modal.buttons.map(b => b.label),
                 },
                 activeInteractivePrompt: this.activeInteractivePrompt,
+                ...sessionFields,
             };
         }
         if (lc === 'busy' || lc === 'generating') {
-            return { status: 'generating', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
+            return { status: 'generating', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
         }
-        return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt };
+        return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
     }
 
     private maybeRefreshNativeHistory(): void {
@@ -165,10 +175,13 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     getScriptParsedStatus(): unknown {
+        const providerSessionId = this.extractProviderSessionIdFromScreen();
+        if (providerSessionId) this.providerSessionId = providerSessionId;
         const status = this.getStatus();
         return {
             ...status,
             messages: this.readClaudeScreenAssistantMessages(),
+            ...(this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}),
         };
     }
 
@@ -345,6 +358,7 @@ export class SpecCliAdapter implements CliAdapter {
             displayName: this.spec.name,
             spawnedAtMs: this.spawnedAtMs,
             spawnedEnv: this.spawnedEnv,
+            ...(this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}),
         };
     }
     updateRuntimeMeta(meta?: Record<string, unknown>): void {
@@ -417,6 +431,19 @@ export class SpecCliAdapter implements CliAdapter {
         } catch {
             return {};
         }
+    }
+
+    private extractProviderSessionIdFromScreen(): string | undefined {
+        if (this.cliType !== 'codex-cli') return this.providerSessionId;
+        let screenText = '';
+        try {
+            screenText = this.driver.snapshot();
+        } catch {
+            return this.providerSessionId;
+        }
+        const clean = stripAnsi(screenText);
+        const match = clean.match(/(?:gpt-|o\d|codex-)[^\n·]*·[^\n·]*·\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+        return match?.[1] || this.providerSessionId;
     }
 
     private readClaudeScreenAssistantMessages(): ChatMessage[] {

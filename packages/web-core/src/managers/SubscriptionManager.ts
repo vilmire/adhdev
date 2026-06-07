@@ -27,6 +27,14 @@ function buildSubscriptionId(topic: TransportTopic, key: string): string {
     return `${topic}:${key}`
 }
 
+function areSubscribeRequestsEquivalent(left: SubscribeRequest, right: SubscribeRequest): boolean {
+    try {
+        return JSON.stringify(left) === JSON.stringify(right)
+    } catch {
+        return false
+    }
+}
+
 function shouldDebugSubscriptions(): boolean {
     if (typeof window === 'undefined') return false
     try {
@@ -57,6 +65,22 @@ export class SubscriptionManager {
         let initialSendAccepted = true
         if (existing) {
             existing.handlers.add(handler as TopicHandler)
+            if (!areSubscribeRequestsEquivalent(existing.request, request) || existing.daemonId !== daemonId) {
+                existing.daemonId = daemonId
+                existing.request = request
+                initialSendAccepted = transport.sendData?.(daemonId, request) ?? false
+                if (!initialSendAccepted && options?.retryIntervalMs) {
+                    this.scheduleRetry(id, transport, options.retryIntervalMs)
+                } else if (initialSendAccepted) {
+                    this.clearRetry(id)
+                }
+                logSubscriptionDebug('subscribe_update', {
+                    daemonId,
+                    topic: request.topic,
+                    key: request.key,
+                    accepted: initialSendAccepted,
+                })
+            }
             if (existing.lastUpdate) {
                 handler(existing.lastUpdate as T)
             }

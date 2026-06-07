@@ -342,6 +342,96 @@ describe('SessionChatTailController registry', () => {
     }
   })
 
+  it('connects a retained controller when sendData becomes available after first render', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+
+    const sendData = vi.fn().mockReturnValue(true)
+    const reacquired = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+
+    expect(reacquired).toBe(controller)
+    expect(sendData).toHaveBeenCalledOnce()
+    expect(sendData.mock.calls[0]?.[1]).toMatchObject({
+      type: 'subscribe',
+      topic: 'session.chat_tail',
+      key: 'daemon:daemon-1:session:session-1',
+      params: {
+        targetSessionId: 'session-1',
+        historySessionId: 'history-1',
+        tailLimit: 60,
+      },
+    })
+  })
+
+  it('re-subscribes when a Codex runtime session later resolves its provider history id', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const sendData = vi.fn().mockReturnValue(true)
+    const runtimeController = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'runtime-session-1',
+      historySessionId: 'runtime-session-1',
+      subscriptionKey: 'daemon:daemon-1:session:runtime-session-1',
+      tailLimit: 60,
+    })
+
+    runtimeController.retain()
+
+    const providerController = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'runtime-session-1',
+      historySessionId: '019ea459-712f-7eb2-84a5-d2e633c1ec45',
+      subscriptionKey: 'daemon:daemon-1:session:runtime-session-1',
+      tailLimit: 60,
+    })
+
+    providerController.retain()
+
+    const subscribeCalls = sendData.mock.calls
+      .map((call) => call[1])
+      .filter((request) => request?.type === 'subscribe')
+
+    expect(subscribeCalls).toHaveLength(2)
+    expect(subscribeCalls[0]).toMatchObject({
+      topic: 'session.chat_tail',
+      key: 'daemon:daemon-1:session:runtime-session-1',
+      params: {
+        targetSessionId: 'runtime-session-1',
+        historySessionId: 'runtime-session-1',
+      },
+    })
+    expect(subscribeCalls[1]).toMatchObject({
+      topic: 'session.chat_tail',
+      key: 'daemon:daemon-1:session:runtime-session-1',
+      params: {
+        targetSessionId: 'runtime-session-1',
+        historySessionId: '019ea459-712f-7eb2-84a5-d2e633c1ec45',
+      },
+    })
+  })
+
   it('replays cached transcript state after the background retain cycle releases and later reacquires the same session', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
@@ -1117,6 +1207,134 @@ describe('SessionChatTailController registry', () => {
       'real prompt',
       'real answer',
     ])
+  })
+
+  it('keeps fallback bubbles visible through transient native-unavailable empty idle updates', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'codex-runtime-session',
+      historySessionId: 'codex-runtime-session',
+      subscriptionKey: 'daemon:daemon-1:session:codex-runtime-session',
+      tailLimit: 60,
+      fallbackRecentCount: 2,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:codex-runtime-session',
+      sessionId: 'codex-runtime-session',
+      historySessionId: 'codex-runtime-session',
+      messages: [],
+      status: 'idle',
+      messageSource: {
+        selected: 'pty-parser',
+        fallbackReason: 'native_history_empty',
+        nativeSource: 'native-unavailable',
+      },
+    } as any))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: false,
+    })
+  })
+
+  it('keeps hydrated live bubbles visible through transient native-unavailable empty refreshes', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'codex-runtime-session',
+      historySessionId: '019ea2ea-375b-7c62-946e-f63b4c04ba6e',
+      subscriptionKey: 'daemon:daemon-1:session:codex-runtime-session',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:codex-runtime-session',
+      sessionId: 'codex-runtime-session',
+      historySessionId: '019ea2ea-375b-7c62-946e-f63b4c04ba6e',
+      messages: [
+        { role: 'user', content: 'visible prompt', id: 'msg-1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'visible answer', id: 'msg-2', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      messageSource: {
+        selected: 'native-history',
+        nativeSource: 'provider-native',
+      },
+    } as any))
+
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:codex-runtime-session',
+      sessionId: 'codex-runtime-session',
+      historySessionId: '019ea2ea-375b-7c62-946e-f63b4c04ba6e',
+      messages: [],
+      status: 'idle',
+      messageSource: {
+        selected: 'pty-parser',
+        fallbackReason: 'native_history_empty',
+        nativeSource: 'native-unavailable',
+      },
+    } as any))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      hasLiveSnapshot: true,
+      liveMessages: [
+        expect.objectContaining({ content: 'visible prompt' }),
+        expect.objectContaining({ content: 'visible answer' }),
+      ],
+    })
+  })
+
+  it('preserves explicit empty clear state even when a transient empty update follows', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'codex-runtime-session',
+      historySessionId: 'old-chat',
+      subscriptionKey: 'daemon:daemon-1:session:codex-runtime-session',
+      tailLimit: 60,
+      fallbackRecentCount: 2,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:codex-runtime-session',
+      sessionId: 'codex-runtime-session',
+      historySessionId: 'old-chat',
+      messages: [
+        { role: 'assistant', content: 'old chat', id: 'old-1', timestamp: 1 } as any,
+      ],
+    }))
+    clearSessionChatTailControllerSnapshot('daemon-1', 'codex-runtime-session', 'old-chat')
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:codex-runtime-session',
+      sessionId: 'codex-runtime-session',
+      historySessionId: 'old-chat',
+      messages: [],
+      status: 'idle',
+      messageSource: {
+        selected: 'pty-parser',
+        fallbackReason: 'native_history_empty',
+        nativeSource: 'native-unavailable',
+      },
+    } as any))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: true,
+    })
   })
 
   it('keeps fallback bubbles visible through short busy current-turn tails', () => {

@@ -5295,10 +5295,8 @@ export class DaemonCommandRouter {
                 if (ownerFailure) return ownerFailure;
                 try {
                     const { triggerMeshQueue } = await import('../mesh/mesh-events.js');
-                    if (meshId) {
-                        triggerMeshQueue(this.deps as any, meshId);
-                    }
-                    return { success: true };
+                    const trigger = await triggerMeshQueue(this.deps as any, meshId);
+                    return { success: true, trigger };
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
@@ -5451,23 +5449,102 @@ export class DaemonCommandRouter {
                         // a real PTY the registration goes through and the
                         // exit code tells us whether it actually persisted.
                         let mcpRegistrationOk = false;
+                        let mcpRegistrationFailure: {
+                            command: string;
+                            output: string;
+                            exitCode: number | null;
+                            signal: number | null;
+                            timedOut: boolean;
+                        } | null = null;
                         try {
-                            const { execUnderPty } = await import('./mesh-coordinator.js');
-                            const cmdParts = coordinatorSetup.command.trim().split(/\s+/);
-                            const [regCmd, ...regArgs] = cmdParts;
-                            LOG.info('MeshCoordinator', `Running MCP registration (pty): ${coordinatorSetup.command}`);
-                            const ptyResult = await execUnderPty(regCmd, regArgs, { cwd: workspace, timeoutMs: 20_000 });
-                            if (ptyResult.timedOut) {
-                                LOG.warn('MeshCoordinator', `MCP registration timed out — last output:\n${ptyResult.output.slice(-2000)}`);
-                            } else if (ptyResult.exitCode === 0) {
-                                mcpRegistrationOk = true;
-                                LOG.info('MeshCoordinator', `MCP registration succeeded (exit=0)`);
-                            } else {
-                                // Non-fatal — many providers return non-zero on duplicate registration.
-                                LOG.warn('MeshCoordinator', `MCP registration exit=${ptyResult.exitCode} signal=${ptyResult.signal} — output:\n${ptyResult.output.slice(-2000)}`);
+                            const { buildMeshCoordinatorRegistrationPlan, execUnderPty } = await import('./mesh-coordinator.js');
+                            const registrationPlan = buildMeshCoordinatorRegistrationPlan(
+                                cliType,
+                                coordinatorSetup.serverName,
+                                coordinatorSetup.command,
+                            );
+                            for (const step of registrationPlan) {
+                                const renderedCommand = [step.command, ...step.args].join(' ');
+                                LOG.info('MeshCoordinator', `Running MCP ${step.label} (pty): ${renderedCommand}`);
+                                const ptyResult = await execUnderPty(step.command, step.args, { cwd: workspace, timeoutMs: 20_000 });
+                                if (ptyResult.exitCode === 0 && !ptyResult.timedOut) {
+                                    if (step.required) mcpRegistrationOk = true;
+                                    continue;
+                                }
+                                LOG.warn('MeshCoordinator', `MCP ${step.label} failed exit=${ptyResult.exitCode} signal=${ptyResult.signal} timedOut=${ptyResult.timedOut} — output:\n${ptyResult.output.slice(-2000)}`);
+                                if (step.required) {
+                                    mcpRegistrationFailure = {
+                                        command: renderedCommand,
+                                        output: ptyResult.output.slice(-2000),
+                                        exitCode: ptyResult.exitCode,
+                                        signal: ptyResult.signal,
+                                        timedOut: ptyResult.timedOut,
+                                    };
+                                    break;
+                                }
                             }
                         } catch (error: any) {
                             LOG.warn('MeshCoordinator', `MCP registration command failed: ${error?.message || error}`);
+                            mcpRegistrationFailure = {
+                                command: coordinatorSetup.command,
+                                output: error?.message || String(error),
+                                exitCode: null,
+                                signal: null,
+                                timedOut: false,
+                            };
+                        }
+
+                        if (!mcpRegistrationOk) {
+                            return {
+                                success: false,
+                                code: 'mesh_coordinator_mcp_registration_failed',
+                                error: `Could not register ${coordinatorSetup.serverName}; coordinator session was not launched`,
+                                meshId,
+                                cliType,
+                                workspace,
+                                registration: mcpRegistrationFailure,
+                            };
+                        }
+
+                        // Codex gives repo-local .mcp.json precedence over its
+                        // global `codex mcp add` registration. Refresh an
+                        // existing ADHDev entry so a stale workspace command
+                        // cannot shadow the registration we just verified.
+                        if (cliType === 'codex-cli') {
+                            const repoMcpConfigPath = pathJoin(workspace, '.mcp.json');
+                            if (fs.existsSync(repoMcpConfigPath)) {
+                                try {
+                                    const repoMcpConfig = parseMeshCoordinatorMcpConfig(
+                                        fs.readFileSync(repoMcpConfigPath, 'utf-8'),
+                                        'claude_mcp_json',
+                                    );
+                                    const existingServers = repoMcpConfig.mcpServers;
+                                    if (
+                                        existingServers
+                                        && typeof existingServers === 'object'
+                                        && !Array.isArray(existingServers)
+                                        && existingServers[coordinatorSetup.serverName]
+                                    ) {
+                                        fs.writeFileSync(repoMcpConfigPath, serializeMeshCoordinatorMcpConfig({
+                                            ...repoMcpConfig,
+                                            mcpServers: {
+                                                ...existingServers,
+                                                [coordinatorSetup.serverName]: coordinatorSetup.mcpServer,
+                                            },
+                                        }, 'claude_mcp_json'), 'utf-8');
+                                        LOG.info('MeshCoordinator', `Refreshed repo-local ${repoMcpConfigPath} entry for ${coordinatorSetup.serverName}`);
+                                    }
+                                } catch (error: any) {
+                                    return {
+                                        success: false,
+                                        code: 'mesh_coordinator_config_write_failed',
+                                        error: `Could not refresh repo-local MCP config: ${error?.message || error}`,
+                                        meshId,
+                                        cliType,
+                                        workspace,
+                                    };
+                                }
+                            }
                         }
 
                         // Inject system prompt declaratively from provider.v1.json.

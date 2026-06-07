@@ -274,6 +274,33 @@ describe('build conversations shared context', () => {
         })
     })
 
+    it('rejects a generic CLI active chat id as a native history target', () => {
+        const cli = createIdeEntry({
+            id: 'machine-1:cli:runtime-1',
+            sessionId: 'runtime-1',
+            providerSessionId: undefined,
+            type: 'codex-cli',
+            transport: 'pty',
+            cliName: 'Codex CLI',
+            mode: 'chat',
+            activeChat: {
+                id: 'codex-cli',
+                title: '',
+                status: 'idle',
+                messages: [],
+                activeModal: null,
+            },
+        })
+
+        const conversation = buildScopedIdeConversations(cli)[0]
+
+        expect(conversation).toMatchObject({
+            sessionId: 'runtime-1',
+            providerSessionId: undefined,
+            historySessionId: undefined,
+        })
+    })
+
     it('renders only daemon-provided native CLI transcript messages without frontend local message overlays', () => {
         const cli = createIdeEntry({
             id: 'cli-2',

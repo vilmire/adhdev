@@ -27,6 +27,7 @@ export interface NativeHistoryInput {
     providerSessionId?: string;
     historySessionId?: string;
     workspace?: string;
+    sessionStartedAtMs?: number;
     format?: string;
     watchPath?: string;
     forceRefresh?: boolean;
@@ -34,7 +35,7 @@ export interface NativeHistoryInput {
 }
 
 export interface NativeHistoryResult {
-    messages: Array<{ role: string; content: string; receivedAt?: number; kind?: string }>;
+    messages: Array<{ role: string; content: string; receivedAt?: number; kind?: string; workspace?: string }>;
     providerSessionId?: string;
     sourcePath: string;
     sourceMtimeMs: number;
@@ -53,7 +54,12 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
         // shows up before I type anything" on every provider).
         const requestedProviderSid = input.providerSessionId || '';
 
-        const sourcePath = resolveSourcePath(reader, workspace, sessionId);
+        const sessionStartedAtMs = typeof input.sessionStartedAtMs === 'number'
+            ? input.sessionStartedAtMs
+            : typeof input.args?.sessionStartedAtMs === 'number'
+                ? input.args.sessionStartedAtMs
+                : 0;
+        const sourcePath = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs);
         if (!sourcePath) return null;
         if (input.forceRefresh === true || input.args?.forceRefresh === true) {
             try { fs.statSync(sourcePath); } catch { /* best-effort metadata refresh */ }
@@ -72,6 +78,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
                 receivedAt: typeof m.receivedAt === 'number' ? m.receivedAt : Date.parse(m.timestamp || '') || Date.now(),
                 kind: typeof m.kind === 'string' ? m.kind : 'standard',
+                workspace: typeof m.workspace === 'string' ? m.workspace : workspace || undefined,
             })),
             providerSessionId: session.providerSessionId,
             sourcePath: session.sourcePath,
@@ -85,10 +92,10 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
 // Per-provider path resolution
 // ────────────────────────────────────────────────────────────────────────────
 
-function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string): string | null {
+function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number): string | null {
     switch (reader) {
         case 'claude-cli':   return resolveClaudePath(workspace, sessionId);
-        case 'codex-cli':    return resolveCodexPath(workspace);
+        case 'codex-cli':    return resolveCodexPath(workspace, sessionId, sessionStartedAtMs);
         case 'antigravity-cli': return resolveAntigravityPath(workspace);
         case 'hermes-cli':   return resolveHermesPath(workspace, sessionId);
     }
@@ -112,21 +119,111 @@ function resolveClaudePath(workspace: string, sessionId: string): string | null 
     return null;
 }
 
-function resolveCodexPath(workspace: string): string | null {
-    void workspace;
+function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAtMs: number): string | null {
     // codex stores by UTC date: ~/.codex/sessions/<year>/<month>/<day>/<file>.jsonl
-    const now = new Date();
-    const dir = path.join(
-        os.homedir(), '.codex', 'sessions',
-        String(now.getUTCFullYear()),
-        String(now.getUTCMonth() + 1).padStart(2, '0'),
-        String(now.getUTCDate()).padStart(2, '0'),
-    );
-    if (fs.existsSync(dir)) {
-        const f = newestRecentFile(dir, /\.jsonl$/);
-        if (f) return f;
+    const root = codexSessionsRoot();
+    if (sessionId && isUuidLikeSessionId(sessionId)) {
+        return findCodexPathBySessionId(root, sessionId);
     }
-    return null;
+    return findCodexPathByRuntime(root, workspace, sessionStartedAtMs);
+}
+
+function findCodexPathBySessionId(root: string, sessionId: string): string | null {
+    if (!fs.existsSync(root)) return null;
+    const needle = sessionId.toLowerCase();
+    const matches: Array<{ p: string; mtime: number }> = [];
+    const stack: string[] = [root];
+    while (stack.length > 0) {
+        const current = stack.pop()!;
+        let entries: fs.Dirent[] = [];
+        try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+        for (const entry of entries) {
+            const entryPath = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                stack.push(entryPath);
+                continue;
+            }
+            if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+            if (!entry.name.toLowerCase().includes(needle)) continue;
+            if (!isSafeFilename(entry.name.replace('.jsonl', ''))) continue;
+            matches.push({ p: entryPath, mtime: safeMtime(entryPath) });
+        }
+    }
+    matches.sort((a, b) => b.mtime - a.mtime);
+    return matches[0]?.p ?? null;
+}
+
+const CODEX_SPAWN_BIND_GRACE_MS = 10_000;
+
+function findCodexPathByRuntime(root: string, workspace: string, sessionStartedAtMs: number): string | null {
+    if (!fs.existsSync(root) || !workspace) return null;
+    const workspaceResolved = resolveRealPath(workspace);
+    const cutoff = Date.now() - RECENT_WINDOW_MS;
+    const matches: Array<{ p: string; mtime: number; diff: number }> = [];
+    const stack: string[] = [root];
+
+    while (stack.length > 0) {
+        const current = stack.pop()!;
+        let entries: fs.Dirent[] = [];
+        try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+        for (const entry of entries) {
+            const entryPath = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                stack.push(entryPath);
+                continue;
+            }
+            if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+            const mtime = safeMtime(entryPath);
+            if (mtime < cutoff) continue;
+            const meta = readCodexSessionMeta(entryPath);
+            if (!meta?.cwd || resolveRealPath(meta.cwd) !== workspaceResolved) continue;
+            const diff = sessionStartedAtMs > 0 && meta.timestampMs != null
+                ? Math.abs(meta.timestampMs - sessionStartedAtMs)
+                : 0;
+            if (sessionStartedAtMs > 0 && (meta.timestampMs == null || diff > CODEX_SPAWN_BIND_GRACE_MS)) continue;
+            matches.push({ p: entryPath, mtime, diff });
+        }
+    }
+
+    matches.sort((a, b) => sessionStartedAtMs > 0
+        ? a.diff - b.diff || b.mtime - a.mtime
+        : b.mtime - a.mtime);
+    return matches[0]?.p ?? null;
+}
+
+function readCodexSessionMeta(filePath: string): { cwd?: string; timestampMs?: number } | null {
+    try {
+        const fd = fs.openSync(filePath, 'r');
+        try {
+            const buffer = Buffer.alloc(8192);
+            const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+            if (bytes <= 0) return null;
+            const text = buffer.subarray(0, bytes).toString('utf8');
+            const firstLine = text.slice(0, text.indexOf('\n') >= 0 ? text.indexOf('\n') : text.length).trim();
+            if (!firstLine) return null;
+            const record = JSON.parse(firstLine) as Record<string, unknown>;
+            if (record.type !== 'session_meta' || !record.payload || typeof record.payload !== 'object') return null;
+            const payload = record.payload as Record<string, unknown>;
+            const timestampRaw = payload.timestamp;
+            const timestampMs = typeof timestampRaw === 'string'
+                ? Date.parse(timestampRaw)
+                : typeof timestampRaw === 'number'
+                    ? (timestampRaw < 1e12 ? timestampRaw * 1000 : timestampRaw)
+                    : NaN;
+            return {
+                cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
+                timestampMs: Number.isFinite(timestampMs) ? timestampMs : undefined,
+            };
+        } finally {
+            fs.closeSync(fd);
+        }
+    } catch {
+        return null;
+    }
+}
+
+function resolveRealPath(value: string): string {
+    try { return fs.realpathSync(value); } catch { return value; }
 }
 
 function resolveAntigravityPath(workspace: string): string | null {
@@ -185,6 +282,18 @@ function readByReader(
 function cwdAsDashes(cwd: string): string {
     if (!cwd) return '';
     return cwd.replace(/\//g, '-');
+}
+
+function codexSessionsRoot(): string {
+    return path.join(os.homedir(), '.codex', 'sessions');
+}
+
+function isUuidLikeSessionId(sessionId: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId);
+}
+
+function isSafeFilename(name: string): boolean {
+    return /^[A-Za-z0-9._:-]+$/.test(name) && !name.includes('..');
 }
 
 function newestFile(dir: string, pattern: RegExp): string | null {

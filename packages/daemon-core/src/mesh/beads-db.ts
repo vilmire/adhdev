@@ -474,6 +474,10 @@ export class BeadsDB {
         `).run(cutoff);
     }
 
+    deleteDirectDispatches(meshId: string): void {
+        this.db.prepare(`DELETE FROM mesh_direct_dispatches WHERE mesh_id = ?`).run(meshId);
+    }
+
     markStaleDirectDispatches(meshId: string, olderThanMs: number): void {
         const cutoff = new Date(Date.now() - olderThanMs).toISOString();
         const now = new Date().toISOString();

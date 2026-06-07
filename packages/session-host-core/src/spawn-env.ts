@@ -47,12 +47,15 @@ export function sanitizeSpawnEnv(
         }
     }
 
-    // Do not leak the parent Codex app/extension thread identity into child CLIs.
-    // Those variables cause codex-cli to attach to the current IDE thread instead
-    // of creating or resuming its own standalone CLI thread, which breaks
-    // providerSessionId discovery and reconnect semantics.
+    // Do not leak parent Codex session controls into child CLIs. Thread identity
+    // breaks providerSessionId discovery/reconnect semantics, while the parent's
+    // network-disabled sandbox flag prevents coordinator MCP children from
+    // connecting back to the local ADHDev daemon.
     delete env.CODEX_THREAD_ID;
     delete env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
+    delete env.CODEX_SANDBOX_NETWORK_DISABLED;
+    delete env.NO_COLOR;
+    delete env.COLOR;
 
     applyTerminalColorEnv(env);
     return env;

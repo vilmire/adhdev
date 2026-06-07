@@ -13,6 +13,7 @@ const repoRoot = path.resolve(__dirname, '..');
 const pidFile = path.join(repoRoot, '.adhdev-dev-pids.json');
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const daemonCoreDistEntry = path.join(repoRoot, 'packages/daemon-core/dist/index.js');
+const sessionHostPidFile = path.join(os.homedir(), '.adhdev', 'adhdev-standalone-session-host.pid');
 
 // daemon-standalone imports `@adhdev/daemon-core` whose package.json points at
 // dist/. tsx running the standalone src/ does NOT re-transpile daemon-core —
@@ -202,19 +203,42 @@ function startChild(spec) {
   return child;
 }
 
-function prebuildDaemonCore() {
-  // tsx loads @adhdev/daemon-core from dist/. If dist is missing, the daemon
-  // start will fail before the watcher can produce it. Build once synchronously
-  // so the first daemon launch is guaranteed to find a current dist.
-  log(label('core', '\x1b[35m', 'prebuilding daemon-core dist (first run)...'));
-  const result = spawnSync(npmCmd, ['run', 'build', '-w', 'packages/daemon-core'], {
+function runPrebuild(labelName, args) {
+  log(label(labelName, '\x1b[35m', `running ${args.join(' ')}...`));
+  const result = spawnSync(npmCmd, args, {
     cwd: repoRoot,
     stdio: 'inherit',
   });
   if (result.status !== 0) {
-    log('ERROR: daemon-core prebuild failed. Cannot start daemon with stale dist.');
+    log(`ERROR: ${labelName} prebuild failed. Cannot start daemon with stale runtime code.`);
     process.exit(result.status ?? 1);
   }
+}
+
+function prebuildRuntimeDependencies() {
+  // tsx loads @adhdev/daemon-core from dist/. If dist is missing, the daemon
+  // start will fail before the watcher can produce it. Build once synchronously
+  // so the first daemon launch is guaranteed to find a current dist.
+  runPrebuild('core', ['run', 'build', '-w', 'packages/daemon-core']);
+  runPrebuild('session-host-core', ['run', 'build', '-w', 'packages/session-host-core']);
+  runPrebuild('session-host-daemon', ['run', 'build', '-w', 'packages/session-host-daemon']);
+  runPrebuild('session-host-vendor', ['run', 'bundle:vendor', '-w', 'packages/daemon-standalone']);
+}
+
+async function stopStaleSessionHost() {
+  if (!fs.existsSync(sessionHostPidFile)) return;
+  try {
+    const pid = Number.parseInt(fs.readFileSync(sessionHostPidFile, 'utf8').trim(), 10);
+    if (Number.isFinite(pid) && processExists(pid)) {
+      log(label('session-host', '\x1b[35m', `stopping stale process ${pid}...`));
+      await terminatePid(pid);
+    }
+  } catch (error) {
+    log(`Warning: failed to stop stale session host: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    fs.unlinkSync(sessionHostPidFile);
+  } catch {}
 }
 
 async function computeDistHash() {
@@ -263,7 +287,8 @@ async function main() {
   // daemon child started concurrently it would race that clean and crash on
   // missing dist/index.js. Prebuilding before spawning anything guarantees a
   // stable dist on disk when the daemon starts.
-  prebuildDaemonCore();
+  prebuildRuntimeDependencies();
+  await stopStaleSessionHost();
 
   // Start the watcher (core) first. We don't strictly need to await its first
   // rebuild — prebuild already populated dist — but starting it before the

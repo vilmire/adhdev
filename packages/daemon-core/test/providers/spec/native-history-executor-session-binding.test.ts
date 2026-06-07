@@ -212,4 +212,92 @@ describe('executeJsonl — concurrent codex-cli sessions in same workspace', () 
         expect(result).toBeNull();
         void staleRollout;
     });
+
+    it('prefers an explicit session id over newest same-workspace rollout', () => {
+        const dateDir = path.join(tmpDir, '.codex', 'sessions', '2026', '06', '07');
+        const workspace = path.join(tmpDir, 'project');
+        fs.mkdirSync(workspace, { recursive: true });
+
+        const t0 = Date.now() - 60_000;
+        const requestedId = '019ea15f-dddd-7133-8347-920def0c7906';
+        const newerId = '019ea15f-eeee-7dd2-861e-e81c2ff13ae2';
+        const requestedRollout = writeRollout(
+            dateDir,
+            requestedId,
+            new Date(t0).toISOString(),
+            workspace,
+            [{ role: 'assistant', text: 'REQUESTED', ts: new Date(t0 + 100).toISOString() }],
+            t0,
+        );
+        writeRollout(
+            dateDir,
+            newerId,
+            new Date(t0 + 30_000).toISOString(),
+            workspace,
+            [{ role: 'assistant', text: 'NEWER', ts: new Date(t0 + 30_100).toISOString() }],
+            t0 + 30_000,
+        );
+
+        const cfg = {
+            source: {
+                kind: 'jsonl' as const,
+                path: `${tmpDir}/.codex/sessions/{yyyy}/{mm}/{dd}`,
+                file_pattern: 'rollout-*.jsonl',
+                session_id_from: 'filename_uuid' as const,
+                message_filter: { where: "$.type == 'response_item' && $.payload.type == 'message'" },
+                message_map: {
+                    role: '$.payload.role',
+                    content: '$.payload.content[0].text',
+                    timestamp_ms: '$.timestamp',
+                },
+            },
+        };
+
+        const result = executeNativeHistory(cfg, {
+            workspace,
+            historySessionId: requestedId,
+            sessionStartedAtMs: t0 + 30_000,
+        });
+        expect(result?.sourcePath).toBe(requestedRollout);
+        expect(result?.providerSessionId).toBe(requestedId);
+        expect(result?.messages.map(m => m.content)).toEqual(['REQUESTED']);
+    });
+
+    it('does not fall back to newest rollout when an explicit session id is missing', () => {
+        const dateDir = path.join(tmpDir, '.codex', 'sessions', '2026', '06', '07');
+        const workspace = path.join(tmpDir, 'project');
+        fs.mkdirSync(workspace, { recursive: true });
+
+        const t0 = Date.now() - 60_000;
+        writeRollout(
+            dateDir,
+            '019ea15f-ffff-7133-8347-920def0c7906',
+            new Date(t0).toISOString(),
+            workspace,
+            [{ role: 'assistant', text: 'EXISTING', ts: new Date(t0 + 100).toISOString() }],
+            t0,
+        );
+
+        const cfg = {
+            source: {
+                kind: 'jsonl' as const,
+                path: `${tmpDir}/.codex/sessions/{yyyy}/{mm}/{dd}`,
+                file_pattern: 'rollout-*.jsonl',
+                session_id_from: 'filename_uuid' as const,
+                message_filter: { where: "$.type == 'response_item' && $.payload.type == 'message'" },
+                message_map: {
+                    role: '$.payload.role',
+                    content: '$.payload.content[0].text',
+                    timestamp_ms: '$.timestamp',
+                },
+            },
+        };
+
+        const result = executeNativeHistory(cfg, {
+            workspace,
+            historySessionId: '019ea160-0000-7133-8347-920def0c7906',
+            sessionStartedAtMs: t0,
+        });
+        expect(result).toBeNull();
+    });
 });

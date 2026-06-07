@@ -62,4 +62,21 @@ describe('mesh coordinator setup UI helpers', () => {
       requiresRestart: true,
     }))
   })
+
+  it('renders transport-aware MCP launch args in CLI registration templates', () => {
+    const setup = buildManualCoordinatorSetup({
+      supported: true,
+      mcpConfig: {
+        mode: 'manual',
+        instructions: 'Register this server.',
+        template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}',
+      },
+    }, {
+      meshId: 'mesh_local',
+      adhdevMcpCommand: 'adhdev',
+      adhdevMcpArgs: 'mcp --mode local --repo-mesh mesh_local --port 3847',
+    })
+
+    expect(setup?.template).toBe('codex mcp add adhdev-mesh -- adhdev mcp --mode local --repo-mesh mesh_local --port 3847')
+  })
 })

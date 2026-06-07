@@ -214,8 +214,11 @@ export function buildIdeConversations(
             ? ''
             : title;
         const nativeServerMsgs = chat.messages || [];
-        const nativeHistorySessionId = (typeof activeId === 'string' && activeId.trim())
-            ? activeId
+        const normalizedActiveId = typeof activeId === 'string' ? activeId.trim() : '';
+        const genericCliActiveId = (isCliConv(ide) || isAcpConv(ide))
+            && normalizedActiveId === String(ide.type || '').trim();
+        const nativeHistorySessionId = normalizedActiveId && !genericCliActiveId
+            ? normalizedActiveId
             : ide.providerSessionId;
         const nativeCoordinator = ide.coordinator
             || (typeof ide.settings?.meshCoordinatorFor === 'string' && ide.settings.meshCoordinatorFor

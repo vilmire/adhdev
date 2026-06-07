@@ -36,4 +36,15 @@ describe('CliProviderInstance active chat identity', () => {
         expect(first.getState().activeChat?.id).toBe('runtime-session-1');
         expect(second.getState().activeChat?.id).toBe('runtime-session-2');
     });
+
+    it('does not use a generic adapter runtime id as the active chat identity', () => {
+        const instance = new CliProviderInstance(provider, '/workspaces/shared', [], 'runtime-session-1');
+        const adapter = (instance as any).adapter;
+        adapter.getRuntimeMetadata = () => ({
+            runtimeId: 'codex-cli',
+            runtimeKey: 'codex-cli',
+        });
+
+        expect(instance.getState().activeChat?.id).toBe('runtime-session-1');
+    });
 });

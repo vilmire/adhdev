@@ -685,6 +685,70 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     }
   })
 
+  it('emits mesh completion with diagnostics when external-native final assistant never arrives', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-07T00:10:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'codex-cli',
+        name: 'Codex CLI',
+        category: 'cli',
+        spawn: { command: 'codex', args: [] },
+        nativeHistory: {
+          format: 'codex-jsonl',
+          watchPath: '~/.codex/sessions/**/*.jsonl',
+          mode: 'native-source',
+          scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+        },
+        scripts: providerNativeHistoryScripts(() => [
+          { role: 'user', kind: 'standard', content: 'Do the assigned task', receivedAt: 1_800_000_601_000 },
+        ]),
+      } as any, '/tmp/project', [], 'runtime-codex', undefined, {
+        providerSessionId: '019ea42e-f1f8-7cb1-82fe-0b3b3f2ccc46',
+        launchMode: 'new',
+      }) as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+      instance.settings = {
+        meshNodeFor: 'mesh-test',
+        meshNodeId: 'node-test',
+        meshActiveTaskId: 'task-test',
+      }
+
+      let status = 'generating'
+      instance.adapter = {
+        chatMessagesOwnedExternally: true,
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({ status: 'idle', title: 'Codex CLI', messages: [] }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+      expect(events.map((event) => event.event)).toContain('agent:generating_started')
+
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(35_000)
+
+      const completed = events.find((event) => event.event === 'agent:generating_completed')
+      expect(completed).toMatchObject({
+        completionDiagnostic: {
+          emittedAfterFinalizationTimeout: true,
+          blockReason: 'missing_final_assistant',
+          providerSessionId: '019ea42e-f1f8-7cb1-82fe-0b3b3f2ccc46',
+          finalAssistantPresent: false,
+          finalAssistantEvidenceSource: 'external-native',
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('emits completion with timeout diagnostics if idle parser never exposes a final assistant turn', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))

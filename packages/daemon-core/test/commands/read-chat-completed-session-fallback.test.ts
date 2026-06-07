@@ -21,9 +21,15 @@ import { DaemonCommandHandler } from '../../src/commands/handler.js'
 function createHelpers() {
   return {
     getCdp: () => null,
-    getProvider: (type?: string) => type === 'hermes-cli'
-      ? ({ type: 'hermes-cli', category: 'cli', historyBehavior: { transcriptAuthority: 'provider' } })
-      : undefined,
+    getProvider: (type?: string) => {
+      if (type === 'hermes-cli') {
+        return { type: 'hermes-cli', category: 'cli', historyBehavior: { transcriptAuthority: 'provider' } }
+      }
+      if (type === 'codex-cli') {
+        return { type: 'codex-cli', category: 'cli', nativeHistory: { mode: 'canonical' }, historyBehavior: {} }
+      }
+      return undefined
+    },
     getProviderScript: () => null,
     evaluateProviderScript: async () => null,
     getCliAdapter: () => null,
@@ -153,6 +159,449 @@ describe('read_chat completed runtime provider fallback', () => {
     expect((result.messages as any[]).length).toBeGreaterThan(0)
     expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
       historySessionId: '25e40a0f-2dce-4e5a-9d0d-8fbf63bf7016',
+    }))
+  })
+
+  it('does not leak unmatched native history for a live codex runtime without providerSessionId', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      messages: [
+        { role: 'assistant', content: 'old workspace transcript', receivedAt: 1, historySessionId: 'old-provider-session' },
+      ],
+      hasMore: false,
+      source: 'provider-native',
+      providerSessionId: 'old-provider-session',
+    })
+
+    const runtimeSessionId = 'runtime-live-without-provider-id'
+    const adapter = {
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/tmp/adhdev-project',
+      getStatus: () => ({ status: 'idle' }),
+      getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
+      getRuntimeMetadata: () => ({
+        runtimeId: runtimeSessionId,
+        runtimeKey: runtimeSessionId,
+        spawnedAtMs: 1000,
+        spawnedEnv: {},
+      }),
+      getPartialResponse: () => '',
+      isProcessing: () => false,
+      isReady: () => true,
+    }
+
+    const result = await handleReadChat({
+      ...createHelpers(),
+      getCliAdapter: () => adapter,
+      ctx: {
+        instanceManager: { getInstance: () => null },
+        sessionRegistry: {
+          get: (sessionId: string) => sessionId === runtimeSessionId
+            ? {
+              sessionId: runtimeSessionId,
+              providerType: 'codex-cli',
+              transport: 'pty',
+              spawnedAtMs: 1000,
+            }
+            : undefined,
+        },
+      },
+    } as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.messages).toEqual([])
+    expect((result.messageSource as any)?.selected).toBe('pty-parser')
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: undefined,
+      workspace: '/tmp/adhdev-project',
+      sessionStartedAtMs: 1000,
+    }))
+  })
+
+  it('binds a live codex runtime to its spawn-matched native transcript and promotes the provider session id', async () => {
+    const runtimeSessionId = 'runtime-live-without-provider-id-spawn-match'
+    const providerSessionId = '019ea359-e438-7be2-b24e-88aedb6cd87c'
+    mocks.readProviderChatHistory.mockReturnValue({
+      messages: [
+        { role: 'user', content: 'unique prompt', receivedAt: 1100 },
+        { role: 'assistant', content: 'unique answer', receivedAt: 1200 },
+      ],
+      hasMore: false,
+      source: 'provider-native',
+      providerSessionId,
+    })
+    const updateRuntimeMeta = vi.fn()
+    const adapter = {
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/tmp/adhdev-project',
+      getStatus: () => ({ status: 'idle' }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        messages: [{ role: 'user', content: 'unique prompt', receivedAt: 1100 }],
+      }),
+      getRuntimeMetadata: () => ({
+        runtimeId: runtimeSessionId,
+        runtimeKey: runtimeSessionId,
+        spawnedAtMs: 1000,
+        spawnedEnv: {},
+      }),
+      updateRuntimeMeta,
+      getPartialResponse: () => '',
+      isProcessing: () => false,
+      isReady: () => true,
+    }
+
+    const result = await handleReadChat({
+      ...createHelpers(),
+      getCliAdapter: () => adapter,
+      ctx: {
+        instanceManager: { getInstance: () => null },
+        sessionRegistry: {
+          get: (sessionId: string) => sessionId === runtimeSessionId
+            ? {
+              sessionId: runtimeSessionId,
+              providerType: 'codex-cli',
+              transport: 'pty',
+              spawnedAtMs: 1000,
+            }
+            : undefined,
+        },
+      },
+    } as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.messages as any[]).map(message => message.content)).toEqual([
+      'unique prompt',
+      'unique answer',
+    ])
+    expect(result.providerSessionId).toBe(providerSessionId)
+    expect(updateRuntimeMeta).toHaveBeenCalledWith({ providerSessionId })
+  })
+
+  it('does not use same-workspace Codex native history when an exact provider session is still empty', async () => {
+    const runtimeSessionId = 'runtime-live-with-provider-id'
+    const providerSessionId = '019ea33e-6f7e-7b51-91de-5b9531f2711b'
+    mocks.readProviderChatHistory.mockImplementation((_agentType: string, options: any) => {
+      if (options?.historySessionId === providerSessionId) {
+        return {
+          messages: [],
+          hasMore: false,
+          source: 'native-unavailable',
+        }
+      }
+      return {
+        messages: [{ role: 'assistant', content: 'old workspace transcript', receivedAt: 1 }],
+        hasMore: false,
+        providerSessionId: 'old-provider-session',
+        source: 'provider-native',
+      }
+    })
+
+    const adapter = {
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/tmp/adhdev-project',
+      getStatus: () => ({ status: 'idle' }),
+      getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
+      getRuntimeMetadata: () => ({
+        runtimeId: runtimeSessionId,
+        runtimeKey: runtimeSessionId,
+        providerSessionId,
+        spawnedAtMs: 1000,
+        spawnedEnv: {},
+      }),
+      getPartialResponse: () => '',
+      isProcessing: () => false,
+      isReady: () => true,
+    }
+
+    const result = await handleReadChat({
+      ...createHelpers(),
+      getCliAdapter: () => adapter,
+      ctx: {
+        instanceManager: { getInstance: () => null },
+        sessionRegistry: {
+          get: (sessionId: string) => sessionId === runtimeSessionId
+            ? {
+              sessionId: runtimeSessionId,
+              providerSessionId,
+              providerType: 'codex-cli',
+              transport: 'pty',
+              spawnedAtMs: 1000,
+            }
+            : undefined,
+        },
+      },
+    } as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      historySessionId: providerSessionId,
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.messages).toEqual([])
+    expect((result.messageSource as any)?.selected).toBe('pty-parser')
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledTimes(1)
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: providerSessionId,
+    }))
+  })
+
+  it('keeps an exact restored Codex transcript visible when a later native slice shrinks and PTY is empty', async () => {
+    const runtimeSessionId = 'runtime-restored-exact-history'
+    const providerSessionId = '019ea359-e414-7e70-bfd4-e774c8dcde87'
+    let readCount = 0
+    mocks.readProviderChatHistory.mockImplementation(() => {
+      readCount += 1
+      const messages = [
+        { role: 'system', content: 'session context', receivedAt: 1000 },
+        { role: 'user', content: 'restored prompt', receivedAt: 1100 },
+        { role: 'assistant', content: 'restored answer', receivedAt: 1200 },
+      ]
+      return {
+        messages: readCount === 1 ? messages : messages.slice(1),
+        hasMore: false,
+        source: 'provider-native',
+        providerSessionId,
+        nativeHistoryCoverage: 'full',
+      }
+    })
+
+    const adapter = {
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/tmp/adhdev-project',
+      getStatus: () => ({ status: 'idle' }),
+      getScriptParsedStatus: () => ({ status: 'idle', messages: [], providerSessionId }),
+      getRuntimeMetadata: () => ({
+        runtimeId: runtimeSessionId,
+        runtimeKey: runtimeSessionId,
+        providerSessionId,
+        spawnedAtMs: 0,
+        spawnedEnv: {},
+      }),
+      getPartialResponse: () => '',
+      isProcessing: () => false,
+      isReady: () => true,
+    }
+    const helpers = {
+      ...createHelpers(),
+      getCliAdapter: () => adapter,
+      currentSession: {
+        sessionId: runtimeSessionId,
+        providerSessionId,
+        providerType: 'codex-cli',
+        transport: 'pty',
+        workspace: '/tmp/adhdev-project',
+      },
+      ctx: {
+        instanceManager: { getInstance: () => null },
+        sessionRegistry: {
+          get: (sessionId: string) => sessionId === runtimeSessionId
+            ? {
+              sessionId: runtimeSessionId,
+              providerSessionId,
+              providerType: 'codex-cli',
+              transport: 'pty',
+              spawnedAtMs: 0,
+            }
+            : undefined,
+        },
+      },
+    }
+    const args = {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      historySessionId: providerSessionId,
+      providerSessionId,
+      tailLimit: 20,
+    }
+
+    const first = await handleReadChat(helpers as any, args)
+    const second = await handleReadChat(helpers as any, args)
+
+    expect((first.messageSource as any)?.selected).toBe('native-history')
+    expect((second.messageSource as any)?.selected).toBe('native-history')
+    expect((second.messages as any[]).map(message => message.content)).toEqual([
+      'restored prompt',
+      'restored answer',
+    ])
+  })
+
+  it('rejects an exact Codex provider id when the rollout belongs to another workspace', async () => {
+    const runtimeSessionId = 'runtime-worktree-with-stale-provider-id'
+    const providerSessionId = '019ea367-b753-7d43-b27f-cf3a08edc0d9'
+    mocks.readProviderChatHistory.mockReturnValue({
+      messages: [
+        {
+          role: 'assistant',
+          content: 'main workspace answer',
+          receivedAt: 1200,
+          workspace: '/tmp/main-project',
+        },
+      ],
+      hasMore: false,
+      source: 'provider-native',
+      providerSessionId,
+      nativeHistoryCoverage: 'full',
+      workspace: '/tmp/main-project',
+    })
+
+    const adapter = {
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/tmp/worktree-project',
+      getStatus: () => ({ status: 'idle', providerSessionId }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        providerSessionId,
+        messages: [{ role: 'user', content: 'worktree prompt', receivedAt: 1300 }],
+      }),
+      getRuntimeMetadata: () => ({
+        runtimeId: runtimeSessionId,
+        runtimeKey: runtimeSessionId,
+        providerSessionId,
+        spawnedAtMs: 1000,
+        spawnedEnv: {},
+      }),
+      getPartialResponse: () => '',
+      isProcessing: () => false,
+      isReady: () => true,
+    }
+
+    const result = await handleReadChat({
+      ...createHelpers(),
+      getCliAdapter: () => adapter,
+      currentSession: {
+        sessionId: runtimeSessionId,
+        providerSessionId,
+        providerType: 'codex-cli',
+        transport: 'pty',
+        workspace: '/tmp/worktree-project',
+      },
+      ctx: {
+        instanceManager: { getInstance: () => null },
+        sessionRegistry: {
+          get: () => ({
+            sessionId: runtimeSessionId,
+            providerSessionId,
+            providerType: 'codex-cli',
+            transport: 'pty',
+            spawnedAtMs: 1000,
+          }),
+        },
+      },
+    } as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      historySessionId: providerSessionId,
+      tailLimit: 20,
+    })
+
+    expect((result.messages as any[]).map(message => message.content)).not.toContain('main workspace answer')
+    expect((result.messageSource as any)?.selected).toBe('pty-parser')
+    expect((result.messageSource as any)?.coverage?.safeMapping).toBe(false)
+  })
+
+  it('rebinds an auto-detected Codex id when its rollout workspace is wrong', async () => {
+    const runtimeSessionId = 'runtime-worktree-auto-rebind'
+    const staleProviderSessionId = '019ea36e-5bbb-7202-800b-54e0c57ee987'
+    const correctProviderSessionId = '019ea36e-5bfe-7952-aa6f-4407b7f8aec7'
+    mocks.readProviderChatHistory.mockImplementation((_agentType: string, options: any) => {
+      if (options.historySessionId) {
+        return {
+          messages: [{ role: 'assistant', content: 'main answer', receivedAt: 1200, workspace: '/tmp/main-project' }],
+          hasMore: false,
+          source: 'provider-native',
+          providerSessionId: staleProviderSessionId,
+          nativeHistoryCoverage: 'full',
+          workspace: '/tmp/main-project',
+        }
+      }
+      return {
+        messages: [
+          { role: 'user', content: 'worktree prompt', receivedAt: 1300, workspace: '/tmp/worktree-project' },
+          { role: 'assistant', content: 'worktree answer', receivedAt: 1400, workspace: '/tmp/worktree-project' },
+        ],
+        hasMore: false,
+        source: 'provider-native',
+        providerSessionId: correctProviderSessionId,
+        nativeHistoryCoverage: 'full',
+        workspace: '/tmp/worktree-project',
+      }
+    })
+    const updateRuntimeMeta = vi.fn()
+    const adapter = {
+      cliType: 'codex-cli',
+      cliName: 'Codex CLI',
+      workingDir: '/tmp/worktree-project',
+      getStatus: () => ({ status: 'idle', providerSessionId: staleProviderSessionId }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        providerSessionId: staleProviderSessionId,
+        messages: [{ role: 'user', content: 'worktree prompt', receivedAt: 1300 }],
+      }),
+      getRuntimeMetadata: () => ({
+        runtimeId: runtimeSessionId,
+        runtimeKey: runtimeSessionId,
+        providerSessionId: staleProviderSessionId,
+        spawnedAtMs: 1000,
+        spawnedEnv: {},
+      }),
+      updateRuntimeMeta,
+      getPartialResponse: () => '',
+      isProcessing: () => false,
+      isReady: () => true,
+    }
+
+    const result = await handleReadChat({
+      ...createHelpers(),
+      getCliAdapter: () => adapter,
+      currentSession: {
+        sessionId: runtimeSessionId,
+        providerSessionId: staleProviderSessionId,
+        providerType: 'codex-cli',
+        transport: 'pty',
+        workspace: '/tmp/worktree-project',
+      },
+      ctx: {
+        instanceManager: { getInstance: () => null },
+        sessionRegistry: {
+          get: () => ({
+            sessionId: runtimeSessionId,
+            providerSessionId: staleProviderSessionId,
+            providerType: 'codex-cli',
+            transport: 'pty',
+            spawnedAtMs: 1000,
+          }),
+        },
+      },
+    } as any, {
+      agentType: 'codex-cli',
+      targetSessionId: runtimeSessionId,
+      tailLimit: 20,
+    })
+
+    expect(result.providerSessionId).toBe(correctProviderSessionId)
+    expect((result.messages as any[]).map(message => message.content)).toEqual([
+      'worktree prompt',
+      'worktree answer',
+    ])
+    expect(updateRuntimeMeta).toHaveBeenCalledWith({ providerSessionId: correctProviderSessionId })
+    expect(mocks.readProviderChatHistory).toHaveBeenLastCalledWith('codex-cli', expect.objectContaining({
+      historySessionId: undefined,
+      workspace: '/tmp/worktree-project',
+      sessionStartedAtMs: 1000,
     }))
   })
 })

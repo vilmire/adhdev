@@ -1350,6 +1350,7 @@ type ProviderNativeHistoryReadResult = {
     sourcePath: string;
     sourceMtimeMs: number;
     providerSessionId?: string;
+    workspace?: string;
     nativeHistoryCoverage?: string;
     partialReason?: string;
     unavailableReason?: string;
@@ -1449,6 +1450,7 @@ function callProviderNativeHistoryRead(
         sourcePath: typeof (result as any).sourcePath === 'string' ? (result as any).sourcePath : '',
         sourceMtimeMs: Number((result as any).sourceMtimeMs) || 0,
         providerSessionId: typeof (result as any).providerSessionId === 'string' ? (result as any).providerSessionId.trim() : undefined,
+        workspace: typeof (result as any).workspace === 'string' ? (result as any).workspace.trim() : undefined,
         nativeHistoryCoverage: typeof (result as any).nativeHistoryCoverage === 'string' ? (result as any).nativeHistoryCoverage.trim() : undefined,
         partialReason: typeof (result as any).partialReason === 'string' ? (result as any).partialReason.trim() : undefined,
         unavailableReason: typeof (result as any).unavailableReason === 'string' ? (result as any).unavailableReason.trim() : undefined,
@@ -1537,6 +1539,7 @@ export function readProviderChatHistory(
     sourcePath?: string;
     sourceMtimeMs?: number;
     providerSessionId?: string;
+    workspace?: string;
     nativeHistoryCoverage?: string;
     partialReason?: string;
     unavailableReason?: string;
@@ -1550,6 +1553,7 @@ export function readProviderChatHistory(
             sourcePath: nativeResult.sourcePath,
             sourceMtimeMs: nativeResult.sourceMtimeMs,
             providerSessionId: nativeResult.providerSessionId,
+            workspace: nativeResult.workspace,
             nativeHistoryCoverage: nativeResult.nativeHistoryCoverage,
             partialReason: nativeResult.partialReason,
             unavailableReason: nativeResult.unavailableReason,

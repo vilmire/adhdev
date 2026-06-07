@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DaemonCommandRouter } from '../../src/commands/router.js'
-import { resolveMeshCoordinatorSetup } from '../../src/commands/mesh-coordinator.js'
+import { buildMeshCoordinatorRegistrationPlan, resolveMeshCoordinatorSetup } from '../../src/commands/mesh-coordinator.js'
 import type { ProviderModule } from '../../src/providers/contracts.js'
 
 const baseProvider: ProviderModule = {
@@ -50,8 +50,20 @@ function createAutoImportRouter(
   })
 }
 
+function clearCoordinatorMcpEnv(): void {
+  delete process.env.ADHDEV_COORDINATOR_MCP_ENTRY_PATH
+  delete process.env.ADHDEV_COORDINATOR_NODE_EXECUTABLE
+  delete process.env.ADHDEV_COORDINATOR_MCP_TRANSPORT
+  delete process.env.ADHDEV_COORDINATOR_MCP_PORT
+}
+
 describe('resolveMeshCoordinatorSetup', () => {
+  beforeEach(() => {
+    clearCoordinatorMcpEnv()
+  })
+
   afterEach(() => {
+    clearCoordinatorMcpEnv()
     vi.restoreAllMocks()
   })
 
@@ -273,7 +285,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     expect(result.kind).not.toBe('unsupported')
   })
 
-  it('codex-cli coordinator setup is unaffected after adding antigravity-cli support', () => {
+  it('renders codex-cli coordinator registration from the resolved MCP launch args', () => {
     const provider: ProviderModule = {
       ...baseProvider,
       type: 'codex-cli',
@@ -284,7 +296,7 @@ describe('resolveMeshCoordinatorSetup', () => {
           serverName: 'adhdev-mesh',
           requiresRestart: true,
           instructions: 'ADHDev will register the adhdev-mesh MCP server in Codex via `codex mcp add` before launching a fresh coordinator session. You can verify with `codex mcp list`.',
-          template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} mcp --mode ipc --repo-mesh {{meshId}}',
+          template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}',
         },
       },
     }
@@ -300,6 +312,180 @@ describe('resolveMeshCoordinatorSetup', () => {
     expect(result.serverName).toBe('adhdev-mesh')
     expect(result.command).toContain('codex mcp add')
     expect(result.command).toContain('mesh_codex_unaffected')
+  })
+
+  it('renders codex-cli coordinator registration for a standalone local daemon', () => {
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'codex-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          serverName: 'adhdev-mesh',
+          requiresRestart: true,
+          instructions: 'Register through Codex.',
+          template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}',
+        },
+      },
+    }
+
+    const result = resolveMeshCoordinatorSetup({
+      provider,
+      meshId: 'mesh_codex_local',
+      workspace: '/repo',
+      adhdevMcpTransport: 'local',
+      adhdevMcpPort: 3957,
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      kind: 'cli_command',
+      command: 'codex mcp add adhdev-mesh -- adhdev mcp --mode local --repo-mesh mesh_codex_local --port 3957',
+    }))
+  })
+
+  it('uses node to launch a direct bundled MCP entrypoint without the adhdev mcp subcommand', () => {
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'codex-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          serverName: 'adhdev-mesh',
+          instructions: 'Register through Codex.',
+          template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}',
+        },
+      },
+    }
+
+    const result = resolveMeshCoordinatorSetup({
+      provider,
+      meshId: 'mesh_local',
+      workspace: '/repo',
+      adhdevMcpEntryPath: '/app/vendor/mcp-server/index.js',
+      nodeExecutable: '/usr/local/bin/node',
+      adhdevMcpTransport: 'local',
+      adhdevMcpPort: 3847,
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      kind: 'cli_command',
+      command: 'codex mcp add adhdev-mesh -- /usr/local/bin/node /app/vendor/mcp-server/index.js --mode local --repo-mesh mesh_local --port 3847',
+      mcpServer: {
+        command: '/usr/local/bin/node',
+        args: ['/app/vendor/mcp-server/index.js', '--mode', 'local', '--repo-mesh', 'mesh_local', '--port', '3847'],
+      },
+    }))
+  })
+
+  it('uses standalone MCP entrypoint environment variables for installed packages', () => {
+    process.env.ADHDEV_COORDINATOR_MCP_ENTRY_PATH = '/npm/global/lib/node_modules/@adhdev/daemon-standalone/vendor/mcp-server/index.js'
+    process.env.ADHDEV_COORDINATOR_NODE_EXECUTABLE = '/usr/local/bin/node'
+    process.env.ADHDEV_COORDINATOR_MCP_TRANSPORT = 'local'
+    process.env.ADHDEV_COORDINATOR_MCP_PORT = '3847'
+
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'codex-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          serverName: 'adhdev-mesh',
+          instructions: 'Register through Codex.',
+          template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}',
+        },
+      },
+    }
+
+    const result = resolveMeshCoordinatorSetup({
+      provider,
+      meshId: 'mesh_install',
+      workspace: '/repo',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      kind: 'cli_command',
+      command: 'codex mcp add adhdev-mesh -- /usr/local/bin/node /npm/global/lib/node_modules/@adhdev/daemon-standalone/vendor/mcp-server/index.js --mode local --repo-mesh mesh_install --port 3847',
+      mcpServer: {
+        command: '/usr/local/bin/node',
+        args: [
+          '/npm/global/lib/node_modules/@adhdev/daemon-standalone/vendor/mcp-server/index.js',
+          '--mode',
+          'local',
+          '--repo-mesh',
+          'mesh_install',
+          '--port',
+          '3847',
+        ],
+      },
+    }))
+  })
+
+  it('upgrades legacy cli registration templates to the standalone local transport', () => {
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'codex-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          serverName: 'adhdev-mesh',
+          instructions: 'Register through Codex.',
+          template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} mcp --mode ipc --repo-mesh {{meshId}}',
+        },
+      },
+    }
+
+    const result = resolveMeshCoordinatorSetup({
+      provider,
+      meshId: 'mesh_codex_legacy_local',
+      workspace: '/repo',
+      adhdevMcpTransport: 'local',
+      adhdevMcpPort: 3847,
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      kind: 'cli_command',
+      command: 'codex mcp add adhdev-mesh -- adhdev mcp --mode local --repo-mesh mesh_codex_legacy_local --port 3847',
+    }))
+  })
+
+  it('replaces an existing Codex MCP registration before adding the current mesh transport', () => {
+    expect(buildMeshCoordinatorRegistrationPlan(
+      'codex-cli',
+      'adhdev-mesh',
+      'codex mcp add adhdev-mesh -- adhdev mcp --mode local --repo-mesh mesh_codex_local --port 3847',
+    )).toEqual([
+      {
+        command: 'codex',
+        args: ['mcp', 'remove', 'adhdev-mesh'],
+        required: false,
+        label: 'remove_existing',
+      },
+      {
+        command: 'codex',
+        args: ['mcp', 'add', 'adhdev-mesh', '--', 'adhdev', 'mcp', '--mode', 'local', '--repo-mesh', 'mesh_codex_local', '--port', '3847'],
+        required: true,
+        label: 'register',
+      },
+    ])
+  })
+
+  it('does not remove registrations for non-Codex coordinator CLIs', () => {
+    expect(buildMeshCoordinatorRegistrationPlan(
+      'antigravity-cli',
+      'adhdev-mesh',
+      'agy mcp add adhdev-mesh -- adhdev mcp --mode ipc --repo-mesh mesh_agy',
+    )).toEqual([
+      {
+        command: 'agy',
+        args: ['mcp', 'add', 'adhdev-mesh', '--', 'adhdev', 'mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_agy'],
+        required: true,
+        label: 'register',
+      },
+    ])
   })
 
   it('launch_mesh_coordinator prefers live session-host workspace over stale node workspace', async () => {

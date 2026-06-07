@@ -8,6 +8,7 @@ import {
   resolveSessionHostAppNameResolution,
   type SessionHostEndpoint,
 } from '@adhdev/daemon-core';
+import { sanitizeSpawnEnv } from '@adhdev/session-host-core';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../../daemon-core/src/runtime-defaults.js';
 const SESSION_HOST_APP_NAME_RESOLUTION = resolveSessionHostAppNameResolution({ standalone: true });
 const SESSION_HOST_APP_NAME = SESSION_HOST_APP_NAME_RESOLUTION.appName;
@@ -22,39 +23,7 @@ export function getStandaloneSessionHostAppNameWarning(): string | undefined {
 }
 
 function buildSessionHostEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(baseEnv)) {
-    if (typeof value !== 'string') continue;
-    env[key] = value;
-  }
-
-  for (const key of Object.keys(env)) {
-    if (
-      key === 'INIT_CWD'
-      || key === 'npm_command'
-      || key === 'npm_execpath'
-      || key === 'npm_node_execpath'
-      || key.startsWith('npm_')
-      || key.startsWith('npm_config_')
-      || key.startsWith('npm_package_')
-      || key.startsWith('npm_lifecycle_')
-      || key.startsWith('PNPM_')
-      || key.startsWith('YARN_')
-      || key.startsWith('BUN_')
-    ) {
-      delete env[key];
-    }
-  }
-
-  if (!env.NO_COLOR) {
-    if (!env.TERM || env.TERM === 'xterm-color') env.TERM = 'xterm-256color';
-    if (!env.COLORTERM) env.COLORTERM = 'truecolor';
-    if (process.platform === 'win32') {
-      if (!env.FORCE_COLOR) env.FORCE_COLOR = '1';
-      if (!env.CLICOLOR) env.CLICOLOR = '1';
-    }
-  }
-
+  const env = sanitizeSpawnEnv(baseEnv);
   env.ADHDEV_SESSION_HOST_NAME = SESSION_HOST_APP_NAME;
   return env;
 }

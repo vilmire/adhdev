@@ -372,6 +372,10 @@ export function __clearMeshQueueForTests(meshId: string): void {
     BeadsDB.getInstance().deleteQueue(meshId);
 }
 
+export function __clearDirectDispatchesForTests(meshId: string): void {
+    BeadsDB.getInstance().deleteDirectDispatches(meshId);
+}
+
 export function __resetBeadsDBForTests(): void {
     BeadsDB.resetForTests();
 }

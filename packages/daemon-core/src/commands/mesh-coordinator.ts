@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import { LOG } from '../logging/logger.js'
 import type {
   MeshCoordinatorMcpConfigFormat,
@@ -39,6 +39,7 @@ export type MeshCoordinatorSetup =
       command: string
       requiresRestart: boolean
       instructions: string
+      mcpServer: MeshCoordinatorMcpServerLaunch
     }
   | {
       kind: 'unsupported'
@@ -71,6 +72,8 @@ function resolveHermesMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetupO
   const mcpServer = resolveAdhdevMcpServerLaunch({
     meshId: options.meshId,
     adhdevMcpCommand: options.adhdevMcpCommand,
+    adhdevMcpEntryPath: options.adhdevMcpEntryPath,
+    nodeExecutable: options.nodeExecutable,
     adhdevMcpTransport: options.adhdevMcpTransport,
     adhdevMcpPort: options.adhdevMcpPort,
   })
@@ -144,6 +147,8 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
     const mcpServer = resolveAdhdevMcpServerLaunch({
       meshId,
       adhdevMcpCommand: options.adhdevMcpCommand,
+      adhdevMcpEntryPath: options.adhdevMcpEntryPath,
+      nodeExecutable: options.nodeExecutable,
       adhdevMcpTransport: options.adhdevMcpTransport,
       adhdevMcpPort: options.adhdevMcpPort,
     })
@@ -168,22 +173,41 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
     if (!instructions || !template?.trim()) {
       return { kind: 'unsupported', reason: 'Provider manual MCP setup is missing instructions or template' }
     }
-    const renderedTemplate = renderMeshCoordinatorTemplate(template, {
+    const mcpServer = resolveAdhdevMcpServerLaunch({
+      meshId,
+      adhdevMcpCommand: options.adhdevMcpCommand,
+      adhdevMcpEntryPath: options.adhdevMcpEntryPath,
+      nodeExecutable: options.nodeExecutable,
+      adhdevMcpTransport: options.adhdevMcpTransport,
+      adhdevMcpPort: options.adhdevMcpPort,
+    })
+    if (!mcpServer) {
+      return {
+        kind: 'unsupported',
+        reason: 'Could not resolve the ADHDev MCP server entrypoint and transport arguments',
+      }
+    }
+    let renderedTemplate = renderMeshCoordinatorTemplate(template, {
       meshId,
       workspace,
       serverName,
-      adhdevMcpCommand: options.adhdevMcpCommand || DEFAULT_ADHDEV_MCP_COMMAND,
+      adhdevMcpCommand: mcpServer.command,
+      adhdevMcpArgs: mcpServer.args.join(' '),
     })
     // Detect if the template is a runnable CLI command (single line, no YAML/JSON structure).
     // If so, use cli_command kind so the daemon can execute it automatically.
     const isCliCommand = !renderedTemplate.trim().includes('\n') && !renderedTemplate.trim().startsWith('{')
     if (isCliCommand) {
+      if (!/\{\{\s*adhdevMcpArgs\s*\}\}/.test(template)) {
+        renderedTemplate = replaceLegacyCliCommandMcpArgs(renderedTemplate, mcpServer.args)
+      }
       return {
         kind: 'cli_command',
         serverName,
         command: renderedTemplate.trim(),
         requiresRestart: mcpConfig.requiresRestart === true,
         instructions: instructions,
+        mcpServer,
       }
     }
     return {
@@ -204,7 +228,14 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
 }
 
 function renderMeshCoordinatorTemplate(template: string, values: Record<string, string>): string {
-  return template.replace(/\{\{\s*(meshId|workspace|serverName|adhdevMcpCommand)\s*\}\}/g, (_, key: string) => values[key] || '')
+  return template.replace(/\{\{\s*(meshId|workspace|serverName|adhdevMcpCommand|adhdevMcpArgs)\s*\}\}/g, (_, key: string) => values[key] || '')
+}
+
+function replaceLegacyCliCommandMcpArgs(command: string, args: string[]): string {
+  return command.replace(
+    /\bmcp\s+--mode\s+(?:ipc|local)\s+--repo-mesh\s+\S+(?:\s+--port\s+\d+)?\s*$/,
+    args.join(' '),
+  )
 }
 
 function resolveHermesCoordinatorHome(meshId: string, workspace: string): string {
@@ -224,12 +255,29 @@ function resolveMcpConfigPath(configPath: string, workspace: string): string {
 function resolveAdhdevMcpServerLaunch(options: {
   meshId: string
   adhdevMcpCommand?: string
+  adhdevMcpEntryPath?: string
+  nodeExecutable?: string
   adhdevMcpTransport?: 'local' | 'ipc'
   adhdevMcpPort?: number
 }): MeshCoordinatorMcpServerLaunch | null {
+  const directEntryPath = resolveAdhdevMcpEntryPath(options.adhdevMcpEntryPath)
+  if (directEntryPath) {
+    const transport = resolveMcpTransport(options.adhdevMcpTransport)
+    const args = [directEntryPath, '--mode', transport, '--repo-mesh', options.meshId]
+    const port = resolveMcpPort(options.adhdevMcpPort)
+    if (port !== undefined) args.push('--port', String(port))
+    return {
+      command: resolveNodeExecutable(options.nodeExecutable),
+      args,
+    }
+  }
+
   const command = resolveAdhdevCommand(options.adhdevMcpCommand)
   const transport = resolveMcpTransport(options.adhdevMcpTransport)
-  const args = ['mcp', '--mode', transport, '--repo-mesh', options.meshId]
+  const directMcpEntrypoint = basename(command).startsWith('adhdev-mcp')
+    || command.includes('/vendor/mcp-server/')
+    || command.includes('\\vendor\\mcp-server\\')
+  const args = [...(directMcpEntrypoint ? [] : ['mcp']), '--mode', transport, '--repo-mesh', options.meshId]
   const port = resolveMcpPort(options.adhdevMcpPort)
   if (port !== undefined) args.push('--port', String(port))
   return {
@@ -240,6 +288,17 @@ function resolveAdhdevMcpServerLaunch(options: {
 
 function resolveAdhdevCommand(explicitCommand?: string): string {
   return explicitCommand?.trim() || process.env.ADHDEV_COORDINATOR_MCP_COMMAND?.trim() || DEFAULT_ADHDEV_MCP_COMMAND
+}
+
+function resolveAdhdevMcpEntryPath(explicitEntryPath?: string): string | null {
+  const entryPath = explicitEntryPath?.trim() || process.env.ADHDEV_COORDINATOR_MCP_ENTRY_PATH?.trim()
+  return entryPath || null
+}
+
+function resolveNodeExecutable(explicitNodeExecutable?: string): string {
+  return explicitNodeExecutable?.trim()
+    || process.env.ADHDEV_COORDINATOR_NODE_EXECUTABLE?.trim()
+    || process.execPath
 }
 
 function resolveMcpTransport(explicitTransport?: 'local' | 'ipc'): 'local' | 'ipc' {
@@ -416,6 +475,52 @@ export interface PtyExecResult {
   signal: number | null
   output: string
   timedOut: boolean
+}
+
+export interface MeshCoordinatorRegistrationStep {
+  command: string
+  args: string[]
+  required: boolean
+  label: 'remove_existing' | 'register'
+}
+
+/**
+ * Codex rejects `mcp add` when a server with the same name already exists.
+ * Replace that entry before registering so transport/mesh changes do not leave
+ * a fresh coordinator attached to stale MCP launch arguments.
+ */
+export function buildMeshCoordinatorRegistrationPlan(
+  cliType: string,
+  serverName: string,
+  registrationCommand: string,
+): MeshCoordinatorRegistrationStep[] {
+  const commandParts = registrationCommand.trim().split(/\s+/).filter(Boolean)
+  const [command, ...args] = commandParts
+  if (!command) return []
+
+  const register: MeshCoordinatorRegistrationStep = {
+    command,
+    args,
+    required: true,
+    label: 'register',
+  }
+  if (
+    cliType === 'codex-cli'
+    && basename(command) === 'codex'
+    && args[0] === 'mcp'
+    && args[1] === 'add'
+  ) {
+    return [
+      {
+        command,
+        args: ['mcp', 'remove', serverName],
+        required: false,
+        label: 'remove_existing',
+      },
+      register,
+    ]
+  }
+  return [register]
 }
 
 /**

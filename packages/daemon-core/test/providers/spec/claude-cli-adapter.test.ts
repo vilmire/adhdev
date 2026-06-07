@@ -63,6 +63,20 @@ function makeAdapter(screenText: string): any {
   return adapter;
 }
 
+function makeCodexAdapter(screenText: string): any {
+  const adapter = makeAdapter(screenText);
+  adapter.cliType = 'codex-cli';
+  adapter.cliName = 'Codex CLI';
+  adapter.spec = {
+    ...adapter.spec,
+    id: 'codex-cli',
+    name: 'Codex CLI',
+    binary: 'codex',
+  };
+  adapter.providerSessionId = undefined;
+  return adapter;
+}
+
 describe('SpecCliAdapter — claude-cli screen fallbacks', () => {
   it('promotes headerless numbered-choice AskUserQuestion screens to activeInteractivePrompt', () => {
     const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
@@ -90,5 +104,21 @@ describe('SpecCliAdapter — claude-cli screen fallbacks', () => {
       kind: 'standard',
       content: '안녕하세요! 가위바위보 한 판 해요.',
     })]);
+  });
+});
+
+describe('SpecCliAdapter — codex-cli footer identity', () => {
+  it('extracts providerSessionId from ANSI-colored Codex footer', () => {
+    const adapter = makeCodexAdapter([
+      '\u001b[1;2m› \u001b[0mReply with exactly: ADHDEV_RETEST_A',
+      '',
+      '\u001b[2m• \u001b[0mADHDEV_RETEST_A',
+      '',
+      '\u001b[2C\u001b[38;2;246;226;183;22mgpt-5.5 high\u001b[39;2m · \u001b[38;2;171;223;167;22m~/Work/adhdev\u001b[39;2m · \u001b[38;2;148;153;174;22m019ea2ac-b82d-7551-8276-75d047b2fdab\u001b[0m',
+    ].join('\n'));
+
+    const parsed = adapter.getScriptParsedStatus();
+
+    expect(parsed.providerSessionId).toBe('019ea2ac-b82d-7551-8276-75d047b2fdab');
   });
 });

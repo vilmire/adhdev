@@ -1179,13 +1179,69 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
     return false;
 }
 
+export interface MeshQueueTriggerResult {
+    success: true;
+    meshId: string;
+    pendingBefore: number;
+    assignedBefore: number;
+    pendingAfter: number;
+    assignedAfter: number;
+    claimed: boolean;
+    newlyAssignedTasks: Array<{
+        id: string;
+        nodeId?: string;
+        sessionId?: string;
+    }>;
+    localIdleSessionsChecked: number;
+    remoteIdleSessionsChecked: number;
+    skippedSessions: Array<{
+        nodeId?: string;
+        sessionId?: string;
+        reason: string;
+        status?: string;
+    }>;
+    autoLaunchStarted: boolean;
+    noIdleMeshSessionAvailable?: boolean;
+}
+
+function countQueueStatus(meshId: string, status: 'pending' | 'assigned'): number {
+    return getQueue(meshId, { status: [status] as any }).length;
+}
+
+function getQueueStatusById(meshId: string): Map<string, string> {
+    return new Map(getQueue(meshId).map(task => [task.id, task.status]));
+}
+
 /**
  * Triggers a queue check for all nodes in the mesh.
  * Called when a new task is enqueued, in case nodes are already idle.
  */
-export async function triggerMeshQueue(components: DaemonComponents, meshId: string): Promise<void> {
+export async function triggerMeshQueue(components: DaemonComponents, meshId: string): Promise<MeshQueueTriggerResult> {
     const mesh = getMeshWithCache(components, meshId);
-    if (!mesh) return;
+    const pendingBefore = countQueueStatus(meshId, 'pending');
+    const assignedBefore = countQueueStatus(meshId, 'assigned');
+    const beforeStatus = getQueueStatusById(meshId);
+    const skippedSessions: MeshQueueTriggerResult['skippedSessions'] = [];
+    let localIdleSessionsChecked = 0;
+    let remoteIdleSessionsChecked = 0;
+    let autoLaunchStarted = false;
+    if (!mesh) {
+        return {
+            success: true,
+            meshId,
+            pendingBefore,
+            assignedBefore,
+            pendingAfter: pendingBefore,
+            assignedAfter: assignedBefore,
+            claimed: false,
+            newlyAssignedTasks: [],
+            localIdleSessionsChecked,
+            remoteIdleSessionsChecked,
+            skippedSessions: [{ reason: 'mesh_not_found' }],
+            autoLaunchStarted,
+            noIdleMeshSessionAvailable: true,
+        };
+    }
 
     // Find all CLI instances that belong to this mesh and are idle
     const cliInstances = components.instanceManager.getByCategory('cli');
@@ -1202,14 +1258,30 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         // Only genuinely idle live sessions can pull work. Restored/stopped
         // records are kept for transcript/recovery visibility, but assigning
         // queue items to them strands tasks in assigned/pending without chat.
-        if (!isIdleSessionState(state)) continue;
+        if (!isIdleSessionState(state)) {
+            const status = readNonEmptyString(state.status).toLowerCase();
+            skippedSessions.push({
+                nodeId,
+                sessionId: readNonEmptyString(state.instanceId),
+                reason: isTerminalSessionStatus(status) ? 'terminal_session' : 'session_not_idle',
+                status: status || undefined,
+            });
+            continue;
+        }
 
         const sessionId = state.instanceId;
         const providerType = state.type || readNonEmptyString(settings.providerType);
         
         if (providerType) {
             // Try to assign a task to this idle node
+            localIdleSessionsChecked += 1;
             tryAssignQueueTask(components, meshId, nodeId, sessionId, providerType);
+        } else {
+            skippedSessions.push({
+                nodeId,
+                sessionId,
+                reason: 'provider_type_missing',
+            });
         }
     }
 
@@ -1218,6 +1290,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         // Find if this node is in the same mesh
         const node = mesh.nodes.find((n: any) => n.id === idle.nodeId);
         if (node) {
+            remoteIdleSessionsChecked += 1;
             const assigned = tryAssignQueueTask(components, meshId, idle.nodeId, idle.sessionId, idle.providerType);
             if (assigned) {
                 remoteIdleSessions.delete(key);
@@ -1225,7 +1298,34 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         }
     }
 
-    await maybeAutoLaunchOneQueueSession(components, meshId, mesh);
+    autoLaunchStarted = await maybeAutoLaunchOneQueueSession(components, meshId, mesh);
+    const afterQueue = getQueue(meshId);
+    const pendingAfter = afterQueue.filter(task => task.status === 'pending').length;
+    const assignedAfter = afterQueue.filter(task => task.status === 'assigned').length;
+    const newlyAssignedTasks = afterQueue
+        .filter(task => task.status === 'assigned' && beforeStatus.get(task.id) !== 'assigned')
+        .map(task => ({
+            id: task.id,
+            nodeId: task.assignedNodeId,
+            sessionId: task.assignedSessionId,
+        }));
+    return {
+        success: true,
+        meshId,
+        pendingBefore,
+        assignedBefore,
+        pendingAfter,
+        assignedAfter,
+        claimed: newlyAssignedTasks.length > 0,
+        newlyAssignedTasks,
+        localIdleSessionsChecked,
+        remoteIdleSessionsChecked,
+        skippedSessions,
+        autoLaunchStarted,
+        ...(pendingAfter > 0 && newlyAssignedTasks.length === 0 && localIdleSessionsChecked === 0 && remoteIdleSessionsChecked === 0 && !autoLaunchStarted
+            ? { noIdleMeshSessionAvailable: true }
+            : {}),
+    };
 }
 
 async function maybeAutoFastForwardIdleNode(components: DaemonComponents, args: {

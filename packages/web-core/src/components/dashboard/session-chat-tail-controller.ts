@@ -190,6 +190,33 @@ function shouldDeferBusyTailUpdate(
   return nextMessages.length < existingCount
 }
 
+function isTransientUnavailableEmptyTail(
+  snapshot: SessionChatTailSnapshot,
+  fallbackRecentCount: number,
+  nextMessages: DashboardMessage[],
+  messageSource: Record<string, unknown> | undefined,
+): boolean {
+  if (nextMessages.length !== 0) return false
+  const existingCount = getExistingVisibleMessageCount(snapshot, fallbackRecentCount)
+  if (existingCount <= 0) return false
+
+  // An explicit local clear (new-chat/reset flow) intentionally sets an empty
+  // live snapshot. Do not resurrect fallback rows after that.
+  if (snapshot.hasLiveSnapshot && snapshot.liveMessages.length === 0) return false
+
+  if (!messageSource || typeof messageSource !== 'object') return false
+  const selected = messageSource.selected
+  const fallbackReason = messageSource.fallbackReason
+  const nativeSource = messageSource.nativeSource
+
+  // Codex can briefly report an empty tail before its provider-native rollout
+  // id is bound. Treat that as "not hydrated yet" instead of letting an empty
+  // PTY/native-unavailable result erase visible fallback/live bubbles.
+  if (selected === 'native-history') return false
+  if (nativeSource === 'native-unavailable') return true
+  return typeof fallbackReason === 'string' && fallbackReason.startsWith('native_history_')
+}
+
 function readChatTailUpdateMessages(update: SessionChatTailUpdate): DashboardMessage[] {
   if (Array.isArray(update.messages)) return update.messages as DashboardMessage[]
   const tailMessages = (update as SessionChatTailUpdate & { messagesTail?: unknown }).messagesTail
@@ -228,6 +255,9 @@ export class SessionChatTailController {
   }
 
   updateOptions(options: Partial<SessionChatTailControllerOptions>): void {
+    const previousSendData = this.sendData
+    const previousDaemonId = this.daemonId
+    const previousSessionId = this.sessionId
     if (options.manager) this.manager = options.manager
     if (options.sendData) this.sendData = options.sendData
     if (options.historySessionId) this.historySessionId = options.historySessionId
@@ -246,6 +276,17 @@ export class SessionChatTailController {
           this.connect()
         }
       }
+    }
+    if (
+      this.retainCount > 0
+      && (
+        previousSendData !== this.sendData
+        || previousDaemonId !== this.daemonId
+        || previousSessionId !== this.sessionId
+      )
+    ) {
+      this.disconnect()
+      this.connect()
     }
   }
 
@@ -391,6 +432,9 @@ export class SessionChatTailController {
     const nextMessages = readChatTailUpdateMessages(update)
     const incomingMessageSource = (update as SessionChatTailUpdate & { messageSource?: Record<string, unknown> }).messageSource
     if (shouldDeferBusyTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource)) {
+      return
+    }
+    if (isTransientUnavailableEmptyTail(this.snapshot, this.fallbackRecentCount, nextMessages, incomingMessageSource)) {
       return
     }
     const nextCursor: SessionChatTailCursor = { tailLimit: this.snapshot.cursor.tailLimit }
