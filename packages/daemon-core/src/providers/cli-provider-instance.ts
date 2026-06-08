@@ -602,6 +602,16 @@ export class CliProviderInstance implements ProviderInstance {
         if (externalNativeFinal && isCliGeneratingLikeStatus(visibleStatus)) {
             visibleStatus = 'idle';
         }
+        // Adapter raw status can lag behind parsed/native evidence: if the spec driver
+        // has not yet emitted a state_changed(idle) event but the parsed transcript
+        // already shows a final assistant turn, treat the session as idle so that
+        // getState() agrees with what detectStatusTransition already recorded via
+        // lastStatus. Without this guard, getState() returns 'generating' even after
+        // the instance's lastStatus has flipped to 'idle', causing the dashboard to
+        // show a perpetual generating spinner.
+        if (isCliGeneratingLikeStatus(visibleStatus) && this.lastStatus === 'idle') {
+            visibleStatus = 'idle';
+        }
         const runtime = this.adapter.getRuntimeMetadata();
         this.maybeAppendRuntimeRecoveryMessage(runtime);
         let parsedMessages = Array.isArray(parsedStatus?.messages)
