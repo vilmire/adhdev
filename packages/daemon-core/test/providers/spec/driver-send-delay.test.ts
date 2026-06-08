@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { matchesCompletionIdleRule, resolveSubmitDelayMs } from '../../../src/providers/spec/driver.js';
+import { matchesCompletionIdleRule, matchesCompletionIdleTargetState, resolveSubmitDelayMs } from '../../../src/providers/spec/driver.js';
 import { evaluate } from '../../../src/providers/spec/evaluator.js';
 import { loadSpec } from '../../../src/providers/spec/loader.js';
 
@@ -54,6 +54,16 @@ describe('SpecDriver send_message — submit delay', () => {
 
         const otherSpinner = ['previous answer', '✶ Brewed for 1m 46s', '❯'].join('\n');
         expect(matchesCompletionIdleRule(spec, evaluate(spec, otherSpinner), otherSpinner)).toBeNull();
+    });
+
+    it('claude-cli completion idle marker requires the idle prompt before downshifting', () => {
+        const spec = loadSpecFor('claude-cli');
+        const busyOnly = ['previous answer', '✻ Brewed for 1m 46s', 'esc to interrupt'].join('\n');
+        expect(matchesCompletionIdleRule(spec, evaluate(spec, busyOnly), busyOnly)).toBe('✻ Brewed for 1m 46s');
+        expect(matchesCompletionIdleTargetState(spec, evaluate(spec, busyOnly), busyOnly)).toBe(false);
+
+        const withIdlePrompt = ['previous answer', '✻ Brewed for 1m 46s', '❯'].join('\n');
+        expect(matchesCompletionIdleTargetState(spec, evaluate(spec, withIdlePrompt), withIdlePrompt)).toBe(true);
     });
 
     it('antigravity-cli spec ships an explicit delay so it does not depend on the daemon floor', () => {
