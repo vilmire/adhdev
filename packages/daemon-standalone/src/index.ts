@@ -71,6 +71,7 @@ import {
   normalizeInteractivePromptResponse,
   type InteractivePrompt,
   type InteractivePromptResponse,
+  readCachedInlineMeshActiveSessionDetails,
 } from '@adhdev/daemon-core';
 import { DEFAULT_DAEMON_PORT, DAEMON_WS_PATH } from '@adhdev/daemon-core';
 import {
@@ -1999,11 +2000,25 @@ class StandaloneServer {
     state.seq += 1;
     state.lastSentAt = now;
     const cfgSnap = loadConfig();
+    const status = this.buildSharedSnapshot('metadata');
+
+    if (state.subscription.params.includeSessions || state.request.params.includeSessions) {
+      if (this.components?.meshRegistry) {
+        const nodes = this.components.meshRegistry.getAllKnownNodes();
+        for (const node of nodes) {
+          const meshSessions = readCachedInlineMeshActiveSessionDetails(node);
+          for (const session of meshSessions) {
+            status.sessions.push(session as any);
+          }
+        }
+      }
+    }
+
     return {
       topic: 'daemon.metadata',
       key,
       daemonId: `standalone_${cfgSnap.machineId || 'standalone'}`,
-      status: this.buildSharedSnapshot('metadata'),
+      status,
       userName: cfgSnap.userName || undefined,
       seq: state.seq,
       timestamp: now,

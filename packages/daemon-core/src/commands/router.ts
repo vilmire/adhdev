@@ -849,7 +849,7 @@ function readCachedInlineMeshActiveSessions(node: any): string[] {
     return sessionId ? [sessionId] : [];
 }
 
-function readCachedInlineMeshActiveSessionDetails(node: any): Array<Record<string, unknown>> {
+export function readCachedInlineMeshActiveSessionDetails(node: any): Array<Record<string, unknown>> {
     const cachedStatus = readObjectRecord(node?.cachedStatus);
     const activeSession = readObjectRecord(cachedStatus.activeSession);
     const fallbackSession = Object.keys(activeSession).length
