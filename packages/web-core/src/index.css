@@ -524,6 +524,20 @@
         color: var(--text-muted);
     }
 
+    .adhdev-dockview-tab-mesh-role {
+        flex: 0 1 auto;
+        max-width: 9rem;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text-secondary);
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        opacity: 0.62;
+    }
+
     .adhdev-dockview-tab-unread-dot {
         position: absolute;
         top: 4px;
@@ -1940,12 +1954,6 @@
         background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
         border-color: color-mix(in srgb, var(--accent-primary) 18%, var(--border-default));
         color: var(--accent-primary);
-    }
-
-    .chat-pane-meta-row {
-        padding: 10px 16px 6px;
-        border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 68%, transparent);
-        background: color-mix(in srgb, var(--surface-primary) 96%, transparent);
     }
 
     .header-title-mobile {

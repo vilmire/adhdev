@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
     getConversationHistorySubtitle,
+    getConversationMeshRoleLabels,
+    getConversationMeshRoleTitle,
     getConversationMetaText,
     getConversationMachineCardPreview,
     getConversationNotificationLabel,
@@ -64,6 +66,27 @@ describe('conversation presenters', () => {
 
         expect(getConversationHistorySubtitle(conversation)).toBe('repo — Codex CLI')
         expect(getConversationStopDialogLabel(conversation)).toBe('Codex CLI')
+    })
+
+    it('formats compact Korean mesh role labels with detailed tooltip metadata', () => {
+        const conversation = createConversation({
+            settings: {
+                meshNodeFor: 'mesh-1',
+                meshCoordinatorFor: 'mesh-1',
+            },
+            coordinator: { meshId: 'mesh-1', role: 'coordinator' },
+            meshQueueStats: {
+                pending: 2,
+                assigned: 1,
+                completed: 4,
+                failed: 0,
+            },
+        })
+
+        expect(getConversationMeshRoleLabels(conversation)).toEqual(['메시 노드', '코디네이터'])
+        expect(getConversationMeshRoleTitle(conversation)).toBe(
+            '메시 노드: mesh-1 · 코디네이터: mesh-1 · Queue: 2 pending, 1 assigned, 4 completed, 0 failed',
+        )
     })
 
     it('prefers connection hints before action-needed hints', () => {

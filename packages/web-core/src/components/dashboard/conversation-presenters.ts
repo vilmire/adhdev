@@ -18,6 +18,41 @@ export function getConversationMetaText(conversation: ActiveConversation): strin
     return getConversationMetaParts(conversation).join(' · ')
 }
 
+export function getConversationMeshRoleLabels(conversation: ActiveConversation): string[] {
+    const labels: string[] = []
+    const isMeshNode = typeof conversation.settings?.meshNodeFor === 'string'
+        && conversation.settings.meshNodeFor.trim().length > 0
+    const isMeshCoordinator = !!conversation.coordinator?.meshId
+        || (typeof conversation.settings?.meshCoordinatorFor === 'string'
+            && conversation.settings.meshCoordinatorFor.trim().length > 0)
+
+    if (isMeshNode) labels.push('메시 노드')
+    if (isMeshCoordinator) labels.push('코디네이터')
+    return labels
+}
+
+export function getConversationMeshRoleTitle(conversation: ActiveConversation): string {
+    const details: string[] = []
+    const meshNodeFor = typeof conversation.settings?.meshNodeFor === 'string'
+        ? conversation.settings.meshNodeFor.trim()
+        : ''
+    const coordinatorMeshId = typeof conversation.coordinator?.meshId === 'string'
+        ? conversation.coordinator.meshId.trim()
+        : ''
+    const settingsCoordinatorFor = typeof conversation.settings?.meshCoordinatorFor === 'string'
+        ? conversation.settings.meshCoordinatorFor.trim()
+        : ''
+    const coordinatorFor = coordinatorMeshId || settingsCoordinatorFor
+
+    if (meshNodeFor) details.push(`메시 노드: ${meshNodeFor}`)
+    if (coordinatorFor) details.push(`코디네이터: ${coordinatorFor}`)
+    if (conversation.meshQueueStats) {
+        const { pending, assigned, completed, failed } = conversation.meshQueueStats
+        details.push(`Queue: ${pending} pending, ${assigned} assigned, ${completed} completed, ${failed} failed`)
+    }
+    return details.join(' · ')
+}
+
 export function getConversationPreviewText(conversation: ActiveConversation): string {
     const preview = getConversationLastMessagePreview(conversation)
     if (preview) return preview

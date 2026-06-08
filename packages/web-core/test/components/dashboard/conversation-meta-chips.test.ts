@@ -1,4 +1,6 @@
 import React from 'react'
+import { readFileSync } from 'node:fs'
+import * as path from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { StaticRouter } from 'react-router-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -61,5 +63,12 @@ describe('ConversationMetaChips', () => {
 
         expect(html).toContain('Mesh Node')
         expect(html).not.toContain('Coordinator')
+    })
+
+    it('does not render the old chat pane meta row from pane content', () => {
+        const source = readFileSync(path.resolve(process.cwd(), 'src/components/dashboard/PaneGroupContent.tsx'), 'utf8')
+
+        expect(source).not.toContain('chat-pane-meta-row')
+        expect(source).not.toContain('<ConversationMetaChips')
     })
 })

@@ -3,7 +3,12 @@ import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import type { ActiveConversation } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
-import { getConversationTabMetaText, getConversationTitle } from './conversation-presenters'
+import {
+    getConversationMeshRoleLabels,
+    getConversationMeshRoleTitle,
+    getConversationTabMetaText,
+    getConversationTitle,
+} from './conversation-presenters'
 import GitStatusPill from '../git/GitStatusPill'
 
 const preventContextMenuButtonFocus = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -84,6 +89,8 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
     const tabClass = viewStates.isGenerating ? 'agent-tab-generating'
         : viewStates.isWaiting ? 'agent-tab-waiting' : ''
     const isReconnecting = viewStates.isReconnecting
+    const meshRoleLabels = getConversationMeshRoleLabels(conv)
+    const meshRoleTitle = getConversationMeshRoleTitle(conv)
 
     const handleDragStart = useCallback((e: React.DragEvent<HTMLDivElement>) => {
         draggingTabRef.current = conv.tabKey
@@ -194,6 +201,11 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
                     <span className="adhdev-dockview-tab-status-text is-idle">○</span>
                 )}
             </div>
+            {meshRoleLabels.length > 0 && (
+                <span className="adhdev-dockview-tab-mesh-role" title={meshRoleTitle} aria-label={meshRoleTitle || meshRoleLabels.join(' · ')}>
+                    {meshRoleLabels.join(' · ')}
+                </span>
+            )}
             <div className="adhdev-dockview-tab-copy">
                 <span className="adhdev-dockview-tab-primary" title={getConversationTitle(conv)}>{getConversationTitle(conv)}</span>
                 <span className="adhdev-dockview-tab-meta inline-flex min-w-0 items-center gap-1">
