@@ -327,8 +327,8 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const attentionBadge = getMeshGraphAttentionBadge(node)
     const calloutText = getMeshGraphCalloutText(node)
     const hasActiveSession = isNodeActive(node)
-    const visibleSessions = node.sessionDetails.slice(0, 3)
-    const visibleCardSessions = node.sessionDetails.slice(0, compact ? 1 : 2)
+    const visibleSessions = node.sessionDetails
+    const visibleCardSessions = node.sessionDetails
     const sessionSummaryLabel = getSessionSummaryLabel(node)
     const sessionTooltipLines = node.sessionDetails.map(session => {
         const status = formatSessionStatusLabel(session)
@@ -389,7 +389,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     </div>
                 )}
                 {visibleCardSessions.length > 0 && (
-                    <div className="mt-1.5 flex min-w-0 flex-col gap-1">
+                    <div className="mt-1.5 flex max-h-28 min-w-0 flex-col gap-1 overflow-y-auto pr-1">
                         {visibleCardSessions.map(session => (
                             <div
                                 key={session.sessionId}
@@ -487,7 +487,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             )}
 
             {visibleCardSessions.length > 0 && (
-                <div className="mt-2 flex min-w-0 flex-col gap-1.5">
+                <div className="mt-2 flex max-h-44 min-w-0 flex-col gap-1.5 overflow-y-auto pr-1">
                     {visibleCardSessions.map(session => {
                         const roleLabel = getSessionRoleLabel(session)
                         return (
@@ -516,11 +516,6 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                             </div>
                         )
                     })}
-                    {node.sessionDetails.length > visibleCardSessions.length && (
-                        <div className={`text-[9px] ${meshTheme.textMuted}`}>
-                            +{node.sessionDetails.length - visibleCardSessions.length} more attached chat(s)
-                        </div>
-                    )}
                 </div>
             )}
 
@@ -580,7 +575,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         <div className={`mb-1.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>
                             Attached Chats
                         </div>
-                        <div className="flex flex-col gap-1.5">
+                        <div className="flex max-h-56 flex-col gap-1.5 overflow-y-auto pr-1">
                             {visibleSessions.map(session => {
                                 const startedAt = session.startedAt || session.createdAt || null
                                 const roleLabel = getSessionRoleLabel(session)
@@ -618,11 +613,6 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                     </div>
                                 )
                             })}
-                            {node.sessionDetails.length > visibleSessions.length && (
-                                <div className={`text-[9px] ${meshTheme.textMuted}`}>
-                                    +{node.sessionDetails.length - visibleSessions.length} more attached chat(s)
-                                </div>
-                            )}
                         </div>
                     </div>
                 )}

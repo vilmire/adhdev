@@ -577,7 +577,7 @@ function normalizeRepoMeshStatus(candidate: JsonRecord): RepoMeshStatus | null {
         : null
     if (!meshId || !normalizedNodes) return null
 
-    const nodes = canonicalizeRepoMeshNodes(normalizedNodes)
+    const nodes = attachCoordinatorSessionsToNodes(candidate as unknown as RepoMeshStatus, canonicalizeRepoMeshNodes(normalizedNodes))
     const meshName = readString(candidate.meshName, candidate.mesh_name, candidate.name)
     const repoIdentity = readString(candidate.repoIdentity, candidate.repo_identity)
     const refreshedAt = readString(candidate.refreshedAt, candidate.refreshed_at, candidate.updatedAt, candidate.updated_at)

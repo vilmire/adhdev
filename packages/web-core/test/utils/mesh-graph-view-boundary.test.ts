@@ -101,6 +101,17 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain('opacity-60')
     })
 
+    it('renders all node session rows instead of slicing extra workers behind a summary', () => {
+        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+
+        expect(source).toContain('const visibleSessions = node.sessionDetails')
+        expect(source).toContain('const visibleCardSessions = node.sessionDetails')
+        expect(source).toContain('overflow-y-auto')
+        expect(source).not.toContain('node.sessionDetails.slice(0, 3)')
+        expect(source).not.toContain('node.sessionDetails.slice(0, compact ? 1 : 2)')
+        expect(source).not.toContain('more attached chat(s)')
+    })
+
     it('scales viewport height for dense graphs with 10+ and 16+ nodes', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 

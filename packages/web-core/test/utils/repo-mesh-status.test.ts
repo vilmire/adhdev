@@ -148,6 +148,94 @@ describe('extractRepoMeshStatus', () => {
     expect(canonicalGraph.stats.totalActiveSessions).toBe(1)
   })
 
+  it('keeps every live node session when coordinatorSessions contains only the coordinator', () => {
+    const coordinatorId = '46c156c9-6ed3-483f-acce-7ab06be025d0'
+    const workerIds = [
+      '57e74a69-97f8-4e97-9148-1c0c14d0c84b',
+      '1d92b377-30d7-487b-b81a-691a77261003',
+      'a104734b-8fbc-4ee9-b8ee-69beb1586ed8',
+      '2082f407-e588-48c9-9f21-695be1662c31',
+    ]
+    const normalized = extractRepoMeshStatus({
+      ...status,
+      queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+      activeWork: [],
+      coordinatorSessions: [
+        {
+          id: coordinatorId,
+          providerType: 'codex-cli',
+          status: 'idle',
+          chatStatus: 'idle',
+          role: 'coordinator',
+          isSelfCoordinator: true,
+          workspace: '/repo/main',
+          statusNote: 'Coordinator self status is sampled.',
+        },
+      ],
+      nodes: [
+        {
+          nodeId: 'node_self',
+          machineLabel: 'Self',
+          workspace: '/repo/main',
+          health: 'online',
+          providers: ['codex-cli'],
+          sessions: [
+            {
+              id: coordinatorId,
+              providerType: 'codex-cli',
+              status: 'idle',
+              chatStatus: 'idle',
+              isSelfCoordinator: true,
+            },
+            ...workerIds.map(id => ({
+              id,
+              providerType: 'codex-cli',
+              status: 'idle',
+              chatStatus: 'idle',
+            })),
+          ],
+          git: {
+            isGitRepo: true,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+          },
+        },
+      ],
+    } as any)
+
+    const node = normalized?.nodes.find(item => item.nodeId === 'node_self')
+    const graph = buildMeshGraph(normalized as any)
+    const graphNode = graph.nodes.find(item => item.id === 'node_self')
+
+    expect(node?.activeSessions).toEqual([coordinatorId, ...workerIds])
+    expect(node?.activeSessionDetails?.map(session => session.sessionId)).toEqual([coordinatorId, ...workerIds])
+    expect(node?.activeSessionDetails).toHaveLength(5)
+    expect(node?.activeSessionDetails?.[0]).toMatchObject({
+      sessionId: coordinatorId,
+      role: 'coordinator',
+      isSelfCoordinator: true,
+      statusNote: 'Coordinator self status is sampled.',
+    })
+    expect(node?.activeSessionDetails?.slice(1)).toEqual(workerIds.map(id => expect.objectContaining({
+      sessionId: id,
+      providerType: 'codex-cli',
+      state: 'idle',
+      chatStatus: 'idle',
+    })))
+    expect(node?.activeSessionDetails?.slice(1).every(session => session.role === undefined && session.isSelfCoordinator === undefined)).toBe(true)
+    expect(graphNode?.activeSessionCount).toBe(5)
+    expect(graphNode?.activeSessions).toEqual([coordinatorId, ...workerIds])
+    expect(graphNode?.sessionDetails.map(session => session.sessionId)).toEqual([coordinatorId, ...workerIds])
+    expect(graph.stats.totalActiveSessions).toBe(5)
+  })
+
   it('prefers fresh result status over stale upstream-unverified wrapper status', () => {
     const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
     const staleWrapperStatus = {

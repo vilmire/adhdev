@@ -30,7 +30,7 @@ function createConversation(overrides: Partial<ActiveConversation> = {}): Active
 }
 
 function renderHeader(overrides: Record<string, unknown> = {}) {
-  const activeConv = createConversation()
+  const activeConv = (overrides.activeConv as ActiveConversation | undefined) ?? createConversation()
   const notifications: DashboardNotificationRecord[] = [
     {
       id: 'n-1',
@@ -199,5 +199,23 @@ describe('DashboardHeader inbox notifications', () => {
     expect(html).toContain('Open dashboard guide')
     expect(html).toContain('Guide')
     expect(mainViewSource).not.toContain('fixed right-4 bottom-24')
+  })
+
+  it('keeps the mesh graph header button compact beside the CLI view toggle', () => {
+    const html = renderHeader({
+      activeConv: createConversation({
+        daemonId: 'daemon-1',
+        coordinator: { meshId: 'mesh-1', role: 'coordinator' },
+      }),
+      onOpenMeshGraph: () => {},
+    })
+    const css = readFileSync(path.resolve(process.cwd(), 'src/index.css'), 'utf8')
+
+    expect(html).toContain('dashboard-header-mesh-button')
+    expect(html).toContain('Open live repo mesh graph')
+    expect(css).toContain('.dashboard-header-mesh-button')
+    expect(css).toContain('height: 32px;')
+    expect(css).toContain('padding: 4px 8px;')
+    expect(css).toContain('line-height: 1;')
   })
 })

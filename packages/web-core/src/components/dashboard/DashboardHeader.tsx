@@ -383,7 +383,7 @@ export default function DashboardHeader({
                             <button
                                 type="button"
                                 onClick={() => onOpenMeshGraph(activeConv)}
-                                className="btn btn-secondary btn-sm inline-flex items-center gap-1.5"
+                                className="btn btn-secondary btn-sm dashboard-header-mesh-button"
                                 title="Open live repo mesh graph"
                             >
                                 <IconMesh size={14} />
