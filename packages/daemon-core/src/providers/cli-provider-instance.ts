@@ -1273,6 +1273,9 @@ export class CliProviderInstance implements ProviderInstance {
                         LOG.info('CLI', `[${this.type}] external transcript probe: msgCount=${probe.msgCount} lastRole=${probe.lastRole || 'none'} lastKind=${probe.lastKind || 'none'} contentLen=${probe.contentLen} sourceMtime=${probe.sourceMtimeMs ?? 'unknown'} mtimeAge=${probe.mtimeAgeMs ?? 'unknown'}ms`);
                         pending.loggedTranscriptProbe = true;
                     }
+                    if (this.type === 'antigravity-cli') {
+                        return null;
+                    }
                     return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout };
                 }
                 // SpecCliAdapter never populates parsed.messages — chat history flows

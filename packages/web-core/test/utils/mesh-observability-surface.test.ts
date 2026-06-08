@@ -48,7 +48,7 @@ describe('MeshObservabilitySurface', () => {
       'utf8',
     )
 
-    expect(source).toContain('relative min-h-0 flex-1 rounded-[28px]')
+    expect(source).toContain('relative flex min-h-0 flex-1 flex-col rounded-[28px]')
     expect(source).toContain('absolute inset-x-4 top-4 z-30')
     expect(source).toContain('max-h-[42dvh]')
     expect(source).toContain('overflow-y-auto')

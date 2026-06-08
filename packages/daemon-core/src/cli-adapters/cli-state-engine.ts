@@ -534,7 +534,7 @@ export class CliStateEngine {
         const recentInteractiveActivity = this.hasRecentInteractiveActivity(snap, now);
         LOG.debug(
             'CLI',
-            `[${this.provider.type}] settled diagnostics prompt=${JSON.stringify(this.currentTurnScope?.prompt || '').slice(0, 140)} status=${String(status || '')} parsedStatus=${String(parsedStatus || '')} parsedMsgCount=${parsedMessages.length} lastParsedAssistant=${JSON.stringify((lastParsedAssistant?.content || '').slice(0, 120)).slice(0, 160)} responseBuffer=${JSON.stringify((snap.responseBuffer || '').slice(0, 160)).slice(0, 220)}`
+            `[${this.provider.type}] settled diagnostics prompt=${JSON.stringify(this.currentTurnScope?.prompt || '').slice(0, 140)} status=${String(status || '')} parsedStatus=${String(parsedStatus || '')} parsedMsgCount=${parsedMessages.length} lastParsedAssistant=${JSON.stringify((lastParsedAssistant?.content || '').slice(0, 120)).slice(0, 160)} responseBuffer=${JSON.stringify((snap.responseBuffer || '').slice(0, 160)).slice(0, 220)} recentActivity=${recentInteractiveActivity}`
         );
 
         // recent_activity_hold protects an in-flight user turn from a false
@@ -544,11 +544,21 @@ export class CliStateEngine {
         // produced the startup status flip the user reported
         // (generating → idle → generating → idle within the first few seconds
         // of claude-cli launch).
+        //
+        // When isWaitingForResponse=true and a currentTurnScope is alive, a
+        // PTY quiet period (>statusActivityHold ms without output) does NOT
+        // mean the response is done — claude-cli regularly pauses 2s+ between
+        // chunks during parsing/generation. recentInteractiveActivity going
+        // false during such a pause was the root cause of false-idle
+        // regressions. We hold generating whenever an active response turn is
+        // in flight (unconditionally, not just when there was recent output).
+        // The real completion gate is applyIdle's idleFinishCandidate +
+        // idleFinish timeout, which requires stable quiet AND a parsed
+        // assistant message.
         const shouldHoldGenerating = status === 'idle'
             && this.isWaitingForResponse
             && !!this.currentTurnScope
             && !modal
-            && recentInteractiveActivity
             && !(parsedStatus === 'idle' && !!lastParsedAssistant);
 
         if (shouldHoldGenerating) { this.applyHoldGenerating(ctx); return; }

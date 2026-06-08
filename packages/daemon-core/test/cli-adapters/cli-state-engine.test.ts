@@ -400,6 +400,87 @@ describe('CliStateEngine', () => {
         })
     })
 
+    // ── false-idle regression guard ─────────────────────────────────────────
+
+    describe('shouldHoldGenerating — quiet PTY during active turn', () => {
+        it('holds generating when PTY has been quiet >statusActivityHold ms but turn is still active', () => {
+            // claude-cli can pause 2s+ between chunks; a quiet period must NOT
+            // fire false-idle while isWaitingForResponse && currentTurnScope.
+            const { engine, transport, callbacks } = buildEngine()
+
+            // Simulate stale output — lastNonEmptyOutputAt and lastScreenChangeAt
+            // are far in the past (beyond statusActivityHold=2000ms)
+            const stalePast = Date.now() - 5000
+            transport.getSnapshot = () => makeSnap({
+                lastNonEmptyOutputAt: stalePast,
+                lastScreenChangeAt: stalePast,
+                isWaitingForResponse: true,
+            })
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [],
+                activeModal: null,
+            }))
+
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = {
+                prompt: 'write me a long story',
+                startedAt: Date.now() - 3000,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+            engine.setStatus('generating')
+
+            // evaluateSettled sees status=idle from parser but we have an active turn
+            engine.evaluateSettled(transport.getSnapshot())
+
+            // Must NOT transition to idle — should hold generating
+            expect(engine.currentStatus).toBe('generating')
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+        })
+
+        it('bypasses the hold and falls through to applyIdle when parsedStatus=idle with final assistant', () => {
+            // Even during an active turn, if the parser confirms idle + assistant,
+            // the shouldHoldGenerating exception fires and applyIdle runs instead of hold.
+            // applyIdle does not immediately set idle — it arms an idleFinishCandidate timer.
+            // We verify it did NOT enter applyHoldGenerating (which records 'recent_activity_hold').
+            const { engine, transport } = buildEngine()
+
+            const stalePast = Date.now() - 5000
+            transport.getSnapshot = () => makeSnap({
+                lastNonEmptyOutputAt: stalePast,
+                lastScreenChangeAt: stalePast,
+                isWaitingForResponse: true,
+            })
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'hello' },
+                    { role: 'assistant', kind: 'standard', content: 'Done!', meta: {} },
+                ],
+                activeModal: null,
+                parsedStatus: 'idle',
+            }))
+
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = {
+                prompt: 'hello',
+                startedAt: Date.now() - 3000,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+            engine.setStatus('generating')
+
+            engine.evaluateSettled(transport.getSnapshot())
+
+            // applyHoldGenerating would record 'recent_activity_hold' as trigger.
+            // Since the exception condition released the hold, that trigger should NOT appear.
+            const history = engine.getStatusHistory()
+            const holdEntry = history.find(h => h.trigger === 'recent_activity_hold')
+            expect(holdEntry).toBeUndefined()
+        })
+    })
+
     // ── resetActiveTurnState ────────────────────────────────────────────────
 
     describe('resetActiveTurnState', () => {
