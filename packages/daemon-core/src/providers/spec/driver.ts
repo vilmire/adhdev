@@ -148,6 +148,21 @@ export function matchesCompletionIdleRule(spec: CliSpec, ev: SpecEvaluation, scr
     }
 }
 
+export function matchesCompletionIdleTargetState(spec: CliSpec, ev: SpecEvaluation, screen: string): boolean {
+    const target = spec.states.find(state => state.id === spec.default_state)
+        ?? spec.states.find(state => state.id === 'idle');
+    if (!target?.when?.regex) return false;
+    const haystack = target.when.section
+        ? ev.sections.find(section => section.id === target.when.section)?.text ?? ''
+        : screen;
+    if (!haystack) return false;
+    try {
+        return new RegExp(target.when.regex, target.when.flags || 'i').test(haystack);
+    } catch {
+        return false;
+    }
+}
+
 export class SpecDriver {
     private spec!: CliSpec;
     private adapter!: TerminalAdapter;
@@ -336,11 +351,15 @@ export class SpecDriver {
                 const holdMs = Math.max(0, completionIdleRule.hold_ms || 0);
                 const ageMs = now - this.completionIdleFirstSeenAt;
                 if (ageMs >= holdMs) {
-                    const idle = this.spec.states.find(state => state.id === this.spec.default_state)
-                        ?? this.spec.states.find(state => state.id === 'idle');
-                    evState = idle
-                        ? { id: idle.id, label: idle.label, title: null }
-                        : { id: 'idle', label: 'Ready', title: null };
+                    if (matchesCompletionIdleTargetState(this.spec, ev, screen)) {
+                        const idle = this.spec.states.find(state => state.id === this.spec.default_state)
+                            ?? this.spec.states.find(state => state.id === 'idle');
+                        evState = idle
+                            ? { id: idle.id, label: idle.label, title: null }
+                            : { id: 'idle', label: 'Ready', title: null };
+                    } else {
+                        busyWakeMs = Math.min(busyWakeMs, 1000);
+                    }
                 } else {
                     busyWakeMs = Math.min(busyWakeMs, Math.max(holdMs - ageMs, 0));
                 }
