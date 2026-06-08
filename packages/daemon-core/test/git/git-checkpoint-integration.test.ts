@@ -84,4 +84,30 @@ describe('git checkpoint integration', () => {
     });
     expect(git(repo, ['log', '--oneline'])).toContain('initial commit');
   });
+
+  it('fails instead of no-op when a nested submodule working tree is dirty', async () => {
+    const submoduleRepo = initRepo('checkpoint-submodule-child');
+    writeFileSync(join(submoduleRepo, 'child.txt'), 'child\n');
+    git(submoduleRepo, ['add', 'child.txt']);
+    git(submoduleRepo, ['commit', '-m', 'child init']);
+
+    const repo = initRepo('checkpoint-submodule-parent');
+    git(repo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', submoduleRepo, 'oss']);
+    git(repo, ['commit', '-m', 'add oss submodule']);
+
+    writeFileSync(join(repo, 'oss', 'child.txt'), 'child\nlocal dirty\n');
+
+    const result = await handleGitCommand('git_checkpoint', {
+      workspace: repo,
+      message: 'checkpoint: parent should not hide dirty submodule',
+      includeUntracked: true,
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      reason: 'dirty_index_required',
+      error: expect.stringContaining('oss'),
+    });
+    expect(git(repo, ['log', '-1', '--pretty=%B'])).toBe('add oss submodule');
+  });
 });

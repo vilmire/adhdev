@@ -455,6 +455,15 @@ async function gitCheckpoint(
   if (statusResult.hasConflicts) {
     throw new GitCommandError('conflict', 'Repository has conflicts — resolve before checkpointing');
   }
+  const dirtySubmodules = (statusResult.submodules || []).filter(submodule => submodule.dirty);
+  if (dirtySubmodules.length > 0) {
+    const paths = dirtySubmodules.map(submodule => submodule.path).join(', ');
+    throw new GitCommandError(
+      'dirty_index_required',
+      `Repository has dirty submodules that must be checkpointed first: ${paths}. ` +
+      'Checkpoint or commit each dirty submodule, then checkpoint this repository to record gitlink changes.',
+    );
+  }
 
   const addArgs = includeUntracked ? ['-A'] : ['-u'];
   await runGit(repo, ['add', ...addArgs], { cwd: repoRoot });
