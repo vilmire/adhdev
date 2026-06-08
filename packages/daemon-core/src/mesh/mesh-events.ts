@@ -18,14 +18,7 @@ import { fastForwardMeshNode } from './mesh-fast-forward.js';
 // can assign tasks to them. Each entry carries an expiresAt timestamp;
 // entries are swept on insertion to prevent unbounded growth.
 // ---------------------------------------------------------------------------
-interface RemoteIdleSession {
-    nodeId: string;
-    sessionId: string;
-    providerType: string;
-    expiresAt: number;
-}
 const REMOTE_IDLE_SESSION_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const remoteIdleSessions = new Map<string, RemoteIdleSession>(); // key: `${nodeId}:${sessionId}`
 
 // ---------------------------------------------------------------------------
 // Workspace-to-mesh lookup cache
@@ -55,10 +48,9 @@ export function __resetIdleAutoFastForwardForTests(): void {
 }
 
 function sweepExpiredRemoteIdleSessions(): void {
-    const now = Date.now();
-    for (const [key, session] of remoteIdleSessions) {
-        if (session.expiresAt <= now) remoteIdleSessions.delete(key);
-    }
+    try {
+        BeadsDB.getInstance().pruneExpiredRemoteIdleSessions();
+    } catch { /* best-effort */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -1286,14 +1278,21 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     }
 
     // Also check known idle remote sessions
-    for (const [key, idle] of remoteIdleSessions.entries()) {
+    let remoteSessions: Array<{ nodeId: string; sessionId: string; providerType: string }> = [];
+    try {
+        remoteSessions = BeadsDB.getInstance().getRemoteIdleSessions();
+    } catch { /* best-effort */ }
+
+    for (const idle of remoteSessions) {
         // Find if this node is in the same mesh
         const node = mesh.nodes.find((n: any) => n.id === idle.nodeId);
         if (node) {
             remoteIdleSessionsChecked += 1;
             const assigned = tryAssignQueueTask(components, meshId, idle.nodeId, idle.sessionId, idle.providerType);
             if (assigned) {
-                remoteIdleSessions.delete(key);
+                try {
+                    BeadsDB.getInstance().deleteRemoteIdleSession(idle.nodeId, idle.sessionId);
+                } catch { /* best-effort */ }
             }
         }
     }
@@ -1534,7 +1533,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     });
     if (intentionalCleanupStop) {
         if (eventSessionId && eventNodeId) {
-            remoteIdleSessions.delete(`${eventNodeId}:${eventSessionId}`);
+            try {
+                BeadsDB.getInstance().deleteRemoteIdleSession(eventNodeId, eventSessionId);
+            } catch { /* best-effort */ }
         }
         LOG.info('MeshEvents', `Suppressed ${args.event} for intentionally cleanup-stopped session ${eventSessionId || '(unknown session)'}`);
         return { success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true };
@@ -1700,16 +1701,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 
         if (sessionId && nodeId && providerType) {
             sweepExpiredRemoteIdleSessions();
-            remoteIdleSessions.set(`${nodeId}:${sessionId}`, {
-                nodeId, sessionId, providerType,
-                expiresAt: Date.now() + REMOTE_IDLE_SESSION_TTL_MS,
-            });
+            try {
+                BeadsDB.getInstance().setRemoteIdleSession(nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
+            } catch { /* best-effort */ }
             setImmediate(() => {
                 maybeAutoFastForwardIdleNode(components, { meshId: args.meshId, nodeId, sessionId, providerType })
                     .finally(() => {
                         try {
                             const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
-                            if (assigned) remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
+                            if (assigned) BeadsDB.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
                         } catch (e: any) {
                             LOG.warn('MeshQueue', `Failed to assign idle queue task after maintenance for ${nodeId}: ${e?.message || e}`);
                         }
@@ -1720,7 +1720,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
-            remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
+            try {
+                BeadsDB.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+            } catch { /* best-effort */ }
         }
         if (sessionId) {
             updateDirectDispatchStatus(args.meshId, sessionId, 'acked');
@@ -1729,7 +1731,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
-            remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
+            try {
+                BeadsDB.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+            } catch { /* best-effort */ }
         }
         if (sessionId) {
             completedTaskForLedger = markSessionTerminal(sessionId, 'failed');

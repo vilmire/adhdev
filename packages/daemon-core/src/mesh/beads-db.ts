@@ -111,6 +111,15 @@ export class BeadsDB {
 
             CREATE INDEX IF NOT EXISTS idx_direct_dispatches_mesh_session
                 ON mesh_direct_dispatches(mesh_id, session_id, status);
+
+            CREATE TABLE IF NOT EXISTS remote_idle_sessions (
+                node_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                provider_type TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                metadata TEXT,
+                PRIMARY KEY (node_id, session_id)
+            );
         `);
     }
 
@@ -486,5 +495,33 @@ export class BeadsDB {
             SET status = 'stale', updated_at = ?
             WHERE mesh_id = ? AND status = 'dispatched' AND dispatched_at < ?
         `).run(now, meshId, cutoff);
+    }
+
+    // ── Remote Idle Sessions ─────────────────────────────────────────────────
+
+    setRemoteIdleSession(nodeId: string, sessionId: string, providerType: string, expiresAt: number, metadata?: any): void {
+        this.db.prepare(`
+            INSERT OR REPLACE INTO remote_idle_sessions (node_id, session_id, provider_type, expires_at, metadata)
+            VALUES (?, ?, ?, ?, ?)
+        `).run(nodeId, sessionId, providerType, expiresAt, metadata ? JSON.stringify(metadata) : null);
+    }
+
+    getRemoteIdleSessions(): Array<{ nodeId: string; sessionId: string; providerType: string; expiresAt: number; metadata?: any }> {
+        const rows = this.db.prepare('SELECT node_id, session_id, provider_type, expires_at, metadata FROM remote_idle_sessions').all() as Array<any>;
+        return rows.map(r => ({
+            nodeId: r.node_id,
+            sessionId: r.session_id,
+            providerType: r.provider_type,
+            expiresAt: r.expires_at,
+            metadata: r.metadata ? JSON.parse(r.metadata) : undefined,
+        }));
+    }
+
+    deleteRemoteIdleSession(nodeId: string, sessionId: string): void {
+        this.db.prepare('DELETE FROM remote_idle_sessions WHERE node_id = ? AND session_id = ?').run(nodeId, sessionId);
+    }
+
+    pruneExpiredRemoteIdleSessions(): void {
+        this.db.prepare('DELETE FROM remote_idle_sessions WHERE expires_at <= ?').run(Date.now());
     }
 }
