@@ -173,6 +173,45 @@ describe('buildMeshGraphLayout', () => {
             ['node_parent', 'sub_c'],
         ])
     })
+
+    it('anchors submodule nodes using their collapsed visual height', async () => {
+        const submodule = node('node_parent::submodule::oss', {
+            type: 'submoduleNode',
+            label: 'oss',
+            branch: null,
+            parentNodeId: 'node_parent',
+            submodulePath: 'oss',
+            submoduleCommit: '1234567',
+        })
+        const graph = {
+            meshId: 'mesh',
+            meshName: 'Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-06-08T00:00:00.000Z',
+            nodes: [
+                node('node_parent', { label: 'Parent' }),
+                submodule,
+            ],
+            edges: [
+                { id: 'edge_submodule', source: 'node_parent', target: submodule.id, type: 'submoduleLink', direction: 'directed' },
+            ],
+            warnings: [],
+            stats: {} as any,
+        }
+
+        const elkInput = buildMeshGraphElkInput(graph as any, MESH_GRAPH_ELK_OPTIONS, false)
+        const layout = await buildMeshGraphLayout(graph as any, false)
+        const submoduleBounds = layout.bounds.find(bound => bound.id === submodule.id)
+        const submoduleElkNode = elkInput.children?.find(child => child.id === submodule.id)
+        const edgeRoute = layout.edgeRoutes.get('edge_submodule')
+        const targetPoint = edgeRoute?.points.at(-1)
+
+        expect(estimateMeshGraphNodeHeight(submodule, false)).toBe(MESH_GRAPH_LAYOUT.minSubmoduleCardHeight)
+        expect(estimateMeshGraphNodeHeight(submodule, false)).toBeLessThan(MESH_GRAPH_LAYOUT.maxEstimatedCardHeight)
+        expect(submoduleElkNode?.height).toBe(MESH_GRAPH_LAYOUT.minSubmoduleCardHeight)
+        expect(submoduleBounds?.height).toBe(MESH_GRAPH_LAYOUT.minSubmoduleCardHeight)
+        expect(targetPoint?.y).toBe(submoduleBounds ? submoduleBounds.y + MESH_GRAPH_LAYOUT.minSubmoduleCardHeight / 2 : undefined)
+    })
 })
 
 describe('compact mode layout', () => {
@@ -184,6 +223,8 @@ describe('compact mode layout', () => {
         expect(getMeshGraphNodeCardWidth(n, false)).toBe(MESH_GRAPH_LAYOUT.worktreeCardWidth)
         expect(getMeshGraphNodeCardWidth(n, true)).toBeLessThan(getMeshGraphNodeCardWidth(n, false))
         expect(estimateMeshGraphNodeHeight(n, true)).toBeLessThan(estimateMeshGraphNodeHeight(n, false))
+        expect(estimateMeshGraphNodeHeight(sub, true)).toBe(MESH_GRAPH_LAYOUT_COMPACT.minSubmoduleCardHeight)
+        expect(estimateMeshGraphNodeHeight(sub, true)).toBeLessThan(MESH_GRAPH_LAYOUT_COMPACT.maxEstimatedCardHeight)
     })
 
     it('uses compact ELK spacing options that produce a smaller inter-node gap than default', () => {

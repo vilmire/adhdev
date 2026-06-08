@@ -24,6 +24,7 @@ const MESH_GRAPH_EVENT_REFRESH_MIN_MS = 250
 
 type DashboardLiveMeshSessionStatus = {
     sessionId: string
+    aliases?: string[]
     meshId: string
     nodeId?: string | null
     providerType?: string
@@ -50,29 +51,56 @@ function readRecord(value: unknown): Record<string, any> {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {}
 }
 
+function collectSessionAliases(...values: unknown[]): string[] {
+    const aliases = new Set<string>()
+    for (const value of values) {
+        const text = readString(value)
+        if (text) aliases.add(text)
+    }
+    return [...aliases]
+}
+
 function buildLiveSessionStatus(session: any, meshId: string): DashboardLiveMeshSessionStatus | null {
     const settings = readRecord(session?.settings)
     const coordinatorMeshId = readString(session?.coordinator?.meshId) || readString(settings.meshCoordinatorFor)
     const nodeMeshId = readString(settings.meshNodeFor)
-    if (coordinatorMeshId !== meshId && nodeMeshId !== meshId) return null
-    const sessionId = readString(session?.id) || readString(session?.sessionId)
-    if (!sessionId) return null
+    const hasMeshContext = !!coordinatorMeshId || !!nodeMeshId
+    const belongsToRequestedMesh = coordinatorMeshId === meshId || nodeMeshId === meshId
+    if (hasMeshContext && !belongsToRequestedMesh) return null
     const activeChat = readRecord(session?.activeChat)
+    const aliases = collectSessionAliases(
+        session?.id,
+        session?.sessionId,
+        session?.session_id,
+        session?.providerSessionId,
+        session?.provider_session_id,
+        session?.targetSessionId,
+        session?.target_session_id,
+        activeChat.sessionId,
+        activeChat.session_id,
+        activeChat.providerSessionId,
+        activeChat.provider_session_id,
+    )
+    const sessionId = aliases[0] || ''
+    if (!sessionId) return null
     const role = coordinatorMeshId === meshId
         ? readString(session?.coordinator?.role) || 'coordinator'
-        : readString(settings.meshNodeRole) || 'worker'
+        : nodeMeshId === meshId
+            ? readString(settings.meshNodeRole) || 'worker'
+            : readString(session?.role) || readString(settings.meshNodeRole) || undefined
     return {
         sessionId,
+        aliases,
         meshId,
-        nodeId: readString(settings.meshNodeId) || null,
+        nodeId: belongsToRequestedMesh ? readString(settings.meshNodeId) || null : null,
         providerType: readString(session?.providerType) || undefined,
         state: readString(session?.status) || undefined,
         chatStatus: readString(activeChat.status) || undefined,
         lifecycle: readString(session?.runtimeLifecycle) || undefined,
         surfaceKind: readString(session?.runtimeSurfaceKind) || undefined,
         recoveryState: readString(session?.runtimeRecoveryState) || undefined,
-        role,
-        isSelfCoordinator: coordinatorMeshId === meshId,
+        ...(role ? { role } : {}),
+        ...(belongsToRequestedMesh ? { isSelfCoordinator: coordinatorMeshId === meshId } : {}),
         workspace: readString(session?.workspace) || null,
     }
 }
@@ -86,6 +114,7 @@ function buildActiveConversationLiveSessionStatus(activeConv: ActiveConversation
     const nodeId = typeof activeConv.settings?.meshNodeId === 'string' ? activeConv.settings.meshNodeId : null
     return {
         sessionId: activeConv.sessionId,
+        aliases: collectSessionAliases(activeConv.sessionId, activeConv.providerSessionId, activeConv.historySessionId, activeConv.nativeSessionId),
         meshId,
         nodeId,
         providerType: activeConv.agentType,
@@ -110,7 +139,11 @@ export function mergeDashboardLiveSessionStatusIntoMeshStatus(
     liveSessions: DashboardLiveMeshSessionStatus[],
 ): RepoMeshStatus {
     if (liveSessions.length === 0) return status
-    const liveById = new Map(liveSessions.map(session => [session.sessionId, session]))
+    const liveById = new Map<string, DashboardLiveMeshSessionStatus>()
+    for (const session of liveSessions) {
+        const aliases = session.aliases && session.aliases.length > 0 ? session.aliases : [session.sessionId]
+        for (const alias of aliases) liveById.set(alias, session)
+    }
     let changed = false
     const nodes = (status.nodes ?? []).map(node => {
         const rawDetails = Array.isArray(node.activeSessionDetails)
@@ -120,9 +153,16 @@ export function mergeDashboardLiveSessionStatusIntoMeshStatus(
                 : []
         const byId = new Map<string, any>()
         for (const session of rawDetails) {
-            const sessionId = readString(session?.sessionId) || readString(session?.session_id) || readString(session?.id)
+            const sessionAliases = collectSessionAliases(
+                session?.sessionId,
+                session?.session_id,
+                session?.id,
+                session?.providerSessionId,
+                session?.provider_session_id,
+            )
+            const sessionId = sessionAliases[0] || ''
             if (!sessionId) continue
-            const live = liveById.get(sessionId)
+            const live = sessionAliases.map(alias => liveById.get(alias)).find(Boolean)
             if (live) changed = true
             byId.set(sessionId, live ? {
                 ...session,
@@ -142,7 +182,9 @@ export function mergeDashboardLiveSessionStatusIntoMeshStatus(
             if (!byId.has(sessionId)) byId.set(sessionId, { sessionId, workspace: node.workspace, isCached: true })
         }
         for (const live of liveSessions) {
-            if (live.nodeId !== node.nodeId || byId.has(live.sessionId)) continue
+            const aliases = live.aliases && live.aliases.length > 0 ? live.aliases : [live.sessionId]
+            if (aliases.some(alias => byId.has(alias))) continue
+            if (live.nodeId !== node.nodeId) continue
             changed = true
             byId.set(live.sessionId, {
                 sessionId: live.sessionId,

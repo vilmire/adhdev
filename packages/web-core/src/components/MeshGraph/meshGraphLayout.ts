@@ -182,6 +182,7 @@ export function getNodeSummaryForLayout(node: MeshGraphNode): string {
 
 export function estimateMeshGraphNodeHeight(node: MeshGraphNode, compact = false): number {
     const layout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
+    if (node.type === 'submoduleNode') return layout.minSubmoduleCardHeight
     // Fixed-tier height: every card in a given mode occupies the same vertical box.
     // Prevents ELK from staggering layer boundaries by per-node badge/callout count,
     // which is what made same-layer nodes look X-misaligned. The card itself uses

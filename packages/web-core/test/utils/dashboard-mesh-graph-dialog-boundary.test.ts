@@ -3,6 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { DaemonMetadataUpdate } from '@adhdev/daemon-core'
 import { collectDashboardLiveMeshSessionStatuses, getDashboardMeshMetadataSignature, mergeDashboardLiveSessionStatusIntoMeshStatus } from '../../src/components/dashboard/DashboardMeshGraphDialog'
+import { buildMeshGraph } from '../../src/utils/mesh-visualization'
 
 function readSource(relativePath: string): string {
   return fs.readFileSync(path.join(import.meta.dirname, '../../src', relativePath), 'utf8')
@@ -211,6 +212,86 @@ describe('dashboard mesh graph dialog wiring', () => {
       isSelfCoordinator: true,
     })
     expect(merged.nodes[0].activeSessions).toEqual(['coordinator'])
+  })
+
+  it('overlays live generating status onto matching attached mesh sessions', () => {
+    const update = {
+      topic: 'daemon.metadata',
+      key: 'daemon:metadata:daemon-1',
+      daemonId: 'daemon-1',
+      seq: 1,
+      timestamp: 1000,
+      status: {
+        sessions: [
+          {
+            id: 'runtime-worker-1',
+            providerSessionId: 'provider-worker-1',
+            providerType: 'codex-cli',
+            status: 'generating',
+            activeChat: { status: 'generating' },
+            settings: { meshNodeFor: 'mesh_a', meshNodeId: 'node_1' },
+          },
+          {
+            id: 'worker-2',
+            providerType: 'codex-cli',
+            status: 'generating',
+            activeChat: { status: 'generating' },
+          },
+          {
+            id: 'unrelated-generating',
+            providerType: 'codex-cli',
+            status: 'generating',
+            activeChat: { status: 'generating' },
+            settings: { meshNodeFor: 'mesh_b', meshNodeId: 'node_9' },
+          },
+        ],
+      },
+    } as unknown as DaemonMetadataUpdate
+    const liveSessions = collectDashboardLiveMeshSessionStatuses(update, 'mesh_a')
+    const merged = mergeDashboardLiveSessionStatusIntoMeshStatus({
+      meshId: 'mesh_a',
+      meshName: 'Mesh A',
+      repoIdentity: 'repo',
+      refreshedAt: '2026-06-08T00:00:00.000Z',
+      nodes: [
+        {
+          nodeId: 'node_1',
+          machineLabel: 'Worker',
+          workspace: '/repo',
+          health: 'online',
+          activeSessions: ['provider-worker-1', 'worker-2'],
+          activeSessionDetails: [
+            {
+              sessionId: 'provider-worker-1',
+              providerType: 'codex-cli',
+              state: 'idle',
+              chatStatus: 'idle',
+              role: 'worker',
+            },
+            {
+              sessionId: 'worker-2',
+              providerType: 'codex-cli',
+              state: 'idle',
+              chatStatus: 'idle',
+              role: 'worker',
+            },
+          ],
+          providers: ['codex-cli'],
+        },
+      ],
+    } as any, liveSessions)
+    const graph = buildMeshGraph(merged as any)
+    const graphNode = graph.nodes.find(node => node.id === 'node_1')
+
+    expect(liveSessions).toHaveLength(2)
+    expect(merged.nodes[0].activeSessionDetails).toEqual([
+      expect.objectContaining({ sessionId: 'provider-worker-1', state: 'generating', chatStatus: 'generating' }),
+      expect.objectContaining({ sessionId: 'worker-2', state: 'generating', chatStatus: 'generating' }),
+    ])
+    expect(graphNode?.sessionDetails.map(session => [session.sessionId, session.chatStatus || session.state])).toEqual([
+      ['provider-worker-1', 'generating'],
+      ['worker-2', 'generating'],
+    ])
   })
 
     it('keeps the dialog responsive on the shared mobile/desktop observability path', () => {
