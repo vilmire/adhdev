@@ -93,6 +93,61 @@ describe('extractRepoMeshStatus', () => {
     expect(graphNode?.activeSessionCount).toBe(2)
   })
 
+  it('attaches top-level coordinatorSessions to a matching node when activeWork is empty', () => {
+    const normalized = extractRepoMeshStatus({
+      ...status,
+      queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+      activeWork: [],
+      coordinatorSessions: [
+        {
+          id: 'self-coordinator-session',
+          providerType: 'codex-cli',
+          status: 'idle',
+          chatStatus: 'idle',
+          role: 'coordinator',
+          isSelfCoordinator: true,
+          workspace: '/repo/main',
+        },
+      ],
+      nodes: [
+        {
+          nodeId: 'node_self',
+          machineLabel: 'Self',
+          workspace: '/repo/main',
+          health: 'online',
+          providers: [],
+          activeSessions: [],
+          git: {
+            isGitRepo: true,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+          },
+        },
+      ],
+    } as any)
+
+    const canonicalGraph = buildMeshGraph(normalized as any)
+    const graphNode = canonicalGraph.nodes.find(item => item.id === 'node_self')
+
+    expect(graphNode?.activeSessionCount).toBe(1)
+    expect(graphNode?.sessionDetails[0]).toMatchObject({
+      sessionId: 'self-coordinator-session',
+      providerType: 'codex-cli',
+      state: 'idle',
+      chatStatus: 'idle',
+      role: 'coordinator',
+      isSelfCoordinator: true,
+    })
+    expect(canonicalGraph.stats.totalActiveSessions).toBe(1)
+  })
+
   it('prefers fresh result status over stale upstream-unverified wrapper status', () => {
     const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
     const staleWrapperStatus = {

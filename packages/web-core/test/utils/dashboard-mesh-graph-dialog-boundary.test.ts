@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { DaemonMetadataUpdate } from '@adhdev/daemon-core'
-import { getDashboardMeshMetadataSignature } from '../../src/components/dashboard/DashboardMeshGraphDialog'
+import { collectDashboardLiveMeshSessionStatuses, getDashboardMeshMetadataSignature, mergeDashboardLiveSessionStatusIntoMeshStatus } from '../../src/components/dashboard/DashboardMeshGraphDialog'
 
 function readSource(relativePath: string): string {
   return fs.readFileSync(path.join(import.meta.dirname, '../../src', relativePath), 'utf8')
@@ -39,12 +39,15 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).toContain('dashboardMeshGraphStatusCache.get(cacheKey)')
     expect(dialogSource).toContain('dashboardMeshGraphStatusCache.set(cacheKey, status)')
     expect(dialogSource).toContain('loadGraph(false)')
-    expect(dialogSource).toContain('MESH_GRAPH_BACKGROUND_REFRESH_MS')
+    expect(dialogSource).toContain('MESH_GRAPH_CONNECTED_BACKGROUND_REFRESH_MS')
+    expect(dialogSource).toContain('MESH_GRAPH_RECONNECTING_BACKGROUND_REFRESH_MS')
     expect(dialogSource).toContain('loadGraph(true, { background: true })')
-    expect(dialogSource).toContain('Live events + 4s fallback')
+    expect(dialogSource).toContain('Live events + 15s reconciliation')
+    expect(dialogSource).toContain('Reconnecting + 4s reconciliation')
+    expect(dialogSource).toContain('mergeDashboardLiveSessionStatusIntoMeshStatus(meshStatus, liveMeshSessions)')
     expect(dialogSource).not.toContain('if (!refresh && meshOverrides?.loadMeshStatus)')
     expect(dialogSource).toContain('<MeshObservabilitySurface')
-    expect(dialogSource).toContain('status={meshStatus}')
+    expect(dialogSource).toContain('status={displayedMeshStatus}')
     expect(dialogSource).not.toContain('graph={')
     expect(dialogSource).toContain('daemonId={daemonId}')
     expect(dialogSource).toContain('sendDaemonCommand={sendDaemonCommand}')
@@ -142,6 +145,74 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(getDashboardMeshMetadataSignature(baseUpdate, 'mesh_missing')).toBeNull()
   })
 
+  it('merges matching live coordinator session status without creating unrelated live sessions', () => {
+    const update = {
+      topic: 'daemon.metadata',
+      key: 'daemon:metadata:daemon-1',
+      daemonId: 'daemon-1',
+      seq: 1,
+      timestamp: 1000,
+      status: {
+        sessions: [
+          {
+            id: 'coordinator',
+            providerType: 'codex-cli',
+            status: 'generating',
+            activeChat: { status: 'generating' },
+            settings: { meshCoordinatorFor: 'mesh_a' },
+            coordinator: { meshId: 'mesh_a', role: 'coordinator' },
+          },
+          {
+            id: 'unrelated',
+            providerType: 'codex-cli',
+            status: 'generating',
+            activeChat: { status: 'generating' },
+            settings: { meshCoordinatorFor: 'mesh_b' },
+            coordinator: { meshId: 'mesh_b', role: 'coordinator' },
+          },
+        ],
+      },
+    } as unknown as DaemonMetadataUpdate
+    const liveSessions = collectDashboardLiveMeshSessionStatuses(update, 'mesh_a')
+    const merged = mergeDashboardLiveSessionStatusIntoMeshStatus({
+      meshId: 'mesh_a',
+      meshName: 'Mesh A',
+      repoIdentity: 'repo',
+      refreshedAt: '2026-06-08T00:00:00.000Z',
+      nodes: [
+        {
+          nodeId: 'node_1',
+          machineLabel: 'Coordinator',
+          workspace: '/repo',
+          health: 'online',
+          activeSessions: ['coordinator'],
+          activeSessionDetails: [
+            {
+              sessionId: 'coordinator',
+              providerType: 'codex-cli',
+              state: 'idle',
+              chatStatus: 'idle',
+              role: 'coordinator',
+              isSelfCoordinator: true,
+            },
+          ],
+          providers: ['codex-cli'],
+        },
+      ],
+    } as any, liveSessions)
+
+    expect(liveSessions).toHaveLength(1)
+    expect(merged.nodes[0].activeSessionDetails?.[0]).toMatchObject({
+      sessionId: 'coordinator',
+      providerType: 'codex-cli',
+      state: 'generating',
+      chatStatus: 'generating',
+      role: 'coordinator',
+      isSelfCoordinator: true,
+    })
+    expect(merged.nodes[0].activeSessions).toEqual(['coordinator'])
+  })
+
     it('keeps the dialog responsive on the shared mobile/desktop observability path', () => {
         const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
         const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
@@ -185,6 +256,7 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(surfaceSource).toContain("sendDaemonCommand(targetDaemonId, 'git_log', { workspace, limit: 5 })")
     expect(surfaceSource).toContain('<Row label="HEAD"')
     expect(surfaceSource).toContain('<Row label="Sessions"')
+    expect(readSource('components/MeshGraph/MeshGraphView.tsx')).toContain('visibleCardSessions')
     expect(surfaceSource).toContain('Close')
     expect(surfaceSource).not.toContain('Open chat')
     expect(surfaceSource).not.toContain('View session')

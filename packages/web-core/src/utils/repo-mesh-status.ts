@@ -232,6 +232,30 @@ function preferGitDerivedHealth(rawHealth: string | undefined, git: GitRepoStatu
     return rawHealth as RepoMeshNodeStatus['health']
 }
 
+function normalizeMeshSessionRecord(entry: unknown): RepoMeshSessionStatus | null {
+    const record = readRecord(entry)
+    const sessionId = readString(record.sessionId, record.session_id, record.id)
+    if (!sessionId) return null
+    return {
+        sessionId,
+        ...(readString(record.providerType, record.provider) ? { providerType: readString(record.providerType, record.provider) } : {}),
+        ...(readString(record.state, record.status) ? { state: readString(record.state, record.status) } : {}),
+        ...(readString(record.chatStatus, record.chat_status) ? { chatStatus: readString(record.chatStatus, record.chat_status) } : {}),
+        ...(readString(record.lifecycle) ? { lifecycle: readString(record.lifecycle) as RepoMeshSessionStatus['lifecycle'] } : {}),
+        ...(readString(record.surfaceKind, record.surface_kind) ? { surfaceKind: readString(record.surfaceKind, record.surface_kind) as RepoMeshSessionStatus['surfaceKind'] } : {}),
+        ...(readString(record.recoveryState, record.recovery_state) ? { recoveryState: readString(record.recoveryState, record.recovery_state) } : {}),
+        ...(readString(record.workspace) ? { workspace: readString(record.workspace) } : {}),
+        ...(readString(record.title) ? { title: readString(record.title) } : {}),
+        ...(readString(record.role) ? { role: readString(record.role) } : {}),
+        ...(readBoolean(record.isSelfCoordinator, record.is_self_coordinator) !== undefined ? { isSelfCoordinator: readBoolean(record.isSelfCoordinator, record.is_self_coordinator) } : {}),
+        ...(readString(record.statusNote, record.status_note) ? { statusNote: readString(record.statusNote, record.status_note) } : {}),
+        ...(readString(record.createdAt, record.created_at) ? { createdAt: readString(record.createdAt, record.created_at) } : {}),
+        ...(readString(record.startedAt, record.started_at) ? { startedAt: readString(record.startedAt, record.started_at) } : {}),
+        ...(readString(record.lastActivityAt, record.last_activity_at) ? { lastActivityAt: readString(record.lastActivityAt, record.last_activity_at) } : {}),
+        ...(readBoolean(record.isCached, record.is_cached) !== undefined ? { isCached: readBoolean(record.isCached, record.is_cached) } : {}),
+    }
+}
+
 function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | undefined {
     const details = Array.isArray(node.activeSessionDetails)
         ? node.activeSessionDetails
@@ -242,30 +266,7 @@ function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | u
                 : null
     if (details) {
         const normalized = details
-            .map((entry): RepoMeshSessionStatus | null => {
-                const record = readRecord(entry)
-                const sessionId = readString(record.sessionId, record.session_id, record.id)
-                if (!sessionId) return null
-                const normalizedEntry: RepoMeshSessionStatus = {
-                    sessionId,
-                    ...(readString(record.providerType, record.provider) ? { providerType: readString(record.providerType, record.provider) } : {}),
-                    ...(readString(record.state, record.status) ? { state: readString(record.state, record.status) } : {}),
-                    ...(readString(record.chatStatus, record.chat_status) ? { chatStatus: readString(record.chatStatus, record.chat_status) } : {}),
-                    ...(readString(record.lifecycle) ? { lifecycle: readString(record.lifecycle) as RepoMeshSessionStatus['lifecycle'] } : {}),
-                    ...(readString(record.surfaceKind, record.surface_kind) ? { surfaceKind: readString(record.surfaceKind, record.surface_kind) as RepoMeshSessionStatus['surfaceKind'] } : {}),
-                    ...(readString(record.recoveryState, record.recovery_state) ? { recoveryState: readString(record.recoveryState, record.recovery_state) } : {}),
-                    ...(readString(record.workspace) ? { workspace: readString(record.workspace) } : {}),
-                    ...(readString(record.title) ? { title: readString(record.title) } : {}),
-                    ...(readString(record.role) ? { role: readString(record.role) } : {}),
-                    ...(readBoolean(record.isSelfCoordinator, record.is_self_coordinator) !== undefined ? { isSelfCoordinator: readBoolean(record.isSelfCoordinator, record.is_self_coordinator) } : {}),
-                    ...(readString(record.statusNote, record.status_note) ? { statusNote: readString(record.statusNote, record.status_note) } : {}),
-                    ...(readString(record.createdAt, record.created_at) ? { createdAt: readString(record.createdAt, record.created_at) } : {}),
-                    ...(readString(record.startedAt, record.started_at) ? { startedAt: readString(record.startedAt, record.started_at) } : {}),
-                    ...(readString(record.lastActivityAt, record.last_activity_at) ? { lastActivityAt: readString(record.lastActivityAt, record.last_activity_at) } : {}),
-                    ...(readBoolean(record.isCached, record.is_cached) !== undefined ? { isCached: readBoolean(record.isCached, record.is_cached) } : {}),
-                }
-                return normalizedEntry
-            })
+            .map(normalizeMeshSessionRecord)
             .filter((entry): entry is RepoMeshSessionStatus => entry !== null)
         if (normalized.length > 0) return normalized
     }
@@ -443,6 +444,7 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
         ...(machineStatus ? { machineStatus } : {}),
         ...(readBoolean(record.isLocalWorktree, record.is_local_worktree) !== undefined ? { isLocalWorktree: readBoolean(record.isLocalWorktree, record.is_local_worktree) } : {}),
         ...(readString(record.worktreeBranch, record.worktree_branch) ? { worktreeBranch: readString(record.worktreeBranch, record.worktree_branch) } : {}),
+        ...(readString(record.clonedFromNodeId, record.cloned_from_node_id) ? { clonedFromNodeId: readString(record.clonedFromNodeId, record.cloned_from_node_id) } : {}),
         health: health as RepoMeshNodeStatus['health'],
         ...(git ? { git } : {}),
         ...(gitProbePending !== undefined ? { gitProbePending } : {}),
@@ -459,10 +461,71 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
     }
 }
 
-function canonicalizeRepoMeshNodes(nodes: RepoMeshNodeStatus[]): RepoMeshNodeStatus[] {
+function dedupeSessionDetails(sessions: RepoMeshSessionStatus[]): RepoMeshSessionStatus[] {
+    const byId = new Map<string, RepoMeshSessionStatus>()
+    for (const session of sessions) {
+        const existing = byId.get(session.sessionId)
+        byId.set(session.sessionId, existing ? { ...existing, ...session } : session)
+    }
+    return [...byId.values()]
+}
+
+function attachCoordinatorSessionsToNodes(status: RepoMeshStatus, nodes: RepoMeshNodeStatus[]): RepoMeshNodeStatus[] {
+    const coordinatorSessions = Array.isArray((status as any).coordinatorSessions)
+        ? (status as any).coordinatorSessions
+        : Array.isArray((status as any).coordinator_sessions)
+            ? (status as any).coordinator_sessions
+            : []
+    const normalizedSessions = coordinatorSessions
+        .map(normalizeMeshSessionRecord)
+        .filter((entry): entry is RepoMeshSessionStatus => entry !== null)
+    if (normalizedSessions.length === 0) return nodes
+
+    return nodes.map(node => {
+        const matching = normalizedSessions.filter(session => {
+            const record = readRecord(coordinatorSessions.find((entry: unknown) => {
+                const raw = readRecord(entry)
+                return readString(raw.sessionId, raw.session_id, raw.id) === session.sessionId
+            }))
+            const sessionNodeId = readString(record.nodeId, record.node_id)
+            const sessionDaemonId = readString(record.daemonId, record.daemon_id)
+            const sessionWorkspace = readString(record.workspace)
+            if (sessionNodeId && sessionNodeId === node.nodeId) return true
+            if (sessionDaemonId && node.daemonId && sessionDaemonId === node.daemonId) {
+                return !sessionWorkspace || !node.workspace || sessionWorkspace === node.workspace
+            }
+            return Boolean(sessionWorkspace && node.workspace && sessionWorkspace === node.workspace)
+        })
+        if (matching.length === 0) return node
+        const activeSessionDetails = dedupeSessionDetails([...(node.activeSessionDetails ?? []), ...matching])
+        return {
+            ...node,
+            activeSessionDetails,
+            activeSessions: dedupeSessionDetails([
+                ...(node.activeSessionDetails ?? []),
+                ...matching,
+                ...(node.activeSessions ?? []).map(sessionId => ({ sessionId })),
+            ]).map(session => session.sessionId),
+        }
+    })
+}
+
+function nodeNeedsAliasNormalization(node: unknown): boolean {
+    const record = readRecord(node)
+    return Array.isArray(record.sessions)
+        || Array.isArray(record.active_session_details)
+        || readString(record.daemon_id, record.machine_id, record.repo_root, record.worktree_branch, record.cloned_from_node_id) !== undefined
+        || readBoolean(record.is_local_worktree) !== undefined
+}
+
+function canonicalizeRepoMeshNodes(nodes: unknown[]): RepoMeshNodeStatus[] {
     const nodesById = new Map<string, RepoMeshNodeStatus>()
     const canonicalNodes: RepoMeshNodeStatus[] = []
-    for (const node of nodes) {
+    for (const rawNode of nodes) {
+        const node = nodeNeedsAliasNormalization(rawNode)
+            ? normalizeRepoMeshNodeStatus(rawNode) ?? rawNode as RepoMeshNodeStatus
+            : rawNode as RepoMeshNodeStatus
+        if (!node?.nodeId) continue
         const existing = nodesById.get(node.nodeId)
         if (!existing) {
             nodesById.set(node.nodeId, node)
@@ -478,9 +541,10 @@ function canonicalizeRepoMeshNodes(nodes: RepoMeshNodeStatus[]): RepoMeshNodeSta
 }
 
 export function canonicalizeRepoMeshStatus(status: RepoMeshStatus): RepoMeshStatus {
+    const nodes = canonicalizeRepoMeshNodes(status.nodes ?? [])
     return {
         ...status,
-        nodes: canonicalizeRepoMeshNodes(status.nodes ?? []),
+        nodes: attachCoordinatorSessionsToNodes(status, nodes),
     }
 }
 

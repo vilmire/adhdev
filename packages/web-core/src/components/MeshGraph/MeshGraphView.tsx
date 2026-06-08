@@ -328,6 +328,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const calloutText = getMeshGraphCalloutText(node)
     const hasActiveSession = isNodeActive(node)
     const visibleSessions = node.sessionDetails.slice(0, 3)
+    const visibleCardSessions = node.sessionDetails.slice(0, compact ? 1 : 2)
     const sessionSummaryLabel = getSessionSummaryLabel(node)
     const sessionTooltipLines = node.sessionDetails.map(session => {
         const status = formatSessionStatusLabel(session)
@@ -385,6 +386,35 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 {sessionSummaryLabel && (
                     <div className={`mt-1 min-w-0 max-w-full truncate text-[9px] ${meshTheme.isDark ? 'text-cyan-100/85' : 'text-sky-700'}`} title={sessionTooltipLines.join('\n')}>
                         {sessionSummaryLabel}
+                    </div>
+                )}
+                {visibleCardSessions.length > 0 && (
+                    <div className="mt-1.5 flex min-w-0 flex-col gap-1">
+                        {visibleCardSessions.map(session => (
+                            <div
+                                key={session.sessionId}
+                                className={`min-w-0 rounded-md border px-1.5 py-1 ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/[0.055]' : 'border-sky-200 bg-white/80'}`}
+                                title={[
+                                    `Session ID: ${session.sessionId}`,
+                                    session.providerType ? `Provider: ${session.providerType}` : null,
+                                    `Status: ${formatSessionStatusLabel(session)}`,
+                                    `Role: ${getSessionRoleLabel(session)}`,
+                                ].filter(Boolean).join('\n')}
+                            >
+                                <div className="flex min-w-0 items-center justify-between gap-1.5">
+                                    <span className={`min-w-0 truncate text-[9px] ${meshTheme.textMuted}`}>
+                                        {session.providerType || 'provider unknown'}
+                                    </span>
+                                    <span className={`shrink-0 rounded-full border px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.1em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
+                                        {formatSessionStatusLabel(session)}
+                                    </span>
+                                </div>
+                                <div className={`mt-0.5 flex min-w-0 items-center gap-1.5 text-[8px] ${meshTheme.textMuted}`}>
+                                    <span className="min-w-0 truncate font-mono">{shortSessionId(session.sessionId)}</span>
+                                    <span className="shrink-0">{getSessionRoleLabel(session)}</span>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 )}
                 <Handle type="source" position={direction === 'TB' ? Position.Bottom : Position.Right} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
@@ -453,6 +483,44 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     title={sessionTooltipLines.join('\n')}
                 >
                     <span className="truncate">{sessionSummaryLabel}</span>
+                </div>
+            )}
+
+            {visibleCardSessions.length > 0 && (
+                <div className="mt-2 flex min-w-0 flex-col gap-1.5">
+                    {visibleCardSessions.map(session => {
+                        const roleLabel = getSessionRoleLabel(session)
+                        return (
+                            <div
+                                key={session.sessionId}
+                                className={`min-w-0 rounded-lg border px-2.5 py-1.5 ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/[0.055]' : 'border-sky-200 bg-white/85'}`}
+                                title={[
+                                    `Session ID: ${session.sessionId}`,
+                                    session.providerType ? `Provider: ${session.providerType}` : null,
+                                    `Status: ${formatSessionStatusLabel(session)}`,
+                                    `Role: ${roleLabel}`,
+                                ].filter(Boolean).join('\n')}
+                            >
+                                <div className="flex min-w-0 items-center justify-between gap-2">
+                                    <span className={`min-w-0 truncate text-[10px] ${meshTheme.textMuted}`}>
+                                        {session.providerType || 'provider unknown'}
+                                    </span>
+                                    <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
+                                        {formatSessionStatusLabel(session)}
+                                    </span>
+                                </div>
+                                <div className={`mt-0.5 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[9px] ${meshTheme.textMuted}`}>
+                                    <span className="min-w-0 truncate font-mono">{shortSessionId(session.sessionId)}</span>
+                                    <span>{roleLabel}</span>
+                                </div>
+                            </div>
+                        )
+                    })}
+                    {node.sessionDetails.length > visibleCardSessions.length && (
+                        <div className={`text-[9px] ${meshTheme.textMuted}`}>
+                            +{node.sessionDetails.length - visibleCardSessions.length} more attached chat(s)
+                        </div>
+                    )}
                 </div>
             )}
 
