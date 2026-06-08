@@ -63,6 +63,7 @@ export interface DaemonInitConfig {
 
     /** Router transport-specific callbacks */
     onStatusChange?: () => void;
+    onMeshStateChange?: (meshId: string) => void;
     onPostChatCommand?: () => void;
     sessionHostControl?: SessionHostControlPlane | null;
     getCdpLogFn?: (ideType: string) => (msg: string) => void;
@@ -310,6 +311,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         },
         onIdeConnected: () => poller?.start(),
         onStatusChange: config.onStatusChange,
+        onMeshStateChange: config.onMeshStateChange,
         onPostChatCommand: config.onPostChatCommand,
         sessionHostControl: config.sessionHostControl,
         statusInstanceId: config.statusInstanceId,

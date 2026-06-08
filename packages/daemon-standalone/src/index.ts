@@ -2004,8 +2004,8 @@ class StandaloneServer {
     const includeSessions = state.request.params.includeSessions === true;
 
     if (includeSessions) {
-      if (this.components?.meshRegistry) {
-        const nodes = this.components.meshRegistry.getAllKnownNodes();
+      if (this.components?.router) {
+        const nodes = this.components.router.getCachedInlineMeshNodes();
         for (const node of nodes) {
           const meshSessions = readCachedInlineMeshActiveSessionDetails(node);
           for (const session of meshSessions) {

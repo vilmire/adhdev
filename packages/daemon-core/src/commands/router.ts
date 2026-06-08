@@ -2148,12 +2148,14 @@ export interface CommandRouterDeps {
     /** Reference to detected IDEs array (mutable — router updates it) */
     detectedIdes: { value: any[] };
     sessionRegistry: SessionRegistry;
-    /** Callback for CDP manager creation after launch_ide */
+    /** Callback after CDP manager created (transport-specific extras) */
     onCdpManagerCreated?: (ideType: string, manager: DaemonCdpManager) => void;
     /** Callback after IDE connected (e.g., startAgentStreamPolling) */
     onIdeConnected?: () => void;
     /** Callback after status change (stop_ide, restart) */
     onStatusChange?: () => void;
+    /** Callback when a mesh state is invalidated */
+    onMeshStateChange?: (meshId: string) => void;
     /** Callback after chat-related commands */
     onPostChatCommand?: () => void;
     /** Get a connected CDP manager (for agent stream reset check) */
@@ -2474,6 +2476,16 @@ export class DaemonCommandRouter {
         return next;
     }
 
+    public getCachedInlineMeshNodes(): any[] {
+        const nodes: any[] = [];
+        for (const mesh of this.inlineMeshCache.values()) {
+            if (Array.isArray(mesh?.nodes)) {
+                nodes.push(...mesh.nodes);
+            }
+        }
+        return nodes;
+    }
+
     public getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
         if (inlineMesh && typeof inlineMesh === 'object') {
             return this.warmInlineMeshCache(meshId, inlineMesh);
@@ -2528,6 +2540,7 @@ export class DaemonCommandRouter {
 
     private invalidateAggregateMeshStatus(meshId: string): void {
         this.aggregateMeshStatusCache.delete(meshId);
+        this.deps.onMeshStateChange?.(meshId);
     }
 
 
