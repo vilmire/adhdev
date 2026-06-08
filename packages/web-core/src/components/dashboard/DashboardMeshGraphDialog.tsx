@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { RepoMeshStatus } from '@adhdev/daemon-core'
+import type { DaemonMetadataUpdate, RepoMeshStatus } from '@adhdev/daemon-core'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
 import { IconMesh, IconX } from '../Icons'
 import { MeshObservabilitySurface } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
+import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
+import { subscriptionManager } from '../../managers/SubscriptionManager'
 import { extractRepoMeshStatus } from '../../utils/repo-mesh-status'
 import { getMeshGraphTheme } from '../MeshGraph/meshGraphTheme'
 
@@ -17,10 +19,53 @@ interface DashboardMeshGraphDialogProps {
 
 const dashboardMeshGraphStatusCache = new Map<string, RepoMeshStatus>()
 const MESH_GRAPH_BACKGROUND_REFRESH_MS = 4_000
+const MESH_GRAPH_EVENT_REFRESH_MIN_MS = 250
 
 function dashboardMeshGraphStatusCacheKey(daemonId: string | null, meshId: string | null): string | null {
     if (!daemonId || !meshId) return null
     return `${daemonId}::${meshId}`
+}
+
+function readString(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : ''
+}
+
+function readRecord(value: unknown): Record<string, any> {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {}
+}
+
+export function getDashboardMeshMetadataSignature(update: DaemonMetadataUpdate, meshId: string | null): string | null {
+    if (!meshId) return null
+    const sessions = Array.isArray(update.status?.sessions) ? update.status.sessions : []
+    const parts = sessions
+        .map((session: any) => {
+            const settings = readRecord(session?.settings)
+            const coordinatorMeshId = readString(session?.coordinator?.meshId) || readString(settings.meshCoordinatorFor)
+            const nodeMeshId = readString(settings.meshNodeFor)
+            if (coordinatorMeshId !== meshId && nodeMeshId !== meshId) return null
+            const activeChat = readRecord(session?.activeChat)
+            const prompt = readRecord(session?.activeInteractivePrompt)
+            const meshQueueStats = session?.meshQueueStats && typeof session.meshQueueStats === 'object'
+                ? JSON.stringify(session.meshQueueStats)
+                : ''
+            return [
+                readString(session?.id),
+                readString(session?.providerType),
+                readString(session?.status),
+                readString(activeChat.status),
+                readString(session?.runtimeLifecycle),
+                readString(session?.runtimeSurfaceKind),
+                readString(session?.runtimeRecoveryState),
+                readString(prompt.status) || readString(prompt.kind) || readString(prompt.type),
+                readString(settings.meshNodeId),
+                coordinatorMeshId ? 'coordinator' : 'worker',
+                meshQueueStats,
+            ].join('|')
+        })
+        .filter((part): part is string => !!part)
+        .sort()
+
+    return parts.length > 0 ? parts.join('\n') : null
 }
 
 export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand, onClose }: DashboardMeshGraphDialogProps) {
@@ -30,6 +75,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const cacheKey = dashboardMeshGraphStatusCacheKey(daemonId, meshId)
     const initialMeshStatus = cacheKey ? dashboardMeshGraphStatusCache.get(cacheKey) ?? null : null
     const meshOverrides = useDashboardMeshOverrides()
+    const { sendData } = useTransport()
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const [meshStatus, setMeshStatus] = useState<RepoMeshStatus | null>(initialMeshStatus)
@@ -39,6 +85,11 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(initialMeshStatus?.refreshedAt ?? null)
     const hasUsableGraphRef = useRef(initialMeshStatus !== null)
     const loadInFlightRef = useRef(false)
+    const pendingRefreshRef = useRef(false)
+    const metadataSignatureRef = useRef<string | null>(null)
+    const lastEventRefreshAtRef = useRef(0)
+    const pendingEventTimerRef = useRef<number | null>(null)
+    const mountedRef = useRef(true)
 
     useEffect(() => {
         hasUsableGraphRef.current = meshStatus !== null
@@ -49,6 +100,8 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         setMeshStatus(cachedStatus)
         setLastLoadedAt(cachedStatus?.refreshedAt ?? null)
         hasUsableGraphRef.current = cachedStatus !== null
+        pendingRefreshRef.current = false
+        metadataSignatureRef.current = null
         setRefreshing(false)
         setError(null)
     }, [cacheKey])
@@ -60,7 +113,10 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             return
         }
 
-        if (loadInFlightRef.current) return
+        if (loadInFlightRef.current) {
+            if (refresh) pendingRefreshRef.current = true
+            return
+        }
 
         if (!refresh && cacheKey) {
             const cachedStatus = dashboardMeshGraphStatusCache.get(cacheKey)
@@ -101,12 +157,75 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             loadInFlightRef.current = false
             setLoading(false)
             setRefreshing(false)
+            if (pendingRefreshRef.current && mountedRef.current) {
+                pendingRefreshRef.current = false
+                window.setTimeout(() => {
+                    if (mountedRef.current) void loadGraph(true, { background: true })
+                }, 0)
+            }
         }
     }, [cacheKey, daemonId, meshId, meshOverrides, sendDaemonCommand])
 
-    useEffect(() => {
-        loadGraph(false)
+    const scheduleEventDrivenRefresh = useCallback(() => {
+        if (document.visibilityState === 'hidden') return
+        const now = Date.now()
+        const elapsed = now - lastEventRefreshAtRef.current
+        const run = () => {
+            pendingEventTimerRef.current = null
+            lastEventRefreshAtRef.current = Date.now()
+            void loadGraph(true, { background: true })
+        }
+        if (elapsed >= MESH_GRAPH_EVENT_REFRESH_MIN_MS) {
+            if (pendingEventTimerRef.current !== null) {
+                window.clearTimeout(pendingEventTimerRef.current)
+                pendingEventTimerRef.current = null
+            }
+            run()
+            return
+        }
+        if (pendingEventTimerRef.current !== null) return
+        pendingEventTimerRef.current = window.setTimeout(run, MESH_GRAPH_EVENT_REFRESH_MIN_MS - elapsed)
     }, [loadGraph])
+
+    useEffect(() => {
+        mountedRef.current = true
+        loadGraph(false)
+        return () => {
+            mountedRef.current = false
+            if (pendingEventTimerRef.current !== null) {
+                window.clearTimeout(pendingEventTimerRef.current)
+                pendingEventTimerRef.current = null
+            }
+        }
+    }, [loadGraph])
+
+    useEffect(() => {
+        if (!daemonId || !meshId || !sendData) return
+        // Daemon metadata carries delegated worker and mesh queue/session transitions.
+        // A coordinator's own in-flight turn may still surface only when its provider reports status, so the timer below remains a reconciliation path.
+        const unsubscribe = subscriptionManager.subscribe(
+            { sendData },
+            daemonId,
+            {
+                type: 'subscribe',
+                topic: 'daemon.metadata',
+                key: `daemon:metadata:${daemonId}`,
+                params: {
+                    includeSessions: true,
+                },
+            },
+            (update: DaemonMetadataUpdate) => {
+                if (update.topic !== 'daemon.metadata') return
+                const signature = getDashboardMeshMetadataSignature(update, meshId)
+                if (!signature || signature === metadataSignatureRef.current) return
+                metadataSignatureRef.current = signature
+                scheduleEventDrivenRefresh()
+            },
+        )
+        return () => {
+            unsubscribe()
+        }
+    }, [daemonId, meshId, scheduleEventDrivenRefresh, sendData])
 
     useEffect(() => {
         if (!daemonId || !meshId) return
@@ -169,7 +288,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                         )}
                         {!refreshing && meshStatus && (
                             <span className={meshTheme.dialogRefreshedChipClass}>
-                                Auto-refresh 4s
+                                Live events + 4s fallback
                             </span>
                         )}
                         <button

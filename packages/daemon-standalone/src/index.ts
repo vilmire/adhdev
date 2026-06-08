@@ -392,6 +392,19 @@ const SESSION_TARGET_COMMANDS = new Set([
   'agent_command',
 ]);
 
+function commandMayAffectMeshGraphStatus(type: string): boolean {
+  return type.startsWith('mesh_')
+    || type === 'add_mesh_node'
+    || type === 'update_mesh_node'
+    || type === 'remove_mesh_node'
+    || type === 'clone_mesh_node'
+    || type === 'trigger_mesh_queue'
+    || type === 'get_mesh_queue'
+    || type === 'launch_cli'
+    || type === 'stop_cli'
+    || type === 'restart_session';
+}
+
 function standaloneIpcEnabled(): boolean {
   const value = String(process.env.ADHDEV_STANDALONE_ENABLE_IPC || '').trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';
@@ -2220,7 +2233,8 @@ class StandaloneServer {
       return { success: false, error: 'command type required' };
     }
     const result = await this.components.router.execute(type, args, 'standalone');
-    if (type === 'invoke_provider_script' || type.startsWith('workspace_') || type.startsWith('session_host_')) {
+    const affectsMeshGraphStatus = commandMayAffectMeshGraphStatus(type);
+    if (type === 'invoke_provider_script' || type.startsWith('workspace_') || type.startsWith('session_host_') || affectsMeshGraphStatus) {
       this.scheduleBroadcastStatus();
     }
     if (
@@ -2230,6 +2244,7 @@ class StandaloneServer {
       || type === 'set_machine_nickname'
       || type.startsWith('workspace_')
       || type.startsWith('session_host_')
+      || affectsMeshGraphStatus
     ) {
       void this.flushWsDaemonMetadataSubscriptions();
     }

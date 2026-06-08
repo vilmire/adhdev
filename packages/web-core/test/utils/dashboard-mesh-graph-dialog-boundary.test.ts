@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import type { DaemonMetadataUpdate } from '@adhdev/daemon-core'
+import { getDashboardMeshMetadataSignature } from '../../src/components/dashboard/DashboardMeshGraphDialog'
 
 function readSource(relativePath: string): string {
   return fs.readFileSync(path.join(import.meta.dirname, '../../src', relativePath), 'utf8')
@@ -21,6 +23,12 @@ describe('dashboard mesh graph dialog wiring', () => {
     const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
 
     expect(dialogSource).toContain('useDashboardMeshOverrides()')
+    expect(dialogSource).toContain('useTransport()')
+    expect(dialogSource).toContain('subscriptionManager.subscribe(')
+    expect(dialogSource).toContain("topic: 'daemon.metadata'")
+    expect(dialogSource).toContain('getDashboardMeshMetadataSignature(update, meshId)')
+    expect(dialogSource).toContain('scheduleEventDrivenRefresh()')
+    expect(dialogSource).toContain('unsubscribe()')
     expect(dialogSource).toContain('meshOverrides?.loadMeshStatus')
     expect(dialogSource).toContain("sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })")
     expect(dialogSource).toContain('meshOverrides.loadMeshStatus(daemonId, meshId, {')
@@ -33,7 +41,7 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).toContain('loadGraph(false)')
     expect(dialogSource).toContain('MESH_GRAPH_BACKGROUND_REFRESH_MS')
     expect(dialogSource).toContain('loadGraph(true, { background: true })')
-    expect(dialogSource).toContain('Auto-refresh 4s')
+    expect(dialogSource).toContain('Live events + 4s fallback')
     expect(dialogSource).not.toContain('if (!refresh && meshOverrides?.loadMeshStatus)')
     expect(dialogSource).toContain('<MeshObservabilitySurface')
     expect(dialogSource).toContain('status={meshStatus}')
@@ -45,6 +53,93 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).not.toContain('pendingRefreshTimerRef')
     expect(dialogSource).not.toContain('mockMeshGraph')
     expect(dialogSource).not.toContain('mockNodes')
+  })
+
+  it('invalidates only for metadata changes on sessions that belong to the active mesh', () => {
+    const baseUpdate = {
+      topic: 'daemon.metadata',
+      key: 'daemon:metadata:daemon-1',
+      daemonId: 'daemon-1',
+      seq: 1,
+      timestamp: 1000,
+      status: {
+        instanceId: 'daemon-1',
+        machine: { id: 'machine-1', hostname: 'host', platform: 'darwin', arch: 'arm64' },
+        timestamp: 1000,
+        sessions: [
+          {
+            id: 'coordinator',
+            providerType: 'codex',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Coordinator',
+            parentId: null,
+            activeChat: { status: 'idle' },
+            settings: { meshCoordinatorFor: 'mesh_a' },
+            coordinator: { meshId: 'mesh_a', role: 'coordinator' },
+            meshQueueStats: { pending: 0, assigned: 1, completed: 0, failed: 0 },
+          },
+          {
+            id: 'worker',
+            providerType: 'codex',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'generating',
+            title: 'Worker',
+            parentId: null,
+            activeChat: { status: 'generating' },
+            settings: { meshNodeFor: 'mesh_a', meshNodeId: 'node-1' },
+          },
+          {
+            id: 'unrelated',
+            providerType: 'codex',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'generating',
+            title: 'Unrelated',
+            parentId: null,
+            activeChat: { status: 'generating' },
+            settings: { meshNodeFor: 'mesh_b', meshNodeId: 'node-9' },
+          },
+        ],
+      },
+    } as DaemonMetadataUpdate
+
+    const initial = getDashboardMeshMetadataSignature(baseUpdate, 'mesh_a')
+    const unrelatedChanged = getDashboardMeshMetadataSignature({
+      ...baseUpdate,
+      status: {
+        ...baseUpdate.status,
+        sessions: baseUpdate.status.sessions.map((session: any) => session.id === 'unrelated'
+          ? { ...session, status: 'idle', activeChat: { status: 'idle' } }
+          : session),
+      },
+    } as DaemonMetadataUpdate, 'mesh_a')
+    const workerCompleted = getDashboardMeshMetadataSignature({
+      ...baseUpdate,
+      status: {
+        ...baseUpdate.status,
+        sessions: baseUpdate.status.sessions.map((session: any) => session.id === 'worker'
+          ? { ...session, status: 'idle', activeChat: { status: 'idle' } }
+          : session),
+      },
+    } as DaemonMetadataUpdate, 'mesh_a')
+    const queueChanged = getDashboardMeshMetadataSignature({
+      ...baseUpdate,
+      status: {
+        ...baseUpdate.status,
+        sessions: baseUpdate.status.sessions.map((session: any) => session.id === 'coordinator'
+          ? { ...session, meshQueueStats: { pending: 0, assigned: 0, completed: 1, failed: 0 } }
+          : session),
+      },
+    } as DaemonMetadataUpdate, 'mesh_a')
+
+    expect(initial).toBeTruthy()
+    expect(unrelatedChanged).toEqual(initial)
+    expect(workerCompleted).not.toEqual(initial)
+    expect(queueChanged).not.toEqual(initial)
+    expect(getDashboardMeshMetadataSignature(baseUpdate, 'mesh_missing')).toBeNull()
   })
 
     it('keeps the dialog responsive on the shared mobile/desktop observability path', () => {

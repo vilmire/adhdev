@@ -37,3 +37,15 @@ test('standalone workspace.git subscriptions only flush while subscribers exist'
   assert.match(text, /if \(this\.hasWsGitSubscriptions\(\)\) void this\.flushWsGitSubscriptions\(\)/)
   assert.match(text, /if \(!this\.hasWsGitSubscriptions\(targetWs\)\) return/)
 })
+
+test('standalone mesh and session commands flush daemon metadata subscriptions for graph refresh', () => {
+  const text = source()
+
+  assert.match(text, /function commandMayAffectMeshGraphStatus\(type: string\): boolean/)
+  assert.match(text, /type\.startsWith\('mesh_'\)/)
+  assert.match(text, /type === 'launch_cli'/)
+  assert.match(text, /type === 'stop_cli'/)
+  assert.match(text, /const affectsMeshGraphStatus = commandMayAffectMeshGraphStatus\(type\)/)
+  assert.match(text, /type\.startsWith\('session_host_'\) \|\| affectsMeshGraphStatus\) \{[\s\S]*?this\.scheduleBroadcastStatus\(\)/)
+  assert.match(text, /type\.startsWith\('session_host_'\)[\s\S]*?\|\| affectsMeshGraphStatus[\s\S]*?\) \{[\s\S]*?void this\.flushWsDaemonMetadataSubscriptions\(\)/)
+})
