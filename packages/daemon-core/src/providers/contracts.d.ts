@@ -401,7 +401,62 @@ export interface ProviderModule {
     spawnArgBuilder?: (config: Record<string, string>) => string[];
     /** ACP agent auth methods (multiple supported — in priority order) */
     auth?: AcpAuthMethod[];
+    /**
+     * Repo Mesh coordinator capability and MCP ingestion behavior.
+     * Providers must declare this rather than relying on daemon hardcoded CLI quirks.
+     */
+    meshCoordinator?: ProviderMeshCoordinatorConfig;
 }
+export type MeshCoordinatorMcpConfigMode = 'auto_import' | 'manual' | 'none';
+export type MeshCoordinatorMcpConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
+export interface ProviderMeshCoordinatorConfig {
+    supported: boolean;
+    reason?: string;
+    mcpConfig?: {
+        mode: MeshCoordinatorMcpConfigMode;
+        format?: MeshCoordinatorMcpConfigFormat;
+        path?: string;
+        serverName?: string;
+        configPathCommand?: string;
+        requiresRestart?: boolean;
+        instructions?: string;
+        template?: string;
+    };
+    systemPromptInjection?: MeshCoordinatorSystemPromptInjection;
+    delegatedWorkerIsolation?: MeshCoordinatorDelegatedWorkerIsolation;
+}
+export type MeshCoordinatorSystemPromptInjection = {
+    mode: 'cli_arg';
+    flag: string;
+} | {
+    mode: 'config_override';
+    flag: string;
+    template: string;
+} | {
+    mode: 'context_file';
+    path: string;
+    wrapper?: string;
+} | {
+    mode: 'env_var';
+    name: string;
+};
+export interface MeshCoordinatorDelegatedWorkerIsolation {
+    env?: {
+        unset?: string[];
+    };
+    args?: MeshCoordinatorDelegatedWorkerArgRule[];
+}
+export type MeshCoordinatorDelegatedWorkerArgRule = {
+    mode: 'empty_mcp_config';
+    flag: string;
+    strictFlag?: string;
+} | {
+    mode: 'config_override';
+    flag: string;
+    key: string;
+    value: string;
+    dedupeKey?: string;
+};
 export interface ProviderResumeCapability {
     supported: boolean;
     stopStrategy?: 'command' | 'ctrl_c';

@@ -1994,10 +1994,15 @@ async function drainCoordinatorPendingEvents(
 
     if (ctx.transport instanceof IpcTransport) {
         const surfacedEvents: any[] = [];
+        const coordinatorDaemonId = readString(ctx.localDaemonId);
+        const pendingEventArgs = {
+            meshId: ctx.mesh.id,
+            ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
+        };
 
         try {
             surfacedEvents.push(
-                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', { meshId: ctx.mesh.id }) as any)
+                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', pendingEventArgs) as any)
                     .filter(matchesCurrentMesh),
             );
             surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);
@@ -2011,7 +2016,7 @@ async function drainCoordinatorPendingEvents(
 
             try {
                 const remoteEvents = normalizePendingMeshCoordinatorEvents(
-                    await ctx.transport.meshCommand(node.daemonId, 'get_pending_mesh_events', { meshId: ctx.mesh.id }),
+                    await ctx.transport.meshCommand(node.daemonId, 'get_pending_mesh_events', pendingEventArgs),
                 ).filter(matchesCurrentMesh);
                 if (remoteEvents.length === 0) continue;
 
@@ -2028,7 +2033,7 @@ async function drainCoordinatorPendingEvents(
 
         try {
             surfacedEvents.push(
-                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', { meshId: ctx.mesh.id }) as any)
+                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', pendingEventArgs) as any)
                     .filter(matchesCurrentMesh),
             );
             surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);

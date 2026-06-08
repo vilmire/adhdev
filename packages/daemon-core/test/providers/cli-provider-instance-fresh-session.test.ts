@@ -122,6 +122,45 @@ describe('waitForCliAdapterReady', () => {
 })
 
 describe('CliProviderInstance provider session recovery', () => {
+  it('preserves runtime mesh metadata when provider settings are refreshed', () => {
+    const instance = new CliProviderInstance({
+      type: 'claude-cli',
+      name: 'Claude Code',
+      category: 'cli',
+      spawn: { command: 'claude', args: [] },
+    } as any, '/tmp/project', [], 'runtime-session-mesh-settings') as any
+    instance.settings = {
+      enabled: true,
+      autoApprove: false,
+      meshNodeFor: 'mesh-runtime',
+      meshNodeId: 'node-runtime',
+      meshCoordinatorDaemonId: 'daemon-coordinator',
+      meshCoordinatorNodeId: 'node-coordinator',
+      spawnedSessionVisibility: 'visible',
+      launchedByCoordinator: true,
+    }
+    instance.adapter = { updateRuntimeSettings: vi.fn() }
+    instance.monitor = { updateConfig: vi.fn() }
+
+    instance.updateSettings({ enabled: true, autoApprove: true, longGeneratingThresholdSec: 240 })
+
+    expect(instance.settings).toMatchObject({
+      enabled: true,
+      autoApprove: true,
+      longGeneratingThresholdSec: 240,
+      meshNodeFor: 'mesh-runtime',
+      meshNodeId: 'node-runtime',
+      meshCoordinatorDaemonId: 'daemon-coordinator',
+      meshCoordinatorNodeId: 'node-coordinator',
+      spawnedSessionVisibility: 'visible',
+      launchedByCoordinator: true,
+    })
+    expect(instance.adapter.updateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({
+      meshNodeFor: 'mesh-runtime',
+      meshCoordinatorDaemonId: 'daemon-coordinator',
+    }))
+  })
+
   it('uses provider autoApprove defaults when runtime settings omit the field', () => {
     const disabledByDefault = new CliProviderInstance({
       type: 'hermes-cli',
@@ -680,6 +719,72 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       expect(completed).toMatchObject({
         finalSummary: 'I choose rock. You win.',
       })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reconciles external-native final assistant when the PTY stays generating', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2027-01-15T08:00:00Z'))
+    try {
+      let nativeMessages: Array<Record<string, unknown>> = [
+        { role: 'user', kind: 'standard', content: 'Update README', receivedAt: Date.now() },
+      ]
+      const instance = new CliProviderInstance({
+        type: 'antigravity-cli',
+        name: 'Antigravity',
+        category: 'cli',
+        spawn: { command: 'agy', args: [] },
+        nativeHistory: {
+          format: 'antigravity-jsonl',
+          watchPath: '~/.gemini/antigravity-cli',
+          mode: 'native-source',
+          scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+        },
+        scripts: providerNativeHistoryScripts(() => nativeMessages),
+      } as any, '/tmp/project', [], 'runtime-antigravity', undefined, {
+        providerSessionId: '3d991780-74a1-4e97-8c2e-c38719794b9d',
+        launchMode: 'new',
+      }) as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+
+      const status = 'generating'
+      instance.adapter = {
+        chatMessagesOwnedExternally: true,
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        isProcessing: () => true,
+        getScriptParsedStatus: () => ({ status: 'generating', title: 'Antigravity', messages: [] }),
+        getPartialResponse: () => '⣾ Working...',
+        getRuntimeMetadata: () => null,
+      }
+      instance.recordAcknowledgedUserInput('Update README')
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+      expect(events.map((event) => event.event)).toContain('agent:generating_started')
+
+      nativeMessages = [
+        ...nativeMessages,
+        { role: 'assistant', kind: 'standard', content: 'README updated.', receivedAt: Date.now() + 1_000 },
+      ]
+      vi.advanceTimersByTime(1000)
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+
+      const completed = events.find((event) => event.event === 'agent:generating_completed')
+      expect(completed).toMatchObject({
+        finalSummary: 'README updated.',
+        completionDiagnostic: {
+          reconciliationReason: 'external_native_final_assistant_while_adapter_busy',
+          finalAssistantEvidenceSource: 'external-native',
+        },
+      })
+      expect(instance.getState().status).toBe('idle')
+      expect(instance.getState().activeChat.status).toBe('idle')
     } finally {
       vi.useRealTimers()
     }

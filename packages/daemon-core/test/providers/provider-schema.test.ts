@@ -289,6 +289,44 @@ describe('validateProviderDefinition', () => {
     expect(result.warnings).not.toContain('Unknown provider field: meshCoordinator')
   })
 
+  it('accepts provider-declared delegated worker isolation rules', () => {
+    const result = validateProviderDefinition({
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      category: 'cli',
+      spawn: { command: 'codex' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          instructions: 'Register adhdev-mesh with Codex.',
+          template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}',
+        },
+        delegatedWorkerIsolation: {
+          env: { unset: ['ADHDEV_INLINE_MESH'] },
+          args: [
+            {
+              mode: 'config_override',
+              flag: '-c',
+              key: 'mcp_servers.adhdev-mesh.enabled',
+              value: 'false',
+              dedupeKey: 'mcp_servers.adhdev-mesh',
+            },
+            {
+              mode: 'empty_mcp_config',
+              flag: '--mcp-config',
+              strictFlag: '--strict-mcp-config',
+            },
+          ],
+        },
+      },
+    })
+
+    expect(result.errors).toEqual([])
+  })
+
   it('accepts mesh coordinator manual MCP metadata with actionable instructions', () => {
     const result = validateProviderDefinition({
       type: 'hermes-cli',

@@ -403,7 +403,42 @@ export interface ProviderMeshCoordinatorConfig {
    * the CLI doesn't recognize).
    */
   systemPromptInjection?: MeshCoordinatorSystemPromptInjection;
+  /**
+   * How coordinator-launched worker sessions are isolated from coordinator-only
+   * MCP/tools/config. Provider-specific CLI quirks belong here, not in daemon
+   * launch code.
+   */
+  delegatedWorkerIsolation?: MeshCoordinatorDelegatedWorkerIsolation;
 }
+
+export interface MeshCoordinatorDelegatedWorkerIsolation {
+  /** Environment variables to unset for delegated worker sessions. */
+  env?: {
+    unset?: string[];
+  };
+  /** Spawn-argument rules applied before launching a delegated worker. */
+  args?: MeshCoordinatorDelegatedWorkerArgRule[];
+}
+
+export type MeshCoordinatorDelegatedWorkerArgRule =
+  | {
+      mode: 'empty_mcp_config';
+      /** CLI flag that points at an MCP config file, e.g. '--mcp-config'. */
+      flag: string;
+      /** Optional CLI flag that forces only the provided MCP config to be used. */
+      strictFlag?: string;
+    }
+  | {
+      mode: 'config_override';
+      /** CLI config flag, e.g. '-c' or '--config'. */
+      flag: string;
+      /** Config key to set for worker isolation. */
+      key: string;
+      /** Config value to set. */
+      value: string;
+      /** Optional broader key prefix used for duplicate detection. */
+      dedupeKey?: string;
+    };
 
 /**
  * Declarative description of how a CLI accepts a session-scoped system prompt.

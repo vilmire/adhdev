@@ -73,6 +73,12 @@ type CompletionFinalAssistantEvidence = {
     source: 'parsed' | 'external-native' | 'unavailable';
 };
 
+type ExternalNativeFinalReconciliation = {
+    fingerprint: string;
+    finalSummary: string;
+    evidence: CompletionFinalAssistantEvidence;
+};
+
 type ExternalTranscriptProbe = {
     readAt: number;
     msgCount: number;
@@ -369,6 +375,8 @@ export class CliProviderInstance implements ProviderInstance {
     private historyWriter: ChatHistoryWriter;
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     private lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
+    private lastAcknowledgedUserInputAt = 0;
+    private externalBusyIdleFingerprint = '';
     private lastNativeSourceCanonicalCheckAt = 0;
     private lastNativeSourceCanonicalCacheKey: string | undefined = undefined;
     private cachedSqliteDb: {
@@ -587,9 +595,13 @@ export class CliProviderInstance implements ProviderInstance {
             typeof adapterStatus?.providerSessionId === 'string' ? adapterStatus.providerSessionId : '',
         );
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, Date.now());
-        const visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
+        let visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
             ? 'error'
             : (autoApproveActive ? 'generating' : adapterStatus.status);
+        const externalNativeFinal = this.getExternalNativeFinalReconciliation(parsedStatus?.messages, adapterStatus);
+        if (externalNativeFinal && isCliGeneratingLikeStatus(visibleStatus)) {
+            visibleStatus = 'idle';
+        }
         const runtime = this.adapter.getRuntimeMetadata();
         this.maybeAppendRuntimeRecoveryMessage(runtime);
         let parsedMessages = Array.isArray(parsedStatus?.messages)
@@ -788,7 +800,22 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     updateSettings(newSettings: Record<string, any>): void {
-        this.settings = { ...newSettings };
+        const runtimeMeshSettings: Record<string, any> = {};
+        for (const key of [
+            'meshNodeFor',
+            'meshNodeId',
+            'meshActiveTaskId',
+            'meshCoordinatorFor',
+            'meshCoordinatorDaemonId',
+            'meshCoordinatorNodeId',
+            'spawnedSessionVisibility',
+            'launchedByCoordinator',
+        ]) {
+            if (this.settings[key] !== undefined && newSettings[key] === undefined) {
+                runtimeMeshSettings[key] = this.settings[key];
+            }
+        }
+        this.settings = { ...newSettings, ...runtimeMeshSettings };
         this.adapter.updateRuntimeSettings?.(this.settings);
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
@@ -884,6 +911,8 @@ export class CliProviderInstance implements ProviderInstance {
         if (!content) return;
 
         const receivedAt = Date.now();
+        this.lastAcknowledgedUserInputAt = receivedAt;
+        this.externalBusyIdleFingerprint = '';
         const dedupKey = `user_input_ack:${crypto
             .createHash('sha256')
             .update(`${this.instanceId}:${content}:${receivedAt}`)
@@ -1049,6 +1078,59 @@ export class CliProviderInstance implements ProviderInstance {
         return extractFinalSummaryFromMessages(evidence.messages as any);
     }
 
+    private externalNativeFinalFingerprint(evidence: CompletionFinalAssistantEvidence): string {
+        const messages = Array.isArray(evidence.messages) ? evidence.messages : [];
+        const visibleMessages = messages.filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
+        const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
+        const content = lastVisible ? flattenContent(lastVisible.content).trim() : '';
+        const receivedAt = lastVisible ? getMessageTime(lastVisible) : 0;
+        const probe = this.lastExternalCompletionProbe;
+        return crypto
+            .createHash('sha256')
+            .update([
+                this.type,
+                this.providerSessionId || '',
+                probe?.sourcePath || '',
+                String(probe?.sourceMtimeMs || 0),
+                String(receivedAt || 0),
+                content.slice(-500),
+            ].join('\0'))
+            .digest('hex')
+            .slice(0, 24);
+    }
+
+    private getExternalNativeFinalReconciliation(parsedMessages: unknown, adapterStatus: any): ExternalNativeFinalReconciliation | null {
+        const rawStatus = typeof adapterStatus?.status === 'string' ? adapterStatus.status.trim() : '';
+        if (!isCliGeneratingLikeStatus(rawStatus)) return null;
+        if (hasNonEmptyCliModalButtons(adapterStatus?.activeModal ?? adapterStatus?.modal)) return null;
+
+        const evidence = this.completionFinalAssistantEvidence(parsedMessages);
+        if (evidence.source !== 'external-native' || !evidence.present) return null;
+
+        const messages = Array.isArray(evidence.messages) ? evidence.messages : [];
+        const visibleMessages = messages.filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
+        const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
+        const lastMessageAt = lastVisible ? getMessageTime(lastVisible) : 0;
+        const sourceMtimeMs = Number(this.lastExternalCompletionProbe?.sourceMtimeMs || 0);
+        const minEvidenceAt = Math.max(
+            this.startedAt > 0 ? this.startedAt - 5_000 : 0,
+            this.generatingStartedAt > 0 ? this.generatingStartedAt - 5_000 : 0,
+            this.lastAcknowledgedUserInputAt > 0 ? this.lastAcknowledgedUserInputAt - 1_000 : 0,
+        );
+        if (minEvidenceAt > 0 && lastMessageAt > 0 && lastMessageAt < minEvidenceAt && sourceMtimeMs < minEvidenceAt) {
+            return null;
+        }
+
+        const finalSummary = extractFinalSummaryFromMessages(evidence.messages as any);
+        if (!finalSummary) return null;
+        const fingerprint = this.externalNativeFinalFingerprint(evidence);
+        if (fingerprint === this.externalBusyIdleFingerprint) {
+            return { fingerprint, finalSummary, evidence };
+        }
+        this.externalBusyIdleFingerprint = fingerprint;
+        return { fingerprint, finalSummary, evidence };
+    }
+
     private buildCompletedFinalizationDiagnostic(args: {
         blockReason: string;
         latestStatus?: any;
@@ -1138,12 +1220,13 @@ export class CliProviderInstance implements ProviderInstance {
         return true;
     }
 
-    private getCompletedFinalizationBlock(latestVisibleStatus: string, pending: CompletedDebouncePending): CompletedFinalizationBlock | null {
+    private getCompletedFinalizationBlock(latestVisibleStatus: string, pending: CompletedDebouncePending, opts?: { externalNativeFinal?: ExternalNativeFinalReconciliation | null }): CompletedFinalizationBlock | null {
         if (latestVisibleStatus !== 'idle') return { reason: `status:${latestVisibleStatus}`, terminal: true };
 
         const adapterAny = this.adapter as any;
         const approvalResolvedIdle = pending.previousStatus === 'waiting_approval';
-        if (!approvalResolvedIdle) {
+        const externalNativeFinal = opts?.externalNativeFinal || null;
+        if (!approvalResolvedIdle && !externalNativeFinal) {
             if (adapterAny?.isWaitingForResponse === true) return { reason: 'adapter_waiting_for_response', terminal: true };
             if (adapterAny?.currentTurnScope) return { reason: 'adapter_turn_scope_active', terminal: true };
             if (this.hasAdapterPendingResponse()) return { reason: 'adapter_pending_response', terminal: true };
@@ -1152,7 +1235,7 @@ export class CliProviderInstance implements ProviderInstance {
         const partial = typeof this.adapter.getPartialResponse === 'function'
             ? this.adapter.getPartialResponse()
             : '';
-        if (typeof partial === 'string' && partial.trim()) return { reason: 'partial_response_pending', terminal: true };
+        if (!externalNativeFinal && typeof partial === 'string' && partial.trim()) return { reason: 'partial_response_pending', terminal: true };
 
         let parsed: any;
         try {
@@ -1164,6 +1247,7 @@ export class CliProviderInstance implements ProviderInstance {
         const parsedStatus = typeof parsed?.status === 'string' ? parsed.status : 'unknown';
         if (parsedStatus !== 'idle') {
             const adapterStatus = this.adapter.getStatus({ allowParse: false });
+            if (externalNativeFinal && isCliGeneratingLikeStatus(parsedStatus)) return null;
             if (this.shouldSuppressStaleParsedBusyStatus(parsed, adapterStatus)) return null;
             return { reason: `parsed_status:${parsedStatus}`, terminal: isCliGeneratingLikeStatus(parsedStatus) };
         }
@@ -1230,7 +1314,10 @@ export class CliProviderInstance implements ProviderInstance {
 
         const latestStatus = this.adapter.getStatus({ allowParse: false });
         const latestAutoApproveActive = latestStatus.status === 'waiting_approval' && this.shouldAutoApprove();
-        const latestVisibleStatus = latestAutoApproveActive ? 'generating' : latestStatus.status;
+        const externalNativeFinal = this.getExternalNativeFinalReconciliation(undefined, latestStatus);
+        const latestVisibleStatus = externalNativeFinal && isCliGeneratingLikeStatus(latestStatus.status)
+            ? 'idle'
+            : (latestAutoApproveActive ? 'generating' : latestStatus.status);
         if (latestVisibleStatus !== 'idle') {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
             this.completedDebouncePending = null;
@@ -1238,7 +1325,7 @@ export class CliProviderInstance implements ProviderInstance {
             return;
         }
 
-        const block = this.getCompletedFinalizationBlock(latestVisibleStatus, pending);
+        const block = this.getCompletedFinalizationBlock(latestVisibleStatus, pending, { externalNativeFinal });
         if (block) {
             const blockReason = block.reason;
             const waitedMs = Date.now() - pending.firstObservedAt;
@@ -1282,7 +1369,18 @@ export class CliProviderInstance implements ProviderInstance {
             chatTitle: pending.chatTitle,
             duration: pending.duration,
             timestamp: pending.timestamp,
-            finalSummary: this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
+            finalSummary: externalNativeFinal?.finalSummary || this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
+            ...(externalNativeFinal ? {
+                completionDiagnostic: {
+                    providerType: this.type,
+                    sessionId: this.instanceId,
+                    providerSessionId: this.providerSessionId || null,
+                    reconciliationReason: 'external_native_final_assistant_while_adapter_busy',
+                    finalAssistantPresent: true,
+                    finalAssistantEvidenceSource: externalNativeFinal.evidence.source,
+                    externalFinalFingerprint: externalNativeFinal.fingerprint,
+                },
+            } : {}),
         });
         this.completedDebouncePending = null;
         this.completedDebounceTimer = null;
@@ -1359,7 +1457,10 @@ export class CliProviderInstance implements ProviderInstance {
         const parsedStatus = null;
         const rawStatus = adapterStatus.status;
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, now);
-        const newStatus = autoApproveActive ? 'generating' : rawStatus;
+        const externalNativeFinal = this.getExternalNativeFinalReconciliation(undefined, adapterStatus);
+        const newStatus = externalNativeFinal && isCliGeneratingLikeStatus(rawStatus)
+            ? 'idle'
+            : (autoApproveActive ? 'generating' : rawStatus);
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const partial = this.adapter.getPartialResponse();

@@ -86,7 +86,7 @@ const ChatInputBar = memo(function ChatInputBar({
     onControlsToggle,
     messageInput,
 }: ChatInputBarProps) {
-    const chatInputRef = useRef<HTMLInputElement>(null);
+    const chatInputRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [draftInput, setDraftInput] = useState('');
     const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
@@ -108,6 +108,13 @@ const ChatInputBar = memo(function ChatInputBar({
         if (!isActive) return;
         chatInputRef.current?.focus({ preventScroll: true });
     }, [contextKey, isActive]);
+
+    useEffect(() => {
+        const el = chatInputRef.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    }, [draftInput]);
 
     const addFiles = useCallback(async (files: FileList | File[]) => {
         setAttachError(null);
@@ -289,37 +296,43 @@ const ChatInputBar = memo(function ChatInputBar({
                 )}
 
                 <div className="flex-1 relative">
-                    <input
+                    <textarea
                         ref={chatInputRef}
-                        type="text"
-                        placeholder={statusMessage || (canAttachImages && attachments.length > 0 ? 'Add a message (optional)...' : `Send message to ${panelLabel}...`)}
+                        rows={1}
+                        placeholder={statusMessage || (canAttachImages && attachments.length > 0 ? 'Add a message (optional)...' : `Send message to ${panelLabel}... (Shift+Enter for newline)`)}
                         value={draftInput}
                         onChange={e => setDraftInput(e.target.value)}
                         onPaste={e => {
-                            // Intercept image pastes when supported
+                            // Intercept image pastes when supported. Text pastes
+                            // (including those with newlines) fall through to the
+                            // textarea's default handler so the cursor position
+                            // and selection are honored.
                             if (canAttachImages && e.clipboardData.files.length > 0) {
                                 const hasImageFile = Array.from(e.clipboardData.files).some((f) => f.type.startsWith('image/'));
                                 if (hasImageFile) {
                                     e.preventDefault();
                                     void addFiles(e.clipboardData.files);
-                                    return;
                                 }
                             }
-                            const pasted = e.clipboardData.getData('text');
-                            if (pasted) setDraftInput(prev => prev + pasted);
-                            e.preventDefault();
                         }}
                         onKeyDown={e => {
                             if (e.key !== 'Enter') return;
-                            if (e.nativeEvent.isComposing) {
-                                e.preventDefault();
-                                return;
-                            }
+                            if (e.nativeEvent.isComposing) return;
+                            // Shift+Enter inserts a newline (textarea default).
+                            // Plain Enter submits. No "double-newline submits"
+                            // heuristic — interior newlines are preserved verbatim.
+                            if (e.shiftKey) return;
                             e.preventDefault();
                             void submitDraft();
                         }}
-                        className="w-full h-10 rounded-[20px] px-4 bg-bg-secondary text-sm text-text-primary"
-                        style={{ border: '1px solid var(--chat-input-border, var(--border-subtle))' }}
+                        className="w-full rounded-[20px] px-4 py-2 bg-bg-secondary text-sm text-text-primary resize-none leading-[1.4] block"
+                        style={{
+                            border: '1px solid var(--chat-input-border, var(--border-subtle))',
+                            minHeight: 40,
+                            maxHeight: 160,
+                            overflowY: 'auto',
+                            whiteSpace: 'pre-wrap',
+                        }}
                     />
                 </div>
                 <button

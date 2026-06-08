@@ -1378,6 +1378,15 @@ function hasVisibleAssistantMessage(messages: unknown[] | undefined): boolean {
     });
 }
 
+function hasFinalVisibleAssistantMessage(messages: unknown[] | undefined): boolean {
+    if (!Array.isArray(messages)) return false;
+    const visible = filterUserFacingChatMessages(messages as ChatMessage[]);
+    const last = visible[visible.length - 1] as ChatMessage | undefined;
+    const role = typeof last?.role === 'string' ? last.role.trim().toLowerCase() : '';
+    const content = last ? flattenContent(last.content).trim() : '';
+    return (role === 'assistant' || role === 'model') && content.length > 0;
+}
+
 function shouldTrustCliAdapterTerminalStatus(parsedStatus: unknown, activeModal: unknown, adapter: CliAdapter, adapterStatus: any): boolean {
     if (!isGeneratingLikeStatus(parsedStatus)) return false;
     if (hasNonEmptyModalButtons(activeModal)) return false;
@@ -2478,6 +2487,23 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         coverage,
                     });
                 }
+            }
+            if (
+                isGeneratingLikeStatus(selectedStatus)
+                && selectedTranscriptAuthority === 'provider'
+                && !hasNonEmptyModalButtons(activeModal)
+                && hasFinalVisibleAssistantMessage(selectedMessages)
+            ) {
+                selectedStatus = 'idle';
+                selectedMessages = finalizeStreamingMessagesWhenIdle(selectedMessages, selectedStatus);
+                messageSource = {
+                    ...messageSource,
+                    statusReconciled: {
+                        from: returnedStatus,
+                        to: 'idle',
+                        reason: 'provider_native_final_assistant',
+                    },
+                };
             }
             LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord.status || '')} parsedMsgCount=${parsedRecord.messages.length} returnedMsgCount=${returnedMessages.length}`);
             return buildReadChatCommandResult({

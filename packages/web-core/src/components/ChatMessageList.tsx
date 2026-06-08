@@ -552,7 +552,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
     const showExpandBtn = false;
     const visibleContent = displayContent;
     const renderAsPreformatted = contentLooksPreformatted;
-    const renderAsMarkdown = !renderAsPreformatted && likelyNeedsMarkdownRender(visibleContent);
+    // User-authored messages render as plain pre-wrap text — never markdown or
+    // PTY-style parsing. The user typed it themselves, so `*foo*` should stay
+    // literal and intentional newlines must be preserved exactly as written.
+    const renderAsMarkdown = !isUser && !renderAsPreformatted && likelyNeedsMarkdownRender(visibleContent);
     const rowClassName = [
         'chat-message-row',
         isUser ? 'chat-message-row-user self-end' : 'chat-message-row-assistant self-start',

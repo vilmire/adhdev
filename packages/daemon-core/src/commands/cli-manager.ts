@@ -25,7 +25,7 @@ import { CliProviderInstance } from '../providers/cli-provider-instance.js';
 import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
-import { normalizeInputEnvelope, type ProviderModule, type ProviderResumeCapability } from '../providers/contracts.js';
+import { normalizeInputEnvelope, type MeshCoordinatorDelegatedWorkerIsolation, type ProviderModule, type ProviderResumeCapability } from '../providers/contracts.js';
 import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
@@ -247,18 +247,19 @@ type CliStartOptions = {
     extraEnv?: Record<string, string>;
 };
 
-const COORDINATOR_DELEGATED_ENV_UNSETS: Record<string, string> = {
-    ADHDEV_INLINE_MESH: '',
-    ADHDEV_MCP_TRANSPORT: '',
-    ADHDEV_MESH_ID: '',
-    HERMES_EPHEMERAL_SYSTEM_PROMPT: '',
-};
+const DEFAULT_COORDINATOR_DELEGATED_ENV_UNSETS = [
+    'ADHDEV_INLINE_MESH',
+    'ADHDEV_MCP_TRANSPORT',
+    'ADHDEV_MESH_ID',
+    'HERMES_EPHEMERAL_SYSTEM_PROMPT',
+] as const;
 
 export interface CoordinatorDelegatedCliLaunchOptionsInput {
     cliType: string;
     workspace: string;
     cliArgs?: string[];
     env?: Record<string, string>;
+    isolation?: MeshCoordinatorDelegatedWorkerIsolation;
 }
 
 export interface CoordinatorDelegatedCliLaunchOptions {
@@ -268,6 +269,21 @@ export interface CoordinatorDelegatedCliLaunchOptions {
 
 function hasCliArg(args: string[], flag: string): boolean {
     return args.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+}
+
+function hasConfigOverride(args: string[], key: string): boolean {
+    for (let index = 0; index < args.length; index += 1) {
+        const arg = args[index];
+        const next = args[index + 1];
+        if ((arg === '-c' || arg === '--config') && typeof next === 'string') {
+            if (next === key || next.startsWith(`${key}=`) || next.startsWith(`${key}.`)) return true;
+        }
+        if (arg.startsWith('--config=')) {
+            const value = arg.slice('--config='.length);
+            if (value === key || value.startsWith(`${key}=`) || value.startsWith(`${key}.`)) return true;
+        }
+    }
+    return false;
 }
 
 function ensureEmptyDelegatedMcpConfig(workspace: string): string {
@@ -282,12 +298,31 @@ function ensureEmptyDelegatedMcpConfig(workspace: string): string {
 export function buildCoordinatorDelegatedCliLaunchOptions(
     input: CoordinatorDelegatedCliLaunchOptionsInput,
 ): CoordinatorDelegatedCliLaunchOptions {
-    const cliType = String(input.cliType || '').trim();
     const cliArgs = Array.isArray(input.cliArgs) ? [...input.cliArgs] : [];
-    const env: Record<string, string> = { ...(input.env || {}), ...COORDINATOR_DELEGATED_ENV_UNSETS };
+    const env: Record<string, string> = { ...(input.env || {}) };
+    const envUnsets = new Set<string>(DEFAULT_COORDINATOR_DELEGATED_ENV_UNSETS);
+    for (const key of input.isolation?.env?.unset || []) {
+        if (typeof key === 'string' && key.trim()) envUnsets.add(key.trim());
+    }
+    for (const key of envUnsets) env[key] = '';
 
-    if (cliType === 'claude-cli' && !hasCliArg(cliArgs, '--mcp-config')) {
-        cliArgs.unshift('--mcp-config', ensureEmptyDelegatedMcpConfig(input.workspace));
+    for (const rule of input.isolation?.args || []) {
+        if (!rule || typeof rule !== 'object') continue;
+        if (rule.mode === 'empty_mcp_config') {
+            if (rule.flag && !hasCliArg(cliArgs, rule.flag)) {
+                cliArgs.unshift(rule.flag, ensureEmptyDelegatedMcpConfig(input.workspace));
+            }
+            if (rule.strictFlag && !hasCliArg(cliArgs, rule.strictFlag)) {
+                cliArgs.unshift(rule.strictFlag);
+            }
+            continue;
+        }
+        if (rule.mode === 'config_override') {
+            const key = String(rule.dedupeKey || rule.key || '').trim();
+            const flag = String(rule.flag || '').trim();
+            if (!key || !flag || hasConfigOverride(cliArgs, key)) continue;
+            cliArgs.unshift(flag, `${rule.key}=${rule.value}`);
+        }
     }
 
     return { cliArgs, env };
@@ -1090,6 +1125,8 @@ export class DaemonCliManager {
                 const launchSource = resolved.source;
                 if (!cliType) throw new Error('cliType required');
 
+                const providerType = this.providerLoader.resolveAlias(cliType);
+                const provLookup = this.providerLoader.getMeta(providerType) as ProviderModule | undefined;
                 const settingsOverride = args?.settings && typeof args.settings === 'object' ? args.settings : undefined;
                 const delegatedLaunch = settingsOverride?.launchedByCoordinator === true
                     ? buildCoordinatorDelegatedCliLaunchOptions({
@@ -1097,6 +1134,7 @@ export class DaemonCliManager {
                         workspace: dir,
                         cliArgs: args?.cliArgs,
                         env: args?.env,
+                        isolation: provLookup?.meshCoordinator?.delegatedWorkerIsolation,
                     })
                     : null;
                 // Untrusted-provider gate: an external source that ships JS
@@ -1104,15 +1142,15 @@ export class DaemonCliManager {
                 // launch. Dashboards add `confirmExternalUntrusted: true` to
                 // the launch args after showing the trust modal. Without
                 // that ack we refuse to spawn and tell the caller why.
-                const provLookup = this.providerLoader.getMeta(this.providerLoader.resolveAlias(cliType)) as any;
-                const provTrust = provLookup?._sourceTrust;
+                const provMeta = provLookup as any;
+                const provTrust = provMeta?._sourceTrust;
                 if (provTrust === 'external-untrusted' && args?.confirmExternalUntrusted !== true) {
                     return {
                         success: false,
                         error: 'untrusted_external_provider',
                         provider: {
                             type: provLookup?.type ?? cliType,
-                            sourceName: provLookup?._sourceName ?? null,
+                            sourceName: provMeta?._sourceName ?? null,
                             trust: provTrust,
                         },
                         hint: 'Resend launch_cli with confirmExternalUntrusted=true after the user explicitly approves running JavaScript from this 3rd-party source.',

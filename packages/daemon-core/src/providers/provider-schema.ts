@@ -300,7 +300,11 @@ function validateMeshCoordinator(raw: unknown, errors: string[]): void {
     errors.push('meshCoordinator.reason must be a non-empty string when provided')
   }
 
-  const mcpConfig = meshCoordinator.mcpConfig
+  validateMeshCoordinatorMcpConfig(meshCoordinator.mcpConfig, errors)
+  validateMeshCoordinatorDelegatedWorkerIsolation(meshCoordinator.delegatedWorkerIsolation, errors)
+}
+
+function validateMeshCoordinatorMcpConfig(mcpConfig: unknown, errors: string[]): void {
   if (mcpConfig === undefined) return
   if (!mcpConfig || typeof mcpConfig !== 'object' || Array.isArray(mcpConfig)) {
     errors.push('meshCoordinator.mcpConfig must be an object')
@@ -344,6 +348,57 @@ function validateMeshCoordinator(raw: unknown, errors: string[]): void {
     }
     if (typeof config.template !== 'string' || !config.template.trim()) {
       errors.push('meshCoordinator.mcpConfig.template is required for manual MCP setup')
+    }
+  }
+}
+
+function validateMeshCoordinatorDelegatedWorkerIsolation(raw: unknown, errors: string[]): void {
+  if (raw === undefined) return
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push('meshCoordinator.delegatedWorkerIsolation must be an object')
+    return
+  }
+  const isolation = raw as Record<string, unknown>
+  const env = isolation.env
+  if (env !== undefined) {
+    if (!env || typeof env !== 'object' || Array.isArray(env)) {
+      errors.push('meshCoordinator.delegatedWorkerIsolation.env must be an object')
+    } else {
+      const unset = (env as Record<string, unknown>).unset
+      if (unset !== undefined && (!Array.isArray(unset) || unset.some((key) => typeof key !== 'string' || !key.trim()))) {
+        errors.push('meshCoordinator.delegatedWorkerIsolation.env.unset must be an array of non-empty strings')
+      }
+    }
+  }
+  const args = isolation.args
+  if (args === undefined) return
+  if (!Array.isArray(args)) {
+    errors.push('meshCoordinator.delegatedWorkerIsolation.args must be an array')
+    return
+  }
+  for (const [index, rule] of args.entries()) {
+    const prefix = `meshCoordinator.delegatedWorkerIsolation.args[${index}]`
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+      errors.push(`${prefix} must be an object`)
+      continue
+    }
+    const item = rule as Record<string, unknown>
+    const mode = item.mode
+    if (mode !== 'empty_mcp_config' && mode !== 'config_override') {
+      errors.push(`${prefix}.mode must be one of: empty_mcp_config, config_override`)
+      continue
+    }
+    for (const key of mode === 'empty_mcp_config' ? ['flag'] : ['flag', 'key', 'value']) {
+      const value = item[key]
+      if (typeof value !== 'string' || !value.trim()) {
+        errors.push(`${prefix}.${key} must be a non-empty string`)
+      }
+    }
+    for (const key of ['strictFlag', 'dedupeKey']) {
+      const value = item[key]
+      if (value !== undefined && (typeof value !== 'string' || !value.trim())) {
+        errors.push(`${prefix}.${key} must be a non-empty string when provided`)
+      }
     }
   }
 }

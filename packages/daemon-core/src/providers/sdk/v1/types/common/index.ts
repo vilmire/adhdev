@@ -169,7 +169,26 @@ export interface McpConfigDef {
 export interface MeshCoordinatorDef {
   supported: boolean;
   mcpConfig?: McpConfigDef;
+  systemPromptInjection?: MeshCoordinatorSystemPromptInjectionDef;
+  delegatedWorkerIsolation?: MeshCoordinatorDelegatedWorkerIsolationDef;
 }
+
+export type MeshCoordinatorSystemPromptInjectionDef =
+  | { mode: 'cli_arg'; flag: string }
+  | { mode: 'config_override'; flag: string; template: string }
+  | { mode: 'context_file'; path: string; wrapper?: string }
+  | { mode: 'env_var'; name: string };
+
+export interface MeshCoordinatorDelegatedWorkerIsolationDef {
+  env?: {
+    unset?: ReadonlyArray<string>;
+  };
+  args?: ReadonlyArray<MeshCoordinatorDelegatedWorkerArgRuleDef>;
+}
+
+export type MeshCoordinatorDelegatedWorkerArgRuleDef =
+  | { mode: 'empty_mcp_config'; flag: string; strictFlag?: string }
+  | { mode: 'config_override'; flag: string; key: string; value: string; dedupeKey?: string };
 
 // ─── Compatibility ──────────────────────────────────────────────────────
 

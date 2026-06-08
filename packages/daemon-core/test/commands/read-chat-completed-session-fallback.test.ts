@@ -28,6 +28,9 @@ function createHelpers() {
       if (type === 'codex-cli') {
         return { type: 'codex-cli', category: 'cli', nativeHistory: { mode: 'canonical' }, historyBehavior: {} }
       }
+      if (type === 'antigravity-cli') {
+        return { type: 'antigravity-cli', category: 'cli', nativeHistory: { mode: 'canonical' }, historyBehavior: {} }
+      }
       return undefined
     },
     getProviderScript: () => null,
@@ -436,6 +439,85 @@ describe('read_chat completed runtime provider fallback', () => {
       'restored prompt',
       'restored answer',
     ])
+  })
+
+  it('returns idle when provider-native history has a final assistant but PTY still reports generating', async () => {
+    const runtimeSessionId = 'runtime-antigravity-stuck-busy'
+    const providerSessionId = 'ag-session-1'
+    mocks.readProviderChatHistory.mockReturnValue({
+      messages: [
+        { role: 'user', content: 'Update README', receivedAt: 1800, workspace: '/tmp/adhdev-project' },
+        { role: 'assistant', content: 'README updated.', receivedAt: 1900, workspace: '/tmp/adhdev-project' },
+      ],
+      hasMore: false,
+      source: 'provider-native',
+      providerSessionId,
+      nativeHistoryCoverage: 'full',
+      workspace: '/tmp/adhdev-project',
+    })
+
+    const adapter = {
+      cliType: 'antigravity-cli',
+      cliName: 'Antigravity',
+      workingDir: '/tmp/adhdev-project',
+      getStatus: () => ({ status: 'generating', providerSessionId, activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'generating',
+        providerSessionId,
+        messages: [],
+        activeModal: null,
+      }),
+      getRuntimeMetadata: () => ({
+        runtimeId: runtimeSessionId,
+        runtimeKey: runtimeSessionId,
+        providerSessionId,
+        spawnedAtMs: 1000,
+        spawnedEnv: {},
+      }),
+      getPartialResponse: () => '⣾ Working...',
+      isProcessing: () => true,
+      isReady: () => true,
+      updateRuntimeMeta: vi.fn(),
+    }
+
+    const result = await handleReadChat({
+      ...createHelpers(),
+      getCliAdapter: () => adapter,
+      currentSession: {
+        sessionId: runtimeSessionId,
+        providerSessionId,
+        providerType: 'antigravity-cli',
+        transport: 'pty',
+        workspace: '/tmp/adhdev-project',
+      },
+      ctx: {
+        instanceManager: { getInstance: () => null },
+        sessionRegistry: {
+          get: () => ({
+            sessionId: runtimeSessionId,
+            providerSessionId,
+            providerType: 'antigravity-cli',
+            transport: 'pty',
+            spawnedAtMs: 1000,
+          }),
+        },
+      },
+    } as any, {
+      agentType: 'antigravity-cli',
+      targetSessionId: runtimeSessionId,
+      historySessionId: providerSessionId,
+      providerSessionId,
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('idle')
+    expect((result.messageSource as any)?.selected).toBe('native-history')
+    expect((result.messageSource as any)?.statusReconciled).toMatchObject({
+      from: 'generating',
+      to: 'idle',
+      reason: 'provider_native_final_assistant',
+    })
   })
 
   it('rejects an exact Codex provider id when the rollout belongs to another workspace', async () => {

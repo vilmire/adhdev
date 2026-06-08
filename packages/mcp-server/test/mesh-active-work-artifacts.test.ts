@@ -296,6 +296,10 @@ test('mesh_status reconciles idle direct dispatch completion from final transcri
 
     const status = JSON.parse(await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true, includeTerminalDirectWork: true }));
     assert.equal(calls.some(call => call.command === 'read_chat'), true);
+    assert.equal(calls.some(call =>
+      call.command === 'get_pending_mesh_events'
+      && call.args.coordinatorDaemonId === 'daemon-coordinator'
+    ), true);
     assert.equal(status.staleDirectWork.some((entry: any) => entry.taskId === taskId), false);
     assert.equal(status.activeWork.some((entry: any) => entry.taskId === taskId), false);
     assert.equal(status.terminalDirectWork.some((entry: any) => entry.taskId === taskId && entry.terminalKind === 'task_completed'), true);
