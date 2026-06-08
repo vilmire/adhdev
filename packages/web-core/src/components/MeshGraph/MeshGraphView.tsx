@@ -57,6 +57,8 @@ interface MeshGraphViewProps {
     data: MeshGraphData
     selectedNodeId?: string | null
     onNodeClick?: (node: MeshGraphNode) => void
+    onNodeHoverChange?: (node: MeshGraphNode | null) => void
+    onEdgeHoverChange?: (edge: MeshGraphEdge | null) => void
 }
 
 type FlowNodeData = Record<string, unknown> & {
@@ -974,13 +976,19 @@ type DirectionPref = 'auto' | 'LR' | 'TB'
 
 const MINIMAP_NODE_THRESHOLD = 12
 
-export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick }: MeshGraphViewProps) {
+export default function MeshGraphView({
+    data,
+    selectedNodeId = null,
+    onNodeClick,
+    onNodeHoverChange,
+    onEdgeHoverChange,
+}: MeshGraphViewProps) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const dataFingerprint = useMemo(() => getMeshGraphDataFingerprint(data), [data])
     const layoutFingerprint = useMemo(() => getMeshGraphLayoutFingerprint(data), [data])
     const compact = data.nodes.length >= COMPACT_NODE_THRESHOLD
-    const [directionPref, setDirectionPref] = useState<DirectionPref>('auto')
+    const [directionPref, setDirectionPref] = useState<DirectionPref>('LR')
     const direction: MeshGraphDirection = useMemo(
         () => (directionPref === 'auto' ? pickMeshGraphDirection(data) : directionPref),
         [directionPref, dataFingerprint, data],
@@ -1114,6 +1122,10 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                     zoomOnDoubleClick={false}
                     selectionOnDrag={false}
                     onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}
+                    onNodeMouseEnter={(_, node) => onNodeHoverChange?.(node.data.graphNode)}
+                    onNodeMouseLeave={() => onNodeHoverChange?.(null)}
+                    onEdgeMouseEnter={(_, edge) => onEdgeHoverChange?.(edge.data?.graphEdge ?? null)}
+                    onEdgeMouseLeave={() => onEdgeHoverChange?.(null)}
                     className="h-full w-full"
                     colorMode={meshTheme.flowColorMode}
                     proOptions={{ hideAttribution: true }}

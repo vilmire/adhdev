@@ -8,7 +8,7 @@ import type {
 import { useTheme } from '../../hooks/useTheme'
 import MeshGraphView from './MeshGraphView'
 import { getMeshGraphTheme } from './meshGraphTheme'
-import type { MeshGraphData, MeshGraphNode } from './types'
+import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import { buildMeshGraph, type MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from '../../utils/repo-mesh-status'
 
@@ -279,6 +279,29 @@ function describeGraphNodeSource(node: MeshGraphNode): string {
     return source?.connection?.source ?? 'mesh_status'
 }
 
+function edgeTypeLabel(edge: MeshGraphEdge): string {
+    switch (edge.type) {
+        case 'parentBranch':
+            return 'default branch link'
+        case 'worktreeLink':
+            return 'worktree relationship'
+        case 'sessionLink':
+            return 'session relationship'
+        case 'orphanLink':
+            return 'orphan relationship'
+        case 'submoduleLink':
+            return 'submodule relationship'
+        case 'cloneLink':
+            return 'clone relationship'
+        default:
+            return edge.type
+    }
+}
+
+function edgeDirectionLabel(edge: MeshGraphEdge): string {
+    return edge.direction === 'directed' ? 'directed' : 'undirected'
+}
+
 export function resolveSelectedGraphNodeForDetail(graph: MeshGraphData, selectedNodeId: string | null | undefined): MeshGraphNode | null {
     if (!selectedNodeId) return null
     return graph.nodes.find(node => node.id === selectedNodeId) ?? null
@@ -355,6 +378,8 @@ export default function MeshObservabilitySurface({
     const statusGraphFingerprint = useMemo(() => getRepoMeshStatusGraphFingerprint(canonicalStatus), [canonicalStatus])
     const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [statusGraphFingerprint]) as MeshGraphData
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+    const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
+    const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
     const [gitHistoryByWorkspace, setGitHistoryByWorkspace] = useState<Record<string, GitHistoryState>>({})
     const [healPreview, setHealPreview] = useState<HealPreviewState | null>(null)
@@ -386,6 +411,16 @@ export default function MeshObservabilitySurface({
 
     const selectedNodeStatus = selectedNodeId ? nodeStatusById.get(selectedNodeId) ?? null : null
     const selectedGraphNode = resolveSelectedGraphNodeForDetail(canonicalGraph, selectedNodeId)
+    const hoveredGraphNode = resolveSelectedGraphNodeForDetail(canonicalGraph, hoveredNodeId)
+    const hoveredGraphEdge = hoveredEdgeId
+        ? canonicalGraph.edges.find(edge => edge.id === hoveredEdgeId) ?? null
+        : null
+    const hoveredEdgeSource = hoveredGraphEdge
+        ? canonicalGraph.nodes.find(node => node.id === hoveredGraphEdge.source) ?? null
+        : null
+    const hoveredEdgeTarget = hoveredGraphEdge
+        ? canonicalGraph.nodes.find(node => node.id === hoveredGraphEdge.target) ?? null
+        : null
 
     useEffect(() => {
         if (!selectedNodeId) return
@@ -632,7 +667,7 @@ export default function MeshObservabilitySurface({
                                     </div>
                                 )}
                                 <div className={`text-xs ${meshTheme.textMuted}`}>
-                                    Click a node only when you want drill-down details. The graph itself now carries the convergence state.
+                                    Hover nodes or edges for a quick preview. Click a node when you want pinned drill-down details.
                                 </div>
                             </div>
                         </details>
@@ -641,6 +676,14 @@ export default function MeshObservabilitySurface({
                         <MeshGraphView
                             data={canonicalGraph}
                             selectedNodeId={selectedNodeId}
+                            onNodeHoverChange={node => {
+                                setHoveredNodeId(node?.id ?? null)
+                                if (node) setHoveredEdgeId(null)
+                            }}
+                            onEdgeHoverChange={edge => {
+                                setHoveredEdgeId(edge?.id ?? null)
+                                if (edge) setHoveredNodeId(null)
+                            }}
                             onNodeClick={node => {
                                 const shouldCollapse = detailSelection?.kind === 'node' && selectedNodeId === node.id
                                 if (shouldCollapse) {
@@ -654,6 +697,67 @@ export default function MeshObservabilitySurface({
                         />
                     ) : (
                         <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{emptyMessage}</div>
+                    )}
+                    {!selectedGraphNode && hoveredGraphNode && (
+                        <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center p-2 sm:inset-x-auto sm:right-5 sm:top-24 sm:bottom-auto sm:justify-end">
+                            <section
+                                aria-label="Hovered node preview"
+                                className={meshTheme.isDark
+                                    ? 'w-full max-w-[min(24rem,calc(100vw-2.5rem))] rounded-2xl border border-white/12 bg-slate-950/94 p-4 shadow-2xl shadow-black/35 backdrop-blur-xl'
+                                    : 'w-full max-w-[min(24rem,calc(100vw-2.5rem))] rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/12 backdrop-blur-xl'}
+                            >
+                                <div className="mb-3 flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{hoveredGraphNode.label}</div>
+                                        <div className={`mt-1 font-mono text-[11px] ${meshTheme.textMuted}`}>{hoveredGraphNode.id.slice(0, 16)}</div>
+                                    </div>
+                                    <Badge label="hover preview" tone="info" />
+                                </div>
+                                <div className="mb-3 flex flex-wrap gap-2">
+                                    <Badge label={hoveredGraphNode.health} tone={healthTone(hoveredGraphNode.health)} />
+                                    {hoveredGraphNode.branch && <Badge label={hoveredGraphNode.branch} tone="default" />}
+                                    {hoveredGraphNode.ahead > 0 && <Badge label={`ahead ${hoveredGraphNode.ahead}`} tone="warn" />}
+                                    {hoveredGraphNode.behind > 0 && <Badge label={`behind ${hoveredGraphNode.behind}`} tone="warn" />}
+                                    {hoveredGraphNode.dirtyFiles > 0 && <Badge label={`${hoveredGraphNode.dirtyFiles} dirty`} tone="warn" />}
+                                    {hoveredGraphNode.activeSessionCount > 0 && <Badge label={`${hoveredGraphNode.activeSessionCount} sessions`} tone="info" />}
+                                </div>
+                                <div className="grid gap-2 text-xs sm:grid-cols-2">
+                                    <Row label="Machine" value={hoveredGraphNode.machineLabel ?? 'not reported'} />
+                                    <Row label="Locality" value={hoveredGraphNode.locality} />
+                                    <Row label="Workspace" value={hoveredGraphNode.workspace} />
+                                    <Row label="Upstream" value={hoveredGraphNode.upstream ?? 'none'} />
+                                    <Row label="Dirty/ahead/behind" value={`${hoveredGraphNode.dirtyFiles} dirty · ↑${hoveredGraphNode.ahead}/↓${hoveredGraphNode.behind}`} />
+                                    <Row label="Source" value={describeGraphNodeSource(hoveredGraphNode)} />
+                                </div>
+                            </section>
+                        </div>
+                    )}
+                    {!selectedGraphNode && !hoveredGraphNode && hoveredGraphEdge && (
+                        <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center p-2 sm:inset-x-auto sm:right-5 sm:top-24 sm:bottom-auto sm:justify-end">
+                            <section
+                                aria-label="Hovered edge preview"
+                                className={meshTheme.isDark
+                                    ? 'w-full max-w-[min(22rem,calc(100vw-2.5rem))] rounded-2xl border border-white/12 bg-slate-950/94 p-4 shadow-2xl shadow-black/35 backdrop-blur-xl'
+                                    : 'w-full max-w-[min(22rem,calc(100vw-2.5rem))] rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/12 backdrop-blur-xl'}
+                            >
+                                <div className="mb-3 flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{hoveredGraphEdge.label || edgeTypeLabel(hoveredGraphEdge)}</div>
+                                        <div className={`mt-1 text-[11px] ${meshTheme.textMuted}`}>{hoveredGraphEdge.id}</div>
+                                    </div>
+                                    <Badge label="hover preview" tone="info" />
+                                </div>
+                                <div className="mb-3 flex flex-wrap gap-2">
+                                    <Badge label={edgeTypeLabel(hoveredGraphEdge)} tone="default" />
+                                    <Badge label={edgeDirectionLabel(hoveredGraphEdge)} tone="info" />
+                                </div>
+                                <div className="grid gap-2 text-xs">
+                                    <Row label="From" value={hoveredEdgeSource?.label ?? hoveredGraphEdge.source} />
+                                    <Row label="To" value={hoveredEdgeTarget?.label ?? hoveredGraphEdge.target} />
+                                    <Row label="Label" value={hoveredGraphEdge.label ?? 'none'} />
+                                </div>
+                            </section>
+                        </div>
                     )}
                     {selectedGraphNode && detailSelection?.kind === 'node' && (
                         <div className="absolute inset-x-3 bottom-3 top-20 z-20 flex items-end justify-center p-2 sm:inset-5 sm:top-24 sm:items-start sm:justify-end" onClick={closeGraphDetail} role="presentation">

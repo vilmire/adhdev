@@ -8,17 +8,22 @@
 
 import ELK, { type ElkExtendedEdge, type ElkNode, type LayoutOptions } from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphData, MeshGraphNode } from './types'
-import { formatMeshGraphAheadBehind } from './meshGraphViewModel'
+import {
+    formatMeshGraphAheadBehind,
+    getMeshGraphAttentionBadge,
+    getMeshGraphCalloutText,
+    shouldShowMeshGraphCallout,
+} from './meshGraphViewModel'
 
 export const MESH_GRAPH_LAYOUT = {
     worktreeCardWidth: 256,
-    submoduleCardWidth: 256,
-    minWorktreeCardHeight: 110,
-    minSubmoduleCardHeight: 110,
-    maxEstimatedCardHeight: 178,
-    layerGap: 200,
-    nodeGap: 72,
-    edgeLabelBuffer: 160,
+    submoduleCardWidth: 228,
+    minWorktreeCardHeight: 174,
+    minSubmoduleCardHeight: 146,
+    maxEstimatedCardHeight: 304,
+    layerGap: 220,
+    nodeGap: 82,
+    edgeLabelBuffer: 180,
     placeholderTopOffset: 0,
 } as const
 
@@ -27,7 +32,7 @@ export const MESH_GRAPH_LAYOUT_COMPACT = {
     submoduleCardWidth: 188,
     minWorktreeCardHeight: 88,
     minSubmoduleCardHeight: 88,
-    maxEstimatedCardHeight: 124,
+    maxEstimatedCardHeight: 178,
     layerGap: 160,
     nodeGap: 52,
     edgeLabelBuffer: 120,
@@ -182,13 +187,65 @@ export function getNodeSummaryForLayout(node: MeshGraphNode): string {
 
 export function estimateMeshGraphNodeHeight(node: MeshGraphNode, compact = false): number {
     const layout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
-    if (node.type === 'submoduleNode') return layout.minSubmoduleCardHeight
-    // Fixed-tier height: every card in a given mode occupies the same vertical box.
-    // Prevents ELK from staggering layer boundaries by per-node badge/callout count,
-    // which is what made same-layer nodes look X-misaligned. The card itself uses
-    // overflow handling for content that exceeds the box.
-    void node
-    return layout.maxEstimatedCardHeight
+    const width = getMeshGraphNodeCardWidth(node, compact)
+    const charsPerLine = compact
+        ? (node.type === 'submoduleNode' ? 20 : 22)
+        : (node.type === 'submoduleNode' ? 24 : 30)
+    const badgesPerRow = compact
+        ? (node.type === 'submoduleNode' ? 2 : 2)
+        : (node.type === 'submoduleNode' ? 2 : 3)
+    const badgeRows = Math.ceil(countRenderedBadges(node) / badgesPerRow)
+    const titleLines = estimateTextLines(node.label, charsPerLine, compact ? 2 : 2)
+    const subtitleLines = estimateTextLines(
+        node.type === 'submoduleNode' ? node.submodulePath : node.machineLabel || node.workspace,
+        charsPerLine,
+        compact ? 2 : 2,
+    )
+    const summaryLines = estimateTextLines(getNodeSummaryForLayout(node), charsPerLine + (compact ? 1 : 4), compact ? 2 : 3)
+    const attentionBadge = getMeshGraphAttentionBadge(node)
+    const calloutText = shouldShowMeshGraphCallout(node) ? getMeshGraphCalloutText(node) : null
+    const calloutLines = compact
+        ? 0
+        : estimateTextLines(calloutText, Math.max(24, Math.floor(width / 8)), 4)
+
+    const estimated = compact
+        ? 40
+            + titleLines * 16
+            + subtitleLines * 12
+            + (attentionBadge ? 22 : 0)
+            + Math.max(0, badgeRows - 1) * 18
+            + Math.max(18, summaryLines * 16)
+        : 52
+            + titleLines * 18
+            + subtitleLines * 14
+            + (attentionBadge ? 30 : 0)
+            + badgeRows * 24
+            + Math.max(22, summaryLines * 18)
+            + (calloutLines > 0 ? 22 + calloutLines * 16 : 0)
+
+    const minHeight = node.type === 'submoduleNode'
+        ? layout.minSubmoduleCardHeight
+        : layout.minWorktreeCardHeight
+    return Math.min(layout.maxEstimatedCardHeight, Math.max(minHeight, Math.ceil(estimated)))
+}
+
+function estimateTextLines(value: string | null | undefined, charsPerLine: number, maxLines: number): number {
+    const text = (value || '').trim()
+    if (!text) return 0
+    return Math.max(1, Math.min(maxLines, Math.ceil(text.length / charsPerLine)))
+}
+
+function countRenderedBadges(node: MeshGraphNode): number {
+    let count = 1
+    if (node.type === 'submoduleNode') count += 1
+    if (node.branch && node.type !== 'submoduleNode') count += 1
+    if (node.submoduleCommit && node.type === 'submoduleNode') count += 1
+    if (node.dirty) count += 1
+    if (node.outOfSync) count += 1
+    if (node.hasConflicts) count += 1
+    if (node.type !== 'submoduleNode' && node.upstream && node.upstreamStatus !== 'fresh') count += 1
+    if (node.isOrphan) count += 1
+    return count
 }
 
 function compareNodes(a: MeshGraphNode, b: MeshGraphNode): number {

@@ -21,6 +21,10 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain('useReactFlow<FlowNode, FlowEdge>()')
         expect(source).toContain('void reactFlow.fitView({')
         expect(source).toContain('onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}')
+        expect(source).toContain('onNodeMouseEnter={(_, node) => onNodeHoverChange?.(node.data.graphNode)}')
+        expect(source).toContain('onNodeMouseLeave={() => onNodeHoverChange?.(null)}')
+        expect(source).toContain('onEdgeMouseEnter={(_, edge) => onEdgeHoverChange?.(edge.data?.graphEdge ?? null)}')
+        expect(source).toContain('onEdgeMouseLeave={() => onEdgeHoverChange?.(null)}')
     })
 
     it('uses React Flow controls for zoom, fit, and the graph minimap without custom viewport guards', () => {

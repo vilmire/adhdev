@@ -174,7 +174,7 @@ describe('buildMeshGraphLayout', () => {
         ])
     })
 
-    it('anchors submodule nodes using their collapsed visual height', async () => {
+    it('anchors submodule nodes using their measured visual height', async () => {
         const submodule = node('node_parent::submodule::oss', {
             type: 'submoduleNode',
             label: 'oss',
@@ -206,11 +206,13 @@ describe('buildMeshGraphLayout', () => {
         const edgeRoute = layout.edgeRoutes.get('edge_submodule')
         const targetPoint = edgeRoute?.points.at(-1)
 
-        expect(estimateMeshGraphNodeHeight(submodule, false)).toBe(MESH_GRAPH_LAYOUT.minSubmoduleCardHeight)
-        expect(estimateMeshGraphNodeHeight(submodule, false)).toBeLessThan(MESH_GRAPH_LAYOUT.maxEstimatedCardHeight)
-        expect(submoduleElkNode?.height).toBe(MESH_GRAPH_LAYOUT.minSubmoduleCardHeight)
-        expect(submoduleBounds?.height).toBe(MESH_GRAPH_LAYOUT.minSubmoduleCardHeight)
-        expect(targetPoint?.y).toBe(submoduleBounds ? submoduleBounds.y + MESH_GRAPH_LAYOUT.minSubmoduleCardHeight / 2 : undefined)
+        const measuredHeight = estimateMeshGraphNodeHeight(submodule, false)
+
+        expect(measuredHeight).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.minSubmoduleCardHeight)
+        expect(measuredHeight).toBeLessThan(MESH_GRAPH_LAYOUT.maxEstimatedCardHeight)
+        expect(submoduleElkNode?.height).toBe(measuredHeight)
+        expect(submoduleBounds?.height).toBe(measuredHeight)
+        expect(targetPoint?.y).toBe(submoduleBounds ? submoduleBounds.y + measuredHeight / 2 : undefined)
     })
 })
 
@@ -385,12 +387,7 @@ describe('compact mode layout', () => {
 })
 
 describe('badge row estimation (overlap guard)', () => {
-    it('returns the fixed tier height regardless of badge count (no per-node estimation)', () => {
-        // Policy change 2026-06-07: card heights are fixed tiers (standard/compact)
-        // to keep ELK layer boundaries aligned. Badge overflow is handled by the
-        // card chrome (expand on hover/select) rather than by per-node height
-        // estimation. So a "heavy" node and a "light" node must report the same
-        // height in a given mode.
+    it('gives denser cards more ELK height when they carry more status chrome', () => {
         const heavyNode = node('heavy', {
             health: 'dirty',
             dirty: true,
@@ -403,9 +400,7 @@ describe('badge row estimation (overlap guard)', () => {
         })
         const lightNode = node('light', { health: 'online' })
         expect(estimateMeshGraphNodeHeight(heavyNode, false))
-            .toBe(MESH_GRAPH_LAYOUT.maxEstimatedCardHeight)
-        expect(estimateMeshGraphNodeHeight(lightNode, false))
-            .toBe(MESH_GRAPH_LAYOUT.maxEstimatedCardHeight)
+            .toBeGreaterThan(estimateMeshGraphNodeHeight(lightNode, false))
     })
 
     it('gives taller height estimate when badges include wide labels like "upstream unverified"', () => {
@@ -421,7 +416,7 @@ describe('badge row estimation (overlap guard)', () => {
         })
         const heightWithWide = estimateMeshGraphNodeHeight(withWide, false)
         const heightWithoutWide = estimateMeshGraphNodeHeight(withoutWide, false)
-        expect(heightWithWide).toBeGreaterThanOrEqual(heightWithoutWide)
+        expect(heightWithWide).toBeGreaterThan(heightWithoutWide)
     })
 
     it('estimated node height exceeds ELK-reported node gap for nodes with many badges', () => {
