@@ -2001,8 +2001,9 @@ class StandaloneServer {
     state.lastSentAt = now;
     const cfgSnap = loadConfig();
     const status = this.buildSharedSnapshot('metadata');
+    const includeSessions = state.request.params.includeSessions === true;
 
-    if (state.subscription.params.includeSessions || state.request.params.includeSessions) {
+    if (includeSessions) {
       if (this.components?.meshRegistry) {
         const nodes = this.components.meshRegistry.getAllKnownNodes();
         for (const node of nodes) {
