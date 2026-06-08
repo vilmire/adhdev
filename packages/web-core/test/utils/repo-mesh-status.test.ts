@@ -47,6 +47,7 @@ describe('extractRepoMeshStatus', () => {
               providerType: 'hermes-cli',
               status: 'idle',
               isSelfCoordinator: true,
+              statusNote: 'Coordinator self status is sampled.',
               createdAt: '2026-06-08T00:00:00.000Z',
             },
           ],
@@ -81,6 +82,7 @@ describe('extractRepoMeshStatus', () => {
         providerType: 'hermes-cli',
         state: 'idle',
         isSelfCoordinator: true,
+        statusNote: 'Coordinator self status is sampled.',
         createdAt: '2026-06-08T00:00:00.000Z',
       }),
     ])

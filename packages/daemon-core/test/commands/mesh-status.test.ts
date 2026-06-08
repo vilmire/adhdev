@@ -662,6 +662,58 @@ describe('mesh_status', () => {
     }
   })
 
+  it('marks sampled self coordinator session status so the graph does not imply live generation precision', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-self-coordinator-session-')
+    try {
+      const { router } = createRouter({
+        listSessions: vi.fn(async () => [
+          {
+            sessionId: 'sess-coordinator',
+            workspace: repoRoot,
+            lifecycle: 'running',
+            status: 'idle',
+            providerType: 'codex-cli',
+            meta: { meshCoordinatorFor: 'mesh-self' },
+          },
+        ]),
+      })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-self',
+        inlineMesh: {
+          id: 'mesh-self',
+          name: 'Self Mesh',
+          repoIdentity: 'repo',
+          policy: {},
+          coordinator: { preferredNodeId: 'node-main' },
+          nodes: [
+            {
+              id: 'node-main',
+              daemonId: 'machine-local',
+              machineLabel: 'Coordinator',
+              workspace: repoRoot,
+              providers: ['codex-cli'],
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.nodes[0].activeSessionDetails).toEqual([
+        expect.objectContaining({
+          sessionId: 'sess-coordinator',
+          providerType: 'codex-cli',
+          state: 'idle',
+          role: 'coordinator',
+          isSelfCoordinator: true,
+          statusNote: expect.stringContaining('sampled from the session host'),
+        }),
+      ])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('does not attach a live session to an unrelated or nonexistent worktree node by stale node id', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-stale-node-session-')
     const missingWorktree = join(dir, 'missing-worktree')

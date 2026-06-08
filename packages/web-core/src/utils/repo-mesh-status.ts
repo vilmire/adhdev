@@ -258,6 +258,7 @@ function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | u
                     ...(readString(record.title) ? { title: readString(record.title) } : {}),
                     ...(readString(record.role) ? { role: readString(record.role) } : {}),
                     ...(readBoolean(record.isSelfCoordinator, record.is_self_coordinator) !== undefined ? { isSelfCoordinator: readBoolean(record.isSelfCoordinator, record.is_self_coordinator) } : {}),
+                    ...(readString(record.statusNote, record.status_note) ? { statusNote: readString(record.statusNote, record.status_note) } : {}),
                     ...(readString(record.createdAt, record.created_at) ? { createdAt: readString(record.createdAt, record.created_at) } : {}),
                     ...(readString(record.startedAt, record.started_at) ? { startedAt: readString(record.startedAt, record.started_at) } : {}),
                     ...(readString(record.lastActivityAt, record.last_activity_at) ? { lastActivityAt: readString(record.lastActivityAt, record.last_activity_at) } : {}),
@@ -285,6 +286,7 @@ function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | u
         ...(readString(fallback.providerType, fallback.provider) ? { providerType: readString(fallback.providerType, fallback.provider) } : {}),
         ...(readString(fallback.state, fallback.status) ? { state: readString(fallback.state, fallback.status) } : {}),
         ...(readString(fallback.chatStatus, fallback.chat_status) ? { chatStatus: readString(fallback.chatStatus, fallback.chat_status) } : {}),
+        ...(readString(fallback.statusNote, fallback.status_note) ? { statusNote: readString(fallback.statusNote, fallback.status_note) } : {}),
         ...(readString(fallback.createdAt, fallback.created_at) ? { createdAt: readString(fallback.createdAt, fallback.created_at) } : {}),
         ...(readString(fallback.startedAt, fallback.started_at) ? { startedAt: readString(fallback.startedAt, fallback.started_at) } : {}),
     }]

@@ -1074,11 +1074,16 @@ async function hydrateInlineMeshDirectTruth(args: {
 function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
     const meta = readObjectRecord(record?.meta);
     const isSelfCoordinator = Boolean(readStringValue(meta.meshCoordinatorFor));
+    const chatStatus = readStringValue(record?.chatStatus, record?.activeChat?.status, meta.chatStatus, meta.sessionStatus);
+    const state = readLiveMeshSessionState(record);
+    const statusNote = isSelfCoordinator && (!chatStatus || chatStatus === 'idle' || state === 'idle')
+        ? 'Coordinator self status is sampled from the session host and may read idle while the coordinator is generating this response.'
+        : null;
     return {
         sessionId: readStringValue(record?.sessionId) || 'unknown',
         providerType: readStringValue(record?.providerType),
-        state: readLiveMeshSessionState(record),
-        chatStatus: readStringValue(record?.chatStatus, record?.activeChat?.status, meta.chatStatus, meta.sessionStatus),
+        state,
+        chatStatus,
         lifecycle: readStringValue(record?.lifecycle),
         surfaceKind: getSessionHostSurfaceKind(record as any),
         recoveryState: readStringValue(meta.runtimeRecoveryState) ?? null,
@@ -1086,6 +1091,7 @@ function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
         title: readStringValue(record?.displayName, record?.workspaceLabel) ?? null,
         role: isSelfCoordinator ? 'coordinator' : readStringValue(meta.meshRole, meta.role) ?? null,
         isSelfCoordinator,
+        statusNote,
         createdAt: toIsoTimestamp(record?.createdAt ?? record?.created_at),
         startedAt: toIsoTimestamp(record?.startedAt ?? record?.started_at ?? record?.spawnedAtMs ?? record?.spawned_at_ms),
         lastActivityAt: toIsoTimestamp(record?.updatedAt ?? record?.lastActivityAt ?? record?.last_activity_at),

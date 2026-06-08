@@ -325,6 +325,7 @@ function getRepoMeshStatusGraphFingerprint(status: RepoMeshStatus): string {
                 session.lifecycle ?? '',
                 session.role ?? '',
                 session.isSelfCoordinator ? 1 : 0,
+                session.statusNote ?? '',
                 session.startedAt ?? '',
                 session.createdAt ?? '',
             ].join('/')).join(',') ?? '',
@@ -600,7 +601,7 @@ export default function MeshObservabilitySurface({
                             )}
                             <Badge label={`${canonicalGraph.stats.totalNodes} nodes`} tone="default" />
                             {canonicalGraph.stats.totalActiveSessions > 0 && (
-                                <Badge label={`${canonicalGraph.stats.totalActiveSessions} active sessions`} tone="info" />
+                                <Badge label={`${canonicalGraph.stats.totalActiveSessions} attached chats`} tone="info" />
                             )}
                         </div>
                         <details className={`max-w-full rounded-xl px-3 py-2 text-xs ${meshTheme.isDark ? 'border border-white/10 bg-white/[0.03] text-slate-300' : 'border border-slate-200 bg-slate-50 text-slate-600'}`}>
@@ -728,6 +729,11 @@ export default function MeshObservabilitySurface({
                                                         <span>{sessionRoleLabel(entry.session)}</span>
                                                         <span>{sessionElapsedLabel(entry.session)}</span>
                                                     </div>
+                                                    {entry.session.statusNote && (
+                                                        <div className={`mt-1 text-[10px] leading-4 ${meshTheme.textMuted}`}>
+                                                            {entry.session.statusNote}
+                                                        </div>
+                                                    )}
                                                     <div className={`mt-0.5 truncate ${meshTheme.textMuted}`} title={entry.session.workspace || entry.workspace}>
                                                         {(entry.session.workspace || entry.workspace).slice(0, 42)}{entry.branch ? ` · ${entry.branch}` : ''}
                                                     </div>

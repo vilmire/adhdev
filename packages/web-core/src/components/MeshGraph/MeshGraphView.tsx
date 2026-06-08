@@ -287,6 +287,19 @@ function getSessionRoleLabel(session: MeshGraphNode['sessionDetails'][number]): 
     return role || 'worker'
 }
 
+function getSessionSummaryLabel(node: MeshGraphNode): string | null {
+    if (node.sessionDetails.length === 0) return null
+    const generatingCount = node.sessionDetails.filter(session => formatSessionStatusLabel(session) === 'generating').length
+    const coordinatorCount = node.sessionDetails.filter(session => session.isSelfCoordinator).length
+    const workerCount = node.sessionDetails.length - coordinatorCount
+    const parts = [`${node.sessionDetails.length} chat${node.sessionDetails.length === 1 ? '' : 's'}`]
+    if (generatingCount > 0) parts.push(`${generatingCount} generating`)
+    if (coordinatorCount > 0) parts.push(coordinatorCount === 1 ? 'coordinator attached' : `${coordinatorCount} coordinators`)
+    if (workerCount > 0) parts.push(`${workerCount} worker${workerCount === 1 ? '' : 's'}`)
+    if (generatingCount === 0 && coordinatorCount > 0) parts.push('sampled status')
+    return parts.join(' · ')
+}
+
 function formatLocality(locality: MeshGraphNode['locality']): string {
     if (locality === 'local') return 'local'
     if (locality === 'remote') return 'remote'
@@ -315,12 +328,14 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const calloutText = getMeshGraphCalloutText(node)
     const hasActiveSession = isNodeActive(node)
     const visibleSessions = node.sessionDetails.slice(0, 3)
+    const sessionSummaryLabel = getSessionSummaryLabel(node)
     const sessionTooltipLines = node.sessionDetails.map(session => {
         const status = formatSessionStatusLabel(session)
         const provider = session.providerType || 'provider unknown'
         const role = getSessionRoleLabel(session)
         const startedAt = session.startedAt || session.createdAt || null
-        return `Session: ${session.sessionId} · ${provider} · ${status} · ${role} · ${formatElapsedSince(startedAt)}`
+        const note = session.statusNote ? ` · ${session.statusNote}` : ''
+        return `Session: ${session.sessionId} · ${provider} · ${status} · ${role} · ${formatElapsedSince(startedAt)}${note}`
     })
 
     if (compact) {
@@ -365,6 +380,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 {!attentionBadge && node.branch && !isSubmoduleNode && (
                     <div className={`mt-1 min-w-0 max-w-full truncate text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-2 py-0.5 inline-block`} title={node.branch}>
                         {node.branch}
+                    </div>
+                )}
+                {sessionSummaryLabel && (
+                    <div className={`mt-1 min-w-0 max-w-full truncate text-[9px] ${meshTheme.isDark ? 'text-cyan-100/85' : 'text-sky-700'}`} title={sessionTooltipLines.join('\n')}>
+                        {sessionSummaryLabel}
                     </div>
                 )}
                 <Handle type="source" position={direction === 'TB' ? Position.Bottom : Position.Right} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
@@ -426,6 +446,15 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     <span className="truncate">{node.branch}</span>
                 </div>
             ) : null}
+
+            {sessionSummaryLabel && (
+                <div
+                    className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${meshTheme.isDark ? 'border-cyan-400/20 bg-cyan-500/8 text-cyan-100' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
+                    title={sessionTooltipLines.join('\n')}
+                >
+                    <span className="truncate">{sessionSummaryLabel}</span>
+                </div>
+            )}
 
             <div className={`overflow-hidden transition-all ${showDetails ? 'mt-3 max-h-[400px] opacity-100' : 'mt-0 max-h-0 opacity-0 group-hover:mt-3 group-hover:max-h-[400px] group-hover:opacity-100'}`}>
                 <div className="flex min-w-0 flex-wrap gap-1.5 text-[10px]">
@@ -497,6 +526,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                             `Status: ${formatSessionStatusLabel(session)}`,
                                             `Role: ${roleLabel}`,
                                             startedAt ? `Started: ${startedAt}` : 'Started: not reported',
+                                            session.statusNote ? `Note: ${session.statusNote}` : null,
                                         ].filter(Boolean).join('\n')}
                                     >
                                         <div className="flex min-w-0 items-center justify-between gap-2">
@@ -512,6 +542,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                             <span>{roleLabel}</span>
                                             <span>{formatElapsedSince(startedAt)}</span>
                                         </div>
+                                        {session.statusNote && (
+                                            <div className={`mt-1 text-[9px] leading-4 ${meshTheme.textMuted}`}>
+                                                {session.statusNote}
+                                            </div>
+                                        )}
                                     </div>
                                 )
                             })}

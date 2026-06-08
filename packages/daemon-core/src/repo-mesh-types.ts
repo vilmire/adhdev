@@ -367,6 +367,7 @@ export interface RepoMeshSessionStatus {
     title?: string | null;
     role?: string | null;
     isSelfCoordinator?: boolean;
+    statusNote?: string | null;
     createdAt?: string | null;
     startedAt?: string | null;
     lastActivityAt?: string | null;

@@ -198,6 +198,7 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
                                     `Status: ${sessionStatusLabel(session)}`,
                                     `Role: ${sessionRoleLabel(session)}`,
                                     session.startedAt || session.createdAt ? `Started: ${session.startedAt || session.createdAt}` : 'Started: not reported',
+                                    session.statusNote ? `Note: ${session.statusNote}` : null,
                                 ].filter(Boolean).join('\n')}
                             >
                                 <div className="flex min-w-0 items-center justify-between gap-2">
@@ -209,6 +210,11 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
                                     <span>{sessionRoleLabel(session)}</span>
                                     <span>{sessionElapsedLabel(session)}</span>
                                 </div>
+                                {session.statusNote && (
+                                    <div className="mt-1 leading-4">
+                                        {session.statusNote}
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>

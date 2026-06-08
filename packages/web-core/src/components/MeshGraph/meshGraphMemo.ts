@@ -27,6 +27,7 @@ function nodeFingerprint(node: MeshGraphNode): string {
             session.lifecycle ?? '',
             session.role ?? '',
             session.isSelfCoordinator ? 1 : 0,
+            session.statusNote ?? '',
             session.startedAt ?? '',
             session.createdAt ?? '',
         ].join('/')).join(','),

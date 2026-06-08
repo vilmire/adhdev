@@ -16,6 +16,7 @@ interface DashboardMeshGraphDialogProps {
 }
 
 const dashboardMeshGraphStatusCache = new Map<string, RepoMeshStatus>()
+const MESH_GRAPH_BACKGROUND_REFRESH_MS = 4_000
 
 function dashboardMeshGraphStatusCacheKey(daemonId: string | null, meshId: string | null): string | null {
     if (!daemonId || !meshId) return null
@@ -33,9 +34,11 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const [meshStatus, setMeshStatus] = useState<RepoMeshStatus | null>(initialMeshStatus)
     const [loading, setLoading] = useState(false)
+    const [refreshing, setRefreshing] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(initialMeshStatus?.refreshedAt ?? null)
     const hasUsableGraphRef = useRef(initialMeshStatus !== null)
+    const loadInFlightRef = useRef(false)
 
     useEffect(() => {
         hasUsableGraphRef.current = meshStatus !== null
@@ -46,15 +49,18 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         setMeshStatus(cachedStatus)
         setLastLoadedAt(cachedStatus?.refreshedAt ?? null)
         hasUsableGraphRef.current = cachedStatus !== null
+        setRefreshing(false)
         setError(null)
     }, [cacheKey])
 
-    const loadGraph = useCallback(async (refresh = false) => {
+    const loadGraph = useCallback(async (refresh = false, options?: { background?: boolean }) => {
         if (!daemonId || !meshId) {
             setError('This coordinator does not expose a live mesh id.')
             setMeshStatus(null)
             return
         }
+
+        if (loadInFlightRef.current) return
 
         if (!refresh && cacheKey) {
             const cachedStatus = dashboardMeshGraphStatusCache.get(cacheKey)
@@ -68,7 +74,10 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             }
         }
 
-        setLoading(!hasUsableGraphRef.current)
+        loadInFlightRef.current = true
+        const showInitialLoader = !hasUsableGraphRef.current && !options?.background
+        setLoading(showInitialLoader)
+        setRefreshing(refresh && hasUsableGraphRef.current)
         setError(null)
         try {
             const response = meshOverrides?.loadMeshStatus
@@ -89,13 +98,24 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load live mesh status')
         } finally {
+            loadInFlightRef.current = false
             setLoading(false)
+            setRefreshing(false)
         }
     }, [cacheKey, daemonId, meshId, meshOverrides, sendDaemonCommand])
 
     useEffect(() => {
         loadGraph(false)
     }, [loadGraph])
+
+    useEffect(() => {
+        if (!daemonId || !meshId) return
+        const timer = window.setInterval(() => {
+            if (document.visibilityState === 'hidden') return
+            void loadGraph(true, { background: true })
+        }, MESH_GRAPH_BACKGROUND_REFRESH_MS)
+        return () => window.clearInterval(timer)
+    }, [daemonId, loadGraph, meshId])
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -144,7 +164,12 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                     <div className="flex flex-wrap items-center gap-2 md:justify-end">
                         {lastLoadedLabel && (
                             <span className={meshTheme.dialogRefreshedChipClass}>
-                                Refreshed {lastLoadedLabel}
+                                {refreshing ? 'Refreshing mesh...' : `Refreshed ${lastLoadedLabel}`}
+                            </span>
+                        )}
+                        {!refreshing && meshStatus && (
+                            <span className={meshTheme.dialogRefreshedChipClass}>
+                                Auto-refresh 4s
                             </span>
                         )}
                         <button
@@ -152,11 +177,11 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             onClick={() => {
                                 void loadGraph(true)
                             }}
-                            disabled={loading}
+                            disabled={loading || refreshing}
                             className="btn btn-secondary btn-sm rounded-xl px-3.5"
                             title="Refresh live mesh graph"
                         >
-                            {loading ? 'Refreshing…' : 'Refresh'}
+                            {loading || refreshing ? 'Refreshing...' : 'Refresh'}
                         </button>
                         <button
                             type="button"

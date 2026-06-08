@@ -21,6 +21,7 @@ export interface MeshGraphSessionDetail extends RepoMeshSessionStatus {
     chatStatus?: string
     role?: string | null
     isSelfCoordinator?: boolean
+    statusNote?: string | null
     createdAt?: string | null
     startedAt?: string | null
 }
