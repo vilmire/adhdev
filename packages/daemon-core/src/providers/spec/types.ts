@@ -227,5 +227,15 @@ export interface CliSpec {
          *  once the window passes and an idle state has actually been
          *  observed. */
         startup_grace_ms?: number;
+        /** Treat a provider-specific completion marker as idle after it has
+         *  remained visible for hold_ms. This handles TUIs that leave their
+         *  last spinner glyph next to a completed timer, causing the normal
+         *  busy regex to keep matching after the turn is done. */
+        completion_idle_after?: {
+            section?: string;
+            regex: string;
+            flags?: string;
+            hold_ms: number;
+        };
     };
 }

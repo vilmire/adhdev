@@ -1615,6 +1615,7 @@ function countUncommittedChanges(status: any): number {
 function isGitStatusDirty(status: any): boolean {
     if (typeof status?.isDirty === 'boolean') return status.isDirty;
     if (typeof status?.dirty === 'boolean') return status.dirty;
+    if (Array.isArray(status?.submodules) && status.submodules.some((submodule: any) => submodule?.dirty || submodule?.outOfSync || submodule?.error)) return true;
     return countUncommittedChanges(status) > 0;
 }
 

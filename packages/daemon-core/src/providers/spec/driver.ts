@@ -132,6 +132,22 @@ export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text:
     return Math.max(spec, SUBMIT_DELAY_FLOOR_MS + linesBonus);
 }
 
+export function matchesCompletionIdleRule(spec: CliSpec, ev: SpecEvaluation, screen: string): string | null {
+    const rule = spec.debounce?.completion_idle_after;
+    if (!rule?.regex) return null;
+    const haystack = rule.section
+        ? ev.sections.find(section => section.id === rule.section)?.text ?? ''
+        : screen;
+    if (!haystack) return null;
+    try {
+        const regex = new RegExp(rule.regex, rule.flags || '');
+        const match = haystack.match(regex);
+        return match?.[0] || null;
+    } catch {
+        return null;
+    }
+}
+
 export class SpecDriver {
     private spec!: CliSpec;
     private adapter!: TerminalAdapter;
@@ -157,6 +173,8 @@ export class SpecDriver {
      *  because the evaluator already moved past busy by the time the hold
      *  kicks in. */
     private lastBusyState: SpecEvaluation['state'] | null = null;
+    private completionIdleFirstSeenAt = 0;
+    private completionIdleKey = '';
     /** Timer that re-runs evaluate() once the hold window expires. Needed
      *  because the PTY stops emitting once the agent finishes; without an
      *  explicit wake-up there's nothing to trigger the busy → idle
@@ -305,6 +323,36 @@ export class SpecDriver {
                 evState = this.lastBusyState ?? evState;
             }
         }
+        const completionIdleRule = this.spec.debounce?.completion_idle_after;
+        let busyWakeMs = busyHoldMs;
+        if (evState.id === 'busy' && completionIdleRule) {
+            const completionKey = matchesCompletionIdleRule(this.spec, ev, screen);
+            if (completionKey) {
+                const now = Date.now();
+                if (completionKey !== this.completionIdleKey) {
+                    this.completionIdleKey = completionKey;
+                    this.completionIdleFirstSeenAt = now;
+                }
+                const holdMs = Math.max(0, completionIdleRule.hold_ms || 0);
+                const ageMs = now - this.completionIdleFirstSeenAt;
+                if (ageMs >= holdMs) {
+                    const idle = this.spec.states.find(state => state.id === this.spec.default_state)
+                        ?? this.spec.states.find(state => state.id === 'idle');
+                    evState = idle
+                        ? { id: idle.id, label: idle.label, title: null }
+                        : { id: 'idle', label: 'Ready', title: null };
+                } else {
+                    busyWakeMs = Math.min(busyWakeMs, Math.max(holdMs - ageMs, 0));
+                }
+            } else {
+                this.completionIdleKey = '';
+                this.completionIdleFirstSeenAt = 0;
+            }
+        } else if (evState.id !== 'busy') {
+            this.completionIdleKey = '';
+            this.completionIdleFirstSeenAt = 0;
+        }
+
         if (evState.id === 'busy') {
             this.lastBusyAt = Date.now();
             this.lastBusyState = evState;
@@ -313,7 +361,7 @@ export class SpecDriver {
             // footer settles), so without an explicit timer the driver
             // never wakes up to downshift to idle and the dashboard sees
             // status stuck at generating long after the turn ended.
-            this.scheduleBusyExpiry(busyHoldMs);
+            this.scheduleBusyExpiry(busyWakeMs);
         }
 
         const changed = forceEmit

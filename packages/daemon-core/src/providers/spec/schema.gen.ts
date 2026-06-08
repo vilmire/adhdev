@@ -130,7 +130,18 @@ export const SCHEMA = {
             "additionalProperties": false,
             "properties": {
                 "busy_hold_ms": { "type": "integer", "minimum": 0 },
-                "startup_grace_ms": { "type": "integer", "minimum": 0 }
+                "startup_grace_ms": { "type": "integer", "minimum": 0 },
+                "completion_idle_after": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["regex", "hold_ms"],
+                    "properties": {
+                        "section": { "type": "string", "minLength": 1 },
+                        "regex": { "type": "string", "minLength": 1 },
+                        "flags": { "type": "string" },
+                        "hold_ms": { "type": "integer", "minimum": 0 }
+                    }
+                }
             }
         }
     },

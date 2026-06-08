@@ -1509,6 +1509,7 @@ function countUncommittedChanges(status) {
 function isGitStatusDirty(status) {
   if (typeof status?.isDirty === "boolean") return status.isDirty;
   if (typeof status?.dirty === "boolean") return status.dirty;
+  if (Array.isArray(status?.submodules) && status.submodules.some((submodule) => submodule?.dirty || submodule?.outOfSync || submodule?.error)) return true;
   return countUncommittedChanges(status) > 0;
 }
 function slimLedgerPayload(payload) {

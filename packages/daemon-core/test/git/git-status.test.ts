@@ -142,6 +142,29 @@ describe('git repo status parser', () => {
     });
   });
 
+  it('marks submodules dirty when their nested working tree has changes', async () => {
+    const submoduleRepo = tempRepo('status-submodule-dirty-child');
+    writeFileSync(join(submoduleRepo, 'child.txt'), 'child\n');
+    commit(submoduleRepo, 'child init');
+
+    const repo = tempRepo('status-submodule-dirty-parent');
+    writeFileSync(join(repo, 'README.md'), 'parent\n');
+    commit(repo, 'parent init');
+    git(repo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', submoduleRepo, 'oss']);
+    commit(repo, 'add oss submodule');
+
+    writeFileSync(join(repo, 'oss', 'child.txt'), 'child\nlocal dirty\n');
+
+    const status = await getGitRepoStatus(repo);
+
+    expect(status.dirty).toBe(true);
+    expect(status.submodules?.[0]).toMatchObject({
+      path: 'oss',
+      dirty: true,
+      outOfSync: false,
+    });
+  });
+
   it('marks tracked upstream state as unchecked until refreshed and updates behind counts after a bounded fetch', async () => {
     const repo = tempRepo('status-upstream-refresh');
     writeFileSync(join(repo, 'tracked.txt'), 'base\n');

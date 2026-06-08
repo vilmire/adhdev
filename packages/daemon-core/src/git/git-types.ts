@@ -60,6 +60,8 @@ export interface GitRepoStatus extends GitRepoIdentity {
   untracked: number;
   deleted: number;
   renamed: number;
+  /** Aggregate dirty flag including root worktree changes, conflicts, stash, and submodule drift. */
+  dirty: boolean;
   hasConflicts: boolean;
   conflictFiles: string[];
   stashCount: number;

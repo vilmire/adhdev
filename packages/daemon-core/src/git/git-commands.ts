@@ -66,7 +66,7 @@ export interface GitPushResult extends GitRepoIdentity {
 }
 
 export interface GitCommandServices {
-  getStatus?: (params: { workspace: string; refreshUpstream?: boolean }) => Promise<GitRepoStatus> | GitRepoStatus;
+  getStatus?: (params: { workspace: string; refreshUpstream?: boolean; includeSubmodules?: boolean; submoduleIgnorePaths?: string[] }) => Promise<GitRepoStatus> | GitRepoStatus;
   getDiffSummary?: (params: { workspace: string; staged?: boolean }) => Promise<GitDiffSummary> | GitDiffSummary;
   getDiffFile?: (params: { workspace: string; path: string; staged?: boolean }) => Promise<GitFileDiff> | GitFileDiff;
   createSnapshot?: (params: {
@@ -294,7 +294,16 @@ export async function handleGitCommand(
   switch (command) {
     case 'git_status': {
       if (!services.getStatus) return serviceNotImplemented(command);
-      const status = await runService(() => services.getStatus!({ workspace, refreshUpstream: optionalBoolean(args?.refreshUpstream) }));
+      const submoduleIgnorePaths = Array.isArray(args?.submoduleIgnorePaths)
+        ? args.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string' && value.trim().length > 0)
+        : undefined;
+      const statusParams: { workspace: string; refreshUpstream?: boolean; includeSubmodules?: boolean; submoduleIgnorePaths?: string[] } = { workspace };
+      const refreshUpstream = optionalBoolean(args?.refreshUpstream);
+      const includeSubmodules = optionalBoolean(args?.includeSubmodules);
+      if (refreshUpstream !== undefined) statusParams.refreshUpstream = refreshUpstream;
+      if (includeSubmodules !== undefined) statusParams.includeSubmodules = includeSubmodules;
+      if (submoduleIgnorePaths && submoduleIgnorePaths.length > 0) statusParams.submoduleIgnorePaths = submoduleIgnorePaths;
+      const status = await runService(() => services.getStatus!(statusParams));
       return 'success' in status ? status : { success: true, status };
     }
 

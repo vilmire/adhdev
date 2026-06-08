@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { resolveSubmitDelayMs } from '../../../src/providers/spec/driver.js';
+import { matchesCompletionIdleRule, resolveSubmitDelayMs } from '../../../src/providers/spec/driver.js';
+import { evaluate } from '../../../src/providers/spec/evaluator.js';
 import { loadSpec } from '../../../src/providers/spec/loader.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
@@ -44,6 +45,15 @@ describe('SpecDriver send_message — submit delay', () => {
     it('claude-cli spec ships an explicit delay so it does not depend on the daemon floor', () => {
         const spec = loadSpecFor('claude-cli');
         expect(spec.send_message.delay_ms_before_submit).toBeGreaterThanOrEqual(200);
+    });
+
+    it('claude-cli completion idle marker only accepts the ✻ finished-timer form', () => {
+        const spec = loadSpecFor('claude-cli');
+        const screen = ['previous answer', '✻ Brewed for 1m 46s', '❯'].join('\n');
+        expect(matchesCompletionIdleRule(spec, evaluate(spec, screen), screen)).toBe('✻ Brewed for 1m 46s');
+
+        const otherSpinner = ['previous answer', '✶ Brewed for 1m 46s', '❯'].join('\n');
+        expect(matchesCompletionIdleRule(spec, evaluate(spec, otherSpinner), otherSpinner)).toBeNull();
     });
 
     it('antigravity-cli spec ships an explicit delay so it does not depend on the daemon floor', () => {

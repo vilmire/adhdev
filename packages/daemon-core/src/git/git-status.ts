@@ -48,6 +48,11 @@ export async function getGitRepoStatus(
     if (includeSubmodules) {
       submodules = await getSubmoduleStatuses(repo, options);
     }
+    const submoduleDirty = (submodules || []).some(submodule => submodule.dirty || submodule.outOfSync || !!submodule.error);
+    const dirty = parsed.staged + parsed.modified + parsed.untracked + parsed.deleted + parsed.renamed > 0
+      || parsed.conflictFiles.length > 0
+      || stashCount > 0
+      || submoduleDirty;
 
     return {
       workspace: repo.workspace,
@@ -67,6 +72,7 @@ export async function getGitRepoStatus(
       untracked: parsed.untracked,
       deleted: parsed.deleted,
       renamed: parsed.renamed,
+      dirty,
       hasConflicts: parsed.conflictFiles.length > 0,
       conflictFiles: parsed.conflictFiles,
       stashCount,
@@ -285,6 +291,7 @@ function emptyStatus(workspace: string, lastCheckedAt: number, error: GitCommand
     untracked: 0,
     deleted: 0,
     renamed: 0,
+    dirty: false,
     hasConflicts: false,
     conflictFiles: [],
     stashCount: 0,
@@ -304,9 +311,31 @@ async function getSubmoduleStatuses(
 
   try {
     const result = await runGit(repo, ['submodule', 'status', '--recursive'], options);
-    return parseSubmoduleStatusOutput(result.stdout, repo.repoRoot, options.submoduleIgnorePaths);
+    const submodules = parseSubmoduleStatusOutput(result.stdout, repo.repoRoot, options.submoduleIgnorePaths);
+    await Promise.all(submodules.map(submodule => enrichSubmoduleWorktreeStatus(repo, submodule, options)));
+    return submodules;
   } catch {
     return [];
+  }
+}
+
+async function enrichSubmoduleWorktreeStatus(
+  repo: ResolvedGitRepo,
+  submodule: GitSubmoduleStatus,
+  options: GitStatusOptions,
+): Promise<void> {
+  try {
+    const result = await runGit(repo, ['status', '--porcelain=v2', '--branch'], {
+      ...options,
+      cwd: submodule.repoPath,
+    });
+    const parsed = parsePorcelainV2Status(result.stdout);
+    const dirty = parsed.staged + parsed.modified + parsed.untracked + parsed.deleted + parsed.renamed > 0
+      || parsed.conflictFiles.length > 0;
+    submodule.dirty = submodule.dirty || dirty;
+  } catch (error) {
+    submodule.dirty = true;
+    submodule.error = formatGitError(error);
   }
 }
 
@@ -321,9 +350,9 @@ function parseSubmoduleStatusOutput(
   for (const line of output.split('\n')) {
     if (!line.trim()) continue;
 
-    // Format: [+- ]<commit> <path> (<branch>)
-    // - = out of sync, + = dirty, ' ' = clean
-    const match = line.match(/^([\-+\s])([0-9a-f]{40})\s+(\S+)(?:\s+\(([^)]+)\))?/);
+    // Format: [+-U ]<commit> <path> (<branch>)
+    // - = not initialized, + = gitlink out of sync, U = conflict, ' ' = aligned.
+    const match = line.match(/^([\-+U\s])([0-9a-f]{40})\s+(\S+)(?:\s+\(([^)]+)\))?/);
     if (!match) continue;
 
     const prefix = match[1];
@@ -336,8 +365,8 @@ function parseSubmoduleStatusOutput(
       path,
       commit,
       repoPath: repoRoot + '/' + path,
-      dirty: prefix === '+',
-      outOfSync: prefix === '-',
+      dirty: prefix === 'U',
+      outOfSync: prefix === '-' || prefix === '+',
       lastCheckedAt: Date.now(),
     });
   }
