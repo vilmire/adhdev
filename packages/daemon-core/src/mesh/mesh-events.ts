@@ -1632,19 +1632,26 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     }
 
     // ── Task Queue & Ledger ──
+    // Helpers that keep queue and direct-dispatch status transitions symmetric.
+    // Both paths must move together so buildMeshActiveWork and the coordinator
+    // view stay consistent regardless of which dispatch path was used.
+    function markSessionTerminal(sessionId: string, outcome: 'completed' | 'failed', occurredAtMs?: number | null): { id?: string } | null {
+        const task = updateSessionTaskStatus(args.meshId, sessionId, outcome, {
+            occurredAt: occurredAtMs != null ? new Date(occurredAtMs).toISOString() : undefined,
+        });
+        updateDirectDispatchStatus(args.meshId, sessionId, outcome);
+        setImmediate(() => cleanupTerminalDirectDispatches());
+        return task ? { id: task.id } : null;
+    }
+
     let completedTaskForLedger: { id?: string } | null = null;
     if (args.event === 'agent:generating_completed') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
-        
+
         if (sessionId) {
-            const completedTask = updateSessionTaskStatus(args.meshId, sessionId, 'completed', {
-                occurredAt: eventTimestamp !== null ? new Date(eventTimestamp).toISOString() : undefined,
-            });
-            completedTaskForLedger = completedTask ? { id: completedTask.id } : null;
-            updateDirectDispatchStatus(args.meshId, sessionId, 'completed');
-            setImmediate(() => cleanupTerminalDirectDispatches());
+            completedTaskForLedger = markSessionTerminal(sessionId, 'completed', eventTimestamp);
             if (nodeId && providerType) {
                 runIdleMaintenanceThenAssignQueue(components, { meshId: args.meshId, nodeId, sessionId, providerType });
             }
@@ -1657,43 +1664,40 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const finalSummary = readNonEmptyString(args.metadataEvent.finalSummary) || undefined;
         const workerResult = readWorkerResultMetadata(args.metadataEvent);
         const hasCompletionEvidence = !!finalSummary || !!workerResult;
-        const completedTask = sessionId && hasCompletionEvidence
-            ? updateSessionTaskStatus(args.meshId, sessionId, 'completed')
-            : null;
-        if (completedTask && sessionId) {
-            completedTaskForLedger = { id: completedTask.id };
-            updateDirectDispatchStatus(args.meshId, sessionId, 'completed');
-            setImmediate(() => cleanupTerminalDirectDispatches());
-            try {
-                appendLedgerEntry(args.meshId, {
-                    kind: 'task_completed',
-                    nodeId: nodeId || undefined,
-                    sessionId,
-                    providerType: providerType || undefined,
-                    payload: {
-                        event: args.event,
-                        nodeLabel: args.nodeLabel,
-                        taskId: completedTask.id,
-                        completedViaReady: true,
-                        providerSessionId,
-                        finalSummary,
-                        workerResult,
-                        evidence: buildTaskCompletionEvidence({
-                            event: 'agent:ready',
-                            nodeId,
-                            sessionId,
-                            providerType: providerType || undefined,
+        if (sessionId && hasCompletionEvidence) {
+            completedTaskForLedger = markSessionTerminal(sessionId, 'completed');
+            if (completedTaskForLedger) {
+                try {
+                    appendLedgerEntry(args.meshId, {
+                        kind: 'task_completed',
+                        nodeId: nodeId || undefined,
+                        sessionId,
+                        providerType: providerType || undefined,
+                        payload: {
+                            event: args.event,
+                            nodeLabel: args.nodeLabel,
+                            taskId: completedTaskForLedger.id,
+                            completedViaReady: true,
                             providerSessionId,
                             finalSummary,
                             workerResult,
-                        }),
-                    },
-                });
-            } catch (e: any) {
-                LOG.warn('MeshLedger', `Failed to record task_completed from ready: ${e?.message || e}`);
+                            evidence: buildTaskCompletionEvidence({
+                                event: 'agent:ready',
+                                nodeId,
+                                sessionId,
+                                providerType: providerType || undefined,
+                                providerSessionId,
+                                finalSummary,
+                                workerResult,
+                            }),
+                        },
+                    });
+                } catch (e: any) {
+                    LOG.warn('MeshLedger', `Failed to record task_completed from ready: ${e?.message || e}`);
+                }
             }
         }
-        
+
         if (sessionId && nodeId && providerType) {
             sweepExpiredRemoteIdleSessions();
             remoteIdleSessions.set(`${nodeId}:${sessionId}`, {
@@ -1719,7 +1723,6 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
         }
         if (sessionId) {
-            // Mark direct dispatch as acknowledged — the session started generating.
             updateDirectDispatchStatus(args.meshId, sessionId, 'acked');
         }
     } else if (args.event === 'agent:stopped') {
@@ -1729,9 +1732,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
         }
         if (sessionId) {
-            const failedTask = updateSessionTaskStatus(args.meshId, sessionId, 'failed');
-            completedTaskForLedger = failedTask ? { id: failedTask.id } : null;
-            updateDirectDispatchStatus(args.meshId, sessionId, 'failed');
+            completedTaskForLedger = markSessionTerminal(sessionId, 'failed');
         }
     }
 
@@ -2019,21 +2020,20 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         if (!workspace) return;
         const settings = state.settings && typeof state.settings === 'object' ? state.settings as Record<string, unknown> : {};
 
-        // Coordinator sessions normally must not inject events into themselves, but a
-        // coordinator session can also be the direct-dispatch target of mesh_send_task
-        // issued by another coordinator (e.g. a remote orchestrator delegated a task to
-        // this local coordinator). In that case the completion event must still flow into
-        // injectMeshSystemMessage so the ledger records task_completed and the *other*
-        // coordinator's pendingCoordinatorEvents queue is populated. Skip only when this
-        // session is purely a coordinator with no in-flight direct dispatch waiting on it.
+        // A coordinator session normally must not inject events into itself. However,
+        // a coordinator can also be the direct-dispatch target of mesh_send_task from
+        // another coordinator. In that case the completion event must flow through
+        // injectMeshSystemMessage so the ledger records task_completed and the other
+        // coordinator's pendingCoordinatorEvents queue is populated. Skip only when
+        // this session has no in-flight direct dispatch.
         const coordinatorMeshId = readNonEmptyString(settings.meshCoordinatorFor);
         let meshIdFromDirectDispatch = '';
         if (coordinatorMeshId) {
             try {
-                const activeDispatches = getActiveDirectDispatches(coordinatorMeshId);
-                if (activeDispatches.some(d => d.sessionId === instanceId) || hasUnterminalDirectDispatchLedgerEntry(coordinatorMeshId, instanceId)) {
-                    meshIdFromDirectDispatch = coordinatorMeshId;
-                }
+                const hasActiveDispatch =
+                    getActiveDirectDispatches(coordinatorMeshId).some(d => d.sessionId === instanceId)
+                    || hasUnterminalDirectDispatchLedgerEntry(coordinatorMeshId, instanceId);
+                if (hasActiveDispatch) meshIdFromDirectDispatch = coordinatorMeshId;
             } catch { /* best-effort */ }
             if (!meshIdFromDirectDispatch) return;
         }
