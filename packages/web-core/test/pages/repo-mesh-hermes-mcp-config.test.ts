@@ -80,6 +80,10 @@ describe('RepoMesh graph detail affordances', () => {
     const source = readSource('pages/RepoMesh.tsx')
 
     expect(source).toContain('extractRepoMeshStatus(res)')
+    expect(source).toContain('useMeshGraphMetadataSubscription({')
+    expect(source).toContain('sendData,')
+    expect(source).toContain('status: meshGraphStatus')
+    expect(source).toContain('status={displayedMeshGraphStatus}')
     expect(source).toContain('<MeshObservabilitySurface')
     expect(source).toContain('daemonId={daemonId}')
     expect(source).toContain('sendDaemonCommand={sendCommand}')

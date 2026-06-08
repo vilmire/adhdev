@@ -32,6 +32,7 @@ import {
     type MeshCoordinatorMetadata,
 } from '../utils/mesh-coordinator-setup'
 import { MeshObservabilitySurface } from '../components/MeshGraph'
+import { useMeshGraphMetadataSubscription } from '../hooks/useMeshGraphMetadataSubscription'
 import { extractRepoMeshStatus } from '../utils/repo-mesh-status'
 
 // ─── Types (matches daemon-core LocalMeshEntry shape) ───
@@ -244,7 +245,7 @@ export interface RepoMeshProps {
 }
 
 export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}) {
-    const { sendCommand } = useTransport()
+    const { sendCommand, sendData } = useTransport()
     const { ides } = useBaseDaemons()
 
 
@@ -313,6 +314,12 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
     const [nodeProviderPriority, setNodeProviderPriority] = useState<string[]>([])
 
     const selectedMesh = meshes.find(m => m.id === selectedMeshId) || null
+    const displayedMeshGraphStatus = useMeshGraphMetadataSubscription({
+        status: meshGraphStatus,
+        daemonId,
+        meshId: selectedMeshId,
+        sendData,
+    })
 
     useEffect(() => {
         setNodeProviderPriorityDrafts(Object.fromEntries(
@@ -1083,13 +1090,13 @@ export default function RepoMesh({ hideHostPairing = false }: RepoMeshProps = {}
                         {graphError}
                     </div>
                 )}
-                {!meshGraphStatus ? (
+                {!displayedMeshGraphStatus ? (
                     <div className="text-[12px] text-text-muted rounded-lg border border-border-subtle bg-bg-secondary px-3 py-3">
                         {graphLoading ? 'Loading graph...' : 'Refresh the graph to inspect queue activity, sessions, node drift, and mesh topology from this standalone daemon.'}
                     </div>
                 ) : (
                     <MeshObservabilitySurface
-                        status={meshGraphStatus}
+                        status={displayedMeshGraphStatus}
                         emptyMessage="Refresh the graph to inspect queue activity, sessions, node drift, and mesh topology from this standalone daemon."
                         daemonId={daemonId}
                         sendDaemonCommand={sendCommand}
