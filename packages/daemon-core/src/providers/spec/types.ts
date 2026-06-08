@@ -19,6 +19,21 @@ export interface SectionRegex {
     section?: string;
     regex: string;
     flags?: string;
+    /**
+     * Optional cursor-position guards. When present, the state is only
+     * considered matched if the terminal cursor row/column satisfies the
+     * bounds (0-based, inclusive). Missing or undefined means "no constraint".
+     *
+     * Use case: distinguish modal zone from body zone for TUIs that use
+     * cursor position rather than distinct text to locate the active prompt
+     * (e.g. Antigravity cursor lands in modal_zone rows 8-31 when approval
+     * is visible, never in body rows 0-7). Without this guard, body text
+     * containing "Do you want to proceed?" could false-positive a modal match.
+     */
+    cursor_row_min?: number;
+    cursor_row_max?: number;
+    cursor_col_min?: number;
+    cursor_col_max?: number;
 }
 
 export interface SectionPattern {

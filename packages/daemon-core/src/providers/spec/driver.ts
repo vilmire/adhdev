@@ -247,6 +247,10 @@ export class SpecDriver {
         return this.adapter.snapshot();
     }
 
+    getCursorPosition(): { row: number; col: number } {
+        return this.adapter.getCursorPosition();
+    }
+
     shutdown(): void {
         for (const t of this.delegateTimers.values()) clearTimeout(t);
         this.delegateTimers.clear();
@@ -316,7 +320,8 @@ export class SpecDriver {
 
     private reevaluate(forceEmit = false): void {
         const screen = this.adapter.snapshot();
-        const ev = evaluate(this.spec, screen);
+        const cursor = this.adapter.getCursorPosition();
+        const ev = evaluate(this.spec, screen, cursor);
 
         // Busy hold: many TUIs flicker between busy and idle every frame
         // (claude in particular — its token counter appears and disappears

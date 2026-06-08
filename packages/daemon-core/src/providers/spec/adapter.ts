@@ -128,6 +128,14 @@ export class TerminalAdapter {
         return this.lastScreen || this.computeScreen();
     }
 
+    getCursorPosition(): { row: number; col: number } {
+        const buf = this.term.buffer.active;
+        return {
+            row: Math.max(0, (buf as any).cursorY ?? 0),
+            col: Math.max(0, (buf as any).cursorX ?? 0),
+        };
+    }
+
     kill(): void {
         this.stopTimers();
         try { this.pty?.kill(); } catch { /* ignore */ }

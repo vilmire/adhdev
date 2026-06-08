@@ -1,8 +1,23 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
 import { tmpdir } from 'os'
+
+// Isolate all file I/O (ledger JSONL, BeadsDB, pending events) to a per-run
+// temp directory so test runs never pollute the production ~/.adhdev/mesh-ledger.
+// Without this mock, insertDirectDispatch writes to the real beads.db and the
+// entries are never cleaned up — causing staleDirectWorkSummary.count to grow
+// by 4 per test run across the production coordinator view.
+const testTmpDir = path.join(tmpdir(), `adhdev-mesh-events-test-${randomUUID().slice(0, 8)}`)
+const testConfigDir = path.join(testTmpDir, '.adhdev')
+vi.mock('../../src/config/config.js', () => ({
+  getConfigDir: () => {
+    if (!fs.existsSync(testConfigDir)) fs.mkdirSync(testConfigDir, { recursive: true })
+    return testConfigDir
+  },
+  loadConfig: () => ({ machineId: 'test-machine' }),
+}))
 
 const meshConfigMocks = vi.hoisted(() => ({
   getMesh: vi.fn(),
@@ -846,6 +861,44 @@ describe('setupMeshEventForwarding', () => {
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('one bounded status check')
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).not.toContain('mesh_read_chat once')
     cleanupMeshFiles(meshId)
+  })
+
+  it('handleMeshForwardEvent forwards modalMessage and modalButtons from relay payload into metadataEvent for approval dedup and coordinator message', () => {
+    const meshId = `mesh_approval_relay_${Date.now()}`
+    try {
+      const { components, coordinator } = createComponents(meshId)
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:waiting_approval',
+        meshId,
+        nodeId: 'node_agy',
+        targetSessionId: 'agy-session-1',
+        providerType: 'antigravity-cli',
+        modalMessage: 'Do you want to proceed?',
+        modalButtons: ['Yes', 'No'],
+        timestamp: 1710000005000,
+      })
+
+      expect(result).toEqual({ success: true, forwarded: 1 })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+
+      // Verify a second identical event is deduped (requires modalMessage+modalButtons for fingerprinting)
+      const duplicate = handleMeshForwardEvent(components, {
+        event: 'agent:waiting_approval',
+        meshId,
+        nodeId: 'node_agy',
+        targetSessionId: 'agy-session-1',
+        providerType: 'antigravity-cli',
+        modalMessage: 'Do you want to proceed?',
+        modalButtons: ['Yes', 'No'],
+        timestamp: 1710000005000,
+      })
+      expect(duplicate).toMatchObject({ success: true, suppressed: true, duplicateApproval: true })
+      // No second coordinator message injected for the duplicate
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
   })
 
   it('reconciles a long-generating monitor to completion when final summary evidence exists', () => {
@@ -2195,4 +2248,10 @@ describe('daemon-scoped pending event drain', () => {
       cleanupMeshFiles(meshId)
     }
   })
+})
+
+afterAll(() => {
+  try {
+    if (fs.existsSync(testTmpDir)) fs.rmSync(testTmpDir, { recursive: true, force: true })
+  } catch { /* best-effort cleanup */ }
 })

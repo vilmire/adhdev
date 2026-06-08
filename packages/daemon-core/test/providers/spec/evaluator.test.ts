@@ -165,6 +165,189 @@ describe('spec evaluator — codex-cli', () => {
     });
 });
 
+// ── Minimal inline spec factory for cursor-position tests ───────────────────
+
+function minimalSpec(overrides: {
+    states?: any[];
+    sections?: any[];
+    default_state?: string;
+} = {}): CliSpec {
+    return {
+        $schema: 'adhdev:cli/spec@1' as any,
+        id: 'test-cursor',
+        name: 'Test Cursor',
+        binary: 'test',
+        spawn_args: [],
+        send_message: { submit_key: '\r' },
+        layout: {
+            sections: overrides.sections ?? [
+                { id: 'body', from_top: 0 },
+                { id: 'footer', from_bottom: 4 },
+            ],
+        },
+        states: overrides.states ?? [
+            { id: 'idle', label: 'Idle', when: { regex: '.' } },
+        ],
+        default_state: overrides.default_state ?? 'idle',
+    } as unknown as CliSpec;
+}
+
+// Build a 32-row terminal screen where the approval question appears both in
+// the body (row 5) and in the modal_zone (row 20). The cursor alternates.
+function buildDualZoneScreen(): string {
+    const rows: string[] = [];
+    for (let i = 0; i < 32; i++) {
+        if (i === 5)  rows.push('  Do you want to proceed?');
+        else if (i === 20) rows.push('  Do you want to proceed?');
+        else rows.push('');
+    }
+    return rows.join('\n');
+}
+
+describe('spec evaluator — cursor position guards', () => {
+    it('matches state when no cursor predicates and cursor is not supplied (backward compat)', () => {
+        const spec = minimalSpec({
+            states: [{ id: 'approval', label: 'Approval', when: { section: 'body', regex: 'Do you want' } }, { id: 'idle', label: 'Idle', when: { regex: '.' } }],
+            default_state: 'idle',
+        });
+        const screen = 'Do you want to proceed?\n\n';
+        const ev = evaluate(spec, screen);
+        expect(ev.state.id).toBe('approval');
+    });
+
+    it('matches state when cursor predicates are met', () => {
+        const spec = minimalSpec({
+            states: [
+                {
+                    id: 'modal',
+                    label: 'Modal',
+                    // Only matches when cursor is in modal zone (rows 8-31 of 32-row terminal)
+                    when: { regex: 'Do you want', cursor_row_min: 8, cursor_row_max: 31 },
+                },
+                { id: 'idle', label: 'Idle', when: { regex: '.' } },
+            ],
+            default_state: 'idle',
+        });
+        const screen = buildDualZoneScreen();
+        // Cursor in modal zone → should match modal state
+        const ev = evaluate(spec, screen, { row: 20, col: 0 });
+        expect(ev.state.id).toBe('modal');
+    });
+
+    it('rejects state when cursor row is below cursor_row_min', () => {
+        const spec = minimalSpec({
+            states: [
+                {
+                    id: 'modal',
+                    label: 'Modal',
+                    when: { regex: 'Do you want', cursor_row_min: 8 },
+                },
+                { id: 'idle', label: 'Idle', when: { regex: '.' } },
+            ],
+            default_state: 'idle',
+        });
+        const screen = buildDualZoneScreen();
+        // Cursor in body zone (row 5 < cursor_row_min 8) → should skip modal, fall to idle
+        const ev = evaluate(spec, screen, { row: 5, col: 0 });
+        expect(ev.state.id).toBe('idle');
+        // Trace should include the skip reason
+        const skipEntry = ev.trace.find(t => t.kind === 'state_skip' && t.text.includes('cursor row'));
+        expect(skipEntry).toBeTruthy();
+        expect(skipEntry!.text).toContain('cursor_row_min');
+    });
+
+    it('rejects state when cursor row exceeds cursor_row_max', () => {
+        const spec = minimalSpec({
+            states: [
+                {
+                    id: 'footer_only',
+                    label: 'Footer',
+                    when: { regex: 'status', cursor_row_max: 28 },
+                },
+                { id: 'idle', label: 'Idle', when: { regex: '.' } },
+            ],
+            default_state: 'idle',
+        });
+        const rows = Array.from({ length: 32 }, (_, i) => i === 30 ? 'status ok' : '');
+        const screen = rows.join('\n');
+        // Cursor at row 30 > max 28 → skip footer_only
+        const ev = evaluate(spec, screen, { row: 30, col: 5 });
+        expect(ev.state.id).toBe('idle');
+        expect(ev.trace.some(t => t.kind === 'state_skip' && t.text.includes('cursor_row_max'))).toBe(true);
+    });
+
+    it('applies cursor_col_min / cursor_col_max predicates', () => {
+        const spec = minimalSpec({
+            states: [
+                {
+                    id: 'picker',
+                    label: 'Picker',
+                    // Only active when cursor is in right half (col >= 40)
+                    when: { regex: 'Select:', cursor_col_min: 40 },
+                },
+                { id: 'idle', label: 'Idle', when: { regex: '.' } },
+            ],
+            default_state: 'idle',
+        });
+        const screen = 'Select: option 1\nSelect: option 2\n';
+        // Cursor at col 45 → match
+        expect(evaluate(spec, screen, { row: 0, col: 45 }).state.id).toBe('picker');
+        // Cursor at col 10 → skip
+        expect(evaluate(spec, screen, { row: 0, col: 10 }).state.id).toBe('idle');
+    });
+
+    it('ignores cursor predicates when cursor is not supplied (text-only mode)', () => {
+        const spec = minimalSpec({
+            states: [
+                {
+                    id: 'modal',
+                    label: 'Modal',
+                    when: { regex: 'Do you want', cursor_row_min: 8 },
+                },
+                { id: 'idle', label: 'Idle', when: { regex: '.' } },
+            ],
+            default_state: 'idle',
+        });
+        const screen = buildDualZoneScreen();
+        // No cursor supplied → cursor predicates are skipped entirely → modal still matches
+        const ev = evaluate(spec, screen);
+        expect(ev.state.id).toBe('modal');
+    });
+
+    it('spec schema accepts cursor_row_min/max fields in sectionRegex', () => {
+        const specObj = {
+            $schema: 'adhdev:cli/spec@1',
+            id: 'cursor-test', name: 'Cursor Test', binary: 'test',
+            send_message: { submit_key: '\r' },
+            layout: { sections: [{ id: 'body', from_top: 0 }] },
+            states: [{
+                id: 'approval', label: 'Approval',
+                when: { regex: 'Do you want', cursor_row_min: 8, cursor_row_max: 31 },
+            }, { id: 'idle', label: 'Idle', when: { regex: '.' } }],
+            default_state: 'idle',
+        };
+        const tmp = path.join(__dirname, `tmp-cursor-spec-${Date.now()}.json`);
+        fs.writeFileSync(tmp, JSON.stringify(specObj));
+        const res = loadSpec(tmp);
+        fs.unlinkSync(tmp);
+        expect(res.ok).toBe(true);
+        if (res.ok) {
+            const approvalState = res.spec.states.find((s: any) => s.id === 'approval');
+            expect(approvalState?.when.cursor_row_min).toBe(8);
+            expect(approvalState?.when.cursor_row_max).toBe(31);
+        }
+    });
+
+    it('cursor position is included in trace when supplied', () => {
+        const spec = minimalSpec({
+            states: [{ id: 'idle', label: 'Idle', when: { regex: '.' } }],
+        });
+        const ev = evaluate(spec, 'hello world', { row: 15, col: 7 });
+        const cursorEntry = ev.trace.find(t => t.text.includes('cursor (15, 7)'));
+        expect(cursorEntry).toBeTruthy();
+    });
+});
+
 describe('spec loader — strict validation', () => {
     it('rejects a spec with unknown top-level field', () => {
         const bad = {

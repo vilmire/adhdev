@@ -325,7 +325,12 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           fastScrollSensitivity: 4,
           smoothScrollDuration: 120,
           scrollOnUserInput: false,
-          convertEol: false,
+          // Bare LF (\n without preceding \r) should move cursor to column 0 as well as down.
+          // Full-screen TUI apps (e.g. Antigravity) use bare-LF cursor-down sequences combined
+          // with explicit cursor-left to manage multi-row layout. Without this flag those bare
+          // LFs create staircase scroll in the dashboard terminal view during generation.
+          // Claude Code, Codex and Hermes consistently use CRLF so this flag is a no-op for them.
+          convertEol: true,
           disableStdin: false,
         });
 

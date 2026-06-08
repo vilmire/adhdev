@@ -139,6 +139,7 @@ function matchState(
     sections: ResolvedSection[],
     fullScreen: string,
     trace: TraceEntry[],
+    cursor?: { row: number; col: number },
 ): { matched: boolean; title: string | null } {
     const haystack = sectionText(sections, state.when.section, fullScreen);
     const re = compileRegex(state.when);
@@ -146,7 +147,31 @@ function matchState(
         trace.push({ kind: 'state_skip', text: `state[${state.id}] when ${state.when.section ?? '*'}~/${state.when.regex}/ no match` });
         return { matched: false, title: null };
     }
-    trace.push({ kind: 'state_match', text: `state[${state.id}] matched via ${state.when.section ?? '*'}~/${state.when.regex}/` });
+
+    // Cursor-position guards: check row/col bounds when the state declares them.
+    // Guards are skipped entirely when the caller did not supply a cursor position
+    // (cursor === undefined) so existing pure-text evaluation is unaffected.
+    if (cursor !== undefined) {
+        const w = state.when;
+        if (w.cursor_row_min !== undefined && cursor.row < w.cursor_row_min) {
+            trace.push({ kind: 'state_skip', text: `state[${state.id}] cursor row ${cursor.row} < cursor_row_min ${w.cursor_row_min}` });
+            return { matched: false, title: null };
+        }
+        if (w.cursor_row_max !== undefined && cursor.row > w.cursor_row_max) {
+            trace.push({ kind: 'state_skip', text: `state[${state.id}] cursor row ${cursor.row} > cursor_row_max ${w.cursor_row_max}` });
+            return { matched: false, title: null };
+        }
+        if (w.cursor_col_min !== undefined && cursor.col < w.cursor_col_min) {
+            trace.push({ kind: 'state_skip', text: `state[${state.id}] cursor col ${cursor.col} < cursor_col_min ${w.cursor_col_min}` });
+            return { matched: false, title: null };
+        }
+        if (w.cursor_col_max !== undefined && cursor.col > w.cursor_col_max) {
+            trace.push({ kind: 'state_skip', text: `state[${state.id}] cursor col ${cursor.col} > cursor_col_max ${w.cursor_col_max}` });
+            return { matched: false, title: null };
+        }
+    }
+
+    trace.push({ kind: 'state_match', text: `state[${state.id}] matched via ${state.when.section ?? '*'}~/${state.when.regex}/${cursor !== undefined ? ` cursor=(${cursor.row},${cursor.col})` : ''}` });
 
     let title: string | null = null;
     if (state.extract_title) {
@@ -217,19 +242,30 @@ function extractModal(
 // Public evaluator
 // ────────────────────────────────────────────────────────────────────────────
 
-export function evaluate(spec: CliSpec, screenText: string): SpecEvaluation {
+export function evaluate(
+    spec: CliSpec,
+    screenText: string,
+    /** Optional cursor position (0-based row and col). When supplied, states
+     *  with cursor_row_min/max or cursor_col_min/max predicates are filtered.
+     *  When omitted, cursor predicates are ignored and evaluation is text-only
+     *  (backward-compatible with all existing specs and call sites). */
+    cursor?: { row: number; col: number },
+): SpecEvaluation {
     const trace: TraceEntry[] = [];
     const lines = screenText.split('\n');
     const sections = resolveSections(spec, lines);
     for (const s of sections) {
         trace.push({ kind: 'section', text: `section[${s.id}] lines [${s.fromLine}, ${s.toLine}) (${s.toLine - s.fromLine} lines)` });
     }
+    if (cursor !== undefined) {
+        trace.push({ kind: 'section', text: `cursor (${cursor.row}, ${cursor.col})` });
+    }
 
     let activeState: { id: string; label: string; title: string | null } | null = null;
     let modal: ModalSnapshot | null = null;
 
     for (const st of spec.states) {
-        const { matched, title } = matchState(st, sections, screenText, trace);
+        const { matched, title } = matchState(st, sections, screenText, trace, cursor);
         if (!matched) continue;
         const extractedModal = extractModal(st, sections, screenText, title, trace);
         // If the state declares modal_buttons but extraction failed (button

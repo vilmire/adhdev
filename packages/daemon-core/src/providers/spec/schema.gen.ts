@@ -207,6 +207,22 @@ export const SCHEMA = {
                 "flags": {
                     "type": "string",
                     "default": "i"
+                },
+                "cursor_row_min": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cursor_row_max": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cursor_col_min": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cursor_col_max": {
+                    "type": "integer",
+                    "minimum": 0
                 }
             }
         },

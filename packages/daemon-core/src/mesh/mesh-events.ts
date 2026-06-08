@@ -1962,6 +1962,11 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
     const nodeId = readNonEmptyString(payload.nodeId);
     const workspace = readNonEmptyString(payload.workspace);
     const nodeLabel = nodeId ? `Node '${nodeId}'` : workspace ? `Agent at ${workspace}` : 'Remote agent';
+    const relayModalMessage = readNonEmptyString(payload.modalMessage);
+    const relayModalButtons = Array.isArray(payload.modalButtons)
+        ? (payload.modalButtons as unknown[]).filter((b): b is string => typeof b === 'string' && b.trim().length > 0)
+        : null;
+
     return injectMeshSystemMessage(components, {
         meshId,
         nodeId,
@@ -1979,6 +1984,8 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             startedAt: readNonEmptyString(payload.startedAt),
             completedAt: readNonEmptyString(payload.completedAt),
             retryOfJobId: readNonEmptyString(payload.retryOfJobId),
+            ...(relayModalMessage ? { modalMessage: relayModalMessage } : {}),
+            ...(relayModalButtons && relayModalButtons.length > 0 ? { modalButtons: relayModalButtons } : {}),
             ...(payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result) ? { result: payload.result } : {}),
             ...(payload.completionDiagnostic && typeof payload.completionDiagnostic === 'object' && !Array.isArray(payload.completionDiagnostic) ? { completionDiagnostic: payload.completionDiagnostic } : {}),
             ...(payload.workerResult && typeof payload.workerResult === 'object' && !Array.isArray(payload.workerResult) ? { workerResult: payload.workerResult } : {}),

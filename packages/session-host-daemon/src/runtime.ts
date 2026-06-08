@@ -115,9 +115,10 @@ function formatXtermViewportPlain(terminal: XtermTerminal, rows: number): string
   let last = lines.length;
   while (first < last && !lines[first]?.trim()) first++;
   while (last > first && !lines[last - 1]?.trim()) last--;
-  // Browser xterm runs with convertEol=false. Plain fallback snapshots therefore
-  // need CRLF row boundaries; bare LF replays as a staircase from the previous
-  // cursor column and makes Claude's startup art look broken.
+  // Use CRLF row boundaries for unambiguous terminal replay regardless of the
+  // browser xterm convertEol setting. CRLF is always explicit; bare LF depends
+  // on convertEol being true to reset the cursor column, which is not guaranteed
+  // for all xterm consumer configurations.
   return lines.slice(first, last).join('\r\n');
 }
 

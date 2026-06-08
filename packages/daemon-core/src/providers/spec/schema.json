@@ -111,7 +111,11 @@
             "properties": {
                 "section": { "type": "string" },
                 "regex": { "type": "string", "minLength": 1 },
-                "flags": { "type": "string", "default": "i" }
+                "flags": { "type": "string", "default": "i" },
+                "cursor_row_min": { "type": "integer", "minimum": 0 },
+                "cursor_row_max": { "type": "integer", "minimum": 0 },
+                "cursor_col_min": { "type": "integer", "minimum": 0 },
+                "cursor_col_max": { "type": "integer", "minimum": 0 }
             }
         },
         "sectionPattern": {
