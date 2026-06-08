@@ -28,6 +28,7 @@ function graphNode(overrides: Partial<MeshGraphNode>): MeshGraphNode {
     hasConflicts: overrides.hasConflicts ?? false,
     activeSessionCount: overrides.activeSessionCount ?? 0,
     activeSessions: overrides.activeSessions ?? [],
+    sessionDetails: overrides.sessionDetails ?? [],
     providers: overrides.providers ?? [],
     isOrphan: overrides.isOrphan ?? false,
     orphanReasons: overrides.orphanReasons ?? [],

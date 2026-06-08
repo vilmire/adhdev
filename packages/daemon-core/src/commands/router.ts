@@ -877,9 +877,14 @@ function readCachedInlineMeshActiveSessionDetails(node: any): Array<Record<strin
             node?.provider_type,
         ),
         state: readStringValue(fallbackSession.status, fallbackSession.state, fallbackSession.lifecycle),
+        chatStatus: readStringValue(fallbackSession.chatStatus, fallbackSession.chat_status),
         lifecycle: readStringValue(fallbackSession.lifecycle),
         title: readStringValue(fallbackSession.title, fallbackSession.displayName, fallbackSession.display_name) ?? null,
         workspace: readStringValue(fallbackSession.workspace, node?.workspace) ?? null,
+        role: readStringValue(fallbackSession.role) ?? null,
+        isSelfCoordinator: fallbackSession.isSelfCoordinator === true || fallbackSession.is_self_coordinator === true,
+        createdAt: readStringValue(fallbackSession.createdAt, fallbackSession.created_at) ?? null,
+        startedAt: readStringValue(fallbackSession.startedAt, fallbackSession.started_at) ?? null,
         lastActivityAt: readStringValue(fallbackSession.lastActivityAt, fallbackSession.last_activity_at) ?? null,
         recoveryState: readStringValue(fallbackSession.recoveryState, fallbackSession.recovery_state) ?? null,
         isCached: true,
@@ -1067,15 +1072,22 @@ async function hydrateInlineMeshDirectTruth(args: {
 }
 
 function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
+    const meta = readObjectRecord(record?.meta);
+    const isSelfCoordinator = Boolean(readStringValue(meta.meshCoordinatorFor));
     return {
         sessionId: readStringValue(record?.sessionId) || 'unknown',
         providerType: readStringValue(record?.providerType),
         state: readLiveMeshSessionState(record),
+        chatStatus: readStringValue(record?.chatStatus, record?.activeChat?.status, meta.chatStatus, meta.sessionStatus),
         lifecycle: readStringValue(record?.lifecycle),
         surfaceKind: getSessionHostSurfaceKind(record as any),
-        recoveryState: readStringValue(record?.meta?.runtimeRecoveryState) ?? null,
+        recoveryState: readStringValue(meta.runtimeRecoveryState) ?? null,
         workspace: readStringValue(record?.workspace) ?? null,
         title: readStringValue(record?.displayName, record?.workspaceLabel) ?? null,
+        role: isSelfCoordinator ? 'coordinator' : readStringValue(meta.meshRole, meta.role) ?? null,
+        isSelfCoordinator,
+        createdAt: toIsoTimestamp(record?.createdAt ?? record?.created_at),
+        startedAt: toIsoTimestamp(record?.startedAt ?? record?.started_at ?? record?.spawnedAtMs ?? record?.spawned_at_ms),
         lastActivityAt: toIsoTimestamp(record?.updatedAt ?? record?.lastActivityAt ?? record?.last_activity_at),
         isCached: false,
     };

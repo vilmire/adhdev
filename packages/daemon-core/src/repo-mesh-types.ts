@@ -359,11 +359,16 @@ export interface RepoMeshSessionStatus {
     sessionId: string;
     providerType?: string;
     state?: string;
+    chatStatus?: string;
     lifecycle?: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed' | 'interrupted';
     surfaceKind?: 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
     recoveryState?: string | null;
     workspace?: string | null;
     title?: string | null;
+    role?: string | null;
+    isSelfCoordinator?: boolean;
+    createdAt?: string | null;
+    startedAt?: string | null;
     lastActivityAt?: string | null;
     isCached?: boolean;
 }

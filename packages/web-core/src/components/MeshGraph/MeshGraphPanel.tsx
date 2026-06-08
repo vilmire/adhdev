@@ -88,6 +88,42 @@ function formatUpstreamState(node: MeshGraphNode): string | null {
     }
 }
 
+function sessionStatusLabel(session: MeshGraphNode['sessionDetails'][number]): string {
+    const raw = (session.chatStatus || session.state || session.lifecycle || '').trim()
+    if (!raw) return 'unknown'
+    const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_')
+    if (normalized.includes('approval')) return 'awaiting approval'
+    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return 'generating'
+    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return 'idle'
+    return normalized.replace(/_/g, ' ')
+}
+
+function sessionRoleLabel(session: MeshGraphNode['sessionDetails'][number]): string {
+    if (session.isSelfCoordinator) return 'coordinator'
+    const role = typeof session.role === 'string' ? session.role.trim() : ''
+    return role || 'worker'
+}
+
+function sessionElapsedLabel(session: MeshGraphNode['sessionDetails'][number]): string {
+    const startedAt = session.startedAt || session.createdAt || null
+    if (!startedAt) return 'runtime age not reported'
+    const parsed = Date.parse(startedAt)
+    if (!Number.isFinite(parsed)) return 'runtime age not reported'
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - parsed) / 1000))
+    if (elapsedSeconds < 60) return `${elapsedSeconds}s`
+    const minutes = Math.floor(elapsedSeconds / 60)
+    if (minutes < 60) return `${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 48) return `${hours}h ${minutes % 60}m`
+    const days = Math.floor(hours / 24)
+    return `${days}d ${hours % 24}h`
+}
+
+function shortSessionId(sessionId: string): string {
+    if (sessionId.length <= 18) return sessionId
+    return `${sessionId.slice(0, 10)}...${sessionId.slice(-4)}`
+}
+
 export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -145,6 +181,37 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
                             <li key={i}>{r}</li>
                         ))}
                     </ul>
+                </div>
+            )}
+
+            {node.sessionDetails.length > 0 && (
+                <div className="mt-2">
+                    <div className={meshTheme.isDark ? 'mb-1 text-[10px] font-semibold text-slate-300' : 'mb-1 text-[10px] font-semibold text-slate-700'}>Attached chats</div>
+                    <div className="flex flex-col gap-1.5">
+                        {node.sessionDetails.map(session => (
+                            <div
+                                key={session.sessionId}
+                                className={meshTheme.isDark ? 'rounded-lg border border-white/8 bg-white/[0.03] px-2 py-1.5 text-[10px] text-slate-300' : 'rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-[10px] text-slate-600'}
+                                title={[
+                                    `Session ID: ${session.sessionId}`,
+                                    session.providerType ? `Provider: ${session.providerType}` : null,
+                                    `Status: ${sessionStatusLabel(session)}`,
+                                    `Role: ${sessionRoleLabel(session)}`,
+                                    session.startedAt || session.createdAt ? `Started: ${session.startedAt || session.createdAt}` : 'Started: not reported',
+                                ].filter(Boolean).join('\n')}
+                            >
+                                <div className="flex min-w-0 items-center justify-between gap-2">
+                                    <span className="min-w-0 truncate font-mono select-text">{shortSessionId(session.sessionId)}</span>
+                                    <span>{sessionStatusLabel(session)}</span>
+                                </div>
+                                <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5">
+                                    <span className="truncate">{session.providerType || 'provider unknown'}</span>
+                                    <span>{sessionRoleLabel(session)}</span>
+                                    <span>{sessionElapsedLabel(session)}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             )}
 

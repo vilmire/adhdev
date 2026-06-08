@@ -295,6 +295,7 @@ function createPlaceholderNode(defaultAnchor: MeshGraphNode, data: MeshGraphData
         hasConflicts: false,
         activeSessionCount: 0,
         activeSessions: [],
+        sessionDetails: [],
         providers: [],
         isOrphan: false,
         orphanReasons: [],

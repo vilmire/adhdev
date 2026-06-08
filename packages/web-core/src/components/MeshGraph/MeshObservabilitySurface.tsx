@@ -3,14 +3,13 @@ import type {
     GitLogEntry,
     RepoMeshNodeStatus,
     RepoMeshQueueTask,
-    RepoMeshSessionStatus,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import MeshGraphView from './MeshGraphView'
 import { getMeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData, MeshGraphNode } from './types'
-import { buildMeshGraph } from '../../utils/mesh-visualization'
+import { buildMeshGraph, type MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from '../../utils/repo-mesh-status'
 
 type DetailSelection =
@@ -31,7 +30,7 @@ type SessionListEntry = {
     workspace: string
     branch: string | null
     nodeHealth: string
-    session: RepoMeshSessionStatus
+    session: MeshGraphSessionDetail
 }
 
 type GitHistoryState = {
@@ -102,6 +101,46 @@ function sessionTone(state: string | null | undefined): 'default' | 'good' | 'wa
     }
 }
 
+function sessionStatusLabel(session: MeshGraphSessionDetail): string {
+    const raw = (session.chatStatus || session.state || session.lifecycle || '').trim()
+    if (!raw) return 'unknown'
+    const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_')
+    if (normalized.includes('approval')) return 'awaiting approval'
+    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return 'generating'
+    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return 'idle'
+    return normalized.replace(/_/g, ' ')
+}
+
+function sessionRoleLabel(session: MeshGraphSessionDetail): string {
+    if (session.isSelfCoordinator) return 'coordinator'
+    const role = typeof session.role === 'string' ? session.role.trim() : ''
+    return role || 'worker'
+}
+
+function sessionStartedAt(session: MeshGraphSessionDetail): string | null {
+    return session.startedAt || session.createdAt || null
+}
+
+function sessionElapsedLabel(session: MeshGraphSessionDetail): string {
+    const startedAt = sessionStartedAt(session)
+    if (!startedAt) return 'runtime age not reported'
+    const parsed = Date.parse(startedAt)
+    if (!Number.isFinite(parsed)) return 'runtime age not reported'
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - parsed) / 1000))
+    if (elapsedSeconds < 60) return `${elapsedSeconds}s`
+    const minutes = Math.floor(elapsedSeconds / 60)
+    if (minutes < 60) return `${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 48) return `${hours}h ${minutes % 60}m`
+    const days = Math.floor(hours / 24)
+    return `${days}d ${hours % 24}h`
+}
+
+function shortSessionId(sessionId: string): string {
+    if (sessionId.length <= 18) return sessionId
+    return `${sessionId.slice(0, 10)}...${sessionId.slice(-4)}`
+}
+
 function connectionTone(connection: RepoMeshNodeStatus['connection'] | null | undefined): 'default' | 'good' | 'warn' | 'danger' | 'info' {
     if (!connection) return 'default'
     if (connection.state === 'self') return 'info'
@@ -150,8 +189,8 @@ export function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
 function collectSessionEntries(status: RepoMeshStatus): SessionListEntry[] {
     const entries: SessionListEntry[] = []
     for (const node of status.nodes) {
-        const sessions = (node.activeSessionDetails && node.activeSessionDetails.length > 0)
-            ? node.activeSessionDetails
+        const sessions: MeshGraphSessionDetail[] = (node.activeSessionDetails && node.activeSessionDetails.length > 0)
+            ? node.activeSessionDetails as MeshGraphSessionDetail[]
             : (node.activeSessions ?? []).map(sessionId => ({ sessionId, workspace: node.workspace, isCached: true }))
         for (const session of sessions) {
             entries.push({
@@ -278,6 +317,17 @@ function getRepoMeshStatusGraphFingerprint(status: RepoMeshStatus): string {
             node.git?.lastCheckedAt ?? '',
             node.activeSessions?.join(',') ?? '',
             node.activeSessionDetails?.length ?? '',
+            (node.activeSessionDetails as MeshGraphSessionDetail[] | undefined)?.map(session => [
+                session.sessionId,
+                session.providerType ?? '',
+                session.state ?? '',
+                session.chatStatus ?? '',
+                session.lifecycle ?? '',
+                session.role ?? '',
+                session.isSelfCoordinator ? 1 : 0,
+                session.startedAt ?? '',
+                session.createdAt ?? '',
+            ].join('/')).join(',') ?? '',
             node.providers?.join(',') ?? '',
             node.providerPriority?.join(',') ?? '',
             node.error ?? '',
@@ -317,7 +367,7 @@ export default function MeshObservabilitySurface({
     const stateCounts = useMemo(() => {
         const counts = new Map<string, number>()
         for (const entry of sessionEntries) {
-            const label = entry.session.state || entry.session.lifecycle || 'unknown'
+            const label = sessionStatusLabel(entry.session)
             counts.set(label, (counts.get(label) ?? 0) + 1)
         }
         return [...counts.entries()].sort((a, b) => b[1] - a[1])
@@ -661,7 +711,7 @@ export default function MeshObservabilitySurface({
                                     <Row label="Dirty/ahead/behind" value={`${selectedGraphNode.dirtyFiles} dirty · ↑${selectedGraphNode.ahead}/↓${selectedGraphNode.behind}`} />
                                     <Row label="Source" value={String(selectedNodeStatus?.connection?.source ?? describeGraphNodeSource(selectedGraphNode))} />
                                     <Row label="Transport" value={selectedNodeStatus?.connection?.transport ?? 'unknown'} />
-                                    <Row label="Sessions" value={selectedNodeSessionEntries.length > 0 ? selectedNodeSessionEntries.map(entry => entry.session.state || entry.session.lifecycle || 'unknown').join(', ') : 'none active'} />
+                                    <Row label="Sessions" value={selectedNodeSessionEntries.length > 0 ? selectedNodeSessionEntries.map(entry => sessionStatusLabel(entry.session)).join(', ') : 'none active'} />
                                 </div>
                                 {selectedNodeSessionEntries.length > 0 && (
                                     <div className="mt-3">
@@ -670,10 +720,17 @@ export default function MeshObservabilitySurface({
                                             {selectedNodeSessionEntries.map(entry => (
                                                 <div key={entry.session.sessionId} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
                                                     <div className="flex items-center justify-between gap-2">
-                                                        <span className={`font-mono ${meshTheme.textMuted}`}>{entry.session.sessionId.slice(0, 14)}</span>
-                                                        <Badge label={entry.session.state || entry.session.lifecycle || 'unknown'} tone={sessionTone(entry.session.state || entry.session.lifecycle)} />
+                                                        <span className={`min-w-0 truncate font-mono select-text ${meshTheme.textMuted}`} title={entry.session.sessionId}>{shortSessionId(entry.session.sessionId)}</span>
+                                                        <Badge label={sessionStatusLabel(entry.session)} tone={sessionTone(sessionStatusLabel(entry.session))} />
                                                     </div>
-                                                    <div className={`mt-0.5 truncate ${meshTheme.textMuted}`}>{(entry.session.workspace || entry.workspace).slice(0, 32)}{entry.branch ? ` · ${entry.branch}` : ''}</div>
+                                                    <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 ${meshTheme.textMuted}`}>
+                                                        <span className="truncate">{entry.session.providerType || 'provider unknown'}</span>
+                                                        <span>{sessionRoleLabel(entry.session)}</span>
+                                                        <span>{sessionElapsedLabel(entry.session)}</span>
+                                                    </div>
+                                                    <div className={`mt-0.5 truncate ${meshTheme.textMuted}`} title={entry.session.workspace || entry.workspace}>
+                                                        {(entry.session.workspace || entry.workspace).slice(0, 42)}{entry.branch ? ` · ${entry.branch}` : ''}
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>

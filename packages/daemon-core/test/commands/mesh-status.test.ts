@@ -606,7 +606,10 @@ describe('mesh_status', () => {
             workspace: repoRoot,
             lifecycle: 'running',
             providerType: 'hermes-cli',
-            meta: { meshNodeId: 'node-local', meshNodeFor: 'mesh-1' },
+            createdAt: Date.parse('2026-06-08T00:00:00.000Z'),
+            startedAt: Date.parse('2026-06-08T00:00:05.000Z'),
+            lastActivityAt: Date.parse('2026-06-08T00:01:00.000Z'),
+            meta: { meshNodeId: 'node-local', meshNodeFor: 'mesh-1', chatStatus: 'generating', role: 'worker' },
           },
           {
             sessionId: 'sess-unrelated',
@@ -647,6 +650,11 @@ describe('mesh_status', () => {
         expect.objectContaining({
           sessionId: 'sess-mesh',
           providerType: 'hermes-cli',
+          chatStatus: 'generating',
+          role: 'worker',
+          createdAt: '2026-06-08T00:00:00.000Z',
+          startedAt: '2026-06-08T00:00:05.000Z',
+          lastActivityAt: '2026-06-08T00:01:00.000Z',
         }),
       ])
     } finally {

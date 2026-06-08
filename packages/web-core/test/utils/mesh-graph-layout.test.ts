@@ -36,6 +36,7 @@ function node(id: string, overrides: Partial<MeshGraphNode> = {}): MeshGraphNode
         hasConflicts: false,
         activeSessionCount: 0,
         activeSessions: [],
+        sessionDetails: [],
         providers: [],
         isOrphan: false,
         orphanReasons: [],

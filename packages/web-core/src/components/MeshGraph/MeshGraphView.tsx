@@ -221,6 +221,72 @@ function formatHealth(health: MeshGraphNode['health']): string {
     return health.replace(/_/g, ' ')
 }
 
+function formatSessionStatusLabel(session: MeshGraphNode['sessionDetails'][number]): string {
+    const raw = (session.chatStatus || session.state || session.lifecycle || '').trim()
+    if (!raw) return 'unknown'
+    const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_')
+    if (normalized.includes('approval')) return 'awaiting approval'
+    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return 'generating'
+    if (normalized.includes('failed') || normalized.includes('stopped') || normalized.includes('interrupted')) return normalized.replace(/_/g, ' ')
+    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return 'idle'
+    return normalized.replace(/_/g, ' ')
+}
+
+function getSessionStatusBadgeClasses(session: MeshGraphNode['sessionDetails'][number], isDark: boolean): string {
+    const label = formatSessionStatusLabel(session)
+    if (label.includes('approval')) {
+        return isDark
+            ? 'border-amber-400/30 bg-amber-500/12 text-amber-100'
+            : 'border-amber-300 bg-amber-50 text-amber-700'
+    }
+    if (label === 'generating') {
+        return isDark
+            ? 'border-cyan-400/30 bg-cyan-500/12 text-cyan-100'
+            : 'border-sky-300 bg-sky-50 text-sky-700'
+    }
+    if (label === 'idle') {
+        return isDark
+            ? 'border-emerald-400/30 bg-emerald-500/12 text-emerald-100'
+            : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+    }
+    if (label.includes('failed') || label.includes('stopped') || label.includes('interrupted')) {
+        return isDark
+            ? 'border-rose-400/30 bg-rose-500/12 text-rose-100'
+            : 'border-rose-300 bg-rose-50 text-rose-700'
+    }
+    return getBadgeClasses('health', isDark)
+}
+
+function parseSessionTimeMs(value: string | null | undefined): number | null {
+    if (!value) return null
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : null
+}
+
+function formatElapsedSince(value: string | null | undefined): string {
+    const timestamp = parseSessionTimeMs(value)
+    if (timestamp === null) return 'runtime age not reported'
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000))
+    if (elapsedSeconds < 60) return `${elapsedSeconds}s`
+    const minutes = Math.floor(elapsedSeconds / 60)
+    if (minutes < 60) return `${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 48) return `${hours}h ${minutes % 60}m`
+    const days = Math.floor(hours / 24)
+    return `${days}d ${hours % 24}h`
+}
+
+function shortSessionId(sessionId: string): string {
+    if (sessionId.length <= 18) return sessionId
+    return `${sessionId.slice(0, 10)}...${sessionId.slice(-4)}`
+}
+
+function getSessionRoleLabel(session: MeshGraphNode['sessionDetails'][number]): string {
+    if (session.isSelfCoordinator) return 'coordinator'
+    const role = typeof session.role === 'string' ? session.role.trim() : ''
+    return role || 'worker'
+}
+
 function formatLocality(locality: MeshGraphNode['locality']): string {
     if (locality === 'local') return 'local'
     if (locality === 'remote') return 'remote'
@@ -248,6 +314,14 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const attentionBadge = getMeshGraphAttentionBadge(node)
     const calloutText = getMeshGraphCalloutText(node)
     const hasActiveSession = isNodeActive(node)
+    const visibleSessions = node.sessionDetails.slice(0, 3)
+    const sessionTooltipLines = node.sessionDetails.map(session => {
+        const status = formatSessionStatusLabel(session)
+        const provider = session.providerType || 'provider unknown'
+        const role = getSessionRoleLabel(session)
+        const startedAt = session.startedAt || session.createdAt || null
+        return `Session: ${session.sessionId} · ${provider} · ${status} · ${role} · ${formatElapsedSince(startedAt)}`
+    })
 
     if (compact) {
         return (
@@ -261,6 +335,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     node.workspace ? `Workspace: ${node.workspace}` : null,
                     attentionBadge ? `Status: ${attentionBadge.label}` : null,
                     getNodeSummaryForLayout(node),
+                    ...sessionTooltipLines,
                 ].filter(Boolean).join('\n')}
             >
                 <Handle type="target" position={direction === 'TB' ? Position.Top : Position.Left} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
@@ -310,6 +385,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         !isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' ? 'Upstream unverified' : null,
         node.isOrphan ? 'Needs follow-up' : null,
         shouldShowCallout && calloutText ? `Note: ${calloutText}` : null,
+        ...sessionTooltipLines,
     ].filter(Boolean).join('\n')
 
     return (
@@ -401,6 +477,52 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 <div className={`mt-3 text-[11px] leading-5 ${meshTheme.textSecondary}`} style={summaryTextStyle}>
                     {getNodeSummaryForLayout(node)}
                 </div>
+
+                {visibleSessions.length > 0 && (
+                    <div className="mt-3">
+                        <div className={`mb-1.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>
+                            Attached Chats
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                            {visibleSessions.map(session => {
+                                const startedAt = session.startedAt || session.createdAt || null
+                                const roleLabel = getSessionRoleLabel(session)
+                                return (
+                                    <div
+                                        key={session.sessionId}
+                                        className={`min-w-0 rounded-lg border px-2.5 py-1.5 ${meshTheme.isDark ? 'border-white/8 bg-white/[0.035]' : 'border-slate-200 bg-white/80'}`}
+                                        title={[
+                                            `Session ID: ${session.sessionId}`,
+                                            session.providerType ? `Provider: ${session.providerType}` : null,
+                                            `Status: ${formatSessionStatusLabel(session)}`,
+                                            `Role: ${roleLabel}`,
+                                            startedAt ? `Started: ${startedAt}` : 'Started: not reported',
+                                        ].filter(Boolean).join('\n')}
+                                    >
+                                        <div className="flex min-w-0 items-center justify-between gap-2">
+                                            <span className={`min-w-0 truncate font-mono text-[10px] select-text ${meshTheme.textPrimary}`}>
+                                                {shortSessionId(session.sessionId)}
+                                            </span>
+                                            <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
+                                                {formatSessionStatusLabel(session)}
+                                            </span>
+                                        </div>
+                                        <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[9px] ${meshTheme.textMuted}`}>
+                                            <span className="truncate">{session.providerType || 'provider unknown'}</span>
+                                            <span>{roleLabel}</span>
+                                            <span>{formatElapsedSince(startedAt)}</span>
+                                        </div>
+                                    </div>
+                                )
+                            })}
+                            {node.sessionDetails.length > visibleSessions.length && (
+                                <div className={`text-[9px] ${meshTheme.textMuted}`}>
+                                    +{node.sessionDetails.length - visibleSessions.length} more attached chat(s)
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
 
                 {shouldShowCallout && calloutText && (
                     <div

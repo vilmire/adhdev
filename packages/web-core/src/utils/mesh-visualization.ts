@@ -7,6 +7,7 @@ import type {
     GitRepoStatus,
     RepoMeshNodeHealth,
     RepoMeshNodeStatus,
+    RepoMeshSessionStatus,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
 import { canonicalizeRepoMeshStatus, repoMeshNodeHasLiveGitEvidence } from './repo-mesh-status'
@@ -15,6 +16,14 @@ export type MeshGraphNodeType = 'defaultBranchNode' | 'worktreeNode' | 'orphanNo
 export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink' | 'cloneLink'
 
 type MeshGraphSubmoduleStatus = NonNullable<GitRepoStatus['submodules']>[number]
+
+export interface MeshGraphSessionDetail extends RepoMeshSessionStatus {
+    chatStatus?: string
+    role?: string | null
+    isSelfCoordinator?: boolean
+    createdAt?: string | null
+    startedAt?: string | null
+}
 
 type MeshGraphNodeSource = RepoMeshNodeStatus | {
     kind: 'synthetic-submodule'
@@ -65,6 +74,7 @@ export interface MeshGraphNode {
     hasConflicts: boolean
     activeSessionCount: number
     activeSessions: string[]
+    sessionDetails: MeshGraphSessionDetail[]
     providers: string[]
     isOrphan: boolean
     orphanReasons: string[]
@@ -152,6 +162,17 @@ function parseTimestampMs(value: string | null | undefined): number | null {
     if (!value) return null
     const parsed = Date.parse(value)
     return Number.isNaN(parsed) ? null : parsed
+}
+
+function readNodeSessionDetails(nodeStatus: RepoMeshNodeStatus): MeshGraphSessionDetail[] {
+    if (nodeStatus.activeSessionDetails && nodeStatus.activeSessionDetails.length > 0) {
+        return nodeStatus.activeSessionDetails as MeshGraphSessionDetail[]
+    }
+    return (nodeStatus.activeSessions ?? []).map(sessionId => ({
+        sessionId,
+        workspace: nodeStatus.workspace,
+        isCached: true,
+    }))
 }
 
 function isDirty(git?: GitRepoStatus): boolean {
@@ -503,6 +524,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const rawClonedFromNodeId = typeof (nodeStatus as any).clonedFromNodeId === 'string'
             ? (nodeStatus as any).clonedFromNodeId
             : null
+        const sessionDetails = readNodeSessionDetails(nodeStatus)
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
@@ -521,8 +543,9 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             dirty,
             dirtyFiles: dirtyFileCount(git),
             hasConflicts: git?.hasConflicts ?? false,
-            activeSessionCount: nodeStatus.activeSessions?.length ?? 0,
-            activeSessions: nodeStatus.activeSessions ?? [],
+            activeSessionCount: sessionDetails.length,
+            activeSessions: sessionDetails.map(session => session.sessionId),
+            sessionDetails,
             providers: nodeStatus.providers ?? [],
             isOrphan: orphanReasons.length > 0,
             orphanReasons,
@@ -569,6 +592,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 hasConflicts: false,
                 activeSessionCount: 0,
                 activeSessions: [],
+                sessionDetails: [],
                 providers: [],
                 isOrphan: false,
                 orphanReasons: [],
@@ -646,6 +670,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             hasConflicts: branchNodes.some(node => node.hasConflicts),
             activeSessionCount: branchNodes.reduce((total, node) => total + node.activeSessionCount, 0),
             activeSessions: branchNodes.flatMap(node => node.activeSessions),
+            sessionDetails: branchNodes.flatMap(node => node.sessionDetails),
             providers: [...new Set(branchNodes.flatMap(node => node.providers))],
             isOrphan: false,
             orphanReasons: [],
@@ -669,6 +694,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 health: pickDominantHealth(branchNodes.map(node => node.health)),
                 providers: [],
                 activeSessions: [],
+                activeSessionDetails: [],
             },
         }
         nodes.push(syntheticDefaultNode)

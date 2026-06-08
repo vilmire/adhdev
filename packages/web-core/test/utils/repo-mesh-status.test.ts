@@ -24,6 +24,73 @@ describe('extractRepoMeshStatus', () => {
     expect(extractRepoMeshStatus({ success: true, result: { status } } as any)).toEqual(status)
   })
 
+  it('normalizes node sessions alias into graph session details with runtime metadata', () => {
+    const normalized = extractRepoMeshStatus({
+      ...status,
+      nodes: [
+        {
+          nodeId: 'node_worker',
+          machineLabel: 'Worker',
+          workspace: '/repo/worker',
+          health: 'online',
+          providers: [],
+          sessions: [
+            {
+              id: 'session-generating-full-id',
+              providerType: 'codex-cli',
+              chatStatus: 'generating',
+              role: 'worker',
+              startedAt: '2026-06-08T00:00:05.000Z',
+            },
+            {
+              id: 'session-coordinator-full-id',
+              providerType: 'hermes-cli',
+              status: 'idle',
+              isSelfCoordinator: true,
+              createdAt: '2026-06-08T00:00:00.000Z',
+            },
+          ],
+          git: {
+            isGitRepo: true,
+            branch: 'main',
+            upstream: 'origin/main',
+            upstreamStatus: 'fresh',
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+          },
+        },
+      ],
+    } as any)
+
+    const node = normalized?.nodes[0]
+    expect(node?.activeSessions).toEqual(['session-generating-full-id', 'session-coordinator-full-id'])
+    expect(node?.activeSessionDetails).toEqual([
+      expect.objectContaining({
+        sessionId: 'session-generating-full-id',
+        providerType: 'codex-cli',
+        chatStatus: 'generating',
+        role: 'worker',
+        startedAt: '2026-06-08T00:00:05.000Z',
+      }),
+      expect.objectContaining({
+        sessionId: 'session-coordinator-full-id',
+        providerType: 'hermes-cli',
+        state: 'idle',
+        isSelfCoordinator: true,
+        createdAt: '2026-06-08T00:00:00.000Z',
+      }),
+    ])
+
+    const graph = buildMeshGraph(normalized as any)
+    const graphNode = graph.nodes.find(item => item.id === 'node_worker')
+    expect(graphNode?.sessionDetails).toEqual(node?.activeSessionDetails)
+    expect(graphNode?.activeSessionCount).toBe(2)
+  })
+
   it('prefers fresh result status over stale upstream-unverified wrapper status', () => {
     const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
     const staleWrapperStatus = {

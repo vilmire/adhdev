@@ -127,6 +127,11 @@ function normalizeGitStatus(
     const upstreamFetchedAt = readNumber(status.upstreamFetchedAt, status.upstream_fetched_at)
     const upstreamFetchError = readString(status.upstreamFetchError, status.upstream_fetch_error)
     const error = readString(status.error)
+    const staged = readNumber(status.staged) ?? 0
+    const modified = readNumber(status.modified) ?? 0
+    const untracked = readNumber(status.untracked) ?? 0
+    const deleted = readNumber(status.deleted) ?? 0
+    const renamed = readNumber(status.renamed) ?? 0
     return {
         workspace: readString(status.workspace, node.workspace) || '',
         repoRoot: repoRoot ?? null,
@@ -140,11 +145,12 @@ function normalizeGitStatus(
         ...(upstreamFetchError ? { upstreamFetchError } : {}),
         ahead: readNumber(status.ahead) ?? 0,
         behind: readNumber(status.behind) ?? 0,
-        staged: readNumber(status.staged) ?? 0,
-        modified: readNumber(status.modified) ?? 0,
-        untracked: readNumber(status.untracked) ?? 0,
-        deleted: readNumber(status.deleted) ?? 0,
-        renamed: readNumber(status.renamed) ?? 0,
+        staged,
+        modified,
+        untracked,
+        deleted,
+        renamed,
+        dirty: readBoolean(status.dirty, status.isDirty, status.is_dirty) ?? (staged + modified + untracked + deleted + renamed > 0 || hasConflicts),
         hasConflicts,
         conflictFiles,
         stashCount: readNumber(status.stashCount, status.stash_count) ?? 0,
@@ -231,7 +237,9 @@ function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | u
         ? node.activeSessionDetails
         : Array.isArray(node.active_session_details)
             ? node.active_session_details
-            : null
+            : Array.isArray(node.sessions)
+                ? node.sessions
+                : null
     if (details) {
         const normalized = details
             .map((entry): RepoMeshSessionStatus | null => {
@@ -242,11 +250,16 @@ function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | u
                     sessionId,
                     ...(readString(record.providerType, record.provider) ? { providerType: readString(record.providerType, record.provider) } : {}),
                     ...(readString(record.state, record.status) ? { state: readString(record.state, record.status) } : {}),
+                    ...(readString(record.chatStatus, record.chat_status) ? { chatStatus: readString(record.chatStatus, record.chat_status) } : {}),
                     ...(readString(record.lifecycle) ? { lifecycle: readString(record.lifecycle) as RepoMeshSessionStatus['lifecycle'] } : {}),
                     ...(readString(record.surfaceKind, record.surface_kind) ? { surfaceKind: readString(record.surfaceKind, record.surface_kind) as RepoMeshSessionStatus['surfaceKind'] } : {}),
                     ...(readString(record.recoveryState, record.recovery_state) ? { recoveryState: readString(record.recoveryState, record.recovery_state) } : {}),
                     ...(readString(record.workspace) ? { workspace: readString(record.workspace) } : {}),
                     ...(readString(record.title) ? { title: readString(record.title) } : {}),
+                    ...(readString(record.role) ? { role: readString(record.role) } : {}),
+                    ...(readBoolean(record.isSelfCoordinator, record.is_self_coordinator) !== undefined ? { isSelfCoordinator: readBoolean(record.isSelfCoordinator, record.is_self_coordinator) } : {}),
+                    ...(readString(record.createdAt, record.created_at) ? { createdAt: readString(record.createdAt, record.created_at) } : {}),
+                    ...(readString(record.startedAt, record.started_at) ? { startedAt: readString(record.startedAt, record.started_at) } : {}),
                     ...(readString(record.lastActivityAt, record.last_activity_at) ? { lastActivityAt: readString(record.lastActivityAt, record.last_activity_at) } : {}),
                     ...(readBoolean(record.isCached, record.is_cached) !== undefined ? { isCached: readBoolean(record.isCached, record.is_cached) } : {}),
                 }
@@ -271,6 +284,9 @@ function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | u
         sessionId,
         ...(readString(fallback.providerType, fallback.provider) ? { providerType: readString(fallback.providerType, fallback.provider) } : {}),
         ...(readString(fallback.state, fallback.status) ? { state: readString(fallback.state, fallback.status) } : {}),
+        ...(readString(fallback.chatStatus, fallback.chat_status) ? { chatStatus: readString(fallback.chatStatus, fallback.chat_status) } : {}),
+        ...(readString(fallback.createdAt, fallback.created_at) ? { createdAt: readString(fallback.createdAt, fallback.created_at) } : {}),
+        ...(readString(fallback.startedAt, fallback.started_at) ? { startedAt: readString(fallback.startedAt, fallback.started_at) } : {}),
     }]
 }
 
