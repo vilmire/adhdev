@@ -16,7 +16,7 @@
  *   - Session identifier keys diverged across stores: targetSessionId /
  *     assignedSessionId / instanceId / runtimeSessionId / providerSessionId.
  *     resolveEventSessionId() tried four fallbacks per call.
- *   - No protocol version on the JSONL ledger or BeadsDB. Schema
+ *   - No protocol version on the JSONL ledger or MeshRuntimeStore. Schema
  *     evolutions had no guard rail.
  *   - mesh_reconcile_ledger existed as a routine recovery tool, not as
  *     an incident-response escape hatch. That itself signals the routing

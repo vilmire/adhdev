@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { createRequire } from 'module';
 import { getLedgerDir } from './mesh-ledger.js';
@@ -26,8 +26,31 @@ function legacyQueuePath(meshId: string): string {
     return join(getLedgerDir(), `${safeMeshId(meshId)}.queue.json`);
 }
 
-export class BeadsDB {
-    private static instance: BeadsDB | undefined;
+function meshRuntimeStorePath(): string {
+    const dir = getLedgerDir();
+    const nextPath = join(dir, 'mesh-runtime.db');
+    if (existsSync(nextPath)) return nextPath;
+
+    const legacyPath = join(dir, 'beads.db');
+    if (!existsSync(legacyPath)) return nextPath;
+
+    try {
+        renameSync(legacyPath, nextPath);
+        for (const suffix of ['-wal', '-shm']) {
+            const legacyCompanion = `${legacyPath}${suffix}`;
+            if (existsSync(legacyCompanion)) {
+                renameSync(legacyCompanion, `${nextPath}${suffix}`);
+            }
+        }
+    } catch {
+        // Best-effort compatibility for existing installs. If migration fails,
+        // opening the new store will create a clean DB instead of blocking boot.
+    }
+    return nextPath;
+}
+
+export class MeshRuntimeStore {
+    private static instance: MeshRuntimeStore | undefined;
     private readonly db: DatabaseHandle;
     private readonly dbPath: string;
     private readonly migratedMeshIds = new Set<string>();
@@ -49,9 +72,9 @@ export class BeadsDB {
         this.migrate();
     }
 
-    static getInstance(): BeadsDB {
+    static getInstance(): MeshRuntimeStore {
         if (!this.instance) {
-            this.instance = new BeadsDB(join(getLedgerDir(), 'beads.db'));
+            this.instance = new MeshRuntimeStore(meshRuntimeStorePath());
         }
         return this.instance;
     }
@@ -149,13 +172,13 @@ export class BeadsDB {
     }
 
     private maybeCheckpointWal(): void {
-        if (++this.walWriteCounter < BeadsDB.WAL_CHECK_INTERVAL) return;
+        if (++this.walWriteCounter < MeshRuntimeStore.WAL_CHECK_INTERVAL) return;
         this.walWriteCounter = 0;
         try {
             const walPath = `${this.dbPath}-wal`;
             if (!existsSync(walPath)) return;
             const size = statSync(walPath).size;
-            if (size < BeadsDB.WAL_MAX_BYTES) return;
+            if (size < MeshRuntimeStore.WAL_MAX_BYTES) return;
             process.stderr.write(
                 `[adhdev-mesh] WAL file ${Math.round(size / 1024 / 1024)}MB exceeds threshold; forcing checkpoint\n`,
             );

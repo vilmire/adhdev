@@ -2391,7 +2391,7 @@ class StandaloneServer {
 async function main(): Promise<void> {
   // Isolate standalone state from the cloud `adhdev daemon` running on the
   // same machine. Without this, both processes would share
-  // ~/.adhdev/mesh-ledger/ (pending events, beads-db, etc.) and a worker on
+  // ~/.adhdev/mesh-ledger/ (pending events, mesh-runtime-store, etc.) and a worker on
   // the standalone process would queue completion events in a file the cloud
   // coordinator never drains — completion events silently disappear from the
   // coordinator's chat. Honor an explicit ADHDEV_CONFIG_DIR so power users can

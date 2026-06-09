@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
-import { BeadsDB } from './beads-db.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -145,15 +145,15 @@ export function nodeSatisfiesRequiredTags(requiredTags: unknown, capabilityTags:
 }
 
 function withQueueLock<T>(_meshId: string, fn: () => T): T {
-    return BeadsDB.getInstance().transaction(fn);
+    return MeshRuntimeStore.getInstance().transaction(fn);
 }
 
 function readQueue(meshId: string): MeshWorkQueueEntry[] {
-    return BeadsDB.getInstance().getQueueEntries(meshId);
+    return MeshRuntimeStore.getInstance().getQueueEntries(meshId);
 }
 
 function writeQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
-    BeadsDB.getInstance().replaceQueue(meshId, queue);
+    MeshRuntimeStore.getInstance().replaceQueue(meshId, queue);
 }
 
 /**
@@ -181,7 +181,7 @@ export function enqueueTask(
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     };
-    BeadsDB.getInstance().insertQueueEntry(entry);
+    MeshRuntimeStore.getInstance().insertQueueEntry(entry);
     return entry;
 }
 
@@ -189,18 +189,18 @@ export function enqueueTask(
  * Get all tasks in the queue, optionally filtered by status.
  */
 export function getQueue(meshId: string, opts?: { status?: MeshTaskStatus[] }): MeshWorkQueueEntry[] {
-    return BeadsDB.getInstance().getQueueEntries(meshId, opts?.status?.length ? opts.status : undefined);
+    return MeshRuntimeStore.getInstance().getQueueEntries(meshId, opts?.status?.length ? opts.status : undefined);
 }
 
 export function getMeshQueueRevision(meshId: string): string {
-    return BeadsDB.getInstance().getQueueRevision(meshId);
+    return MeshRuntimeStore.getInstance().getQueueRevision(meshId);
 }
 
 /**
  * Find the next pending task that this node is allowed to claim, and mark it as assigned.
  */
 export function claimNextTask(meshId: string, nodeId: string, sessionId: string, capabilityTags?: string[]): MeshWorkQueueEntry | null {
-    return BeadsDB.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags);
+    return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags);
 }
 
 /**
@@ -215,10 +215,10 @@ export function updateTaskStatus(
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
-        const entry = BeadsDB.getInstance().findQueueEntryById(meshId, taskId);
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         entry.status = status;
-        BeadsDB.getInstance().updateQueueEntry(entry);
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         return entry;
     });
 }
@@ -229,11 +229,11 @@ export function recordTaskAutoLaunch(
     autoLaunch: Omit<NonNullable<MeshWorkQueueEntry['autoLaunch']>, 'updatedAt'>,
 ): MeshWorkQueueEntry | null {
     return withQueueLock(meshId, () => {
-        const entry = BeadsDB.getInstance().findQueueEntryById(meshId, taskId);
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         const now = new Date().toISOString();
         entry.autoLaunch = { ...autoLaunch, updatedAt: now };
-        BeadsDB.getInstance().updateQueueEntry(entry);
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         return entry;
     });
 }
@@ -248,13 +248,13 @@ export function cancelTask(
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
-        const entry = BeadsDB.getInstance().findQueueEntryById(meshId, taskId);
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         const now = new Date().toISOString();
         entry.status = 'cancelled';
         entry.cancelledAt = now;
         if (opts?.reason) entry.cancelReason = opts.reason;
-        BeadsDB.getInstance().updateQueueEntry(entry);
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         return entry;
     });
 }
@@ -276,7 +276,7 @@ export function requeueTask(
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
-        const entry = BeadsDB.getInstance().findQueueEntryById(meshId, taskId);
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         entry.status = 'pending';
         delete entry.assignedNodeId;
@@ -290,7 +290,7 @@ export function requeueTask(
         entry.requeuedAt = new Date().toISOString();
         entry.requeueCount = (entry.requeueCount || 0) + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
-        BeadsDB.getInstance().updateQueueEntry(entry);
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         return entry;
     });
 }
@@ -306,10 +306,10 @@ export function updateSessionTaskStatus(
 ): MeshWorkQueueEntry | null {
     return withQueueLock(meshId, () => {
         const occurredAtIso = opts?.occurredAt ? new Date(opts.occurredAt).toISOString() : undefined;
-        const entry = BeadsDB.getInstance().findAssignedBySession(meshId, sessionId, occurredAtIso);
+        const entry = MeshRuntimeStore.getInstance().findAssignedBySession(meshId, sessionId, occurredAtIso);
         if (!entry) return null;
         entry.status = status;
-        BeadsDB.getInstance().updateQueueEntry(entry);
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         return entry;
     });
 }
@@ -339,7 +339,7 @@ export interface MeshWorkQueueStats {
  * Return aggregate queue statistics for the given mesh.
  */
 export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
-    const rows = BeadsDB.getInstance().getQueueStatsByStatus(meshId);
+    const rows = MeshRuntimeStore.getInstance().getQueueStatsByStatus(meshId);
     const counts: Record<string, number> = {};
     for (const r of rows) counts[r.status] = r.count;
     const pending = counts['pending'] ?? 0;
@@ -358,33 +358,33 @@ export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
         cancelled,
         activeCounts: { pending, assigned },
         historicalCounts: { completed, failed, cancelled },
-        activeAssignments: BeadsDB.getInstance().getActiveAssignmentDetails(meshId),
+        activeAssignments: MeshRuntimeStore.getInstance().getActiveAssignmentDetails(meshId),
     };
 }
 
 export function __replaceMeshQueueForTests(meshId: string, queue: MeshWorkQueueEntry[]): void {
-    BeadsDB.getInstance().transaction(() => {
-        BeadsDB.getInstance().replaceQueue(meshId, queue);
+    MeshRuntimeStore.getInstance().transaction(() => {
+        MeshRuntimeStore.getInstance().replaceQueue(meshId, queue);
     });
 }
 
 export function __clearMeshQueueForTests(meshId: string): void {
-    BeadsDB.getInstance().deleteQueue(meshId);
+    MeshRuntimeStore.getInstance().deleteQueue(meshId);
 }
 
 export function __clearDirectDispatchesForTests(meshId: string): void {
-    BeadsDB.getInstance().deleteDirectDispatches(meshId);
+    MeshRuntimeStore.getInstance().deleteDirectDispatches(meshId);
 }
 
-export function __resetBeadsDBForTests(): void {
-    BeadsDB.resetForTests();
+export function __resetMeshRuntimeStoreForTests(): void {
+    MeshRuntimeStore.resetForTests();
 }
 
 // ── Direct Dispatch Tracking ─────────────────────────────────────────────────
 // Persists direct (non-queue) task dispatches so buildMeshActiveWork can read
-// active work from BeadsDB instead of scanning ledger JSONL entries.
+// active work from MeshRuntimeStore instead of scanning ledger JSONL entries.
 
-export type DirectDispatchRecord = ReturnType<BeadsDB['getActiveDirectDispatches']>[number];
+export type DirectDispatchRecord = ReturnType<MeshRuntimeStore['getActiveDirectDispatches']>[number];
 
 export function insertDirectDispatch(
     meshId: string,
@@ -401,7 +401,7 @@ export function insertDirectDispatch(
     },
 ): void {
     try {
-        BeadsDB.getInstance().insertDirectDispatch({ ...data, meshId });
+        MeshRuntimeStore.getInstance().insertDirectDispatch({ ...data, meshId });
     } catch (e: any) {
         process.stderr.write(`[adhdev-mesh] insertDirectDispatch failed for task ${data.taskId}: ${e?.message || e}\n`);
     }
@@ -409,7 +409,7 @@ export function insertDirectDispatch(
 
 export function getActiveDirectDispatches(meshId: string): DirectDispatchRecord[] {
     try {
-        return BeadsDB.getInstance().getActiveDirectDispatches(meshId);
+        return MeshRuntimeStore.getInstance().getActiveDirectDispatches(meshId);
     } catch {
         return [];
     }
@@ -421,18 +421,18 @@ export function updateDirectDispatchStatus(
     status: 'acked' | 'completed' | 'failed' | 'stale',
 ): void {
     try {
-        BeadsDB.getInstance().updateDirectDispatchStatus(meshId, sessionId, status);
+        MeshRuntimeStore.getInstance().updateDirectDispatchStatus(meshId, sessionId, status);
     } catch { /* best-effort */ }
 }
 
 export function cleanupTerminalDirectDispatches(olderThanMs = 7 * 24 * 60 * 60_000): void {
     try {
-        BeadsDB.getInstance().cleanupTerminalDirectDispatches(olderThanMs);
+        MeshRuntimeStore.getInstance().cleanupTerminalDirectDispatches(olderThanMs);
     } catch { /* best-effort */ }
 }
 
 export function markStaleDirectDispatches(meshId: string, olderThanMs = 60 * 60_000): void {
     try {
-        BeadsDB.getInstance().markStaleDirectDispatches(meshId, olderThanMs);
+        MeshRuntimeStore.getInstance().markStaleDirectDispatches(meshId, olderThanMs);
     } catch { /* best-effort */ }
 }

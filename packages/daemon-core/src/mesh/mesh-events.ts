@@ -8,7 +8,7 @@ import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getLedgerDir, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { buildMeshNodeCapabilityTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches } from './mesh-work-queue.js';
-import { BeadsDB } from './beads-db.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 
 // ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ export function __resetIdleAutoFastForwardForTests(): void {
 
 function sweepExpiredRemoteIdleSessions(): void {
     try {
-        BeadsDB.getInstance().pruneExpiredRemoteIdleSessions();
+        MeshRuntimeStore.getInstance().pruneExpiredRemoteIdleSessions();
     } catch { /* best-effort */ }
 }
 
@@ -438,7 +438,7 @@ const RECENT_COMPLETION_FINGERPRINT_TTL_MS = 10 * 60 * 1000;
 
 function hasFingerprintSeen(fingerprint: string): boolean {
     try {
-        return BeadsDB.getInstance().hasCompletionFingerprint(fingerprint);
+        return MeshRuntimeStore.getInstance().hasCompletionFingerprint(fingerprint);
     } catch {
         return false;
     }
@@ -446,7 +446,7 @@ function hasFingerprintSeen(fingerprint: string): boolean {
 
 function recordFingerprintSeen(fingerprint: string): void {
     try {
-        const db = BeadsDB.getInstance();
+        const db = MeshRuntimeStore.getInstance();
         db.recordCompletionFingerprint(fingerprint, RECENT_COMPLETION_FINGERPRINT_TTL_MS);
         db.sweepExpiredFingerprints();
     } catch { /* best-effort; duplicate events are preferable to a crash */ }
@@ -550,7 +550,7 @@ function findRecentTerminalLedgerEvidence(args: {
     if (!args.sessionId && !args.nodeId) return null;
     // Tail-limit: 200 entries gives a wide enough window to catch terminal events for active
     // sessions while avoiding a full O(n) scan. If a terminal is older than 200 entries,
-    // the BeadsDB fingerprint dedup will still block duplicate processing downstream.
+    // the MeshRuntimeStore fingerprint dedup will still block duplicate processing downstream.
     const entries = readLedgerEntries(args.meshId, { tail: 200 });
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
@@ -1280,7 +1280,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     // Also check known idle remote sessions
     let remoteSessions: Array<{ nodeId: string; sessionId: string; providerType: string }> = [];
     try {
-        remoteSessions = BeadsDB.getInstance().getRemoteIdleSessions();
+        remoteSessions = MeshRuntimeStore.getInstance().getRemoteIdleSessions();
     } catch { /* best-effort */ }
 
     for (const idle of remoteSessions) {
@@ -1291,7 +1291,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
             const assigned = tryAssignQueueTask(components, meshId, idle.nodeId, idle.sessionId, idle.providerType);
             if (assigned) {
                 try {
-                    BeadsDB.getInstance().deleteRemoteIdleSession(idle.nodeId, idle.sessionId);
+                    MeshRuntimeStore.getInstance().deleteRemoteIdleSession(idle.nodeId, idle.sessionId);
                 } catch { /* best-effort */ }
             }
         }
@@ -1534,7 +1534,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     if (intentionalCleanupStop) {
         if (eventSessionId && eventNodeId) {
             try {
-                BeadsDB.getInstance().deleteRemoteIdleSession(eventNodeId, eventSessionId);
+                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(eventNodeId, eventSessionId);
             } catch { /* best-effort */ }
         }
         LOG.info('MeshEvents', `Suppressed ${args.event} for intentionally cleanup-stopped session ${eventSessionId || '(unknown session)'}`);
@@ -1718,14 +1718,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         if (sessionId && nodeId && providerType) {
             sweepExpiredRemoteIdleSessions();
             try {
-                BeadsDB.getInstance().setRemoteIdleSession(nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
+                MeshRuntimeStore.getInstance().setRemoteIdleSession(nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
             } catch { /* best-effort */ }
             setImmediate(() => {
                 maybeAutoFastForwardIdleNode(components, { meshId: args.meshId, nodeId, sessionId, providerType })
                     .finally(() => {
                         try {
                             const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
-                            if (assigned) BeadsDB.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+                            if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
                         } catch (e: any) {
                             LOG.warn('MeshQueue', `Failed to assign idle queue task after maintenance for ${nodeId}: ${e?.message || e}`);
                         }
@@ -1737,7 +1737,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
             try {
-                BeadsDB.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
             } catch { /* best-effort */ }
         }
         if (sessionId) {
@@ -1748,7 +1748,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
             try {
-                BeadsDB.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
             } catch { /* best-effort */ }
         }
         if (sessionId) {

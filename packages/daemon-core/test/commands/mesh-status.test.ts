@@ -1120,8 +1120,8 @@ describe('mesh_status', () => {
     try {
       process.env.ADHDEV_CONFIG_DIR = configDir
       const { createMesh, addNode } = await import('../../src/config/mesh-config.js')
-      const { enqueueTask, __resetBeadsDBForTests } = await import('../../src/mesh/mesh-work-queue.js')
-      __resetBeadsDBForTests()
+      const { enqueueTask, __resetMeshRuntimeStoreForTests } = await import('../../src/mesh/mesh-work-queue.js')
+      __resetMeshRuntimeStoreForTests()
 
       const mesh = createMesh({
         name: 'Queue Cache Mesh',
@@ -1154,8 +1154,8 @@ describe('mesh_status', () => {
       })
       expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
     } finally {
-      const { __resetBeadsDBForTests } = await import('../../src/mesh/mesh-work-queue.js')
-      __resetBeadsDBForTests()
+      const { __resetMeshRuntimeStoreForTests } = await import('../../src/mesh/mesh-work-queue.js')
+      __resetMeshRuntimeStoreForTests()
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       await rm(configDir, { recursive: true, force: true })

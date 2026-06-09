@@ -2977,8 +2977,8 @@ export async function meshViewQueue(
             meshId: ctx.mesh.id,
             queue: fullQueue,
             ledgerEntries,
-            // Always pass BeadsDB records (may be empty). buildMeshActiveWork uses them for local
-            // dispatches and falls through to ledger scan for remote P2P dispatches not in BeadsDB.
+            // Always pass MeshRuntimeStore records (may be empty). buildMeshActiveWork uses them for local
+            // dispatches and falls through to ledger scan for remote P2P dispatches not in MeshRuntimeStore.
             directDispatches,
             nodes: liveNodes,
         });

@@ -70,7 +70,7 @@ export interface BuildMeshActiveWorkOptions {
     queue?: MeshWorkQueueEntry[];
     ledgerEntries?: MeshLedgerEntry[];
     /**
-     * Active direct dispatches from BeadsDB. When provided, these are used instead of
+     * Active direct dispatches from MeshRuntimeStore. When provided, these are used instead of
      * scanning ledger entries for direct dispatches — eliminates the O(n_ledger) scan.
      * Falls back to ledger scanning when not provided.
      */
@@ -224,9 +224,9 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         });
     }
 
-    // When BeadsDB direct dispatches are provided, use them for LOCAL dispatches (O(1) indexed).
-    // ALSO scan ledger for remote dispatches (P2P) whose taskIds are not in BeadsDB — these
-    // are never written to the local BeadsDB since they're dispatched from a remote daemon.
+    // When MeshRuntimeStore direct dispatches are provided, use them for LOCAL dispatches (O(1) indexed).
+    // ALSO scan ledger for remote dispatches (P2P) whose taskIds are not in MeshRuntimeStore — these
+    // are never written to the local MeshRuntimeStore since they're dispatched from a remote daemon.
     if (opts.directDispatches !== undefined) {
         const dbTaskIds = new Set(opts.directDispatches.map(d => d.taskId));
         for (const dispatch of opts.directDispatches) {
@@ -274,13 +274,13 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             }
             records.push(record);
         }
-        // Also scan ledger for remote dispatches (via p2p_direct) whose taskIds are NOT in BeadsDB.
-        // Remote daemons write their own local BeadsDB; this coordinator's BeadsDB only has local dispatches.
+        // Also scan ledger for remote dispatches (via p2p_direct) whose taskIds are NOT in MeshRuntimeStore.
+        // Remote daemons write their own local MeshRuntimeStore; this coordinator's MeshRuntimeStore only has local dispatches.
         const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
         for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
             const taskId = directDispatchTaskId(dispatch);
-            if (dbTaskIds.has(taskId)) continue; // already covered by BeadsDB path above
+            if (dbTaskIds.has(taskId)) continue; // already covered by MeshRuntimeStore path above
             const terminal = terminals
                 .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
                 .find(entry => terminalMatchesDispatch(entry, dispatch, taskId));
@@ -329,7 +329,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             records.push(record);
         }
     } else {
-        // Full ledger scan: no BeadsDB direct dispatches available (standalone mode or empty).
+        // Full ledger scan: no MeshRuntimeStore direct dispatches available (standalone mode or empty).
         const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
         for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {

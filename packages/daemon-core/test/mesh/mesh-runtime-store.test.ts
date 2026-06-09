@@ -4,9 +4,11 @@ import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { createRequire } from 'module';
 
-const testTmpDir = join(tmpdir(), `adhdev-beadsdb-test-${randomUUID().slice(0, 8)}`);
+const testTmpDir = join(tmpdir(), `adhdev-mesh-runtime-store-test-${randomUUID().slice(0, 8)}`);
 const testConfigDir = join(testTmpDir, '.adhdev');
+const runtimeRequire = createRequire(import.meta.url);
 
 vi.mock('../../src/config/config.js', () => ({
     getConfigDir: () => {
@@ -15,14 +17,14 @@ vi.mock('../../src/config/config.js', () => ({
     },
 }));
 
-import { BeadsDB } from '../../src/mesh/beads-db.js';
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import {
     insertDirectDispatch,
     getActiveDirectDispatches,
     updateDirectDispatchStatus,
     markStaleDirectDispatches,
     cleanupTerminalDirectDispatches,
-    __resetBeadsDBForTests,
+    __resetMeshRuntimeStoreForTests,
     enqueueTask,
     claimNextTask,
     getQueue,
@@ -33,7 +35,7 @@ import {
     __clearMeshQueueForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 
-describe('beads-db', () => {
+describe('mesh-runtime-store', () => {
     beforeEach(() => {
         if (!existsSync(testConfigDir)) {
             mkdirSync(testConfigDir, { recursive: true });
@@ -41,20 +43,45 @@ describe('beads-db', () => {
     });
 
     afterEach(() => {
-        __resetBeadsDBForTests();
+        __resetMeshRuntimeStoreForTests();
         try {
             rmSync(testTmpDir, { recursive: true, force: true });
         } catch { /* cleanup best-effort */ }
     });
 
     describe('completion fingerprints', () => {
+        it('migrates an existing beads.db file to mesh-runtime.db on first open', () => {
+            const Database = runtimeRequire('better-sqlite3') as any;
+            const ledgerDir = join(testConfigDir, 'mesh-ledger');
+            mkdirSync(ledgerDir, { recursive: true });
+            const legacyDbPath = join(ledgerDir, 'beads.db');
+            const nextDbPath = join(ledgerDir, 'mesh-runtime.db');
+            const fingerprint = `legacy-fp-${randomUUID()}`;
+
+            const legacyDb = new Database(legacyDbPath);
+            legacyDb.exec(`
+                CREATE TABLE mesh_completion_fingerprints (
+                    fingerprint TEXT PRIMARY KEY,
+                    expires_at INTEGER NOT NULL
+                );
+            `);
+            legacyDb.prepare('INSERT INTO mesh_completion_fingerprints (fingerprint, expires_at) VALUES (?, ?)')
+                .run(fingerprint, Date.now() + 60_000);
+            legacyDb.close();
+
+            const db = MeshRuntimeStore.getInstance();
+            expect(existsSync(legacyDbPath)).toBe(false);
+            expect(existsSync(nextDbPath)).toBe(true);
+            expect(db.hasCompletionFingerprint(fingerprint)).toBe(true);
+        });
+
         it('hasCompletionFingerprint returns false for unknown fingerprint', () => {
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             expect(db.hasCompletionFingerprint('unknown-fingerprint-xyz')).toBe(false);
         });
 
         it('recordCompletionFingerprint and hasCompletionFingerprint round-trip', () => {
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             const fp = `fp-valid-${randomUUID()}`;
             db.recordCompletionFingerprint(fp, 60_000); // 60s TTL — valid
             expect(db.hasCompletionFingerprint(fp)).toBe(true);
@@ -67,7 +94,7 @@ describe('beads-db', () => {
         });
 
         it('fingerprintSweepCounter clears expired entries every 100 reads', () => {
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             const fp = `fp-sweep-${randomUUID()}`;
 
             // Record a fingerprint that is already expired (negative TTL)
@@ -220,7 +247,7 @@ describe('beads-db', () => {
             expect(active).toHaveLength(0);
 
             // Confirm via direct DB access that rows are gone
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             const all = db.getActiveDirectDispatches(meshId);
             expect(all).toHaveLength(0);
         });
@@ -267,14 +294,14 @@ describe('beads-db', () => {
         });
     });
 
-    describe('claimNextQueueTask — BeadsDB level', () => {
+    describe('claimNextQueueTask — MeshRuntimeStore level', () => {
         afterEach(() => {
-            __resetBeadsDBForTests();
+            __resetMeshRuntimeStoreForTests();
         });
 
         it('claims the oldest pending task when no active assignment exists', () => {
             const meshId = `mesh-claim-oldest-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             db.insertQueueEntry({ id: 'task-1', meshId, message: 'first', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
             db.insertQueueEntry({ id: 'task-2', meshId, message: 'second', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
@@ -289,7 +316,7 @@ describe('beads-db', () => {
 
         it('returns null when node/session already has an active assignment', () => {
             const meshId = `mesh-claim-active-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             db.insertQueueEntry({ id: 'task-a', meshId, message: 'first task', status: 'pending', createdAt: new Date(Date.now() - 2000).toISOString(), updatedAt: new Date(Date.now() - 2000).toISOString() });
 
             // Claim the first task
@@ -308,7 +335,7 @@ describe('beads-db', () => {
 
         it('prioritizes session-targeted task over unconstrained task', () => {
             const meshId = `mesh-claim-sess-prio-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             db.insertQueueEntry({ id: 'unconstrained-1', meshId, message: 'unconstrained', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
             db.insertQueueEntry({ id: 'session-targeted-1', meshId, message: 'session targeted', status: 'pending', targetSessionId: 'sess-target', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
@@ -321,7 +348,7 @@ describe('beads-db', () => {
 
         it('prioritizes node-targeted (no session) over unconstrained', () => {
             const meshId = `mesh-claim-node-prio-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             db.insertQueueEntry({ id: 'unconstrained-2', meshId, message: 'unconstrained', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
             db.insertQueueEntry({ id: 'node-targeted-1', meshId, message: 'node targeted', status: 'pending', targetNodeId: 'node-a', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
@@ -334,18 +361,18 @@ describe('beads-db', () => {
 
         it('returns null when queue is empty', () => {
             const meshId = `mesh-claim-empty-${randomUUID().slice(0, 8)}`;
-            expect(BeadsDB.getInstance().claimNextQueueTask(meshId, 'node1', 'sess1')).toBeNull();
+            expect(MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, 'node1', 'sess1')).toBeNull();
         });
     });
 
     describe('findQueueEntryById', () => {
         afterEach(() => {
-            __resetBeadsDBForTests();
+            __resetMeshRuntimeStoreForTests();
         });
 
         it('returns entry when found, null for nonexistent', () => {
             const meshId = `mesh-find-by-id-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             const entryId = `entry-${randomUUID().slice(0, 8)}`;
             db.insertQueueEntry({ id: entryId, meshId, message: 'find me', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
@@ -362,13 +389,13 @@ describe('beads-db', () => {
 
     describe('findAssignedBySession', () => {
         afterEach(() => {
-            __resetBeadsDBForTests();
+            __resetMeshRuntimeStoreForTests();
         });
 
         it('returns the assigned entry for a session', () => {
             const meshId = `mesh-assigned-sess-${randomUUID().slice(0, 8)}`;
             const sessionId = `sess-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             db.insertQueueEntry({ id: 'task-assigned-1', meshId, message: 'assigned task', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
             // Claim it so it becomes assigned
@@ -387,7 +414,7 @@ describe('beads-db', () => {
         it('respects occurredAt filter — ignores entries updated after occurredAt cutoff', () => {
             const meshId = `mesh-assigned-cutoff-${randomUUID().slice(0, 8)}`;
             const sessionId = `sess-cutoff-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             db.insertQueueEntry({ id: 'task-cutoff-1', meshId, message: 'cutoff task', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
             // Claim just now — updatedAt is current time
@@ -410,12 +437,12 @@ describe('beads-db', () => {
 
     describe('getQueueStatsByStatus', () => {
         afterEach(() => {
-            __resetBeadsDBForTests();
+            __resetMeshRuntimeStoreForTests();
         });
 
         it('returns accurate counts by status via SQL GROUP BY', () => {
             const meshId = `mesh-stats-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             const now = new Date().toISOString();
 
             // Insert 3 tasks
@@ -442,19 +469,19 @@ describe('beads-db', () => {
         });
 
         it('returns empty array for a mesh with no tasks', () => {
-            const stats = BeadsDB.getInstance().getQueueStatsByStatus('empty-mesh-xyz-never-used');
+            const stats = MeshRuntimeStore.getInstance().getQueueStatsByStatus('empty-mesh-xyz-never-used');
             expect(stats).toEqual([]);
         });
     });
 
     describe('getActiveAssignmentDetails', () => {
         afterEach(() => {
-            __resetBeadsDBForTests();
+            __resetMeshRuntimeStoreForTests();
         });
 
         it('returns node, session, and message for assigned tasks', () => {
             const meshId = `mesh-active-details-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             const now = new Date().toISOString();
             db.insertQueueEntry({ id: 'detail-t1', meshId, message: 'task message', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
             db.insertQueueEntry({ id: 'detail-t2', meshId, message: 'pending task', status: 'pending', createdAt: now, updatedAt: now });
@@ -473,12 +500,12 @@ describe('beads-db', () => {
 
     describe('insertQueueEntry + updateQueueEntry round-trip', () => {
         afterEach(() => {
-            __resetBeadsDBForTests();
+            __resetMeshRuntimeStoreForTests();
         });
 
         it('insertQueueEntry persists and updateQueueEntry modifies in place', () => {
             const meshId = `mesh-roundtrip-${randomUUID().slice(0, 8)}`;
-            const db = BeadsDB.getInstance();
+            const db = MeshRuntimeStore.getInstance();
             const entryId = `roundtrip-${randomUUID().slice(0, 8)}`;
             const now = new Date().toISOString();
 

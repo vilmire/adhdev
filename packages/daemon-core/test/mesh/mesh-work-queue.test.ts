@@ -12,7 +12,7 @@ import {
     getMeshQueueStats,
     __clearMeshQueueForTests,
     __replaceMeshQueueForTests,
-    __resetBeadsDBForTests
+    __resetMeshRuntimeStoreForTests
 } from '../../src/mesh/mesh-work-queue.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
 
@@ -29,7 +29,7 @@ describe('Mesh Work Queue (GUPP)', () => {
 
     afterEach(() => {
         __clearMeshQueueForTests(meshId);
-        __resetBeadsDBForTests();
+        __resetMeshRuntimeStoreForTests();
         if (fs.existsSync(queuePath)) {
             fs.unlinkSync(queuePath);
         }
@@ -45,7 +45,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(queue[0].id).to.equal(task.id);
     });
 
-    it('imports an existing JSON queue into BeadsDB on first read', () => {
+    it('imports an existing JSON queue into MeshRuntimeStore on first read', () => {
         const now = new Date().toISOString();
         const legacyTask = {
             id: 'legacy-task-1',
@@ -56,7 +56,7 @@ describe('Mesh Work Queue (GUPP)', () => {
             updatedAt: now,
         };
         fs.writeFileSync(queuePath, JSON.stringify([legacyTask], null, 2), 'utf-8');
-        __resetBeadsDBForTests();
+        __resetMeshRuntimeStoreForTests();
 
         const queue = getQueue(meshId);
 

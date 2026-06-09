@@ -4,9 +4,9 @@ import * as path from 'path'
 import { randomUUID } from 'crypto'
 import { tmpdir } from 'os'
 
-// Isolate all file I/O (ledger JSONL, BeadsDB, pending events) to a per-run
+// Isolate all file I/O (ledger JSONL, MeshRuntimeStore, pending events) to a per-run
 // temp directory so test runs never pollute the production ~/.adhdev/mesh-ledger.
-// Without this mock, insertDirectDispatch writes to the real beads.db and the
+// Without this mock, insertDirectDispatch writes to the real mesh-runtime.db and the
 // entries are never cleaned up — causing staleDirectWorkSummary.count to grow
 // by 4 per test run across the production coordinator view.
 const testTmpDir = path.join(tmpdir(), `adhdev-mesh-events-test-${randomUUID().slice(0, 8)}`)
@@ -46,7 +46,7 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
 }))
 
 import { __resetIdleAutoFastForwardForTests, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
-import { __clearMeshQueueForTests, __resetBeadsDBForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 
 function createComponents(meshId = 'mesh_inline_1') {
@@ -96,7 +96,7 @@ function cleanupMeshFiles(meshId: string) {
   const ledgerPath = path.join(getLedgerDir(), `${meshId}.jsonl`)
   const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
   __clearMeshQueueForTests(meshId)
-  __resetBeadsDBForTests()
+  __resetMeshRuntimeStoreForTests()
   __resetIdleAutoFastForwardForTests()
   fastForwardMocks.fastForwardMeshNode.mockReset()
   if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
