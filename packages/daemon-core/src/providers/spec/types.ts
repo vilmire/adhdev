@@ -268,6 +268,12 @@ export interface CliSpec {
          *  Absorbs per-frame flicker in TUIs that stream output through
          *  the same region as the spinner. */
         busy_hold_ms?: number;
+        /** Min time the idle state must remain matched before it is
+         *  committed. Filters transient idle flickers that appear during
+         *  approval dismissals, layout reflows, or brief spinner gaps.
+         *  Any non-idle reading within the window cancels the transition.
+         *  When omitted the idle transition is immediate (legacy behaviour). */
+        idle_hold_ms?: number;
         /** Min time after start() before a send_message is allowed to
          *  reach the PTY. Banner paints + auth flows + skill listings
          *  can keep the agent unable to accept input for several seconds

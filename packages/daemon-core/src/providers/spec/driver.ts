@@ -218,6 +218,11 @@ export class SpecDriver {
      *  explicit wake-up there's nothing to trigger the busy → idle
      *  downshift. */
     private busyExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Pending idle-commit timer. Armed when the evaluator first returns idle;
+     *  fires after idle_hold_ms if no non-idle reading has cancelled it. */
+    private idleHoldTimer: ReturnType<typeof setTimeout> | null = null;
+    /** State snapshot captured when the idle hold was armed — emitted on commit. */
+    private pendingIdleState: SpecEvaluation['state'] | null = null;
     private specWatcher: fs.FSWatcher | null = null;
 
     constructor(private readonly opts: SpecDriverOpts) {
@@ -277,8 +282,15 @@ export class SpecDriver {
     shutdown(): void {
         for (const t of this.delegateTimers.values()) clearTimeout(t);
         this.delegateTimers.clear();
+        this.cancelIdleHold();
+        if (this.busyExpiryTimer) { clearTimeout(this.busyExpiryTimer); this.busyExpiryTimer = null; }
         this.specWatcher?.close();
         this.adapter.kill();
+    }
+
+    private cancelIdleHold(): void {
+        if (this.idleHoldTimer) { clearTimeout(this.idleHoldTimer); this.idleHoldTimer = null; }
+        this.pendingIdleState = null;
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -415,12 +427,57 @@ export class SpecDriver {
         if (evState.id === 'busy') {
             this.lastBusyAt = Date.now();
             this.lastBusyState = evState;
+            // Cancel any pending idle commit — non-idle reading invalidates it.
+            this.cancelIdleHold();
             // Schedule a re-evaluation when the hold window expires. PTYs
             // typically stop emitting once the agent stops printing (the
             // footer settles), so without an explicit timer the driver
             // never wakes up to downshift to idle and the dashboard sees
             // status stuck at generating long after the turn ended.
             this.scheduleBusyExpiry(busyWakeMs);
+        } else if (evState.id !== this.currentStateId && evState.id !== 'busy') {
+            // Non-busy modal states (approval, picker, signing_in) also cancel
+            // any in-flight idle hold — they are higher-priority than idle.
+            if (evState.id !== (this.spec.default_state ?? 'idle')) {
+                this.cancelIdleHold();
+            }
+        }
+
+        // Idle hold: if idle_hold_ms is set, don't commit idle immediately.
+        // Arm a timer; if a non-idle reading arrives before it fires, cancel.
+        const idleHoldMs = this.spec.debounce?.idle_hold_ms ?? 0;
+        const isIdleState = evState.id === (this.spec.default_state ?? 'idle');
+        if (isIdleState && idleHoldMs > 0 && this.currentStateId !== evState.id) {
+            if (!this.idleHoldTimer) {
+                this.pendingIdleState = evState;
+                this.idleHoldTimer = setTimeout(() => {
+                    this.idleHoldTimer = null;
+                    const committed = this.pendingIdleState;
+                    this.pendingIdleState = null;
+                    if (!committed) return;
+                    LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] idleHold committed after ${idleHoldMs}ms`);
+                    this.currentStateId = committed.id;
+                    this.currentEval = ev;
+                    this.emit({
+                        kind: 'state_changed',
+                        state: committed,
+                        modal: null,
+                        controls: ev.controls.map(c => ({ id: c.id, label: c.label, action_type: c.actionType })),
+                    });
+                    this.armOrCancelDelegateTimers(committed.id);
+                    if (this.opts.emitTrace) this.emit({ kind: 'spec_trace', entries: ev.trace });
+                }, idleHoldMs);
+            }
+            // Don't fall through to the normal changed/emit path for idle.
+            this.currentEval = ev;
+            const graceMs2 = this.spec.debounce?.startup_grace_ms ?? STARTUP_GRACE_MS;
+            if (!this.idleSeenOnce && Date.now() - this.startedAtMs >= graceMs2) {
+                this.idleSeenOnce = true;
+                const queued = this.pendingSends.splice(0);
+                for (const text of queued) setTimeout(() => this.actuallySendMessage(text), 50);
+            }
+            if (this.pickerInProgress) this.tryAdvancePicker(screen);
+            return;
         }
 
         const changed = forceEmit
