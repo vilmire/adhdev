@@ -501,7 +501,20 @@ export class CliStateEngine {
 
         if (this.maybeCommitVisibleIdleTranscript(session, parsedMessages, snap)) return;
 
-        const lastParsedAssistant = [...parsedMessages].reverse().find((m) => m.role === 'assistant');
+        // When waiting for a response, only consider assistant messages from the
+        // current turn (after currentTurnScope.startedAt) as evidence that a
+        // response has arrived. Without this, a previous turn's assistant message
+        // satisfies hasAssistantTurn in applyIdle and triggers a premature idle
+        // transition before the current turn's response is generated.
+        const turnStartedAt = this.isWaitingForResponse && this.currentTurnScope
+            ? this.currentTurnScope.startedAt
+            : 0;
+        const lastParsedAssistant = [...parsedMessages].reverse().find((m) => {
+            if (m.role !== 'assistant') return false;
+            if (!turnStartedAt) return true;
+            const msgTs = (m as any).receivedAt ?? (m as any).timestamp ?? 0;
+            return !msgTs || msgTs >= turnStartedAt;
+        });
 
         if (
             this.currentTurnScope
