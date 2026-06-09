@@ -307,9 +307,13 @@ export class SpecDriver {
 
     private armSpecWatcher(): void {
         try {
-            this.specWatcher = fs.watch(this.opts.specPath, { persistent: false }, () => {
-                // Re-read; if it parses, replace and re-evaluate. Errors are
-                // surfaced to the dashboard so the spec author sees them live.
+            // Watch the parent directory so we catch atomic replacements
+            // (cp, install scripts) that create a new inode — a file-level
+            // watch misses those on macOS because the original inode is gone.
+            const dir = path.dirname(this.opts.specPath);
+            const base = path.basename(this.opts.specPath);
+            this.specWatcher = fs.watch(dir, { persistent: false }, (_event, filename) => {
+                if (filename && filename !== base) return;
                 const res = loadSpec(this.opts.specPath);
                 if (!res.ok) { this.emit({ kind: 'spec_error', errors: res.errors }); return; }
                 this.spec = res.spec;
