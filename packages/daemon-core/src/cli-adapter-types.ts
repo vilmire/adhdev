@@ -9,6 +9,7 @@ import type { InteractivePrompt, InteractivePromptResponse } from './providers/t
 
 export interface CliAdapterStatus {
     status?: string;
+    parsedStatus?: string;
     messages?: ChatMessage[];
     activeModal?: {
         message: string;

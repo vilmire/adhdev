@@ -170,7 +170,9 @@ export class SpecCliAdapter implements CliAdapter {
         if (this.activeInteractivePrompt) {
             return { status: 'waiting_approval', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
         }
-        return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
+        // parsedStatus mirrors status so cli-state-engine's shouldHoldGenerating
+        // can release the hold when PTY is idle and no interactive prompt is active.
+        return { status: 'idle', parsedStatus: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
     }
 
     private maybeRefreshNativeHistory(): void {
