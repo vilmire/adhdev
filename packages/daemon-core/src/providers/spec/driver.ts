@@ -337,7 +337,7 @@ export class SpecDriver {
         if (this.busyExpiryTimer) clearTimeout(this.busyExpiryTimer);
         this.busyExpiryTimer = setTimeout(() => {
             this.busyExpiryTimer = null;
-            LOG.info('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] busyExpiry fired holdMs=${holdMs}`);
+            LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] busyExpiry fired holdMs=${holdMs}`);
             this.reevaluate();
         }, Math.max(holdMs + 50, 100));
     }
@@ -376,7 +376,7 @@ export class SpecDriver {
                 if (completionKey !== this.completionIdleKey) {
                     this.completionIdleKey = completionKey;
                     this.completionIdleFirstSeenAt = now;
-                    LOG.info('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] completion_idle_after matched: key="${completionKey}"`);
+                    LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] completion_idle_after matched: key="${completionKey}"`);
                 }
                 const holdMs = Math.max(0, completionIdleRule.hold_ms || 0);
                 const forceAfterMs = typeof completionIdleRule.force_after_ms === 'number'
@@ -386,7 +386,7 @@ export class SpecDriver {
                 if (ageMs >= holdMs) {
                     const targetMatches = matchesCompletionIdleTargetState(this.spec, ev, screen, cursor);
                     const forced = !targetMatches && forceAfterMs !== null && ageMs >= holdMs + forceAfterMs;
-                    LOG.info('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] completion_idle_after hold expired ageMs=${ageMs} targetState=${targetMatches} forced=${forced} screenTail="${screen.split(/\r?\n/).slice(-3).join('\\n').slice(-200)}"`);
+                    LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] completion_idle_after hold expired ageMs=${ageMs} targetState=${targetMatches} forced=${forced} screenTail="${screen.split(/\r?\n/).slice(-3).join('\\n').slice(-200)}"`);
                     if (targetMatches || forced) {
                         const idle = this.spec.states.find(state => state.id === this.spec.default_state)
                             ?? this.spec.states.find(state => state.id === 'idle');

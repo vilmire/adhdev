@@ -1273,7 +1273,7 @@ export class CliProviderInstance implements ProviderInstance {
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         const finalAssistantEvidence = this.completionFinalAssistantEvidence(parsed?.messages);
         const allowMissingAssistantTimeout = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
-        LOG.info('CLI', `[${this.type}] finalAssistantEvidence: present=${finalAssistantEvidence.present} source=${finalAssistantEvidence.source} adapterOwnsMessagesElsewhere=${adapterOwnsMessagesElsewhere} parsedStatus=${parsedStatus}`);
+        LOG.debug('CLI', `[${this.type}] finalAssistantEvidence: present=${finalAssistantEvidence.present} source=${finalAssistantEvidence.source} adapterOwnsMessagesElsewhere=${adapterOwnsMessagesElsewhere} parsedStatus=${parsedStatus}`);
         if (!finalAssistantEvidence.present) {
             if (adapterOwnsMessagesElsewhere) {
                 if (finalAssistantEvidence.source === 'external-native') {
@@ -1282,7 +1282,7 @@ export class CliProviderInstance implements ProviderInstance {
                         LOG.info('CLI', `[${this.type}] external transcript probe: msgCount=${probe.msgCount} lastRole=${probe.lastRole || 'none'} lastKind=${probe.lastKind || 'none'} contentLen=${probe.contentLen} sourceMtime=${probe.sourceMtimeMs ?? 'unknown'} mtimeAge=${probe.mtimeAgeMs ?? 'unknown'}ms`);
                         pending.loggedTranscriptProbe = true;
                     }
-                    LOG.info('CLI', `[${this.type}] external-native probe result: lastRole=${probe?.lastRole} contentLen=${probe?.contentLen}`);
+                    LOG.debug('CLI', `[${this.type}] external-native probe result: lastRole=${probe?.lastRole} contentLen=${probe?.contentLen}`);
                     if (probe?.lastRole === 'assistant' && (probe.contentLen ?? 0) > 0) {
                         return null;
                     }
@@ -1295,7 +1295,7 @@ export class CliProviderInstance implements ProviderInstance {
                     return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout };
                 }
             } else {
-                LOG.info('CLI', `[${this.type}] missing_final_assistant (not ownsExternal) requiresFinalAssistant=${!!(this.provider as any).requiresFinalAssistantBeforeIdle}`);
+                LOG.debug('CLI', `[${this.type}] missing_final_assistant (not ownsExternal) requiresFinalAssistant=${!!(this.provider as any).requiresFinalAssistantBeforeIdle}`);
                 return {
                     reason: 'missing_final_assistant',
                     terminal: (this.provider as any).requiresFinalAssistantBeforeIdle === true,
@@ -1341,7 +1341,7 @@ export class CliProviderInstance implements ProviderInstance {
         const latestVisibleStatus = externalNativeFinal && isCliGeneratingLikeStatus(latestStatus.status)
             ? 'idle'
             : (latestAutoApproveActive ? 'generating' : latestStatus.status);
-        LOG.info('CLI', `[${this.type}] flush attempt: adapterStatus=${latestStatus.status} latestVisible=${latestVisibleStatus} externalNativeFinal=${!!externalNativeFinal} generatingStartedAt=${this.generatingStartedAt} isWaitingForResponse=${!!(this.adapter as any)?.isWaitingForResponse} hasPartial=${!!this.adapter.getPartialResponse?.()}`);
+        LOG.debug('CLI', `[${this.type}] flush attempt: adapterStatus=${latestStatus.status} latestVisible=${latestVisibleStatus} externalNativeFinal=${!!externalNativeFinal} generatingStartedAt=${this.generatingStartedAt} isWaitingForResponse=${!!(this.adapter as any)?.isWaitingForResponse} hasPartial=${!!this.adapter.getPartialResponse?.()}`);
         if (latestVisibleStatus !== 'idle') {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
             this.completedDebouncePending = null;
@@ -1353,7 +1353,7 @@ export class CliProviderInstance implements ProviderInstance {
         if (block) {
             const blockReason = block.reason;
             const waitedMs = Date.now() - pending.firstObservedAt;
-            LOG.info('CLI', `[${this.type}] finalization block: reason=${blockReason} terminal=${block.terminal} waitedMs=${waitedMs} maxWait=${COMPLETED_FINALIZATION_MAX_WAIT_MS}`);
+            LOG.debug('CLI', `[${this.type}] finalization block: reason=${blockReason} terminal=${block.terminal} waitedMs=${waitedMs} maxWait=${COMPLETED_FINALIZATION_MAX_WAIT_MS}`);
             if ((block.terminal && !block.allowTimeout) || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS) {
                 if (pending.loggedBlockReason !== blockReason) {
                     LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
@@ -1502,7 +1502,7 @@ export class CliProviderInstance implements ProviderInstance {
                 // after completing. Ignore this blip — do not cancel the pending
                 // completion and do not advance lastStatus to generating.
                 if (this.completedDebouncePending && this.generatingStartedAt === 0) {
-                    LOG.info('CLI', `[${this.type}] ignoring post-completion PTY generating blip (generatingStartedAt=0)`);
+                    LOG.debug('CLI', `[${this.type}] ignoring post-completion PTY generating blip (generatingStartedAt=0)`);
                     return;
                 }
                 this.suppressIdleHistoryReplay = false;
@@ -1608,7 +1608,7 @@ export class CliProviderInstance implements ProviderInstance {
                     };
                     const ownsExternalHistory = !!(this.adapter as any)?.chatMessagesOwnedExternally;
                     const flushDelay = ownsExternalHistory ? 0 : 3000;
-                    LOG.info('CLI', `[${this.type}] set completedDebouncePending duration=${duration}s ownsExternalHistory=${ownsExternalHistory} flushDelay=${flushDelay}ms generatingStartedAt=${this.generatingStartedAt}`);
+                    LOG.debug('CLI', `[${this.type}] set completedDebouncePending duration=${duration}s ownsExternalHistory=${ownsExternalHistory} flushDelay=${flushDelay}ms generatingStartedAt=${this.generatingStartedAt}`);
                     this.scheduleCompletedDebounceFlush(flushDelay);
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {
