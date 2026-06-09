@@ -20,6 +20,7 @@
 
 import { SpecDriver, type DashboardEvent } from './driver.js';
 import { evaluate } from './evaluator.js';
+import { executeNativeHistory } from './native-history-executor.js';
 import { loadSpec } from './loader.js';
 import type { CliSpec } from './types.js';
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
@@ -540,6 +541,27 @@ export class SpecCliAdapter implements CliAdapter {
         const screen = this.driver.getScreen?.() ?? '';
         const history = this.driver.getStateHistory();
         const status = this.getStatus();
+        
+        let messages: any[] = [];
+        if (this.spec.native_history?.source) {
+            try {
+                const result = executeNativeHistory(this.spec.native_history, {
+                    agentType: this.cliType,
+                    providerSessionId: this.providerSessionId,
+                    sessionStartedAtMs: this.spawnedAtMs,
+                    envOverrides: this.spawnedEnv,
+                    workspace: this.workingDir,
+                });
+                if (result && Array.isArray(result.messages)) {
+                    messages = result.messages;
+                }
+            } catch (e) {
+                // Ignore native history read errors in debug state
+            }
+        } else {
+            messages = this.readClaudeScreenAssistantMessages();
+        }
+
         return {
             type: this.cliType,
             name: this.cliName,
@@ -551,6 +573,8 @@ export class SpecCliAdapter implements CliAdapter {
             sections: this.driver.getSections?.() ?? null,
             stateHistory: history,
             specPath: (this.driver as any).opts?.specPath ?? null,
+            messages,
+            committedMessages: messages,
         };
     }
 
