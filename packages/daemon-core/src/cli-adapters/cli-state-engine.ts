@@ -555,17 +555,10 @@ export class CliStateEngine {
         // The real completion gate is applyIdle's idleFinishCandidate +
         // idleFinish timeout, which requires stable quiet AND a parsed
         // assistant message.
-        // parsedStatus==='idle' with no messages means the provider owns history
-        // externally (e.g. SpecCliAdapter always returns messages:[]) and is
-        // explicitly confirming the session is idle. Treat that as sufficient to
-        // release the hold — the native-history gate in cli-provider-instance
-        // handles assistant-presence verification for those providers.
-        const parsedExplicitlyIdle = parsedStatus === 'idle' && parsedMessages.length === 0;
         const shouldHoldGenerating = status === 'idle'
             && this.isWaitingForResponse
             && !!this.currentTurnScope
             && !modal
-            && !parsedExplicitlyIdle
             && !(parsedStatus === 'idle' && !!lastParsedAssistant);
 
         if (shouldHoldGenerating) { this.applyHoldGenerating(ctx); return; }
