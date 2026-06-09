@@ -222,6 +222,50 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     })).toEqual(['\r', '\r', '\r']);
   });
 
+  it('builds per-key TUI steps for non-first numbered choices', () => {
+    const screen = [
+      '☐ RPS R1 1라운드 — 가위바위보! 무엇을 내시겠어요?',
+      '❯ 1. 가위',
+      '  2. 바위',
+      '  3. 보',
+      '  4. Type something.',
+      '────────────────────────────────────────────────',
+      '  5. Chat about thisEnter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'rps-choices', createdAt: 1234 });
+
+    expect(prompt?.questions[0].options.map(option => option.label)).toEqual([
+      '가위',
+      '바위',
+      '보',
+      'Type something.',
+    ]);
+
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
+      promptId: 'rps-choices',
+      answers: {
+        q1: { selectedLabels: ['바위'] },
+      },
+    })).toEqual(['\x1b[B', '\r', '\r']);
+
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
+      promptId: 'rps-choices',
+      answers: {
+        q1: { selectedLabels: ['보'] },
+      },
+    })).toEqual(['\x1b[B', '\x1b[B', '\r', '\r']);
+
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
+      promptId: 'rps-choices',
+      answers: {
+        q1: { selectedLabels: ['가위'] },
+      },
+    })).toEqual(['\r', '\r']);
+  });
+
   it('captures the headerless picker variant where ☐ marker prefixes the question line', () => {
     // claude-cli >=2.1 ships a compact variant where the section header and
     // the question share one line (e.g. "☐ RPS R1 1라운드 — 가위바위보!").

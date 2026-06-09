@@ -353,7 +353,10 @@ export function buildClaudeInteractiveTuiAnswerSteps(
     if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
     const selectedIndex = question.options.findIndex(option => option.label === answer.selectedLabels[0]);
     if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
-    steps.push(`${'\x1b[B'.repeat(selectedIndex)}\r`);
+    for (let i = 0; i < selectedIndex; i += 1) {
+      steps.push('\x1b[B');
+    }
+    steps.push('\r');
   }
   steps.push('\r');
   return steps;
