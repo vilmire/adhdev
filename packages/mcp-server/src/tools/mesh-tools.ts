@@ -3355,6 +3355,38 @@ export async function meshSendTask(
                     nextAction: `Relaunch the target session on node '${args.node_id}' or retry without session_id so Repo Mesh can pick a session with provider metadata.`,
                 });
             }
+            // Apply delivery policy: check session status and decide immediate vs queued vs rejected.
+            // Busy/generating sessions must not receive immediate send_chat injection.
+            if (explicitTargetSession && !isIdleSessionRecord(explicitTargetSession) && !isTerminalSessionRecord(explicitTargetSession)) {
+                const sessionStatus = typeof explicitTargetSession?.status === 'string' ? explicitTargetSession.status : 'unknown';
+                const { createSessionDelivery: createDelivery, resolveDeliveryDecision } = await import('@adhdev/daemon-core');
+                const policyResult = resolveDeliveryDecision(sessionStatus, { kind: 'task' });
+                if (policyResult.decision === 'queued') {
+                    const delivery = createDelivery({
+                        meshId: ctx.mesh.id,
+                        nodeId: args.node_id,
+                        sessionId: args.session_id,
+                        providerType: resolvedProviderType,
+                        kind: 'task',
+                        message: args.message,
+                        status: 'queued',
+                    });
+                    return JSON.stringify({
+                        success: true,
+                        dispatched: false,
+                        decision: 'queued_delivery',
+                        deliveryId: delivery.id,
+                        reason: policyResult.reason,
+                        nodeId: args.node_id,
+                        sessionId: args.session_id,
+                        sessionStatus,
+                        taskMode: taskMode || undefined,
+                        message: policyResult.message,
+                        nextAction: `Use mesh_status to watch for session idle transition, or use mesh_enqueue_task for queue-based assignment. Check deliveryId '${delivery.id}' to track queued delivery.`,
+                    });
+                }
+            }
+
             // Detect whether the session was idle at dispatch time. An idle session that
             // receives agent_command/send_chat should transition to generating. If it stays
             // idle, the dispatch was not acknowledged. Record this for stale detection and
@@ -3421,11 +3453,29 @@ export async function meshSendTask(
                 dispatchedToIdleSession: sessionWasIdle,
                 dispatchedAt,
             });
+            // Create a delivery record for session-level ACK tracking
+            let deliveryId: string | undefined;
+            try {
+                const { createSessionDelivery: createDelivery } = await import('@adhdev/daemon-core');
+                const delivery = createDelivery({
+                    meshId: ctx.mesh.id,
+                    nodeId: args.node_id,
+                    sessionId: args.session_id,
+                    providerType: resolvedProviderType || undefined,
+                    taskId,
+                    kind: 'task',
+                    message: args.message,
+                    status: sessionWasIdle ? 'delivered' : 'delivering',
+                });
+                deliveryId = delivery.id;
+            } catch { /* best-effort */ }
             return JSON.stringify({
                 success: true,
                 dispatched: true,
+                decision: 'immediate',
                 source: 'direct',
                 taskId,
+                deliveryId,
                 taskMode,
                 providerType: resolvedProviderType,
                 nodeId: args.node_id,

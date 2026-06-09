@@ -143,6 +143,49 @@ export class MeshRuntimeStore {
                 metadata TEXT,
                 PRIMARY KEY (node_id, session_id)
             );
+
+            CREATE TABLE IF NOT EXISTS mesh_session_delivery (
+                id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                node_id TEXT,
+                session_id TEXT,
+                provider_type TEXT,
+                task_id TEXT,
+                kind TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                message TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                deliver_after TEXT,
+                expires_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                source_coordinator_session_id TEXT,
+                source_coordinator_daemon_id TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_mesh_status
+                ON mesh_session_delivery(mesh_id, status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_session
+                ON mesh_session_delivery(mesh_id, session_id, status);
+            CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_task
+                ON mesh_session_delivery(mesh_id, task_id);
+
+            CREATE TABLE IF NOT EXISTS mesh_completion_conflicts (
+                id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                conflicting_task_id TEXT,
+                conflicting_session_id TEXT,
+                original_task_id TEXT,
+                original_session_id TEXT,
+                event TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_completion_conflicts_mesh
+                ON mesh_completion_conflicts(mesh_id, created_at);
         `);
     }
 
@@ -546,5 +589,181 @@ export class MeshRuntimeStore {
 
     pruneExpiredRemoteIdleSessions(): void {
         this.db.prepare('DELETE FROM remote_idle_sessions WHERE expires_at <= ?').run(Date.now());
+    }
+
+    // ── Session Delivery Queue ───────────────────────────────────────────────
+
+    insertSessionDelivery(entry: {
+        id: string;
+        meshId: string;
+        nodeId?: string;
+        sessionId?: string;
+        providerType?: string;
+        taskId?: string;
+        kind: string;
+        priority?: number;
+        message: string;
+        status: string;
+        deliverAfter?: string;
+        expiresAt?: string;
+        sourceCoordinatorSessionId?: string;
+        sourceCoordinatorDaemonId?: string;
+        createdAt: string;
+        updatedAt: string;
+    }): void {
+        this.db.prepare(`
+            INSERT OR REPLACE INTO mesh_session_delivery (
+                id, mesh_id, node_id, session_id, provider_type, task_id, kind, priority,
+                message, status, deliver_after, expires_at, attempt_count,
+                source_coordinator_session_id, source_coordinator_daemon_id,
+                last_error, created_at, updated_at
+            ) VALUES (
+                @id, @meshId, @nodeId, @sessionId, @providerType, @taskId, @kind, @priority,
+                @message, @status, @deliverAfter, @expiresAt, 0,
+                @sourceCoordinatorSessionId, @sourceCoordinatorDaemonId,
+                NULL, @createdAt, @updatedAt
+            )
+        `).run({
+            id: entry.id,
+            meshId: entry.meshId,
+            nodeId: entry.nodeId ?? null,
+            sessionId: entry.sessionId ?? null,
+            providerType: entry.providerType ?? null,
+            taskId: entry.taskId ?? null,
+            kind: entry.kind,
+            priority: entry.priority ?? 0,
+            message: entry.message,
+            status: entry.status,
+            deliverAfter: entry.deliverAfter ?? null,
+            expiresAt: entry.expiresAt ?? null,
+            sourceCoordinatorSessionId: entry.sourceCoordinatorSessionId ?? null,
+            sourceCoordinatorDaemonId: entry.sourceCoordinatorDaemonId ?? null,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+        });
+        this.maybeCheckpointWal();
+    }
+
+    updateSessionDeliveryStatus(id: string, status: string, opts?: { lastError?: string; incrementAttempt?: boolean }): void {
+        const now = new Date().toISOString();
+        if (opts?.incrementAttempt) {
+            this.db.prepare(`
+                UPDATE mesh_session_delivery
+                SET status = @status, last_error = @lastError, attempt_count = attempt_count + 1, updated_at = @updatedAt
+                WHERE id = @id
+            `).run({ id, status, lastError: opts?.lastError ?? null, updatedAt: now });
+        } else {
+            this.db.prepare(`
+                UPDATE mesh_session_delivery
+                SET status = @status, last_error = @lastError, updated_at = @updatedAt
+                WHERE id = @id
+            `).run({ id, status, lastError: opts?.lastError ?? null, updatedAt: now });
+        }
+    }
+
+    getActiveSessionDeliveries(meshId: string, sessionId?: string): Array<{
+        id: string; meshId: string; nodeId: string | null; sessionId: string | null;
+        providerType: string | null; taskId: string | null; kind: string; priority: number;
+        message: string; status: string; deliverAfter: string | null; expiresAt: string | null;
+        attemptCount: number; sourceCoordinatorSessionId: string | null;
+        sourceCoordinatorDaemonId: string | null; lastError: string | null;
+        createdAt: string; updatedAt: string;
+    }> {
+        const now = new Date().toISOString();
+        const sql = sessionId
+            ? `SELECT * FROM mesh_session_delivery WHERE mesh_id = ? AND session_id = ? AND status NOT IN ('delivered','completed','failed','expired','cancelled') AND (expires_at IS NULL OR expires_at > ?) ORDER BY priority DESC, created_at ASC`
+            : `SELECT * FROM mesh_session_delivery WHERE mesh_id = ? AND status NOT IN ('delivered','completed','failed','expired','cancelled') AND (expires_at IS NULL OR expires_at > ?) ORDER BY priority DESC, created_at ASC`;
+        const rows = sessionId
+            ? this.db.prepare(sql).all(meshId, sessionId, now) as Array<Record<string, unknown>>
+            : this.db.prepare(sql).all(meshId, now) as Array<Record<string, unknown>>;
+        return rows.map(r => ({
+            id: r.id as string,
+            meshId: r.mesh_id as string,
+            nodeId: r.node_id as string | null,
+            sessionId: r.session_id as string | null,
+            providerType: r.provider_type as string | null,
+            taskId: r.task_id as string | null,
+            kind: r.kind as string,
+            priority: r.priority as number,
+            message: r.message as string,
+            status: r.status as string,
+            deliverAfter: r.deliver_after as string | null,
+            expiresAt: r.expires_at as string | null,
+            attemptCount: r.attempt_count as number,
+            sourceCoordinatorSessionId: r.source_coordinator_session_id as string | null,
+            sourceCoordinatorDaemonId: r.source_coordinator_daemon_id as string | null,
+            lastError: r.last_error as string | null,
+            createdAt: r.created_at as string,
+            updatedAt: r.updated_at as string,
+        }));
+    }
+
+    expireStaleSessionDeliveries(meshId: string): void {
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            UPDATE mesh_session_delivery
+            SET status = 'expired', updated_at = ?
+            WHERE mesh_id = ? AND expires_at IS NOT NULL AND expires_at <= ?
+              AND status NOT IN ('delivered','completed','failed','expired','cancelled')
+        `).run(now, meshId, now);
+    }
+
+    deleteSessionDeliveries(meshId: string): void {
+        this.db.prepare('DELETE FROM mesh_session_delivery WHERE mesh_id = ?').run(meshId);
+    }
+
+    // ── Completion Conflict Diagnostics ──────────────────────────────────────
+
+    recordCompletionConflict(entry: {
+        id: string;
+        meshId: string;
+        fingerprint: string;
+        conflictingTaskId?: string;
+        conflictingSessionId?: string;
+        originalTaskId?: string;
+        originalSessionId?: string;
+        event: string;
+        createdAt: string;
+    }): void {
+        this.db.prepare(`
+            INSERT OR IGNORE INTO mesh_completion_conflicts
+                (id, mesh_id, fingerprint, conflicting_task_id, conflicting_session_id,
+                 original_task_id, original_session_id, event, created_at)
+            VALUES (@id, @meshId, @fingerprint, @conflictingTaskId, @conflictingSessionId,
+                    @originalTaskId, @originalSessionId, @event, @createdAt)
+        `).run({
+            id: entry.id,
+            meshId: entry.meshId,
+            fingerprint: entry.fingerprint,
+            conflictingTaskId: entry.conflictingTaskId ?? null,
+            conflictingSessionId: entry.conflictingSessionId ?? null,
+            originalTaskId: entry.originalTaskId ?? null,
+            originalSessionId: entry.originalSessionId ?? null,
+            event: entry.event,
+            createdAt: entry.createdAt,
+        });
+        this.maybeCheckpointWal();
+    }
+
+    getRecentCompletionConflicts(meshId: string, limitMs: number = 60 * 60 * 1000): Array<{
+        id: string; meshId: string; fingerprint: string; conflictingTaskId: string | null;
+        conflictingSessionId: string | null; originalTaskId: string | null;
+        originalSessionId: string | null; event: string; createdAt: string;
+    }> {
+        const cutoff = new Date(Date.now() - limitMs).toISOString();
+        const rows = this.db.prepare(
+            'SELECT * FROM mesh_completion_conflicts WHERE mesh_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 50'
+        ).all(meshId, cutoff) as Array<Record<string, unknown>>;
+        return rows.map(r => ({
+            id: r.id as string,
+            meshId: r.mesh_id as string,
+            fingerprint: r.fingerprint as string,
+            conflictingTaskId: r.conflicting_task_id as string | null,
+            conflictingSessionId: r.conflicting_session_id as string | null,
+            originalTaskId: r.original_task_id as string | null,
+            originalSessionId: r.original_session_id as string | null,
+            event: r.event as string,
+            createdAt: r.created_at as string,
+        }));
     }
 }

@@ -232,6 +232,10 @@ export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHost
 export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript } from './mesh/mesh-events.js';
 export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
 
+// ── Mesh Delivery Policy ──
+export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, recordCompletionConflict, getRecentCompletionConflicts } from './mesh/mesh-delivery-policy.js';
+export type { MeshSessionDeliveryStatus, MeshSessionDeliveryKind, MeshDeliveryDecision, MeshDeliveryPolicyResult, SessionDeliveryRecord } from './mesh/mesh-delivery-policy.js';
+
 // ── Mesh P2P Relay Failure Classification ──
 export {
   P2pRelayFailureError,

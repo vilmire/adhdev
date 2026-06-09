@@ -10,6 +10,7 @@ import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { buildMeshNodeCapabilityTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
+import { createSessionDelivery, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
@@ -499,10 +500,27 @@ function isDuplicateMeshCompletionEvent(args: {
     timestamp?: number | null;
     finalSummary?: string;
     coordinatorDaemonId?: string;
+    taskId?: string;
+    nodeId?: string;
 }): boolean {
     const fingerprint = buildMeshCompletionFingerprint(args);
     if (!fingerprint) return false;
-    if (hasFingerprintSeen(fingerprint)) return true;
+    if (hasFingerprintSeen(fingerprint)) {
+        // Suppressed duplicate — but if we have a taskId and it differs from what the
+        // fingerprint was stamped for, record a conflict diagnostic so it doesn't disappear silently.
+        // (We can't recover the original taskId from the fingerprint alone, so we record
+        //  the conflicting taskId/session as a diagnostic for coordinator inspection.)
+        if (args.taskId) {
+            recordCompletionConflict({
+                meshId: args.meshId,
+                fingerprint,
+                conflictingTaskId: args.taskId,
+                conflictingSessionId: args.sessionId,
+                event: args.event,
+            });
+        }
+        return true;
+    }
     recordFingerprintSeen(fingerprint);
     return false;
 }
@@ -837,13 +855,27 @@ export function tryAssignQueueTask(
     if (node?.daemonId && components.dispatchMeshCommand) {
         const isLocalNode = components.cliManager.adapters.has(sessionId);
         if (!isLocalNode) {
+            // Create delivery record before attempting P2P send
+            const delivery = createSessionDelivery({
+                meshId,
+                nodeId,
+                sessionId,
+                providerType,
+                taskId: task.id,
+                kind: 'task',
+                message: task.message,
+                status: 'delivering',
+            });
             components.dispatchMeshCommand(node.daemonId, 'agent_command', {
                 targetSessionId: sessionId,
                 cliType: providerType,
                 action: 'send_chat',
                 message: task.message,
+            }).then(() => {
+                updateSessionDeliveryStatus(delivery.id, 'delivered');
             }).catch((e: any) => {
                 LOG.error('MeshQueue', `Failed to dispatch task via P2P to remote node ${nodeId}: ${e?.message}`);
+                updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
                 // Revert to pending so the task can be retried rather than permanently failing
                 updateTaskStatus(meshId, task.id, 'pending');
                 try {
@@ -851,7 +883,7 @@ export function tryAssignQueueTask(
                         kind: 'dispatch_failed' as any,
                         nodeId,
                         sessionId,
-                        payload: { taskId: task.id, error: e?.message, retryable: true },
+                        payload: { taskId: task.id, deliveryId: delivery.id, error: e?.message, retryable: true },
                     });
                 } catch { /* ledger write is best-effort */ }
             });
@@ -859,14 +891,27 @@ export function tryAssignQueueTask(
         }
     }
 
-    // Local routing
+    // Local routing — create delivery record before send_chat
+    const delivery = createSessionDelivery({
+        meshId,
+        nodeId,
+        sessionId,
+        providerType,
+        taskId: task.id,
+        kind: 'task',
+        message: task.message,
+        status: 'delivering',
+    });
     components.cliManager.handleCliCommand('agent_command', {
         targetSessionId: sessionId,
         cliType: providerType,
         action: 'send_chat',
         message: task.message,
+    }).then(() => {
+        updateSessionDeliveryStatus(delivery.id, 'delivered');
     }).catch((e: any) => {
         LOG.error('MeshQueue', `Failed to dispatch task locally to node ${nodeId}: ${e?.message}`);
+        updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
         updateTaskStatus(meshId, task.id, 'failed');
     });
 
@@ -1625,6 +1670,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // Scope dedup to the coordinator daemon so two coordinators for the same mesh
             // don't suppress each other's completion events via shared fingerprint table.
             coordinatorDaemonId: workerCoordinatorDaemonId || undefined,
+            taskId: readNonEmptyString(args.metadataEvent.taskId) || undefined,
+            nodeId: eventNodeId || undefined,
         });
         if (duplicateCompletion) {
             LOG.info('MeshEvents', `Suppressed duplicate completion for mesh ${args.meshId} session ${eventSessionId}`);
@@ -1641,6 +1688,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             timestamp: eventTimestamp,
             finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
             coordinatorDaemonId: workerCoordinatorDaemonId || undefined,
+            taskId: readNonEmptyString(args.metadataEvent.taskId) || undefined,
+            nodeId: eventNodeId || undefined,
         });
         if (duplicateStopped) {
             LOG.info('MeshEvents', `Suppressed duplicate stopped event for mesh ${args.meshId} session ${eventSessionId}`);

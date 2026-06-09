@@ -524,4 +524,231 @@ describe('mesh-runtime-store', () => {
             __clearMeshQueueForTests(meshId);
         });
     });
+
+    // ── Phase A0: Direct Dispatch / Delivery Baseline Tests ─────────────────
+    // These tests fix the existing happy-path behavior and confirm key invariants
+    // for stale-direct-work separation and duplicate completion dedup.
+
+    describe('Phase A0: direct dispatch delivery baseline', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        it('A0.1 — idle direct dispatch reaches dispatched → acked → completed', () => {
+            const meshId = `mesh-a0-happy-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-a0-${randomUUID().slice(0, 8)}`;
+
+            insertDirectDispatch(meshId, {
+                taskId: randomUUID(),
+                sessionId,
+                message: 'task for idle session',
+                via: 'local_direct',
+                dispatchedAt: new Date().toISOString(),
+                dispatchedToIdleSession: true,
+            });
+
+            let active = getActiveDirectDispatches(meshId);
+            expect(active).toHaveLength(1);
+            expect(active[0].status).toBe('dispatched');
+            expect(active[0].dispatchedToIdleSession).toBe(true);
+
+            updateDirectDispatchStatus(meshId, sessionId, 'acked');
+            active = getActiveDirectDispatches(meshId);
+            expect(active[0].status).toBe('acked');
+
+            updateDirectDispatchStatus(meshId, sessionId, 'completed');
+            active = getActiveDirectDispatches(meshId);
+            expect(active).toHaveLength(0);
+        });
+
+        it('A0.2 — stale direct dispatch (61 min old) is marked stale and excluded from active', () => {
+            const meshId = `mesh-a0-stale-${randomUUID().slice(0, 8)}`;
+            const staleId = `sess-stale-${randomUUID().slice(0, 8)}`;
+            const freshId = `sess-fresh-${randomUUID().slice(0, 8)}`;
+
+            insertDirectDispatch(meshId, {
+                taskId: randomUUID(),
+                sessionId: staleId,
+                message: 'old task',
+                via: 'local_direct',
+                dispatchedAt: new Date(Date.now() - 61 * 60 * 1000).toISOString(),
+            });
+            insertDirectDispatch(meshId, {
+                taskId: randomUUID(),
+                sessionId: freshId,
+                message: 'fresh task',
+                via: 'local_direct',
+                dispatchedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+            });
+
+            markStaleDirectDispatches(meshId);
+
+            const active = getActiveDirectDispatches(meshId);
+            // Stale entry should be excluded from active (status = 'stale')
+            expect(active.find(d => d.sessionId === staleId)).toBeUndefined();
+            // Fresh entry should still be active
+            expect(active.find(d => d.sessionId === freshId)).toBeDefined();
+        });
+
+        it('A0.3 — stale direct dispatch does NOT mix into active queue count', () => {
+            const meshId = `mesh-a0-count-${randomUUID().slice(0, 8)}`;
+            const staleId = `sess-stale-count-${randomUUID().slice(0, 8)}`;
+
+            insertDirectDispatch(meshId, {
+                taskId: randomUUID(),
+                sessionId: staleId,
+                message: 'stale work',
+                via: 'local_direct',
+                dispatchedAt: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+            });
+
+            markStaleDirectDispatches(meshId);
+
+            // Stale dispatch should not appear in active dispatches
+            const active = getActiveDirectDispatches(meshId);
+            expect(active).toHaveLength(0);
+        });
+
+        it('A0.4 — duplicate completion for same session does not create second active entry', () => {
+            const meshId = `mesh-a0-dedup-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-dedup-${randomUUID().slice(0, 8)}`;
+
+            insertDirectDispatch(meshId, {
+                taskId: randomUUID(),
+                sessionId,
+                message: 'dedup task',
+                via: 'local_direct',
+                dispatchedAt: new Date().toISOString(),
+            });
+
+            // First completion
+            updateDirectDispatchStatus(meshId, sessionId, 'completed');
+            // Second completion attempt (same session) — must not re-activate
+            updateDirectDispatchStatus(meshId, sessionId, 'completed');
+
+            const active = getActiveDirectDispatches(meshId);
+            expect(active).toHaveLength(0);
+        });
+    });
+
+    // ── Phase A1: session_delivery table tests ───────────────────────────────
+
+    describe('Phase A1: mesh_session_delivery table', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        it('insertSessionDelivery persists and getActiveSessionDeliveries returns it', () => {
+            const meshId = `mesh-sdel-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const id = randomUUID();
+            const now = new Date().toISOString();
+            db.insertSessionDelivery({
+                id,
+                meshId,
+                nodeId: 'node-1',
+                sessionId: 'sess-1',
+                providerType: 'claude-cli',
+                taskId: randomUUID(),
+                kind: 'task',
+                priority: 1,
+                message: 'delivery message',
+                status: 'queued',
+                createdAt: now,
+                updatedAt: now,
+            });
+
+            const active = db.getActiveSessionDeliveries(meshId);
+            expect(active).toHaveLength(1);
+            expect(active[0].id).toBe(id);
+            expect(active[0].status).toBe('queued');
+            expect(active[0].sessionId).toBe('sess-1');
+        });
+
+        it('updateSessionDeliveryStatus transitions to terminal and removes from active list', () => {
+            const meshId = `mesh-sdel-update-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const id = randomUUID();
+            const now = new Date().toISOString();
+            db.insertSessionDelivery({ id, meshId, kind: 'task', message: 'msg', status: 'queued', createdAt: now, updatedAt: now });
+
+            db.updateSessionDeliveryStatus(id, 'completed');
+
+            const active = db.getActiveSessionDeliveries(meshId);
+            expect(active).toHaveLength(0);
+        });
+
+        it('expired deliveries do not appear in active list', () => {
+            const meshId = `mesh-sdel-expire-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const id = randomUUID();
+            const now = new Date().toISOString();
+            const alreadyExpired = new Date(Date.now() - 1000).toISOString();
+            db.insertSessionDelivery({ id, meshId, kind: 'task', message: 'expired', status: 'queued', expiresAt: alreadyExpired, createdAt: now, updatedAt: now });
+
+            const active = db.getActiveSessionDeliveries(meshId);
+            expect(active.find(d => d.id === id)).toBeUndefined();
+        });
+
+        it('delivery for different mesh does not appear in other mesh active list', () => {
+            const meshA = `mesh-sdel-a-${randomUUID().slice(0, 8)}`;
+            const meshB = `mesh-sdel-b-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const now = new Date().toISOString();
+            db.insertSessionDelivery({ id: randomUUID(), meshId: meshA, kind: 'task', message: 'a', status: 'queued', createdAt: now, updatedAt: now });
+            db.insertSessionDelivery({ id: randomUUID(), meshId: meshB, kind: 'task', message: 'b', status: 'queued', createdAt: now, updatedAt: now });
+
+            expect(db.getActiveSessionDeliveries(meshA)).toHaveLength(1);
+            expect(db.getActiveSessionDeliveries(meshB)).toHaveLength(1);
+        });
+    });
+
+    // ── Phase A6: completion conflict table tests ────────────────────────────
+
+    describe('Phase A6: mesh_completion_conflicts table', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        it('recordCompletionConflict inserts and getRecentCompletionConflicts retrieves it', () => {
+            const meshId = `mesh-conflict-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const id = randomUUID();
+            const fp = `fp-${randomUUID()}`;
+            db.recordCompletionConflict({
+                id,
+                meshId,
+                fingerprint: fp,
+                conflictingTaskId: 'task-c',
+                conflictingSessionId: 'sess-c',
+                originalTaskId: 'task-o',
+                originalSessionId: 'sess-o',
+                event: 'agent:generating_completed',
+                createdAt: new Date().toISOString(),
+            });
+
+            const conflicts = db.getRecentCompletionConflicts(meshId);
+            expect(conflicts).toHaveLength(1);
+            expect(conflicts[0].fingerprint).toBe(fp);
+            expect(conflicts[0].conflictingTaskId).toBe('task-c');
+        });
+
+        it('returns empty array when no conflicts for mesh', () => {
+            const meshId = `mesh-no-conflict-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            expect(db.getRecentCompletionConflicts(meshId)).toEqual([]);
+        });
+
+        it('duplicate same-id insert is silently ignored (INSERT OR IGNORE)', () => {
+            const meshId = `mesh-conflict-dedup-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const id = randomUUID();
+            const fp = `fp-${randomUUID()}`;
+            db.recordCompletionConflict({ id, meshId, fingerprint: fp, event: 'agent:generating_completed', createdAt: new Date().toISOString() });
+            db.recordCompletionConflict({ id, meshId, fingerprint: fp, event: 'agent:generating_completed', createdAt: new Date().toISOString() });
+
+            const conflicts = db.getRecentCompletionConflicts(meshId);
+            expect(conflicts).toHaveLength(1);
+        });
+    });
 });
