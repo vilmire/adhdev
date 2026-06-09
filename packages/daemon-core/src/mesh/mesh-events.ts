@@ -1631,6 +1631,22 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true };
         }
     }
+    if (args.event === 'agent:stopped' && eventSessionId) {
+        const duplicateStopped = isDuplicateMeshCompletionEvent({
+            meshId: args.meshId,
+            event: args.event,
+            sessionId: eventSessionId,
+            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+            providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
+            timestamp: eventTimestamp,
+            finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+            coordinatorDaemonId: workerCoordinatorDaemonId || undefined,
+        });
+        if (duplicateStopped) {
+            LOG.info('MeshEvents', `Suppressed duplicate stopped event for mesh ${args.meshId} session ${eventSessionId}`);
+            return { success: true, forwarded: 0, suppressed: true, duplicateStopped: true };
+        }
+    }
 
     // ── Task Queue & Ledger ──
     // Helpers that keep queue and direct-dispatch status transitions symmetric.

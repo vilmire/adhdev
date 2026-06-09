@@ -1650,6 +1650,9 @@ export class CliProviderInstance implements ProviderInstance {
                     },
                 });
                 this.generatingStartedAt = 0;
+                // Cancel any pending debounce flush — monitor already fired completion.
+                if (this.completedDebounceTimer) { clearTimeout(this.completedDebounceTimer); this.completedDebounceTimer = null; }
+                this.completedDebouncePending = null;
                 continue;
             }
             this.pushEvent({ event: me.type, agentKey: me.agentKey, message: me.message, elapsedSec: me.elapsedSec, timestamp: me.timestamp });
