@@ -225,6 +225,13 @@ export interface CliSpec {
     delegate?: DelegateTrigger[];
     native_history?: NativeHistoryConfig;
     /**
+     * When true, the daemon's completed-finalization gate will not emit
+     * `generating_completed` until native history confirms the last message
+     * role is `assistant`. Prevents PTY quiet-period from triggering idle
+     * before the CLI has finished writing its response to disk.
+     */
+    requiresFinalAssistantBeforeIdle?: boolean;
+    /**
      * Per-spec debounce knobs. Defaults are conservative (busy_hold_ms
      * 6000) and live in SpecDriver. Spec authors override here when a
      * particular CLI flickers slower/faster than the default.

@@ -125,6 +125,9 @@ export const SCHEMA = {
             "type": "string",
             "minLength": 1
         },
+        "requiresFinalAssistantBeforeIdle": {
+            "type": "boolean"
+        },
         "debounce": {
             "type": "object",
             "additionalProperties": false,

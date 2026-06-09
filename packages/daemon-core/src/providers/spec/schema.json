@@ -61,6 +61,7 @@
         },
         "native_history": { "$ref": "#/definitions/nativeHistory" },
         "cli_version_range": { "type": "string", "minLength": 1 },
+        "requiresFinalAssistantBeforeIdle": { "type": "boolean" },
         "debounce": {
             "type": "object",
             "additionalProperties": false,
