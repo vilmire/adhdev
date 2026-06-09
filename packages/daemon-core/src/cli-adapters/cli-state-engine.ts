@@ -501,20 +501,44 @@ export class CliStateEngine {
 
         if (this.maybeCommitVisibleIdleTranscript(session, parsedMessages, snap)) return;
 
-        // When waiting for a response, only consider assistant messages from the
-        // current turn (after currentTurnScope.startedAt) as evidence that a
-        // response has arrived. Without this, a previous turn's assistant message
-        // satisfies hasAssistantTurn in applyIdle and triggers a premature idle
-        // transition before the current turn's response is generated.
-        const turnStartedAt = this.isWaitingForResponse && this.currentTurnScope
-            ? this.currentTurnScope.startedAt
-            : 0;
-        const lastParsedAssistant = [...parsedMessages].reverse().find((m) => {
-            if (m.role !== 'assistant') return false;
-            if (!turnStartedAt) return true;
-            const msgTs = (m as any).receivedAt ?? (m as any).timestamp ?? 0;
-            return !msgTs || msgTs >= turnStartedAt;
-        });
+        // When waiting for a response, only an assistant message that appears
+        // *after* the current turn's user message in parsedMessages counts as
+        // evidence that the current turn's response has arrived. Without this,
+        // a previous turn's assistant message satisfies hasAssistantTurn in
+        // applyIdle and triggers a premature idle transition.
+        //
+        // Strategy: find the last user message whose content matches (or
+        // starts-with) the current turn prompt. An assistant appearing after
+        // that index in parsedMessages belongs to the current turn. If no such
+        // user message is found yet (the prompt hasn't been echoed back into
+        // parsedMessages), treat lastParsedAssistant as undefined so
+        // shouldHoldGenerating keeps generating alive.
+        let lastParsedAssistant: CliChatMessage | undefined;
+        if (this.isWaitingForResponse && this.currentTurnScope) {
+            const promptSnippet = normalizePromptText(this.currentTurnScope.prompt || '').slice(0, 80);
+            let currentTurnUserIdx = -1;
+            for (let i = parsedMessages.length - 1; i >= 0; i--) {
+                const m = parsedMessages[i];
+                if (m.role === 'user') {
+                    const content = normalizePromptText(String((m as any).content || '')).slice(0, 80);
+                    if (!promptSnippet || content.includes(promptSnippet) || promptSnippet.includes(content)) {
+                        currentTurnUserIdx = i;
+                        break;
+                    }
+                }
+            }
+            if (currentTurnUserIdx >= 0) {
+                for (let i = parsedMessages.length - 1; i > currentTurnUserIdx; i--) {
+                    if (parsedMessages[i].role === 'assistant') {
+                        lastParsedAssistant = parsedMessages[i];
+                        break;
+                    }
+                }
+            }
+            // If currentTurnUserIdx === -1, prompt not yet echoed — no assistant yet
+        } else {
+            lastParsedAssistant = [...parsedMessages].reverse().find((m) => m.role === 'assistant');
+        }
 
         if (
             this.currentTurnScope
