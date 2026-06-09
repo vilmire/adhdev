@@ -22,6 +22,14 @@ interface SpecSnapshot {
     stateHistory: StateHistoryEntry[]
     idleHoldPending: boolean
     lastBusyAt: number
+    // Extended fields
+    name?: string
+    status?: string
+    workingDir?: string
+    spawnedAtMs?: number
+    providerSessionId?: string | null
+    messages?: Array<{ role: string; content: string; receivedAt?: number }>
+    committedMessages?: Array<{ role: string; content: string; receivedAt?: number }>
 }
 
 interface SpecDebugResult {
@@ -180,6 +188,34 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
 
                     {snap && (
                         <>
+                            {/* Provider info */}
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                                {snap.name && (
+                                    <>
+                                        <span className="text-text-secondary">Provider</span>
+                                        <span className="font-mono text-text-primary">{snap.name} <span className="text-text-tertiary">({snap.cliType})</span></span>
+                                    </>
+                                )}
+                                {snap.workingDir && (
+                                    <>
+                                        <span className="text-text-secondary">Working dir</span>
+                                        <span className="font-mono text-text-secondary truncate" title={snap.workingDir}>{snap.workingDir}</span>
+                                    </>
+                                )}
+                                {snap.spawnedAtMs ? (
+                                    <>
+                                        <span className="text-text-secondary">Spawned</span>
+                                        <span className="text-text-secondary">{formatAgo(snap.spawnedAtMs)}</span>
+                                    </>
+                                ) : null}
+                                {snap.providerSessionId && (
+                                    <>
+                                        <span className="text-text-secondary">Session ID</span>
+                                        <span className="font-mono text-text-tertiary text-[10px] truncate" title={snap.providerSessionId}>{snap.providerSessionId}</span>
+                                    </>
+                                )}
+                            </div>
+
                             {/* State summary */}
                             <div className="flex items-center gap-3 flex-wrap">
                                 <div className="flex items-center gap-1.5">
@@ -191,6 +227,12 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                         <span className="text-text-secondary">({snap.current_state.label})</span>
                                     )}
                                 </div>
+                                {snap.status && snap.status !== snap.current_state?.id && (
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-text-secondary">engine:</span>
+                                        <span className={`font-mono ${stateColor(snap.status)}`}>{snap.status}</span>
+                                    </div>
+                                )}
                                 {snap.idleHoldPending && (
                                     <span className="text-yellow-400/80 text-[11px] bg-yellow-500/10 px-1.5 py-0.5 rounded">idle hold pending</span>
                                 )}
@@ -274,6 +316,32 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     </div>
                                 </div>
                             )}
+
+                            {/* Transcript messages */}
+                            {(() => {
+                                const msgs = snap.messages ?? snap.committedMessages ?? []
+                                if (msgs.length === 0) return null
+                                const userCount = msgs.filter(m => m.role === 'user').length
+                                const assistantCount = msgs.filter(m => m.role === 'assistant').length
+                                const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant')
+                                return (
+                                    <div>
+                                        <div className="text-text-secondary text-[11px] uppercase tracking-wide mb-1.5">
+                                            Transcript ({msgs.length} msgs — {userCount}u / {assistantCount}a)
+                                        </div>
+                                        {lastAssistant && (
+                                            <div className="bg-black/20 border border-border-subtle rounded p-2 text-[11px]">
+                                                <div className="text-text-tertiary mb-0.5">
+                                                    Last assistant {lastAssistant.receivedAt ? formatAgo(lastAssistant.receivedAt) : ''}
+                                                </div>
+                                                <div className="text-text-secondary font-mono whitespace-pre-wrap line-clamp-4 break-all">
+                                                    {lastAssistant.content.slice(0, 400)}{lastAssistant.content.length > 400 ? '…' : ''}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )
+                            })()}
 
                             {/* Spec path */}
                             {snap.specPath && (

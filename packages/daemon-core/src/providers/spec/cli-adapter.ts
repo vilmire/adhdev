@@ -341,6 +341,22 @@ export class SpecCliAdapter implements CliAdapter {
                 sections[(sec as any).id] = lines.slice(start, end).join('\n');
             }
         } catch { /* best-effort */ }
+        // Read native transcript messages for the debug snapshot
+        let messages: any[] = [];
+        if (this.spec.native_history?.source) {
+            try {
+                const nhResult = executeNativeHistory(this.spec.native_history, {
+                    agentType: this.cliType,
+                    providerSessionId: this.providerSessionId,
+                    sessionStartedAtMs: this.spawnedAtMs,
+                    envOverrides: this.spawnedEnv,
+                    workspace: this.workingDir,
+                });
+                if (nhResult && Array.isArray(nhResult.messages)) messages = nhResult.messages;
+            } catch { /* best-effort */ }
+        } else {
+            messages = this.readClaudeScreenAssistantMessages();
+        }
         return {
             cliType: this.cliType,
             spec_id: this.spec.id,
@@ -354,6 +370,14 @@ export class SpecCliAdapter implements CliAdapter {
             idleHoldPending: this.driver.hasIdleHoldPending(),
             lastBusyAt: this.driver.getLastBusyAt(),
             specPath: this.driver.getSpecPath(),
+            // Extended fields
+            name: this.cliName,
+            status: this.getStatus().status,
+            workingDir: this.workingDir,
+            spawnedAtMs: this.spawnedAtMs,
+            providerSessionId: this.providerSessionId ?? null,
+            messages,
+            committedMessages: messages,
         };
     }
     getRuntimeMetadata(): unknown {
@@ -562,6 +586,8 @@ export class SpecCliAdapter implements CliAdapter {
             messages = this.readClaudeScreenAssistantMessages();
         }
 
+        const latestState = this.latestState;
+        const latestModal = this.latestModal;
         return {
             type: this.cliType,
             name: this.cliName,
@@ -569,7 +595,18 @@ export class SpecCliAdapter implements CliAdapter {
             rawStatus: status.status,
             projectedStatus: status.status,
             ready: this.spawned,
+            // Legacy snapshot-style fields for panels that read getDebugSnapshot shape
+            spec_id: this.spec.id,
+            current_state: latestState ?? null,
+            current_modal: latestModal ?? null,
+            exited: this.exited,
+            idleHoldPending: this.driver.hasIdleHoldPending?.() ?? false,
+            lastBusyAt: this.driver.getLastBusyAt?.() ?? 0,
+            screen: screen,
             screenText: screen,
+            workingDir: this.workingDir,
+            spawnedAtMs: this.spawnedAtMs,
+            providerSessionId: this.providerSessionId ?? null,
             sections: this.driver.getSections?.() ?? null,
             stateHistory: history,
             specPath: (this.driver as any).opts?.specPath ?? null,
