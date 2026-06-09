@@ -231,7 +231,7 @@ export default function App() {
                                     <Route path="/machines" element={<SingleMachineRedirect />} />
                                     <Route path="/about" element={<StandaloneAbout />} />
                                     <Route path="/settings" element={<StandaloneSettings />} />
-                                    <Route path="/mesh" element={<StandaloneRepoMeshProvider hideHostPairing><RepoMesh /></StandaloneRepoMeshProvider>} />
+                                    <Route path="/mesh" element={<StandaloneRepoMeshProvider><RepoMesh /></StandaloneRepoMeshProvider>} />
                                     <Route path="*" element={<Navigate to="/dashboard" replace />} />
                                 </Routes>
                             </StandaloneLayout>

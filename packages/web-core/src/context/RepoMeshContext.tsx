@@ -166,8 +166,8 @@ export const STANDALONE_FEATURES: RepoMeshFeatures = {
     coordinatorPrompt: true,
     nodeInstruction: true,
     hermesMcpConfig: true,
-    // Standalone-specific: manual multi-machine host pairing
-    hostPairing: true,
+    // Single-machine only — host pairing intentionally disabled
+    hostPairing: false,
 }
 
 export const CLOUD_FEATURES: RepoMeshFeatures = {

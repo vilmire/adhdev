@@ -13,7 +13,7 @@ import { useBaseDaemons } from './BaseDaemonContext'
 import { RepoMeshContext, STANDALONE_FEATURES, type RepoMeshContextValue, type RepoMeshDaemonEntry } from './RepoMeshContext'
 import { extractRepoMeshStatus } from '../utils/repo-mesh-status'
 
-export function StandaloneRepoMeshProvider({ children, hideHostPairing = false }: { children: ReactNode; hideHostPairing?: boolean }) {
+export function StandaloneRepoMeshProvider({ children }: { children: ReactNode }) {
     const { sendCommand, sendData } = useTransport()
     const { ides } = useBaseDaemons()
 
@@ -56,11 +56,8 @@ export function StandaloneRepoMeshProvider({ children, hideHostPairing = false }
 
         resolveCommandTarget: (daemonId) => ({ targetDaemonId: daemonId }),
 
-        features: {
-            ...STANDALONE_FEATURES,
-            hostPairing: !hideHostPairing,
-        },
-    }), [sendCommand, sendData, daemons, hideHostPairing])
+        features: STANDALONE_FEATURES,
+    }), [sendCommand, sendData, daemons])
 
     return <RepoMeshContext.Provider value={value}>{children}</RepoMeshContext.Provider>
 }
