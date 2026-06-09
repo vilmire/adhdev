@@ -16,6 +16,14 @@ import { executeNativeHistory } from '../../../src/providers/spec/native-history
 
 let tmpDir = '';
 
+function todayDateDir(base: string): string {
+    const now = new Date();
+    const yyyy = String(now.getFullYear());
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return path.join(base, '.codex', 'sessions', yyyy, mm, dd);
+}
+
 function writeRollout(
     dir: string,
     uuid: string,
@@ -59,7 +67,7 @@ afterEach(() => {
 
 describe('executeJsonl — concurrent codex-cli sessions in same workspace', () => {
     it('binds each daemon session to its own rollout by session_meta.timestamp', () => {
-        const dateDir = path.join(tmpDir, '.codex', 'sessions', '2026', '06', '07');
+        const dateDir = todayDateDir(tmpDir);
         const workspace = path.join(tmpDir, 'project');
         fs.mkdirSync(workspace, { recursive: true });
 
@@ -120,7 +128,7 @@ describe('executeJsonl — concurrent codex-cli sessions in same workspace', () 
     });
 
     it('falls back to mtime-newest when no session_meta matches workspace', () => {
-        const dateDir = path.join(tmpDir, '.codex', 'sessions', '2026', '06', '07');
+        const dateDir = todayDateDir(tmpDir);
         const workspace = path.join(tmpDir, 'project');
         fs.mkdirSync(workspace, { recursive: true });
         const otherWorkspace = path.join(tmpDir, 'other');
@@ -171,7 +179,7 @@ describe('executeJsonl — concurrent codex-cli sessions in same workspace', () 
     });
 
     it('ignores rollouts outside the spawn-grace window', () => {
-        const dateDir = path.join(tmpDir, '.codex', 'sessions', '2026', '06', '07');
+        const dateDir = todayDateDir(tmpDir);
         const workspace = path.join(tmpDir, 'project');
         fs.mkdirSync(workspace, { recursive: true });
 
@@ -214,7 +222,7 @@ describe('executeJsonl — concurrent codex-cli sessions in same workspace', () 
     });
 
     it('prefers an explicit session id over newest same-workspace rollout', () => {
-        const dateDir = path.join(tmpDir, '.codex', 'sessions', '2026', '06', '07');
+        const dateDir = todayDateDir(tmpDir);
         const workspace = path.join(tmpDir, 'project');
         fs.mkdirSync(workspace, { recursive: true });
 
@@ -264,7 +272,7 @@ describe('executeJsonl — concurrent codex-cli sessions in same workspace', () 
     });
 
     it('does not fall back to newest rollout when an explicit session id is missing', () => {
-        const dateDir = path.join(tmpDir, '.codex', 'sessions', '2026', '06', '07');
+        const dateDir = todayDateDir(tmpDir);
         const workspace = path.join(tmpDir, 'project');
         fs.mkdirSync(workspace, { recursive: true });
 
