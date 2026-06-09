@@ -12,6 +12,13 @@ describe('RepoMesh import boundaries', () => {
 
     expect(source).not.toContain("from '@adhdev/web-core'")
     expect(source).not.toContain("from '../utils/mesh-visualization'")
+  })
+
+  it('standalone context imports extractRepoMeshStatus directly from repo-mesh-status (not from barrel)', () => {
+    const source = readSource('context/StandaloneRepoMeshProvider.tsx')
+
     expect(source).toContain("from '../utils/repo-mesh-status'")
+    expect(source).not.toContain("from '@adhdev/web-core'")
+    expect(source).not.toContain("from '../utils/mesh-visualization'")
   })
 })
