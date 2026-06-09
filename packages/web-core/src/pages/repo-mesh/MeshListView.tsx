@@ -1,0 +1,161 @@
+import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
+import AppPage from '../../components/ui/AppPage'
+import { Section } from '../../components/ui/Section'
+import { EmptyState } from '../../components/ui/EmptyState'
+import { AlertBanner } from '../../components/ui/AlertBanner'
+import { FormField, Input } from '../../components/ui/FormField'
+import { IconMesh } from '../../components/Icons'
+import { IconGitBranch } from './icons'
+import type { MeshEntry, MeshListViewFeatures } from './types'
+
+function daemonLabel(daemon: RepoMeshDaemonEntry | undefined): string {
+    if (!daemon) return 'Unknown'
+    return daemon.machineNickname || daemon.nickname || daemon.hostname || daemon.id || 'Unknown'
+}
+
+interface Props {
+    meshes: MeshEntry[]
+    loading: boolean
+    error: string | null
+    onDismissError: () => void
+    daemons: RepoMeshDaemonEntry[]
+    features: MeshListViewFeatures
+
+    // Create form state
+    showCreate: boolean
+    onToggleCreate: () => void
+    createName: string
+    onCreateNameChange: (v: string) => void
+    createRepoIdentity: string
+    onCreateRepoIdentityChange: (v: string) => void
+    createRepoRemoteUrl: string
+    onCreateRepoRemoteUrlChange: (v: string) => void
+    newMeshDaemonId: string
+    onNewMeshDaemonIdChange: (v: string) => void
+    newMeshWorkspace: string
+    onNewMeshWorkspaceChange: (v: string) => void
+    createPickerWorkspaces: Array<{ id?: string; path: string; label?: string | null }>
+
+    onSelectMesh: (id: string) => void
+    onCreate: () => void
+    onCancelCreate: () => void
+}
+
+export function MeshListView({
+    meshes,
+    loading,
+    error,
+    onDismissError,
+    daemons,
+    features,
+    showCreate,
+    onToggleCreate,
+    createName,
+    onCreateNameChange,
+    createRepoIdentity,
+    onCreateRepoIdentityChange,
+    createRepoRemoteUrl,
+    onCreateRepoRemoteUrlChange,
+    newMeshDaemonId,
+    onNewMeshDaemonIdChange,
+    newMeshWorkspace,
+    onNewMeshWorkspaceChange,
+    createPickerWorkspaces,
+    onSelectMesh,
+    onCreate,
+    onCancelCreate,
+}: Props) {
+    return (
+        <AppPage
+            icon={<IconMesh />}
+            title="Repo Meshes"
+            subtitle={`${meshes.length} mesh${meshes.length !== 1 ? 'es' : ''}`}
+            widthClassName="max-w-5xl"
+            actions={<button className="btn btn-primary btn-sm" onClick={onToggleCreate}>+ Create Mesh</button>}
+        >
+            {error && <AlertBanner variant="error" onDismiss={onDismissError} className="mb-4">{error}</AlertBanner>}
+
+            {showCreate && (
+                <Section className="mb-5 border-accent/40 animate-[fadeIn_0.3s_ease-out]">
+                    <h3 className="text-base font-bold mb-4">Create Repo Mesh</h3>
+
+                    {features.createDaemonPicker && (
+                        <FormField label="Create on machine" hint="Mesh setup is stored by the selected daemon.">
+                            <select className="input w-full" value={newMeshDaemonId} onChange={e => onNewMeshDaemonIdChange(e.target.value)} disabled={!daemons.length}>
+                                {daemons.length === 0
+                                    ? <option value="">No connected daemon</option>
+                                    : daemons.map(d => <option key={d.id} value={d.id}>{daemonLabel(d)}</option>)}
+                            </select>
+                        </FormField>
+                    )}
+
+                    {features.createDaemonPicker && (
+                        <FormField label="Workspace" hint="Choose from workspaces registered by the selected daemon.">
+                            <select className="input w-full" value={newMeshWorkspace} onChange={e => onNewMeshWorkspaceChange(e.target.value)} disabled={!newMeshDaemonId || !createPickerWorkspaces.length}>
+                                {!newMeshDaemonId ? <option value="">Select a machine first</option>
+                                    : createPickerWorkspaces.length === 0 ? <option value="">No registered workspaces</option>
+                                    : createPickerWorkspaces.map(w => (
+                                        <option key={w.id || w.path} value={w.path}>
+                                            {w.label ? `${w.label} · ${w.path}` : w.path}
+                                        </option>
+                                    ))}
+                            </select>
+                        </FormField>
+                    )}
+
+                    <FormField label="Name">
+                        <Input value={createName} onChange={e => onCreateNameChange(e.target.value)} placeholder="my-project-mesh" autoFocus />
+                    </FormField>
+                    <FormField label="Repo remote URL (optional)" hint="Provide a remote URL OR a stable identity.">
+                        <Input value={createRepoRemoteUrl} onChange={e => onCreateRepoRemoteUrlChange(e.target.value)} placeholder="https://github.com/user/repo" />
+                    </FormField>
+                    <FormField label="Repo identity (optional)" hint="Provide a remote URL OR a stable identity.">
+                        <Input value={createRepoIdentity} onChange={e => onCreateRepoIdentityChange(e.target.value)} placeholder="github.com/user/repo" />
+                    </FormField>
+
+                    <div className="flex gap-2 mt-3">
+                        <button className="btn btn-primary btn-sm" onClick={onCreate}
+                            disabled={!createName.trim() || (!createRepoRemoteUrl.trim() && !createRepoIdentity.trim()) || (features.createDaemonPicker && (!newMeshDaemonId || !newMeshWorkspace))}>
+                            Create
+                        </button>
+                        <button className="btn btn-secondary btn-sm" onClick={onCancelCreate}>Cancel</button>
+                    </div>
+                </Section>
+            )}
+
+            {loading ? (
+                <div className="text-sm text-text-muted p-4">Loading meshes...</div>
+            ) : meshes.length === 0 ? (
+                <EmptyState icon={<IconMesh />} title="No Repo Meshes"
+                    description={daemons.length > 0 ? 'Create a mesh to get started.' : 'Connect an ADHDev daemon first.'}
+                    action={<button className="btn btn-primary btn-sm" disabled={!daemons.length} onClick={onToggleCreate}>Create First Mesh</button>} />
+            ) : (
+                <div className="flex flex-col gap-2.5">
+                    {meshes.map(mesh => (
+                        <button key={mesh.id} type="button" onClick={() => onSelectMesh(mesh.id)}
+                            className="w-full text-left bg-bg-glass border border-border-subtle rounded-xl px-5 py-4 transition-colors hover:border-border-default hover:bg-bg-secondary/70">
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <IconMesh size={16} />
+                                        <span className="font-bold text-sm">{mesh.name}</span>
+                                    </div>
+                                    <div className="text-[12px] text-text-muted flex items-center gap-2">
+                                        <span className="font-mono">{mesh.repoIdentity || (mesh as any).repo_identity || 'No repo identity'}</span>
+                                        {(mesh.defaultBranch || (mesh as any).default_branch) && (
+                                            <span className="inline-flex items-center gap-1"><IconGitBranch size={11} />{mesh.defaultBranch || (mesh as any).default_branch}</span>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="text-right text-[11px] text-text-muted shrink-0 ml-4">
+                                    <div>{new Date(mesh.createdAt || (mesh as any).created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
+                                    <div className="text-text-muted/60">{mesh.nodes?.length ?? (mesh as any).nodeCount ?? 0} node(s)</div>
+                                </div>
+                            </div>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </AppPage>
+    )
+}
