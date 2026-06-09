@@ -5,6 +5,7 @@ export type ManagedStatus =
     | 'idle'
     | 'generating'
     | 'waiting_approval'
+    | 'waiting_choice'
     | 'error'
     | 'stopped'
     | 'starting'
@@ -151,6 +152,7 @@ export function normalizeManagedStatus(
 
     const normalized = String(status || 'idle').trim().toLowerCase();
     if (normalized === 'waiting_approval') return 'waiting_approval';
+    if (normalized === 'waiting_choice') return 'waiting_choice';
     if (WORKING_STATUSES.has(normalized)) return 'generating';
     if (normalized === 'error') return 'error';
     if (normalized === 'stopped') return 'stopped';

@@ -724,16 +724,24 @@ export class CliProviderInstance implements ProviderInstance {
                 ? visibleStatus
                 : (suppressStaleParsedBusyStatus ? visibleStatus : (parsedChatStatus || visibleStatus)));
 
+        // If an AskUserQuestion prompt is awaiting user input, overlay status as
+        // waiting_choice. This is distinct from waiting_approval (tool-use consent)
+        // — the engine's isWaitingForResponse state is unchanged, so completion
+        // tracking continues normally once the user responds.
+        const hasInteractivePrompt = !!this.activeInteractivePrompt;
+        const finalStatus = hasInteractivePrompt ? 'waiting_choice' : visibleStatus;
+        const finalChatStatus = hasInteractivePrompt ? 'waiting_choice' : activeChatStatus;
+
         return {
             type: this.type,
             name: this.provider.name,
             category: 'cli',
-            status: visibleStatus,
+            status: finalStatus,
             mode: this.presentationMode,
             activeChat: {
                 id: activeChatId,
                 title: parsedStatus?.title || dirName,
-                status: activeChatStatus,
+                status: finalChatStatus,
                 messages: statusMessages,
                 activeModal: autoApproveActive ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
                 activeInteractivePrompt: this.activeInteractivePrompt,

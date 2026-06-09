@@ -245,6 +245,7 @@ export function deriveNativeConversationStatus(
 ): string {
     const chatStatus = normalizeManagedStatus(activeChat?.status, { activeModal: activeChat?.activeModal })
     if (chatStatus === 'waiting_approval') return 'waiting_approval'
+    if (chatStatus === 'waiting_choice') return 'waiting_choice'
     if (chatStatus === 'generating') return 'generating'
 
     const activeStream = streams.find(stream =>
@@ -282,7 +283,7 @@ export function deriveStreamConversationStatus(
 export function dedupeAgents(agents: { id: string; name: string; status: string; version?: string }[]): typeof agents {
     if (!Array.isArray(agents) || agents.length <= 1) return agents
     const map = new Map<string, typeof agents[number]>()
-    const priority = ['generating', 'waiting_approval', 'connected', 'idle', 'panel_hidden']
+    const priority = ['generating', 'waiting_approval', 'waiting_choice', 'connected', 'idle', 'panel_hidden']
     for (const a of agents) {
         const key = (a.name || a.id || '').toLowerCase().replace(/\s+/g, '-')
         const existing = map.get(key)

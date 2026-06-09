@@ -11,10 +11,12 @@ import { submitInteractivePromptResponse } from '../interactive-prompt/interacti
 
 export interface UseInteractivePromptResult {
   promptSession: ReturnType<typeof findInteractivePromptSession>
+  hasActivePrompt: boolean
   responseError: string | null
   isSubmitting: boolean
   submit: (selection: InteractivePromptSelection) => Promise<void>
   cancel: () => void
+  reopen: () => void
 }
 
 export function useInteractivePrompt(sessionId?: string | null): UseInteractivePromptResult {
@@ -24,15 +26,19 @@ export function useInteractivePrompt(sessionId?: string | null): UseInteractiveP
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [responseError, setResponseError] = useState<string | null>(null)
 
+  const foundSession = useMemo(() => findInteractivePromptSession(ides, sessionId), [ides, sessionId])
+
+  // hasActivePrompt is true even when dismissed — so callers can show a "reopen" button
+  const hasActivePrompt = !!foundSession
+
   const promptSession = useMemo(() => {
-    const found = findInteractivePromptSession(ides, sessionId)
-    if (!found) return null
-    return found.prompt.promptId === dismissedPromptId ? null : found
-  }, [dismissedPromptId, ides, sessionId])
+    if (!foundSession) return null
+    return foundSession.prompt.promptId === dismissedPromptId ? null : foundSession
+  }, [dismissedPromptId, foundSession])
 
   const submit = useCallback(async (selection: InteractivePromptSelection) => {
     if (!promptSession) return
-      const response = buildInteractivePromptResponse(promptSession.prompt, selection)
+    const response = buildInteractivePromptResponse(promptSession.prompt, selection)
     setIsSubmitting(true)
     setResponseError(null)
     try {
@@ -56,11 +62,18 @@ export function useInteractivePrompt(sessionId?: string | null): UseInteractiveP
     if (promptSession) setDismissedPromptId(promptSession.prompt.promptId)
   }, [promptSession])
 
+  const reopen = useCallback(() => {
+    setDismissedPromptId(null)
+    setResponseError(null)
+  }, [])
+
   return {
     promptSession,
+    hasActivePrompt,
     responseError,
     isSubmitting,
     submit,
     cancel,
+    reopen,
   }
 }

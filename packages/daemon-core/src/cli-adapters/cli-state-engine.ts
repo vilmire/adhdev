@@ -555,22 +555,10 @@ export class CliStateEngine {
         // The real completion gate is applyIdle's idleFinishCandidate +
         // idleFinish timeout, which requires stable quiet AND a parsed
         // assistant message.
-        // For providers that own history externally (e.g. SpecCliAdapter, which
-        // always returns messages:[]), parsedStatus='idle' with no messages and
-        // no active interactive prompt is a reliable idle signal — the provider
-        // is explicitly confirming idle and the native-history gate in
-        // cli-provider-instance will verify the assistant message. When an
-        // interactive prompt is active the PTY is also idle while waiting for
-        // user input, so we must NOT release the hold in that case.
-        const activeInteractivePrompt = !!(session as any)?.activeInteractivePrompt;
-        const parsedExplicitlyIdle = parsedStatus === 'idle'
-            && parsedMessages.length === 0
-            && !activeInteractivePrompt;
         const shouldHoldGenerating = status === 'idle'
             && this.isWaitingForResponse
             && !!this.currentTurnScope
             && !modal
-            && !parsedExplicitlyIdle
             && !(parsedStatus === 'idle' && !!lastParsedAssistant);
 
         if (shouldHoldGenerating) { this.applyHoldGenerating(ctx); return; }

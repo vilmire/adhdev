@@ -16,7 +16,7 @@ import type { InteractivePrompt } from './types/interactive-prompt.js';
 
 // ─── ProviderState — Discriminated union by category ─────────────
 
-export type ProviderStatus = 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting';
+export type ProviderStatus = 'idle' | 'generating' | 'waiting_approval' | 'waiting_choice' | 'error' | 'stopped' | 'starting';
 
 export interface ProviderRuntimeWriteOwner {
     clientId: string;

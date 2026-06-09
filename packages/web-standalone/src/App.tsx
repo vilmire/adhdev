@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
+import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
@@ -203,6 +203,42 @@ function OnboardingGate() {
     return <StandaloneOnboarding onDone={() => setShow(false)} />
 }
 
+// Global interactive prompt dialog — shown whenever any session has waiting_choice status
+function InteractivePromptGate() {
+    const { ides } = useBaseDaemons()
+    // Find the first session with an active interactive prompt
+    const activeSessionId = useMemo(() => {
+        for (const ide of ides) {
+            if (ide.activeInteractivePrompt) return ide.instanceId ?? ide.id
+        }
+        return null
+    }, [ides])
+    const { promptSession, hasActivePrompt, responseError, isSubmitting, submit, cancel, reopen } = useInteractivePrompt(activeSessionId)
+
+    if (!hasActivePrompt) return null
+
+    return (
+        <div className="relative">
+            {!promptSession && (
+                <button
+                    type="button"
+                    onClick={reopen}
+                    className="fixed bottom-4 right-4 z-[79] btn btn-primary btn-sm shadow-lg"
+                >
+                    Awaiting your input ↑
+                </button>
+            )}
+            <InteractivePromptModal
+                promptSession={promptSession}
+                isSubmitting={isSubmitting}
+                error={responseError}
+                onSubmit={submit}
+                onCancel={cancel}
+            />
+        </div>
+    )
+}
+
 export default function App() {
     const transportValue = useMemo(() => ({
         sendCommand: sendCommandViaWs,
@@ -222,6 +258,7 @@ export default function App() {
                     <StandaloneDaemonProvider>
                         <TransportProvider value={transportValue}>
                             <LaunchCliProvider sendDaemonCommand={sendCommandViaWs}>
+                            <InteractivePromptGate />
                             <StandaloneLayout>
                                 <OnboardingGate />
                                 <Routes>
