@@ -1026,10 +1026,17 @@ export class CliStateEngine {
             if (messages[i]?.role === 'user') { lastUserIdx = i; break; }
         }
         if (lastUserIdx < 0) {
-            // No user message visible in PTY parser (e.g. screen scrolled past
-            // it). Fall back to the original any-assistant check to avoid an
-            // infinite defer loop — the native-history gate in
-            // cli-provider-instance will catch the real missing-assistant case.
+            // No user message visible in PTY parser. Two sub-cases:
+            // (a) messages is non-empty — some content was parsed but no user
+            //     line was found. Use the any-assistant fallback.
+            // (b) messages is empty — the provider owns history externally
+            //     (e.g. SpecCliAdapter always returns []) and PTY gives us
+            //     nothing to judge. Do NOT defer here: deferring with empty
+            //     messages causes an infinite reschedule loop because
+            //     parsedStatusHasFinalStandardAssistantMessage also returns
+            //     false on empty input. Let cli-provider-instance's native-
+            //     history gate handle this case.
+            if (messages.length === 0) return false;
             return !this.parsedStatusHasFinalStandardAssistantMessage(parsed);
         }
         // Check for a final standard assistant after the last user
