@@ -137,4 +137,17 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain('WebkitLineClamp: 3')
         expect(source).toContain('WebkitLineClamp: 4')
     })
+
+    it('propagates full dialog body height to the graph shell so hover events reach all nodes in cloud dialog context', () => {
+        const themeSource = readSource('components/MeshGraph/meshGraphTheme.ts')
+        const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
+
+        // dialogBodyClass must be a flex column (not overflow-y-auto) so MeshObservabilitySurface
+        // fills the full dialog body height rather than collapsing to the card min-height only.
+        expect(themeSource).toContain("'min-h-0 flex-1 flex flex-col")
+        expect(themeSource).not.toContain("'min-h-0 flex-1 overflow-y-auto")
+
+        // MeshObservabilitySurface outer div must be flex-1 to fill the flex dialog body.
+        expect(surfaceSource).toContain('"flex min-h-0 flex-1 flex-col gap-4"')
+    })
 })
