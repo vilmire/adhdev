@@ -13,6 +13,33 @@ export interface Section {
     from_top?: Size;
     from_bottom?: Size;
     until?: { section: string };
+    /** Scan the screen for the first (or last, if anchor_last=true) line
+     *  matching this regex and use that line as the section start.
+     *  Combine with `lines`, `until_regex`, or leave alone (defaults to
+     *  end-of-screen) to control how far it extends. */
+    anchor_regex?: string;
+    anchor_flags?: string;
+    /** If true, use the LAST matching line instead of the first. Useful
+     *  when the anchor pattern appears multiple times (e.g. separator
+     *  lines) and you want the one closest to the bottom. */
+    anchor_last?: boolean;
+    /** Optional neighbouring-line guards that must also match for the
+     *  anchor to be accepted. Reduces false positives when the anchor
+     *  pattern could appear elsewhere on screen (e.g. `>` in body text).
+     *  `prev` checks the line immediately above; `next` the line below. */
+    anchor_context?: {
+        prev?: string;
+        prev_flags?: string;
+        next?: string;
+        next_flags?: string;
+    };
+    /** When used with anchor_regex: take at most this many lines from the
+     *  anchor point. */
+    lines?: number;
+    /** When used with anchor_regex: extend until the first line matching
+     *  this regex (exclusive). Takes precedence over `lines`. */
+    until_regex?: string;
+    until_regex_flags?: string;
 }
 
 export interface SectionRegex {
@@ -258,6 +285,11 @@ export interface CliSpec {
             regex: string;
             flags?: string;
             hold_ms: number;
+            /** If the target-state check still fails this many ms after hold_ms
+             *  expired, force an idle transition anyway. Guards against TUIs that
+             *  show transient UI (pickers, option lists) after the completion
+             *  marker appears, keeping the target-state regex from matching. */
+            force_after_ms?: number;
         };
     };
 }

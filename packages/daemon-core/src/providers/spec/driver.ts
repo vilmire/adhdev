@@ -41,6 +41,7 @@ import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { evaluate, type SpecEvaluation, type TraceEntry } from './evaluator.js';
 import { loadSpec } from './loader.js';
 import type { CliSpec, Control, DelegateTrigger } from './types.js';
+import { LOG } from '../../logging/logger.js';
 
 export type DashboardEvent =
     | { kind: 'pty_data'; chunk: string }
@@ -148,10 +149,32 @@ export function matchesCompletionIdleRule(spec: CliSpec, ev: SpecEvaluation, scr
     }
 }
 
-export function matchesCompletionIdleTargetState(spec: CliSpec, ev: SpecEvaluation, screen: string): boolean {
+export function matchesCompletionIdleTargetState(
+    spec: CliSpec,
+    ev: SpecEvaluation,
+    screen: string,
+    cursor?: { row: number; col: number },
+): boolean {
     const target = spec.states.find(state => state.id === spec.default_state)
         ?? spec.states.find(state => state.id === 'idle');
-    if (!target?.when?.regex) return false;
+    if (!target?.when) return false;
+
+    // Cursor-only idle: if the target state has cursor guards but no regex,
+    // treat a cursor match alone as sufficient.
+    const hasCursorGuard = target.when.cursor_row_min !== undefined
+        || target.when.cursor_row_max !== undefined
+        || target.when.cursor_col_min !== undefined
+        || target.when.cursor_col_max !== undefined;
+    if (hasCursorGuard && cursor !== undefined) {
+        const { cursor_row_min, cursor_row_max, cursor_col_min, cursor_col_max } = target.when;
+        const cursorOk = (cursor_row_min === undefined || cursor.row >= cursor_row_min)
+            && (cursor_row_max === undefined || cursor.row <= cursor_row_max)
+            && (cursor_col_min === undefined || cursor.col >= cursor_col_min)
+            && (cursor_col_max === undefined || cursor.col <= cursor_col_max);
+        if (cursorOk) return true;
+    }
+
+    if (!target.when.regex) return false;
     const haystack = target.when.section
         ? ev.sections.find(section => section.id === target.when.section)?.text ?? ''
         : screen;
@@ -314,6 +337,7 @@ export class SpecDriver {
         if (this.busyExpiryTimer) clearTimeout(this.busyExpiryTimer);
         this.busyExpiryTimer = setTimeout(() => {
             this.busyExpiryTimer = null;
+            LOG.info('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] busyExpiry fired holdMs=${holdMs}`);
             this.reevaluate();
         }, Math.max(holdMs + 50, 100));
     }
@@ -352,11 +376,18 @@ export class SpecDriver {
                 if (completionKey !== this.completionIdleKey) {
                     this.completionIdleKey = completionKey;
                     this.completionIdleFirstSeenAt = now;
+                    LOG.info('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] completion_idle_after matched: key="${completionKey}"`);
                 }
                 const holdMs = Math.max(0, completionIdleRule.hold_ms || 0);
+                const forceAfterMs = typeof completionIdleRule.force_after_ms === 'number'
+                    ? completionIdleRule.force_after_ms
+                    : null;
                 const ageMs = now - this.completionIdleFirstSeenAt;
                 if (ageMs >= holdMs) {
-                    if (matchesCompletionIdleTargetState(this.spec, ev, screen)) {
+                    const targetMatches = matchesCompletionIdleTargetState(this.spec, ev, screen, cursor);
+                    const forced = !targetMatches && forceAfterMs !== null && ageMs >= holdMs + forceAfterMs;
+                    LOG.info('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] completion_idle_after hold expired ageMs=${ageMs} targetState=${targetMatches} forced=${forced} screenTail="${screen.split(/\r?\n/).slice(-3).join('\\n').slice(-200)}"`);
+                    if (targetMatches || forced) {
                         const idle = this.spec.states.find(state => state.id === this.spec.default_state)
                             ?? this.spec.states.find(state => state.id === 'idle');
                         evState = idle

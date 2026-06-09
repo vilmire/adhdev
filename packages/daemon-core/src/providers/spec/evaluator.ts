@@ -84,10 +84,39 @@ function resolveSections(spec: CliSpec, lines: string[]): ResolvedSection[] {
     for (const sec of spec.layout.sections) {
         let from = 0;
         let to = total;
-        if (sec.from_top !== undefined) {
+        if (sec.anchor_regex !== undefined) {
+            try {
+                const re = new RegExp(sec.anchor_regex, sec.anchor_flags ?? '');
+                const prevRe = sec.anchor_context?.prev !== undefined
+                    ? new RegExp(sec.anchor_context.prev, sec.anchor_context.prev_flags ?? '') : null;
+                const nextRe = sec.anchor_context?.next !== undefined
+                    ? new RegExp(sec.anchor_context.next, sec.anchor_context.next_flags ?? '') : null;
+                const matches = (i: number) => re.test(lines[i])
+                    && (prevRe === null || (i > 0 && prevRe.test(lines[i - 1])))
+                    && (nextRe === null || (i < total - 1 && nextRe.test(lines[i + 1])));
+                let idx = -1;
+                if (sec.anchor_last) {
+                    for (let i = total - 1; i >= 0; i--) { if (matches(i)) { idx = i; break; } }
+                } else {
+                    for (let i = 0; i < total; i++) { if (matches(i)) { idx = i; break; } }
+                }
+                if (idx !== -1) {
+                    from = idx;
+                    to = total;
+                    if (sec.until_regex !== undefined) {
+                        try {
+                            const ure = new RegExp(sec.until_regex, sec.until_regex_flags ?? '');
+                            const end = lines.findIndex((l, i) => i > idx && ure.test(l));
+                            if (end !== -1) to = end;
+                        } catch { /* bad until_regex — extend to end */ }
+                    } else if (sec.lines !== undefined) {
+                        to = Math.min(total, from + sec.lines);
+                    }
+                }
+            } catch { /* bad anchor_regex — fall through to defaults */ }
+        } else if (sec.from_top !== undefined) {
             from = resolveSize(sec.from_top, total);
-        }
-        if (sec.from_bottom !== undefined) {
+        } else if (sec.from_bottom !== undefined) {
             const sz = resolveSize(sec.from_bottom, total);
             from = total - sz;
             to = total;

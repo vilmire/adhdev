@@ -695,6 +695,12 @@ export class CliStateEngine {
 
     private applyGenerating(ctx: SettledEvalContext): void {
         const { modal, parsedMessages, lastParsedAssistant, parsedStatus, prevStatus } = ctx;
+        const noActiveTurn = !this.currentTurnScope;
+        // If the turn is already complete (isWaitingForResponse=false, no scope,
+        // no modal), PTY generating blips are just the CLI repainting its prompt.
+        // Check BEFORE cancelling the pending idle-finish timer — we don't want
+        // to cancel a scheduled idle transition just because the CLI blinked.
+        if (!this.isWaitingForResponse && noActiveTurn && !modal) return;
         this.clearIdleFinishCandidate('generating');
         // Cancel any pending grace-window idle transition. We have fresh
         // evidence the provider is still generating; the previous
@@ -702,7 +708,6 @@ export class CliStateEngine {
         this.cancelPendingIdleFinish('generating_signal_returned');
         const snap = this.transport.getSnapshot();
         const effectiveScreenText = snap.screenText || snap.accumulatedBuffer;
-        const noActiveTurn = !this.currentTurnScope;
         const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(effectiveScreenText);
         const parsedShowsLiveProgress = parsedStatus === 'generating' && !!lastParsedAssistant;
         if (prevStatus === 'idle' && !this.isWaitingForResponse && noActiveTurn && !modal && looksIdleChrome && !parsedShowsLiveProgress) return;

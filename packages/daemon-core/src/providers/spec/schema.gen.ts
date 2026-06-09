@@ -142,7 +142,8 @@ export const SCHEMA = {
                         "section": { "type": "string", "minLength": 1 },
                         "regex": { "type": "string", "minLength": 1 },
                         "flags": { "type": "string" },
-                        "hold_ms": { "type": "integer", "minimum": 0 }
+                        "hold_ms": { "type": "integer", "minimum": 0 },
+                        "force_after_ms": { "type": "integer", "minimum": 0 }
                     }
                 }
             }
@@ -190,7 +191,23 @@ export const SCHEMA = {
                             "type": "string"
                         }
                     }
-                }
+                },
+                "anchor_regex": { "type": "string", "minLength": 1 },
+                "anchor_flags": { "type": "string" },
+                "anchor_last": { "type": "boolean" },
+                "anchor_context": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "prev": { "type": "string" },
+                        "prev_flags": { "type": "string" },
+                        "next": { "type": "string" },
+                        "next_flags": { "type": "string" }
+                    }
+                },
+                "lines": { "type": "integer", "minimum": 1 },
+                "until_regex": { "type": "string", "minLength": 1 },
+                "until_regex_flags": { "type": "string" }
             }
         },
         "sectionRegex": {
