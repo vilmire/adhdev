@@ -133,6 +133,7 @@ export const SCHEMA = {
             "additionalProperties": false,
             "properties": {
                 "busy_hold_ms": { "type": "integer", "minimum": 0 },
+                "idle_hold_ms": { "type": "integer", "minimum": 0 },
                 "startup_grace_ms": { "type": "integer", "minimum": 0 },
                 "completion_idle_after": {
                     "type": "object",
