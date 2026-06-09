@@ -4184,9 +4184,13 @@ export class DaemonCommandRouter {
                 if (!sessionId) return { success: false, error: 'targetSessionId required' };
                 const target = this.deps.sessionRegistry.get(sessionId);
                 if (!target) return { success: false, error: 'Session not found', sessionId };
-                const adapter = this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter;
-                const snapshot = (adapter && typeof (adapter as any).getDebugSnapshot === 'function')
-                    ? (adapter as any).getDebugSnapshot()
+                const adapterObj = this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter;
+                const snapshot = adapterObj
+                    ? (typeof (adapterObj as any).getDebugSnapshot === 'function'
+                        ? (adapterObj as any).getDebugSnapshot()
+                        : typeof (adapterObj as any).getDebugState === 'function'
+                            ? (adapterObj as any).getDebugState()
+                            : null)
                     : null;
                 return {
                     success: true,

@@ -535,4 +535,39 @@ export class SpecCliAdapter implements CliAdapter {
         this.interactivePromptTransport = 'tui';
         this.statusCallback?.();
     }
+
+    getDebugState(): Record<string, any> {
+        const screen = this.driver.getScreen?.() ?? '';
+        const history = this.driver.getStateHistory();
+        const status = this.getStatus();
+        return {
+            type: this.cliType,
+            name: this.cliName,
+            status: status.status,
+            rawStatus: status.status,
+            projectedStatus: status.status,
+            ready: this.spawned,
+            screenText: screen,
+            sections: this.driver.getSections?.() ?? null,
+            stateHistory: history,
+            specPath: (this.driver as any).opts?.specPath ?? null,
+        };
+    }
+
+    getTraceState(limit = 120): Record<string, any> {
+        const history = this.driver.getStateHistory();
+        return {
+            status: this.getStatus().status,
+            stateHistory: history.slice(-limit),
+            screenText: this.driver.getScreen?.() ?? '',
+        };
+    }
+
+    getProviderResolutionMeta(): Record<string, any> {
+        return {
+            type: this.cliType,
+            providerDir: null,
+            resolvedVersion: null,
+        };
+    }
 }

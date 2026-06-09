@@ -311,6 +311,14 @@ export class SpecDriver {
     getLastBusyAt(): number { return this.lastBusyAt; }
     hasIdleHoldPending(): boolean { return this.idleHoldTimer !== null; }
     getSpecPath(): string { return this.opts.specPath; }
+    getScreen(): string { return this.adapter.snapshot(); }
+    getSections(): Array<{ id: string; text: string }> | null {
+        try {
+            const screen = this.adapter.snapshot();
+            const ev = evaluate(this.spec, screen, undefined);
+            return ev.sections.map(s => ({ id: s.id, text: s.text }));
+        } catch { return null; }
+    }
 
     // ────────────────────────────────────────────────────────────────────
     // Loading & adapter wiring
