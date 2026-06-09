@@ -501,44 +501,7 @@ export class CliStateEngine {
 
         if (this.maybeCommitVisibleIdleTranscript(session, parsedMessages, snap)) return;
 
-        // When waiting for a response, only an assistant message that appears
-        // *after* the current turn's user message in parsedMessages counts as
-        // evidence that the current turn's response has arrived. Without this,
-        // a previous turn's assistant message satisfies hasAssistantTurn in
-        // applyIdle and triggers a premature idle transition.
-        //
-        // Strategy: find the last user message whose content matches (or
-        // starts-with) the current turn prompt. An assistant appearing after
-        // that index in parsedMessages belongs to the current turn. If no such
-        // user message is found yet (the prompt hasn't been echoed back into
-        // parsedMessages), treat lastParsedAssistant as undefined so
-        // shouldHoldGenerating keeps generating alive.
-        let lastParsedAssistant: CliChatMessage | undefined;
-        if (this.isWaitingForResponse && this.currentTurnScope) {
-            const promptSnippet = normalizePromptText(this.currentTurnScope.prompt || '').slice(0, 80);
-            let currentTurnUserIdx = -1;
-            for (let i = parsedMessages.length - 1; i >= 0; i--) {
-                const m = parsedMessages[i];
-                if (m.role === 'user') {
-                    const content = normalizePromptText(String((m as any).content || '')).slice(0, 80);
-                    if (!promptSnippet || content.includes(promptSnippet) || promptSnippet.includes(content)) {
-                        currentTurnUserIdx = i;
-                        break;
-                    }
-                }
-            }
-            if (currentTurnUserIdx >= 0) {
-                for (let i = parsedMessages.length - 1; i > currentTurnUserIdx; i--) {
-                    if (parsedMessages[i].role === 'assistant') {
-                        lastParsedAssistant = parsedMessages[i];
-                        break;
-                    }
-                }
-            }
-            // If currentTurnUserIdx === -1, prompt not yet echoed — no assistant yet
-        } else {
-            lastParsedAssistant = [...parsedMessages].reverse().find((m) => m.role === 'assistant');
-        }
+        const lastParsedAssistant = [...parsedMessages].reverse().find((m) => m.role === 'assistant');
 
         if (
             this.currentTurnScope
@@ -1046,7 +1009,30 @@ export class CliStateEngine {
         const parsedStatus = typeof parsed?.status === 'string' ? parsed.status.trim() : '';
         if (parsedStatus !== 'idle') return true;
         if (parsed?.activeModal || parsed?.modal) return true;
-        return !this.parsedStatusHasFinalStandardAssistantMessage(parsed);
+        // For providers that own their history externally (e.g. SpecCliAdapter
+        // reading native JSONL), parsed.messages only reflects PTY-visible
+        // content which may include previous-turn assistant messages. Gate on
+        // whether the *current turn* has a final assistant: find the last user
+        // in parsed.messages, and check there is an assistant after it.
+        // If no user found at all (e.g. PTY hid it), defer — the native-history
+        // completion gate in cli-provider-instance will confirm via JSONL read.
+        const messages: any[] = Array.isArray(parsed?.messages) ? parsed.messages : [];
+        let lastUserIdx = -1;
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i]?.role === 'user') { lastUserIdx = i; break; }
+        }
+        if (lastUserIdx < 0) {
+            // No user visible in PTY parser — defer to native history gate
+            return true;
+        }
+        // Check for a final standard assistant after the last user
+        const hasCurrentTurnAssistant = messages.slice(lastUserIdx + 1).some((m: any) => {
+            if (!m || m.role !== 'assistant') return false;
+            if (typeof m.content !== 'string' || !m.content.trim()) return false;
+            const kind = typeof m.kind === 'string' && m.kind.trim() ? m.kind.trim() : 'standard';
+            return kind === 'standard' && m.meta?.streaming !== true;
+        });
+        return !hasCurrentTurnAssistant;
     }
 
     private rescheduleTranscriptFinishCheck(reason: string): void {
