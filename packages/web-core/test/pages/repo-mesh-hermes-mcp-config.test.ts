@@ -77,27 +77,36 @@ describe('RepoMesh node active assignment helpers', () => {
 
 describe('RepoMesh graph detail affordances', () => {
   it('routes standalone Repo Mesh through the shared observability surface with live daemon wiring', () => {
-    const source = readSource('pages/RepoMesh.tsx')
+    // RepoMesh.tsx (orchestrator) wires the subscription and passes status down
+    const repoMeshSource = readSource('pages/RepoMesh.tsx')
+    expect(repoMeshSource).toContain('useMeshGraphMetadataSubscription({')
+    expect(repoMeshSource).toContain('sendData,')
+    expect(repoMeshSource).toContain('status: meshGraphStatus')
+    expect(repoMeshSource).toContain('displayedMeshStatus={displayedMeshStatus}')
 
-    expect(source).toContain('extractRepoMeshStatus(res)')
-    expect(source).toContain('useMeshGraphMetadataSubscription({')
-    expect(source).toContain('sendData,')
-    expect(source).toContain('status: meshGraphStatus')
-    expect(source).toContain('status={displayedMeshGraphStatus}')
-    expect(source).toContain('<MeshObservabilitySurface')
-    expect(source).toContain('daemonId={daemonId}')
-    expect(source).toContain('sendDaemonCommand={sendCommand}')
-    expect(source).toContain('queue activity, sessions, node drift, and mesh topology from this standalone daemon')
+    // MeshDetailView.tsx renders the observability surface
+    const detailSource = readSource('pages/repo-mesh/MeshDetailView.tsx')
+    expect(detailSource).toContain('<MeshObservabilitySurface')
+    expect(detailSource).toContain('daemonId={activeDaemonId}')
+    expect(detailSource).toContain('sendDaemonCommand={sendCommand}')
+    expect(detailSource).toContain('queue activity, sessions, node drift, and mesh topology')
+
+    // Standalone context supplies extractRepoMeshStatus to the context
+    const standaloneSource = readSource('context/StandaloneRepoMeshProvider.tsx')
+    expect(standaloneSource).toContain('extractStatus: extractRepoMeshStatus')
   })
 
   it('preserves provider priority when provider inventory is unavailable and marks worktree-local policy', () => {
-    const source = readSource('pages/RepoMesh.tsx')
+    // Handler lives in RepoMesh.tsx (orchestrator)
+    const repoMeshSource = readSource('pages/RepoMesh.tsx')
+    expect(repoMeshSource).toContain('const requested = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)')
+    expect(repoMeshSource).toContain('providers.length > 0')
+    expect(repoMeshSource).toContain('normalizeProviderPriority(requested)')
+    expect(repoMeshSource).toContain('providerPriority')
 
-    expect(source).toContain('const requestedPriority = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)')
-    expect(source).toContain('availableCliProviders.length > 0')
-    expect(source).toContain('normalizeProviderPriority(requestedPriority)')
-    expect(source).toContain('providerPriority,')
-    expect(source).toContain('function isWorktreeNode(node: MeshNode): boolean')
-    expect(source).toContain('Provider priority saved here is node-local and disappears when this worktree node is removed.')
+    // UI text and helper live in MeshNodeList.tsx
+    const nodeListSource = readSource('pages/repo-mesh/MeshNodeList.tsx')
+    expect(nodeListSource).toContain('function isWorktreeNode(node: MeshNode): boolean')
+    expect(nodeListSource).toContain('Provider priority saved here is node-local and disappears when removed.')
   })
 })
