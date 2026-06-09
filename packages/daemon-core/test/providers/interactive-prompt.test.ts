@@ -220,7 +220,7 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
         q1: { selectedLabels: ['빨강'] },
         q2: { selectedLabels: ['monospace'] },
       },
-    })).toEqual(['1', '1']);
+    })).toEqual(['1', '1', '\r']);
   });
 
   it('uses numeric key (1-based) to select each option — no arrow keys needed', () => {
@@ -249,17 +249,17 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
       promptId: 'rps-choices',
       answers: { q1: { selectedLabels: ['가위'] } },
-    })).toEqual(['1']);
+    })).toEqual(['1', '\r']);
 
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
       promptId: 'rps-choices',
       answers: { q1: { selectedLabels: ['바위'] } },
-    })).toEqual(['2']);
+    })).toEqual(['2', '\r']);
 
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
       promptId: 'rps-choices',
       answers: { q1: { selectedLabels: ['보'] } },
-    })).toEqual(['3']);
+    })).toEqual(['3', '\r']);
   });
 
   it('emits one numeric key per question in multi-question prompts — no cursor drift', () => {
@@ -288,29 +288,29 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       ],
     });
 
-    // Rock(0)→'1', Rock(0)→'1'
+    // Rock(0)→'1', Rock(0)→'1', confirm→'\r'
     expect(buildClaudeInteractiveTuiAnswerSteps(
       makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
       { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Rock'] }, q2: { selectedLabels: ['Rock'] } } },
-    )).toEqual(['1', '1']);
+    )).toEqual(['1', '1', '\r']);
 
-    // Paper(1)→'2', Rock(0)→'1'
+    // Paper(1)→'2', Rock(0)→'1', confirm→'\r'
     expect(buildClaudeInteractiveTuiAnswerSteps(
       makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
       { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Paper'] }, q2: { selectedLabels: ['Rock'] } } },
-    )).toEqual(['2', '1']);
+    )).toEqual(['2', '1', '\r']);
 
-    // Scissors(2)→'3', Paper(1)→'2'
+    // Scissors(2)→'3', Paper(1)→'2', confirm→'\r'
     expect(buildClaudeInteractiveTuiAnswerSteps(
       makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
       { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Scissors'] }, q2: { selectedLabels: ['Paper'] } } },
-    )).toEqual(['3', '2']);
+    )).toEqual(['3', '2', '\r']);
 
-    // Rock(0)→'1', Scissors(2)→'3'
+    // Rock(0)→'1', Scissors(2)→'3', confirm→'\r'
     expect(buildClaudeInteractiveTuiAnswerSteps(
       makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
       { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Rock'] }, q2: { selectedLabels: ['Scissors'] } } },
-    )).toEqual(['1', '3']);
+    )).toEqual(['1', '3', '\r']);
   });
 
   it('captures the headerless picker variant where ☐ marker prefixes the question line', () => {

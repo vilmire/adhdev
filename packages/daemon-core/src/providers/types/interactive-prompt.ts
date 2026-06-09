@@ -358,6 +358,10 @@ export function buildClaudeInteractiveTuiAnswerSteps(
     // from — the TUI accepts a digit key to jump straight to that option index.
     steps.push(String(selectedIndex + 1));
   }
+  // After all questions are answered, Claude TUI shows a final confirm screen
+  // ("Submit answers" / "Cancel"). The first option is pre-selected, so a
+  // single Enter confirms and submits.
+  steps.push('\r');
   return steps;
 }
 
