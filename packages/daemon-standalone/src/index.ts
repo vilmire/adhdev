@@ -740,6 +740,7 @@ class StandaloneServer {
         onStatusChange: () => {
           this.scheduleBroadcastStatus();
           void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
+          void this.flushWsSessionModalSubscriptions();
         },
         removeAgentTracking: () => {},
         hostedRuntimeManagerTag: 'adhdev-standalone',
@@ -774,6 +775,7 @@ class StandaloneServer {
         // Flush recently active/finalizing chat sessions immediately on status change so completed
         // messages reach the dashboard without forcing cold background subscriptions to poll.
         void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
+        void this.flushWsSessionModalSubscriptions();
       },
       sessionHostControl,
       onStreamsUpdated: (ideType: string, streams: any[]) => {
