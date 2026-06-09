@@ -345,7 +345,6 @@ export function buildClaudeInteractiveTuiAnswerSteps(
 ): string[] {
   if (response.promptId !== prompt.promptId) throw new Error('Interactive prompt response does not match active prompt');
   const steps: string[] = [];
-  let prevSelectedIndex = 0;
   for (const question of prompt.questions) {
     if (question.multiSelect) throw new Error('Claude TUI multi-select prompts are not supported yet');
     const answer = response.answers[question.questionId];
@@ -354,19 +353,11 @@ export function buildClaudeInteractiveTuiAnswerSteps(
     if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
     const selectedIndex = question.options.findIndex(option => option.label === answer.selectedLabels[0]);
     if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
-    // After confirming the previous question, the Claude TUI cursor stays at
-    // the position of that selection. Reset to the top of the new question's
-    // option list before navigating down to the desired choice.
-    for (let i = 0; i < prevSelectedIndex; i += 1) {
-      steps.push('\x1b[A');
-    }
-    for (let i = 0; i < selectedIndex; i += 1) {
-      steps.push('\x1b[B');
-    }
-    steps.push('\r');
-    prevSelectedIndex = selectedIndex;
+    // Use numeric key (1-based) to jump directly to the option. This avoids
+    // cursor-position drift between questions that arrow-key navigation suffers
+    // from — the TUI accepts a digit key to jump straight to that option index.
+    steps.push(String(selectedIndex + 1));
   }
-  steps.push('\r');
   return steps;
 }
 

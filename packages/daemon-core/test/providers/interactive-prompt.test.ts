@@ -213,16 +213,17 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
         },
       ],
     });
+    // q1=빨강(idx 0) → '1', q2=monospace(idx 0) → '1'
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
       promptId: 'tui-prompt',
       answers: {
         q1: { selectedLabels: ['빨강'] },
         q2: { selectedLabels: ['monospace'] },
       },
-    })).toEqual(['\r', '\r', '\r']);
+    })).toEqual(['1', '1']);
   });
 
-  it('builds per-key TUI steps for non-first numbered choices', () => {
+  it('uses numeric key (1-based) to select each option — no arrow keys needed', () => {
     const screen = [
       '☐ RPS R1 1라운드 — 가위바위보! 무엇을 내시겠어요?',
       '❯ 1. 가위',
@@ -244,32 +245,24 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       'Type something.',
     ]);
 
+    // 가위=idx 0 → '1', 바위=idx 1 → '2', 보=idx 2 → '3'
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
       promptId: 'rps-choices',
-      answers: {
-        q1: { selectedLabels: ['바위'] },
-      },
-    })).toEqual(['\x1b[B', '\r', '\r']);
+      answers: { q1: { selectedLabels: ['가위'] } },
+    })).toEqual(['1']);
 
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
       promptId: 'rps-choices',
-      answers: {
-        q1: { selectedLabels: ['보'] },
-      },
-    })).toEqual(['\x1b[B', '\x1b[B', '\r', '\r']);
+      answers: { q1: { selectedLabels: ['바위'] } },
+    })).toEqual(['2']);
 
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
       promptId: 'rps-choices',
-      answers: {
-        q1: { selectedLabels: ['가위'] },
-      },
-    })).toEqual(['\r', '\r']);
+      answers: { q1: { selectedLabels: ['보'] } },
+    })).toEqual(['3']);
   });
 
-  it('resets cursor to top for each question in multi-question prompts', () => {
-    // Multi-question prompts: after confirming question N, the Claude TUI
-    // cursor stays at the selected index position. For question N+1 the engine
-    // must scroll back to index 0 before navigating to the target choice.
+  it('emits one numeric key per question in multi-question prompts — no cursor drift', () => {
     const makePrompt = (opts: { q1Opts: string[]; q2Opts: string[] }) => ({
       promptId: 'multi-q',
       origin: 'cli' as const,
@@ -295,29 +288,29 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       ],
     });
 
-    // q1=Rock(0), q2=Rock(0): no movement needed for either
+    // Rock(0)→'1', Rock(0)→'1'
     expect(buildClaudeInteractiveTuiAnswerSteps(
       makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
       { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Rock'] }, q2: { selectedLabels: ['Rock'] } } },
-    )).toEqual(['\r', '\r', '\r']);
+    )).toEqual(['1', '1']);
 
-    // q1=Paper(1), q2=Rock(0): after q1 cursor is at 1; reset ↑×1 then no ↓
+    // Paper(1)→'2', Rock(0)→'1'
     expect(buildClaudeInteractiveTuiAnswerSteps(
       makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
       { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Paper'] }, q2: { selectedLabels: ['Rock'] } } },
-    )).toEqual(['\x1b[B', '\r', '\x1b[A', '\r', '\r']);
+    )).toEqual(['2', '1']);
 
-    // q1=Scissors(2), q2=Paper(1): reset ↑×2, then ↓×1
+    // Scissors(2)→'3', Paper(1)→'2'
     expect(buildClaudeInteractiveTuiAnswerSteps(
       makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
       { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Scissors'] }, q2: { selectedLabels: ['Paper'] } } },
-    )).toEqual(['\x1b[B', '\x1b[B', '\r', '\x1b[A', '\x1b[A', '\x1b[B', '\r', '\r']);
+    )).toEqual(['3', '2']);
 
-    // q1=Rock(0), q2=Scissors(2): no reset needed, ↓×2
+    // Rock(0)→'1', Scissors(2)→'3'
     expect(buildClaudeInteractiveTuiAnswerSteps(
       makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
       { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Rock'] }, q2: { selectedLabels: ['Scissors'] } } },
-    )).toEqual(['\r', '\x1b[B', '\x1b[B', '\r', '\r']);
+    )).toEqual(['1', '3']);
   });
 
   it('captures the headerless picker variant where ☐ marker prefixes the question line', () => {

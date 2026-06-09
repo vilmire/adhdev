@@ -1016,14 +1016,21 @@ export class CliStateEngine {
         // in parsed.messages, and check there is an assistant after it.
         // If no user found at all (e.g. PTY hid it), defer — the native-history
         // completion gate in cli-provider-instance will confirm via JSONL read.
+        // For providers that own their history externally (e.g. SpecCliAdapter
+        // reading native JSONL), parsed.messages may include previous-turn
+        // assistant messages. Only an assistant that appears *after* the last
+        // user message counts as evidence the current turn finished.
         const messages: any[] = Array.isArray(parsed?.messages) ? parsed.messages : [];
         let lastUserIdx = -1;
         for (let i = messages.length - 1; i >= 0; i--) {
             if (messages[i]?.role === 'user') { lastUserIdx = i; break; }
         }
         if (lastUserIdx < 0) {
-            // No user visible in PTY parser — defer to native history gate
-            return true;
+            // No user message visible in PTY parser (e.g. screen scrolled past
+            // it). Fall back to the original any-assistant check to avoid an
+            // infinite defer loop — the native-history gate in
+            // cli-provider-instance will catch the real missing-assistant case.
+            return !this.parsedStatusHasFinalStandardAssistantMessage(parsed);
         }
         // Check for a final standard assistant after the last user
         const hasCurrentTurnAssistant = messages.slice(lastUserIdx + 1).some((m: any) => {
