@@ -215,6 +215,9 @@ export { buildMeshGraph } from './utils/mesh-visualization'
 export type { MeshGraph, MeshGraphNode as MeshGraphNodeType, MeshGraphEdge as MeshGraphEdgeType } from './utils/mesh-visualization'
 export { canonicalizeRepoMeshStatus, extractRepoMeshStatus, repoMeshNodeHasLiveGitEvidence, summarizeRepoMeshCanonicalNodeDebug } from './utils/repo-mesh-status'
 export { useMeshGraphMetadataSubscription } from './hooks/useMeshGraphMetadataSubscription'
+export { RepoMeshContext, useRepoMeshContext, STANDALONE_FEATURES, CLOUD_FEATURES } from './context/RepoMeshContext'
+export type { RepoMeshContextValue, RepoMeshDaemonEntry, RepoMeshFeatures, LoadMeshStatusOptions, LaunchCoordinatorParams, LaunchCoordinatorResult } from './context/RepoMeshContext'
+export { StandaloneRepoMeshProvider } from './context/StandaloneRepoMeshProvider'
 
 export { default as OnboardingModal } from './components/OnboardingModal'
 
