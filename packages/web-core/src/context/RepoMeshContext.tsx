@@ -54,20 +54,18 @@ export interface LaunchCoordinatorResult {
 export interface RepoMeshFeatures {
     /** Show "Mesh Host daemon" section with multi-daemon coordinator picker (cloud) */
     meshHostDaemonSection: boolean
-    /** Show queue summary + recent tasks section (cloud) */
+    /** Show queue summary + recent tasks section (both) */
     queueSection: boolean
     /** Show daemon machine picker in "Create Mesh" form (cloud) */
     createDaemonPicker: boolean
     /** Show daemon machine picker in "Add Node" form (cloud) */
     addNodeDaemonPicker: boolean
-    /** Show "Coordinator prompt" override/append section (standalone) */
+    /** Show "Coordinator prompt" override/append section (both) */
     coordinatorPrompt: boolean
-    /** Show per-node "Node instruction" textarea (standalone) */
+    /** Show per-node "Node instruction" textarea (both) */
     nodeInstruction: boolean
-    /** Show "Hermes MCP config" section (standalone) */
+    /** Show "Hermes MCP config" section (both) */
     hermesMcpConfig: boolean
-    /** Show "Mesh Host pairing" section (standalone multi-machine) */
-    hostPairing: boolean
 }
 
 // ─── Context value ───────────────────────────────────────────────
@@ -157,17 +155,15 @@ export interface RepoMeshContextValue {
 // ─── Defaults (standalone) ───────────────────────────────────────
 
 export const STANDALONE_FEATURES: RepoMeshFeatures = {
-    // Multi-daemon UI — standalone has only one daemon, not applicable
+    // Multi-daemon UI — not applicable, standalone is single-machine
     meshHostDaemonSection: false,
     createDaemonPicker: false,
     addNodeDaemonPicker: false,
-    // Functional features — available on both platforms
+    // Functional features — both platforms
     queueSection: true,
     coordinatorPrompt: true,
     nodeInstruction: true,
     hermesMcpConfig: true,
-    // Single-machine only — host pairing intentionally disabled
-    hostPairing: false,
 }
 
 export const CLOUD_FEATURES: RepoMeshFeatures = {
@@ -175,13 +171,11 @@ export const CLOUD_FEATURES: RepoMeshFeatures = {
     meshHostDaemonSection: true,
     createDaemonPicker: true,
     addNodeDaemonPicker: true,
-    // Functional features — available on both platforms
+    // Functional features — both platforms
     queueSection: true,
     coordinatorPrompt: true,
     nodeInstruction: true,
     hermesMcpConfig: true,
-    // Not applicable in cloud (multi-daemon handled via meshHostDaemonSection)
-    hostPairing: false,
 }
 
 // ─── Context ─────────────────────────────────────────────────────

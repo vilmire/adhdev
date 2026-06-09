@@ -60,42 +60,11 @@ interface MeshEntry {
     repoRemoteUrl?: string
     defaultBranch?: string
     policy?: Record<string, any>
-    meshHost?: MeshHostMetadata
     nodes: MeshNode[]
     createdAt: string
     updatedAt: string
     // cloud extras
     [key: string]: any
-}
-
-interface MeshHostMetadata {
-    role?: 'host' | 'member'
-    hostDaemonId?: string
-    hostNodeId?: string
-    hostAddress?: string
-    canOwnCoordinator?: boolean
-    canOwnQueue?: boolean
-    pairing?: {
-        status?: string
-        tokenId?: string
-        joinedAt?: string
-        lastPairedAt?: string
-    }
-}
-
-interface MeshHostPairingStatus {
-    success?: boolean
-    code?: string
-    meshId?: string
-    hostAddress?: string
-    meshHost?: MeshHostMetadata
-    manualPairing?: {
-        status?: string
-        joinImplemented?: boolean
-        protocol?: string
-        description?: string
-    }
-    error?: string
 }
 
 export interface MeshQueueEntry {
@@ -374,18 +343,11 @@ export default function RepoMesh() {
     const [launchingCoordinator, setLaunchingCoordinator] = useState(false)
     const [launchResult, setLaunchResult] = useState<string | null>(null)
 
-    // Standalone: coordinator prompt, node instructions, host pairing
+    // Coordinator prompt + node instructions
     const [coordinatorPromptDraft, setCoordinatorPromptDraft] = useState({ override: '', append: '' })
     const [savingCoordinatorPrompt, setSavingCoordinatorPrompt] = useState(false)
     const [nodeSystemPromptDrafts, setNodeSystemPromptDrafts] = useState<Record<string, string>>({})
     const [savingNodeSystemPromptId, setSavingNodeSystemPromptId] = useState<string | null>(null)
-
-    const [hostPairing, setHostPairing] = useState<MeshHostPairingStatus | null>(null)
-    const [hostPairingLoading, setHostPairingLoading] = useState(false)
-    const [hostPairingSaving, setHostPairingSaving] = useState(false)
-    const [hostPairingJoining, setHostPairingJoining] = useState(false)
-    const [hostAddressDraft, setHostAddressDraft] = useState('')
-    const [hostTokenDraft, setHostTokenDraft] = useState('')
 
     // ─── Derived ─────
 
@@ -514,10 +476,6 @@ export default function RepoMesh() {
         void loadQueue(selectedMeshId)
     }, [selectedMeshId, features.queueSection])
 
-    useEffect(() => {
-        if (features.hostPairing) void loadHostPairing(selectedMeshId)
-    }, [selectedMeshId, features.hostPairing])
-
     // ─── Data loading ────────────────────────────────────────────
 
     const loadMeshes = useCallback(async () => {
@@ -564,26 +522,6 @@ export default function RepoMesh() {
             const res: any = await sendCommand(primaryDaemonId, 'get_mesh_queue', { meshId })
             setMeshQueue(res?.success ? (Array.isArray(res.queue) ? res.queue : []) : [])
         } catch { setMeshQueue([]) }
-    }, [primaryDaemonId, sendCommand])
-
-    const loadHostPairing = useCallback(async (meshId: string | null) => {
-        if (!primaryDaemonId || !meshId) { setHostPairing(null); setHostAddressDraft(''); setHostTokenDraft(''); return }
-        setHostPairingLoading(true)
-        try {
-            const res: any = await sendCommand(primaryDaemonId, 'get_mesh_host_pairing', { meshId })
-            if (res?.success) {
-                setHostPairing(res)
-                setHostAddressDraft(res.hostAddress || res.meshHost?.hostAddress || '')
-            } else {
-                setHostPairing({ success: false, error: res?.error || 'Failed to load Mesh Host pairing' })
-            }
-            setHostTokenDraft('')
-        } catch (e: any) {
-            setHostPairing({ success: false, error: e?.message || 'Failed to load Mesh Host pairing' })
-            setHostTokenDraft('')
-        } finally {
-            setHostPairingLoading(false)
-        }
     }, [primaryDaemonId, sendCommand])
 
     async function loadGraph(refresh = false) {
@@ -774,28 +712,6 @@ export default function RepoMesh() {
         finally { setSavingNodeSystemPromptId(null) }
     }
 
-    async function handleSaveHostPairing() {
-        if (!primaryDaemonId || !selectedMeshId || !hostAddressDraft.trim() || !hostTokenDraft.trim()) return
-        setHostPairingSaving(true)
-        try {
-            const res: any = await sendCommand(primaryDaemonId, 'configure_mesh_host_pairing', { meshId: selectedMeshId, hostAddress: hostAddressDraft.trim(), token: hostTokenDraft.trim() })
-            if (res?.success) { setHostPairing(res); setHostAddressDraft(res.hostAddress || res.meshHost?.hostAddress || hostAddressDraft.trim()); await loadMeshes() }
-            else setHostPairing({ success: false, error: res?.error || 'Failed to save Mesh Host pairing' })
-        } catch (e: any) { setHostPairing({ success: false, error: e?.message || 'Failed to save Mesh Host pairing' }) }
-        finally { setHostPairingSaving(false) }
-    }
-
-    async function handleApplyHostPairing() {
-        if (!primaryDaemonId || !selectedMeshId || !hostTokenDraft.trim()) return
-        setHostPairingJoining(true)
-        try {
-            const res: any = await sendCommand(primaryDaemonId, 'join_mesh_host_pairing', { meshId: selectedMeshId, token: hostTokenDraft.trim() })
-            if (res?.success) { setHostPairing(res); setHostTokenDraft(''); await loadMeshes(); await loadHostPairing(selectedMeshId); await loadGraph() }
-            else setHostPairing({ success: false, meshHost: res?.meshHost, manualPairing: res?.manualPairing, error: res?.error || 'Failed to apply join' })
-        } catch (e: any) { setHostPairing({ success: false, error: e?.message || 'Failed to apply join' }) }
-        finally { setHostPairingJoining(false) }
-    }
-
     async function handleUpdateNodeProviderPriority(node: MeshNode) {
         if (!selectedMeshId) return
         const targetDaemonId = (selectedMesh as any)?.__sourceDaemonId || primaryDaemonId
@@ -948,8 +864,6 @@ export default function RepoMesh() {
     // ─── Detail view ──────────────────────────────────────────────
 
     const policy = readMeshPolicy(selectedMesh)
-    const meshHost = hostPairing?.meshHost || selectedMesh.meshHost || {}
-    const pairingStatus = hostPairing?.manualPairing?.status || (meshHost as any).pairing?.status || 'not_configured'
 
     // Cloud: nodes as MeshNode (already normalized by context)
     const nodes: MeshNode[] = selectedMesh.nodes || []
@@ -978,54 +892,6 @@ export default function RepoMesh() {
             }
         >
             {error && <AlertBanner variant="error" onDismiss={() => setError(null)} className="mb-4">{error}</AlertBanner>}
-
-            {/* ── Standalone: Mesh Host pairing ── */}
-            {features.hostPairing && (
-                <Section title="Mesh Host pairing" description="Standalone manual pairing. Save a Mesh Host address/token, apply the join, then check status.">
-                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,420px)]">
-                        <div className="rounded-xl border border-border-subtle bg-bg-secondary p-4 text-sm">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-text-muted">Local role</span>
-                                <span className="rounded-full border border-accent-primary/25 bg-accent-primary/10 px-2 py-0.5 text-xs font-semibold text-accent-primary">
-                                    {(meshHost as any).role || 'host'}
-                                </span>
-                                <span className="text-text-muted">Pairing</span>
-                                <span className="rounded-full border border-border-subtle px-2 py-0.5 text-xs font-mono text-text-primary">
-                                    {hostPairingLoading ? 'loading' : pairingStatus}
-                                </span>
-                            </div>
-                            <div className="mt-3 grid gap-2 text-xs text-text-muted">
-                                <div>Host address: <code className="text-text-primary">{(meshHost as any).hostAddress || 'not configured'}</code></div>
-                                <div>Token id: <code className="text-text-primary">{(meshHost as any).pairing?.tokenId || 'not configured'}</code></div>
-                                <div>Can own coordinator: <code className="text-text-primary">{String((meshHost as any).canOwnCoordinator ?? ((meshHost as any).role !== 'member'))}</code></div>
-                            </div>
-                            <p className="mt-3 text-xs leading-relaxed text-text-secondary">
-                                {hostPairing?.manualPairing?.description || 'Manual address/token config is saved locally; Apply join sends the token once to the Mesh Host command endpoint.'}
-                            </p>
-                            {hostPairing?.error && <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-300">{hostPairing.error}</div>}
-                        </div>
-                        <div className="rounded-xl border border-border-subtle bg-bg-panel p-4">
-                            <FormField label="Mesh Host address" hint="Example: http://127.0.0.1:3847">
-                                <Input value={hostAddressDraft} onChange={e => setHostAddressDraft(e.target.value)} placeholder="http://127.0.0.1:3847" disabled={hostPairingSaving || hostPairingJoining} />
-                            </FormField>
-                            <FormField label="Pairing token" hint="Raw token used once; not stored after save.">
-                                <Input value={hostTokenDraft} onChange={e => setHostTokenDraft(e.target.value)} placeholder="paste Mesh Host pairing token" type="password" disabled={hostPairingSaving || hostPairingJoining} />
-                            </FormField>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                <button type="button" className="btn btn-primary btn-sm" onClick={handleSaveHostPairing} disabled={hostPairingSaving || hostPairingJoining || !hostAddressDraft.trim() || !hostTokenDraft.trim()}>
-                                    {hostPairingSaving ? 'Saving...' : 'Save manual pairing'}
-                                </button>
-                                <button type="button" className="btn btn-primary btn-sm" onClick={handleApplyHostPairing} disabled={hostPairingJoining || hostPairingSaving || !hostTokenDraft.trim()}>
-                                    {hostPairingJoining ? 'Applying...' : 'Apply join'}
-                                </button>
-                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadHostPairing(selectedMeshId)} disabled={hostPairingLoading || hostPairingSaving || hostPairingJoining}>
-                                    {hostPairingLoading ? 'Checking...' : 'Check saved config'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </Section>
-            )}
 
             {/* ── Policy ── */}
             <Section title="Policy" description="Coordinator safety defaults and session cleanup behavior.">
