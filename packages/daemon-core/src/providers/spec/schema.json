@@ -77,7 +77,8 @@
                         "section": { "type": "string", "minLength": 1 },
                         "regex": { "type": "string", "minLength": 1 },
                         "flags": { "type": "string" },
-                        "hold_ms": { "type": "integer", "minimum": 0 }
+                        "hold_ms": { "type": "integer", "minimum": 0 },
+                        "force_after_ms": { "type": "integer", "minimum": 0 }
                     }
                 }
             }
@@ -98,6 +99,22 @@
                 "id": { "type": "string", "minLength": 1, "pattern": "^[a-z][a-z0-9_]*$" },
                 "from_top": { "$ref": "#/definitions/size" },
                 "from_bottom": { "$ref": "#/definitions/size" },
+                "lines": { "type": "integer", "minimum": 1 },
+                "anchor_regex": { "type": "string", "minLength": 1 },
+                "anchor_flags": { "type": "string" },
+                "anchor_last": { "type": "boolean" },
+                "anchor_context": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "prev": { "type": "string" },
+                        "prev_flags": { "type": "string" },
+                        "next": { "type": "string" },
+                        "next_flags": { "type": "string" }
+                    }
+                },
+                "until_regex": { "type": "string", "minLength": 1 },
+                "until_regex_flags": { "type": "string" },
                 "until": {
                     "type": "object",
                     "additionalProperties": false,
