@@ -2659,8 +2659,8 @@ async function meshViewQueue(ctx, args) {
       meshId: ctx.mesh.id,
       queue: fullQueue,
       ledgerEntries,
-      // Always pass BeadsDB records (may be empty). buildMeshActiveWork uses them for local
-      // dispatches and falls through to ledger scan for remote P2P dispatches not in BeadsDB.
+      // Always pass MeshRuntimeStore records (may be empty). buildMeshActiveWork uses them for local
+      // dispatches and falls through to ledger scan for remote P2P dispatches not in MeshRuntimeStore.
       directDispatches,
       nodes: liveNodes
     });
@@ -2976,6 +2976,35 @@ async function meshSendTask(ctx, args) {
           nextAction: `Relaunch the target session on node '${args.node_id}' or retry without session_id so Repo Mesh can pick a session with provider metadata.`
         });
       }
+      if (explicitTargetSession && !isIdleSessionRecord(explicitTargetSession) && !isTerminalSessionRecord(explicitTargetSession)) {
+        const sessionStatus = typeof explicitTargetSession?.status === "string" ? explicitTargetSession.status : "unknown";
+        const { createSessionDelivery: createDelivery, resolveDeliveryDecision } = await import("@adhdev/daemon-core");
+        const policyResult = resolveDeliveryDecision(sessionStatus, { kind: "task" });
+        if (policyResult.decision === "queued") {
+          const delivery = createDelivery({
+            meshId: ctx.mesh.id,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            providerType: resolvedProviderType,
+            kind: "task",
+            message: args.message,
+            status: "queued"
+          });
+          return JSON.stringify({
+            success: true,
+            dispatched: false,
+            decision: "queued_delivery",
+            deliveryId: delivery.id,
+            reason: policyResult.reason,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            sessionStatus,
+            taskMode: taskMode || void 0,
+            message: policyResult.message,
+            nextAction: `Use mesh_status to watch for session idle transition, or use mesh_enqueue_task for queue-based assignment. Check deliveryId '${delivery.id}' to track queued delivery.`
+          });
+        }
+      }
       const sessionWasIdle = explicitTargetSession ? isIdleSessionRecord(explicitTargetSession) : false;
       const taskId = (0, import_node_crypto.randomUUID)();
       const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -3030,11 +3059,29 @@ async function meshSendTask(ctx, args) {
         dispatchedToIdleSession: sessionWasIdle,
         dispatchedAt
       });
+      let deliveryId;
+      try {
+        const { createSessionDelivery: createDelivery } = await import("@adhdev/daemon-core");
+        const delivery = createDelivery({
+          meshId: ctx.mesh.id,
+          nodeId: args.node_id,
+          sessionId: args.session_id,
+          providerType: resolvedProviderType || void 0,
+          taskId,
+          kind: "task",
+          message: args.message,
+          status: sessionWasIdle ? "delivered" : "delivering"
+        });
+        deliveryId = delivery.id;
+      } catch {
+      }
       return JSON.stringify({
         success: true,
         dispatched: true,
+        decision: "immediate",
         source: "direct",
         taskId,
+        deliveryId,
         taskMode,
         providerType: resolvedProviderType,
         nodeId: args.node_id,
@@ -4399,6 +4446,90 @@ function formatChatDebugResult(result, options) {
   return JSON.stringify(result, null, 2);
 }
 
+// src/tools/spec-debug.ts
+var SPEC_DEBUG_TOOL = {
+  name: "spec_debug",
+  description: "Get current spec state, sections, and state transition history for a spec-driven CLI session (claude-cli, antigravity-cli, etc.). Use to diagnose idle/busy detection issues, inspect section parsing, or verify idle_hold and busy_hold behavior.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      session_id: {
+        type: "string",
+        description: "Target session ID (from list_sessions)."
+      },
+      daemon_id: {
+        type: "string",
+        description: "Daemon ID (cloud mode only). Omit for local mode."
+      },
+      ...FORMAT_PROP
+    },
+    required: ["session_id"]
+  }
+};
+async function specDebug(transport, args) {
+  const sessionId = typeof args.session_id === "string" ? args.session_id.trim() : "";
+  if (!sessionId) throw new Error("session_id is required");
+  let result;
+  if (isLocalTransport(transport)) {
+    result = await transport.command("get_spec_debug", { targetSessionId: sessionId });
+  } else {
+    if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
+    const targetId = `${args.daemon_id}:session:${sessionId}`;
+    result = await transport.sendCommand(targetId, "get_spec_debug", { targetSessionId: sessionId });
+  }
+  return formatSpecDebugResult(result, { sessionId, format: args.format });
+}
+function formatSpecDebugResult(result, options) {
+  if (!result?.success) {
+    const err = result?.error || "Unknown error";
+    if (options.format === "json") return JSON.stringify({ success: false, error: err }, null, 2);
+    return `Error: ${err}`;
+  }
+  if (options.format === "json") return JSON.stringify(result, null, 2);
+  const snap = result.snapshot;
+  if (!snap) {
+    return [
+      `session_id: ${options.sessionId}`,
+      `provider_type: ${String(result.providerType || "")}`,
+      "is_spec_provider: false",
+      "No spec debug data available (not a spec-driven provider)."
+    ].join("\n");
+  }
+  const lines = [];
+  lines.push(`session_id: ${options.sessionId}`);
+  lines.push(`provider_type: ${String(result.providerType || snap.cliType || "")}`);
+  lines.push(`spec_id: ${String(snap.spec_id || "")}`);
+  lines.push(`spec_path: ${String(snap.specPath || "")}`);
+  lines.push(`current_state: ${snap.current_state ? `${snap.current_state.id} (${snap.current_state.label})` : "none"}`);
+  lines.push(`idle_hold_pending: ${String(snap.idleHoldPending ?? false)}`);
+  lines.push(`last_busy_at: ${snap.lastBusyAt ? new Date(snap.lastBusyAt).toISOString() : "never"}`);
+  lines.push(`exited: ${String(snap.exited ?? false)}`);
+  if (snap.current_modal) {
+    lines.push(`current_modal: ${JSON.stringify(snap.current_modal)}`);
+  }
+  if (snap.sections && typeof snap.sections === "object") {
+    lines.push("");
+    lines.push("\u2500\u2500 sections \u2500\u2500");
+    for (const [id, text] of Object.entries(snap.sections)) {
+      const preview = String(text || "").replace(/\n/g, "\u21B5").slice(0, 120);
+      lines.push(`  ${id}: ${preview}`);
+    }
+  }
+  const history = Array.isArray(snap.stateHistory) ? snap.stateHistory : [];
+  if (history.length > 0) {
+    lines.push("");
+    lines.push("\u2500\u2500 state history (newest first) \u2500\u2500");
+    const now = Date.now();
+    for (const entry of [...history].reverse().slice(0, 20)) {
+      const agoMs = now - entry.at;
+      const ago = agoMs < 2e3 ? `${agoMs}ms ago` : `${(agoMs / 1e3).toFixed(1)}s ago`;
+      const dur = entry.durationMs > 0 ? `  held ${entry.durationMs}ms` : "";
+      lines.push(`  ${String(entry.stateId).padEnd(18)} ${ago}${dur}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 // src/tools/send-chat.ts
 var SEND_CHAT_TOOL = {
   name: "send_chat",
@@ -5461,6 +5592,7 @@ async function startMcpServer(opts) {
     CHECK_PENDING_TOOL,
     READ_CHAT_TOOL,
     READ_CHAT_DEBUG_TOOL,
+    SPEC_DEBUG_TOOL,
     SEND_CHAT_TOOL,
     APPROVE_TOOL,
     GIT_STATUS_TOOL,
@@ -5494,6 +5626,10 @@ async function startMcpServer(opts) {
         }
         case "read_chat_debug": {
           const text = await readChatDebug(transport, a);
+          return { content: [{ type: "text", text }] };
+        }
+        case "spec_debug": {
+          const text = await specDebug(transport, a);
           return { content: [{ type: "text", text }] };
         }
         case "send_chat": {
