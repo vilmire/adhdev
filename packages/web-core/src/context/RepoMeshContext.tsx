@@ -157,24 +157,30 @@ export interface RepoMeshContextValue {
 // ─── Defaults (standalone) ───────────────────────────────────────
 
 export const STANDALONE_FEATURES: RepoMeshFeatures = {
+    // Multi-daemon UI — standalone has only one daemon, not applicable
     meshHostDaemonSection: false,
-    queueSection: false,
     createDaemonPicker: false,
     addNodeDaemonPicker: false,
+    // Functional features — available on both platforms
+    queueSection: true,
     coordinatorPrompt: true,
     nodeInstruction: true,
     hermesMcpConfig: true,
+    // Standalone-specific: manual multi-machine host pairing
     hostPairing: true,
 }
 
 export const CLOUD_FEATURES: RepoMeshFeatures = {
+    // Multi-daemon UI — cloud supports multiple connected daemons
     meshHostDaemonSection: true,
-    queueSection: true,
     createDaemonPicker: true,
     addNodeDaemonPicker: true,
-    coordinatorPrompt: false,
-    nodeInstruction: false,
-    hermesMcpConfig: false,
+    // Functional features — available on both platforms
+    queueSection: true,
+    coordinatorPrompt: true,
+    nodeInstruction: true,
+    hermesMcpConfig: true,
+    // Not applicable in cloud (multi-daemon handled via meshHostDaemonSection)
     hostPairing: false,
 }
 
