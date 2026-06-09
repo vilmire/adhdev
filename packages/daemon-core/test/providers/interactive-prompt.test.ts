@@ -266,6 +266,60 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     })).toEqual(['\r', '\r']);
   });
 
+  it('resets cursor to top for each question in multi-question prompts', () => {
+    // Multi-question prompts: after confirming question N, the Claude TUI
+    // cursor stays at the selected index position. For question N+1 the engine
+    // must scroll back to index 0 before navigating to the target choice.
+    const makePrompt = (opts: { q1Opts: string[]; q2Opts: string[] }) => ({
+      promptId: 'multi-q',
+      origin: 'cli' as const,
+      providerType: 'claude-cli',
+      createdAt: 0,
+      questions: [
+        {
+          questionId: 'q1',
+          question: 'Round 1',
+          header: 'R1',
+          multiSelect: false,
+          options: opts.q1Opts.map(l => ({ label: l })),
+          allowFreeform: false,
+        },
+        {
+          questionId: 'q2',
+          question: 'Round 2',
+          header: 'R2',
+          multiSelect: false,
+          options: opts.q2Opts.map(l => ({ label: l })),
+          allowFreeform: false,
+        },
+      ],
+    });
+
+    // q1=Rock(0), q2=Rock(0): no movement needed for either
+    expect(buildClaudeInteractiveTuiAnswerSteps(
+      makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
+      { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Rock'] }, q2: { selectedLabels: ['Rock'] } } },
+    )).toEqual(['\r', '\r', '\r']);
+
+    // q1=Paper(1), q2=Rock(0): after q1 cursor is at 1; reset ↑×1 then no ↓
+    expect(buildClaudeInteractiveTuiAnswerSteps(
+      makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
+      { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Paper'] }, q2: { selectedLabels: ['Rock'] } } },
+    )).toEqual(['\x1b[B', '\r', '\x1b[A', '\r', '\r']);
+
+    // q1=Scissors(2), q2=Paper(1): reset ↑×2, then ↓×1
+    expect(buildClaudeInteractiveTuiAnswerSteps(
+      makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
+      { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Scissors'] }, q2: { selectedLabels: ['Paper'] } } },
+    )).toEqual(['\x1b[B', '\x1b[B', '\r', '\x1b[A', '\x1b[A', '\x1b[B', '\r', '\r']);
+
+    // q1=Rock(0), q2=Scissors(2): no reset needed, ↓×2
+    expect(buildClaudeInteractiveTuiAnswerSteps(
+      makePrompt({ q1Opts: ['Rock','Paper','Scissors'], q2Opts: ['Rock','Paper','Scissors'] }),
+      { promptId: 'multi-q', answers: { q1: { selectedLabels: ['Rock'] }, q2: { selectedLabels: ['Scissors'] } } },
+    )).toEqual(['\r', '\x1b[B', '\x1b[B', '\r', '\r']);
+  });
+
   it('captures the headerless picker variant where ☐ marker prefixes the question line', () => {
     // claude-cli >=2.1 ships a compact variant where the section header and
     // the question share one line (e.g. "☐ RPS R1 1라운드 — 가위바위보!").
