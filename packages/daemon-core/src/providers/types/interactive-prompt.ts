@@ -349,14 +349,25 @@ export function buildClaudeInteractiveTuiAnswerSteps(
     if (question.multiSelect) throw new Error('Claude TUI multi-select prompts are not supported yet');
     const answer = response.answers[question.questionId];
     if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
-    if (answer.freeformText) throw new Error('Claude TUI freeform answers are not supported yet');
-    if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
-    const selectedIndex = question.options.findIndex(option => option.label === answer.selectedLabels[0]);
-    if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
-    // Use numeric key (1-based) to jump directly to the option. This avoids
-    // cursor-position drift between questions that arrow-key navigation suffers
-    // from — the TUI accepts a digit key to jump straight to that option index.
-    steps.push(String(selectedIndex + 1));
+    const freeformText = answer.freeformText?.trim() ?? '';
+    if (freeformText) {
+      // Freeform: select the "Type something." option (always the last visible
+      // option before "Chat about this"), then type the text and confirm.
+      const typeOptionIndex = question.options.findIndex(o => /^Type something\.?$/i.test(o.label));
+      const optionNumber = typeOptionIndex >= 0 ? typeOptionIndex + 1 : question.options.length;
+      steps.push(String(optionNumber));
+      // Type the text character by character, then Enter to confirm.
+      for (const ch of freeformText) steps.push(ch);
+      steps.push('\r');
+    } else {
+      if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
+      const selectedIndex = question.options.findIndex(option => option.label === answer.selectedLabels[0]);
+      if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
+      // Use numeric key (1-based) to jump directly to the option. This avoids
+      // cursor-position drift between questions that arrow-key navigation suffers
+      // from — the TUI accepts a digit key to jump straight to that option index.
+      steps.push(String(selectedIndex + 1));
+    }
   }
   // After all questions are answered, Claude TUI shows a final confirm screen
   // ("Submit answers" / "Cancel"). The first option is pre-selected, so a

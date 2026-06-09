@@ -223,6 +223,26 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     })).toEqual(['1', '1', '\r']);
   });
 
+  it('sends freeform text by selecting Type-something option then typing', () => {
+    const screen = [
+      '☐ RPS R1 1라운드 — 가위바위보! 무엇을 내시겠어요?',
+      '❯ 1. 가위',
+      '  2. 바위',
+      '  3. 보',
+      '  4. Type something.',
+      '────────────────────────────────────────────────',
+      '  5. Chat about thisEnter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([{ screenText: screen }], {
+      promptId: 'freeform-test', createdAt: 0,
+    });
+    // freeform: select option 4 ("Type something."), type text, Enter, final confirm Enter
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
+      promptId: 'freeform-test',
+      answers: { q1: { selectedLabels: [], freeformText: 'hi' } },
+    })).toEqual(['4', 'h', 'i', '\r', '\r']);
+  });
+
   it('uses numeric key (1-based) to select each option — no arrow keys needed', () => {
     const screen = [
       '☐ RPS R1 1라운드 — 가위바위보! 무엇을 내시겠어요?',
