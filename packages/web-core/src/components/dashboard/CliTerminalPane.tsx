@@ -15,6 +15,7 @@ import {
 } from '../../utils/cli-terminal-scale';
 import type { ActiveConversation } from './types';
 import { getConversationTitle } from './conversation-presenters';
+import SpecDebugPanel from './SpecDebugPanel';
 
 export interface CliTerminalPaneProps {
     activeConv: ActiveConversation;
@@ -48,6 +49,7 @@ export default function CliTerminalPane({
     const [hasLoadedOlderRuntimeScrollback, setHasLoadedOlderRuntimeScrollback] = useState(false);
     const [terminalScale, setTerminalScale] = useState(1);
     const [terminalControlsOpen, setTerminalControlsOpen] = useState(false);
+    const [showSpecDebug, setShowSpecDebug] = useState(false);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalScrollMetrics, setTerminalScrollMetrics] = useState<{ scrollTop: number; scrollHeight: number; clientHeight: number; atTop: boolean; canScroll: boolean }>({
@@ -607,6 +609,14 @@ export default function CliTerminalPane({
                     )}
                     <button
                         type="button"
+                        className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
+                        onClick={() => setShowSpecDebug(v => !v)}
+                        title="Spec debug — inspect current state, sections, and transition history"
+                    >
+                        Debug
+                    </button>
+                    <button
+                        type="button"
                         className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
                         onClick={() => { void copyCurrentTerminalText(); }}
                         disabled={!runtimeReady}
@@ -752,6 +762,12 @@ export default function CliTerminalPane({
                 showControlsToggle={false}
                 animateVisibility={false}
             />
+            {showSpecDebug && (
+                <SpecDebugPanel
+                    activeConv={activeConv}
+                    onClose={() => setShowSpecDebug(false)}
+                />
+            )}
         </>
     );
 }

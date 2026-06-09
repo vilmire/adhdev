@@ -349,6 +349,10 @@ export class SpecCliAdapter implements CliAdapter {
             exited: this.exited,
             screen,
             sections,
+            stateHistory: this.driver.getStateHistory(),
+            idleHoldPending: this.driver.hasIdleHoldPending(),
+            lastBusyAt: this.driver.getLastBusyAt(),
+            specPath: this.driver.getSpecPath(),
         };
     }
     getRuntimeMetadata(): unknown {

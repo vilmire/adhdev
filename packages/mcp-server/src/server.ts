@@ -25,6 +25,7 @@ import { LIST_SESSIONS_TOOL, listSessions } from './tools/list-sessions.js';
 import { LIST_DAEMONS_TOOL, listDaemons } from './tools/list-daemons.js';
 import { READ_CHAT_TOOL, readChat } from './tools/read-chat.js';
 import { READ_CHAT_DEBUG_TOOL, readChatDebug } from './tools/read-chat-debug.js';
+import { SPEC_DEBUG_TOOL, specDebug } from './tools/spec-debug.js';
 import { SEND_CHAT_TOOL, sendChat } from './tools/send-chat.js';
 import { APPROVE_TOOL, approve } from './tools/approve.js';
 import { SCREENSHOT_TOOL, screenshot } from './tools/screenshot.js';
@@ -299,6 +300,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     CHECK_PENDING_TOOL,
     READ_CHAT_TOOL,
     READ_CHAT_DEBUG_TOOL,
+    SPEC_DEBUG_TOOL,
     SEND_CHAT_TOOL,
     APPROVE_TOOL,
     GIT_STATUS_TOOL,
@@ -336,6 +338,10 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         }
         case 'read_chat_debug': {
           const text = await readChatDebug(transport, a as any);
+          return { content: [{ type: 'text', text }] };
+        }
+        case 'spec_debug': {
+          const text = await specDebug(transport, a as any);
           return { content: [{ type: 'text', text }] };
         }
         case 'send_chat': {

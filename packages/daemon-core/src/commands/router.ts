@@ -4178,6 +4178,25 @@ export class DaemonCommandRouter {
                 };
             }
 
+            case 'get_spec_debug': {
+                const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim()
+                    : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
+                if (!sessionId) return { success: false, error: 'targetSessionId required' };
+                const target = this.deps.sessionRegistry.get(sessionId);
+                if (!target) return { success: false, error: 'Session not found', sessionId };
+                const adapter = this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter;
+                const snapshot = (adapter && typeof (adapter as any).getDebugSnapshot === 'function')
+                    ? (adapter as any).getDebugSnapshot()
+                    : null;
+                return {
+                    success: true,
+                    sessionId,
+                    providerType: target.providerType,
+                    isSpecProvider: snapshot !== null,
+                    snapshot,
+                };
+            }
+
             // ── User-level coordinator-prompt files (~/.adhdev/coordinator-prompts/).
             //    These live on this daemon's filesystem and never sync to the
             //    cloud / other daemons — they're per-machine config. The

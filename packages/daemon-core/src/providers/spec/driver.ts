@@ -224,6 +224,9 @@ export class SpecDriver {
     /** State snapshot captured when the idle hold was armed — emitted on commit. */
     private pendingIdleState: SpecEvaluation['state'] | null = null;
     private specWatcher: fs.FSWatcher | null = null;
+    /** Ring buffer of committed state transitions (max 50). */
+    private stateHistory: Array<{ stateId: string; label: string; at: number; durationMs: number }> = [];
+    private prevStateAt = 0;
 
     constructor(private readonly opts: SpecDriverOpts) {
         this.loadSpecOrThrow();
@@ -292,6 +295,22 @@ export class SpecDriver {
         if (this.idleHoldTimer) { clearTimeout(this.idleHoldTimer); this.idleHoldTimer = null; }
         this.pendingIdleState = null;
     }
+
+    private pushHistory(stateId: string, label: string): void {
+        const now = Date.now();
+        const durationMs = this.prevStateAt > 0 ? now - this.prevStateAt : 0;
+        this.prevStateAt = now;
+        this.stateHistory.push({ stateId, label, at: now, durationMs });
+        if (this.stateHistory.length > 50) this.stateHistory.shift();
+    }
+
+    getStateHistory(): ReadonlyArray<{ stateId: string; label: string; at: number; durationMs: number }> {
+        return this.stateHistory;
+    }
+
+    getLastBusyAt(): number { return this.lastBusyAt; }
+    hasIdleHoldPending(): boolean { return this.idleHoldTimer !== null; }
+    getSpecPath(): string { return this.opts.specPath; }
 
     // ────────────────────────────────────────────────────────────────────
     // Loading & adapter wiring
@@ -458,6 +477,7 @@ export class SpecDriver {
                     LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] idleHold committed after ${idleHoldMs}ms`);
                     this.currentStateId = committed.id;
                     this.currentEval = ev;
+                    this.pushHistory(committed.id, committed.label);
                     this.emit({
                         kind: 'state_changed',
                         state: committed,
@@ -510,6 +530,7 @@ export class SpecDriver {
         }
         if (changed) {
             this.currentStateId = evState.id;
+            this.pushHistory(evState.id, evState.label);
             this.emit({
                 kind: 'state_changed',
                 state: evState,
