@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { randomUUID } from 'crypto';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
 import { getMesh, getMeshByRepo } from '../config/mesh-config.js';
@@ -8,9 +9,9 @@ import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getLedgerDir, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { buildMeshNodeCapabilityTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches } from './mesh-work-queue.js';
-import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
@@ -128,6 +129,10 @@ function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent): strin
 function hasPendingCoordinatorEventDuplicate(event: PendingMeshCoordinatorEvent): boolean {
     const fingerprint = buildPendingEventFingerprint(event);
     if (!fingerprint.trim()) return false;
+    // Check SQLite inbox first (G3 primary path)
+    try {
+        if (MeshRuntimeStore.getInstance().hasPendingEventFingerprint(event.meshId, fingerprint)) return true;
+    } catch { /* fall through to JSONL check */ }
     return readPendingMeshCoordinatorEventsFromDisk(event.meshId).some((pending) => buildPendingEventFingerprint(pending) === fingerprint);
 }
 
@@ -257,8 +262,25 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
             LOG.info('MeshEvents', `Suppressed duplicate pending ${event.event} for mesh ${event.meshId}`);
             return true;
         }
-        // Write to the coordinator-scoped file when the target coordinator is known;
-        // fall back to the shared file for legacy/unscoped events.
+
+        const fingerprint = buildPendingEventFingerprint(event);
+
+        // G3: Write to SQLite inbox (primary path going forward)
+        try {
+            MeshRuntimeStore.getInstance().insertPendingEvent({
+                id: randomUUID(),
+                meshId: event.meshId,
+                coordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+                event: event.event,
+                payload: event,
+                fingerprint: fingerprint || null,
+                queuedAt: event.queuedAt,
+            });
+        } catch {
+            // SQLite write failure is non-fatal; JSONL fallback below still works.
+        }
+
+        // Also write to JSONL (retained as legacy/export artifact)
         const path = getPendingEventsPath(event.meshId, event.targetCoordinatorDaemonId);
         trimPendingEventsIfNeeded(path);
         appendFileSync(path, JSON.stringify(event) + '\n', 'utf-8');
@@ -292,6 +314,26 @@ function atomicDrainFile(path: string): string | null {
 /** Drain and return all pending coordinator events for meshId, removing them from disk. */
 export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
+
+    // G3: Try SQLite inbox first
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        if (store.pendingEventCount(meshId) > 0) {
+            const rows = store.drainPendingEvents(meshId, coordinatorDaemonId);
+            if (rows.length > 0) {
+                const events = rows
+                    .map(r => r.payload as PendingMeshCoordinatorEvent)
+                    .filter(Boolean);
+                if (events.length > 0) {
+                    return reconcilePendingMeshCoordinatorEvents(meshId, events);
+                }
+            }
+        }
+    } catch {
+        // SQLite drain failed — fall through to JSONL
+    }
+
+    // JSONL fallback (legacy / migration path)
     const paths = coordinatorDaemonId
         ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
         : [getPendingEventsPath(meshId)];
