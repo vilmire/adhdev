@@ -21,6 +21,8 @@ export type MeshGraphLiveSessionStatus = {
 type MeshGraphMetadataSubscriptionArgs = {
     status: RepoMeshStatus | null
     daemonId: string | null
+    /** Additional daemon IDs to subscribe to (e.g. worker node daemons in cloud multi-daemon mesh). */
+    extraDaemonIds?: string[]
     meshId: string | null
     sendData?: (daemonId: string, data: any) => boolean
     extraLiveSessions?: Array<MeshGraphLiveSessionStatus | null | undefined>
@@ -222,43 +224,65 @@ export function getMeshGraphMetadataSignature(update: DaemonMetadataUpdate, mesh
 export function useMeshGraphMetadataSubscription({
     status,
     daemonId,
+    extraDaemonIds,
     meshId,
     sendData,
     extraLiveSessions = [],
 }: MeshGraphMetadataSubscriptionArgs): RepoMeshStatus | null {
-    const [metadataLiveSessions, setMetadataLiveSessions] = useState<MeshGraphLiveSessionStatus[]>([])
-    const metadataSignatureRef = useRef<string | null>(null)
+    // Per-daemon live session state: Map<daemonId, MeshGraphLiveSessionStatus[]>
+    const [perDaemonSessions, setPerDaemonSessions] = useState<Map<string, MeshGraphLiveSessionStatus[]>>(new Map)
+    const signatureRefs = useRef<Map<string, string | null>>(new Map)
+
+    // All daemon IDs to subscribe (primary + extras, deduplicated).
+    // Use a stable sorted-join key so the subscription effect only re-runs when the set changes.
+    const allDaemonIds = useMemo(() => {
+        const ids = new Set<string>()
+        if (daemonId) ids.add(daemonId)
+        if (extraDaemonIds) for (const id of extraDaemonIds) if (id) ids.add(id)
+        return [...ids].sort()
+    }, [daemonId, extraDaemonIds])
+    const allDaemonIdsKey = allDaemonIds.join(',')
 
     useEffect(() => {
-        metadataSignatureRef.current = null
-        setMetadataLiveSessions([])
+        signatureRefs.current = new Map
+        setPerDaemonSessions(new Map)
     }, [daemonId, meshId])
 
     useEffect(() => {
-        if (!daemonId || !meshId || !sendData) return
-        const unsubscribe = subscriptionManager.subscribe(
+        if (!meshId || !sendData || allDaemonIds.length === 0) return
+        const unsubscribes = allDaemonIds.map(did => subscriptionManager.subscribe(
             { sendData },
-            daemonId,
+            did,
             {
                 type: 'subscribe',
                 topic: 'daemon.metadata',
-                key: `daemon:metadata:${daemonId}`,
-                params: {
-                    includeSessions: true,
-                },
+                key: `daemon:metadata:${did}`,
+                params: { includeSessions: true },
             },
             (update: DaemonMetadataUpdate) => {
                 if (update.topic !== 'daemon.metadata') return
                 const signature = getMeshGraphMetadataSignature(update, meshId)
-                if (signature === metadataSignatureRef.current) return
-                metadataSignatureRef.current = signature
-                setMetadataLiveSessions(collectMeshGraphLiveSessionStatuses(update, meshId))
+                if (signature === (signatureRefs.current.get(did) ?? null)) return
+                signatureRefs.current.set(did, signature)
+                const sessions = collectMeshGraphLiveSessionStatuses(update, meshId)
+                setPerDaemonSessions(prev => {
+                    const next = new Map(prev)
+                    next.set(did, sessions)
+                    return next
+                })
             },
-        )
+        ))
         return () => {
-            unsubscribe()
+            for (const unsub of unsubscribes) unsub()
         }
-    }, [daemonId, meshId, sendData])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [allDaemonIdsKey, meshId, sendData])
+
+    const metadataLiveSessions = useMemo(() => {
+        const all: MeshGraphLiveSessionStatus[] = []
+        for (const sessions of perDaemonSessions.values()) all.push(...sessions)
+        return all
+    }, [perDaemonSessions])
 
     const liveMeshSessions = useMemo(
         () => mergeExtraLiveSessions(metadataLiveSessions, extraLiveSessions),

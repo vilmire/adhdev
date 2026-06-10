@@ -296,3 +296,20 @@ export function getRecentCompletionConflicts(meshId: string, limitMs?: number) {
 export function __clearSessionDeliveriesForTests(meshId: string): void {
     MeshRuntimeStore.getInstance().deleteSessionDeliveries(meshId);
 }
+
+/**
+ * Mark all active (queued/delivering/delivered/acked) deliveries for a session as completed or failed.
+ * Called when a task's terminal status is confirmed so delivery records stay in sync.
+ */
+export function markSessionDeliveriesTerminal(
+    meshId: string,
+    sessionId: string,
+    terminalStatus: 'completed' | 'failed',
+): void {
+    try {
+        const active = MeshRuntimeStore.getInstance().getActiveSessionDeliveries(meshId, sessionId);
+        for (const delivery of active) {
+            MeshRuntimeStore.getInstance().updateSessionDeliveryStatus(delivery.id, terminalStatus);
+        }
+    } catch { /* best-effort */ }
+}

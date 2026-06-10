@@ -751,4 +751,129 @@ describe('mesh-runtime-store', () => {
             expect(conflicts).toHaveLength(1);
         });
     });
+
+    // ── Phase E1: queue retry cap ────────────────────────────────────────────
+
+    describe('Phase E1: queue retry cap', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+            __clearMeshQueueForTests();
+        });
+
+        it('E1.1 — requeueTask fails task when requeueCount reaches maxRetries (default 1)', () => {
+            const meshId = `mesh-e1-cap-${randomUUID().slice(0, 8)}`;
+            const task = enqueueTask(meshId, 'test task');
+            claimNextTask(meshId, 'node-1', 'sess-1');
+
+            // First requeue: count 0 → 1 (under cap, succeeds)
+            const first = requeueTask(meshId, task.id);
+            expect(first!.status).toBe('pending');
+            expect(first!.requeueCount).toBe(1);
+
+            // Re-claim so we can requeue again
+            claimNextTask(meshId, 'node-1', 'sess-1');
+
+            // Second requeue: requeueCount is already 1, which equals maxRetries=1 → should fail
+            const result = requeueTask(meshId, task.id);
+            expect(result).not.toBeNull();
+            expect(result!.status).toBe('failed');
+            expect(result!.cancelReason).toMatch(/max_retries_exceeded/);
+        });
+
+        it('E1.2 — requeueTask succeeds when under cap', () => {
+            const meshId = `mesh-e1-under-${randomUUID().slice(0, 8)}`;
+            const task = enqueueTask(meshId, 'test task');
+            claimNextTask(meshId, 'node-1', 'sess-1');
+
+            // maxRetries=2: first requeue should succeed (0 → 1 < 2)
+            const result = requeueTask(meshId, task.id, { maxRetries: 2 });
+            expect(result).not.toBeNull();
+            expect(result!.status).toBe('pending');
+            expect(result!.requeueCount).toBe(1);
+        });
+
+        it('E1.3 — force=true bypasses retry cap', () => {
+            const meshId = `mesh-e1-force-${randomUUID().slice(0, 8)}`;
+            const task = enqueueTask(meshId, 'test task');
+            claimNextTask(meshId, 'node-1', 'sess-1');
+
+            // Exhaust cap: requeue until failed
+            requeueTask(meshId, task.id);              // 0→1, pending
+            claimNextTask(meshId, 'node-1', 'sess-1');
+            const failed = requeueTask(meshId, task.id); // 1>=1, failed
+            expect(failed!.status).toBe('failed');
+
+            // Manual requeue with force=true should succeed despite failed status
+            const forcedResult = requeueTask(meshId, task.id, { force: true });
+            expect(forcedResult).not.toBeNull();
+            expect(forcedResult!.status).toBe('pending');
+        });
+
+        it('E1.4 — failed task from cap has descriptive cancelReason', () => {
+            const meshId = `mesh-e1-reason-${randomUUID().slice(0, 8)}`;
+            const task = enqueueTask(meshId, 'test task');
+            claimNextTask(meshId, 'node-1', 'sess-1');
+
+            // First requeue succeeds (0 < 1)
+            requeueTask(meshId, task.id, { maxRetries: 1 });
+            claimNextTask(meshId, 'node-1', 'sess-1');
+
+            // Second requeue hits cap (1 >= 1)
+            const result = requeueTask(meshId, task.id, { maxRetries: 1 });
+            expect(result!.status).toBe('failed');
+            expect(result!.cancelReason).toContain('1');  // shows the cap value
+        });
+    });
+
+    // ── Phase C1: mesh tool call rate limit ──────────────────────────────────
+
+    describe('Phase C1: mesh_tool_call_log rate guard', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        it('C1.1 — returns no advisory when under the call limit', () => {
+            const meshId = `mesh-c1-ok-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            for (let i = 0; i < 5; i++) {
+                const result = db.recordMeshToolCall({ meshId, tool: 'mesh_status', windowMs: 10_000, maxCalls: 5 });
+                expect(result.rateLimitExceeded).toBe(false);
+                expect(result.advisory).toBeNull();
+            }
+        });
+
+        it('C1.2 — returns advisory and rateLimitExceeded when over the limit', () => {
+            const meshId = `mesh-c1-over-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            for (let i = 0; i < 5; i++) {
+                db.recordMeshToolCall({ meshId, tool: 'mesh_status', windowMs: 10_000, maxCalls: 5 });
+            }
+            const result = db.recordMeshToolCall({ meshId, tool: 'mesh_status', windowMs: 10_000, maxCalls: 5 });
+            expect(result.rateLimitExceeded).toBe(true);
+            expect(result.callsInWindow).toBeGreaterThan(5);
+            expect(typeof result.advisory).toBe('string');
+            expect(result.advisory).toContain('mesh_status');
+        });
+
+        it('C1.3 — different tools have independent windows', () => {
+            const meshId = `mesh-c1-sep-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            for (let i = 0; i < 6; i++) {
+                db.recordMeshToolCall({ meshId, tool: 'mesh_status', windowMs: 10_000, maxCalls: 5 });
+            }
+            const queueResult = db.recordMeshToolCall({ meshId, tool: 'mesh_view_queue', windowMs: 10_000, maxCalls: 5 });
+            expect(queueResult.rateLimitExceeded).toBe(false);
+        });
+
+        it('C1.4 — different mesh IDs have independent windows', () => {
+            const meshId1 = `mesh-c1-m1-${randomUUID().slice(0, 8)}`;
+            const meshId2 = `mesh-c1-m2-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            for (let i = 0; i < 6; i++) {
+                db.recordMeshToolCall({ meshId: meshId1, tool: 'mesh_status', windowMs: 10_000, maxCalls: 5 });
+            }
+            const result = db.recordMeshToolCall({ meshId: meshId2, tool: 'mesh_status', windowMs: 10_000, maxCalls: 5 });
+            expect(result.rateLimitExceeded).toBe(false);
+        });
+    });
 });

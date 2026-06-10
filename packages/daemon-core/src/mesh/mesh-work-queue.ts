@@ -82,6 +82,8 @@ export interface MeshWorkQueueEntry {
     requeueReason?: string;
     requeuedAt?: string;
     requeueCount?: number;
+    /** Max automatic requeue attempts. When requeueCount reaches this, task is auto-failed. */
+    maxRetries?: number;
     /** Last automatic queue session spin-up attempt, for mesh_view_queue/debug visibility. */
     autoLaunch?: {
         status: 'skipped' | 'started' | 'failed' | 'completed';
@@ -123,17 +125,24 @@ function firstProviderPriority(policy: unknown): string | undefined {
 }
 
 export function buildMeshNodeCapabilityTags(
-    node: { capabilities?: unknown; policy?: unknown } | undefined,
+    node: { capabilities?: unknown; policy?: unknown; isLocalWorktree?: unknown; worktreeBranch?: unknown } | undefined,
     providerType?: string,
 ): string[] {
     const provider = typeof providerType === 'string' && providerType.trim()
         ? providerType.trim()
         : firstProviderPriority(node?.policy);
+    const worktreeBranch = typeof node?.worktreeBranch === 'string' && node.worktreeBranch.trim()
+        ? node.worktreeBranch.trim()
+        : null;
     return normalizeMeshCapabilityTags([
         ...(Array.isArray(node?.capabilities) ? node.capabilities : []),
         `os=${process.platform}`,
         `arch=${process.arch}`,
         ...(provider ? [`provider=${provider}`] : []),
+        // Worktree nodes automatically expose a "worktree=<branch>" tag so that
+        // mesh_enqueue_task with required_tags: ["worktree=<branch>"] routes
+        // only to the matching worktree node.
+        ...(node?.isLocalWorktree === true && worktreeBranch ? [`worktree=${worktreeBranch}`] : []),
     ]);
 }
 
@@ -263,6 +272,11 @@ export function cancelTask(
  * Return a queue task to pending for retry. By default, dead session targeting
  * and assigned ownership are cleared so stale assignments do not strand again.
  */
+export type RequeueResult =
+    | { status: 'requeued'; entry: MeshWorkQueueEntry }
+    | { status: 'failed_max_retries'; entry: MeshWorkQueueEntry; maxRetries: number; requeueCount: number }
+    | { status: 'not_found' };
+
 export function requeueTask(
     meshId: string,
     taskId: string,
@@ -272,12 +286,29 @@ export function requeueTask(
         targetSessionId?: string;
         clearTargetNode?: boolean;
         clearTargetSession?: boolean;
+        /**
+         * Override the retry cap for this call. Use only for explicit operator actions.
+         * If true, the task is requeued even when requeueCount >= maxRetries.
+         */
+        force?: boolean;
+        /** Per-task retry cap override. Falls back to mesh policy maxTaskRetries (default 1). */
+        maxRetries?: number;
     } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
+        const currentCount = entry.requeueCount || 0;
+        const maxRetries = opts?.maxRetries ?? entry.maxRetries ?? 1;
+        if (!opts?.force && currentCount >= maxRetries) {
+            // Auto-fail: cap exceeded without explicit force override.
+            entry.status = 'failed';
+            entry.cancelReason = `max_retries_exceeded: requeued ${currentCount} time(s), limit is ${maxRetries}`;
+            entry.updatedAt = new Date().toISOString();
+            MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+            return entry;
+        }
         entry.status = 'pending';
         delete entry.assignedNodeId;
         delete entry.assignedSessionId;
@@ -288,7 +319,7 @@ export function requeueTask(
         if (opts?.clearTargetSession !== false) delete entry.targetSessionId;
         if (typeof opts?.targetSessionId === 'string') entry.targetSessionId = opts.targetSessionId;
         entry.requeuedAt = new Date().toISOString();
-        entry.requeueCount = (entry.requeueCount || 0) + 1;
+        entry.requeueCount = currentCount + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         return entry;
@@ -435,4 +466,27 @@ export function markStaleDirectDispatches(meshId: string, olderThanMs = 60 * 60_
     try {
         MeshRuntimeStore.getInstance().markStaleDirectDispatches(meshId, olderThanMs);
     } catch { /* best-effort */ }
+}
+
+export type MeshToolCallRateResult = { rateLimitExceeded: boolean; callsInWindow: number; advisory: string | null };
+
+/**
+ * Record a coordinator tool call and return a rate-limit advisory when the
+ * call rate for that tool exceeds the allowed threshold.
+ *
+ * Defaults: 10-second sliding window, max 5 calls before advisory is raised.
+ * Returns { rateLimitExceeded: false } on any store error so callers are not blocked.
+ */
+export function recordMeshToolCall(opts: {
+    meshId: string;
+    tool: string;
+    sessionId?: string | null;
+    windowMs?: number;
+    maxCalls?: number;
+}): MeshToolCallRateResult {
+    try {
+        return MeshRuntimeStore.getInstance().recordMeshToolCall(opts);
+    } catch {
+        return { rateLimitExceeded: false, callsInWindow: 0, advisory: null };
+    }
 }

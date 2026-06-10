@@ -10,6 +10,8 @@ import {
     cancelTask,
     requeueTask,
     getMeshQueueStats,
+    buildMeshNodeCapabilityTags,
+    nodeSatisfiesRequiredTags,
     __clearMeshQueueForTests,
     __replaceMeshQueueForTests,
     __resetMeshRuntimeStoreForTests
@@ -433,5 +435,47 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(stats.completed).to.equal(1);
         expect(stats.cancelled).to.equal(1);
         expect(stats.failed).to.equal(0);
+    });
+});
+
+describe('buildMeshNodeCapabilityTags — worktree tag auto-registration', () => {
+    it('non-worktree node does not expose worktree tag', () => {
+        const tags = buildMeshNodeCapabilityTags({ isLocalWorktree: false, worktreeBranch: 'fix-foo' }, 'claude-cli');
+        expect(tags.some((t: string) => t.startsWith('worktree='))).toBe(false);
+    });
+
+    it('worktree node with branch exposes worktree=<branch> tag', () => {
+        const tags = buildMeshNodeCapabilityTags({ isLocalWorktree: true, worktreeBranch: 'fix-mesh-foo' }, 'claude-cli');
+        expect(tags).toContain('worktree=fix-mesh-foo');
+    });
+
+    it('worktree node without branch does not expose worktree tag', () => {
+        const tags = buildMeshNodeCapabilityTags({ isLocalWorktree: true, worktreeBranch: undefined }, 'claude-cli');
+        expect(tags.some((t: string) => t.startsWith('worktree='))).toBe(false);
+    });
+
+    it('required_tags worktree= matches worktree node but not main node', () => {
+        const worktreeTags = buildMeshNodeCapabilityTags({ isLocalWorktree: true, worktreeBranch: 'fix-mesh-bar' }, 'claude-cli');
+        const mainTags = buildMeshNodeCapabilityTags({ isLocalWorktree: false }, 'claude-cli');
+
+        expect(nodeSatisfiesRequiredTags(['worktree=fix-mesh-bar'], worktreeTags)).toBe(true);
+        expect(nodeSatisfiesRequiredTags(['worktree=fix-mesh-bar'], mainTags)).toBe(false);
+    });
+
+    it('claimNextTask with required_tags worktree= is claimed only by matching worktree session', () => {
+        const meshId = `test-worktree-claim-${Date.now()}`;
+        // Enqueue a task targeted at the worktree node
+        enqueueTask(meshId, 'fix task', { requiredTags: ['worktree=fix-branch'] });
+
+        // Main node (no worktree tag) should NOT claim it
+        const mainTags = buildMeshNodeCapabilityTags({ isLocalWorktree: false }, 'claude-cli');
+        const mainClaim = claimNextTask(meshId, 'node-main', 'sess-main', mainTags);
+        expect(mainClaim).toBeNull();
+
+        // Worktree node with matching branch SHOULD claim it
+        const worktreeTags = buildMeshNodeCapabilityTags({ isLocalWorktree: true, worktreeBranch: 'fix-branch' }, 'claude-cli');
+        const worktreeClaim = claimNextTask(meshId, 'node-worktree', 'sess-worktree', worktreeTags);
+        expect(worktreeClaim).not.toBeNull();
+        expect(worktreeClaim!.message).toBe('fix task');
     });
 });

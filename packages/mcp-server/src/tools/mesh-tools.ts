@@ -49,6 +49,7 @@ import {
     readLedgerEntries,
     readLedgerSlice,
     reconcileDirectDispatchCompletionFromTranscript,
+    recordMeshToolCall,
     requeueTask,
     validateMeshTaskModeRequest,
 } from '@adhdev/daemon-core';
@@ -2147,7 +2148,7 @@ export const MESH_QUEUE_CANCEL_TOOL = {
 
 export const MESH_QUEUE_REQUEUE_TOOL = {
     name: 'mesh_queue_requeue',
-    description: 'Return a mesh queue task to pending for retry. By default clears stale assigned owner and target session so another live session can claim it.',
+    description: 'Return a mesh queue task to pending for retry. By default clears stale assigned owner and target session so another live session can claim it. When the task has exceeded its retry cap it is auto-failed instead; use force=true to override.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -2157,6 +2158,7 @@ export const MESH_QUEUE_REQUEUE_TOOL = {
             target_session_id: { type: 'string', description: 'Optional replacement target runtime session ID.' },
             clear_target_node: { type: 'boolean', description: 'When true, remove any existing target node constraint.' },
             keep_target_session: { type: 'boolean', description: 'When true, preserve an existing target session if target_session_id is not provided. Defaults false to avoid stale session targets.' },
+            force: { type: 'boolean', description: 'When true, bypass the retry cap and requeue even if maxRetries has been exceeded. Use only for explicit operator recovery.' },
         },
         required: ['task_id'],
     },
@@ -2443,6 +2445,8 @@ export const ALL_MESH_TOOLS = [
 // ─── Tool Implementations ───────────────────────
 
 export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean } = {}): Promise<string> {
+    const rateResult = recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_status' });
+
     await refreshMeshFromDaemon(ctx);
     const { mesh, transport } = ctx;
 
@@ -2668,6 +2672,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         ...(args.includeTerminalDirectWork === true ? { terminalDirectWork: activeWorkEvidence.terminalDirectWork } : {}),
         activeWorkSummary: activeWorkEvidence.summary,
         ...(pollingGuidance ? { pollingGuidance } : {}),
+        ...(rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: 'rate_limit_exceeded', tool: 'mesh_status', callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {}),
         branchConvergenceSummary: summarizeBranchConvergence(results),
         ...(coordinatorSessions.length > 0
             ? {
@@ -2953,6 +2958,7 @@ export async function meshViewQueue(
     ctx: MeshContext,
     args: { status?: string[]; view?: QueueViewMode },
 ): Promise<string> {
+    const rateResult = recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_view_queue' });
     try {
         await refreshMeshFromDaemon(ctx);
         const statusFilter = sanitizeQueueStatusFilter(args.status);
@@ -3013,6 +3019,7 @@ export async function meshViewQueue(
             staleDirectWork: activeWorkEvidence.staleDirectWork,
             activeWorkSummary: activeWorkEvidence.summary,
             ...(pollingGuidance ? { pollingGuidance } : {}),
+            ...(rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: 'rate_limit_exceeded', tool: 'mesh_view_queue', callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {}),
             summary,
             visibleSummary,
             activeCounts: summary.activeCounts,
@@ -3078,6 +3085,7 @@ export async function meshQueueRequeue(
         clearTargetNode?: boolean;
         keep_target_session?: boolean;
         keepTargetSession?: boolean;
+        force?: boolean;
     },
 ): Promise<string> {
     try {
@@ -3092,8 +3100,18 @@ export async function meshQueueRequeue(
             targetSessionId,
             clearTargetNode: args.clear_target_node === true || args.clearTargetNode === true,
             clearTargetSession: targetSessionId ? false : !keepTargetSession,
+            force: args.force === true,
         });
         if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
+        if (task.status === 'failed' && task.cancelReason?.startsWith('max_retries_exceeded')) {
+            return JSON.stringify({
+                success: false,
+                code: 'max_retries_exceeded',
+                error: task.cancelReason,
+                task,
+                hint: 'Use force=true to bypass the retry cap for explicit operator recovery.',
+            }, null, 2);
+        }
         if (isLocalTransport(ctx.transport)) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         }

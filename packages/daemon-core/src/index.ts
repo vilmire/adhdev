@@ -211,8 +211,8 @@ export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence }
 export type { MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, markStaleDirectDispatches } from './mesh/mesh-work-queue.js';
-export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshWorkQueueStats, MeshQueueMutationOptions, MeshTaskModeValidationResult, DirectDispatchRecord } from './mesh/mesh-work-queue.js';
+export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, markStaleDirectDispatches, recordMeshToolCall } from './mesh/mesh-work-queue.js';
+export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshWorkQueueStats, MeshQueueMutationOptions, MeshTaskModeValidationResult, DirectDispatchRecord, MeshToolCallRateResult } from './mesh/mesh-work-queue.js';
 export { buildCompactStaleDirectWorkSummary, buildMeshActiveWork, buildMeshActiveWorkSummary } from './mesh/mesh-active-work.js';
 export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource, MeshStaleDirectWorkSummary } from './mesh/mesh-active-work.js';
 export { buildMeshAsyncRefineJobs } from './mesh/mesh-refine-status.js';
@@ -233,7 +233,7 @@ export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoor
 export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
 
 // ── Mesh Delivery Policy ──
-export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, recordCompletionConflict, getRecentCompletionConflicts } from './mesh/mesh-delivery-policy.js';
+export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, markSessionDeliveriesTerminal, recordCompletionConflict, getRecentCompletionConflicts } from './mesh/mesh-delivery-policy.js';
 export type { MeshSessionDeliveryStatus, MeshSessionDeliveryKind, MeshDeliveryDecision, MeshDeliveryPolicyResult, SessionDeliveryRecord } from './mesh/mesh-delivery-policy.js';
 
 // ── Mesh P2P Relay Failure Classification ──

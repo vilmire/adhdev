@@ -186,6 +186,17 @@ export class MeshRuntimeStore {
 
             CREATE INDEX IF NOT EXISTS idx_mesh_completion_conflicts_mesh
                 ON mesh_completion_conflicts(mesh_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS mesh_tool_call_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mesh_id TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                session_id TEXT,
+                called_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_tool_call_log_mesh_tool_time
+                ON mesh_tool_call_log(mesh_id, tool, called_at);
         `);
     }
 
@@ -765,5 +776,58 @@ export class MeshRuntimeStore {
             event: r.event as string,
             createdAt: r.created_at as string,
         }));
+    }
+
+    /**
+     * Record a mesh tool call and check whether this mesh+tool combination is
+     * being called too rapidly (sliding window rate guard).
+     *
+     * Returns a rate-limit advisory string when the call rate is too high, null otherwise.
+     * windowMs: sliding window size in ms (default 10s)
+     * maxCalls: max allowed calls within the window (default 5)
+     */
+    recordMeshToolCall(opts: {
+        meshId: string;
+        tool: string;
+        sessionId?: string | null;
+        windowMs?: number;
+        maxCalls?: number;
+    }): { rateLimitExceeded: boolean; callsInWindow: number; advisory: string | null } {
+        const { meshId, tool, sessionId = null } = opts;
+        const windowMs = opts.windowMs ?? 10_000;
+        const maxCalls = opts.maxCalls ?? 5;
+        const now = Date.now();
+        const windowStart = now - windowMs;
+
+        this.db.prepare(
+            'INSERT INTO mesh_tool_call_log (mesh_id, tool, session_id, called_at) VALUES (?, ?, ?, ?)'
+        ).run(meshId, tool, sessionId, now);
+
+        const row = this.db.prepare(
+            'SELECT COUNT(*) as cnt FROM mesh_tool_call_log WHERE mesh_id = ? AND tool = ? AND called_at >= ?'
+        ).get(meshId, tool, windowStart) as { cnt: number };
+        const callsInWindow = row?.cnt ?? 0;
+
+        // Sweep old entries periodically to keep the table lean (every 200 calls across all tools).
+        if (++this.walWriteCounter % 200 === 0) {
+            this.db.prepare(
+                'DELETE FROM mesh_tool_call_log WHERE called_at < ?'
+            ).run(now - Math.max(windowMs * 10, 60_000));
+        }
+
+        if (callsInWindow > maxCalls) {
+            const advisory = `Rate limit: ${tool} called ${callsInWindow} times in the last ${windowMs / 1000}s for mesh ${meshId}. `
+                + `Wait for pendingCoordinatorEvents or an explicit user status request before calling again.`;
+            return { rateLimitExceeded: true, callsInWindow, advisory };
+        }
+        return { rateLimitExceeded: false, callsInWindow, advisory: null };
+    }
+
+    /**
+     * Prune tool call log entries older than the given age in ms.
+     * Exposed for testing.
+     */
+    pruneToolCallLog(olderThanMs: number): void {
+        this.db.prepare('DELETE FROM mesh_tool_call_log WHERE called_at < ?').run(Date.now() - olderThanMs);
     }
 }

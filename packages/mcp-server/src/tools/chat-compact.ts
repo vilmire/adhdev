@@ -20,6 +20,42 @@ export function isCoordinatorVisibleMessage(message: any): boolean {
   return role === 'user' || role === 'assistant' || role === 'agent';
 }
 
+/**
+ * Build a one-line summary string for a tool/bash message that was filtered out.
+ * Returns null when no useful summary can be extracted.
+ */
+export function summarizeToolMessage(message: any): string | null {
+  if (!message || typeof message !== 'object') return null;
+  const kind = String(message.kind ?? message.type ?? message.messageKind ?? '').toLowerCase();
+  const role = String(message.role ?? '').toLowerCase();
+
+  // Bash / terminal execution
+  if (kind === 'terminal' || kind === 'bash') {
+    const cmd = message.command ?? message.cmd ?? message.input ?? messageContent(message);
+    const exit = message.exitCode ?? message.exit_code ?? message.code;
+    const cmdShort = typeof cmd === 'string' ? cmd.split('\n')[0].slice(0, 120) : null;
+    if (!cmdShort) return null;
+    return exit !== undefined && exit !== null ? `[Bash] ${cmdShort} → exit ${exit}` : `[Bash] ${cmdShort}`;
+  }
+
+  // Tool call (Claude-style function call)
+  if (kind === 'tool_call' || kind === 'tool' || role === 'tool') {
+    const name = message.name ?? message.toolName ?? message.tool_name ?? message.function?.name;
+    if (typeof name === 'string' && name.trim()) return `[Tool] ${name.trim()}`;
+    return null;
+  }
+
+  // Tool result with explicit exit code
+  if (kind === 'tool_result') {
+    const exit = message.exitCode ?? message.exit_code ?? message.code;
+    const name = message.name ?? message.toolName ?? message.tool_name;
+    const label = typeof name === 'string' && name.trim() ? name.trim() : 'tool';
+    return exit !== undefined && exit !== null ? `[Tool result: ${label}] exit ${exit}` : null;
+  }
+
+  return null;
+}
+
 export function buildCompactMessageTail(
   visibleMessages: CompactChatMessage[],
   opts: { summary?: string; finalAssistant?: CompactChatMessage | undefined; limit: number },
@@ -43,6 +79,19 @@ export function compactChatPayload(
     : messageContent(finalAssistant).trim();
   const messages = buildCompactMessageTail(visible, { summary, finalAssistant, limit });
 
+  // Collect one-line summaries for filtered-out tool/bash messages so the coordinator
+  // can see what actions were taken without reading the full transcript.
+  const toolSummaries = rawMessages
+    .filter((m: any) => !isCoordinatorVisibleMessage(m))
+    .map(summarizeToolMessage)
+    .filter((s: string | null): s is string => s !== null);
+
+  // omittedMessages = total messages not included in the returned `messages` tail.
+  // This includes both filtered (tool/system) messages AND visible messages cut off by the tail limit.
+  const omittedMessages = Math.max(0, rawMessages.length - messages.length);
+  // filteredMessages = only the non-user-visible messages (for backward compat).
+  const filteredMessages = Math.max(0, rawMessages.length - visible.length);
+
   return {
     success: payload?.success !== false,
     compact: true,
@@ -52,8 +101,9 @@ export function compactChatPayload(
     providerSessionId: payload?.providerSessionId ?? null,
     totalMessages: rawMessages.length,
     visibleMessages: visible.length,
-    filteredMessages: visible.length,
-    omittedMessages: Math.max(0, rawMessages.length - visible.length),
+    filteredMessages,
+    omittedMessages,
+    ...(toolSummaries.length > 0 ? { toolSummaries } : {}),
     summary,
     ...(payload?.changedFiles !== undefined ? { changedFiles: payload.changedFiles } : {}),
     ...(payload?.testsRun !== undefined ? { testsRun: payload.testsRun } : {}),

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { READ_CHAT_TOOL, readChat } from '../src/tools/read-chat.js';
 import { clearRapidReadChatAdvisoryStateForTests } from '../src/tools/read-chat-polling-advisory.js';
+import { summarizeToolMessage, compactChatPayload } from '../src/tools/chat-compact.js';
 
 test('readChat schema exposes opt-in compact mode', () => {
   assert.equal((READ_CHAT_TOOL.inputSchema.properties as any).compact.type, 'boolean');
@@ -157,4 +158,66 @@ test('readChat local mode sends tailLimit and caps formatted output to requested
     parsed.messages.map((message: { content: string }) => message.content),
     ['message-4', 'message-5'],
   );
+});
+
+test('summarizeToolMessage returns bash summary with exit code', () => {
+  const msg = { role: 'assistant', kind: 'terminal', command: 'npm test', exitCode: 0 };
+  assert.equal(summarizeToolMessage(msg), '[Bash] npm test → exit 0');
+});
+
+test('summarizeToolMessage returns bash summary without exit code', () => {
+  const msg = { role: 'assistant', kind: 'bash', command: 'git status' };
+  assert.equal(summarizeToolMessage(msg), '[Bash] git status');
+});
+
+test('summarizeToolMessage returns tool call name', () => {
+  const msg = { role: 'assistant', kind: 'tool_call', name: 'Read' };
+  assert.equal(summarizeToolMessage(msg), '[Tool] Read');
+});
+
+test('summarizeToolMessage returns null for messages without useful info', () => {
+  assert.equal(summarizeToolMessage({ role: 'system', content: 'noise' }), null);
+  assert.equal(summarizeToolMessage({ role: 'assistant', meta: { internal: true }, content: 'internal' }), null);
+});
+
+test('compact payload includes toolSummaries for filtered tool/bash messages', () => {
+  const payload = {
+    success: true,
+    messages: [
+      { role: 'user', content: 'please do X' },
+      { role: 'assistant', kind: 'terminal', command: 'npm test', exitCode: 0 },
+      { role: 'assistant', kind: 'tool_call', name: 'Read' },
+      { role: 'assistant', content: 'Done.' },
+    ],
+  };
+  const result = compactChatPayload(payload, { limit: 10 });
+  assert.equal(result.compact, true);
+  assert.equal(result.visibleMessages, 2);
+  assert.equal(result.filteredMessages, 2);
+  assert.equal(result.omittedMessages, 2);
+  assert.deepEqual(result.toolSummaries, ['[Bash] npm test → exit 0', '[Tool] Read']);
+  assert.deepEqual(
+    result.messages.map((m: any) => m.content),
+    ['please do X', 'Done.'],
+  );
+});
+
+test('compact payload omittedMessages counts tail-sliced visible messages too', () => {
+  // 4 visible messages but limit=2, so 2 are sliced off
+  const payload = {
+    success: true,
+    messages: [
+      { role: 'user', content: 'msg1' },
+      { role: 'user', content: 'msg2' },
+      { role: 'assistant', content: 'msg3' },
+      { role: 'assistant', content: 'msg4' },
+    ],
+  };
+  const result = compactChatPayload(payload, { limit: 2 });
+  assert.equal(result.totalMessages, 4);
+  assert.equal(result.visibleMessages, 4);
+  assert.equal(result.filteredMessages, 0);
+  // omittedMessages = totalMessages - returned messages count = 4 - 2 = 2
+  assert.equal(result.omittedMessages, 2);
+  assert.equal(result.messages.length, 2);
 });

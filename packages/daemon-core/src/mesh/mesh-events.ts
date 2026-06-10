@@ -10,7 +10,7 @@ import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { buildMeshNodeCapabilityTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
-import { createSessionDelivery, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
+import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
@@ -751,6 +751,7 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
         },
     });
     updateDirectDispatchStatus(args.meshId, args.sessionId, kind === 'task_completed' ? 'completed' : 'failed');
+    markSessionDeliveriesTerminal(args.meshId, args.sessionId, kind === 'task_completed' ? 'completed' : 'failed');
     setImmediate(() => cleanupTerminalDirectDispatches());
     queuePendingMeshCoordinatorEvent({
         event: kind === 'task_completed' ? 'agent:generating_completed' : 'agent:stopped',
@@ -1706,6 +1707,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             occurredAt: occurredAtMs != null ? new Date(occurredAtMs).toISOString() : undefined,
         });
         updateDirectDispatchStatus(args.meshId, sessionId, outcome);
+        markSessionDeliveriesTerminal(args.meshId, sessionId, outcome);
         setImmediate(() => cleanupTerminalDirectDispatches());
         return task ? { id: task.id } : null;
     }
@@ -1791,6 +1793,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
         if (sessionId) {
             updateDirectDispatchStatus(args.meshId, sessionId, 'acked');
+            // Ack any queued deliveries so coordinator knows the message was received.
+            const activeDeliveries = ((): { id: string }[] => {
+                try { return MeshRuntimeStore.getInstance().getActiveSessionDeliveries(args.meshId, sessionId); }
+                catch { return []; }
+            })();
+            for (const d of activeDeliveries) {
+                updateSessionDeliveryStatus(d.id, 'acked');
+            }
         }
     } else if (args.event === 'agent:stopped') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);

@@ -219,10 +219,22 @@ export default function RepoMesh() {
     )
     const isHostNodeAttached = features.meshHostDaemonSection ? !!selectedHostNode : true
 
+    // Collect all daemon IDs from mesh nodes so worker sessions on non-coordinator daemons
+    // are also enriched via live metadata subscription (fixes cloud chip missing issue).
+    const meshNodeDaemonIds = useMemo(() => {
+        if (!meshGraphStatus) return []
+        return [...new Set(
+            (meshGraphStatus.nodes ?? [])
+                .map((n: any) => String(n.daemonId || n.daemon_id || ''))
+                .filter(Boolean)
+        )]
+    }, [meshGraphStatus])
+
     // live subscription enrichment
     const displayedMeshStatus = useMeshGraphMetadataSubscription({
         status: meshGraphStatus,
         daemonId: activeDaemonId || null,
+        extraDaemonIds: meshNodeDaemonIds,
         meshId: selectedMeshId,
         sendData,
     })
