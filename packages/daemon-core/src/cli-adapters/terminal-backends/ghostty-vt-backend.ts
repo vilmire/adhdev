@@ -84,6 +84,7 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     readonly kind = 'ghostty-vt' as const;
     private terminal: GhosttyVtTerminal;
     private rows: number;
+    private disposed = false;
 
     constructor(options: TerminalViewportBackendOptions) {
         const binding = loadGhosttyVtBinding();
@@ -101,11 +102,12 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     }
 
     write(data: string): void {
-        if (!data) return;
+        if (!data || this.disposed) return;
         this.terminal.write(data);
     }
 
     getText(): string {
+        if (this.disposed) return '';
         // ghostty's `trim:true` collapses CUF-advanced cells — many TUIs including
         // Claude Code render spaces via cursor-forward rather than literal spaces,
         // which would break downstream regex matching. Keep per-row padding and
@@ -126,10 +128,13 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     }
 
     getCursorPosition(): { col: number; row: number } {
+        if (this.disposed) return { col: 0, row: 0 };
         return this.terminal.getCursorPosition();
     }
 
     dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
         this.terminal.dispose();
     }
 }
