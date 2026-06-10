@@ -290,6 +290,12 @@ export default function RepoMesh() {
         void loadQueue(selectedMeshId)
     }, [selectedMeshId, features.queueSection])
 
+    // Auto-load review inbox on mesh selection (when feature is enabled)
+    useEffect(() => {
+        if (!features.reviewInbox || !selectedMeshId) return
+        void loadReviewInbox(selectedMeshId)
+    }, [selectedMeshId, features.reviewInbox])
+
     // Initial mesh load
     useEffect(() => { void loadMeshes() }, [loadMeshes])
 
