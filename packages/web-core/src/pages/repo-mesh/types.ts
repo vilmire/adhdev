@@ -55,6 +55,9 @@ export interface MeshQueueEntry {
     /** M1: system hold reason, e.g. "dependency_failed:<taskId>". */
     blockedReason?: string
     missionId?: string
+    /** M7: when the task was dispatched (assigned) — used for duration display. */
+    dispatchTimestamp?: string
+    requeueCount?: number
 }
 
 export interface MeshQueueSummary {

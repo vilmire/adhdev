@@ -176,6 +176,8 @@ export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './con
 export { buildCoordinatorSystemPrompt } from './mesh/coordinator-prompt.js';
 export { upsertMeshMission, getMeshMissions, getMeshMission, summarizeMissionTasks, summarizeMeshMission, getActiveMeshMissionSummaries, buildMissionPromptSection, MESH_MISSION_STATUSES } from './mesh/mesh-missions.js';
 export type { MeshMissionRecord, MeshMissionStatus, MeshMissionSummary, MeshMissionTaskAggregate } from './mesh/mesh-missions.js';
+export { computeMeshTaskStats, computeMeshMissionStats } from './mesh/mesh-task-stats.js';
+export type { MeshTaskStats, MeshMissionStats } from './mesh/mesh-task-stats.js';
 export type { CoordinatorPromptContext } from './mesh/coordinator-prompt.js';
 export { loadMeshCoordinatorRegistry, registerMeshCoordinator, unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from './mesh/coordinator-registry.js';
 export type { CoordinatorRegistryEntry } from './mesh/coordinator-registry.js';

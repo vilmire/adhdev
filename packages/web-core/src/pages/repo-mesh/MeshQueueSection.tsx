@@ -2,6 +2,20 @@ import { Section } from '../../components/ui/Section'
 import { IconRefresh, NodeHealthBadge } from './icons'
 import type { MeshQueueEntry, MeshQueueSummary } from './types'
 
+// M7: dispatched→terminal wall clock from queue truth (dispatchTimestamp/updatedAt).
+// Shown only when both endpoints exist — no estimates.
+function describeTaskDuration(item: MeshQueueEntry): string | null {
+    if (item.status !== 'completed' && item.status !== 'failed') return null
+    const dispatched = item.dispatchTimestamp ? new Date(item.dispatchTimestamp).getTime() : NaN
+    const terminal = item.updatedAt ? new Date(item.updatedAt).getTime() : NaN
+    if (!Number.isFinite(dispatched) || !Number.isFinite(terminal) || terminal < dispatched) return null
+    const totalSeconds = Math.round((terminal - dispatched) / 1000)
+    if (totalSeconds < 60) return `${totalSeconds}s`
+    const minutes = Math.floor(totalSeconds / 60)
+    if (minutes < 60) return `${minutes}m ${totalSeconds % 60}s`
+    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
 interface Props {
     queueSummary: MeshQueueSummary | null
     queueLoading: boolean
@@ -60,6 +74,11 @@ export function MeshQueueSection({ queueSummary, queueLoading, queueError, activ
                                         )}
                                         {item.blockedReason && (
                                             <span className="text-[10px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-full px-2 py-0.5" title={item.blockedReason}>blocked</span>
+                                        )}
+                                        {describeTaskDuration(item) && (
+                                            <span className="text-[10px] text-text-muted bg-bg-tertiary border border-border-subtle rounded-full px-2 py-0.5" title="Dispatched → terminal wall clock">
+                                                {describeTaskDuration(item)}{(item.requeueCount ?? 0) > 0 ? ` · ${item.requeueCount} retr${item.requeueCount === 1 ? 'y' : 'ies'}` : ''}
+                                            </span>
                                         )}
                                     </div>
                                     {item.message && <div className="text-[12px] text-text-primary truncate">{item.message}</div>}

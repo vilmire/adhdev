@@ -38,6 +38,8 @@ import {
     describeTaskDependencyState,
     drainPendingMeshCoordinatorEvents,
     enqueueTask,
+    computeMeshMissionStats,
+    computeMeshTaskStats,
     getActiveMeshMissionSummaries,
     upsertMeshMission,
     getActiveDirectDispatches,
@@ -2733,10 +2735,17 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     } catch { /* ledger read is best-effort */ }
 
     // M3-2: active mission summaries — goal + live task aggregates (derived, not stored).
+    // M7: each mission also carries time/attempt stats derived from the ledger.
     try {
         const missions = getActiveMeshMissionSummaries(mesh.id);
         if (missions.length > 0) {
-            response.missions = missions;
+            response.missions = missions.map(mission => {
+                try {
+                    return { ...mission, stats: computeMeshMissionStats(mesh.id, mission.id) };
+                } catch {
+                    return mission;
+                }
+            });
         }
     } catch { /* mission read is best-effort */ }
 
@@ -2775,10 +2784,24 @@ export async function meshTaskHistory(
         payload: e.payload ? slimLedgerPayload(e.payload) : e.payload,
     }));
     const summary = getLedgerSummary(mesh.id);
+    // M7: per-task time/attempt stats for tasks visible in the returned window.
+    // Derived from ledger truth at query time; incomplete evidence is flagged,
+    // never estimated.
+    let taskStats: unknown[] | undefined;
+    try {
+        const taskIds = [...new Set(rawEntries
+            .map(e => (typeof e.payload?.taskId === 'string' ? e.payload.taskId : ''))
+            .filter(Boolean))] as string[];
+        if (taskIds.length > 0) {
+            const stats = computeMeshTaskStats(mesh.id, { taskIds });
+            if (stats.length > 0) taskStats = stats;
+        }
+    } catch { /* stats are best-effort */ }
     return JSON.stringify({
         meshId: mesh.id,
         entries,
         summary,
+        ...(taskStats ? { taskStats } : {}),
         ...(pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}),
     }, null, 2);
 }
