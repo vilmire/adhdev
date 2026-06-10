@@ -353,6 +353,9 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 11. Setup Mesh Event Forwarding
     setupMeshEventForwarding(components);
 
+    // 12. Resume any refine jobs that were interrupted by a previous daemon restart.
+    setImmediate(() => void router.resumePendingRefineJobsOnStartup());
+
     return components;
 }
 

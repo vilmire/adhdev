@@ -2689,6 +2689,7 @@ export class DaemonCommandRouter {
         mesh: any;
         node: any;
         nodeId: string;
+        force?: boolean;
     }): Promise<{ success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string; fallback?: string; forced?: boolean; convergence?: Record<string, unknown> } | { success: false; code: string; error: string; recoveryHint: string; convergence?: Record<string, unknown> }> {
         const workspace = typeof args.node?.workspace === 'string' ? args.node.workspace.trim() : '';
         if (!workspace) {
@@ -2765,15 +2766,13 @@ export class DaemonCommandRouter {
             };
         }
 
-        const forceFallbackConvergence = await this.getWorktreeForceCleanupConvergence({
-            repoRoot,
-            workspace,
-            node: args.node,
-        });
+        const forceFallbackConvergence = args.force
+            ? { allow: true, status: 'force_override', source: 'caller_force_flag' }
+            : await this.getWorktreeForceCleanupConvergence({ repoRoot, workspace, node: args.node });
 
         try {
             const result = await removeWorktree(repoRoot, workspace, {
-                requireClean: true,
+                requireClean: !args.force,
                 allowSubmoduleForceFallback: forceFallbackConvergence.allow,
             });
             return {
@@ -2804,7 +2803,7 @@ export class DaemonCommandRouter {
                 recoveryHint: dirty
                     ? 'Commit, stash, or intentionally discard the worktree changes before retrying mesh_remove_node. The mesh registry entry is preserved until cleanup is safe.'
                     : submoduleForceBlocked
-                        ? 'Verify the worktree branch is merged/contained in the source default branch (for example origin/main) or mark the node with a safe branchConvergence final state before retrying. The mesh registry entry is preserved.'
+                        ? 'Verify the worktree branch is merged/contained in the source default branch (for example origin/main) or mark the node with a safe branchConvergence final state, or pass force:true if content is confirmed already in main.'
                         : 'Inspect git worktree status/list from the source repo and retry after resolving the reported cleanup failure.',
                 ...(submoduleForceBlocked ? { convergence: forceFallbackConvergence } : {}),
             };
@@ -3297,6 +3296,7 @@ export class DaemonCommandRouter {
                         meshId: handle.meshId,
                         nodeId: handle.targetNodeId,
                         targetDaemonId: handle.targetDaemonId,
+                        targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId,
                         workspace: handle.workspace,
                         startedAt: handle.startedAt,
                         completedAt: handle.completedAt,
@@ -3313,6 +3313,47 @@ export class DaemonCommandRouter {
             });
         } catch (e: any) {
             LOG.warn('Mesh', `[Refinery] Failed to append async refine ledger entry: ${e?.message || e}`);
+        }
+    }
+
+    /**
+     * On daemon restart, scan all mesh ledgers for refine jobs that were dispatched
+     * but never completed/failed (i.e. the daemon died mid-job).  Re-queue each one
+     * so the job runs to completion automatically without coordinator intervention.
+     */
+    async resumePendingRefineJobsOnStartup(): Promise<void> {
+        try {
+            const { listMeshes } = await import('../config/mesh-config.js');
+            const { readLedgerEntries } = await import('../mesh/mesh-ledger.js');
+            const meshIds: string[] = listMeshes().map(m => m.id).filter(Boolean) as string[];
+            for (const meshId of meshIds) {
+                const entries = readLedgerEntries(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'] });
+                // Build set of nodeIds that already have a terminal entry.
+                const terminal = new Set<string>();
+                for (const e of entries) {
+                    if ((e.kind === 'task_completed' || e.kind === 'task_failed') && e.nodeId) {
+                        const jobId = (e.payload as any)?.refineJob?.jobId;
+                        if (jobId) terminal.add(`${e.nodeId}:${jobId}`);
+                    }
+                }
+                // Re-dispatch dispatched jobs with no matching terminal entry.
+                for (const e of entries) {
+                    if (e.kind !== 'task_dispatched' || !e.nodeId) continue;
+                    const source = (e.payload as any)?.source;
+                    if (source !== 'refine_mesh_node_async_job') continue;
+                    const jobId = (e.payload as any)?.refineJob?.jobId;
+                    if (!jobId || terminal.has(`${e.nodeId}:${jobId}`)) continue;
+                    const key = this.buildRefineJobKey(meshId, e.nodeId);
+                    if (this.runningRefineJobs.has(key)) continue;
+                    const coordinatorDaemonId = (e.payload as any)?.refineJob?.targetCoordinatorDaemonId;
+                    LOG.info('Mesh', `[Refinery] Auto-resuming interrupted refine job for node ${e.nodeId} (jobId=${jobId})`);
+                    void this.startMeshRefineJob(meshId, e.nodeId, {
+                        coordinatorDaemonId,
+                    });
+                }
+            }
+        } catch (e: any) {
+            LOG.warn('Mesh', `[Refinery] resumePendingRefineJobsOnStartup failed: ${e?.message || e}`);
         }
     }
 
@@ -3505,7 +3546,12 @@ export class DaemonCommandRouter {
                     }
                 }
 
-                if (!didAutoRebase) {
+                // If the actual patch-id is empty, the merge-tree produces no diff vs base —
+                // meaning the branch content is already present in base (landed via a different
+                // path, e.g. cherry-pick or direct commit).  Treat this as "already merged":
+                // skip the merge step but still run cleanup so the worktree node is removed.
+                const alreadyMergedViaOtherPath = !patchEquivalence.actualPatchId;
+                if (!didAutoRebase && !alreadyMergedViaOtherPath) {
                     return {
                         success: false,
                         code: 'patch_equivalence_failed',
@@ -3524,6 +3570,57 @@ export class DaemonCommandRouter {
                             validation: 'passed',
                             patchEquivalence: 'failed',
                             status: 'blocked_review',
+                        },
+                    };
+                }
+
+                if (!didAutoRebase && alreadyMergedViaOtherPath) {
+                    // Content already in base — skip merge, go straight to cleanup.
+                    recordMeshRefineStage(refineStages, 'merge', 'skipped', Date.now(), {
+                        reason: 'already_merged_via_other_path',
+                        note: 'actualPatchId is empty; branch content is already present in base via a different commit path',
+                    });
+                    const cleanupStarted = Date.now();
+                    const removeResult = await this.execute('remove_mesh_node', {
+                        meshId,
+                        nodeId,
+                        sessionCleanupMode: 'preserve',
+                        inlineMesh: args?.inlineMesh,
+                    });
+                    recordMeshRefineStage(refineStages, 'cleanup', removeResult?.success === false ? 'failed' : 'passed', cleanupStarted, {
+                        removed: removeResult?.removed,
+                        code: removeResult?.code,
+                        error: removeResult?.error,
+                    });
+                    try {
+                        const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+                        appendLedgerEntry(meshId, {
+                            kind: 'node_removed',
+                            nodeId,
+                            payload: { alreadyMergedViaOtherPath: true, branch, into: baseBranch, validationSummary, patchEquivalence },
+                        });
+                    } catch { /* ledger append is best-effort */ }
+                    return {
+                        success: removeResult?.success !== false,
+                        code: 'already_merged',
+                        merged: false,
+                        alreadyMergedViaOtherPath: true,
+                        branch,
+                        into: baseBranch,
+                        removeResult,
+                        validationSummary,
+                        patchEquivalence,
+                        refineStages,
+                        finalBranchConvergenceState: {
+                            branch: baseBranch,
+                            mergedBranch: branch,
+                            baseBranch,
+                            merged: false,
+                            alreadyMergedViaOtherPath: true,
+                            removed: removeResult?.success !== false,
+                            validation: 'passed',
+                            patchEquivalence: 'already_merged',
+                            status: removeResult?.success === false ? 'merged_cleanup_failed' : 'merged_to_main',
                         },
                     };
                 }
@@ -5339,7 +5436,7 @@ export class DaemonCommandRouter {
 
                     let worktreeCleanup: Record<string, unknown> | undefined;
                     if (node?.isLocalWorktree) {
-                        const cleanupResult = await this.cleanupLocalWorktreeNode({ mesh, node, nodeId });
+                        const cleanupResult = await this.cleanupLocalWorktreeNode({ mesh, node, nodeId, force: args?.force === true });
                         if (cleanupResult.success === false) {
                             return {
                                 success: false,
