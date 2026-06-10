@@ -499,7 +499,11 @@ export class SpecDriver {
         }
         const completionIdleRule = this.spec.debounce?.completion_idle_after;
         let busyWakeMs = busyHoldMs;
-        if (evState.id === 'busy' && completionIdleRule) {
+        // Don't fire completion_idle_after while a modal (approval, picker,
+        // etc.) is the current state — the modal hold window may have expired
+        // so evState resolves to busy, but the user is still looking at the
+        // approval screen. Firing here would flash busy over the modal.
+        if (evState.id === 'busy' && completionIdleRule && !isModalState(this.currentStateId)) {
             const completionKey = matchesCompletionIdleRule(this.spec, ev, screen);
             if (completionKey) {
                 const now = Date.now();
@@ -551,7 +555,15 @@ export class SpecDriver {
             // a new tool-output burst arrived that pushed the marker off
             // screen — in that case the old firstSeenAt is stale and should
             // restart when the marker reappears.
-            if (!this.completionIdleKey) {
+            //
+            // Also reset on busy re-entry (transitioning back from a non-busy
+            // state). The previous generation may have set completionIdleKey
+            // and firstSeenAt; without this reset the hold window appears
+            // instantly expired on the new generation's first PTY frame that
+            // re-matches the same completion regex key, causing a false-idle
+            // before the new generation has a chance to run.
+            if (!this.completionIdleKey || this.currentStateId !== 'busy') {
+                this.completionIdleKey = '';
                 this.completionIdleFirstSeenAt = 0;
             }
             // Schedule a re-evaluation when the hold window expires. PTYs
