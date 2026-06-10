@@ -5431,6 +5431,40 @@ export class DaemonCommandRouter {
                                     { timeoutMs: 120000 },
                                 );
                                 submodulesInitialized = true;
+
+                                // Sync oss submodule to source node HEAD (best-effort)
+                                const sourceWorkspace = sourceNode.repoRoot || sourceNode.workspace;
+                                if (sourceWorkspace) {
+                                    try {
+                                        const { runGit: rg } = await import('../git/git-executor.js');
+                                        const sourceCtx = { workspace: sourceWorkspace, repoRoot: sourceWorkspace, isGitRepo: true };
+                                        const worktreeCtx = { workspace: result.worktreePath, repoRoot: result.worktreePath, isGitRepo: true };
+
+                                        // Read source node's oss submodule SHA
+                                        const sourceStatusOut = await rg(sourceCtx, ['submodule', 'status', 'oss'], { timeoutMs: 10000 });
+                                        const sourceStatusLine = (typeof sourceStatusOut === 'string' ? sourceStatusOut : (sourceStatusOut as any)?.stdout ?? '').trim();
+                                        const sourceShaMatch = sourceStatusLine.match(/^[+\- ]?([0-9a-f]{40})/);
+                                        const sourceSha = sourceShaMatch?.[1];
+
+                                        if (sourceSha) {
+                                            // Read worktree's current oss HEAD
+                                            const ossCtx = { workspace: `${result.worktreePath}/oss`, repoRoot: `${result.worktreePath}/oss`, isGitRepo: true };
+                                            const worktreeOssHeadOut = await rg(ossCtx, ['rev-parse', 'HEAD'], { timeoutMs: 10000 });
+                                            const worktreeOssSha = (typeof worktreeOssHeadOut === 'string' ? worktreeOssHeadOut : (worktreeOssHeadOut as any)?.stdout ?? '').trim();
+
+                                            if (worktreeOssSha !== sourceSha) {
+                                                // Fetch target SHA from source node's oss directory
+                                                await rg(ossCtx, ['fetch', `${sourceWorkspace}/oss`, 'HEAD'], { timeoutMs: 60000 });
+                                                await rg(ossCtx, ['checkout', sourceSha], { timeoutMs: 10000 });
+                                                await rg(worktreeCtx, ['add', 'oss'], { timeoutMs: 10000 });
+                                                await rg(worktreeCtx, ['commit', '-m', 'chore: sync oss to source node HEAD on clone'], { timeoutMs: 10000 });
+                                                console.log(`[mesh] Synced oss submodule to source HEAD ${sourceSha.slice(0, 8)} in worktree`);
+                                            }
+                                        }
+                                    } catch (ossErr: any) {
+                                        console.warn('[mesh] oss submodule sync to source HEAD failed (best-effort):', ossErr.message);
+                                    }
+                                }
                             } catch (subErr: any) {
                                 // Submodule init is best-effort; don't fail the clone
                                 console.warn('[mesh] Submodule init failed for worktree:', subErr.message);
