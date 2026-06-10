@@ -220,6 +220,12 @@ export class SpecDriver {
     private lastModalAt = 0;
     /** The modal state snapshot held across busy blips. */
     private lastModalState: SpecEvaluation['state'] | null = null;
+    /** Timestamp of when we last *exited* a modal state (approval/picker → idle
+     *  or directly via completion_idle_after).  Used to suppress completion_idle_after
+     *  firings that were queued before the modal appeared and expire immediately
+     *  after the modal is dismissed — without this the agent appears idle even
+     *  though it is still generating. */
+    private lastModalExitAt = 0;
     private completionIdleFirstSeenAt = 0;
     private completionIdleKey = '';
     /** Previous screen lines — passed to evaluate() for `changed` condition detection. */
@@ -498,11 +504,18 @@ export class SpecDriver {
         }
         const completionIdleRule = this.spec.debounce?.completion_idle_after;
         let busyWakeMs = busyHoldMs;
-        // Don't fire completion_idle_after while a modal (approval, picker,
-        // etc.) is the current state — the modal hold window may have expired
-        // so evState resolves to busy, but the user is still looking at the
-        // approval screen. Firing here would flash busy over the modal.
-        if (evState.id === 'busy' && completionIdleRule && !isModalState(this.currentStateId)) {
+        // Don't fire completion_idle_after while in a modal state (approval,
+        // picker, etc.) or within a grace period after leaving one.  Two cases:
+        // 1. Modal still active: the hold window may have expired so evState
+        //    resolves to busy, but the user is still looking at the approval screen.
+        // 2. Modal just dismissed: the timer may have been queued *before* the
+        //    approval appeared and its hold expires immediately after dismissal,
+        //    causing a false-idle even though the agent is still generating.
+        const postModalGraceMs = busyHoldMs;
+        const now = Date.now();
+        const recentlyInModal = isModalState(this.currentStateId) || (this.lastModalAt > 0 && now - this.lastModalAt < postModalGraceMs);
+        const recentlyLeftModal = !recentlyInModal && this.lastModalExitAt > 0 && now - this.lastModalExitAt < postModalGraceMs;
+        if (evState.id === 'busy' && completionIdleRule && !recentlyInModal && !recentlyLeftModal) {
             const completionKey = matchesCompletionIdleRule(this.spec, ev, screen);
             if (completionKey) {
                 const now = Date.now();
@@ -583,7 +596,10 @@ export class SpecDriver {
                 this.lastModalAt = Date.now();
                 this.lastModalState = evState;
             } else {
-                // Leaving modal territory (going to idle) — clear the hold.
+                // Leaving modal territory (going to idle) — clear the hold,
+                // but record the exit time so completion_idle_after can be
+                // suppressed during the grace period after dismissal.
+                if (this.lastModalAt > 0) this.lastModalExitAt = Date.now();
                 this.lastModalAt = 0;
                 this.lastModalState = null;
             }

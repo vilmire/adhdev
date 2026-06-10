@@ -3550,7 +3550,13 @@ export class DaemonCommandRouter {
                 // meaning the branch content is already present in base (landed via a different
                 // path, e.g. cherry-pick or direct commit).  Treat this as "already merged":
                 // skip the merge step but still run cleanup so the worktree node is removed.
-                const alreadyMergedViaOtherPath = !patchEquivalence.actualPatchId;
+                // "already merged via another path": the branch has real changes
+                // (expectedPatchId non-empty) but the merge-tree produces no diff
+                // against base (actualPatchId empty) — meaning every change in the
+                // branch is already present in base via a cherry-pick or direct commit.
+                // If both patch-ids are empty, the branch itself has no changes; that
+                // is a degenerate worktree case, not an "already merged" scenario.
+                const alreadyMergedViaOtherPath = !patchEquivalence.actualPatchId && !!patchEquivalence.expectedPatchId;
                 if (!didAutoRebase && !alreadyMergedViaOtherPath) {
                     return {
                         success: false,
