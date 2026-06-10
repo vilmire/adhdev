@@ -7,6 +7,12 @@ interface StateHistoryEntry {
     label: string
     at: number
     durationMs: number
+    reason?: string
+    matchedStateId?: string
+    matchedRules?: string[]
+    debounceKind?: string
+    idleHoldMs?: number
+    busyHoldMs?: number
 }
 
 interface SpecSnapshot {
@@ -60,6 +66,15 @@ function formatDur(ms: number): string {
     if (ms <= 0) return ''
     if (ms < 1000) return `${ms}ms`
     return `${(ms / 1000).toFixed(1)}s`
+}
+
+const REASON_COLORS: Record<string, string> = {
+    busy_hold_expired: 'text-amber-300 bg-amber-500/15',
+    idle_hold_committed: 'text-green-300 bg-green-500/15',
+    completion_idle_after: 'text-blue-300 bg-blue-500/15',
+    forced_completion: 'text-orange-300 bg-orange-500/15',
+    forceEmit: 'text-purple-300 bg-purple-500/15',
+    spec_reload: 'text-purple-300 bg-purple-500/15',
 }
 
 const STATE_COLORS: Record<string, string> = {
@@ -299,17 +314,46 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     </div>
                                     <div className="space-y-0.5">
                                         {[...snap.stateHistory].reverse().slice(0, 20).map((entry, i) => (
-                                            <div key={i} className="flex items-center gap-2 py-0.5">
-                                                <span className={`font-mono w-20 shrink-0 ${stateColor(entry.stateId)}`}>
-                                                    {entry.stateId}
-                                                </span>
-                                                <span className="text-text-secondary text-[11px] shrink-0">
-                                                    {formatAgo(entry.at)}
-                                                </span>
-                                                {entry.durationMs > 0 && (
-                                                    <span className="text-text-tertiary text-[11px]">
-                                                        held {formatDur(entry.durationMs)}
+                                            <div key={i} className="flex flex-col gap-0.5 py-0.5">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <span className={`font-mono w-20 shrink-0 ${stateColor(entry.stateId)}`}>
+                                                        {entry.stateId}
                                                     </span>
+                                                    <span className="text-text-secondary text-[11px] shrink-0">
+                                                        {formatAgo(entry.at)}
+                                                    </span>
+                                                    {entry.durationMs > 0 && (
+                                                        <span className="text-text-tertiary text-[11px]">
+                                                            held {formatDur(entry.durationMs)}
+                                                        </span>
+                                                    )}
+                                                    {entry.reason && entry.reason !== 'eval_match' && (
+                                                        <span className={`text-[10px] px-1 py-0.5 rounded font-mono shrink-0 ${REASON_COLORS[entry.reason] ?? 'text-white/50 bg-white/5'}`}>
+                                                            {entry.reason}
+                                                        </span>
+                                                    )}
+                                                    {entry.debounceKind && entry.debounceKind !== 'none' && (
+                                                        <span className="text-text-tertiary text-[10px]">
+                                                            ({entry.debounceKind})
+                                                        </span>
+                                                    )}
+                                                    {entry.matchedStateId && entry.matchedStateId !== entry.stateId && (
+                                                        <span className="text-text-tertiary text-[10px] font-mono">
+                                                            eval→{entry.matchedStateId}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                {entry.matchedRules && entry.matchedRules.length > 0 && (
+                                                    <div className="flex items-center gap-1 flex-wrap pl-22 ml-[88px]">
+                                                        {entry.matchedRules.slice(0, 3).map((rule, ri) => (
+                                                            <span key={ri} className="font-mono text-[10px] text-blue-300/60 bg-blue-500/10 px-1 py-0.5 rounded">
+                                                                {rule}
+                                                            </span>
+                                                        ))}
+                                                        {entry.matchedRules.length > 3 && (
+                                                            <span className="text-[10px] text-text-tertiary">+{entry.matchedRules.length - 3} more</span>
+                                                        )}
+                                                    </div>
                                                 )}
                                             </div>
                                         ))}

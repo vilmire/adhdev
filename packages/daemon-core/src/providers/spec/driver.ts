@@ -218,6 +218,8 @@ export class SpecDriver {
      *  explicit wake-up there's nothing to trigger the busy → idle
      *  downshift. */
     private busyExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Set true while reevaluate() is invoked from busyExpiryTimer callback. */
+    private busyExpiryFired = false;
     /** Pending idle-commit timer. Armed when the evaluator first returns idle;
      *  fires after idle_hold_ms if no non-idle reading has cancelled it. */
     private idleHoldTimer: ReturnType<typeof setTimeout> | null = null;
@@ -225,7 +227,18 @@ export class SpecDriver {
     private pendingIdleState: SpecEvaluation['state'] | null = null;
     private specWatcher: fs.FSWatcher | null = null;
     /** Ring buffer of committed state transitions (max 50). */
-    private stateHistory: Array<{ stateId: string; label: string; at: number; durationMs: number }> = [];
+    private stateHistory: Array<{
+        stateId: string;
+        label: string;
+        at: number;
+        durationMs: number;
+        reason: string;
+        matchedStateId?: string;
+        matchedRules?: string[];
+        debounceKind?: string;
+        idleHoldMs?: number;
+        busyHoldMs?: number;
+    }> = [];
     private prevStateAt = 0;
 
     constructor(private readonly opts: SpecDriverOpts) {
@@ -296,15 +309,44 @@ export class SpecDriver {
         this.pendingIdleState = null;
     }
 
-    private pushHistory(stateId: string, label: string): void {
+    private pushHistory(stateId: string, label: string, meta?: {
+        reason?: string;
+        matchedStateId?: string;
+        matchedRules?: string[];
+        debounceKind?: string;
+        idleHoldMs?: number;
+        busyHoldMs?: number;
+    }): void {
         const now = Date.now();
         const durationMs = this.prevStateAt > 0 ? now - this.prevStateAt : 0;
         this.prevStateAt = now;
-        this.stateHistory.push({ stateId, label, at: now, durationMs });
+        this.stateHistory.push({
+            stateId,
+            label,
+            at: now,
+            durationMs,
+            reason: meta?.reason ?? 'eval_match',
+            ...(meta?.matchedStateId !== undefined ? { matchedStateId: meta.matchedStateId } : {}),
+            ...(meta?.matchedRules !== undefined ? { matchedRules: meta.matchedRules } : {}),
+            ...(meta?.debounceKind !== undefined ? { debounceKind: meta.debounceKind } : {}),
+            ...(meta?.idleHoldMs !== undefined ? { idleHoldMs: meta.idleHoldMs } : {}),
+            ...(meta?.busyHoldMs !== undefined ? { busyHoldMs: meta.busyHoldMs } : {}),
+        });
         if (this.stateHistory.length > 50) this.stateHistory.shift();
     }
 
-    getStateHistory(): ReadonlyArray<{ stateId: string; label: string; at: number; durationMs: number }> {
+    getStateHistory(): ReadonlyArray<{
+        stateId: string;
+        label: string;
+        at: number;
+        durationMs: number;
+        reason: string;
+        matchedStateId?: string;
+        matchedRules?: string[];
+        debounceKind?: string;
+        idleHoldMs?: number;
+        busyHoldMs?: number;
+    }> {
         return this.stateHistory;
     }
 
@@ -381,7 +423,9 @@ export class SpecDriver {
         this.busyExpiryTimer = setTimeout(() => {
             this.busyExpiryTimer = null;
             LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] busyExpiry fired holdMs=${holdMs}`);
+            this.busyExpiryFired = true;
             this.reevaluate();
+            this.busyExpiryFired = false;
         }, Math.max(holdMs + 50, 100));
     }
 
@@ -477,6 +521,8 @@ export class SpecDriver {
         if (isIdleState && idleHoldMs > 0 && this.currentStateId !== evState.id) {
             if (!this.idleHoldTimer) {
                 this.pendingIdleState = evState;
+                const capturedEv = ev;
+                const capturedMatchedRules = extractMatchedRules(ev);
                 this.idleHoldTimer = setTimeout(() => {
                     this.idleHoldTimer = null;
                     const committed = this.pendingIdleState;
@@ -484,16 +530,22 @@ export class SpecDriver {
                     if (!committed) return;
                     LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] idleHold committed after ${idleHoldMs}ms`);
                     this.currentStateId = committed.id;
-                    this.currentEval = ev;
-                    this.pushHistory(committed.id, committed.label);
+                    this.currentEval = capturedEv;
+                    this.pushHistory(committed.id, committed.label, {
+                        reason: 'idle_hold_committed',
+                        matchedStateId: capturedEv.state.id,
+                        matchedRules: capturedMatchedRules,
+                        debounceKind: 'idle_hold',
+                        idleHoldMs,
+                    });
                     this.emit({
                         kind: 'state_changed',
                         state: committed,
                         modal: null,
-                        controls: ev.controls.map(c => ({ id: c.id, label: c.label, action_type: c.actionType })),
+                        controls: capturedEv.controls.map(c => ({ id: c.id, label: c.label, action_type: c.actionType })),
                     });
                     this.armOrCancelDelegateTimers(committed.id);
-                    if (this.opts.emitTrace) this.emit({ kind: 'spec_trace', entries: ev.trace });
+                    if (this.opts.emitTrace) this.emit({ kind: 'spec_trace', entries: capturedEv.trace });
                 }, idleHoldMs);
             }
             // Don't fall through to the normal changed/emit path for idle.
@@ -538,7 +590,34 @@ export class SpecDriver {
         }
         if (changed) {
             this.currentStateId = evState.id;
-            this.pushHistory(evState.id, evState.label);
+            const matchedRules = extractMatchedRules(ev);
+            // Determine reason and debounce kind for this transition
+            let transitionReason: string;
+            let debounceKind: string;
+            let transitionBusyHoldMs: number | undefined;
+            if (forceEmit) {
+                transitionReason = 'forceEmit';
+                debounceKind = 'none';
+            } else if (evState.id !== ev.state.id) {
+                // evState was overridden — completion_idle_after forced idle
+                transitionReason = 'completion_idle_after';
+                debounceKind = 'completion_idle_after';
+            } else if (this.busyExpiryFired) {
+                // busyExpiryTimer woke us up and hold has now expired
+                transitionReason = 'busy_hold_expired';
+                debounceKind = 'busy_hold';
+                transitionBusyHoldMs = busyHoldMs;
+            } else {
+                transitionReason = 'eval_match';
+                debounceKind = 'none';
+            }
+            this.pushHistory(evState.id, evState.label, {
+                reason: transitionReason,
+                matchedStateId: ev.state.id,
+                matchedRules,
+                debounceKind,
+                ...(transitionBusyHoldMs !== undefined ? { busyHoldMs: transitionBusyHoldMs } : {}),
+            });
             this.emit({
                 kind: 'state_changed',
                 state: evState,
@@ -730,4 +809,12 @@ function guessExt(mime: string): string {
     if (/gif/i.test(mime)) return '.gif';
     if (/webp/i.test(mime)) return '.webp';
     return '.bin';
+}
+
+function extractMatchedRules(ev: SpecEvaluation): string[] {
+    if (!Array.isArray(ev.trace)) return [];
+    return (ev.trace as any[])
+        .filter(t => t.matched === true || t.kind === 'state_match')
+        .map(t => t.rule ?? t.stateId ?? t.id ?? String(t))
+        .filter(Boolean);
 }
