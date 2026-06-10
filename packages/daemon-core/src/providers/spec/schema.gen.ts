@@ -295,8 +295,11 @@ export const SCHEMA = {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
-                        "pattern",
                         "key_for_index"
+                    ],
+                    "oneOf": [
+                        { "required": ["pattern"] },
+                        { "required": ["patterns"] }
                     ],
                     "properties": {
                         "section": {
@@ -308,6 +311,19 @@ export const SCHEMA = {
                         },
                         "flags": {
                             "type": "string"
+                        },
+                        "patterns": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["pattern"],
+                                "properties": {
+                                    "pattern": { "type": "string", "minLength": 1 },
+                                    "flags": { "type": "string" }
+                                }
+                            }
                         },
                         "key_for_index": {
                             "type": "string",

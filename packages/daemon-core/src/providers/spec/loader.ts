@@ -77,7 +77,12 @@ function validateRefs(spec: CliSpec): string[] {
             if (s.modal_buttons.section && !sectionIds.has(s.modal_buttons.section)) {
                 errs.push(`states[${s.id}].modal_buttons.section "${s.modal_buttons.section}" unknown`);
             }
-            compileRegex(s.modal_buttons.pattern, s.modal_buttons.flags ?? 'm', `states[${s.id}].modal_buttons.pattern`, errs);
+            if (s.modal_buttons.pattern) {
+                compileRegex(s.modal_buttons.pattern, s.modal_buttons.flags ?? 'm', `states[${s.id}].modal_buttons.pattern`, errs);
+            }
+            for (const [pi, p] of (s.modal_buttons.patterns ?? []).entries()) {
+                compileRegex(p.pattern, p.flags ?? 'm', `states[${s.id}].modal_buttons.patterns[${pi}]`, errs);
+            }
         }
     }
 

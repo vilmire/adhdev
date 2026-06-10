@@ -360,6 +360,8 @@ export class SpecCliAdapter implements CliAdapter {
             idleHoldPending: this.driver.hasIdleHoldPending(),
             lastBusyAt: this.driver.getLastBusyAt(),
             specPath: this.driver.getSpecPath(),
+            cursorPosition: this.driver.getCursorPosition(),
+            completionIdleDebounce: this.driver.getCompletionIdleDebounceState(),
             // Extended fields
             name: this.cliName,
             status: this.getStatus().status,

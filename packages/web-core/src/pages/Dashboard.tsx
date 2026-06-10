@@ -33,7 +33,6 @@ import { useDashboardOverlayDialogsState } from '../hooks/useDashboardOverlayDia
 import { useDashboardPendingLaunch } from '../hooks/useDashboardPendingLaunch'
 import { useInteractivePrompt } from '../hooks/useInteractivePrompt'
 
-import TerminalBackendBanner from '../components/dashboard/TerminalBackendBanner'
 import DashboardMainView from '../components/dashboard/DashboardMainView'
 import DashboardOverlays from '../components/dashboard/DashboardOverlays'
 import DashboardVersionBanner from '../components/dashboard/DashboardVersionBanner'
@@ -42,7 +41,7 @@ import type { DashboardMobileSection } from '../components/dashboard/DashboardMo
 import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
 import { buildLiveSessionInboxStateMap } from '../components/dashboard/DashboardMobileChatShared'
-import { compareMachineEntries, getMachineDisplayName } from '../utils/daemon-utils'
+import { compareMachineEntries } from '../utils/daemon-utils'
 import { getDashboardMachineRefreshTargets } from '../utils/dashboard-machine-refresh'
 
 
@@ -129,11 +128,6 @@ export default function Dashboard() {
         }
     }, [loadDaemonMetadata, loadMachineRuntime, machineEntries])
 
-    const terminalBackend = daemonEntry?.terminalBackend || null
-    const terminalBackendMachineLabel = daemonEntry
-        ? getMachineDisplayName(daemonEntry, { fallbackId: daemonEntry.id })
-        : null
-    const terminalBackendMachineKey = daemonEntry?.id || null
     const effectiveIdes = useMemo(
         () => applyCliViewModeOverrides(ides, cliViewModeOverrides),
         [ides, cliViewModeOverrides],
@@ -427,12 +421,6 @@ export default function Dashboard() {
     return (
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
 
-            <TerminalBackendBanner
-                terminalBackend={terminalBackend}
-                isStandalone={isStandalone}
-                machineLabel={terminalBackendMachineLabel}
-                machineKey={terminalBackendMachineKey}
-            />
 
             {(!versionBannerDismissed || hasRequiredVersionDaemons) && (
                 <DashboardVersionBanner

@@ -28,7 +28,5 @@ export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete
 
 /** Terminal backend status */
 export interface TerminalBackendStatus {
-    backend: 'xterm' | 'ghostty-vt';
-    preference: 'auto' | 'xterm' | 'ghostty-vt';
-    ghosttyAvailable: boolean;
+    backend: 'ghostty-vt';
 }

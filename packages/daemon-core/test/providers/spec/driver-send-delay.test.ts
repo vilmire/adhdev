@@ -49,8 +49,12 @@ describe('SpecDriver send_message — submit delay', () => {
 
     it('claude-cli completion idle marker only accepts the ✻ finished-timer form', () => {
         const spec = loadSpecFor('claude-cli');
+        // Returns the stable regex pattern (not the match text) so that
+        // a live counter like "1m 6s" changing every second doesn't reset
+        // completionIdleFirstSeenAt and prevent the hold from expiring.
+        const expectedKey = spec.debounce?.completion_idle_after?.regex;
         const screen = ['previous answer', '✻ Brewed for 1m 46s', '❯'].join('\n');
-        expect(matchesCompletionIdleRule(spec, evaluate(spec, screen), screen)).toBe('✻ Brewed for 1m 46s');
+        expect(matchesCompletionIdleRule(spec, evaluate(spec, screen), screen)).toBe(expectedKey);
 
         const otherSpinner = ['previous answer', '✶ Brewed for 1m 46s', '❯'].join('\n');
         expect(matchesCompletionIdleRule(spec, evaluate(spec, otherSpinner), otherSpinner)).toBeNull();
@@ -58,8 +62,9 @@ describe('SpecDriver send_message — submit delay', () => {
 
     it('claude-cli completion idle marker requires the idle prompt before downshifting', () => {
         const spec = loadSpecFor('claude-cli');
+        const expectedKey = spec.debounce?.completion_idle_after?.regex;
         const busyOnly = ['previous answer', '✻ Brewed for 1m 46s', 'esc to interrupt'].join('\n');
-        expect(matchesCompletionIdleRule(spec, evaluate(spec, busyOnly), busyOnly)).toBe('✻ Brewed for 1m 46s');
+        expect(matchesCompletionIdleRule(spec, evaluate(spec, busyOnly), busyOnly)).toBe(expectedKey);
         expect(matchesCompletionIdleTargetState(spec, evaluate(spec, busyOnly), busyOnly)).toBe(false);
 
         const withIdlePrompt = ['previous answer', '✻ Brewed for 1m 46s', '❯'].join('\n');

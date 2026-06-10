@@ -1,65 +1,35 @@
 /**
- * Thin generic terminal adapter.
+ * PTY + terminal-screen adapter for the spec driver.
  *
- * Spawns a PTY, feeds bytes into a headless xterm so a visible screen
- * snapshot is always available, and exposes a small hook surface
- * (init / tick / on_screen_changed / on_exit). Nothing in this module
- * knows about agents, modals, or specs — it's just a terminal host.
+ * Spawns a PTY, feeds bytes into a TerminalScreen (ghostty-vt when available,
+ * xterm fallback otherwise) so a visible-screen snapshot is always available,
+ * and exposes a small hook surface for the SpecDriver to consume:
  *
- * The Spec Driver is built on top of this adapter and consumes the
- * hooks to drive its declarative state machine.
- *
- * Inbound from driver:
- *   send_keys(str)  — raw bytes to PTY
- *   resize(c, r)    — resize the PTY and the xterm
- *   kill()          — terminate the child
- *
- * Outbound to driver:
- *   init({ pid })
- *   on_pty_data(chunk)            — raw bytes for dashboard's terminal pane
- *   on_screen_changed(snapshot)   — coalesced visible-screen change
- *   tick()                        — periodic timer (configurable interval)
- *   on_exit({ exitCode })
+ *   init({ pid })               — PTY spawned
+ *   on_pty_data(chunk)          — raw PTY byte chunk received
+ *   on_screen_changed(snapshot) — coalesced visible-screen change
+ *   on_exit({ exitCode })       — PTY exited
+ *   tick()                      — periodic tick (if tickIntervalMs > 0)
  */
 'use strict';
 
-// @xterm/headless ships as CJS only but stamps __esModule = true on its
-// export object, so tsup's __toESM helper neither synthesizes a `default`
-// property (it sees the __esModule marker and trusts it) nor preserves
-// the named `Terminal` export through a plain ESM-style
-// `import { Terminal } from '@xterm/headless'`. The first symptom we saw
-// from this was the published `adhdev` CLI exploding with
-// "Named export 'Terminal' not found" inside the mcp ipc bootstrap.
-//
-// Pull Terminal off the namespace import (which tsup compiles into a
-// shim that *does* see the package's own Terminal property) instead.
-// Type-only import keeps the .d.ts surface honest.
-import type { Terminal as TerminalType } from '@xterm/headless';
-import * as xtermHeadlessNs from '@xterm/headless';
-const TerminalCtor: { new (...args: unknown[]): TerminalType } =
-    (xtermHeadlessNs as any).Terminal
-    ?? (xtermHeadlessNs as any).default?.Terminal;
-import { NodePtyTransportFactory, type PtyRuntimeTransport, type PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
+import { TerminalScreen } from '../../cli-adapters/terminal-screen.js';
+import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
+import type { PtyRuntimeTransport } from '../../cli-adapters/pty-transport.js';
+import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
+
+export type { PtyTransportFactory };
 
 export interface TerminalAdapterOpts {
     binary: string;
     args?: string[];
-    cwd: string;
+    cwd?: string;
     env?: Record<string, string>;
     cols?: number;
     rows?: number;
     /** Coalesce screen snapshots: emit on_screen_changed at most this often. */
     screenChangeDebounceMs?: number;
-    /** tick() period. 0 disables ticks. */
     tickIntervalMs?: number;
-    /**
-     * Optional PTY transport factory. When the daemon supplies a
-     * SessionHostPtyTransportFactory (standalone runs the PTY inside the
-     * session-host so the runtime/<sid>/snapshot endpoint can serve it),
-     * forward it here. Without it the PTY spawns locally inside the
-     * daemon process and the dashboard's terminal pane reports
-     * "Runtime terminal unavailable: Unknown session".
-     */
     transportFactory?: PtyTransportFactory;
 }
 
@@ -67,18 +37,18 @@ export interface TerminalAdapterHandlers {
     init?(info: { pid: number }): void;
     on_pty_data?(chunk: string): void;
     on_screen_changed?(snapshot: string): void;
-    tick?(): void;
     on_exit?(info: { exitCode: number }): void;
+    tick?(): void;
 }
 
 export class TerminalAdapter {
-    private term: TerminalType;
-    private pty: PtyRuntimeTransport | null = null;
-    private factory: PtyTransportFactory;
-    private cols: number;
     private rows: number;
-    private screenDebounceMs: number;
-    private tickIntervalMs: number;
+    private cols: number;
+    private readonly screenDebounceMs: number;
+    private readonly tickIntervalMs: number;
+    private readonly factory: PtyTransportFactory;
+    private screen: TerminalScreen;
+    private pty: PtyRuntimeTransport | null = null;
     private screenTimer: ReturnType<typeof setTimeout> | null = null;
     private tickTimer: ReturnType<typeof setInterval> | null = null;
     private lastScreen = '';
@@ -87,17 +57,20 @@ export class TerminalAdapter {
         private readonly opts: TerminalAdapterOpts,
         private readonly handlers: TerminalAdapterHandlers,
     ) {
-        this.cols = opts.cols ?? 100;
-        this.rows = opts.rows ?? 30;
+        this.cols = opts.cols ?? DEFAULT_SESSION_HOST_COLS;
+        this.rows = opts.rows ?? DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
+        // Import NodePtyTransportFactory lazily to avoid loading node-pty in
+        // environments that don't need it (tests, fixture runners).
+        const { NodePtyTransportFactory } = require('../../cli-adapters/pty-transport.js');
         this.factory = opts.transportFactory ?? new NodePtyTransportFactory();
-        this.term = new TerminalCtor({ cols: this.cols, rows: this.rows, allowProposedApi: true, scrollback: 1000 });
+        this.screen = new TerminalScreen(this.rows, this.cols);
     }
 
     start(): void {
         this.pty = this.factory.spawn(this.opts.binary, this.opts.args ?? [], {
-            cwd: this.opts.cwd,
+            cwd: this.opts.cwd ?? process.cwd(),
             env: { ...process.env, ...(this.opts.env ?? {}) } as Record<string, string>,
             cols: this.cols,
             rows: this.rows,
@@ -114,14 +87,10 @@ export class TerminalAdapter {
         }
     }
 
-    send_keys(s: string): void {
-        this.pty?.write(s);
-    }
-
     resize(cols: number, rows: number): void {
         this.cols = cols; this.rows = rows;
         this.pty?.resize(cols, rows);
-        this.term.resize(cols, rows);
+        this.screen.resize(rows, cols);
     }
 
     snapshot(): string {
@@ -129,23 +98,24 @@ export class TerminalAdapter {
     }
 
     getCursorPosition(): { row: number; col: number } {
-        const buf = this.term.buffer.active;
-        return {
-            row: Math.max(0, (buf as any).cursorY ?? 0),
-            col: Math.max(0, (buf as any).cursorX ?? 0),
-        };
+        const pos = this.screen.getCursorPosition();
+        return { row: pos.row, col: pos.col };
+    }
+
+    send_keys(text: string): void {
+        this.pty?.write(text);
     }
 
     kill(): void {
         this.stopTimers();
         try { this.pty?.kill(); } catch { /* ignore */ }
         this.pty = null;
-        this.term.dispose();
+        this.screen.dispose();
     }
 
     private onChunk(chunk: string): void {
         try { this.handlers.on_pty_data?.(chunk); } catch { /* user side */ }
-        this.term.write(chunk);
+        this.screen.write(chunk);
         // Coalesce snapshot emission — rapid bursts shouldn't fire 200x.
         if (this.screenTimer) return;
         this.screenTimer = setTimeout(() => {
@@ -158,15 +128,7 @@ export class TerminalAdapter {
     }
 
     private computeScreen(): string {
-        const buf = this.term.buffer.active;
-        const out: string[] = [];
-        for (let y = 0; y < buf.length; y += 1) {
-            const line = buf.getLine(y);
-            if (!line) continue;
-            out.push(line.translateToString(true));
-        }
-        while (out.length > 0 && out[out.length - 1].trim() === '') out.pop();
-        return out.join('\n');
+        return this.screen.getText();
     }
 
     private stopTimers(): void {

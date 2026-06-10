@@ -20,6 +20,7 @@ import type { InteractivePromptResponse } from '../providers/types/interactive-p
 import { LOG } from '../logging/logger.js';
 import { getDebugRuntimeConfig } from '../logging/debug-config.js';
 import { TerminalScreen } from './terminal-screen.js';
+import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import {
     NodePtyTransportFactory,
     type PtyRuntimeMetadata,
@@ -212,7 +213,7 @@ export class ProviderCliAdapter implements CliAdapter {
     /** Full accumulated raw PTY output (with ANSI) */
     private accumulatedRawBuffer: string = '';
     /** Current visible terminal screen snapshot */
-    private terminalScreen = new TerminalScreen(24, 80);
+    private terminalScreen = new TerminalScreen(DEFAULT_SESSION_HOST_ROWS, DEFAULT_SESSION_HOST_COLS);
     private static readonly MAX_RESPONSE_BUFFER = 8000;
     private static readonly MAX_RECENT_OUTPUT_BUFFER = 1000;
     private responseBufferDroppedChars = 0;
@@ -563,7 +564,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.startupBuffer = '';
         this.startupFirstOutputAt = 0;
         if (this.startupSettleTimer) { clearTimeout(this.startupSettleTimer); this.startupSettleTimer = null; }
-        this.resetTerminalScreen(24, 80);
+        this.resetTerminalScreen(DEFAULT_SESSION_HOST_ROWS, DEFAULT_SESSION_HOST_COLS);
         this.pendingTerminalQueryTail = '';
         this.ready = false;
         await this.ptyProcess.ready;

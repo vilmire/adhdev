@@ -38,6 +38,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { TerminalAdapter, type TerminalAdapterOpts } from './adapter.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
+import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import { evaluate, type SpecEvaluation, type TraceEntry } from './evaluator.js';
 import { loadSpec } from './loader.js';
 import type { CliSpec, Control, DelegateTrigger } from './types.js';
@@ -142,8 +143,13 @@ export function matchesCompletionIdleRule(spec: CliSpec, ev: SpecEvaluation, scr
     if (!haystack) return null;
     try {
         const regex = new RegExp(rule.regex, rule.flags || '');
-        const match = haystack.match(regex);
-        return match?.[0] || null;
+        const matched = regex.test(haystack);
+        // Return the regex pattern as the stable key rather than the match
+        // text. The match text often contains a live counter (e.g. "Compacted
+        // for 1m 6s") that changes every second, which would reset
+        // completionIdleFirstSeenAt on every PTY frame and prevent the hold
+        // window from ever expiring.
+        return matched ? rule.regex : null;
     } catch {
         return null;
     }
@@ -211,6 +217,14 @@ export class SpecDriver {
      *  because the evaluator already moved past busy by the time the hold
      *  kicks in. */
     private lastBusyState: SpecEvaluation['state'] | null = null;
+    /** Timestamp of the last time we entered a modal state (approval/picker or
+     *  any non-busy non-idle state). Used to suppress brief busy blips that
+     *  appear while the modal is still on screen — Claude Code streams body
+     *  text that transiently shows a spinner even while an approval modal is
+     *  visible, causing rapid approval→busy→approval flicker on the dashboard. */
+    private lastModalAt = 0;
+    /** The modal state snapshot held across busy blips. */
+    private lastModalState: SpecEvaluation['state'] | null = null;
     private completionIdleFirstSeenAt = 0;
     private completionIdleKey = '';
     /** Timer that re-runs evaluate() once the hold window expires. Needed
@@ -353,6 +367,17 @@ export class SpecDriver {
     getLastBusyAt(): number { return this.lastBusyAt; }
     hasIdleHoldPending(): boolean { return this.idleHoldTimer !== null; }
     getSpecPath(): string { return this.opts.specPath; }
+    getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null {
+        if (!this.completionIdleKey || !this.completionIdleFirstSeenAt) return null;
+        const rule = this.spec.debounce?.completion_idle_after;
+        if (!rule) return null;
+        return {
+            active: true,
+            ageMs: Date.now() - this.completionIdleFirstSeenAt,
+            holdMs: rule.hold_ms ?? 0,
+            forceAfterMs: typeof rule.force_after_ms === 'number' ? rule.force_after_ms : 0,
+        };
+    }
     getScreen(): string { return this.adapter.snapshot(); }
     getSections(): Array<{ id: string; text: string }> | null {
         try {
@@ -380,8 +405,8 @@ export class SpecDriver {
             args: [...baseArgs, ...extra],
             cwd: this.opts.workingDir,
             env: { ...(this.spec.env ?? {}), ...(this.opts.extraEnv ?? {}) },
-            cols: this.opts.cols ?? 100,
-            rows: this.opts.rows ?? 30,
+            cols: this.opts.cols ?? DEFAULT_SESSION_HOST_COLS,
+            rows: this.opts.rows ?? DEFAULT_SESSION_HOST_ROWS,
             transportFactory: this.opts.transportFactory,
         };
     }
@@ -454,6 +479,24 @@ export class SpecDriver {
                 evState = this.lastBusyState ?? evState;
             }
         }
+        // Modal hold: when in a modal state (approval, picker, etc.) a brief
+        // busy reading should not interrupt the modal. Claude Code streams
+        // body content while the approval modal is visible, causing a spinner
+        // to appear transiently — without this hold, the dashboard sees a
+        // rapid modal→busy→modal flicker and the approval UI disappears and
+        // reappears every few seconds. Apply the same busy_hold_ms window:
+        // if the modal was entered recently and the evaluator now returns
+        // busy, stay in the modal state until the hold expires or a non-busy
+        // non-modal reading arrives.
+        const idleStateId = this.spec.default_state ?? 'idle';
+        const isModalState = (id: string | null) =>
+            id !== null && id !== 'busy' && id !== idleStateId;
+        if (isModalState(this.currentStateId) && evState.id === 'busy') {
+            const ageMs = Date.now() - this.lastModalAt;
+            if (ageMs < busyHoldMs && this.lastModalState) {
+                evState = this.lastModalState;
+            }
+        }
         const completionIdleRule = this.spec.debounce?.completion_idle_after;
         let busyWakeMs = busyHoldMs;
         if (evState.id === 'busy' && completionIdleRule) {
@@ -500,15 +543,17 @@ export class SpecDriver {
             this.lastBusyState = evState;
             // Cancel any pending idle commit — non-idle reading invalidates it.
             this.cancelIdleHold();
-            // Reset completion_idle_after tracking on busy re-entry. If the
-            // completion marker is still on screen when a new PTY burst
-            // arrives (rapid tool-output toggle), the old firstSeenAt would
-            // make ageMs >= holdMs immediately on the very next reevaluate,
-            // forcing idle again before the new output has settled and
-            // creating a rapid busy↔idle loop. Resetting here forces the
-            // hold window to restart from the current moment.
-            this.completionIdleKey = '';
-            this.completionIdleFirstSeenAt = 0;
+            // Reset completion_idle_after tracking only when the completion
+            // marker is NOT present. If the marker is on screen (key is set
+            // by the block above), clearing it here would restart the hold
+            // window on every PTY frame and the hold would never expire.
+            // Only reset when the marker disappeared (key is empty), meaning
+            // a new tool-output burst arrived that pushed the marker off
+            // screen — in that case the old firstSeenAt is stale and should
+            // restart when the marker reappears.
+            if (!this.completionIdleKey) {
+                this.completionIdleFirstSeenAt = 0;
+            }
             // Schedule a re-evaluation when the hold window expires. PTYs
             // typically stop emitting once the agent stops printing (the
             // footer settles), so without an explicit timer the driver
@@ -520,6 +565,16 @@ export class SpecDriver {
             // any in-flight idle hold — they are higher-priority than idle.
             if (evState.id !== (this.spec.default_state ?? 'idle')) {
                 this.cancelIdleHold();
+            }
+            // Track the modal entry timestamp so the modal-hold above can
+            // suppress brief busy blips while the modal is still on screen.
+            if (isModalState(evState.id)) {
+                this.lastModalAt = Date.now();
+                this.lastModalState = evState;
+            } else {
+                // Leaving modal territory (going to idle) — clear the hold.
+                this.lastModalAt = 0;
+                this.lastModalState = null;
             }
         }
 

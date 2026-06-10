@@ -71,8 +71,12 @@ export interface SectionPattern {
 
 export interface ModalButtonsRule {
     section?: string;
-    pattern: string;
+    /** Single pattern (original). Use `patterns` for multi-format fallback. */
+    pattern?: string;
     flags?: string;
+    /** Ordered list of pattern alternatives. Evaluated in order; first that
+     *  yields >= min_count buttons wins. Mutually exclusive with `pattern`. */
+    patterns?: Array<{ pattern: string; flags?: string }>;
     key_for_index: string;
     min_count?: number;
     continuation_lines?: boolean;

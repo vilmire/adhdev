@@ -212,18 +212,15 @@ function matchState(
     return { matched: true, title };
 }
 
-function extractModal(
-    state: SpecState,
-    sections: ResolvedSection[],
-    fullScreen: string,
-    title: string | null,
-    trace: TraceEntry[],
-): ModalSnapshot | null {
-    if (!state.modal_buttons) return null;
-    const hay = sectionText(sections, state.modal_buttons.section, fullScreen);
+function extractButtonsWithPattern(
+    rule: { pattern: string; flags?: string },
+    hay: string,
+    keyTemplate: string,
+    continuationLines: boolean,
+): { index: number; label: string; key: string }[] {
     const buttons: { index: number; label: string; key: string }[] = [];
-    if (state.modal_buttons.continuation_lines) {
-        const re = compileLinePattern(state.modal_buttons);
+    if (continuationLines) {
+        const re = compileLinePattern(rule);
         const lines = hay.split('\n');
         for (let i = 0; i < lines.length; i += 1) {
             const m = re.exec(lines[i]);
@@ -241,24 +238,57 @@ function extractModal(
                 j += 1;
             }
             if (buttons.some(b => b.index === idx)) continue;
-            const key = state.modal_buttons.key_for_index.replace(/\{index\}/g, String(idx));
+            const key = keyTemplate.replace(/\{index\}/g, String(idx));
             buttons.push({ index: idx, label, key });
             i = j - 1;
         }
     } else {
-        const re = compilePattern(state.modal_buttons);
+        const re = compilePattern(rule);
         let m: RegExpExecArray | null;
         while ((m = re.exec(hay)) !== null) {
             const idx = Number(m[1]);
             const label = String(m[2] ?? '').trim();
             if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
             if (buttons.some(b => b.index === idx)) continue;
-            const key = state.modal_buttons.key_for_index.replace(/\{index\}/g, String(idx));
+            const key = keyTemplate.replace(/\{index\}/g, String(idx));
             buttons.push({ index: idx, label, key });
         }
     }
     buttons.sort((a, b) => a.index - b.index);
+    return buttons;
+}
+
+function extractModal(
+    state: SpecState,
+    sections: ResolvedSection[],
+    fullScreen: string,
+    title: string | null,
+    trace: TraceEntry[],
+): ModalSnapshot | null {
+    if (!state.modal_buttons) return null;
+    const hay = sectionText(sections, state.modal_buttons.section, fullScreen);
     const minCount = state.modal_buttons.min_count ?? 2;
+    const keyTemplate = state.modal_buttons.key_for_index;
+    const continuationLines = state.modal_buttons.continuation_lines ?? false;
+
+    // Build ordered list of pattern candidates: `patterns` array takes precedence,
+    // falling back to the single `pattern` field.
+    const candidates: Array<{ pattern: string; flags?: string }> =
+        state.modal_buttons.patterns?.length
+            ? state.modal_buttons.patterns
+            : state.modal_buttons.pattern
+              ? [{ pattern: state.modal_buttons.pattern, flags: state.modal_buttons.flags }]
+              : [];
+
+    let buttons: { index: number; label: string; key: string }[] = [];
+    for (const candidate of candidates) {
+        const result = extractButtonsWithPattern(candidate, hay, keyTemplate, continuationLines);
+        if (result.length >= minCount) {
+            buttons = result;
+            break;
+        }
+    }
+
     if (buttons.length < minCount) {
         trace.push({ kind: 'modal', text: `modal_buttons matched ${buttons.length}/${minCount} required — discarded` });
         return null;

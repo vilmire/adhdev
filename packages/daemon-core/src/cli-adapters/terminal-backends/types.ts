@@ -1,6 +1,4 @@
-export type TerminalViewportBackendKind = 'xterm' | 'ghostty-vt';
-
-export type TerminalViewportBackendPreference = TerminalViewportBackendKind | 'auto';
+export type TerminalViewportBackendKind = 'ghostty-vt';
 
 export type TerminalViewportBackendOptions = {
     rows: number;

@@ -1,7 +1,6 @@
 import type {
     TerminalViewportBackend,
     TerminalViewportBackendOptions,
-    TerminalViewportBackendPreference,
 } from './types.js';
 
 type GhosttyVtTerminal = {
@@ -49,12 +48,10 @@ function getBindingCandidates(): string[] {
     return explicit ? [explicit] : DEFAULT_BINDING_CANDIDATES;
 }
 
-function loadGhosttyVtBinding(required: boolean): GhosttyVtBinding | null {
+function loadGhosttyVtBinding(): GhosttyVtBinding {
     if (cachedBinding !== undefined) {
-        if (!cachedBinding && required && cachedBindingError) {
-            throw cachedBindingError;
-        }
-        return cachedBinding;
+        if (!cachedBinding && cachedBindingError) throw cachedBindingError;
+        return cachedBinding!;
     }
 
     const errors: string[] = [];
@@ -65,7 +62,7 @@ function loadGhosttyVtBinding(required: boolean): GhosttyVtBinding | null {
             const mod = require(ref);
             cachedBinding = normalizeBinding(mod, ref);
             cachedBindingError = null;
-            return cachedBinding;
+            return cachedBinding!;
         } catch (error) {
             if (isModuleNotFoundError(error, ref)) {
                 errors.push(`${ref}: module not found`);
@@ -78,21 +75,9 @@ function loadGhosttyVtBinding(required: boolean): GhosttyVtBinding | null {
 
     cachedBinding = null;
     cachedBindingError = new Error(
-        `ghostty-vt backend requested but no binding is available (${errors.join('; ') || 'no candidates tried'})`,
+        `ghostty-vt binding unavailable (${errors.join('; ') || 'no candidates tried'})`,
     );
-
-    if (required) throw cachedBindingError;
-    return null;
-}
-
-export function resolveTerminalBackendPreference(): TerminalViewportBackendPreference {
-    const raw = process.env.ADHDEV_TERMINAL_BACKEND?.trim().toLowerCase();
-    if (raw === 'ghostty-vt' || raw === 'xterm' || raw === 'auto') return raw;
-    return 'auto';
-}
-
-export function isGhosttyVtBackendAvailable(): boolean {
-    return !!loadGhosttyVtBinding(false);
+    throw cachedBindingError;
 }
 
 export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
@@ -100,10 +85,7 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     private terminal: GhosttyVtTerminal;
 
     constructor(options: TerminalViewportBackendOptions) {
-        const binding = loadGhosttyVtBinding(true);
-        if (!binding) {
-            throw new Error('ghostty-vt backend requested but no binding is available');
-        }
+        const binding = loadGhosttyVtBinding();
         this.terminal = binding.createTerminal({
             cols: Math.max(1, options.cols | 0),
             rows: Math.max(1, options.rows | 0),
@@ -121,15 +103,10 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     }
 
     getText(): string {
-        // (fix) ghostty's `trim:true` mode strips trailing whitespace per row
-        // AND collapses cells that were touched only by cursor-forward (ESC[<n>C)
-        // without a printable glyph. Many TUIs (Claude Code most prominently)
-        // render inter-word spaces via CUF rather than literal spaces, so
-        // trim:true would smash "Do you want to proceed?" into
-        // "Doyouwanttoproceed?" and break every downstream regex
-        // (approval detection, prompt-line discovery, etc.). Keep the per-row
-        // padding, then trim each row's trailing whitespace ourselves so the
-        // serialized text matches what the user sees in the terminal.
+        // ghostty's `trim:true` collapses CUF-advanced cells — many TUIs including
+        // Claude Code render spaces via cursor-forward rather than literal spaces,
+        // which would break downstream regex matching. Keep per-row padding and
+        // trim trailing whitespace ourselves.
         const raw = this.terminal.formatPlainText({ trim: false }) || '';
         if (!raw) return '';
         const lines = raw.split('\n').map((row) => row.replace(/\s+$/, ''));

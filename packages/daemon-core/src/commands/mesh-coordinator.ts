@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
+import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { LOG } from '../logging/logger.js'
 import type {
@@ -557,8 +558,8 @@ export async function execUnderPty(
     try {
       child = ptyLib.spawn(command, args, {
         name: 'xterm-256color',
-        cols: 120,
-        rows: 30,
+        cols: DEFAULT_SESSION_HOST_COLS,
+        rows: DEFAULT_SESSION_HOST_ROWS,
         cwd: options.cwd ?? process.cwd(),
         env,
       })

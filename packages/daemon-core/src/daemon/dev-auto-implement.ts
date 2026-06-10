@@ -9,6 +9,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import type * as http from 'http';
 import type { ChildProcess } from 'child_process';
 import type { DevServerContext, ProviderCategory } from './dev-server-types.js';
@@ -482,8 +483,8 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
       const isWin = os.platform() === 'win32';
       child = pty.spawn(isWin ? 'cmd.exe' : (process.env.SHELL || '/bin/zsh'), [isWin ? '/c' : '-c', shellCmd], {
         name: 'xterm-256color',
-        cols: 120,
-        rows: 40,
+        cols: DEFAULT_SESSION_HOST_COLS,
+        rows: DEFAULT_SESSION_HOST_ROWS,
         cwd: providerDir,
         env: { ...process.env, ...(spawn.env || {}) },
       });
