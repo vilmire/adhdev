@@ -1214,6 +1214,195 @@ describe('CliProviderInstance incremental history persistence', () => {
   })
 })
 
+describe('CliProviderInstance — startup-phase spurious completion suppression', () => {
+  it('does not emit generating_completed when starting→generating→idle fires without a real task dispatch', () => {
+    // Regression: session enters 'starting' state on spawn, then PTY startup output
+    // briefly triggers the provider script to report 'generating', then settles to 'idle'.
+    // Because idle→generating handler is the only code path that sets generatingStartedAt
+    // and generatingDebouncePending, both being absent signals a startup blip that must not
+    // fire agent:generating_completed.
+    vi.useFakeTimers()
+    try {
+      const instance = new CliProviderInstance({
+        type: 'antigravity-cli',
+        name: 'Antigravity CLI',
+        category: 'cli',
+        spawn: { command: 'agy', args: [] },
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      // lastStatus starts at 'starting' — matching real spawn lifecycle
+      expect(instance.lastStatus).toBe('starting')
+
+      let status = 'generating'
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({ status, title: 'Antigravity CLI', messages: [] }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      // PTY startup noise: starting → generating (no task dispatched)
+      instance.detectStatusTransition()
+      expect(instance.lastStatus).toBe('generating')
+
+      // PTY quiet period: generating → idle (startup settling)
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(30_000)
+
+      expect(events.map((event: any) => event.event)).not.toContain('agent:generating_completed')
+      expect(instance.lastStatus).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not emit generating_completed for codex-cli starting→generating→idle startup blip', () => {
+    vi.useFakeTimers()
+    try {
+      const instance = new CliProviderInstance({
+        type: 'codex-cli',
+        name: 'Codex CLI',
+        category: 'cli',
+        spawn: { command: 'codex', args: [] },
+        requiresFinalAssistantBeforeIdle: true,
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      expect(instance.lastStatus).toBe('starting')
+
+      let status = 'generating'
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({ status, title: 'Codex CLI', messages: [] }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(30_000)
+
+      expect(events.map((event: any) => event.event)).not.toContain('agent:generating_completed')
+      expect(instance.lastStatus).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not emit generating_completed for hermes-cli starting→generating→idle startup blip', () => {
+    vi.useFakeTimers()
+    try {
+      const instance = new CliProviderInstance({
+        type: 'hermes-cli',
+        name: 'Hermes Agent',
+        category: 'cli',
+        spawn: { command: 'hermes', args: [] },
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      expect(instance.lastStatus).toBe('starting')
+
+      let status = 'generating'
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({ status, title: 'Hermes Agent', messages: [] }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(30_000)
+
+      expect(events.map((event: any) => event.event)).not.toContain('agent:generating_completed')
+      expect(instance.lastStatus).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still emits agent:ready when starting→idle fires directly (no generating blip)', () => {
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/tmp/project') as any
+    const events: any[] = []
+    instance.pushEvent = (event: any) => events.push(event)
+    instance.historyWriter = { appendNewMessages: vi.fn() }
+    expect(instance.lastStatus).toBe('starting')
+
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({ status: 'idle', title: 'Hermes Agent', messages: [] }),
+      getPartialResponse: () => '',
+      getRuntimeMetadata: () => null,
+    }
+
+    instance.detectStatusTransition()
+
+    expect(events.map((event: any) => event.event)).toContain('agent:ready')
+    expect(events.map((event: any) => event.event)).not.toContain('agent:generating_completed')
+    expect(instance.lastStatus).toBe('idle')
+  })
+
+  it('emits generating_completed normally after a real idle→generating→idle task turn', () => {
+    // Confirm the fix does not regress normal task completion.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-10T00:00:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'hermes-cli',
+        name: 'Hermes Agent',
+        category: 'cli',
+        spawn: { command: 'hermes', args: [] },
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      // Manually advance to idle (past startup)
+      instance.lastStatus = 'idle'
+
+      let status = 'generating'
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({
+          status,
+          title: 'Hermes Agent',
+          messages: [
+            { role: 'user', content: 'do a task', kind: 'standard' },
+            { role: 'assistant', content: 'task done', kind: 'standard' },
+          ],
+        }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      // Real task: idle → generating
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+      expect(events.map((event: any) => event.event)).toContain('agent:generating_started')
+
+      // Task finishes: generating → idle
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(5000)
+
+      expect(events.map((event: any) => event.event)).toContain('agent:generating_completed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('CliProviderInstance — stale parsed busy status suppression (Bug 2: false completion from non-empty responseBuffer)', () => {
   function makeInstance() {
     return new CliProviderInstance({

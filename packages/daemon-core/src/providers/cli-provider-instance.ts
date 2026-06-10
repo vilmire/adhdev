@@ -1561,6 +1561,15 @@ export class CliProviderInstance implements ProviderInstance {
                 }
             } else if (newStatus === 'idle' && (this.lastStatus === 'generating' || this.lastStatus === 'waiting_approval')) {
                 const duration = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : 0;
+                // Guard: if generatingStartedAt===0 and no debounce pending, the generating phase
+                // was entered from 'starting' state (startup PTY noise), not from a real idle→generating
+                // task dispatch. The idle→generating handler is the only code path that sets
+                // generatingStartedAt and generatingDebouncePending, so both being absent means no
+                // task was ever dispatched. Suppress the spurious completion event and fall through
+                // to a simple lastStatus update.
+                if (!this.generatingStartedAt && !this.generatingDebouncePending) {
+                    LOG.debug('CLI', `[${this.type}] suppressed startup-phase generating→idle blip (generatingStartedAt=0, no debounce pending)`);
+                } else
                 // If debounce still pending (generating lasted < 1s), cancel both UI events.
                 // Still emit agent:generating_completed so mesh orchestration can record
                 // task_completed for direct dispatches that complete faster than the debounce.
@@ -1589,19 +1598,31 @@ export class CliProviderInstance implements ProviderInstance {
                     if (missingEvidence) {
                         LOG.warn('CLI', `[${this.type}] short completion missing final assistant evidence (source=${shortEvidenceSource})`);
                     }
-                    this.pushEvent({
-                        event: 'agent:generating_completed',
-                        chatTitle,
-                        duration: 0,
-                        timestamp: now,
-                        finalSummary: shortFinalSummary,
-                        completionDiagnostic: {
-                            reason: 'short_generating_suppressed',
-                            shortDurationMs,
-                            finalAssistantEvidenceSource: shortEvidenceSource,
-                            ...(missingEvidence ? { blockReason: 'missing_final_assistant' } : {}),
-                        },
-                    });
+                    // When evidence is missing and there is no active mesh task context, suppress
+                    // the completion event. Providers with requiresFinalAssistantBeforeIdle or
+                    // external-native history must confirm a final assistant message before the
+                    // coordinator records task_completed. Only emit here if a mesh task is active
+                    // so the coordinator can apply its own timeout/retry logic.
+                    const hasMeshContext = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
+                    if (missingEvidence && !hasMeshContext) {
+                        LOG.info('CLI', `[${this.type}] short completion suppressed: missing final assistant evidence, no mesh context (source=${shortEvidenceSource})`);
+                        // completedDebouncePending intentionally left null — the session is now idle
+                        // with no confirmed turn, matching the startup-blip suppression semantics.
+                    } else {
+                        this.pushEvent({
+                            event: 'agent:generating_completed',
+                            chatTitle,
+                            duration: 0,
+                            timestamp: now,
+                            finalSummary: shortFinalSummary,
+                            completionDiagnostic: {
+                                reason: 'short_generating_suppressed',
+                                shortDurationMs,
+                                finalAssistantEvidenceSource: shortEvidenceSource,
+                                ...(missingEvidence ? { blockReason: 'missing_final_assistant' } : {}),
+                            },
+                        });
+                    }
                 } else {
                     // Debounce completed, then require the rich transcript path that read_chat
                     // uses to show an idle turn whose last user-facing message is assistant.
