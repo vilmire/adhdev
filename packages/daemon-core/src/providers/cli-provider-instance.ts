@@ -1568,8 +1568,6 @@ export class CliProviderInstance implements ProviderInstance {
                     const shortDurationMs = this.generatingStartedAt ? now - this.generatingStartedAt : 0;
                     LOG.info('CLI', `[${this.type}] suppressed short generating (${shortDurationMs}ms)`);
                     if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }
-                    this.generatingDebouncePending = null;
-                    this.generatingStartedAt = 0;
                     // Emit completion for mesh task association even though the UI generating
                     // started/completed pair is suppressed (too short for visible UI update).
                     let shortFinalSummary: string | undefined;
@@ -1580,22 +1578,30 @@ export class CliProviderInstance implements ProviderInstance {
                         shortEvidenceSource = evidence.source;
                         shortFinalSummary = extractFinalSummaryFromMessages(evidence.messages as any);
                     } catch { /* best-effort */ }
-                    if (((this.provider as any).requiresFinalAssistantBeforeIdle === true || shortEvidenceSource === 'external-native') && !shortFinalSummary) {
-                        LOG.info('CLI', `[${this.type}] suppressed short completion without final assistant evidence`);
-                    } else {
-                        this.pushEvent({
-                            event: 'agent:generating_completed',
-                            chatTitle,
-                            duration: 0,
-                            timestamp: now,
-                            finalSummary: shortFinalSummary,
-                            completionDiagnostic: {
-                                reason: 'short_generating_suppressed',
-                                shortDurationMs,
-                                finalAssistantEvidenceSource: shortEvidenceSource,
-                            },
-                        });
+                    // If a real response is confirmed, retroactively emit started so the chat
+                    // bubble appears even though the debounce suppressed the original event.
+                    if (shortFinalSummary) {
+                        this.pushEvent({ event: 'agent:generating_started', chatTitle, timestamp: now - shortDurationMs });
                     }
+                    this.generatingDebouncePending = null;
+                    this.generatingStartedAt = 0;
+                    const missingEvidence = ((this.provider as any).requiresFinalAssistantBeforeIdle === true || shortEvidenceSource === 'external-native') && !shortFinalSummary;
+                    if (missingEvidence) {
+                        LOG.warn('CLI', `[${this.type}] short completion missing final assistant evidence (source=${shortEvidenceSource})`);
+                    }
+                    this.pushEvent({
+                        event: 'agent:generating_completed',
+                        chatTitle,
+                        duration: 0,
+                        timestamp: now,
+                        finalSummary: shortFinalSummary,
+                        completionDiagnostic: {
+                            reason: 'short_generating_suppressed',
+                            shortDurationMs,
+                            finalAssistantEvidenceSource: shortEvidenceSource,
+                            ...(missingEvidence ? { blockReason: 'missing_final_assistant' } : {}),
+                        },
+                    });
                 } else {
                     // Debounce completed, then require the rich transcript path that read_chat
                     // uses to show an idle turn whose last user-facing message is assistant.
