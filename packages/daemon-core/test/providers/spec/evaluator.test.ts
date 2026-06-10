@@ -314,7 +314,9 @@ describe('spec evaluator — cursor position guards', () => {
         expect(ev.state.id).toBe('modal');
     });
 
-    it('spec schema accepts cursor_row_min/max fields in sectionRegex', () => {
+    it('spec schema accepts cursor_row_min/max fields in sectionRegex (v1 migrated to v3)', () => {
+        // v1 spec with cursor guards in when.regex — after migration the guards
+        // live in the first condition of when.all[0].cursor_row_min.
         const specObj = {
             $schema: 'adhdev:cli/spec@1',
             id: 'cursor-test', name: 'Cursor Test', binary: 'test',
@@ -333,8 +335,10 @@ describe('spec evaluator — cursor position guards', () => {
         expect(res.ok).toBe(true);
         if (res.ok) {
             const approvalState = res.spec.states.find((s: any) => s.id === 'approval');
-            expect(approvalState?.when.cursor_row_min).toBe(8);
-            expect(approvalState?.when.cursor_row_max).toBe(31);
+            // v3 format: cursor guards are in when.all[0] (the migrated RegexCondition)
+            const whenCond = (approvalState?.when as any)?.all?.[0];
+            expect(whenCond?.cursor_row_min).toBe(8);
+            expect(whenCond?.cursor_row_max).toBe(31);
         }
     });
 

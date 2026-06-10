@@ -234,25 +234,25 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
             role="dialog"
             aria-modal="true"
             aria-label="Spec debug"
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4"
             onClick={onClose}
             style={{ pointerEvents: 'auto' }}
         >
             <div
-                className="bg-zinc-900 text-zinc-100 border border-zinc-700 rounded-lg shadow-2xl max-w-2xl w-full max-h-[88vh] flex flex-col"
+                className="bg-zinc-900 text-zinc-100 border border-zinc-700 rounded-t-xl sm:rounded-lg shadow-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[88vh] flex flex-col"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="flex items-center justify-between border-b border-zinc-700 px-4 py-2.5 shrink-0">
-                    <div className="flex items-center gap-2.5">
-                        <span className="text-sm font-semibold text-zinc-100">Spec Debug</span>
+                <div className="flex items-center justify-between border-b border-zinc-700 px-4 py-2.5 shrink-0 gap-2 min-w-0">
+                    <div className="flex items-center gap-2.5 min-w-0 overflow-hidden">
+                        <span className="text-sm font-semibold text-zinc-100 shrink-0">Spec Debug</span>
                         {snap && (
-                            <span className="text-[11px] text-zinc-400 font-mono bg-zinc-800 px-1.5 py-0.5 rounded">
+                            <span className="text-[11px] text-zinc-400 font-mono bg-zinc-800 px-1.5 py-0.5 rounded truncate">
                                 {snap.spec_id}
                             </span>
                         )}
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 shrink-0">
                         <button
                             type="button"
                             className="text-[11px] text-zinc-300 hover:text-white transition-colors px-2 py-1 rounded hover:bg-zinc-700 border border-transparent hover:border-zinc-600"

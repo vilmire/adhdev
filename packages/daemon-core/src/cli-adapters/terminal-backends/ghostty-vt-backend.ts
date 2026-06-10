@@ -83,18 +83,21 @@ function loadGhosttyVtBinding(): GhosttyVtBinding {
 export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     readonly kind = 'ghostty-vt' as const;
     private terminal: GhosttyVtTerminal;
+    private rows: number;
 
     constructor(options: TerminalViewportBackendOptions) {
         const binding = loadGhosttyVtBinding();
+        this.rows = Math.max(1, options.rows | 0);
         this.terminal = binding.createTerminal({
             cols: Math.max(1, options.cols | 0),
-            rows: Math.max(1, options.rows | 0),
+            rows: this.rows,
             scrollback: Math.max(0, options.scrollback | 0),
         });
     }
 
     resize(rows: number, cols: number): void {
-        this.terminal.resize(Math.max(1, cols | 0), Math.max(1, rows | 0));
+        this.rows = Math.max(1, rows | 0);
+        this.terminal.resize(Math.max(1, cols | 0), this.rows);
     }
 
     write(data: string): void {
@@ -107,14 +110,19 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
         // Claude Code render spaces via cursor-forward rather than literal spaces,
         // which would break downstream regex matching. Keep per-row padding and
         // trim trailing whitespace ourselves.
+        //
+        // formatPlainText uses a .screen pin which includes scrollback history.
+        // Slice to the last `rows` lines to get only the visible viewport.
         const raw = this.terminal.formatPlainText({ trim: false }) || '';
         if (!raw) return '';
         const lines = raw.split('\n').map((row) => row.replace(/\s+$/, ''));
+        // Take only the viewport (last `rows` lines) to exclude scrollback history.
+        const viewport = lines.length > this.rows ? lines.slice(-this.rows) : lines;
         let first = 0;
-        let last = lines.length;
-        while (first < last && !lines[first]) first += 1;
-        while (last > first && !lines[last - 1]) last -= 1;
-        return lines.slice(first, last).join('\n');
+        let last = viewport.length;
+        while (first < last && !viewport[first]) first += 1;
+        while (last > first && !viewport[last - 1]) last -= 1;
+        return viewport.slice(first, last).join('\n');
     }
 
     getCursorPosition(): { col: number; row: number } {

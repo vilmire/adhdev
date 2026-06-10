@@ -41,7 +41,7 @@ import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import { evaluate, type SpecEvaluation, type TraceEntry } from './evaluator.js';
 import { loadSpec } from './loader.js';
-import type { CliSpec, Control, DelegateTrigger } from './types.js';
+import type { CliSpec, Control, DelegateTrigger, SectionDef } from './types.js';
 import { LOG } from '../../logging/logger.js';
 
 export type DashboardEvent =
@@ -161,32 +161,27 @@ export function matchesCompletionIdleTargetState(
     screen: string,
     cursor?: { row: number; col: number },
 ): boolean {
-    const target = spec.states.find(state => state.id === spec.default_state)
+    // Test whether the idle/default state's when-condition actually matches
+    // the current screen, WITHOUT the default fallback. We don't want to
+    // return true just because no other state matched (which is what
+    // evaluate() does via its default_state fallback).
+    const targetId = spec.default_state ?? 'idle';
+    const target = spec.states.find(state => state.id === targetId)
         ?? spec.states.find(state => state.id === 'idle');
-    if (!target?.when) return false;
+    if (!target) return false;
 
-    // Cursor-only idle: if the target state has cursor guards but no regex,
-    // treat a cursor match alone as sufficient.
-    const hasCursorGuard = target.when.cursor_row_min !== undefined
-        || target.when.cursor_row_max !== undefined
-        || target.when.cursor_col_min !== undefined
-        || target.when.cursor_col_max !== undefined;
-    if (hasCursorGuard && cursor !== undefined) {
-        const { cursor_row_min, cursor_row_max, cursor_col_min, cursor_col_max } = target.when;
-        const cursorOk = (cursor_row_min === undefined || cursor.row >= cursor_row_min)
-            && (cursor_row_max === undefined || cursor.row <= cursor_row_max)
-            && (cursor_col_min === undefined || cursor.col >= cursor_col_min)
-            && (cursor_col_max === undefined || cursor.col <= cursor_col_max);
-        if (cursorOk) return true;
-    }
+    // Re-use the resolved sections already computed by evaluate().
+    const sections = ev.sections;
+    const cleanScreen = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l).join('\n');
 
-    if (!target.when.regex) return false;
-    const haystack = target.when.section
-        ? ev.sections.find(section => section.id === target.when.section)?.text ?? ''
-        : screen;
-    if (!haystack) return false;
     try {
-        return new RegExp(target.when.regex, target.when.flags || 'i').test(haystack);
+        // Import the condition evaluator — but we need it as a module-level fn.
+        // Instead, call evaluate() and check: if the evaluator chose the target
+        // via an *explicit* state match (not fallback), return true.
+        // We detect a fallback via trace: the fallback emits "(no state matched".
+        const result = evaluate(spec, screen, cursor);
+        const wasFallback = result.trace.some(t => t.text.startsWith('(no state matched'));
+        return result.state.id === targetId && !wasFallback;
     } catch {
         return false;
     }
@@ -227,6 +222,8 @@ export class SpecDriver {
     private lastModalState: SpecEvaluation['state'] | null = null;
     private completionIdleFirstSeenAt = 0;
     private completionIdleKey = '';
+    /** Previous screen lines — passed to evaluate() for `changed` condition detection. */
+    private prevScreenLines: string[] = [];
     /** Timer that re-runs evaluate() once the hold window expires. Needed
      *  because the PTY stops emitting once the agent finishes; without an
      *  explicit wake-up there's nothing to trigger the busy → idle
@@ -457,7 +454,9 @@ export class SpecDriver {
     private reevaluate(forceEmit = false): void {
         const screen = this.adapter.snapshot();
         const cursor = this.adapter.getCursorPosition();
-        const ev = evaluate(this.spec, screen, cursor);
+        const ev = evaluate(this.spec, screen, cursor, this.prevScreenLines.length > 0 ? this.prevScreenLines : undefined);
+        // Update prevScreenLines for next evaluation's `changed` condition detection.
+        this.prevScreenLines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
 
         // Busy hold: many TUIs flicker between busy and idle every frame
         // (claude in particular — its token counter appears and disappears
@@ -831,6 +830,7 @@ export class SpecDriver {
         const action = picker.spec.action;
         if (action.type !== 'open_picker') return;
         const hay = sectionTextFromSnapshot(this.spec, screen, action.wait_for.section) ?? screen;
+        if (!action.wait_for.regex) return;
         const re = new RegExp(action.wait_for.regex, action.wait_for.flags ?? 'i');
         if (!re.test(hay)) return;
         // Cue arrived — the dashboard now sees the picker modal via

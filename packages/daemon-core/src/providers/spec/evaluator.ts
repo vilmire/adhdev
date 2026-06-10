@@ -1,7 +1,7 @@
 /**
  * Spec evaluator — pure function.
  *
- * Given a visible screen text and a CliSpec, returns:
+ * Given a visible screen text and a CliSpec (v3), returns:
  *   - which sections cover which line ranges
  *   - which state matched and why
  *   - extracted modal title + buttons (if any)
@@ -9,12 +9,14 @@
  *   - which notifications/delegates this evaluation activates
  *   - a trace object that explains every decision (for the inspector)
  *
- * No I/O, no state.
+ * No I/O, no state. Pass prevLines for delta (changed) condition support.
  */
 'use strict';
 
 import type {
-    CliSpec, Section, SectionRegex, SectionPattern, SpecState,
+    CliSpec, SectionDef, SpecStateV3, Condition, RegexCondition,
+    ChangedCondition, AllCondition, AnyCondition,
+    ExtractTitle, ExtractButtons,
     ControlAction, NotificationRule, DelegateTrigger,
 } from './types.js';
 
@@ -63,7 +65,7 @@ export interface SpecEvaluation {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Layout
+// Layout — v3 sections{} object
 // ────────────────────────────────────────────────────────────────────────────
 
 function resolveSize(size: number | string | undefined, total: number): number {
@@ -75,23 +77,31 @@ function resolveSize(size: number | string | undefined, total: number): number {
     return Math.max(0, Math.min(total, Math.round((total * pct) / 100)));
 }
 
-function resolveSections(spec: CliSpec, lines: string[]): ResolvedSection[] {
+/**
+ * Resolve v3 sections{} object into an ordered array of ResolvedSection.
+ * Two-pass: first anchor/positional, then apply `until` cross-references.
+ */
+function resolveSections(
+    sectionsObj: Record<string, SectionDef>,
+    lines: string[],
+): ResolvedSection[] {
     const total = lines.length;
-    const resolved: ResolvedSection[] = [];
-    // Two-pass: first resolve from_top / from_bottom without `until`.
     const anchored = new Map<string, { fromLine: number; toLine: number }>();
+    const sectionEntries = Object.entries(sectionsObj);
 
-    for (const sec of spec.layout.sections) {
+    for (const [id, sec] of sectionEntries) {
         let from = 0;
         let to = total;
-        if (sec.anchor_regex !== undefined) {
+
+        if (sec.anchor !== undefined) {
             try {
-                const re = new RegExp(sec.anchor_regex, sec.anchor_flags ?? '');
+                const re = new RegExp(sec.anchor, sec.anchor_flags ?? '');
                 const prevRe = sec.anchor_context?.prev !== undefined
                     ? new RegExp(sec.anchor_context.prev, sec.anchor_context.prev_flags ?? '') : null;
                 const nextRe = sec.anchor_context?.next !== undefined
                     ? new RegExp(sec.anchor_context.next, sec.anchor_context.next_flags ?? '') : null;
-                const matches = (i: number) => re.test(lines[i])
+                const matches = (i: number) =>
+                    re.test(lines[i])
                     && (prevRe === null || (i > 0 && prevRe.test(lines[i - 1])))
                     && (nextRe === null || (i < total - 1 && nextRe.test(lines[i + 1])));
                 let idx = -1;
@@ -104,36 +114,54 @@ function resolveSections(spec: CliSpec, lines: string[]): ResolvedSection[] {
                     from = idx;
                     to = total;
                     if (sec.until_regex !== undefined) {
+                        // until_regex on anchor-based sections (extension field)
                         try {
                             const ure = new RegExp(sec.until_regex, sec.until_regex_flags ?? '');
                             const end = lines.findIndex((l, i) => i > idx && ure.test(l));
                             if (end !== -1) to = end;
-                        } catch { /* bad until_regex — extend to end */ }
+                        } catch { /* bad until_regex */ }
                     } else if (sec.lines !== undefined) {
                         to = Math.min(total, from + sec.lines);
                     }
+                    // `until` regex check on anchor sections (starts with ^)
+                    // handled in second pass
                 }
-            } catch { /* bad anchor_regex — fall through to defaults */ }
+            } catch { /* bad anchor regex */ }
         } else if (sec.from_top !== undefined) {
             from = resolveSize(sec.from_top, total);
+            to = total;
         } else if (sec.from_bottom !== undefined) {
             const sz = resolveSize(sec.from_bottom, total);
             from = total - sz;
             to = total;
         }
-        anchored.set(sec.id, { fromLine: from, toLine: to });
+
+        anchored.set(id, { fromLine: from, toLine: to });
     }
 
-    // Second pass: apply `until` references.
-    for (const sec of spec.layout.sections) {
-        let { fromLine, toLine } = anchored.get(sec.id)!;
-        if (sec.until) {
-            const target = anchored.get(sec.until.section);
-            if (target) toLine = target.fromLine;
+    // Second pass: apply `until` references or `until` regex strings.
+    const resolved: ResolvedSection[] = [];
+    for (const [id, sec] of sectionEntries) {
+        let { fromLine, toLine } = anchored.get(id)!;
+
+        if (sec.until !== undefined) {
+            if (sec.until.startsWith('^')) {
+                // `until` is a regex: stop at the first matching line after fromLine
+                try {
+                    const ure = new RegExp(sec.until);
+                    const end = lines.findIndex((l, i) => i > fromLine && ure.test(l));
+                    if (end !== -1) toLine = end;
+                } catch { /* bad until regex */ }
+            } else {
+                // `until` is a section id reference
+                const target = anchored.get(sec.until);
+                if (target) toLine = target.fromLine;
+            }
         }
+
         if (toLine < fromLine) toLine = fromLine;
         const text = lines.slice(fromLine, toLine).join('\n');
-        resolved.push({ id: sec.id, fromLine, toLine, text });
+        resolved.push({ id, fromLine, toLine, text });
     }
 
     return resolved;
@@ -145,8 +173,176 @@ function sectionText(sections: ResolvedSection[], sectionId: string | undefined,
     return found ? found.text : '';
 }
 
-function compileRegex(ref: { regex: string; flags?: string }): RegExp {
-    return new RegExp(ref.regex, ref.flags ?? 'i');
+// ────────────────────────────────────────────────────────────────────────────
+// Condition evaluation (v3)
+// ────────────────────────────────────────────────────────────────────────────
+
+function isRegexCondition(c: Condition): c is RegexCondition {
+    return 'matches' in c;
+}
+
+function isChangedCondition(c: Condition): c is ChangedCondition {
+    return 'cursor_above' in c && 'changed' in c;
+}
+
+function isAllCondition(c: Condition): c is AllCondition {
+    return 'all' in c;
+}
+
+function isAnyCondition(c: Condition): c is AnyCondition {
+    return 'any' in c;
+}
+
+function evaluateCondition(
+    cond: Condition,
+    sections: ResolvedSection[],
+    fullScreen: string,
+    cursor: { row: number; col: number } | undefined,
+    prevLines: string[] | undefined,
+    trace: TraceEntry[],
+    stateId: string,
+): boolean {
+    if (isAllCondition(cond)) {
+        for (const child of cond.all) {
+            if (!evaluateCondition(child, sections, fullScreen, cursor, prevLines, trace, stateId)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (isAnyCondition(cond)) {
+        for (const child of cond.any) {
+            if (evaluateCondition(child, sections, fullScreen, cursor, prevLines, trace, stateId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if (isChangedCondition(cond)) {
+        if (!cursor || !prevLines || prevLines.length === 0) return false;
+        const curLines = fullScreen.split('\n');
+        const startRow = Math.max(0, cursor.row - cond.cursor_above);
+        const endRow = cursor.row; // exclusive
+        const currentSlice = curLines.slice(startRow, endRow).join('\n');
+        const prevSlice = prevLines.slice(startRow, endRow).join('\n');
+        const result = currentSlice !== prevSlice;
+        trace.push({ kind: 'section', text: `state[${stateId}] changed cond cursor_above=${cond.cursor_above} rows[${startRow},${endRow}) changed=${result}` });
+        return result;
+    }
+
+    if (isRegexCondition(cond)) {
+        const haystack = sectionText(sections, cond.section, fullScreen);
+        let matched = false;
+        try {
+            const re = new RegExp(cond.matches, cond.flags ?? 'i');
+            matched = re.test(haystack);
+        } catch { matched = false; }
+
+        if (!matched) {
+            trace.push({ kind: 'state_skip', text: `state[${stateId}] regex cond ${cond.section ?? '*'}~/${cond.matches}/ no match` });
+            return false;
+        }
+
+        // Cursor-position guards
+        if (cursor !== undefined) {
+            if (cond.cursor_row_min !== undefined && cursor.row < cond.cursor_row_min) {
+                trace.push({ kind: 'state_skip', text: `state[${stateId}] cursor row ${cursor.row} < cursor_row_min ${cond.cursor_row_min}` });
+                return false;
+            }
+            if (cond.cursor_row_max !== undefined && cursor.row > cond.cursor_row_max) {
+                trace.push({ kind: 'state_skip', text: `state[${stateId}] cursor row ${cursor.row} > cursor_row_max ${cond.cursor_row_max}` });
+                return false;
+            }
+            if (cond.cursor_col_min !== undefined && cursor.col < cond.cursor_col_min) {
+                trace.push({ kind: 'state_skip', text: `state[${stateId}] cursor col ${cursor.col} < cursor_col_min ${cond.cursor_col_min}` });
+                return false;
+            }
+            if (cond.cursor_col_max !== undefined && cursor.col > cond.cursor_col_max) {
+                trace.push({ kind: 'state_skip', text: `state[${stateId}] cursor col ${cursor.col} > cursor_col_max ${cond.cursor_col_max}` });
+                return false;
+            }
+        }
+
+        trace.push({ kind: 'state_match', text: `state[${stateId}] regex cond ${cond.section ?? '*'}~/${cond.matches}/ matched${cursor !== undefined ? ` cursor=(${cursor.row},${cursor.col})` : ''}` });
+        return true;
+    }
+
+    return false;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// State matching
+// ────────────────────────────────────────────────────────────────────────────
+
+function matchState(
+    state: SpecStateV3,
+    sections: ResolvedSection[],
+    fullScreen: string,
+    trace: TraceEntry[],
+    cursor: { row: number; col: number } | undefined,
+    prevLines: string[] | undefined,
+): { matched: boolean; title: string | null } {
+    // Support v1-shaped state.when ({ regex, section }) for backward compat
+    // with test objects that don't go through the loader.
+    let effectiveWhen = state.when;
+    const stateAny = state as any;
+    if (stateAny.when && 'regex' in stateAny.when && !('all' in stateAny.when) && !('any' in stateAny.when)) {
+        effectiveWhen = normalizeV1When(stateAny.when);
+    }
+    const condMatched = evaluateCondition(effectiveWhen, sections, fullScreen, cursor, prevLines, trace, state.id);
+
+    if (!condMatched) {
+        trace.push({ kind: 'state_skip', text: `state[${state.id}] when condition not met` });
+        return { matched: false, title: null };
+    }
+
+    trace.push({ kind: 'state_match', text: `state[${state.id}] matched` });
+
+    let title: string | null = null;
+    const stateAny2 = state as any;
+    const extract = state.extract;
+    // v1 compat: extract_title
+    const titleRule: ExtractTitle | undefined = extract?.title
+        ?? (stateAny2.extract_title ? v1ExtractTitleToV3(stateAny2.extract_title) : undefined);
+    if (titleRule) {
+        title = extractTitle(titleRule, sections, fullScreen);
+        trace.push({ kind: 'state_match', text: `state[${state.id}] extract.title → ${title ?? '(none)'}` });
+    }
+
+    return { matched: true, title };
+}
+
+function extractTitle(
+    rule: ExtractTitle,
+    sections: ResolvedSection[],
+    fullScreen: string,
+): string | null {
+    const hay = sectionText(sections, rule.section, fullScreen);
+    if (!hay) return null;
+
+    if (rule.first_line) {
+        // Take the first non-separator, non-empty line
+        const lines = hay.split('\n');
+        for (const line of lines) {
+            const stripped = line.trim();
+            if (stripped && !/^[─╌═─\s]+$/.test(stripped)) {
+                return stripped;
+            }
+        }
+        return null;
+    }
+
+    if (rule.regex) {
+        try {
+            const re = new RegExp(rule.regex, rule.flags ?? 'i');
+            const m = re.exec(hay);
+            if (m) return (m[1] ?? m[0]).trim();
+        } catch { /* bad regex */ }
+    }
+
+    return null;
 }
 
 function compilePattern(ref: { pattern: string; flags?: string }): RegExp {
@@ -159,66 +355,14 @@ function compileLinePattern(ref: { pattern: string; flags?: string }): RegExp {
     return new RegExp(ref.pattern, flags);
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// State matching
-// ────────────────────────────────────────────────────────────────────────────
-
-function matchState(
-    state: SpecState,
-    sections: ResolvedSection[],
-    fullScreen: string,
-    trace: TraceEntry[],
-    cursor?: { row: number; col: number },
-): { matched: boolean; title: string | null } {
-    const haystack = sectionText(sections, state.when.section, fullScreen);
-    const re = compileRegex(state.when);
-    if (!re.test(haystack)) {
-        trace.push({ kind: 'state_skip', text: `state[${state.id}] when ${state.when.section ?? '*'}~/${state.when.regex}/ no match` });
-        return { matched: false, title: null };
-    }
-
-    // Cursor-position guards: check row/col bounds when the state declares them.
-    // Guards are skipped entirely when the caller did not supply a cursor position
-    // (cursor === undefined) so existing pure-text evaluation is unaffected.
-    if (cursor !== undefined) {
-        const w = state.when;
-        if (w.cursor_row_min !== undefined && cursor.row < w.cursor_row_min) {
-            trace.push({ kind: 'state_skip', text: `state[${state.id}] cursor row ${cursor.row} < cursor_row_min ${w.cursor_row_min}` });
-            return { matched: false, title: null };
-        }
-        if (w.cursor_row_max !== undefined && cursor.row > w.cursor_row_max) {
-            trace.push({ kind: 'state_skip', text: `state[${state.id}] cursor row ${cursor.row} > cursor_row_max ${w.cursor_row_max}` });
-            return { matched: false, title: null };
-        }
-        if (w.cursor_col_min !== undefined && cursor.col < w.cursor_col_min) {
-            trace.push({ kind: 'state_skip', text: `state[${state.id}] cursor col ${cursor.col} < cursor_col_min ${w.cursor_col_min}` });
-            return { matched: false, title: null };
-        }
-        if (w.cursor_col_max !== undefined && cursor.col > w.cursor_col_max) {
-            trace.push({ kind: 'state_skip', text: `state[${state.id}] cursor col ${cursor.col} > cursor_col_max ${w.cursor_col_max}` });
-            return { matched: false, title: null };
-        }
-    }
-
-    trace.push({ kind: 'state_match', text: `state[${state.id}] matched via ${state.when.section ?? '*'}~/${state.when.regex}/${cursor !== undefined ? ` cursor=(${cursor.row},${cursor.col})` : ''}` });
-
-    let title: string | null = null;
-    if (state.extract_title) {
-        const titleHay = sectionText(sections, state.extract_title.section, fullScreen);
-        const m = compileRegex(state.extract_title).exec(titleHay);
-        if (m) title = (m[1] ?? m[0]).trim();
-        trace.push({ kind: 'state_match', text: `state[${state.id}] extract_title → ${title ?? '(none)'}` });
-    }
-    return { matched: true, title };
-}
-
-function extractButtonsWithPattern(
-    rule: { pattern: string; flags?: string },
+function extractButtonsFromRule(
+    rule: ExtractButtons,
     hay: string,
-    keyTemplate: string,
-    continuationLines: boolean,
 ): { index: number; label: string; key: string }[] {
+    const keyTemplate = rule.key_for_index;
+    const continuationLines = rule.continuation_lines ?? false;
     const buttons: { index: number; label: string; key: string }[] = [];
+
     if (continuationLines) {
         const re = compileLinePattern(rule);
         const lines = hay.split('\n');
@@ -254,47 +398,94 @@ function extractButtonsWithPattern(
             buttons.push({ index: idx, label, key });
         }
     }
+
     buttons.sort((a, b) => a.index - b.index);
     return buttons;
 }
 
 function extractModal(
-    state: SpecState,
+    state: SpecStateV3,
     sections: ResolvedSection[],
     fullScreen: string,
     title: string | null,
     trace: TraceEntry[],
 ): ModalSnapshot | null {
-    if (!state.modal_buttons) return null;
-    const hay = sectionText(sections, state.modal_buttons.section, fullScreen);
-    const minCount = state.modal_buttons.min_count ?? 2;
-    const keyTemplate = state.modal_buttons.key_for_index;
-    const continuationLines = state.modal_buttons.continuation_lines ?? false;
+    const stateAny = state as any;
+    // v1 compat: modal_buttons
+    const buttonsRule: ExtractButtons | undefined = state.extract?.buttons
+        ?? (stateAny.modal_buttons ? v1ModalButtonsToV3(stateAny.modal_buttons) : undefined);
+    if (!buttonsRule) return null;
 
-    // Build ordered list of pattern candidates: `patterns` array takes precedence,
-    // falling back to the single `pattern` field.
-    const candidates: Array<{ pattern: string; flags?: string }> =
-        state.modal_buttons.patterns?.length
-            ? state.modal_buttons.patterns
-            : state.modal_buttons.pattern
-              ? [{ pattern: state.modal_buttons.pattern, flags: state.modal_buttons.flags }]
-              : [];
-
-    let buttons: { index: number; label: string; key: string }[] = [];
-    for (const candidate of candidates) {
-        const result = extractButtonsWithPattern(candidate, hay, keyTemplate, continuationLines);
-        if (result.length >= minCount) {
-            buttons = result;
-            break;
-        }
-    }
+    const hay = sectionText(sections, buttonsRule.section, fullScreen);
+    const minCount = buttonsRule.min_count ?? 2;
+    const buttons = extractButtonsFromRule(buttonsRule, hay);
 
     if (buttons.length < minCount) {
-        trace.push({ kind: 'modal', text: `modal_buttons matched ${buttons.length}/${minCount} required — discarded` });
+        trace.push({ kind: 'modal', text: `extract.buttons matched ${buttons.length}/${minCount} required — discarded` });
         return null;
     }
-    trace.push({ kind: 'modal', text: `modal_buttons matched ${buttons.length} choices` });
+    trace.push({ kind: 'modal', text: `extract.buttons matched ${buttons.length} choices` });
     return { title, buttons };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// v1 backward-compat helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Convert a v1 sections array to a v3 sections object (for inline test specs
+ * that bypass the loader and thus the migration path).
+ */
+function buildSectionsMapFromV1(v1Sections: any[]): Record<string, SectionDef> {
+    const map: Record<string, SectionDef> = {};
+    for (const sec of v1Sections) {
+        const { id, anchor_regex, ...rest } = sec;
+        const def: SectionDef = { ...rest };
+        if (anchor_regex) def.anchor = anchor_regex;
+        // v1 until: { section: id } → v3 until: id
+        if (rest.until?.section) def.until = rest.until.section;
+        else if (rest.until && typeof rest.until === 'string') def.until = rest.until;
+        else delete (def as any).until;
+        map[id] = def;
+    }
+    return map;
+}
+
+/** Convert v1 SectionRegex (when.regex) to v3 AllCondition. */
+function normalizeV1When(v1When: any): AllCondition {
+    if (v1When?.cursor_above_lines && v1When?.changed) {
+        return { all: [{ cursor_above: v1When.cursor_above_lines, changed: true as const }] };
+    }
+    const cond: any = { matches: v1When.regex };
+    if (v1When.section) cond.section = v1When.section;
+    if (v1When.flags) cond.flags = v1When.flags;
+    if (v1When.cursor_row_min !== undefined) cond.cursor_row_min = v1When.cursor_row_min;
+    if (v1When.cursor_row_max !== undefined) cond.cursor_row_max = v1When.cursor_row_max;
+    if (v1When.cursor_col_min !== undefined) cond.cursor_col_min = v1When.cursor_col_min;
+    if (v1When.cursor_col_max !== undefined) cond.cursor_col_max = v1When.cursor_col_max;
+    return { all: [cond] };
+}
+
+/** Convert v1 extract_title to v3 ExtractTitle. */
+function v1ExtractTitleToV3(v1: any): ExtractTitle {
+    if (v1.first_line) return { section: v1.section, first_line: true };
+    return { section: v1.section, regex: v1.regex, flags: v1.flags };
+}
+
+/** Convert v1 modal_buttons to v3 ExtractButtons. */
+function v1ModalButtonsToV3(v1: any): ExtractButtons | undefined {
+    // Use first pattern from patterns[] or single pattern
+    const pat = v1.patterns?.length ? v1.patterns[0].pattern : v1.pattern;
+    if (!pat) return undefined;
+    const flg = v1.patterns?.length ? v1.patterns[0].flags : v1.flags;
+    return {
+        section: v1.section,
+        pattern: pat,
+        flags: flg,
+        key_for_index: v1.key_for_index,
+        min_count: v1.min_count,
+        continuation_lines: v1.continuation_lines,
+    };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -304,19 +495,23 @@ function extractModal(
 export function evaluate(
     spec: CliSpec,
     screenText: string,
-    /** Optional cursor position (0-based row and col). When supplied, states
-     *  with cursor_row_min/max or cursor_col_min/max predicates are filtered.
-     *  When omitted, cursor predicates are ignored and evaluation is text-only
-     *  (backward-compatible with all existing specs and call sites). */
+    /** Optional cursor position (0-based row and col). */
     cursor?: { row: number; col: number },
+    /** Optional previous screen lines for `changed` condition detection. */
+    prevLines?: string[],
 ): SpecEvaluation {
     const trace: TraceEntry[] = [];
     const lines = screenText.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
-    // Use \r-stripped text for all regex matching so that anchor patterns
-    // like ^[─╌]+$ and full-screen when-regex work correctly against PTY
-    // output where lines end with \r\n rather than plain \n.
     const cleanScreen = lines.join('\n');
-    const sections = resolveSections(spec, lines);
+
+    // Support both v3 (sections{}) and v1-shaped objects (layout.sections[])
+    // The v1 path exists for tests that build raw spec objects without going
+    // through the loader (which would normally migrate v1 → v3).
+    const specAny = spec as any;
+    const effectiveSectionsMap: Record<string, SectionDef> = spec.sections
+        ?? buildSectionsMapFromV1(specAny.layout?.sections ?? []);
+    const sections = resolveSections(effectiveSectionsMap, lines);
+
     for (const s of sections) {
         trace.push({ kind: 'section', text: `section[${s.id}] lines [${s.fromLine}, ${s.toLine}) (${s.toLine - s.fromLine} lines)` });
     }
@@ -328,16 +523,14 @@ export function evaluate(
     let modal: ModalSnapshot | null = null;
 
     for (const st of spec.states) {
-        const { matched, title } = matchState(st, sections, cleanScreen, trace, cursor);
+        const { matched, title } = matchState(st, sections, cleanScreen, trace, cursor, prevLines);
         if (!matched) continue;
         const extractedModal = extractModal(st, sections, cleanScreen, title, trace);
-        // If the state declares modal_buttons but extraction failed (button
-        // count below min_count, or text-was-mistaken-for-modal), do not
-        // promote the state. Otherwise we would surface a phantom approval
-        // built from arbitrary screen text — see claude-cli numbered-list
-        // false-positive on 2026-06-07.
-        if (st.modal_buttons && !extractedModal) {
-            trace.push({ kind: 'state_skip', text: `state[${st.id}] matched but modal_buttons extraction failed — not promoting` });
+        // If the state declares extract.buttons (or v1 modal_buttons) but
+        // extraction failed, don't promote the state (avoids phantom approvals).
+        const stAny = st as any;
+        if ((st.extract?.buttons || stAny.modal_buttons) && !extractedModal) {
+            trace.push({ kind: 'state_skip', text: `state[${st.id}] matched but extract.buttons failed — not promoting` });
             continue;
         }
         activeState = { id: st.id, label: st.label, title };
@@ -374,9 +567,6 @@ export function evaluate(
     const delegates: FiredDelegate[] = [];
     for (const d of spec.delegate ?? []) {
         if (d.when_state !== activeState.id) continue;
-        // after_duration_ms is enforced by the driver, not the evaluator
-        // (the evaluator is pure / stateless). The driver bundles a
-        // timer per delegate trigger and emits when it fires.
         delegates.push({ id: d.id, task: interpolate(d.task_template, activeState, sections) });
     }
 
