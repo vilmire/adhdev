@@ -969,10 +969,10 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
     return null
 }
 
-function getGraphHeightClass(nodeCount: number): string {
-    if (nodeCount >= 16) return 'h-[720px] min-h-[720px] sm:h-[860px] xl:h-[980px]'
-    if (nodeCount >= 10) return 'h-[580px] min-h-[580px] sm:h-[700px] xl:h-[820px]'
-    return 'h-[460px] min-h-[460px] sm:h-[560px] xl:h-[680px]'
+function getGraphMinHeightClass(nodeCount: number): string {
+    if (nodeCount >= 16) return 'min-h-[720px]'
+    if (nodeCount >= 10) return 'min-h-[580px]'
+    return 'min-h-[460px]'
 }
 
 type DirectionPref = 'auto' | 'LR' | 'TB'
@@ -1047,7 +1047,7 @@ export default function MeshGraphView({
         }
     }, [])
 
-    const graphHeightClass = getGraphHeightClass(data.nodes.length)
+    const graphMinHeightClass = getGraphMinHeightClass(data.nodes.length)
 
     const directionToggleButtonClass = (active: boolean) =>
         active
@@ -1063,7 +1063,7 @@ export default function MeshGraphView({
         <MeshGraphCompactContext.Provider value={compact}>
         <MeshGraphDirectionContext.Provider value={direction}>
         <div ref={surfaceRef} className={meshTheme.graphShellClass}>
-            <div className={`flex flex-wrap items-center justify-between gap-2 px-3 pt-3 pb-2 text-[11px] ${meshTheme.textSecondary}`}>
+            <div className={`shrink-0 flex flex-wrap items-center justify-between gap-2 px-3 pt-3 pb-2 text-[11px] ${meshTheme.textSecondary}`}>
                 <div className="flex flex-wrap gap-2">
                     <span className={meshTheme.graphStatChipClass}>
                         {data.stats.totalNodes} node{data.stats.totalNodes === 1 ? '' : 's'}
@@ -1107,7 +1107,7 @@ export default function MeshGraphView({
                     </div>
                 </div>
             </div>
-            <div className={`w-full min-w-0 ${graphHeightClass}`}>
+            <div className={`w-full min-w-0 flex-1 min-h-0 ${graphMinHeightClass}`}>
                 <ReactFlow<FlowNode, FlowEdge>
                     nodes={nodes}
                     edges={layout.edges}

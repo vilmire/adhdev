@@ -98,6 +98,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
     const [error, setError] = useState<string | null>(null)
     const [showScreen, setShowScreen] = useState(false)
     const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['footer']))
+    const [snapshotLabel, setSnapshotLabel] = useState<'Snapshot' | 'Copied!'>('Snapshot')
 
     const daemonId = activeConv.daemonId || activeConv.routeId?.split(':')[0] || activeConv.routeId || ''
     const sessionId = activeConv.sessionId || ''
@@ -133,6 +134,72 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
 
     const snap = data?.snapshot
 
+    const handleSnapshot = async () => {
+        let resolved = data
+        if (!resolved) {
+            await load()
+            resolved = data
+        }
+        const s = resolved?.snapshot
+        const lines: string[] = []
+        lines.push('# Spec Debug Snapshot')
+        lines.push(`Generated: ${new Date().toISOString()}`)
+        lines.push(`Session: ${resolved?.sessionId ?? ''} (${resolved?.providerType ?? ''})`)
+        lines.push(`Spec: ${s?.spec_id ?? ''} (${s?.specPath ?? ''})`)
+        lines.push(`Provider: ${s?.name ?? ''} (${s?.cliType ?? ''})`)
+        lines.push(`Working dir: ${s?.workingDir ?? ''}`)
+        lines.push(`Spawned: ${s?.spawnedAtMs ? new Date(s.spawnedAtMs).toISOString() : ''}`)
+        lines.push('')
+        lines.push('## Current State')
+        lines.push(`State: ${s?.current_state?.id ?? 'none'} (${s?.current_state?.label ?? ''})`)
+        lines.push(`Status: ${s?.status ?? ''}`)
+        lines.push(`Idle hold pending: ${s?.idleHoldPending ?? false}`)
+        lines.push(`Exited: ${s?.exited ?? false}`)
+        lines.push(`Last busy: ${s?.lastBusyAt ? formatAgo(s.lastBusyAt) : ''}`)
+        lines.push('')
+        lines.push('## Modal')
+        if (s?.current_modal) {
+            const btns = s.current_modal.buttons.map(b => b.label).join(' / ')
+            lines.push(`${s.current_modal.title ?? ''} [${btns}]`)
+        } else {
+            lines.push('none')
+        }
+        lines.push('')
+        lines.push('## State History (last 20)')
+        const history = s?.stateHistory ? [...s.stateHistory].reverse().slice(0, 20) : []
+        for (const entry of history) {
+            const reason = entry.reason != null ? (typeof entry.reason === 'string' ? entry.reason : JSON.stringify(entry.reason)) : ''
+            const debounce = entry.debounceKind != null ? (typeof entry.debounceKind === 'string' ? entry.debounceKind : JSON.stringify(entry.debounceKind)) : ''
+            const matchedStateId = entry.matchedStateId != null ? String(entry.matchedStateId) : ''
+            const rules = (entry.matchedRules ?? []).map(r => typeof r === 'string' ? r : JSON.stringify(r)).join(', ')
+            lines.push(`- ${entry.stateId} @ ${new Date(entry.at).toISOString()} held ${entry.durationMs}ms | reason: ${reason} | debounce: ${debounce} | eval→${matchedStateId} | rules: ${rules}`)
+        }
+        lines.push('')
+        lines.push('## Sections')
+        if (s?.sections) {
+            for (const [id, text] of Object.entries(s.sections)) {
+                const preview = text.split('\n').slice(0, 3).join('\n')
+                lines.push(`${id}: ${preview}`)
+            }
+        }
+        lines.push('')
+        lines.push('## Last Assistant Message')
+        const msgs = s?.messages ?? s?.committedMessages ?? []
+        const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant')
+        lines.push(lastAssistant ? lastAssistant.content.slice(0, 400) : '')
+        lines.push('')
+        lines.push('## Screen (first 30 lines)')
+        lines.push(s?.screen ? s.screen.split('\n').slice(0, 30).join('\n') : '')
+
+        try {
+            await navigator.clipboard.writeText(lines.join('\n'))
+            setSnapshotLabel('Copied!')
+            setTimeout(() => setSnapshotLabel('Snapshot'), 1500)
+        } catch (e) {
+            console.error('[SpecDebugPanel] clipboard write failed', e)
+        }
+    }
+
     const toggleSection = (id: string) => {
         setExpandedSections(prev => {
             const next = new Set(prev)
@@ -166,6 +233,14 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         )}
                     </div>
                     <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            className="text-[11px] text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-white/5"
+                            onClick={() => { void handleSnapshot() }}
+                            disabled={loading}
+                        >
+                            {snapshotLabel}
+                        </button>
                         <button
                             type="button"
                             className="text-[11px] text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-white/5"
@@ -327,19 +402,19 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                                             held {formatDur(entry.durationMs)}
                                                         </span>
                                                     )}
-                                                    {entry.reason && entry.reason !== 'eval_match' && (
-                                                        <span className={`text-[10px] px-1 py-0.5 rounded font-mono shrink-0 ${REASON_COLORS[entry.reason] ?? 'text-white/50 bg-white/5'}`}>
-                                                            {entry.reason}
+                                                    {entry.reason && String(entry.reason) !== 'eval_match' && (
+                                                        <span className={`text-[10px] px-1 py-0.5 rounded font-mono shrink-0 ${REASON_COLORS[String(entry.reason)] ?? 'text-white/50 bg-white/5'}`}>
+                                                            {String(entry.reason)}
                                                         </span>
                                                     )}
-                                                    {entry.debounceKind && entry.debounceKind !== 'none' && (
+                                                    {entry.debounceKind && String(entry.debounceKind) !== 'none' && (
                                                         <span className="text-text-tertiary text-[10px]">
-                                                            ({entry.debounceKind})
+                                                            ({String(entry.debounceKind)})
                                                         </span>
                                                     )}
-                                                    {entry.matchedStateId && entry.matchedStateId !== entry.stateId && (
+                                                    {entry.matchedStateId && String(entry.matchedStateId) !== entry.stateId && (
                                                         <span className="text-text-tertiary text-[10px] font-mono">
-                                                            eval→{entry.matchedStateId}
+                                                            eval→{String(entry.matchedStateId)}
                                                         </span>
                                                     )}
                                                 </div>
@@ -347,7 +422,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                                     <div className="flex items-center gap-1 flex-wrap pl-22 ml-[88px]">
                                                         {entry.matchedRules.slice(0, 3).map((rule, ri) => (
                                                             <span key={ri} className="font-mono text-[10px] text-blue-300/60 bg-blue-500/10 px-1 py-0.5 rounded">
-                                                                {rule}
+                                                                {typeof rule === 'string' ? rule : JSON.stringify(rule)}
                                                             </span>
                                                         ))}
                                                         {entry.matchedRules.length > 3 && (
