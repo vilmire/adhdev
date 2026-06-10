@@ -3846,3 +3846,12 @@
 }
 
 /* end @layer base */
+
+@keyframes mesh-glow-breathe {
+    0%, 100% { box-shadow: 0 0 0 1px rgba(34,211,238,0.25), 0 0 12px 2px rgba(34,211,238,0.12), 0 18px 48px rgba(3,7,18,0.22); }
+    50%       { box-shadow: 0 0 0 1px rgba(34,211,238,0.55), 0 0 22px 6px rgba(34,211,238,0.28), 0 18px 48px rgba(3,7,18,0.22); }
+}
+.mesh-node-generating {
+    animation: mesh-glow-breathe 2s ease-in-out infinite;
+    border-color: rgba(34,211,238,0.55) !important;
+}
