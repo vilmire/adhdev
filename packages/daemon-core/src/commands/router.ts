@@ -3347,7 +3347,7 @@ export class DaemonCommandRouter {
             const { stdout: baseHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
             const { stdout: branchHeadStdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8' });
             const baseHead = baseHeadStdout.trim();
-            const branchHead = branchHeadStdout.trim();
+            let branchHead = branchHeadStdout.trim();
             recordMeshRefineStage(refineStages, 'resolve_refs', 'passed', resolveStarted, { branch, baseBranch, baseHead, branchHead });
 
             const validationStarted = Date.now();
@@ -3414,7 +3414,7 @@ export class DaemonCommandRouter {
             }
 
             const patchEquivalenceStarted = Date.now();
-            const patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
+            let patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
             recordMeshRefineStage(refineStages, 'patch_equivalence', patchEquivalence.status, patchEquivalenceStarted, {
                 equivalent: patchEquivalence.equivalent,
                 expectedPatchId: patchEquivalence.expectedPatchId,
@@ -3423,26 +3423,109 @@ export class DaemonCommandRouter {
                 actionableHint: patchEquivalence.actionableHint,
             });
             if (!patchEquivalence.equivalent) {
-                return {
-                    success: false,
-                    code: 'patch_equivalence_failed',
-                    convergenceStatus: 'blocked_review',
-                    error: 'Refinery patch-equivalence preflight failed; merge/refine was not attempted.',
-                    branch,
-                    into: baseBranch,
-                    validationSummary,
-                    patchEquivalence,
-                    refineStages,
-                    finalBranchConvergenceState: {
-                branch,
-                baseBranch,
-                merged: false,
-                removed: false,
-                validation: 'passed',
-                patchEquivalence: 'failed',
-                status: 'blocked_review',
-                    },
-                };
+                // Auto-rebase: if branch is simply behind base, attempt rebase automatically before failing.
+                let didAutoRebase = false;
+                let isBehindBase = false;
+                try {
+                    execFileSync('git', ['merge-base', '--is-ancestor', branchHead, baseHead], {
+                        cwd: node.workspace,
+                        stdio: 'ignore',
+                    });
+                    isBehindBase = true;
+                } catch { /* non-zero exit means branchHead is not an ancestor of baseHead */ }
+
+                if (isBehindBase) {
+                    const autoRebaseStarted = Date.now();
+                    try {
+                        execFileSync('git', ['rebase', baseHead], {
+                            cwd: node.workspace,
+                            stdio: ['ignore', 'pipe', 'pipe'],
+                        });
+                        const { stdout: rebasedHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: node.workspace, encoding: 'utf8' });
+                        branchHead = rebasedHeadStdout.trim();
+                        const rebasedPatchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
+                        recordMeshRefineStage(refineStages, 'patch_equivalence_after_auto_rebase', rebasedPatchEquivalence.status, autoRebaseStarted, {
+                            equivalent: rebasedPatchEquivalence.equivalent,
+                            expectedPatchId: rebasedPatchEquivalence.expectedPatchId,
+                            actualPatchId: rebasedPatchEquivalence.actualPatchId,
+                            error: rebasedPatchEquivalence.error,
+                            rebasedBranchHead: branchHead,
+                        });
+                        if (rebasedPatchEquivalence.equivalent) {
+                            patchEquivalence = rebasedPatchEquivalence;
+                            didAutoRebase = true;
+                        } else {
+                            return {
+                                success: false,
+                                code: 'needs_rebase',
+                                convergenceStatus: 'blocked_review',
+                                error: 'Branch was rebased onto base but patch equivalence still failed; manual intervention required.',
+                                branch,
+                                into: baseBranch,
+                                validationSummary,
+                                patchEquivalence: rebasedPatchEquivalence,
+                                refineStages,
+                                finalBranchConvergenceState: {
+                                    branch,
+                                    baseBranch,
+                                    merged: false,
+                                    removed: false,
+                                    validation: 'passed',
+                                    patchEquivalence: 'failed',
+                                    status: 'blocked_review',
+                                },
+                            };
+                        }
+                    } catch (rebaseErr: any) {
+                        try { execFileSync('git', ['rebase', '--abort'], { cwd: node.workspace, stdio: 'ignore' }); } catch { /* ignore */ }
+                        recordMeshRefineStage(refineStages, 'patch_equivalence_after_auto_rebase', 'failed', autoRebaseStarted, {
+                            error: rebaseErr?.message || String(rebaseErr),
+                        });
+                        return {
+                            success: false,
+                            code: 'needs_rebase_with_conflicts',
+                            convergenceStatus: 'blocked_review',
+                            error: 'Branch is behind base and auto-rebase failed due to conflicts; resolve conflicts manually and retry.',
+                            branch,
+                            into: baseBranch,
+                            validationSummary,
+                            patchEquivalence,
+                            refineStages,
+                            finalBranchConvergenceState: {
+                                branch,
+                                baseBranch,
+                                merged: false,
+                                removed: false,
+                                validation: 'passed',
+                                patchEquivalence: 'failed',
+                                status: 'blocked_review',
+                            },
+                        };
+                    }
+                }
+
+                if (!didAutoRebase) {
+                    return {
+                        success: false,
+                        code: 'patch_equivalence_failed',
+                        convergenceStatus: 'blocked_review',
+                        error: 'Refinery patch-equivalence preflight failed; merge/refine was not attempted.',
+                        branch,
+                        into: baseBranch,
+                        validationSummary,
+                        patchEquivalence,
+                        refineStages,
+                        finalBranchConvergenceState: {
+                            branch,
+                            baseBranch,
+                            merged: false,
+                            removed: false,
+                            validation: 'passed',
+                            patchEquivalence: 'failed',
+                            status: 'blocked_review',
+                        },
+                    };
+                }
             }
 
             const submoduleReachabilityStarted = Date.now();
@@ -3734,7 +3817,7 @@ export class DaemonCommandRouter {
                     ? 'validation_failed'
                     : refineCode === 'submodule_reachability_failed'
                         ? 'submodule_reachability_failed'
-                        : refineCode === 'merge_failed' || refineCode === 'patch_equivalence_failed'
+                        : refineCode === 'merge_failed' || refineCode === 'patch_equivalence_failed' || refineCode === 'needs_rebase' || refineCode === 'needs_rebase_with_conflicts'
                             ? 'merge_failed'
                             : refineCode === 'cleanup_failed'
                                 ? 'cleanup_failed'
