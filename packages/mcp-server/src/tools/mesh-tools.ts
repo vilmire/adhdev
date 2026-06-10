@@ -1751,9 +1751,26 @@ function getNodeLaunchReadiness(node: LocalMeshNodeEntry): Record<string, unknow
     };
 }
 
-function getWorktreeBootstrapLaunchBlock(node: LocalMeshNodeEntry): Record<string, unknown> | undefined {
+function getWorktreeBootstrapLaunchBlock(node: LocalMeshNodeEntry, meshPolicy?: unknown): Record<string, unknown> | undefined {
+    if (!(node as any).isLocalWorktree) return undefined;
     const bootstrap = (node as any).worktreeBootstrap;
-    if (!(node as any).isLocalWorktree || bootstrap?.status !== 'failed' || bootstrap?.required === false) return undefined;
+
+    // M2-4 (opt-in): with policy.requireBootstrapBeforeLaunch, any non-ready
+    // bootstrap state blocks the launch fail-closed - not just failures.
+    const requireReady = !!(meshPolicy && typeof meshPolicy === 'object'
+        && (meshPolicy as Record<string, unknown>).requireBootstrapBeforeLaunch === true);
+    if (requireReady && bootstrap?.status !== 'ready') {
+        return {
+            success: false,
+            code: 'bootstrap_not_ready',
+            error: `Node '${node.id}' bootstrap state is '${bootstrap?.status ?? 'unknown'}' and mesh policy requireBootstrapBeforeLaunch is enabled.`,
+            nodeId: node.id,
+            worktreeBootstrap: bootstrap ?? null,
+            recoveryHint: 'Run the worktree bootstrap (clone runOnClone or a refine with bootstrap inherit) until the node reports ready, or disable requireBootstrapBeforeLaunch.',
+        };
+    }
+
+    if (bootstrap?.status !== 'failed' || bootstrap?.required === false) return undefined;
     return {
         success: false,
         code: 'worktree_bootstrap_failed',
@@ -3732,7 +3749,7 @@ export async function meshLaunchSession(
     args: { node_id: string; type?: string },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
-    const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node);
+    const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node, ctx.mesh.policy);
     if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
 
     if (isLocalTransport(ctx.transport)) {

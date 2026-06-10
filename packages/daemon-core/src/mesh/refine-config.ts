@@ -29,8 +29,18 @@ export interface RepoMeshRefineConfig {
     validation?: {
         required?: boolean;
         /**
-         * Optional dependency/bootstrap commands that Refinery runs before
-         * validation commands. Refinery never infers installs on its own.
+         * M2-2 (v2): how Refinery sources its bootstrap stage.
+         *   'inherit' (default) — consume the worktree_bootstrap config/state:
+         *     skip when the node's bootstrap is 'ready' (staleInputs unchanged),
+         *     run the worktree_bootstrap definition when stale/never-ran.
+         *   'skip' — no bootstrap stage at all (validation commands run as-is).
+         */
+        bootstrap?: 'inherit' | 'skip';
+        /**
+         * DEPRECATED (M2-2): define bootstrap once in
+         * .adhdev/worktree_bootstrap.json instead. Still honored when no
+         * worktree_bootstrap config exists, with a deprecation warning; when
+         * both exist the worktree_bootstrap config wins.
          */
         bootstrapCommands?: RepoMeshRefineValidationCommandConfig[];
         commands?: RepoMeshRefineValidationCommandConfig[];
@@ -60,9 +70,13 @@ export interface MeshRefineConfigLoadResult {
 export interface MeshRefineValidationPlan {
     source: string;
     sourceType: MeshRefineConfigLoadResult['sourceType'];
+    /** M2-2: how the bootstrap stage is sourced ('inherit' consumes worktree_bootstrap; 'skip' disables it). */
+    bootstrapMode: 'inherit' | 'skip';
     bootstrapCommands: MeshRefineValidationCommandPlan[];
     commands: MeshRefineValidationCommandPlan[];
     rejectedCommands: Array<Record<string, unknown>>;
+    /** M2-2: deprecation notices (e.g. validation.bootstrapCommands present). */
+    deprecationWarnings: string[];
     suggestions: RepoMeshRefineValidationCommandConfig[];
     suggestedConfig?: RepoMeshRefineConfig;
     unavailableReason?: string;
@@ -98,6 +112,11 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
             additionalProperties: false,
             properties: {
                 required: { type: 'boolean', default: true },
+                bootstrap: {
+                    enum: ['inherit', 'skip'],
+                    default: 'inherit',
+                    description: "M2-2 (v2): 'inherit' consumes the worktree_bootstrap config/state (skip when ready, rerun when stale); 'skip' disables the bootstrap stage entirely.",
+                },
                 commands: {
                     type: 'array',
                     minItems: 1,
@@ -120,6 +139,7 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                 bootstrapCommands: {
                     type: 'array',
                     maxItems: 4,
+                    description: 'DEPRECATED: define bootstrap once in .adhdev/worktree_bootstrap.json. Honored only when no worktree_bootstrap config exists (with a deprecation warning); worktree_bootstrap wins when both exist.',
                     items: {
                         type: 'object',
                         additionalProperties: false,
@@ -217,23 +237,36 @@ export function normalizeMeshCommandConfig(entry: unknown, source: string): { co
 
 const isRecord = isMeshConfigRecord;
 
-export function validateMeshRefineConfig(config: unknown, source = 'inline'): { valid: boolean; errors: string[]; bootstrapCommands: MeshRefineValidationCommandPlan[]; commands: MeshRefineValidationCommandPlan[]; rejectedCommands: Array<Record<string, unknown>> } {
+export function validateMeshRefineConfig(config: unknown, source = 'inline'): { valid: boolean; errors: string[]; bootstrapCommands: MeshRefineValidationCommandPlan[]; commands: MeshRefineValidationCommandPlan[]; rejectedCommands: Array<Record<string, unknown>>; bootstrapMode: 'inherit' | 'skip'; deprecationWarnings: string[] } {
     const errors: string[] = [];
     const bootstrapCommands: MeshRefineValidationCommandPlan[] = [];
     const commands: MeshRefineValidationCommandPlan[] = [];
     const rejectedCommands: Array<Record<string, unknown>> = [];
+    const deprecationWarnings: string[] = [];
+    let bootstrapMode: 'inherit' | 'skip' = 'inherit';
 
-    if (!isRecord(config)) return { valid: false, errors: ['config must be an object'], bootstrapCommands, commands, rejectedCommands };
+    if (!isRecord(config)) return { valid: false, errors: ['config must be an object'], bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
     if (config.version !== 1) errors.push('version must be 1');
     if (config.allowAutoPublishSubmoduleMainCommits !== undefined && typeof config.allowAutoPublishSubmoduleMainCommits !== 'boolean') {
         errors.push('allowAutoPublishSubmoduleMainCommits must be a boolean when provided');
     }
     const validation = config.validation;
     if (validation !== undefined && !isRecord(validation)) errors.push('validation must be an object');
+    const rawBootstrapMode = isRecord(validation) ? validation.bootstrap : undefined;
+    if (rawBootstrapMode !== undefined) {
+        if (rawBootstrapMode === 'inherit' || rawBootstrapMode === 'skip') {
+            bootstrapMode = rawBootstrapMode;
+        } else {
+            errors.push("validation.bootstrap must be 'inherit' or 'skip' when provided");
+        }
+    }
     const rawCommands = isRecord(validation) ? validation.commands : undefined;
     const rawBootstrapCommands = isRecord(validation) ? validation.bootstrapCommands : undefined;
     if (rawCommands !== undefined && !Array.isArray(rawCommands)) errors.push('validation.commands must be an array');
     if (rawBootstrapCommands !== undefined && !Array.isArray(rawBootstrapCommands)) errors.push('validation.bootstrapCommands must be an array');
+    if (Array.isArray(rawBootstrapCommands) && rawBootstrapCommands.length > 0) {
+        deprecationWarnings.push('validation.bootstrapCommands is deprecated: define bootstrap once in .adhdev/worktree_bootstrap.json. It still runs when no worktree_bootstrap config exists; when both exist the worktree_bootstrap config wins.');
+    }
     if (Array.isArray(rawBootstrapCommands)) {
         rawBootstrapCommands.forEach((entry, index) => {
             const normalized = normalizeMeshCommandConfig(entry, `${source}:validation.bootstrapCommands[${index}]`);
@@ -249,7 +282,7 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
         });
     }
     if (rejectedCommands.length) errors.push('one or more validation commands are invalid');
-    return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands };
+    return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
 }
 
 function parseConfigText(path: string, text: string): unknown {
@@ -343,9 +376,11 @@ export function resolveMeshRefineValidationPlan(mesh: any, workspace: string): M
         return {
             source: loaded.source,
             sourceType: loaded.sourceType,
+            bootstrapMode: 'inherit',
             bootstrapCommands: [],
             commands: [],
             rejectedCommands: loaded.error ? [{ source: loaded.source, reason: loaded.error }] : [],
+            deprecationWarnings: [],
             suggestions: suggestion.suggestions,
             suggestedConfig: suggestion.suggestedConfig,
             unavailableReason: loaded.error || 'validation_unavailable: repo mesh/refine config missing',
@@ -356,9 +391,11 @@ export function resolveMeshRefineValidationPlan(mesh: any, workspace: string): M
     return {
         source: loaded.path || loaded.source,
         sourceType: loaded.sourceType,
+        bootstrapMode: validation.bootstrapMode,
         bootstrapCommands: validation.bootstrapCommands,
         commands: validation.commands,
         rejectedCommands: validation.rejectedCommands,
+        deprecationWarnings: validation.deprecationWarnings,
         suggestions: suggestion.suggestions,
         suggestedConfig: suggestion.suggestedConfig,
         unavailableReason: validation.commands.length ? undefined : 'validation_unavailable: repo mesh/refine config has no validation.commands',

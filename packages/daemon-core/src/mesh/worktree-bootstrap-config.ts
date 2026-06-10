@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve as pathResolve } from 'path';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import * as yaml from 'js-yaml';
 import {
@@ -31,6 +32,15 @@ export interface WorktreeBootstrapState extends MeshAsyncJobLifecycle {
     exitCode?: number | null;
     commandsRun?: Array<Record<string, unknown>>;
     staleInputs?: string[];
+    /**
+     * M2-1: sha256 per staleInputs path recorded when the bootstrap reached
+     * 'ready'. evaluateWorktreeBootstrapState compares current file hashes
+     * against this to detect staleness (e.g. base merge changed a lockfile).
+     * Missing files hash to the literal 'absent'.
+     */
+    staleInputsDigest?: Record<string, string>;
+    /** M2-1: why an evaluated state resolved to stale (digest_mismatch | never_ran). */
+    staleReason?: string;
 }
 
 export interface WorktreeBootstrapConfigLoadResult {
@@ -151,6 +161,70 @@ export function loadMeshWorktreeBootstrapConfig(mesh: any, workspace: string): W
     return { source: 'unavailable', sourceType: 'unavailable', error: `No worktree bootstrap config found. Checked: ${MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS.join(', ')}` };
 }
 
+/** M2-1: hash staleInputs files so 'ready' can be invalidated when they change. */
+export function computeStaleInputsDigest(workspace: string, staleInputs: string[] | undefined): Record<string, string> {
+    const digest: Record<string, string> = {};
+    for (const relative of staleInputs ?? []) {
+        const filePath = join(workspace, relative);
+        try {
+            digest[relative] = createHash('sha256').update(readFileSync(filePath)).digest('hex');
+        } catch {
+            digest[relative] = 'absent';
+        }
+    }
+    return digest;
+}
+
+/**
+ * M2-1: the official bootstrap state contract. Resolves the effective state
+ * for a node workspace from config presence + the persisted last-run state +
+ * a staleInputs digest comparison. Read-only — never runs commands.
+ *
+ *   ready          — last run succeeded and staleInputs are unchanged
+ *   stale          — never ran, or a staleInputs file changed since 'ready'
+ *   running/failed — persisted lifecycle state passes through
+ *   not_configured / disabled / (invalid → failed) — from config resolution
+ */
+export function evaluateWorktreeBootstrapState(mesh: any, workspace: string, persisted?: WorktreeBootstrapState | null): WorktreeBootstrapState {
+    const loaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
+    if (!loaded.config) {
+        return { status: 'not_configured', required: false, configSource: loaded.source, configSourceType: loaded.sourceType, error: loaded.error };
+    }
+    const required = loaded.config.required !== false;
+    if (loaded.config.enabled === false || loaded.config.runOnClone === false) {
+        return { status: 'disabled', required, configSource: loaded.path || loaded.source, configSourceType: loaded.sourceType };
+    }
+    if (loaded.sourceType === 'invalid') {
+        return { status: 'failed', required, configSource: loaded.path || loaded.source, configSourceType: 'invalid', error: loaded.error };
+    }
+    if (persisted?.status === 'running') return { ...persisted, required };
+    if (persisted?.status === 'failed') return { ...persisted, required };
+    if (persisted?.status === 'ready') {
+        const staleInputs = loaded.config.staleInputs ?? persisted.staleInputs ?? [];
+        if (staleInputs.length > 0 && persisted.staleInputsDigest) {
+            const current = computeStaleInputsDigest(workspace, staleInputs);
+            const changed = staleInputs.filter(p => current[p] !== persisted.staleInputsDigest![p]);
+            if (changed.length > 0) {
+                return {
+                    ...persisted,
+                    status: 'stale',
+                    required,
+                    staleReason: `digest_mismatch: ${changed.join(', ')}`,
+                };
+            }
+        }
+        return { ...persisted, required };
+    }
+    return {
+        status: 'stale',
+        required,
+        configSource: loaded.path || loaded.source,
+        configSourceType: loaded.sourceType,
+        staleInputs: loaded.config.staleInputs,
+        staleReason: 'never_ran',
+    };
+}
+
 export async function runMeshWorktreeBootstrap(mesh: any, workspace: string): Promise<WorktreeBootstrapState> {
     const loaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
     if (!loaded.config) {
@@ -243,5 +317,10 @@ export async function runMeshWorktreeBootstrap(mesh: any, workspace: string): Pr
     state.status = 'ready';
     state.exitCode = 0;
     state.completedAt = new Date().toISOString();
+    // M2-1: record staleInputs hashes so evaluateWorktreeBootstrapState can
+    // invalidate this 'ready' when an input (e.g. lockfile) changes later.
+    if (staleInputPaths.length > 0) {
+        state.staleInputsDigest = computeStaleInputsDigest(workspace, staleInputPaths);
+    }
     return state;
 }

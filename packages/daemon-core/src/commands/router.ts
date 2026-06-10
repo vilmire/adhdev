@@ -56,6 +56,7 @@ import {
 import {
     MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS,
     MESH_WORKTREE_BOOTSTRAP_CONFIG_SCHEMA,
+    evaluateWorktreeBootstrapState,
     loadMeshWorktreeBootstrapConfig,
     runMeshWorktreeBootstrap,
     type WorktreeBootstrapState,
@@ -1306,6 +1307,27 @@ type MeshRefineValidationSummary = {
     configSourceType?: string;
     suggestions?: unknown[];
     suggestedConfig?: unknown;
+    /**
+     * M2-3: the bootstrap stage recorded separately from validation so review
+     * surfaces can distinguish environment failures from validation failures.
+     *   cached — worktree_bootstrap was 'ready' (staleInputs unchanged), skipped
+     *   ran    — worktree_bootstrap was stale/never-ran and re-ran successfully
+     *   failed — bootstrap run failed (refine stops before validation)
+     *   skipped — refine config validation.bootstrap === 'skip'
+     *   legacy — deprecated validation.bootstrapCommands path was used
+     *   not_configured — no bootstrap definition anywhere
+     */
+    bootstrap?: {
+        stage: 'cached' | 'ran' | 'failed' | 'skipped' | 'legacy' | 'not_configured';
+        status?: string;
+        skipped?: boolean;
+        configSource?: string;
+        staleReason?: string;
+        error?: string;
+        commandsRun?: Array<Record<string, unknown>>;
+    };
+    /** M2-2: deprecation notices from the refine config (e.g. bootstrapCommands). */
+    deprecationWarnings?: string[];
 };
 
 type MeshRefineStageStatus = 'passed' | 'failed' | 'skipped';
@@ -1919,7 +1941,16 @@ function buildMeshRefineValidationPlan(mesh: any, workspace: string): Record<str
     };
 }
 
-async function runMeshRefineValidationGate(mesh: any, workspace: string): Promise<MeshRefineValidationSummary> {
+async function runMeshRefineValidationGate(
+    mesh: any,
+    workspace: string,
+    opts?: {
+        /** M2-2: persisted node bootstrap state for staleness evaluation. */
+        persistedBootstrapState?: WorktreeBootstrapState | null;
+        /** M2-2: called after an inherit-mode bootstrap run so the caller can persist the new state. */
+        onBootstrapStateChange?: (state: WorktreeBootstrapState) => void;
+    },
+): Promise<MeshRefineValidationSummary> {
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
     const execFileAsync = promisify(execFile);
@@ -1937,11 +1968,58 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
         configSourceType: selection.sourceType,
         suggestions: selection.suggestions,
         suggestedConfig: selection.suggestedConfig,
+        ...(selection.deprecationWarnings.length > 0 ? { deprecationWarnings: selection.deprecationWarnings } : {}),
     };
 
     if (!selection.commands.length) {
         summary.skippedReason = selection.unavailableReason || 'validation_unavailable: repo mesh/refine config did not provide executable validation.commands';
         return summary;
+    }
+
+    // ── M2-2: Bootstrap stage — refine consumes the worktree_bootstrap config
+    //    instead of defining its own. Legacy validation.bootstrapCommands run
+    //    only when no worktree_bootstrap config exists (deprecation path).
+    let runLegacyBootstrapCommands = selection.bootstrapCommands.length > 0;
+    if (selection.bootstrapMode === 'skip') {
+        summary.bootstrap = { stage: 'skipped', skipped: true };
+        runLegacyBootstrapCommands = false;
+    } else {
+        const wbLoad = loadMeshWorktreeBootstrapConfig(mesh, workspace);
+        const wbUsable = !!wbLoad.config && wbLoad.sourceType !== 'invalid'
+            && wbLoad.config.enabled !== false && wbLoad.config.runOnClone !== false;
+        if (wbUsable) {
+            runLegacyBootstrapCommands = false; // worktree_bootstrap wins over deprecated bootstrapCommands
+            const evaluated = evaluateWorktreeBootstrapState(mesh, workspace, opts?.persistedBootstrapState);
+            if (evaluated.status === 'ready') {
+                summary.bootstrap = { stage: 'cached', status: 'ready', skipped: true, configSource: evaluated.configSource };
+            } else {
+                const ran = await runMeshWorktreeBootstrap(mesh, workspace);
+                try { opts?.onBootstrapStateChange?.(ran); } catch { /* persistence is best-effort */ }
+                if (ran.status === 'ready') {
+                    summary.bootstrap = {
+                        stage: 'ran',
+                        status: 'ready',
+                        configSource: ran.configSource,
+                        ...(evaluated.staleReason ? { staleReason: evaluated.staleReason } : {}),
+                        commandsRun: ran.commandsRun,
+                    };
+                } else {
+                    summary.bootstrap = {
+                        stage: 'failed',
+                        status: ran.status,
+                        configSource: ran.configSource,
+                        error: ran.error,
+                        commandsRun: ran.commandsRun,
+                    };
+                    summary.status = 'failed';
+                    summary.failureKind = 'dependency_bootstrap_failed';
+                    summary.failureCode = 'dependency_bootstrap_failed';
+                    return summary;
+                }
+            }
+        } else if (!runLegacyBootstrapCommands) {
+            summary.bootstrap = { stage: 'not_configured' };
+        }
     }
 
     const commandRecord = (candidate: MeshRefineValidationCommand, cwd: string, startedAt: number, result: any, passed: boolean, extras: Record<string, unknown> = {}) => ({
@@ -1969,30 +2047,34 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
             .some(lock => fs.existsSync(pathJoin(cwd, lock)));
     };
 
-    for (const candidate of selection.bootstrapCommands) {
-        const startedAt = Date.now();
-        const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
-        const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
-        try {
-            const result = await execFileAsync(candidate.command, candidate.args, {
-                cwd,
-                encoding: 'utf8',
-                timeout,
-                maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
-                env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
-            });
-            summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
-        } catch (error: any) {
-            summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, error, false, {
-                exitCode: typeof error?.code === 'number' ? error.code : null,
-                signal: typeof error?.signal === 'string' ? error.signal : null,
-                timedOut: error?.killed === true || /timed out/i.test(String(error?.message || '')),
-                failureKind: 'dependency_bootstrap_failed',
-            }));
-            summary.status = 'failed';
-            summary.failureKind = 'dependency_bootstrap_failed';
-            summary.failureCode = 'dependency_bootstrap_failed';
-            return summary;
+    if (runLegacyBootstrapCommands) {
+        summary.bootstrap = { stage: 'legacy' };
+        for (const candidate of selection.bootstrapCommands) {
+            const startedAt = Date.now();
+            const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
+            const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
+            try {
+                const result = await execFileAsync(candidate.command, candidate.args, {
+                    cwd,
+                    encoding: 'utf8',
+                    timeout,
+                    maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
+                    env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
+                });
+                summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
+            } catch (error: any) {
+                summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, error, false, {
+                    exitCode: typeof error?.code === 'number' ? error.code : null,
+                    signal: typeof error?.signal === 'string' ? error.signal : null,
+                    timedOut: error?.killed === true || /timed out/i.test(String(error?.message || '')),
+                    failureKind: 'dependency_bootstrap_failed',
+                }));
+                summary.bootstrap = { stage: 'failed', error: String(error?.message || error) };
+                summary.status = 'failed';
+                summary.failureKind = 'dependency_bootstrap_failed';
+                summary.failureCode = 'dependency_bootstrap_failed';
+                return summary;
+            }
         }
     }
 
@@ -2000,7 +2082,8 @@ async function runMeshRefineValidationGate(mesh: any, workspace: string): Promis
         const startedAt = Date.now();
         const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
         const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
-        if (selection.bootstrapCommands.length === 0 && isPackageManagerValidation(candidate) && dependenciesLikelyMissing(cwd)) {
+        const bootstrapProvidedDependencies = summary.bootstrap?.stage === 'cached' || summary.bootstrap?.stage === 'ran' || summary.bootstrap?.stage === 'legacy';
+        if (!bootstrapProvidedDependencies && isPackageManagerValidation(candidate) && dependenciesLikelyMissing(cwd)) {
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, {
                 stderr: 'Dependencies appear to be missing: package.json and a lockfile are present, but node_modules is absent. Configure validation.bootstrapCommands in repo mesh/refine config if Refinery should install/bootstrap before validation.',
             }, false, {
@@ -3259,7 +3342,16 @@ export class DaemonCommandRouter {
             recordMeshRefineStage(refineStages, 'resolve_refs', 'passed', resolveStarted, { branch, baseBranch, baseHead, branchHead });
 
             const validationStarted = Date.now();
-            const validationSummary = await runMeshRefineValidationGate(mesh, node.workspace);
+            const validationSummary = await runMeshRefineValidationGate(mesh, node.workspace, {
+                // M2-2: consume the node's persisted bootstrap state; persist re-runs.
+                persistedBootstrapState: (node as any).worktreeBootstrap as WorktreeBootstrapState | undefined,
+                onBootstrapStateChange: (state) => {
+                    (node as any).worktreeBootstrap = state;
+                    void import('../config/mesh-config.js')
+                        .then(({ updateNode }) => updateNode(mesh.id, node.id, { worktreeBootstrap: state } as any))
+                        .catch(() => { /* persistence is best-effort */ });
+                },
+            });
             recordMeshRefineStage(
                 refineStages,
                 'validation',

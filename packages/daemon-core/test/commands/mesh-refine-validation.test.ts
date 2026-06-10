@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
 import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../src/mesh/mesh-events'
+import { computeStaleInputsDigest } from '../../src/mesh/worktree-bootstrap-config'
 
 function createRouter(meshId?: string, messages?: string[]) {
   const coordinator = meshId && messages
@@ -1231,4 +1232,118 @@ describe('refine_mesh_node validation gate', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('M2-2: refine skips bootstrap when worktree_bootstrap is ready with unchanged staleInputs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-m2-cached-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      mkdirSync(join(repo, '.adhdev'), { recursive: true })
+      writeFileSync(join(repo, 'bootstrap-marker.js'), "require('fs').writeFileSync(require('path').join('..', 'bootstrap-marker-ran'), 'ran')\n", 'utf-8')
+      writeFileSync(join(repo, '.adhdev', 'worktree_bootstrap.json'), JSON.stringify({
+        version: 1, required: true, staleInputs: ['package.json'],
+        commands: [{ command: 'node bootstrap-marker.js' }],
+      }), 'utf-8')
+      execFileSync('git', ['add', '.'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'add bootstrap config'], { cwd: repo })
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-m2-cached')
+      const node: any = mesh.nodes.find((n: any) => n.id === 'node-m2-cached')
+      node.worktreeBootstrap = {
+        status: 'ready', required: true, staleInputs: ['package.json'],
+        staleInputsDigest: computeStaleInputsDigest(worktree, ['package.json']),
+      }
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-m2-cached', inlineMesh: mesh })
+      expectAccepted(accepted, 'node-m2-cached')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result.validationSummary.bootstrap).toMatchObject({ stage: 'cached', status: 'ready', skipped: true })
+      // Bootstrap was NOT re-run: the marker script never executed.
+      expect(existsSync(join(worktree, '..', 'bootstrap-marker-ran'))).toBe(false)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 90000)
+
+  it('M2-2: refine reruns bootstrap when a staleInputs digest changed (base merge scenario)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-m2-stale-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      mkdirSync(join(repo, '.adhdev'), { recursive: true })
+      writeFileSync(join(repo, 'bootstrap-marker.js'), "require('fs').writeFileSync(require('path').join('..', 'bootstrap-marker-ran'), 'ran')\n", 'utf-8')
+      writeFileSync(join(repo, '.adhdev', 'worktree_bootstrap.json'), JSON.stringify({
+        version: 1, required: true, staleInputs: ['package.json'],
+        commands: [{ command: 'node bootstrap-marker.js' }],
+      }), 'utf-8')
+      execFileSync('git', ['add', '.'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'add bootstrap config'], { cwd: repo })
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-m2-stale')
+      const node: any = mesh.nodes.find((n: any) => n.id === 'node-m2-stale')
+      // Persisted digest recorded against an older package.json — a base merge changed it since.
+      node.worktreeBootstrap = {
+        status: 'ready', required: true, staleInputs: ['package.json'],
+        staleInputsDigest: { 'package.json': 'stale-digest-from-before-base-merge' },
+      }
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-m2-stale', inlineMesh: mesh })
+      expectAccepted(accepted, 'node-m2-stale')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result.validationSummary.bootstrap.stage).toBe('ran')
+      expect(result.validationSummary.bootstrap.status).toBe('ready')
+      expect(result.validationSummary.bootstrap.staleReason).toContain('digest_mismatch')
+      // Bootstrap actually re-ran.
+      expect(existsSync(join(worktree, '..', 'bootstrap-marker-ran'))).toBe(true)
+      // The re-run state was persisted back onto the node with a fresh digest.
+      expect(node.worktreeBootstrap.status).toBe('ready')
+      expect(node.worktreeBootstrap.staleInputsDigest['package.json']).not.toBe('stale-digest-from-before-base-merge')
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 90000)
+
+  it('M2-2: legacy bootstrapCommands-only repos keep working and surface a deprecation warning', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-m2-legacy-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-m2-legacy')
+      ;(mesh.policy.refineConfig.validation as any).bootstrapCommands = [
+        { command: 'node', args: ['-e', 'require("fs").mkdirSync("node_modules", { recursive: true })'], category: 'custom' },
+      ]
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-m2-legacy', inlineMesh: mesh })
+      expectAccepted(accepted, 'node-m2-legacy')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result.validationSummary.bootstrap.stage).toBe('legacy')
+      expect(result.validationSummary.bootstrapCommandsRun).toHaveLength(1)
+      expect(result.validationSummary.deprecationWarnings[0]).toContain('deprecated')
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 90000)
+
 })

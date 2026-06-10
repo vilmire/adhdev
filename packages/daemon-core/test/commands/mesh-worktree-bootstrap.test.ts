@@ -8,10 +8,13 @@ import { promisify } from 'node:util'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
 import {
+  computeStaleInputsDigest,
+  evaluateWorktreeBootstrapState,
   loadMeshWorktreeBootstrapConfig,
   validateMeshWorktreeBootstrapConfig,
   runMeshWorktreeBootstrap,
 } from '../../src/mesh/worktree-bootstrap-config'
+import { validateMeshRefineConfig, resolveMeshRefineValidationPlan } from '../../src/mesh/refine-config'
 
 const execFileAsync = promisify(execFile)
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -165,11 +168,16 @@ describe('mesh worktree bootstrap', () => {
       expect(result.node.worktreeBootstrap.status).toBe('running')
       expect(inlineMesh.nodes.some((node: any) => node.id === result.node.id)).toBe(true)
 
-      for (let i = 0; i < 20 && !existsSync(join(result.worktreePath, 'node_modules', '.adhdev-bootstrap-ran')); i += 1) {
+      // Wait on the persisted state, not just the script artifact — the 'ready'
+      // flip (including the M2-1 staleInputs digest) lands moments after the
+      // bootstrap script's last file write.
+      for (let i = 0; i < 40 && result.node.worktreeBootstrap.status !== 'ready'; i += 1) {
         await delay(50)
       }
       expect(readFileSync(join(result.worktreePath, 'node_modules', '.adhdev-bootstrap-ran'), 'utf-8')).toBe('ready\n')
       expect(result.node.worktreeBootstrap.status).toBe('ready')
+      // M2-1: ready state carries the staleInputs digest for later staleness checks.
+      expect(result.node.worktreeBootstrap.staleInputsDigest).toBeTruthy()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -269,6 +277,105 @@ describe('mesh worktree bootstrap', () => {
       const result = await runMeshWorktreeBootstrap(mesh, repoRoot)
       expect(result.status).toBe('ready')
       expect(result.exitCode).toBe(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('M2 — bootstrap lifecycle promotion', () => {
+  it('M2-1: run records staleInputs digest and evaluate returns ready while unchanged', async () => {
+    const { dir, repoRoot } = await createRepo('adhdev-m2-digest-')
+    try {
+      const ran = await runMeshWorktreeBootstrap({}, repoRoot)
+      expect(ran.status).toBe('ready')
+      expect(ran.staleInputsDigest).toBeTruthy()
+      expect(Object.keys(ran.staleInputsDigest!)).toContain('package-lock.json')
+
+      const evaluated = evaluateWorktreeBootstrapState({}, repoRoot, ran)
+      expect(evaluated.status).toBe('ready')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('M2-1: evaluate flips ready to stale when a staleInputs file changes (base merge scenario)', async () => {
+    const { dir, repoRoot } = await createRepo('adhdev-m2-stale-')
+    try {
+      const ran = await runMeshWorktreeBootstrap({}, repoRoot)
+      expect(ran.status).toBe('ready')
+
+      // Simulate a base merge bumping the lockfile.
+      await writeFile(join(repoRoot, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, bumped: true }))
+
+      const evaluated = evaluateWorktreeBootstrapState({}, repoRoot, ran)
+      expect(evaluated.status).toBe('stale')
+      expect(evaluated.staleReason).toContain('digest_mismatch')
+      expect(evaluated.staleReason).toContain('package-lock.json')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('M2-1: evaluate reports stale never_ran without persisted state and not_configured without config', async () => {
+    const { dir, repoRoot } = await createRepo('adhdev-m2-neverran-')
+    try {
+      const neverRan = evaluateWorktreeBootstrapState({}, repoRoot, undefined)
+      expect(neverRan.status).toBe('stale')
+      expect(neverRan.staleReason).toBe('never_ran')
+
+      await rm(join(repoRoot, '.adhdev', 'worktree_bootstrap.json'), { force: true })
+      const noConfig = evaluateWorktreeBootstrapState({}, repoRoot, undefined)
+      expect(noConfig.status).toBe('not_configured')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('M2-1: digest marks missing files as absent', () => {
+    const digest = computeStaleInputsDigest('/nonexistent-dir', ['package-lock.json'])
+    expect(digest['package-lock.json']).toBe('absent')
+  })
+
+  it('M2-2: refine config v2 accepts validation.bootstrap and warns on deprecated bootstrapCommands', () => {
+    const v2 = validateMeshRefineConfig({
+      version: 1,
+      validation: { bootstrap: 'skip', commands: [{ command: 'npm test' }] },
+    })
+    expect(v2.valid).toBe(true)
+    expect(v2.bootstrapMode).toBe('skip')
+    expect(v2.deprecationWarnings).toHaveLength(0)
+
+    const legacy = validateMeshRefineConfig({
+      version: 1,
+      validation: { bootstrapCommands: [{ command: 'npm ci' }], commands: [{ command: 'npm test' }] },
+    })
+    expect(legacy.valid).toBe(true)
+    expect(legacy.bootstrapMode).toBe('inherit')
+    expect(legacy.deprecationWarnings[0]).toContain('deprecated')
+
+    const invalid = validateMeshRefineConfig({
+      version: 1,
+      validation: { bootstrap: 'sometimes', commands: [{ command: 'npm test' }] },
+    })
+    expect(invalid.valid).toBe(false)
+    expect(invalid.errors.some(e => e.includes("validation.bootstrap"))).toBe(true)
+  })
+
+  it('M2-2: validation plan carries bootstrapMode and deprecation warnings', async () => {
+    const { dir, repoRoot } = await createRepo('adhdev-m2-plan-')
+    try {
+      await writeFile(join(repoRoot, '.adhdev', 'refine.json'), JSON.stringify({
+        version: 1,
+        validation: {
+          bootstrapCommands: [{ command: 'node scripts/bootstrap.mjs' }],
+          commands: [{ command: 'node --version' }],
+        },
+      }))
+      const plan = resolveMeshRefineValidationPlan({}, repoRoot)
+      expect(plan.bootstrapMode).toBe('inherit')
+      expect(plan.deprecationWarnings.length).toBeGreaterThan(0)
+      expect(plan.bootstrapCommands).toHaveLength(1)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
