@@ -3694,12 +3694,15 @@ export async function meshLaunchSession(
                 cliType: resolvedProviderType,
                 dir: node.workspace,
                 settings: {
+                    // Worker launch envelope (A5): structured metadata so worker sessions
+                    // know their role and can route completion events back correctly.
+                    role: 'worker',
                     meshNodeFor: ctx.mesh.id,
                     meshNodeId: args.node_id,
                     spawnedSessionVisibility,
                     ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
                     ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
-                    launchedByCoordinator: true
+                    launchedByCoordinator: true,
                 }
             });
         } catch (e: any) {

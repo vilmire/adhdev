@@ -1225,6 +1225,8 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     cliType: resolved.providerType,
                     dir: node.workspace,
                     settings: {
+                        // Worker launch envelope: role + mesh context so worker can route completion events.
+                        role: 'worker',
                         meshNodeFor: meshId,
                         meshNodeId: nodeId,
                         spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
@@ -1759,6 +1761,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
+        const providerSessionId = readNonEmptyString(args.metadataEvent.providerSessionId) || undefined;
+        const finalSummary = readNonEmptyString(args.metadataEvent.finalSummary) || undefined;
+        const workerResult = readWorkerResultMetadata(args.metadataEvent);
 
         if (sessionId) {
             completedTaskForLedger = markSessionTerminal(sessionId, 'completed', eventTimestamp);
@@ -1893,6 +1898,12 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         ? args.metadataEvent.completionDiagnostic
                         : undefined,
                     evidence: completionEvidence,
+                    // B2: evidenceLevel lets coordinator know when completion evidence is insufficient.
+                    ...(completionEvidence
+                        ? completionEvidence.workerResult.source === 'default'
+                            ? { evidenceLevel: 'insufficient', reviewRecommended: true }
+                            : { evidenceLevel: 'sufficient' }
+                        : {}),
                 },
             });
         } catch (e: any) {
@@ -1945,6 +1956,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                 cliType: recoveryContext.failedProviderType,
                                 dir: node.workspace,
                                 settings: {
+                                    role: 'worker',
                                     meshNodeFor: args.meshId,
                                     meshNodeId: node.id,
                                     spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',

@@ -3620,10 +3620,47 @@ export class DaemonCommandRouter {
             result = { success: false, error: e?.message || String(e) };
         }
         const completedAt = new Date().toISOString();
+
+        // B1: Discriminated terminal status — do not rely solely on result.success.
+        // Map known failure codes to structured terminal kinds.
+        type RefineTerminalKind = 'completed' | 'blocked_review' | 'validation_failed' | 'submodule_reachability_failed' | 'merge_failed' | 'cleanup_failed';
+        const refineCode = typeof result.code === 'string' ? result.code : '';
+        const refineTerminalKind: RefineTerminalKind = result.success === true
+            ? 'completed'
+            : refineCode === 'blocked_review'
+                ? 'blocked_review'
+                : refineCode === 'validation_failed' || refineCode === 'validation_dependencies_missing'
+                    ? 'validation_failed'
+                    : refineCode === 'submodule_reachability_failed'
+                        ? 'submodule_reachability_failed'
+                        : refineCode === 'merge_failed' || refineCode === 'patch_equivalence_failed'
+                            ? 'merge_failed'
+                            : refineCode === 'cleanup_failed'
+                                ? 'cleanup_failed'
+                                : 'merge_failed'; // fallback for unclassified failures
+        const isTerminalSuccess = refineTerminalKind === 'completed';
+        const normalizedResult = {
+            ...result,
+            terminalKind: refineTerminalKind,
+            ...(result.nextStep === undefined && !isTerminalSuccess ? {
+                nextStep: refineTerminalKind === 'blocked_review'
+                    ? 'Request user review/approval before attempting to merge again.'
+                    : refineTerminalKind === 'validation_failed'
+                        ? 'Fix failing tests or configure validation.bootstrapCommands and retry mesh_refine_node.'
+                        : refineTerminalKind === 'submodule_reachability_failed'
+                            ? 'Push unreachable submodule commits to origin/main, then retry mesh_refine_node.'
+                            : refineTerminalKind === 'merge_failed'
+                                ? 'Resolve merge conflicts or patch equivalence issues, then retry mesh_refine_node.'
+                                : refineTerminalKind === 'cleanup_failed'
+                                    ? 'Manually remove the worktree and retry or use mesh_remove_node.'
+                                    : 'Inspect refineStages for the failing stage and retry.',
+            } : {}),
+        };
+
         const terminalHandle = this.buildRefineJobHandle({
             meshId: handle.meshId,
             nodeId: handle.targetNodeId,
-            status: result.success === true ? 'completed' : 'failed',
+            status: isTerminalSuccess ? 'completed' : 'failed',
             startedAt: handle.startedAt,
             completedAt,
             jobId: handle.jobId,
@@ -3631,12 +3668,12 @@ export class DaemonCommandRouter {
             retryOfJobId: handle.retryOfJobId,
             node: { daemonId: handle.targetDaemonId, workspace: handle.workspace },
         });
-        const terminal: MeshRefineTerminalJob = { ...terminalHandle, result };
+        const terminal: MeshRefineTerminalJob = { ...terminalHandle, result: normalizedResult };
         this.terminalRefineJobs.set(key, terminal);
         this.runningRefineJobs.delete(key);
         this.invalidateAggregateMeshStatus(handle.meshId);
-        await this.appendRefineJobLedger(result.success === true ? 'task_completed' : 'task_failed', terminalHandle, result);
-        this.queueRefineJobEvent(result.success === true ? 'refine:completed' : 'refine:failed', terminalHandle, result);
+        await this.appendRefineJobLedger(isTerminalSuccess ? 'task_completed' : 'task_failed', terminalHandle, normalizedResult);
+        this.queueRefineJobEvent(isTerminalSuccess ? 'refine:completed' : 'refine:failed', terminalHandle, normalizedResult);
     }
 
     private async startMeshRefineJob(meshId: string, nodeId: string, args: any): Promise<CommandRouterResult> {
