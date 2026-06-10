@@ -140,7 +140,7 @@ describe('buildMeshGraph', () => {
         ]))
     })
 
-    it('links same-branch peers as worktree siblings', () => {
+    it('links same-branch nodes to the default branch anchor via parentBranch edges (no peer-to-peer worktreeLink)', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_peers',
             meshName: 'Peer Mesh',
@@ -192,14 +192,13 @@ describe('buildMeshGraph', () => {
             ],
         } as any)
 
+        // Both nodes connect to the synthetic default branch anchor, not each other
         expect(graph.edges).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                source: 'node_a',
-                target: 'node_b',
-                type: 'worktreeLink',
-                label: 'main peers',
-            }),
+            expect.objectContaining({ source: '__branch_main', target: 'node_a', type: 'parentBranch' }),
+            expect.objectContaining({ source: '__branch_main', target: 'node_b', type: 'parentBranch' }),
         ]))
+        // No peer-to-peer worktreeLink between same-branch nodes
+        expect(graph.edges.find(e => e.type === 'worktreeLink' && e.label === 'main peers')).toBeUndefined()
     })
 
     it('links sibling submodules directly to their repo node instead of chaining them together', () => {
@@ -835,9 +834,7 @@ describe('buildMeshGraph', () => {
             expect.objectContaining({ source: '__branch_main', target: 'node_7', direction: 'undirected' }),
             expect.objectContaining({ source: '__branch_main', target: 'node_117', direction: 'undirected' }),
         ]))
-        expect(graph.edges.find(edge => edge.type === 'worktreeLink' && edge.label === 'main peers')).toEqual(expect.objectContaining({
-            direction: 'undirected',
-        }))
+        expect(graph.edges.find(edge => edge.type === 'worktreeLink' && edge.label === 'main peers')).toBeUndefined()
     })
 
     it('emits cloneLink edges for nodes with clonedFromNodeId and exposes worktreeBranch on the node', () => {
