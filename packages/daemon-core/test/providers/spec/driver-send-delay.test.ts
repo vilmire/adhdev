@@ -53,21 +53,24 @@ describe('SpecDriver send_message — submit delay', () => {
         // a live counter like "1m 6s" changing every second doesn't reset
         // completionIdleFirstSeenAt and prevent the hold from expiring.
         const expectedKey = spec.debounce?.completion_idle_after?.regex;
-        const screen = ['previous answer', '✻ Brewed for 1m 46s', '❯'].join('\n');
+        // Spec v3 scopes completion_marker to the body section; the synthetic
+        // screen must include the input-box separator line so body resolves
+        // (real claude-cli screens always render it above the prompt).
+        const screen = ['previous answer', '✻ Brewed for 1m 46s', '──────────', '❯'].join('\n');
         expect(matchesCompletionIdleRule(spec, evaluate(spec, screen), screen)).toBe(expectedKey);
 
-        const otherSpinner = ['previous answer', '✶ Brewed for 1m 46s', '❯'].join('\n');
+        const otherSpinner = ['previous answer', '✶ Brewed for 1m 46s', '──────────', '❯'].join('\n');
         expect(matchesCompletionIdleRule(spec, evaluate(spec, otherSpinner), otherSpinner)).toBeNull();
     });
 
     it('claude-cli completion idle marker requires the idle prompt before downshifting', () => {
         const spec = loadSpecFor('claude-cli');
         const expectedKey = spec.debounce?.completion_idle_after?.regex;
-        const busyOnly = ['previous answer', '✻ Brewed for 1m 46s', 'esc to interrupt'].join('\n');
+        const busyOnly = ['previous answer', '✻ Brewed for 1m 46s', '──────────', 'esc to interrupt'].join('\n');
         expect(matchesCompletionIdleRule(spec, evaluate(spec, busyOnly), busyOnly)).toBe(expectedKey);
         expect(matchesCompletionIdleTargetState(spec, evaluate(spec, busyOnly), busyOnly)).toBe(false);
 
-        const withIdlePrompt = ['previous answer', '✻ Brewed for 1m 46s', '❯'].join('\n');
+        const withIdlePrompt = ['previous answer', '✻ Brewed for 1m 46s', '──────────', '❯'].join('\n');
         expect(matchesCompletionIdleTargetState(spec, evaluate(spec, withIdlePrompt), withIdlePrompt)).toBe(true);
     });
 
@@ -85,7 +88,7 @@ describe('SpecDriver send_message — submit delay', () => {
         // produces ageMs >= holdMs — which is exactly the stale state that
         // busy re-entry must clear by resetting firstSeenAt to 0.
         const spec = loadSpecFor('claude-cli');
-        const screen = ['previous answer', '✻ Worked for 4s', '❯'].join('\n');
+        const screen = ['previous answer', '✻ Worked for 4s', '──────────', '❯'].join('\n');
         const completionKey = matchesCompletionIdleRule(spec, evaluate(spec, screen), screen);
         expect(completionKey).not.toBeNull();
 

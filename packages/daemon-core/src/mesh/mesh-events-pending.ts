@@ -263,29 +263,37 @@ function atomicDrainFile(path: string): string | null {
 export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
 
-    // G3: Try SQLite inbox first
+    // Dual-write means SQLite and JSONL hold the same events. Both stores must be
+    // emptied in one drain call — draining only one leaves the other to re-deliver
+    // the same events on the next call. Merge with fingerprint dedup.
+    const merged: PendingMeshCoordinatorEvent[] = [];
+    const seenFingerprints = new Set<string>();
+    const pushUnique = (event: PendingMeshCoordinatorEvent) => {
+        const fingerprint = buildPendingEventFingerprint(event);
+        if (fingerprint.trim()) {
+            if (seenFingerprints.has(fingerprint)) return;
+            seenFingerprints.add(fingerprint);
+        }
+        merged.push(event);
+    };
+
+    // G3: SQLite inbox
     try {
         const store = MeshRuntimeStore.getInstance();
         if (store.pendingEventCount(meshId) > 0) {
-            const rows = store.drainPendingEvents(meshId, coordinatorDaemonId);
-            if (rows.length > 0) {
-                const events = rows
-                    .map(r => r.payload as PendingMeshCoordinatorEvent)
-                    .filter(Boolean);
-                if (events.length > 0) {
-                    return reconcilePendingMeshCoordinatorEvents(meshId, events);
-                }
+            for (const row of store.drainPendingEvents(meshId, coordinatorDaemonId)) {
+                const event = row.payload as PendingMeshCoordinatorEvent;
+                if (event) pushUnique(event);
             }
         }
     } catch {
-        // SQLite drain failed — fall through to JSONL
+        // SQLite drain failed — JSONL below still drains
     }
 
-    // JSONL fallback (legacy / migration path)
+    // JSONL (legacy / migration path) — always drained alongside SQLite
     const paths = coordinatorDaemonId
         ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
         : [getPendingEventsPath(meshId)];
-    const all: PendingMeshCoordinatorEvent[] = [];
     for (const path of paths) {
         const content = atomicDrainFile(path);
         if (!content) continue;
@@ -296,10 +304,10 @@ export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDa
         const filtered = (coordinatorDaemonId && path === getPendingEventsPath(meshId))
             ? parsed.filter(e => !e.targetCoordinatorDaemonId || e.targetCoordinatorDaemonId === coordinatorDaemonId)
             : parsed;
-        all.push(...filtered);
+        for (const event of filtered) pushUnique(event);
     }
-    if (all.length === 0) return [];
-    return reconcilePendingMeshCoordinatorEvents(meshId, all);
+    if (merged.length === 0) return [];
+    return reconcilePendingMeshCoordinatorEvents(meshId, merged);
 }
 
 /** Peek at pending coordinator events without draining (non-destructive). */

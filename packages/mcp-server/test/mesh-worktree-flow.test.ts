@@ -96,6 +96,7 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.equal(calls[1].daemonId, 'daemon-source');
   assert.equal(calls[1].command, 'launch_cli');
   assert.deepEqual(calls[1].args.settings, {
+    role: 'worker',
     meshNodeFor: 'mesh-worktree-flow',
     meshNodeId: 'node-worktree',
     spawnedSessionVisibility: 'visible',
@@ -529,6 +530,7 @@ test('mesh_launch_session stamps delegated sessions hidden when mesh policy requ
   assert.equal(calls[0].command, 'launch_cli');
   assert.equal(calls[0].args.settings?.spawnedSessionVisibility, 'hidden');
   assert.equal(calls[0].args.settings?.launchedByCoordinator, true);
+  assert.equal(calls[0].args.settings?.role, 'worker');
 });
 
 test('mesh_launch_session stamps coordinator daemon id for remote worker nodes even when coordinator is not a mesh node', async () => {
@@ -577,6 +579,7 @@ test('mesh_launch_session stamps coordinator daemon id for remote worker nodes e
   assert.equal(calls[0].args.settings?.meshNodeFor, 'mesh-remote-worker');
   assert.equal(calls[0].args.settings?.meshNodeId, 'node-remote-worker');
   assert.equal(calls[0].args.settings?.launchedByCoordinator, true);
+  assert.equal(calls[0].args.settings?.role, 'worker');
 });
 
 test('mesh_launch_session fails closed for remote worker nodes when coordinator daemon id is unavailable', async () => {

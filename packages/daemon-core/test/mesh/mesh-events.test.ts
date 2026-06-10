@@ -1322,6 +1322,7 @@ describe('setupMeshEventForwarding', () => {
         cliType: 'hermes-cli',
         dir: '/repo/worktree-a',
         settings: expect.objectContaining({
+          role: 'worker',
           meshNodeFor: meshId,
           meshNodeId: 'node_child_1',
           spawnedSessionVisibility: 'hidden',

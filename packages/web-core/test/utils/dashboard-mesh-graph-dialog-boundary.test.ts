@@ -30,8 +30,10 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(hookSource).toContain('subscriptionManager.subscribe(')
     expect(hookSource).toContain("topic: 'daemon.metadata'")
     expect(hookSource).toContain('getMeshGraphMetadataSignature(update, meshId)')
-    expect(hookSource).toContain('setMetadataLiveSessions(collectMeshGraphLiveSessionStatuses(update, meshId))')
-    expect(hookSource).toContain('unsubscribe()')
+    // Multi-daemon subscription: sessions are collected per daemon and aggregated.
+    expect(hookSource).toContain('const sessions = collectMeshGraphLiveSessionStatuses(update, meshId)')
+    expect(hookSource).toContain('setPerDaemonSessions(prev => {')
+    expect(hookSource).toContain('for (const unsub of unsubscribes) unsub()')
     expect(dialogSource).toContain('meshOverrides?.loadMeshStatus')
     expect(dialogSource).toContain("sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })")
     expect(dialogSource).toContain('meshOverrides.loadMeshStatus(daemonId, meshId, {')

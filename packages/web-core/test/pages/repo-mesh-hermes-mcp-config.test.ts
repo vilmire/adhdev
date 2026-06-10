@@ -97,12 +97,12 @@ describe('RepoMesh graph detail affordances', () => {
   })
 
   it('preserves provider priority when provider inventory is unavailable and marks worktree-local policy', () => {
-    // Handler lives in RepoMesh.tsx (orchestrator)
-    const repoMeshSource = readSource('pages/RepoMesh.tsx')
-    expect(repoMeshSource).toContain('const requested = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)')
-    expect(repoMeshSource).toContain('providers.length > 0')
-    expect(repoMeshSource).toContain('normalizeProviderPriority(requested)')
-    expect(repoMeshSource).toContain('providerPriority')
+    // Handler lives in useMeshNodeActions.ts (extracted from RepoMesh.tsx by F2)
+    const nodeActionsSource = readSource('pages/repo-mesh/useMeshNodeActions.ts')
+    expect(nodeActionsSource).toContain('const requested = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)')
+    expect(nodeActionsSource).toContain('providers.length > 0')
+    expect(nodeActionsSource).toContain('normalizeProviderPriority(requested)')
+    expect(nodeActionsSource).toContain('providerPriority')
 
     // UI text and helper live in MeshNodeList.tsx
     const nodeListSource = readSource('pages/repo-mesh/MeshNodeList.tsx')
