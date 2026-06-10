@@ -5,7 +5,7 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 24 tools: mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
+ * 25 tools: mesh_status, mesh_mission_upsert, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *           mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
  *           mesh_read_debug, mesh_launch_session, mesh_git_status,
  *           mesh_fast_forward_node, mesh_checkpoint, mesh_approve,
@@ -38,6 +38,8 @@ import {
     describeTaskDependencyState,
     drainPendingMeshCoordinatorEvents,
     enqueueTask,
+    getActiveMeshMissionSummaries,
+    upsertMeshMission,
     getActiveDirectDispatches,
     getQueue,
     getLedgerSummary,
@@ -2272,6 +2274,21 @@ export const MESH_CHECKPOINT_TOOL = {
     },
 };
 
+export const MESH_MISSION_UPSERT_TOOL = {
+    name: 'mesh_mission_upsert',
+    description: 'Create or update a persistent mission record so the plan survives coordinator restarts. Create a mission before enqueueing a multi-task batch, attach tasks via mesh_enqueue_task mission_id, and update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            mission_id: { type: 'string', description: 'Mission id to update. Omit to create a new mission.' },
+            title: { type: 'string', description: 'Short mission title.' },
+            goal: { type: 'string', description: 'Free-text mission goal/definition of done.' },
+            status: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'], description: 'Mission lifecycle status. Defaults to active on create.' },
+        },
+        required: ['title'],
+    },
+};
+
 export const MESH_APPROVE_TOOL = {
     name: 'mesh_approve',
     description: 'Approve or reject a pending action on a delegated agent session.',
@@ -2446,6 +2463,7 @@ export const ALL_MESH_TOOLS = [
     MESH_CLEANUP_SESSIONS_TOOL,
     MESH_TASK_HISTORY_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
+    MESH_MISSION_UPSERT_TOOL,
 ];
 
 // ─── Tool Implementations ───────────────────────
@@ -2697,6 +2715,14 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         response.ledgerSummary = ledgerSummary;
     } catch { /* ledger read is best-effort */ }
 
+    // M3-2: active mission summaries — goal + live task aggregates (derived, not stored).
+    try {
+        const missions = getActiveMeshMissionSummaries(mesh.id);
+        if (missions.length > 0) {
+            response.missions = missions;
+        }
+    } catch { /* mission read is best-effort */ }
+
     try {
         const pendingEvents = await drainCoordinatorPendingEvents(ctx);
         const asyncRefineJobs = buildMeshAsyncRefineJobs({
@@ -2851,6 +2877,31 @@ export async function meshListNodes(ctx: MeshContext): Promise<string> {
             userOverrides: n.userOverrides,
         })),
     }, null, 2);
+}
+
+export async function meshMissionUpsert(
+    ctx: MeshContext,
+    args: { mission_id?: string; missionId?: string; title: string; goal?: string; status?: string },
+): Promise<string> {
+    try {
+        const mission = upsertMeshMission(ctx.mesh.id, {
+            id: readString(args.mission_id) || readString(args.missionId) || undefined,
+            title: args.title,
+            goal: typeof args.goal === 'string' ? args.goal : undefined,
+            status: readString(args.status) || undefined,
+        });
+        return JSON.stringify({
+            success: true,
+            mission,
+            nextAction: 'Attach tasks with mesh_enqueue_task mission_id and depends_on. mesh_status shows live task aggregates for this mission.',
+        });
+    } catch (e: any) {
+        const message = e?.message || String(e);
+        const code = message.includes('mission_title_required') ? 'mission_title_required'
+            : message.includes('invalid_mission_status') ? 'invalid_mission_status'
+            : undefined;
+        return JSON.stringify({ success: false, ...(code ? { code } : {}), error: message });
+    }
 }
 
 export async function meshEnqueueTask(

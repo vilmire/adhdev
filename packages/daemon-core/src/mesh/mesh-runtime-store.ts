@@ -237,6 +237,22 @@ export class MeshRuntimeStore {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_mesh_pending_events_fingerprint
                 ON mesh_pending_events(mesh_id, fingerprint)
                 WHERE fingerprint IS NOT NULL;
+
+            -- M3: persistent mission records. Plans live in the system, not in the
+            -- coordinator LLM's context. Progress is derived from task statuses at
+            -- query time (mission_id on queue tasks) — never stored here.
+            CREATE TABLE IF NOT EXISTS mesh_missions (
+                id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                goal TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_missions_mesh_status
+                ON mesh_missions(mesh_id, status, updated_at);
         `);
     }
 
@@ -1199,6 +1215,64 @@ export class MeshRuntimeStore {
             'SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? LIMIT 1'
         ).get(meshId, fingerprint);
         return row !== undefined;
+    }
+
+    // ── M3: Mission Records ─────────────────────────────────────────────────
+
+    upsertMission(mission: {
+        id: string;
+        meshId: string;
+        title: string;
+        goal?: string;
+        status?: string;
+    }): void {
+        const now = new Date().toISOString();
+        this.db.prepare(
+            `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                 title = excluded.title,
+                 goal = excluded.goal,
+                 status = excluded.status,
+                 updated_at = excluded.updated_at`
+        ).run(
+            mission.id,
+            mission.meshId,
+            mission.title,
+            mission.goal ?? '',
+            mission.status ?? 'active',
+            now,
+            now,
+        );
+        this.maybeCheckpointWal();
+    }
+
+    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; createdAt: string; updatedAt: string } | null {
+        const row = this.db.prepare(
+            'SELECT * FROM mesh_missions WHERE mesh_id = ? AND id = ?'
+        ).get(meshId, missionId) as Record<string, string> | undefined;
+        if (!row) return null;
+        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+
+    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; createdAt: string; updatedAt: string }> {
+        let rows: Array<Record<string, string>>;
+        if (statuses?.length) {
+            const placeholders = statuses.map(() => '?').join(', ');
+            rows = this.db.prepare(
+                `SELECT * FROM mesh_missions WHERE mesh_id = ? AND status IN (${placeholders}) ORDER BY updated_at DESC`
+            ).all(meshId, ...statuses) as Array<Record<string, string>>;
+        } else {
+            rows = this.db.prepare(
+                'SELECT * FROM mesh_missions WHERE mesh_id = ? ORDER BY updated_at DESC'
+            ).all(meshId) as Array<Record<string, string>>;
+        }
+        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at }));
+    }
+
+    /** Remove all missions for a mesh — mesh deletion / test cleanup. */
+    clearMissionsForMesh(meshId: string): number {
+        return this.db.prepare('DELETE FROM mesh_missions WHERE mesh_id = ?').run(meshId).changes;
     }
 
     /** Remove all pending-event rows (drained included) for a mesh — mesh deletion / test cleanup. */

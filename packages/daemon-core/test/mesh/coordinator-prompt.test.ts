@@ -200,4 +200,51 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('then rerun `mesh_refine_node`')
     expect(prompt).toContain('Submodule reachability = publish-needed')
   })
+
+  it('M3-4: instructs mission upsert + mission_id enqueue for multi-task work', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_m3',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [{ id: 'node_1', workspace: '/repo', userOverrides: {}, policy: {} }],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+      coordinatorCliType: 'claude-cli',
+    })
+
+    expect(prompt).toContain('mesh_mission_upsert')
+    expect(prompt).toContain('mission_id')
+    expect(prompt).toContain('depends_on')
+    expect(prompt).toContain('claims dependents automatically')
+  })
+
+  it('M3-4: restart continuation reads the injected mission and forbids duplicate enqueue', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_m3_resume',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [{ id: 'node_1', workspace: '/repo', userOverrides: {}, policy: {} }],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+      coordinatorCliType: 'claude-cli',
+      missionSection: [
+        '## Active Mission',
+        '- **Nightly refactor** (id: `mission-1`)',
+        '  Goal: Split the monolith',
+        '  Tasks: 3 total — 2 pending (0 blocked), 0 assigned, 1 completed, 0 failed, 0 cancelled',
+        'Continue this mission from its current task state. Do not re-enqueue tasks that already exist — check mesh_view_queue first. Update the mission with mesh_mission_upsert when its goal changes or it reaches a terminal state (completed/abandoned).',
+      ].join('\n'),
+    })
+
+    expect(prompt).toContain('Active Mission')
+    expect(prompt).toContain('Nightly refactor')
+    expect(prompt).toContain('Do not re-enqueue tasks that already exist')
+    // Existing anti-polling rules stay intact alongside the mission section.
+    expect(prompt).toContain('Do **not** poll')
+  })
 })
+

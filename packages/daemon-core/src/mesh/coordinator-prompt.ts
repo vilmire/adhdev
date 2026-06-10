@@ -40,6 +40,12 @@ export interface CoordinatorPromptContext {
     status?: RepoMeshStatus;
     userInstruction?: string;
     coordinatorCliType?: string;
+    /**
+     * M3: pre-rendered active mission section (from buildMissionPromptSection).
+     * Empty/undefined when the mesh has no active mission — the prompt output
+     * stays identical to the pre-M3 form in that case.
+     */
+    missionSection?: string;
 }
 
 /**
@@ -121,6 +127,11 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
         sections.push('## Nodes\nNo nodes configured yet. Ask the user to add nodes with `adhdev mesh add-node`.');
     }
 
+    // ── Active Mission (M3) — only present when one exists ──
+    if (ctx.missionSection?.trim()) {
+        sections.push(ctx.missionSection.trim());
+    }
+
     // ── Policy ──
     sections.push(buildPolicySection({ ...DEFAULT_MESH_POLICY, ...(mesh.policy || {}) }));
 
@@ -175,6 +186,7 @@ function readUserPromptFile(cliType: string | undefined, suffix: string): string
  *   {{defaultBranch}}   — mesh.defaultBranch or empty
  *   {{cliType}}         — coordinator CLI type or empty
  *   {{nodes}}           — full node section (status if known, otherwise config)
+ *   {{mission}}         — active mission summary section (empty when none)
  *   {{policy}}          — full policy section
  *   {{tools}}           — the canonical tools table
  *   {{workflow}}        — the canonical orchestration workflow
@@ -198,6 +210,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         defaultBranch: mesh.defaultBranch || '',
         cliType: coordinatorCliType || '',
         nodes: nodesSection,
+        mission: ctx.missionSection?.trim() || '',
         policy: buildPolicySection({ ...DEFAULT_MESH_POLICY, ...(mesh.policy || {}) }),
         tools: TOOLS_SECTION,
         workflow: WORKFLOW_SECTION,
@@ -330,7 +343,7 @@ Before doing any coordinator work, confirm that the actual callable tool list in
 const WORKFLOW_SECTION = `## Orchestration Workflow
 
 1. **Assess** — Call \`mesh_status\` to see which nodes are healthy and available. Check \`mesh_task_history\` to understand what has already been done in this mesh — previous delegations, completions, and failures.
-2. **Plan** — Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If \`mesh_task_history\` shows a recent failure for a task, decide whether to retry or reassign.
+2. **Plan** — Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If \`mesh_task_history\` shows a recent failure for a task, decide whether to retry or reassign. **For multi-task work, create a mission first**: call \`mesh_mission_upsert\` with a title and goal, then attach every enqueued task with \`mission_id\`. Express "B after A" ordering with \`depends_on\` on the queue task instead of waiting and polling — the system claims dependents automatically when their dependencies complete. When the mission's outcome is decided, update its status (\`completed\`/\`abandoned\`) via \`mesh_mission_upsert\`. If the prompt already shows an **Active Mission**, continue it from its current task state — do not re-enqueue tasks that already exist.
 3. **Queue / Delegate** — The Mesh uses an autonomous pull-based Work Queue:
    a. **General Tasks**: Enqueue tasks using \`mesh_enqueue_task\`. Idle node agents will automatically pull tasks from the queue and begin working.
    b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session. Call \`mesh_launch_session\` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. If you need branch isolation for parallel work, call \`mesh_clone_node\` to create a worktree node first.

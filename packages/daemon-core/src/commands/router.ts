@@ -5420,6 +5420,12 @@ export class DaemonCommandRouter {
 
                 try {
                     const { buildCoordinatorSystemPrompt } = await import('../mesh/coordinator-prompt.js');
+                    const { buildMissionPromptSection } = await import('../mesh/mesh-missions.js');
+                    // M3-3: inject the active mission summary into the coordinator prompt.
+                    // Best-effort — a store failure must not block coordinator launch.
+                    const buildMissionSectionBestEffort = (id: string): string => {
+                        try { return buildMissionPromptSection(id); } catch { return ''; }
+                    };
 
                     // Support inline mesh data from cloud (bypasses local meshes.json lookup)
                     let mesh: any;
@@ -5526,7 +5532,7 @@ export class DaemonCommandRouter {
                         // Build coordinator prompt first — fail closed on errors.
                         let cliCmdSystemPrompt = '';
                         try {
-                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined });
+                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id) });
                         } catch (error: any) {
                             const message = error?.message || String(error);
                             LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
@@ -5744,7 +5750,7 @@ export class DaemonCommandRouter {
                     // broken mesh state is visible instead of silently launching with weaker rules.
                     let systemPrompt = '';
                     try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined });
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id) });
                     } catch (error: any) {
                         const message = error?.message || String(error);
                         LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
