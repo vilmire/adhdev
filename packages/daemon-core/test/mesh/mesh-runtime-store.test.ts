@@ -876,4 +876,125 @@ describe('mesh-runtime-store', () => {
             expect(result.rateLimitExceeded).toBe(false);
         });
     });
+
+    // ── Phase G2: Event Ledger SQLite ────────────────────────────────────────
+
+    describe('Phase G2: mesh_event_ledger table', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        it('G2.1 — appendLedgerEntry persists and readLedgerEntries returns it', () => {
+            const meshId = `mesh-g2-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const id = randomUUID();
+            db.appendLedgerEntry({
+                id,
+                meshId,
+                timestamp: new Date().toISOString(),
+                kind: 'task_completed',
+                nodeId: 'node-1',
+                sessionId: 'sess-1',
+                providerType: 'claude-cli',
+                payload: { taskId: 'task-1' },
+            });
+            const entries = db.readLedgerEntries(meshId, { tail: 10 });
+            expect(entries).toHaveLength(1);
+            expect(entries[0].id).toBe(id);
+            expect(entries[0].kind).toBe('task_completed');
+            expect((entries[0].payload as any).taskId).toBe('task-1');
+        });
+
+        it('G2.2 — duplicate id insert is silently ignored', () => {
+            const meshId = `mesh-g2-dedup-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const id = randomUUID();
+            const entry = { id, meshId, timestamp: new Date().toISOString(), kind: 'task_dispatched', payload: {} };
+            db.appendLedgerEntry(entry);
+            db.appendLedgerEntry(entry);
+            expect(db.ledgerEntryCount(meshId)).toBe(1);
+        });
+
+        it('G2.3 — importLedgerEntries skips existing ids', () => {
+            const meshId = `mesh-g2-import-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const now = new Date().toISOString();
+            const entries = [
+                { id: randomUUID(), meshId, timestamp: now, kind: 'task_dispatched', payload: {} },
+                { id: randomUUID(), meshId, timestamp: now, kind: 'task_completed', payload: {} },
+            ];
+            const first = db.importLedgerEntries(entries);
+            expect(first).toBe(2);
+            const second = db.importLedgerEntries(entries); // same ids — should all skip
+            expect(second).toBe(0);
+            expect(db.ledgerEntryCount(meshId)).toBe(2);
+        });
+
+        it('G2.4 — readLedgerEntries kind filter works', () => {
+            const meshId = `mesh-g2-kind-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const now = new Date().toISOString();
+            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: now, kind: 'task_dispatched', payload: {} });
+            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: now, kind: 'task_completed', payload: {} });
+            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: now, kind: 'task_failed', payload: {} });
+            const completed = db.readLedgerEntries(meshId, { kind: 'task_completed' });
+            expect(completed).toHaveLength(1);
+            expect(completed[0].kind).toBe('task_completed');
+        });
+    });
+
+    // ── Phase G3: Pending Events SQLite ──────────────────────────────────────
+
+    describe('Phase G3: mesh_pending_events table', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        it('G3.1 — insertPendingEvent persists and drainPendingEvents returns it', () => {
+            const meshId = `mesh-g3-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            db.insertPendingEvent({
+                id: randomUUID(),
+                meshId,
+                event: 'agent:generating_completed',
+                payload: { nodeLabel: 'Node X' },
+                queuedAt: Date.now(),
+            });
+            expect(db.pendingEventCount(meshId)).toBe(1);
+            const drained = db.drainPendingEvents(meshId);
+            expect(drained).toHaveLength(1);
+            expect(drained[0].event).toBe('agent:generating_completed');
+            expect(db.pendingEventCount(meshId)).toBe(0); // drained
+        });
+
+        it('G3.2 — fingerprint dedup prevents duplicate inserts', () => {
+            const meshId = `mesh-g3-fp-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const fingerprint = `fp::${randomUUID()}`;
+            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:stopped', payload: {}, fingerprint, queuedAt: Date.now() });
+            const second = db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:stopped', payload: {}, fingerprint, queuedAt: Date.now() });
+            expect(second).toBe(false); // duplicate rejected
+            expect(db.pendingEventCount(meshId)).toBe(1);
+        });
+
+        it('G3.3 — hasPendingEventFingerprint returns true after insert', () => {
+            const meshId = `mesh-g3-has-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const fp = `fp::${randomUUID()}`;
+            expect(db.hasPendingEventFingerprint(meshId, fp)).toBe(false);
+            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:stopped', payload: {}, fingerprint: fp, queuedAt: Date.now() });
+            expect(db.hasPendingEventFingerprint(meshId, fp)).toBe(true);
+        });
+
+        it('G3.4 — drain with coordinatorDaemonId filters correctly', () => {
+            const meshId = `mesh-g3-scope-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            db.insertPendingEvent({ id: randomUUID(), meshId, coordinatorDaemonId: 'coord-A', event: 'agent:ready', payload: {}, queuedAt: Date.now() });
+            db.insertPendingEvent({ id: randomUUID(), meshId, coordinatorDaemonId: null, event: 'agent:stopped', payload: {}, queuedAt: Date.now() });
+            const drainedForA = db.drainPendingEvents(meshId, 'coord-A');
+            // Both: scoped to coord-A + unscoped
+            expect(drainedForA).toHaveLength(2);
+            expect(db.pendingEventCount(meshId)).toBe(0);
+        });
+    });
 });

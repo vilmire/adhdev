@@ -33,6 +33,7 @@ import {
     buildWorkerTaskFooter,
 } from '../../src/mesh/mesh-ledger.js';
 import type { MeshLedgerEntry, MeshLedgerKind } from '../../src/mesh/mesh-ledger.js';
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
 describe('mesh-ledger', () => {
     const testMeshId = `test-mesh-${randomUUID().slice(0, 8)}`;
@@ -44,6 +45,8 @@ describe('mesh-ledger', () => {
     });
 
     afterEach(() => {
+        // Reset SQLite store so tests don't bleed into each other via the G2 ledger table.
+        MeshRuntimeStore.resetForTests();
         try {
             rmSync(testTmpDir, { recursive: true, force: true });
         } catch { /* cleanup best-effort */ }

@@ -18,6 +18,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getConfigDir } from '../config/config.js';
 import { EventEmitter } from 'events';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
 // ─── Types ──────────────────────────────────────
 
 export type MeshLedgerKind =
@@ -551,6 +552,23 @@ export function appendLedgerEntry(
         }
     }
 
+    // Write to SQLite (G2: primary runtime path)
+    try {
+        MeshRuntimeStore.getInstance().appendLedgerEntry({
+            id: entry.id,
+            meshId: entry.meshId,
+            timestamp: entry.timestamp,
+            kind: entry.kind,
+            nodeId: entry.nodeId ?? null,
+            sessionId: entry.sessionId ?? null,
+            providerType: entry.providerType ?? null,
+            payload: entry.payload,
+        });
+    } catch {
+        // SQLite write is best-effort during migration; JSONL remains the fallback.
+    }
+
+    // Also write to JSONL (retained as export/import/debug/legacy artifact)
     try {
         const line = JSON.stringify(entry) + '\n';
         appendFileSync(filePath, line, { encoding: 'utf-8', mode: 0o600 });
@@ -663,6 +681,8 @@ function invalidateLedgerCache(meshId: string): void {
 
 /**
  * Read ledger entries with optional filtering.
+ * JSONL remains the read path for now (G2 write-through dual-write is active;
+ * full SQLite read cutover is a follow-up migration step).
  */
 export function readLedgerEntries(meshId: string, opts?: ReadLedgerOptions): MeshLedgerEntry[] {
     let entries = getCachedRawEntries(meshId);

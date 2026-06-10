@@ -197,6 +197,46 @@ export class MeshRuntimeStore {
 
             CREATE INDEX IF NOT EXISTS idx_mesh_tool_call_log_mesh_tool_time
                 ON mesh_tool_call_log(mesh_id, tool, called_at);
+
+            -- G2: Event ledger — runtime source of truth for task/session lifecycle events.
+            -- JSONL files are retained as export/import/debug/legacy artifacts only.
+            CREATE TABLE IF NOT EXISTS mesh_event_ledger (
+                id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                node_id TEXT,
+                session_id TEXT,
+                provider_type TEXT,
+                payload TEXT NOT NULL DEFAULT '{}'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_time
+                ON mesh_event_ledger(mesh_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_kind
+                ON mesh_event_ledger(mesh_id, kind, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_session
+                ON mesh_event_ledger(mesh_id, session_id, timestamp);
+
+            -- G3: Pending coordinator event inbox — replaces <meshId>.pending-events.jsonl.
+            -- Coordinator drains this table on get_pending_mesh_events, then deletes drained rows.
+            CREATE TABLE IF NOT EXISTS mesh_pending_events (
+                id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                coordinator_daemon_id TEXT,
+                event TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                fingerprint TEXT,
+                queued_at INTEGER NOT NULL,
+                drained INTEGER NOT NULL DEFAULT 0,
+                drained_at INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_mesh_drained
+                ON mesh_pending_events(mesh_id, drained, queued_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_mesh_pending_events_fingerprint
+                ON mesh_pending_events(mesh_id, fingerprint)
+                WHERE fingerprint IS NOT NULL;
         `);
     }
 
@@ -829,5 +869,173 @@ export class MeshRuntimeStore {
      */
     pruneToolCallLog(olderThanMs: number): void {
         this.db.prepare('DELETE FROM mesh_tool_call_log WHERE called_at < ?').run(Date.now() - olderThanMs);
+    }
+
+    // ── G2: Event Ledger ────────────────────────────────────────────────────
+
+    appendLedgerEntry(entry: {
+        id: string;
+        meshId: string;
+        timestamp: string;
+        kind: string;
+        nodeId?: string | null;
+        sessionId?: string | null;
+        providerType?: string | null;
+        payload?: unknown;
+    }): void {
+        this.db.prepare(
+            `INSERT OR IGNORE INTO mesh_event_ledger
+             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+            entry.id,
+            entry.meshId,
+            entry.timestamp,
+            entry.kind,
+            entry.nodeId ?? null,
+            entry.sessionId ?? null,
+            entry.providerType ?? null,
+            JSON.stringify(entry.payload ?? {}),
+        );
+        this.maybeCheckpointWal();
+    }
+
+    readLedgerEntries(meshId: string, opts?: {
+        tail?: number;
+        since?: string;
+        kind?: string;
+        limit?: number;
+    }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; payload: unknown }> {
+        const limit = opts?.tail ?? opts?.limit ?? 200;
+        let query: string;
+        const params: unknown[] = [meshId];
+        if (opts?.kind && opts?.since) {
+            query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND kind = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?`;
+            params.push(opts.kind, opts.since, limit);
+        } else if (opts?.kind) {
+            query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND kind = ? ORDER BY timestamp DESC LIMIT ?`;
+            params.push(opts.kind, limit);
+        } else if (opts?.since) {
+            query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?`;
+            params.push(opts.since, limit);
+        } else {
+            query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? ORDER BY timestamp DESC LIMIT ?`;
+            params.push(limit);
+        }
+        const rows = this.db.prepare(query).all(...params) as Array<Record<string, unknown>>;
+        return rows.map(r => ({
+            id: r.id as string,
+            meshId: r.mesh_id as string,
+            timestamp: r.timestamp as string,
+            kind: r.kind as string,
+            nodeId: r.node_id as string | null,
+            sessionId: r.session_id as string | null,
+            providerType: r.provider_type as string | null,
+            payload: (() => { try { return JSON.parse(r.payload as string); } catch { return {}; } })(),
+        }));
+    }
+
+    hasLedgerEntry(meshId: string, id: string): boolean {
+        const row = this.db.prepare(
+            'SELECT 1 FROM mesh_event_ledger WHERE mesh_id = ? AND id = ? LIMIT 1'
+        ).get(meshId, id);
+        return row !== undefined;
+    }
+
+    ledgerEntryCount(meshId: string): number {
+        const row = this.db.prepare(
+            'SELECT COUNT(*) as cnt FROM mesh_event_ledger WHERE mesh_id = ?'
+        ).get(meshId) as { cnt: number } | undefined;
+        return row?.cnt ?? 0;
+    }
+
+    importLedgerEntries(entries: Array<{
+        id: string; meshId: string; timestamp: string; kind: string;
+        nodeId?: string | null; sessionId?: string | null; providerType?: string | null; payload?: unknown;
+    }>): number {
+        let imported = 0;
+        const stmt = this.db.prepare(
+            `INSERT OR IGNORE INTO mesh_event_ledger
+             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        this.db.transaction(() => {
+            for (const e of entries) {
+                const result = stmt.run(
+                    e.id, e.meshId, e.timestamp, e.kind,
+                    e.nodeId ?? null, e.sessionId ?? null, e.providerType ?? null,
+                    JSON.stringify(e.payload ?? {}),
+                );
+                if (result.changes > 0) imported++;
+            }
+        })();
+        return imported;
+    }
+
+    // ── G3: Pending Coordinator Events ──────────────────────────────────────
+
+    insertPendingEvent(event: {
+        id: string;
+        meshId: string;
+        coordinatorDaemonId?: string | null;
+        event: string;
+        payload?: unknown;
+        fingerprint?: string | null;
+        queuedAt: number;
+    }): boolean {
+        const result = this.db.prepare(
+            `INSERT OR IGNORE INTO mesh_pending_events
+             (id, mesh_id, coordinator_daemon_id, event, payload, fingerprint, queued_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+            event.id,
+            event.meshId,
+            event.coordinatorDaemonId ?? null,
+            event.event,
+            JSON.stringify(event.payload ?? {}),
+            event.fingerprint ?? null,
+            event.queuedAt,
+        );
+        this.maybeCheckpointWal();
+        return result.changes > 0;
+    }
+
+    drainPendingEvents(meshId: string, coordinatorDaemonId?: string | null): Array<{ id: string; event: string; payload: unknown }> {
+        return this.transaction(() => {
+            const whereClause = coordinatorDaemonId
+                ? `WHERE mesh_id = ? AND drained = 0 AND (coordinator_daemon_id IS NULL OR coordinator_daemon_id = ?)`
+                : `WHERE mesh_id = ? AND drained = 0`;
+            const params: unknown[] = coordinatorDaemonId
+                ? [meshId, coordinatorDaemonId]
+                : [meshId];
+            const rows = this.db.prepare(
+                `SELECT id, event, payload FROM mesh_pending_events ${whereClause} ORDER BY queued_at ASC LIMIT 100`
+            ).all(...params) as Array<{ id: string; event: string; payload: string }>;
+            if (rows.length === 0) return [];
+            const ids = rows.map(r => r.id);
+            const now = Date.now();
+            this.db.prepare(
+                `UPDATE mesh_pending_events SET drained = 1, drained_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`
+            ).run(now, ...ids);
+            return rows.map(r => ({
+                id: r.id,
+                event: r.event,
+                payload: (() => { try { return JSON.parse(r.payload); } catch { return {}; } })(),
+            }));
+        });
+    }
+
+    hasPendingEventFingerprint(meshId: string, fingerprint: string): boolean {
+        const row = this.db.prepare(
+            'SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? LIMIT 1'
+        ).get(meshId, fingerprint);
+        return row !== undefined;
+    }
+
+    pendingEventCount(meshId: string): number {
+        const row = this.db.prepare(
+            'SELECT COUNT(*) as cnt FROM mesh_pending_events WHERE mesh_id = ? AND drained = 0'
+        ).get(meshId) as { cnt: number } | undefined;
+        return row?.cnt ?? 0;
     }
 }
