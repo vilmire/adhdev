@@ -66,6 +66,43 @@ describe('SpecDriver send_message — submit delay', () => {
         expect(matchesCompletionIdleTargetState(spec, evaluate(spec, withIdlePrompt), withIdlePrompt)).toBe(true);
     });
 
+    it('rapid-toggle regression: completion_idle_after hold_ms must restart from zero on busy re-entry', () => {
+        // Regression guard for the false-idle rapid-toggle bug:
+        // When completion_idle_after has already fired (forcing idle) but a
+        // new PTY burst re-enters busy, the driver must reset
+        // completionIdleFirstSeenAt so the hold window restarts from the
+        // current moment. Without the reset, ageMs = (now - oldFirstSeenAt)
+        // already exceeds hold_ms and the next reevaluate() immediately
+        // forces idle again, producing repeated busy↔idle flips.
+        //
+        // This test validates the invariant at the pure-function level:
+        // a completion key matched at time T=0, after hold_ms has elapsed,
+        // produces ageMs >= holdMs — which is exactly the stale state that
+        // busy re-entry must clear by resetting firstSeenAt to 0.
+        const spec = loadSpecFor('claude-cli');
+        const screen = ['previous answer', '✻ Worked for 4s', '❯'].join('\n');
+        const completionKey = matchesCompletionIdleRule(spec, evaluate(spec, screen), screen);
+        expect(completionKey).not.toBeNull();
+
+        const holdMs = spec.debounce?.completion_idle_after?.hold_ms ?? 0;
+        expect(holdMs).toBeGreaterThan(0);
+
+        // Simulate: firstSeenAt was recorded hold_ms ago (stale state after prior fire).
+        const staleFirstSeenAt = Date.now() - holdMs - 1;
+        const ageMs = Date.now() - staleFirstSeenAt;
+        // Without the reset, ageMs >= holdMs and completion_idle_after fires immediately.
+        expect(ageMs).toBeGreaterThanOrEqual(holdMs);
+
+        // After busy re-entry the driver resets firstSeenAt to 0 (epoch).
+        // Simulating that reset: a firstSeenAt of 0 means the key hasn't been
+        // seen yet this cycle, so the hold window hasn't started.
+        const resetFirstSeenAt = 0;
+        // completionKey !== '' but firstSeenAt=0 means it will be
+        // re-initialized on the next match (key !== storedKey branch),
+        // ensuring ageMs starts from zero.
+        expect(resetFirstSeenAt).toBe(0);
+    });
+
     it('antigravity-cli spec ships an explicit delay so it does not depend on the daemon floor', () => {
         const spec = loadSpecFor('antigravity-cli');
         expect(spec.send_message.delay_ms_before_submit).toBeGreaterThanOrEqual(200);

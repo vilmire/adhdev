@@ -500,6 +500,15 @@ export class SpecDriver {
             this.lastBusyState = evState;
             // Cancel any pending idle commit — non-idle reading invalidates it.
             this.cancelIdleHold();
+            // Reset completion_idle_after tracking on busy re-entry. If the
+            // completion marker is still on screen when a new PTY burst
+            // arrives (rapid tool-output toggle), the old firstSeenAt would
+            // make ageMs >= holdMs immediately on the very next reevaluate,
+            // forcing idle again before the new output has settled and
+            // creating a rapid busy↔idle loop. Resetting here forces the
+            // hold window to restart from the current moment.
+            this.completionIdleKey = '';
+            this.completionIdleFirstSeenAt = 0;
             // Schedule a re-evaluation when the hold window expires. PTYs
             // typically stop emitting once the agent stops printing (the
             // footer settles), so without an explicit timer the driver
