@@ -324,21 +324,11 @@ export class SpecCliAdapter implements CliAdapter {
         let sections: Record<string, string> | undefined;
         try {
             screen = this.driver.snapshot();
-            const lines = screen.split('\n');
-            sections = {};
-            for (const sec of this.spec.layout?.sections ?? []) {
-                const from = (sec as any).from_top;
-                const fromBottom = (sec as any).from_bottom;
-                let start = 0;
-                let end = lines.length;
-                if (typeof from === 'number') start = Math.max(0, from);
-                else if (typeof fromBottom === 'number') start = Math.max(0, lines.length - fromBottom);
-                const until = (sec as any).until;
-                if (until && typeof until === 'object' && typeof until.section === 'string') {
-                    const ref = (this.spec.layout?.sections ?? []).find((s: any) => s.id === until.section) as any;
-                    if (ref && typeof ref.from_bottom === 'number') end = Math.max(start, lines.length - ref.from_bottom);
-                }
-                sections[(sec as any).id] = lines.slice(start, end).join('\n');
+            const driverSections = this.driver.getSections?.();
+            if (driverSections) {
+                sections = Object.fromEntries(driverSections.map(s => [s.id, s.text]));
+            } else {
+                sections = this.readCurrentScreenSections(screen);
             }
         } catch { /* best-effort */ }
         // Read native transcript messages for the debug snapshot
