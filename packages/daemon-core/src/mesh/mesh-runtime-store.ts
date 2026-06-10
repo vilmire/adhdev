@@ -1210,9 +1210,25 @@ export class MeshRuntimeStore {
         });
     }
 
+    /** Non-destructive peek — returns undrained events without marking them drained. */
+    peekPendingEvents(meshId: string, coordinatorDaemonId?: string | null): Array<{ id: string; event: string; payload: unknown }> {
+        const whereClause = coordinatorDaemonId
+            ? `WHERE mesh_id = ? AND drained = 0 AND (coordinator_daemon_id IS NULL OR coordinator_daemon_id = ?)`
+            : `WHERE mesh_id = ? AND drained = 0`;
+        const params: unknown[] = coordinatorDaemonId ? [meshId, coordinatorDaemonId] : [meshId];
+        const rows = this.db.prepare(
+            `SELECT id, event, payload FROM mesh_pending_events ${whereClause} ORDER BY queued_at ASC LIMIT 100`
+        ).all(...params) as Array<{ id: string; event: string; payload: string }>;
+        return rows.map(r => ({
+            id: r.id,
+            event: r.event,
+            payload: (() => { try { return JSON.parse(r.payload); } catch { return {}; } })(),
+        }));
+    }
+
     hasPendingEventFingerprint(meshId: string, fingerprint: string): boolean {
         const row = this.db.prepare(
-            'SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? LIMIT 1'
+            'SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? AND drained = 0 LIMIT 1'
         ).get(meshId, fingerprint);
         return row !== undefined;
     }

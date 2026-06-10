@@ -313,7 +313,36 @@ export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDa
 /** Peek at pending coordinator events without draining (non-destructive). */
 export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): readonly PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
-    return reconcilePendingMeshCoordinatorEvents(meshId, readPendingMeshCoordinatorEventsFromDisk(meshId, coordinatorDaemonId));
+
+    // Merge SQLite (primary) + JSONL (legacy) with fingerprint dedup.
+    const merged: PendingMeshCoordinatorEvent[] = [];
+    const seenFingerprints = new Set<string>();
+    const pushUnique = (event: PendingMeshCoordinatorEvent) => {
+        const fingerprint = buildPendingEventFingerprint(event);
+        if (fingerprint.trim()) {
+            if (seenFingerprints.has(fingerprint)) return;
+            seenFingerprints.add(fingerprint);
+        }
+        merged.push(event);
+    };
+
+    // G3: SQLite inbox (non-destructive peek at undrained rows)
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        if (store.pendingEventCount(meshId) > 0) {
+            for (const row of store.peekPendingEvents(meshId, coordinatorDaemonId)) {
+                const event = row.payload as PendingMeshCoordinatorEvent;
+                if (event) pushUnique(event);
+            }
+        }
+    } catch { /* SQLite unavailable — JSONL fallback below */ }
+
+    // JSONL (legacy)
+    for (const event of readPendingMeshCoordinatorEventsFromDisk(meshId, coordinatorDaemonId)) {
+        pushUnique(event);
+    }
+
+    return reconcilePendingMeshCoordinatorEvents(meshId, merged);
 }
 
 /**
@@ -330,6 +359,9 @@ export function __clearMeshPendingEventsForTests(meshId: string): void {
 /** Explicitly clear all pending coordinator events for a mesh (and coordinator if scoped). */
 export function clearPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): void {
     if (!meshId) return;
+    // Clear SQLite rows
+    try { MeshRuntimeStore.getInstance().clearPendingEventsForMesh(meshId); } catch { /* store unavailable */ }
+    // Clear JSONL files
     const paths = coordinatorDaemonId
         ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
         : [getPendingEventsPath(meshId)];
