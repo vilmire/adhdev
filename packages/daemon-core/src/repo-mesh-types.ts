@@ -418,6 +418,7 @@ export interface RepoMeshNodeStatus {
     worktreeBootstrap?: LocalMeshNodeEntry['worktreeBootstrap'];
     launchBlockedReason?: string;
     launchBlockedMessage?: string;
+    recoveryHint?: string;
     lastSeenAt?: string;
     updatedAt?: string;
     connection?: RepoMeshPeerConnectionStatus;

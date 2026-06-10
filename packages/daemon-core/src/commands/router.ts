@@ -941,6 +941,7 @@ function finalizeMeshNodeStatus(args: {
             status.launchBlockedReason = 'worktree_bootstrap_failed';
             status.launchBlockedMessage = readStringValue(bootstrap.error)
                 || 'Required worktree bootstrap failed; resolve it before launching an agent into this node.';
+            status.recoveryHint = 'Run retry_mesh_node_bootstrap to retry';
             return;
         }
         if (bootstrap.status === 'running' && bootstrap.required !== false) {
@@ -5609,6 +5610,63 @@ export class DaemonCommandRouter {
                     return { success: false, error: e.message };
                 }
             }
+            case 'retry_mesh_node_bootstrap': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                if (!nodeId) return { success: false, error: 'nodeId required' };
+                const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'bootstrap retry');
+                if (ownerFailure) return ownerFailure;
+
+                try {
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    const mesh = meshRecord?.mesh;
+                    if (!mesh) return { success: false, error: 'Mesh not found' };
+
+                    const node = mesh.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
+                    if (!node.isLocalWorktree) return { success: false, error: 'Node is not a local worktree node' };
+
+                    const currentBootstrap = node.worktreeBootstrap as WorktreeBootstrapState | undefined;
+                    if (currentBootstrap?.status === 'running') {
+                        return { success: false, error: 'Bootstrap is already running for this node' };
+                    }
+
+                    const worktreePath: string = node.workspace || node.repoRoot;
+                    if (!worktreePath) return { success: false, error: 'Node has no workspace path' };
+
+                    const loadedBootstrap = loadMeshWorktreeBootstrapConfig(mesh, worktreePath);
+                    const runningState: WorktreeBootstrapState = {
+                        status: 'running',
+                        required: loadedBootstrap.config?.required !== false,
+                        configSource: loadedBootstrap.path || loadedBootstrap.source,
+                        configSourceType: loadedBootstrap.sourceType,
+                        startedAt: new Date().toISOString(),
+                    };
+
+                    const persistState = async (bootstrapState: WorktreeBootstrapState): Promise<void> => {
+                        node.worktreeBootstrap = bootstrapState;
+                        if (meshRecord.inline) {
+                            this.updateInlineMeshNode(meshId, mesh, node);
+                            return;
+                        }
+                        try {
+                            const { updateNode } = await import('../config/mesh-config.js');
+                            updateNode(meshId, node.id, { worktreeBootstrap: bootstrapState });
+                            this.invalidateAggregateMeshStatus(meshId);
+                        } catch { /* best-effort */ }
+                    };
+
+                    await persistState(runningState);
+                    const bootstrapState = await runMeshWorktreeBootstrap(mesh, worktreePath);
+                    await persistState(bootstrapState);
+
+                    return { success: true, bootstrapState };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
             case 'trigger_mesh_queue': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
