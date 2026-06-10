@@ -737,24 +737,6 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         }
     }
 
-    for (const [branch, ids] of branchToNodeIds) {
-        if (ids.length < 2) continue
-        const ordered = ids
-            .map(id => nodes.find(node => node.id === id))
-            .filter(Boolean) as MeshGraphNode[]
-        ordered.sort((a, b) => a.label.localeCompare(b.label))
-        for (let index = 1; index < ordered.length; index += 1) {
-            edges.push({
-                id: `wt_${ordered[index - 1].id}--${ordered[index].id}`,
-                source: ordered[index - 1].id,
-                target: ordered[index].id,
-                type: 'worktreeLink',
-                label: index === 1 ? `${branch} peers` : undefined,
-                direction: 'undirected',
-            })
-        }
-    }
-
     const nodeIds = new Set(nodes.map(node => node.id))
     const cloneLinkEdgeIds = new Set<string>()
     for (const node of nodes) {

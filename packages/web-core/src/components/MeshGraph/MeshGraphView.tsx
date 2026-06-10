@@ -425,6 +425,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     }
 
     const showDetails = selected
+    const [hovered, setHovered] = useState(false)
     const tooltipLines = [
         node.label,
         subtitle,
@@ -442,7 +443,9 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
 
     return (
         <div
-            className={`group rounded-2xl border px-4 py-3 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            className={`rounded-2xl border px-4 py-3 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
             style={{ width: getMeshGraphNodeCardWidth(node) }}
             title={tooltipLines}
         >
@@ -521,7 +524,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 </div>
             )}
 
-            <div className={`overflow-hidden transition-all ${showDetails ? 'mt-3 max-h-[400px] opacity-100' : 'mt-0 max-h-0 opacity-0 group-hover:mt-3 group-hover:max-h-[400px] group-hover:opacity-100'}`}>
+            <div className={`overflow-hidden transition-all ${showDetails || hovered ? 'mt-3 max-h-[400px] opacity-100' : 'mt-0 max-h-0 opacity-0'}`}>
                 <div className="flex min-w-0 flex-wrap gap-1.5 text-[10px]">
                     <span className={`rounded-full border px-2 py-0.5 capitalize ${getBadgeClasses('health', meshTheme.isDark)}`}>
                         {formatHealth(node.health)}
