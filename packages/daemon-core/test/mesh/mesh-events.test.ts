@@ -2256,3 +2256,86 @@ afterAll(() => {
     if (fs.existsSync(testTmpDir)) fs.rmSync(testTmpDir, { recursive: true, force: true })
   } catch { /* best-effort cleanup */ }
 })
+
+describe('M1-3 — dependent wake on completion (event-based, no polling)', () => {
+  it('claims a dependent task for another idle session after the dependency completes', async () => {
+    const meshId = `mesh_dep_wake_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [
+          { id: 'node_child_1', workspace: '/repo/worktree-a' },
+          { id: 'node_child_2', workspace: '/repo/worktree-b' },
+        ],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      fastForwardMocks.fastForwardMeshNode.mockResolvedValue({ code: 'noop', allowed: false })
+
+      let listener: ((event: any) => void) | undefined
+      const completingState = {
+        instanceId: 'runtime-session-1',
+        workspace: '/repo/worktree-a',
+        status: 'generating',
+        type: 'hermes-cli',
+        settings: { meshNodeFor: meshId, meshNodeId: 'node_child_1' },
+      }
+      const idleWorkerState = {
+        instanceId: 'runtime-session-2',
+        workspace: '/repo/worktree-b',
+        status: 'idle',
+        type: 'hermes-cli',
+        settings: { meshNodeFor: meshId, meshNodeId: 'node_child_2' },
+      }
+      const completing = { category: 'cli', getState: vi.fn(() => completingState) }
+      const idleWorker = { category: 'cli', getState: vi.fn(() => idleWorkerState) }
+      const cliManager = {
+        adapters: new Map([['runtime-session-1', {}], ['runtime-session-2', {}]]),
+        handleCliCommand: vi.fn(() => Promise.resolve({ success: true })),
+      }
+      const components = {
+        instanceManager: {
+          onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
+          getInstance: vi.fn((id: string) => id === 'runtime-session-1' ? completing : id === 'runtime-session-2' ? idleWorker : undefined),
+          getByCategory: vi.fn((category: string) => category === 'cli' ? [completing, idleWorker] : []),
+        },
+        cliManager,
+      } as any
+
+      // Task A assigned to session-1; B depends on A and targets session-2.
+      const a = enqueueTask(meshId, 'task A')
+      const claimedA = claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      expect(claimedA?.id).toBe(a.id)
+      const b = enqueueTask(meshId, 'task B after A', { dependsOn: [a.id], targetSessionId: 'runtime-session-2' })
+
+      setupMeshEventForwarding(components)
+      listener!({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        finalSummary: 'A done',
+        timestamp: Date.now(),
+      })
+
+      // The wake path runs via setImmediate — allow the event loop to settle.
+      await new Promise(resolve => setTimeout(resolve, 100))
+
+      const after = getQueue(meshId)
+      expect(after.find(t => t.id === a.id)?.status).toBe('completed')
+      const afterB = after.find(t => t.id === b.id)
+      expect(afterB?.status).toBe('assigned')
+      expect(afterB?.assignedSessionId).toBe('runtime-session-2')
+      // Dispatch went through the normal send_chat path for session-2.
+      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
+        targetSessionId: 'runtime-session-2',
+        action: 'send_chat',
+        message: 'task B after A',
+      }))
+    } finally {
+      cleanupMeshFiles(meshId)
+      meshConfigMocks.getMesh.mockReset()
+      meshConfigMocks.getMeshByRepo.mockReset()
+    }
+  })
+})

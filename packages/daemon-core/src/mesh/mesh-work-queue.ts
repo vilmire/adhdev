@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { getMesh } from '../config/mesh-config.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -71,6 +72,20 @@ export interface MeshWorkQueueEntry {
     targetSessionId?: string;
     /** If specified, a node must expose all tags before it can claim the task. */
     requiredTags?: string[];
+    /**
+     * M1: ids of tasks that must reach 'completed' before this task is claimable.
+     * Forward references (ids not yet enqueued) are allowed for batch flows and
+     * simply keep the task waiting until the referenced task exists and completes.
+     */
+    dependsOn?: string[];
+    /** M1/M3: mission this task belongs to (joins mesh_missions). */
+    missionId?: string;
+    /**
+     * M1: why this task is held back (e.g. "dependency_failed:<taskId>").
+     * Only set by the system on dependency failure under the 'block' policy;
+     * waiting-on-dependency state is computed at view time, not stored.
+     */
+    blockedReason?: string;
     /** The node that actually claimed and is executing the task */
     assignedNodeId?: string;
     /** The session currently executing the task */
@@ -165,33 +180,96 @@ function writeQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
     MeshRuntimeStore.getInstance().replaceQueue(meshId, queue);
 }
 
+function normalizeDependsOn(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set<string>();
+    return value
+        .map(id => typeof id === 'string' ? id.trim() : '')
+        .filter(Boolean)
+        .filter(id => {
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+        });
+}
+
+/**
+ * M1: detect dependency cycles before enqueue. Walks the dependency graph of
+ * existing queue entries plus the new task's edges. Fail-closed: a cycle
+ * rejects the enqueue entirely. Synchronous and bounded by queue size.
+ */
+export function assertNoDependencyCycle(meshId: string, newTaskId: string, dependsOn: string[]): void {
+    if (dependsOn.length === 0) return;
+    if (dependsOn.includes(newTaskId)) {
+        throw new Error(`dependency_cycle_detected: task '${newTaskId}' cannot depend on itself`);
+    }
+    const adjacency = new Map<string, string[]>();
+    for (const entry of readQueue(meshId)) {
+        adjacency.set(entry.id, normalizeDependsOn(entry.dependsOn));
+    }
+    adjacency.set(newTaskId, dependsOn);
+    // DFS from the new task: if we can reach newTaskId again, the edges form a cycle.
+    const stack = [...dependsOn];
+    const visited = new Set<string>();
+    while (stack.length > 0) {
+        const current = stack.pop()!;
+        if (current === newTaskId) {
+            throw new Error(`dependency_cycle_detected: task '${newTaskId}' is part of a dependency cycle via '${dependsOn.join(', ')}'`);
+        }
+        if (visited.has(current)) continue;
+        visited.add(current);
+        stack.push(...(adjacency.get(current) ?? []));
+    }
+}
+
 /**
  * Add a new task to the mesh queue.
  */
 export function enqueueTask(
     meshId: string,
     message: string,
-    opts?: { targetNodeId?: string; targetSessionId?: string; taskMode?: MeshTaskMode | string; requiredTags?: string[] } & MeshQueueMutationOptions,
+    opts?: {
+        targetNodeId?: string;
+        targetSessionId?: string;
+        taskMode?: MeshTaskMode | string;
+        requiredTags?: string[];
+        /** M1: tasks that must complete before this one is claimable. */
+        dependsOn?: string[];
+        /** M1/M3: mission this task belongs to. */
+        missionId?: string;
+        /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
+        id?: string;
+    } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry {
     requireMeshHostQueueOwner(opts);
     const modeValidation = validateMeshTaskModeRequest(opts?.taskMode, message);
     if (!modeValidation.valid) {
         throw new Error(`live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(', ')})`);
     }
-    const entry: MeshWorkQueueEntry = {
-        id: randomUUID(),
-        meshId,
-        message,
-        status: 'pending',
-        taskMode: modeValidation.taskMode,
-        targetNodeId: opts?.targetNodeId,
-        targetSessionId: opts?.targetSessionId,
-        requiredTags: normalizeMeshCapabilityTags(opts?.requiredTags),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-    };
-    MeshRuntimeStore.getInstance().insertQueueEntry(entry);
-    return entry;
+    const id = typeof opts?.id === 'string' && opts.id.trim() ? opts.id.trim() : randomUUID();
+    const dependsOn = normalizeDependsOn(opts?.dependsOn);
+    return withQueueLock(meshId, () => {
+        if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, id)) {
+            throw new Error(`duplicate_task_id: task '${id}' already exists in mesh '${meshId}'`);
+        }
+        assertNoDependencyCycle(meshId, id, dependsOn);
+        const entry: MeshWorkQueueEntry = {
+            id,
+            meshId,
+            message,
+            status: 'pending',
+            taskMode: modeValidation.taskMode,
+            targetNodeId: opts?.targetNodeId,
+            targetSessionId: opts?.targetSessionId,
+            requiredTags: normalizeMeshCapabilityTags(opts?.requiredTags),
+            ...(dependsOn.length > 0 ? { dependsOn } : {}),
+            ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        };
+        MeshRuntimeStore.getInstance().insertQueueEntry(entry);
+        return entry;
+    });
 }
 
 /**
@@ -212,6 +290,57 @@ export function claimNextTask(meshId: string, nodeId: string, sessionId: string,
     return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags);
 }
 
+// ─── M1: Dependency Failure Propagation ─────────
+
+export type DependencyFailurePolicy = 'block' | 'cancel';
+
+function resolveDependencyFailurePolicy(meshId: string): DependencyFailurePolicy {
+    try {
+        const policy = (getMesh(meshId)?.policy ?? {}) as Record<string, unknown>;
+        return policy.onDependencyFailure === 'cancel' ? 'cancel' : 'block';
+    } catch {
+        return 'block';
+    }
+}
+
+/**
+ * Apply the mesh's onDependencyFailure policy to pending dependents of a task
+ * that just reached a failed/cancelled terminal state.
+ *
+ * - 'block' (default): dependents stay pending with blockedReason
+ *   "dependency_failed:<taskId>" so an operator can requeue/cancel them.
+ * - 'cancel': dependents are cancelled (cascading to their own dependents).
+ *
+ * Must be called inside the queue lock of the triggering transition.
+ */
+function propagateDependencyFailure(meshId: string, failedTaskId: string): void {
+    const policy = resolveDependencyFailurePolicy(meshId);
+    const store = MeshRuntimeStore.getInstance();
+    const frontier = [failedTaskId];
+    const seen = new Set<string>(frontier);
+    while (frontier.length > 0) {
+        const currentId = frontier.pop()!;
+        const dependents = store.getQueueEntries(meshId, ['pending'])
+            .filter(entry => Array.isArray(entry.dependsOn) && entry.dependsOn.includes(currentId));
+        for (const dependent of dependents) {
+            if (seen.has(dependent.id)) continue;
+            seen.add(dependent.id);
+            if (policy === 'cancel') {
+                dependent.status = 'cancelled';
+                dependent.cancelledAt = new Date().toISOString();
+                dependent.cancelReason = `dependency_failed:${currentId}`;
+                store.updateQueueEntry(dependent);
+                frontier.push(dependent.id); // cascade to transitive dependents
+            } else {
+                dependent.blockedReason = `dependency_failed:${currentId}`;
+                store.updateQueueEntry(dependent);
+            }
+        }
+    }
+}
+
+const DEPENDENCY_FAILURE_TERMINALS = new Set<MeshTaskStatus>(['failed', 'cancelled']);
+
 /**
  * Update the status of a specific task.
  * Used when a session completes, fails, or stalls.
@@ -228,6 +357,7 @@ export function updateTaskStatus(
         if (!entry) return null;
         entry.status = status;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        if (DEPENDENCY_FAILURE_TERMINALS.has(status)) propagateDependencyFailure(meshId, taskId);
         return entry;
     });
 }
@@ -264,6 +394,7 @@ export function cancelTask(
         entry.cancelledAt = now;
         if (opts?.reason) entry.cancelReason = opts.reason;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        propagateDependencyFailure(meshId, taskId);
         return entry;
     });
 }
@@ -307,9 +438,13 @@ export function requeueTask(
             entry.cancelReason = `max_retries_exceeded: requeued ${currentCount} time(s), limit is ${maxRetries}`;
             entry.updatedAt = new Date().toISOString();
             MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+            propagateDependencyFailure(meshId, taskId);
             return entry;
         }
         entry.status = 'pending';
+        // Operator requeue clears a dependency-failure block — the operator is
+        // explicitly overriding the held-back state.
+        delete entry.blockedReason;
         delete entry.assignedNodeId;
         delete entry.assignedSessionId;
         delete entry.cancelledAt;
@@ -341,8 +476,35 @@ export function updateSessionTaskStatus(
         if (!entry) return null;
         entry.status = status;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        if (DEPENDENCY_FAILURE_TERMINALS.has(status)) propagateDependencyFailure(meshId, entry.id);
         return entry;
     });
+}
+
+/**
+ * M1-3: true when at least one pending task is waiting on the given task.
+ * Used by the completion event path to decide whether to wake the queue.
+ */
+export function hasPendingDependents(meshId: string, taskId: string): boolean {
+    return MeshRuntimeStore.getInstance().getQueueEntries(meshId, ['pending'])
+        .some(entry => Array.isArray(entry.dependsOn) && entry.dependsOn.includes(taskId));
+}
+
+/**
+ * M1-4: view-time dependency state for a task — unmet dependency ids and
+ * whether the task is currently claimable from a dependency standpoint.
+ * Not stored (truth stays in task statuses).
+ */
+export function describeTaskDependencyState(
+    entry: Pick<MeshWorkQueueEntry, 'dependsOn' | 'blockedReason'>,
+    statusById: Map<string, MeshTaskStatus | string>,
+): { waitingOn: string[]; dependenciesSatisfied: boolean } {
+    const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
+    const waitingOn = deps.filter(depId => statusById.get(depId) !== 'completed');
+    return {
+        waitingOn,
+        dependenciesSatisfied: waitingOn.length === 0 && !entry.blockedReason,
+    };
 }
 
 export interface MeshWorkQueueStats {

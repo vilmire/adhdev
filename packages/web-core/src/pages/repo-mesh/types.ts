@@ -48,6 +48,13 @@ export interface MeshQueueEntry {
     updatedAt?: string
     staleAssigned?: boolean
     staleReason?: string
+    /** M1: ids of tasks this task waits on. */
+    dependsOn?: string[]
+    /** M1: unmet dependency ids computed at view time. */
+    waitingOn?: string[]
+    /** M1: system hold reason, e.g. "dependency_failed:<taskId>". */
+    blockedReason?: string
+    missionId?: string
 }
 
 export interface MeshQueueSummary {

@@ -436,9 +436,28 @@ export class MeshRuntimeStore {
                 `).all(meshId) as Array<{ payload: string }>
                 ),
             ];
-            const entry = rows
-                .map(row => JSON.parse(row.payload) as MeshWorkQueueEntry)
-                .find(candidate => nodeSatisfiesRequiredTags(candidate.requiredTags, capabilityTags));
+            const candidates = rows.map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
+
+            // M1: a task with unmet dependencies (or a system blockedReason) is not claimable.
+            // Resolve dependency statuses in one query over the union of referenced ids.
+            const depIds = [...new Set(candidates.flatMap(c => Array.isArray(c.dependsOn) ? c.dependsOn : []))];
+            const depStatus = new Map<string, string>();
+            if (depIds.length > 0) {
+                const placeholders = depIds.map(() => '?').join(', ');
+                const depRows = this.db.prepare(
+                    `SELECT id, status FROM mesh_queue WHERE mesh_id = ? AND id IN (${placeholders})`
+                ).all(meshId, ...depIds) as Array<{ id: string; status: string }>;
+                for (const r of depRows) depStatus.set(r.id, r.status);
+            }
+            const dependenciesSatisfied = (candidate: MeshWorkQueueEntry): boolean => {
+                if (candidate.blockedReason) return false;
+                const deps = Array.isArray(candidate.dependsOn) ? candidate.dependsOn : [];
+                return deps.every(depId => depStatus.get(depId) === 'completed');
+            };
+
+            const entry = candidates.find(candidate =>
+                nodeSatisfiesRequiredTags(candidate.requiredTags, capabilityTags)
+                && dependenciesSatisfied(candidate));
             if (!entry) return null;
 
             const now = new Date().toISOString();

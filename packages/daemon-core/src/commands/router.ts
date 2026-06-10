@@ -4852,11 +4852,17 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
                 try {
-                    const { getMeshQueueStats, getQueue } = await import('../mesh/mesh-work-queue.js');
+                    const { getMeshQueueStats, getQueue, describeTaskDependencyState } = await import('../mesh/mesh-work-queue.js');
                     const status = Array.isArray(args?.status)
                         ? args.status.map((s: any) => typeof s === 'string' ? s.trim() : '').filter(Boolean)
                         : undefined;
-                    const queue = getQueue(meshId, { status: status as any });
+                    const rawQueue = getQueue(meshId, { status: status as any });
+                    // M1: annotate dependency state at view time (waitingOn / dependenciesSatisfied).
+                    const statusById = new Map(getQueue(meshId).map(task => [task.id, task.status]));
+                    const queue = rawQueue.map(task =>
+                        Array.isArray(task.dependsOn) && task.dependsOn.length > 0
+                            ? { ...task, ...describeTaskDependencyState(task, statusById) }
+                            : task);
                     const summary = getMeshQueueStats(meshId);
                     return {
                         success: true,

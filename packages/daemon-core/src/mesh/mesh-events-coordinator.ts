@@ -6,7 +6,7 @@ import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents } from './mesh-work-queue.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -1002,6 +1002,17 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             completedTaskForLedger = markSessionTerminal(sessionId, 'completed', eventTimestamp);
             if (nodeId && providerType) {
                 runIdleMaintenanceThenAssignQueue(components, { meshId: args.meshId, nodeId, sessionId, providerType });
+            }
+            // M1-3: wake dependents of the completed task. The maintenance path above
+            // only assigns to the completing session; dependents may be claimable by
+            // other idle sessions, so run a full queue trigger when any are waiting.
+            const completedTaskId = completedTaskForLedger?.id;
+            if (completedTaskId && hasPendingDependents(args.meshId, completedTaskId)) {
+                setImmediate(() => {
+                    triggerMeshQueue(components, args.meshId).catch((e: any) => {
+                        LOG.warn('MeshQueue', `Dependent wake after task ${completedTaskId} failed: ${e?.message || e}`);
+                    });
+                });
             }
         }
     } else if (args.event === 'agent:ready') {

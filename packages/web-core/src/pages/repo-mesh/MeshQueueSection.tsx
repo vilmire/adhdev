@@ -53,6 +53,14 @@ export function MeshQueueSection({ queueSummary, queueLoading, queueError, activ
                                         {item.staleAssigned && (
                                             <span className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5" title={item.staleReason || 'Stale assignment'}>stale</span>
                                         )}
+                                        {(item.waitingOn?.length ?? 0) > 0 && (
+                                            <span className="text-[10px] text-sky-300 bg-sky-500/10 border border-sky-500/20 rounded-full px-2 py-0.5" title={`Waiting on: ${item.waitingOn!.join(', ')}`}>
+                                                waits on {item.waitingOn!.length} task{item.waitingOn!.length > 1 ? 's' : ''}
+                                            </span>
+                                        )}
+                                        {item.blockedReason && (
+                                            <span className="text-[10px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-full px-2 py-0.5" title={item.blockedReason}>blocked</span>
+                                        )}
                                     </div>
                                     {item.message && <div className="text-[12px] text-text-primary truncate">{item.message}</div>}
                                 </div>

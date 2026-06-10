@@ -35,6 +35,7 @@ import {
     buildP2pRelayFailurePayload,
     cancelTask,
     classifyP2pRelayFailure,
+    describeTaskDependencyState,
     drainPendingMeshCoordinatorEvents,
     enqueueTask,
     getActiveDirectDispatches,
@@ -2109,6 +2110,10 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
             requiredTags: { type: 'array', items: { type: 'string' }, description: 'Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu.' },
             required_tags: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for requiredTags.' },
+            depends_on: { type: 'array', items: { type: 'string' }, description: 'Task ids that must complete before this task becomes claimable. Cycles are rejected at enqueue.' },
+            dependsOn: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for depends_on.' },
+            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id).' },
+            missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
         },
         required: ['message'],
     },
@@ -2850,12 +2855,19 @@ export async function meshListNodes(ctx: MeshContext): Promise<string> {
 
 export async function meshEnqueueTask(
     ctx: MeshContext,
-    args: { message: string; task_mode?: string; taskMode?: string; requiredTags?: string[]; required_tags?: string[] },
+    args: {
+        message: string; task_mode?: string; taskMode?: string;
+        requiredTags?: string[]; required_tags?: string[];
+        dependsOn?: string[]; depends_on?: string[];
+        missionId?: string; mission_id?: string;
+    },
 ): Promise<string> {
     const taskMode = readString(args.task_mode) || readString(args.taskMode);
     const requiredTags = normalizeMeshCapabilityTags(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
+    const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : undefined;
+    const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
     try {
-        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags });
+        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId });
 
         // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
         if (isLocalTransport(ctx.transport) && !(ctx.transport instanceof IpcTransport)) {
@@ -2953,6 +2965,9 @@ export async function meshEnqueueTask(
         if (message.includes('live_debug_readonly_guardrail_violation')) {
             return JSON.stringify({ success: false, code: 'live_debug_readonly_guardrail_violation', taskMode, error: message });
         }
+        if (message.includes('dependency_cycle_detected')) {
+            return JSON.stringify({ success: false, code: 'dependency_cycle_detected', dependsOn, error: message });
+        }
         return JSON.stringify({ success: false, error: message });
     }
 }
@@ -2966,7 +2981,15 @@ export async function meshViewQueue(
         await refreshMeshFromDaemon(ctx);
         const statusFilter = sanitizeQueueStatusFilter(args.status);
         const view = normalizeQueueViewMode(args.view);
-        const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(getQueue(ctx.mesh.id), ctx.mesh));
+        const rawQueue = getQueue(ctx.mesh.id);
+        // M1: annotate dependency state (waitingOn, dependenciesSatisfied) at view time.
+        const statusById = new Map(rawQueue.map(task => [task.id, task.status]));
+        const withDependencies = rawQueue.map(task => {
+            if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) return task;
+            const depState = describeTaskDependencyState(task, statusById);
+            return { ...task, ...depState };
+        });
+        const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh));
         const queue = filterQueueForView(fullQueue, view, statusFilter);
         const summary = buildQueueStatusSummary(fullQueue);
         const visibleSummary = buildQueueStatusSummary(queue);
