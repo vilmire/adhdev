@@ -6521,12 +6521,30 @@ export class DaemonCommandRouter {
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
 
-                    const cachedStatus = this.getCachedAggregateMeshStatus(meshId, mesh, {});
-                    const nodeStatuses: Record<string, unknown>[] = Array.isArray(cachedStatus?.nodes)
-                        ? cachedStatus.nodes as Record<string, unknown>[]
-                        : Array.isArray(mesh.nodes)
-                            ? mesh.nodes as Record<string, unknown>[]
-                            : [];
+                    // Ensure we have a fresh aggregate status so nodeStatuses carry
+                    // computed fields (connection.state, branchConvergence, isLocalWorktree)
+                    // that the raw mesh.nodes config objects don't have.
+                    // When the caller provides an inlineMesh, prefer its nodes directly
+                    // (they already carry the computed fields from the coordinator).
+                    const inlineNodes = args?.inlineMesh && Array.isArray((args.inlineMesh as any)?.nodes)
+                        ? (args.inlineMesh as any).nodes as Record<string, unknown>[]
+                        : null;
+                    let cachedStatus = !inlineNodes ? this.getCachedAggregateMeshStatus(meshId, mesh, {}) : null;
+                    if (!cachedStatus && !inlineNodes) {
+                        const freshStatus = await this.execute('mesh_status', {
+                            meshId,
+                            inlineMesh: args?.inlineMesh,
+                            refresh: true,
+                        }, 'get_mesh_review_inbox');
+                        cachedStatus = (freshStatus?.success !== false) ? freshStatus : null;
+                    }
+                    const nodeStatuses: Record<string, unknown>[] = inlineNodes
+                        ? inlineNodes
+                        : Array.isArray(cachedStatus?.nodes)
+                            ? cachedStatus.nodes as Record<string, unknown>[]
+                            : Array.isArray(mesh.nodes)
+                                ? mesh.nodes as Record<string, unknown>[]
+                                : [];
 
                     const ledgerEntries = readLedgerEntries(meshId, { tail: 300 });
                     const derivation = deriveMeshReviewInboxItems({ nodes: nodeStatuses, ledgerEntries });
