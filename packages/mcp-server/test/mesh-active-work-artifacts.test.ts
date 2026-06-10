@@ -7,10 +7,17 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHistory, meshViewQueue } from '../src/tools/mesh-tools.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, drainPendingMeshCoordinatorEvents, enqueueTask, getLedgerDir, insertDirectDispatch, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
 import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
+import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
 
 function cleanupMesh(meshId: string): void {
   __clearMeshQueueForTests(meshId);
   __clearDirectDispatchesForTests(meshId);
+  // G2/G3: runtime reads are SQLite-primary — clear the runtime store rows too
+  // (ledger entries and drained pending-event fingerprints), otherwise state
+  // accumulates across runs and bleeds into assertions.
+  __clearMeshLedgerForTests(meshId);
+  __clearMeshPendingEventsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
   for (const suffix of ['.jsonl', '.queue.json', '.queue.lock', '.pending-events.jsonl']) {
     const path = join(getLedgerDir(), `${safe}${suffix}`);

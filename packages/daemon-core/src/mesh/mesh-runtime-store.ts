@@ -935,6 +935,70 @@ export class MeshRuntimeStore {
         }));
     }
 
+    /**
+     * G2 read cutover: read ledger entries in append order (oldest first),
+     * matching legacy JSONL file-order semantics. Ties on the same timestamp
+     * are broken by rowid (insertion order), preserving the positional
+     * guarantee that mesh-events relies on for same-millisecond entries.
+     */
+    readLedgerEntriesOrdered(meshId: string, opts?: {
+        since?: string;
+        kinds?: string[];
+        tail?: number;
+    }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; payload: unknown }> {
+        const params: unknown[] = [meshId];
+        let whereClause = 'mesh_id = ?';
+        if (opts?.since) {
+            whereClause += ' AND timestamp >= ?';
+            params.push(opts.since);
+        }
+        const kinds = Array.isArray(opts?.kinds) ? opts.kinds.filter(k => typeof k === 'string' && k.trim()) : [];
+        if (kinds.length > 0) {
+            whereClause += ` AND kind IN (${kinds.map(() => '?').join(', ')})`;
+            params.push(...kinds);
+        }
+        let query: string;
+        if (opts?.tail && opts.tail > 0) {
+            // Tail: newest N in append order — inner DESC limit, outer re-sort ASC.
+            query = `SELECT * FROM (
+                SELECT rowid AS rid, * FROM mesh_event_ledger WHERE ${whereClause}
+                ORDER BY timestamp DESC, rowid DESC LIMIT ?
+            ) ORDER BY timestamp ASC, rid ASC`;
+            params.push(Math.floor(opts.tail));
+        } else {
+            query = `SELECT rowid AS rid, * FROM mesh_event_ledger WHERE ${whereClause} ORDER BY timestamp ASC, rowid ASC`;
+        }
+        const rows = this.db.prepare(query).all(...params) as Array<Record<string, unknown>>;
+        return rows.map(r => ({
+            id: r.id as string,
+            meshId: r.mesh_id as string,
+            timestamp: r.timestamp as string,
+            kind: r.kind as string,
+            nodeId: r.node_id as string | null,
+            sessionId: r.session_id as string | null,
+            providerType: r.provider_type as string | null,
+            payload: (() => { try { return JSON.parse(r.payload as string); } catch { return {}; } })(),
+        }));
+    }
+
+    /** Remove all ledger entries for a mesh (mesh deletion / test cleanup). */
+    clearLedgerForMesh(meshId: string): number {
+        return this.db.prepare('DELETE FROM mesh_event_ledger WHERE mesh_id = ?').run(meshId).changes;
+    }
+
+    /** G2: remove entries moved to the JSONL archive so the SQLite runtime set mirrors the active ledger. */
+    deleteLedgerEntries(meshId: string, ids: string[]): number {
+        if (!ids.length) return 0;
+        let deleted = 0;
+        const stmt = this.db.prepare('DELETE FROM mesh_event_ledger WHERE mesh_id = ? AND id = ?');
+        this.db.transaction(() => {
+            for (const id of ids) {
+                deleted += stmt.run(meshId, id).changes;
+            }
+        })();
+        return deleted;
+    }
+
     hasLedgerEntry(meshId: string, id: string): boolean {
         const row = this.db.prepare(
             'SELECT 1 FROM mesh_event_ledger WHERE mesh_id = ? AND id = ? LIMIT 1'
@@ -1116,6 +1180,11 @@ export class MeshRuntimeStore {
             'SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? LIMIT 1'
         ).get(meshId, fingerprint);
         return row !== undefined;
+    }
+
+    /** Remove all pending-event rows (drained included) for a mesh — mesh deletion / test cleanup. */
+    clearPendingEventsForMesh(meshId: string): number {
+        return this.db.prepare('DELETE FROM mesh_pending_events WHERE mesh_id = ?').run(meshId).changes;
     }
 
     pendingEventCount(meshId: string): number {

@@ -733,4 +733,94 @@ describe('mesh-ledger', () => {
             expect(newResult.skippedDuplicate).toBe(0);
         });
     });
+
+    describe('G2 read cutover — SQLite primary, JSONL export/debug only', () => {
+        it('reads from SQLite even when the JSONL file is deleted after append', () => {
+            const meshId = `g2-cutover-${randomUUID().slice(0, 8)}`;
+            appendLedgerEntry(meshId, { kind: 'task_dispatched', payload: { n: 1 } });
+            appendLedgerEntry(meshId, { kind: 'task_completed', payload: { n: 2 } });
+
+            // Delete the JSONL artifact — runtime reads must survive on SQLite alone.
+            const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            rmSync(join(getLedgerDir(), `${safe}.jsonl`), { force: true });
+
+            const entries = readLedgerEntries(meshId);
+            expect(entries).toHaveLength(2);
+            expect(entries.map(e => e.kind)).toEqual(['task_dispatched', 'task_completed']);
+        });
+
+        it('one-time imports legacy JSONL entries without duplicating dual-written ones', () => {
+            const meshId = `g2-import-${randomUUID().slice(0, 8)}`;
+
+            // Legacy JSONL written before the cutover (not in SQLite).
+            const legacy: MeshLedgerEntry = {
+                id: `legacy-${randomUUID()}`,
+                meshId,
+                timestamp: new Date(Date.now() - 60_000).toISOString(),
+                kind: 'task_dispatched',
+                payload: { legacy: true },
+            };
+            const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            writeFileSync(join(getLedgerDir(), `${safe}.jsonl`), JSON.stringify(legacy) + '\n', { encoding: 'utf-8' });
+
+            // Dual-written entry after the cutover.
+            appendLedgerEntry(meshId, { kind: 'task_completed', payload: { fresh: true } });
+
+            const entries = readLedgerEntries(meshId);
+            expect(entries).toHaveLength(2);
+            expect(entries[0].id).toBe(legacy.id);
+            expect(entries[1].kind).toBe('task_completed');
+
+            // Re-reading must not re-import or duplicate.
+            const again = readLedgerEntries(meshId);
+            expect(again).toHaveLength(2);
+        });
+
+        it('compactLedger removes archived entries from SQLite as well as JSONL', () => {
+            const meshId = `g2-compact-${randomUUID().slice(0, 8)}`;
+            const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+
+            // Old terminal entry (archivable) + fresh entry, written to both stores.
+            const oldEntry: MeshLedgerEntry = {
+                id: `old-${randomUUID()}`,
+                meshId,
+                timestamp: oldTimestamp,
+                kind: 'task_completed',
+                payload: { old: true },
+            };
+            const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            writeFileSync(join(getLedgerDir(), `${safe}.jsonl`), JSON.stringify(oldEntry) + '\n', { encoding: 'utf-8' });
+            appendLedgerEntry(meshId, { kind: 'task_dispatched', payload: { fresh: true } });
+
+            const result = compactLedger(meshId);
+            expect(result.archivedCount).toBe(1);
+
+            // SQLite runtime view mirrors the compacted active set.
+            const entries = readLedgerEntries(meshId);
+            expect(entries).toHaveLength(1);
+            expect(entries[0].kind).toBe('task_dispatched');
+            expect(MeshRuntimeStore.getInstance().hasLedgerEntry(meshId, oldEntry.id)).toBe(false);
+        });
+
+        it('appendRemoteLedgerEntries lands remote entries in SQLite', () => {
+            const meshId = `g2-remote-${randomUUID().slice(0, 8)}`;
+            const remote: MeshLedgerEntry = {
+                id: `remote-${randomUUID()}`,
+                meshId,
+                timestamp: new Date().toISOString(),
+                kind: 'task_completed',
+                nodeId: 'node_remote',
+                payload: { remote: true },
+            };
+            const result = appendRemoteLedgerEntries(meshId, [remote]);
+            expect(result.accepted).toBe(1);
+            expect(MeshRuntimeStore.getInstance().hasLedgerEntry(meshId, remote.id)).toBe(true);
+
+            // Delete JSONL — remote entry must still be readable from SQLite.
+            const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            rmSync(join(getLedgerDir(), `${safe}.jsonl`), { force: true });
+            const entries = readLedgerEntries(meshId);
+            expect(entries.map(e => e.id)).toContain(remote.id);
+        });
+    });
 });

@@ -316,6 +316,17 @@ export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaem
     return reconcilePendingMeshCoordinatorEvents(meshId, readPendingMeshCoordinatorEventsFromDisk(meshId, coordinatorDaemonId));
 }
 
+/**
+ * Test helper: purge all pending-event state for a mesh — SQLite rows
+ * (including drained fingerprint history) and JSONL files.
+ */
+export function __clearMeshPendingEventsForTests(meshId: string): void {
+    try {
+        MeshRuntimeStore.getInstance().clearPendingEventsForMesh(meshId);
+    } catch { /* store unavailable — nothing to clear */ }
+    clearPendingMeshCoordinatorEvents(meshId);
+}
+
 /** Explicitly clear all pending coordinator events for a mesh (and coordinator if scoped). */
 export function clearPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): void {
     if (!meshId) return;

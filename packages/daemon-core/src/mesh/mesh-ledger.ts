@@ -378,6 +378,13 @@ export function compactLedger(meshId: string): { archivedCount: number; retained
         return { archivedCount: archive.length, retainedCount: keep.length };
     }
 
+    // G2: mirror the compaction in SQLite so the runtime store matches the active
+    // ledger set. Archived entries live on in the JSONL archive files (export/debug).
+    try {
+        MeshRuntimeStore.getInstance().deleteLedgerEntries(meshId, archive.map(e => e.id));
+        invalidateLedgerCache(meshId);
+    } catch { /* best-effort; summary counts absorb the difference via archived counts */ }
+
     return { archivedCount: archive.length, retainedCount: keep.length };
 }
 
@@ -552,7 +559,7 @@ export function appendLedgerEntry(
         }
     }
 
-    // Write to SQLite (G2: primary runtime path)
+    // Write to SQLite (G2: primary runtime read/write path)
     try {
         MeshRuntimeStore.getInstance().appendLedgerEntry({
             id: entry.id,
@@ -565,7 +572,10 @@ export function appendLedgerEntry(
             payload: entry.payload,
         });
     } catch {
-        // SQLite write is best-effort during migration; JSONL remains the fallback.
+        // SQLite write failed but the JSONL append below still records the entry.
+        // Reset the one-time import flag so the next read re-imports from JSONL
+        // and the store self-heals instead of silently missing this entry.
+        ledgerImportDone.delete(meshId);
     }
 
     // Also write to JSONL (retained as export/import/debug/legacy artifact)
@@ -627,6 +637,20 @@ export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEnt
         return { accepted: 0, skippedDuplicate, rejectedInvalid, entries: [] };
     }
 
+    // G2: write to SQLite (primary runtime store); INSERT OR IGNORE dedups by id.
+    try {
+        MeshRuntimeStore.getInstance().importLedgerEntries(validEntries.map(e => ({
+            id: e.id,
+            meshId: e.meshId,
+            timestamp: e.timestamp,
+            kind: e.kind,
+            nodeId: e.nodeId ?? null,
+            sessionId: e.sessionId ?? null,
+            providerType: e.providerType ?? null,
+            payload: e.payload ?? {},
+        })));
+    } catch { /* best-effort; JSONL append below still records the entries */ }
+
     try {
         const lines = validEntries.map(e => JSON.stringify(e)).join('\n') + '\n';
         appendFileSync(ledgerPath, lines, { encoding: 'utf-8', mode: 0o600 });
@@ -643,7 +667,7 @@ export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEnt
 // ─── Ledger Read Cache ─────────────────────────
 // Absorbs repeated reads within a single event-processing burst (e.g. agent:stopped
 // triggers shouldSuppressIntentionalCleanupStop, findRecentTerminalLedgerEvidence,
-// hasDispatchAfterTerminal, and getSessionRecoveryContext — all reading the same file).
+// hasDispatchAfterTerminal, and getSessionRecoveryContext — all reading the same store).
 // TTL is 100ms: short enough to stay current, long enough to cover one event cycle.
 // Cache is invalidated on every write (append, remote import, compaction).
 
@@ -666,11 +690,66 @@ function readLedgerFile(meshId: string): MeshLedgerEntry[] {
     return entries;
 }
 
+// ─── G2: One-Time JSONL → SQLite Import ─────────
+// On the first SQLite read for a mesh (per store instance), import any legacy
+// JSONL entries into mesh_event_ledger. INSERT OR IGNORE makes this idempotent:
+// dual-written entries are skipped, only pre-cutover legacy entries are added.
+// Keyed by the store instance so MeshRuntimeStore.resetForTests() (fresh DB)
+// naturally re-imports.
+
+let ledgerImportStoreRef: MeshRuntimeStore | undefined;
+const ledgerImportDone = new Set<string>();
+
+function ensureLedgerImported(store: MeshRuntimeStore, meshId: string): void {
+    if (ledgerImportStoreRef !== store) {
+        ledgerImportDone.clear();
+        ledgerImportStoreRef = store;
+    }
+    if (ledgerImportDone.has(meshId)) return;
+    ledgerImportDone.add(meshId);
+    const fileEntries = readLedgerFile(meshId);
+    if (fileEntries.length === 0) return;
+    try {
+        store.importLedgerEntries(fileEntries.map(e => ({
+            id: e.id,
+            meshId: e.meshId,
+            timestamp: e.timestamp,
+            kind: e.kind,
+            nodeId: e.nodeId ?? null,
+            sessionId: e.sessionId ?? null,
+            providerType: e.providerType ?? null,
+            payload: e.payload ?? {},
+        })));
+    } catch { /* import is best-effort; reads fall back to JSONL on store failure */ }
+}
+
+function readLedgerFromStore(meshId: string): MeshLedgerEntry[] {
+    const store = MeshRuntimeStore.getInstance();
+    ensureLedgerImported(store, meshId);
+    return store.readLedgerEntriesOrdered(meshId).map(r => ({
+        id: r.id,
+        meshId: r.meshId,
+        timestamp: r.timestamp,
+        kind: r.kind as MeshLedgerKind,
+        ...(r.nodeId ? { nodeId: r.nodeId } : {}),
+        ...(r.sessionId ? { sessionId: r.sessionId } : {}),
+        ...(r.providerType ? { providerType: r.providerType } : {}),
+        payload: (r.payload && typeof r.payload === 'object' ? r.payload : {}) as Record<string, unknown>,
+    }));
+}
+
 function getCachedRawEntries(meshId: string): MeshLedgerEntry[] {
     const now = Date.now();
     const cached = ledgerReadCache.get(meshId);
     if (cached && now - cached.cachedAt < LEDGER_CACHE_TTL_MS) return cached.entries;
-    const entries = readLedgerFile(meshId);
+    let entries: MeshLedgerEntry[];
+    try {
+        // G2: SQLite mesh_event_ledger is the primary runtime read path.
+        entries = readLedgerFromStore(meshId);
+    } catch {
+        // Store unavailable — fall back to the JSONL export artifact.
+        entries = readLedgerFile(meshId);
+    }
     ledgerReadCache.set(meshId, { entries, cachedAt: now });
     return entries;
 }
@@ -680,9 +759,22 @@ function invalidateLedgerCache(meshId: string): void {
 }
 
 /**
+ * Test helper: clear all runtime ledger state for a mesh — SQLite rows, read
+ * cache, and the one-time import flag. JSONL files are the caller's concern.
+ */
+export function __clearMeshLedgerForTests(meshId: string): void {
+    try {
+        MeshRuntimeStore.getInstance().clearLedgerForMesh(meshId);
+    } catch { /* store unavailable — nothing to clear */ }
+    ledgerReadCache.delete(meshId);
+    ledgerImportDone.delete(meshId);
+}
+
+/**
  * Read ledger entries with optional filtering.
- * JSONL remains the read path for now (G2 write-through dual-write is active;
- * full SQLite read cutover is a follow-up migration step).
+ * G2: SQLite (mesh_event_ledger) is the primary read path; legacy JSONL is
+ * imported once per store instance and otherwise retained as an
+ * export/import/debug artifact only.
  */
 export function readLedgerEntries(meshId: string, opts?: ReadLedgerOptions): MeshLedgerEntry[] {
     let entries = getCachedRawEntries(meshId);
