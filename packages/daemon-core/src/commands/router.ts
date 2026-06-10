@@ -1426,6 +1426,12 @@ type MeshRefineJobHandle = {
     completedAt?: string;
     duplicate?: boolean;
     retryOfJobId?: string;
+    /**
+     * The coordinator daemon ID that initiated this refine job.
+     * When set, events for this job are scoped to that coordinator's
+     * pending-events queue instead of the shared broadcast queue.
+     */
+    targetCoordinatorDaemonId?: string;
     eventDelivery: {
         pendingEvents: true;
         ledger: true;
@@ -3200,6 +3206,7 @@ export class DaemonCommandRouter {
         jobId?: string;
         interactionId?: string;
         retryOfJobId?: string;
+        coordinatorDaemonId?: string;
     }): MeshRefineJobHandle {
         return {
             success: true,
@@ -3215,6 +3222,7 @@ export class DaemonCommandRouter {
             startedAt: args.startedAt || new Date().toISOString(),
             ...(args.completedAt ? { completedAt: args.completedAt } : {}),
             ...(args.retryOfJobId ? { retryOfJobId: args.retryOfJobId } : {}),
+            ...(args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {}),
             eventDelivery: { pendingEvents: true, ledger: true },
             evidence: {
                 pendingEventsCommand: 'get_pending_mesh_events',
@@ -3247,6 +3255,7 @@ export class DaemonCommandRouter {
             workspace: handle.workspace,
             metadataEvent,
             queuedAt: Date.now(),
+            ...(handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {}),
         };
         if (typeof this.deps.instanceManager?.getByCategory === 'function') {
             const forwarded = handleMeshForwardEvent(
@@ -3759,6 +3768,7 @@ export class DaemonCommandRouter {
             interactionId: handle.interactionId,
             retryOfJobId: handle.retryOfJobId,
             node: { daemonId: handle.targetDaemonId, workspace: handle.workspace },
+            coordinatorDaemonId: handle.targetCoordinatorDaemonId,
         });
         const terminal: MeshRefineTerminalJob = { ...terminalHandle, result: normalizedResult };
         this.terminalRefineJobs.set(key, terminal);
@@ -3780,7 +3790,12 @@ export class DaemonCommandRouter {
         if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
         if (!node.isLocalWorktree || !node.workspace) return { success: false, error: `Refinery requires a local worktree node` };
 
-        const handle = this.buildRefineJobHandle({ meshId, nodeId, node, retryOfJobId: terminal?.jobId });
+        // Capture the caller's coordinator daemon ID so completed/failed events are
+        // scoped to that coordinator's pending-events queue and survive daemon restarts.
+        const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
+            ? args.coordinatorDaemonId.trim()
+            : (this.deps.statusInstanceId || undefined);
+        const handle = this.buildRefineJobHandle({ meshId, nodeId, node, retryOfJobId: terminal?.jobId, coordinatorDaemonId });
         this.runningRefineJobs.set(key, handle);
         await this.appendRefineJobLedger('task_dispatched', handle);
         this.queueRefineJobEvent('refine:accepted', handle);
@@ -6487,6 +6502,16 @@ export class DaemonCommandRouter {
                         ...(asyncRefineJobs.length > 0 ? { asyncRefineJobs } : {}),
                         ...(historicalSessions ? { historicalSessions } : {}),
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
+                        activeRefineJobs: Array.from(this.runningRefineJobs.values())
+                            .filter(job => job.meshId === meshId)
+                            .map(job => ({
+                                jobId: job.jobId,
+                                nodeId: job.targetNodeId,
+                                workspace: job.workspace,
+                                startedAt: job.startedAt,
+                                status: job.status,
+                                targetCoordinatorDaemonId: job.targetCoordinatorDaemonId,
+                            })),
                     };
                     const { pendingCoordinatorEvents: _pendingCoordinatorEvents, ...cacheableStatusResult } = statusResult as any;
                     const rememberedStatus = this.rememberAggregateMeshStatus(meshId, cacheableStatusResult, refreshReason);
