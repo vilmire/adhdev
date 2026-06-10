@@ -8,6 +8,7 @@ import { MeshObservabilitySurface } from '../../components/MeshGraph'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
 import { MeshQueueSection } from './MeshQueueSection'
+import { ReviewInboxSection } from './ReviewInboxSection'
 import { MeshNodeList } from './MeshNodeList'
 import { MeshHostDaemonSection } from './MeshHostDaemonSection'
 import { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'
@@ -107,6 +108,16 @@ interface Props {
 
     features: MeshDetailViewFeatures
 
+    // Review Inbox (M4.0) — required when features.reviewInbox is true
+    reviewInboxItems: import('@adhdev/daemon-core').MeshReviewInboxItem[]
+    reviewInboxLoading: boolean
+    reviewInboxError: string | null
+    reviewInboxRemoteNodesExcluded: boolean
+    onLoadReviewInbox: () => void
+    onDismissReviewInboxItem: (nodeId: string) => void
+    onRefineNode: (nodeId: string) => void
+    onRequeueLast: (nodeId: string) => void
+
     sendCommand: (daemonId: string, command: string, payload?: any) => Promise<any>
 }
 
@@ -175,6 +186,14 @@ export function MeshDetailView({
     onRemoveNode,
     availableCliAgents,
     features,
+    reviewInboxItems,
+    reviewInboxLoading,
+    reviewInboxError,
+    reviewInboxRemoteNodesExcluded,
+    onLoadReviewInbox,
+    onDismissReviewInboxItem,
+    onRefineNode,
+    onRequeueLast,
     sendCommand,
 }: Props) {
     const policy = readMeshPolicy(selectedMesh)
@@ -327,6 +346,23 @@ export function MeshDetailView({
                     />
                 )}
             </Section>
+
+            {/* ── Review Inbox (M4.0) ── */}
+            {features.reviewInbox && (
+                <ReviewInboxSection
+                    items={reviewInboxItems}
+                    loading={reviewInboxLoading}
+                    error={reviewInboxError}
+                    remoteNodesExcluded={reviewInboxRemoteNodesExcluded}
+                    meshId={selectedMesh.id}
+                    activeDaemonId={activeDaemonId}
+                    onRefresh={onLoadReviewInbox}
+                    onDismiss={onDismissReviewInboxItem}
+                    onRefineNode={onRefineNode}
+                    onRequeueLast={onRequeueLast}
+                    sendCommand={sendCommand}
+                />
+            )}
 
             {/* ── Nodes ── */}
             <MeshNodeList

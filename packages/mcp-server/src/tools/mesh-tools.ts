@@ -2457,6 +2457,18 @@ export const MESH_REFINE_PLAN_TOOL = {
     },
 };
 
+export const MESH_REVIEW_INBOX_TOOL = {
+    name: 'mesh_review_inbox',
+    description: 'List local worktree nodes that need human review: merge candidates (pushed feature branches ready to merge) and Refinery-blocked review results. Returns evidence summaries, diff stats vs. the default branch, and suggested actions (Refine / Requeue / Dismiss). Remote nodes are excluded in M4.0.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            mesh_id: { type: 'string', description: 'Mesh ID (optional — inferred from active mesh if omitted).' },
+        },
+        required: [],
+    },
+};
+
 export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_LIST_NODES_TOOL,
@@ -2483,6 +2495,7 @@ export const ALL_MESH_TOOLS = [
     MESH_TASK_HISTORY_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_MISSION_UPSERT_TOOL,
+    MESH_REVIEW_INBOX_TOOL,
 ];
 
 // ─── Tool Implementations ───────────────────────
@@ -4360,4 +4373,20 @@ export async function meshRefineNode(
     } else {
         return JSON.stringify({ error: 'Cloud mesh refine_node requires node daemonId' });
     }
+}
+
+export async function meshReviewInbox(
+    ctx: MeshContext,
+    args: { mesh_id?: string } = {},
+): Promise<string> {
+    if (!isLocalTransport(ctx.transport)) {
+        return JSON.stringify({ error: 'mesh_review_inbox requires a local daemon transport (M4.0 scope: local nodes only)' });
+    }
+    await refreshMeshFromDaemon(ctx);
+    const meshId = (args.mesh_id ?? ctx.mesh.id).trim();
+    const result = await commandForNode(ctx, ctx.mesh.nodes[0], 'get_mesh_review_inbox', {
+        meshId,
+        inlineMesh: ctx.mesh,
+    });
+    return JSON.stringify(result, null, 2);
 }

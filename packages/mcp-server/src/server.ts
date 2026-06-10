@@ -44,7 +44,8 @@ import {
   meshLaunchSession, meshGitStatus, meshFastForwardNode, meshCheckpoint, meshApprove,
   meshCloneNode, meshRemoveNode, meshRefineNode,
   meshRefineConfigSchema, meshValidateRefineConfig, meshSuggestRefineConfig, meshRefinePlan,
-  meshCleanupSessions, meshTaskHistory, meshReconcileLedger, meshMissionUpsert
+  meshCleanupSessions, meshTaskHistory, meshReconcileLedger, meshMissionUpsert,
+  meshReviewInbox
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 
@@ -274,6 +275,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_task_history': text = await meshTaskHistory(meshCtx, a as any); break;
           case 'mesh_reconcile_ledger': text = await meshReconcileLedger(meshCtx, a as any); break;
           case 'mesh_mission_upsert': text = await meshMissionUpsert(meshCtx, a as any); break;
+          case 'mesh_review_inbox': text = await meshReviewInbox(meshCtx, a as any); break;
           default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
         }
         return { content: [{ type: 'text', text }] };

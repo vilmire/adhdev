@@ -26,6 +26,7 @@ import { useMeshList } from './repo-mesh/useMeshList'
 import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph } from './repo-mesh/useMeshGraph'
+import { useMeshReviewInbox } from './repo-mesh/useMeshReviewInbox'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
 
 // Re-export types that cloud/standalone wrappers may reference
@@ -115,6 +116,17 @@ export default function RepoMesh() {
         loadLiveMesh,
         resolveCommandTarget,
     })
+
+    // ─── Review Inbox (M4.0) ───
+
+    const {
+        items: reviewInboxItems,
+        loading: reviewInboxLoading,
+        error: reviewInboxError,
+        remoteNodesExcluded: reviewInboxRemoteNodesExcluded,
+        loadInbox: loadReviewInbox,
+        dismissItem: dismissReviewInboxItem,
+    } = useMeshReviewInbox({ primaryDaemonId, sendCommand })
 
     // ─── Node actions ───
 
@@ -392,6 +404,23 @@ export default function RepoMesh() {
                 hermesMcpConfig: features.hermesMcpConfig,
                 addNodeDaemonPicker: features.addNodeDaemonPicker,
                 nodeInstruction: features.nodeInstruction,
+                reviewInbox: features.reviewInbox ?? false,
+            }}
+            reviewInboxItems={reviewInboxItems}
+            reviewInboxLoading={reviewInboxLoading}
+            reviewInboxError={reviewInboxError}
+            reviewInboxRemoteNodesExcluded={reviewInboxRemoteNodesExcluded}
+            onLoadReviewInbox={() => selectedMeshId && void loadReviewInbox(selectedMeshId)}
+            onDismissReviewInboxItem={dismissReviewInboxItem}
+            onRefineNode={async (nodeId) => {
+                if (!selectedMeshId) return
+                await sendCommand(resolvedActiveDaemonId, 'refine_mesh_node', { meshId: selectedMeshId, nodeId, inlineMesh: selectedMesh })
+                void loadReviewInbox(selectedMeshId)
+            }}
+            onRequeueLast={async (nodeId) => {
+                if (!selectedMeshId) return
+                await sendCommand(resolvedActiveDaemonId, 'requeue_mesh_queue_task', { meshId: selectedMeshId, nodeId })
+                void loadReviewInbox(selectedMeshId)
             }}
             sendCommand={sendCommand}
         />

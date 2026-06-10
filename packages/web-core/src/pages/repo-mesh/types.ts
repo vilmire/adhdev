@@ -115,4 +115,5 @@ export interface MeshDetailViewFeatures {
     hermesMcpConfig: boolean
     addNodeDaemonPicker: boolean
     nodeInstruction: boolean
+    reviewInbox: boolean
 }

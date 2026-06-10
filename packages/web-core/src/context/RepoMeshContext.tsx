@@ -66,6 +66,8 @@ export interface RepoMeshFeatures {
     nodeInstruction: boolean
     /** Show "Hermes MCP config" section (both) */
     hermesMcpConfig: boolean
+    /** Show "Review Inbox" section — merge candidates + Refinery-blocked nodes (M4.0, standalone) */
+    reviewInbox?: boolean
 }
 
 // ─── Context value ───────────────────────────────────────────────
@@ -164,6 +166,7 @@ export const STANDALONE_FEATURES: RepoMeshFeatures = {
     coordinatorPrompt: true,
     nodeInstruction: true,
     hermesMcpConfig: true,
+    reviewInbox: true,
 }
 
 export const CLOUD_FEATURES: RepoMeshFeatures = {

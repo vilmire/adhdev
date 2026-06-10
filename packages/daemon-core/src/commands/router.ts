@@ -6508,6 +6508,72 @@ export class DaemonCommandRouter {
                 }
             }
 
+            case 'get_mesh_review_inbox': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                try {
+                    const { deriveMeshReviewInboxItems } = await import('../mesh/mesh-review-inbox.js');
+                    const { readLedgerEntries } = await import('../mesh/mesh-ledger.js');
+                    const { getGitDiffSummary } = await import('../git/git-diff.js');
+                    const { existsSync } = await import('node:fs');
+
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                    const mesh = meshRecord?.mesh;
+                    if (!mesh) return { success: false, error: 'Mesh not found' };
+
+                    const cachedStatus = this.getCachedAggregateMeshStatus(meshId, mesh, {});
+                    const nodeStatuses: Record<string, unknown>[] = Array.isArray(cachedStatus?.nodes)
+                        ? cachedStatus.nodes as Record<string, unknown>[]
+                        : Array.isArray(mesh.nodes)
+                            ? mesh.nodes as Record<string, unknown>[]
+                            : [];
+
+                    const ledgerEntries = readLedgerEntries(meshId, { tail: 300 });
+                    const derivation = deriveMeshReviewInboxItems({ nodes: nodeStatuses, ledgerEntries });
+
+                    for (const item of derivation.items) {
+                        const workspace = item.workspace;
+                        if (!workspace || !existsSync(workspace)) continue;
+                        const baseRef = item.defaultBranch
+                            ? `origin/${item.defaultBranch}`
+                            : 'origin/main';
+                        try {
+                            const diffResult = await getGitDiffSummary(workspace, { baseRef, maxFiles: 100 });
+                            if (diffResult.isGitRepo) {
+                                item.diffSummary = {
+                                    baseRef,
+                                    files: diffResult.files.map(f => ({
+                                        path: f.path,
+                                        status: f.status,
+                                        insertions: f.insertions,
+                                        deletions: f.deletions,
+                                        binary: f.binary,
+                                        oldPath: f.oldPath,
+                                    })),
+                                    totalFiles: diffResult.files.length,
+                                    totalInsertions: diffResult.totalInsertions,
+                                    totalDeletions: diffResult.totalDeletions,
+                                    truncated: diffResult.truncated,
+                                    ...(diffResult.error ? { error: diffResult.error } : {}),
+                                };
+                            }
+                        } catch {
+                            item.diffSummary = null;
+                        }
+                    }
+
+                    return {
+                        success: true,
+                        meshId,
+                        inbox: derivation.items,
+                        remoteNodesExcluded: derivation.remoteNodesExcluded,
+                        excludedRemoteNodeIds: derivation.excludedRemoteNodeIds,
+                    };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
             default:
                 break;
         }

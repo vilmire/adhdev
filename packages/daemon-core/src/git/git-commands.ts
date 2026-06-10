@@ -67,8 +67,8 @@ export interface GitPushResult extends GitRepoIdentity {
 
 export interface GitCommandServices {
   getStatus?: (params: { workspace: string; refreshUpstream?: boolean; includeSubmodules?: boolean; submoduleIgnorePaths?: string[] }) => Promise<GitRepoStatus> | GitRepoStatus;
-  getDiffSummary?: (params: { workspace: string; staged?: boolean }) => Promise<GitDiffSummary> | GitDiffSummary;
-  getDiffFile?: (params: { workspace: string; path: string; staged?: boolean }) => Promise<GitFileDiff> | GitFileDiff;
+  getDiffSummary?: (params: { workspace: string; staged?: boolean; base?: string }) => Promise<GitDiffSummary> | GitDiffSummary;
+  getDiffFile?: (params: { workspace: string; path: string; staged?: boolean; base?: string }) => Promise<GitFileDiff> | GitFileDiff;
   createSnapshot?: (params: {
     workspace: string;
     reason: GitSnapshotReason;
@@ -176,8 +176,8 @@ const defaultSnapshotStore = createGitSnapshotStore({
 export function createDefaultGitCommandServices(): GitCommandServices {
   return {
     getStatus: ({ workspace, refreshUpstream }) => getGitRepoStatus(workspace, { refreshUpstream }),
-    getDiffSummary: ({ workspace }) => getGitDiffSummary(workspace),
-    getDiffFile: ({ workspace, path: filePath }) => getGitFileDiff(workspace, filePath),
+    getDiffSummary: ({ workspace, base }) => getGitDiffSummary(workspace, base ? { baseRef: base } : {}),
+    getDiffFile: ({ workspace, path: filePath, base }) => getGitFileDiff(workspace, filePath, base ? { baseRef: base } : {}),
     createSnapshot: ({ workspace, reason, sessionId, turnId }) => defaultSnapshotStore.create({
       workspace,
       reason,
@@ -309,7 +309,7 @@ export async function handleGitCommand(
 
     case 'git_diff_summary': {
       if (!services.getDiffSummary) return serviceNotImplemented(command);
-      const diffSummary = await runService(() => services.getDiffSummary!({ workspace, staged: optionalBoolean(args?.staged) }));
+      const diffSummary = await runService(() => services.getDiffSummary!({ workspace, staged: optionalBoolean(args?.staged), base: optionalString(args?.base) }));
       return 'success' in diffSummary ? diffSummary : { success: true, diffSummary };
     }
 

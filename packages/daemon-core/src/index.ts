@@ -178,6 +178,8 @@ export { upsertMeshMission, getMeshMissions, getMeshMission, summarizeMissionTas
 export type { MeshMissionRecord, MeshMissionStatus, MeshMissionSummary, MeshMissionTaskAggregate } from './mesh/mesh-missions.js';
 export { computeMeshTaskStats, computeMeshMissionStats } from './mesh/mesh-task-stats.js';
 export type { MeshTaskStats, MeshMissionStats } from './mesh/mesh-task-stats.js';
+export { deriveMeshReviewInboxItems } from './mesh/mesh-review-inbox.js';
+export type { MeshReviewInboxItem, MeshReviewInboxDerivation, MeshReviewInboxEvidence, MeshReviewInboxDiffSummary, MeshReviewInboxDiffFile, MeshReviewInboxReason, MeshReviewInboxConvergence } from './mesh/mesh-review-inbox.js';
 export type { CoordinatorPromptContext } from './mesh/coordinator-prompt.js';
 export { loadMeshCoordinatorRegistry, registerMeshCoordinator, unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from './mesh/coordinator-registry.js';
 export type { CoordinatorRegistryEntry } from './mesh/coordinator-registry.js';

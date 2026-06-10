@@ -10,6 +10,20 @@ export interface GitDiffOptions {
   timeoutMs?: number;
   maxFiles?: number;
   maxBytes?: number;
+  /**
+   * When set, diff `<baseRef>...HEAD` (merge-base range — "what this branch
+   * adds on top of base") instead of the working tree. Staged/untracked
+   * sections do not apply in this mode.
+   */
+  baseRef?: string;
+}
+
+function validateBaseRef(ref: string): string {
+  const trimmed = ref.trim();
+  if (!trimmed || trimmed.startsWith('-') || trimmed.includes('..') || !/^[A-Za-z0-9][A-Za-z0-9._/@-]*$/.test(trimmed)) {
+    throw new GitCommandError('invalid_args', `Invalid base ref: ${ref}`);
+  }
+  return trimmed;
 }
 
 export interface GitFileDiffResult {
@@ -44,6 +58,30 @@ export async function getGitDiffSummary(
   try {
     const repo = await resolveGitRepository(workspace, options);
     const repoRoot = repo.repoRoot!;
+
+    if (options.baseRef) {
+      const range = `${validateBaseRef(options.baseRef)}...HEAD`;
+      const [nameStatus, numstat] = await Promise.all([
+        runGit(repo, ['diff', '--no-ext-diff', '--name-status', range, '--'], { ...options, cwd: repoRoot }),
+        runGit(repo, ['diff', '--no-ext-diff', '--numstat', range, '--'], { ...options, cwd: repoRoot }),
+      ]);
+      const outputBytes = byteLength(nameStatus.stdout + numstat.stdout);
+      const changes = combineDiffEntries(nameStatus.stdout, numstat.stdout, false);
+      const maxFiles = normalizePositiveInteger(options.maxFiles, DEFAULT_MAX_FILES);
+      const maxBytes = normalizePositiveInteger(options.maxBytes, DEFAULT_MAX_BYTES);
+      const files = changes.slice(0, maxFiles);
+      return {
+        workspace: repo.workspace,
+        repoRoot,
+        isGitRepo: true,
+        files,
+        totalInsertions: files.reduce((sum, file) => sum + file.insertions, 0),
+        totalDeletions: files.reduce((sum, file) => sum + file.deletions, 0),
+        truncated: changes.length > files.length || outputBytes > maxBytes,
+        lastCheckedAt,
+      };
+    }
+
     const [unstagedNameStatus, unstagedNumstat, stagedNameStatus, stagedNumstat, untracked] = await Promise.all([
       runGit(repo, ['diff', '--no-ext-diff', '--name-status'], { ...options, cwd: repoRoot }),
       runGit(repo, ['diff', '--no-ext-diff', '--numstat'], { ...options, cwd: repoRoot }),
@@ -105,6 +143,21 @@ export async function getGitFileDiff(
   const repoRoot = repo.repoRoot!;
   const selected = await resolveRepoFilePath(repoRoot, filePath);
   const maxBytes = normalizePositiveInteger(options.maxBytes, DEFAULT_MAX_BYTES);
+
+  if (options.baseRef) {
+    const range = `${validateBaseRef(options.baseRef)}...HEAD`;
+    const result = await runGit(repo, ['diff', '--no-ext-diff', range, '--', selected.relativePath], { ...options, cwd: repoRoot });
+    const bounded = truncateText(result.stdout, maxBytes);
+    return {
+      workspace: repo.workspace,
+      repoRoot,
+      isGitRepo: true,
+      path: selected.relativePath,
+      diff: bounded.text,
+      truncated: bounded.truncated,
+      lastCheckedAt,
+    };
+  }
 
   const [unstaged, staged] = await Promise.all([
     runGit(repo, ['diff', '--no-ext-diff', '--', selected.relativePath], { ...options, cwd: repoRoot }),
