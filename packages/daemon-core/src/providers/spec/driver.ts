@@ -813,8 +813,8 @@ function guessExt(mime: string): string {
 
 function extractMatchedRules(ev: SpecEvaluation): string[] {
     if (!Array.isArray(ev.trace)) return [];
-    return (ev.trace as any[])
-        .filter(t => t.matched === true || t.kind === 'state_match')
-        .map(t => t.rule ?? t.stateId ?? t.id ?? String(t))
+    return ev.trace
+        .filter(t => t.kind === 'state_match')
+        .map(t => t.text)
         .filter(Boolean);
 }
