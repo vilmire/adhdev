@@ -281,7 +281,11 @@ export function evaluate(
     cursor?: { row: number; col: number },
 ): SpecEvaluation {
     const trace: TraceEntry[] = [];
-    const lines = screenText.split('\n');
+    const lines = screenText.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
+    // Use \r-stripped text for all regex matching so that anchor patterns
+    // like ^[─╌]+$ and full-screen when-regex work correctly against PTY
+    // output where lines end with \r\n rather than plain \n.
+    const cleanScreen = lines.join('\n');
     const sections = resolveSections(spec, lines);
     for (const s of sections) {
         trace.push({ kind: 'section', text: `section[${s.id}] lines [${s.fromLine}, ${s.toLine}) (${s.toLine - s.fromLine} lines)` });
@@ -294,9 +298,9 @@ export function evaluate(
     let modal: ModalSnapshot | null = null;
 
     for (const st of spec.states) {
-        const { matched, title } = matchState(st, sections, screenText, trace, cursor);
+        const { matched, title } = matchState(st, sections, cleanScreen, trace, cursor);
         if (!matched) continue;
-        const extractedModal = extractModal(st, sections, screenText, title, trace);
+        const extractedModal = extractModal(st, sections, cleanScreen, title, trace);
         // If the state declares modal_buttons but extraction failed (button
         // count below min_count, or text-was-mistaken-for-modal), do not
         // promote the state. Otherwise we would surface a phantom approval
