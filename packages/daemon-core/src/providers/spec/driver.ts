@@ -322,7 +322,17 @@ export class SpecDriver {
     }
 
     private cancelIdleHold(): void {
-        if (this.idleHoldTimer) { clearTimeout(this.idleHoldTimer); this.idleHoldTimer = null; }
+        if (this.idleHoldTimer) {
+            clearTimeout(this.idleHoldTimer);
+            this.idleHoldTimer = null;
+            // If the idle hold was armed by a completion_idle_after forced-idle,
+            // cancelling it means new activity arrived while we were waiting.
+            // Reset the completion tracker so the hold window restarts fresh
+            // when the marker reappears — otherwise the stale firstSeenAt makes
+            // the hold appear already-expired on the next PTY frame that matches.
+            this.completionIdleKey = '';
+            this.completionIdleFirstSeenAt = 0;
+        }
         this.pendingIdleState = null;
     }
 
