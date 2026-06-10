@@ -287,6 +287,8 @@ export class AcpProviderInstance implements ProviderInstance {
     private partialBlocks: ContentBlock[] = [];
     /** Tool calls collected during current turn */
     private turnToolCalls: ToolCallInfo[] = [];
+ /** Guard: prevent concurrent sendPrompt calls from racing on shared state */
+    private _sendPromptInFlight = false;
 
  // Error tracking
     private errorMessage: string | null = null;
@@ -1002,7 +1004,11 @@ export class AcpProviderInstance implements ProviderInstance {
             }
         } catch (e: any) {
             this.log.warn(`[${this.type}] session/new failed: ${e?.message}`);
-            this.currentStatus = 'idle';
+            if (!this.errorReason) {
+                this.errorReason = 'init_failed';
+                this.errorMessage = `ACP session creation failed: ${e?.message}`;
+            }
+            this.currentStatus = 'error';
         }
     }
 
@@ -1011,6 +1017,12 @@ export class AcpProviderInstance implements ProviderInstance {
             this.log.warn(`[${this.type}] Cannot send prompt: no active connection/session`);
             return;
         }
+
+        if (this._sendPromptInFlight) {
+            this.log.warn(`[${this.type}] sendPrompt already in flight — dropping concurrent request`);
+            throw new Error('ACP sendPrompt already in flight');
+        }
+        this._sendPromptInFlight = true;
 
  // Build prompt content
         const promptParts: any[] = contentBlocks && contentBlocks.length > 0
@@ -1098,6 +1110,8 @@ export class AcpProviderInstance implements ProviderInstance {
             this.finalizeAssistantMessage();
             this.currentStatus = 'idle';
             this.detectStatusTransition();
+        } finally {
+            this._sendPromptInFlight = false;
         }
     }
 
