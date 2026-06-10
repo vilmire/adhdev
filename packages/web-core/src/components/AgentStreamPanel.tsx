@@ -48,6 +48,20 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
         return deriveStreamConversationStatus(activeStream);
     }, [activeStream]);
 
+    // Stable mapped messages — only rebuilds when the messages array reference changes,
+    // not when unrelated stream fields (title, status, modal) update.
+    const mappedMessages = useMemo(() => {
+        if (!activeStream) return [];
+        const streamKey = getStreamKey(activeStream);
+        return activeStream.messages.map((m, i: number) => ({
+            role: m.role,
+            content: m.content,
+            kind: m.kind,
+            id: `${streamKey}-${i}`,
+            receivedAt: m.receivedAt,
+        }));
+    }, [activeStream?.messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
     // Build ActiveConversation for ChatPane (same format as Dashboard)
     const activeConv: ActiveConversation | null = useMemo(() => {
         if (!activeStream) return null;
@@ -61,13 +75,7 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
             agentType: activeStream.agentType,
             status: derivedStatus,
             title: effectiveStreamTitle,
-            messages: activeStream.messages.map((m, i: number) => ({
-                role: m.role,
-                content: m.content,
-                kind: m.kind,
-                id: `${getStreamKey(activeStream)}-${i}`,
-                receivedAt: m.receivedAt,
-            })),
+            messages: mappedMessages,
             ideType: activeStream.agentType,
             workspaceName: '',
             displayPrimary: effectiveStreamTitle || formatIdeType(activeStream.agentType),
@@ -78,7 +86,7 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
             streamSource: 'agent-stream' as const,
             tabKey: `agent-stream-${getStreamKey(activeStream)}`,
         };
-    }, [activeStream, routeId, derivedStatus]);
+    }, [activeStream, routeId, derivedStatus, mappedMessages]);
 
     const sendInFlightRef = useRef(false);
 
