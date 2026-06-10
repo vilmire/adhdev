@@ -1,5 +1,12 @@
 import type { AppendRemoteLedgerResult, MeshLedgerSlice, MeshLedgerSummary } from './mesh-ledger.js';
 
+/** Minimal ledger slice shape accepted by buildMeshLedgerReplicaEvidence. Covers both JSONL and SQLite slices. */
+export interface AnyLedgerSlice {
+    entries: Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId?: string | null; sessionId?: string | null; providerType?: string | null; payload: unknown }>;
+    cursor: { afterId: string | null; nextAfterId: string | null; limit: number; hasMore: boolean };
+    summary?: MeshLedgerSummary;
+}
+
 export type MeshLedgerReplicaStatus = 'local' | 'queried' | 'imported' | 'failed';
 
 export interface MeshLedgerReplicaEvidence {
@@ -25,7 +32,7 @@ export interface MeshLedgerReconciliationEvidence {
     meshId: string;
     generatedAt: string;
     sourceOfTruth: {
-        kind: 'coordinator_local_jsonl';
+        kind: 'coordinator_local_sqlite';
         p2pOnly: true;
         cloudD1LedgerSync: false;
         notes: string;
@@ -47,7 +54,7 @@ export interface MeshLedgerReconciliationEvidence {
     };
 }
 
-function lastTimestamp(slice?: MeshLedgerSlice): string | null {
+function lastTimestamp(slice?: AnyLedgerSlice): string | null {
     const entries = Array.isArray(slice?.entries) ? slice!.entries : [];
     return entries.length ? entries[entries.length - 1].timestamp : null;
 }
@@ -56,7 +63,7 @@ export function buildMeshLedgerReplicaEvidence(args: {
     nodeId: string;
     daemonId?: string;
     transport: 'local' | 'p2p_datachannel';
-    slice?: MeshLedgerSlice;
+    slice?: AnyLedgerSlice;
     importResult?: AppendRemoteLedgerResult;
     status?: MeshLedgerReplicaStatus;
     error?: string;
@@ -91,10 +98,10 @@ export function buildMeshLedgerReconciliationEvidence(meshId: string, replicas: 
         meshId,
         generatedAt: new Date().toISOString(),
         sourceOfTruth: {
-            kind: 'coordinator_local_jsonl',
+            kind: 'coordinator_local_sqlite',
             p2pOnly: true,
             cloudD1LedgerSync: false,
-            notes: 'Coordinator reconciles bounded slices from daemon-local JSONL ledgers over P2P DataChannel; Cloud/D1 is not a ledger source of truth.',
+            notes: 'Coordinator reconciles bounded slices from daemon-local SQLite event ledgers (mesh_event_ledger table) over P2P DataChannel; Cloud/D1 is not a ledger source of truth.',
         },
         replicas,
         totals: {

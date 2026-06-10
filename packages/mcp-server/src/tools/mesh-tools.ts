@@ -48,6 +48,7 @@ import {
     normalizeMeshCapabilityTags,
     readLedgerEntries,
     readLedgerSlice,
+    readLedgerSliceFromStore,
     reconcileDirectDispatchCompletionFromTranscript,
     recordMeshToolCall,
     requeueTask,
@@ -2755,7 +2756,9 @@ export async function meshReconcileLedger(
     for (const node of nodes) {
         try {
             if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {
-                const slice = readLedgerSlice(ctx.mesh.id, queryArgs);
+                // G4: Use SQLite mesh_event_ledger (bounded slice) as the local P2P reconcile read path.
+                // readLedgerSlice (JSONL) is retained for per-daemon P2P export; coordinator local reads use SQLite.
+                const slice = readLedgerSliceFromStore(ctx.mesh.id, queryArgs);
                 replicas.push(buildMeshLedgerReplicaEvidence({
                     nodeId: node.id,
                     daemonId: node.daemonId,

@@ -798,6 +798,26 @@ export function readLedgerSlice(meshId: string, opts?: ReadLedgerSliceOptions): 
 }
 
 /**
+ * G4: Read a bounded ledger slice from the SQLite mesh_event_ledger table.
+ * This is the preferred P2P reconcile read path; JSONL files are retained as
+ * export/import/debug/legacy artifacts only.
+ *
+ * Returns a shape structurally compatible with MeshLedgerSlice (minus the
+ * JSONL-specific `summary` and `sourceOfTruth.path` fields) so callers can
+ * pass it to buildMeshLedgerReplicaEvidence without modification.
+ */
+export function readLedgerSliceFromStore(meshId: string, opts?: ReadLedgerSliceOptions): ReturnType<typeof MeshRuntimeStore.prototype.readLedgerSlice> {
+    return MeshRuntimeStore.getInstance().readLedgerSlice(meshId, {
+        afterId: opts?.afterId,
+        since: opts?.since,
+        // ReadLedgerSliceOptions allows kind as array; SQLite path takes a single kind string.
+        // Pass first kind value if provided; callers needing multi-kind filtering should use readLedgerSlice (JSONL).
+        kind: opts?.kind?.length ? opts.kind[0] : undefined,
+        limit: opts?.limit,
+    });
+}
+
+/**
  * Get a summary of mesh activity from the ledger.
  */
 export function getLedgerSummary(meshId: string): MeshLedgerSummary {

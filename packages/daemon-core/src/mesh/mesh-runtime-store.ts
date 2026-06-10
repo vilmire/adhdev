@@ -972,6 +972,92 @@ export class MeshRuntimeStore {
         return imported;
     }
 
+    /**
+     * G4: Read a bounded, cursor-addressable ledger slice directly from the SQLite
+     * mesh_event_ledger table. This is the P2P reconcile read path; JSONL files are
+     * retained as export/import/debug/legacy artifacts only.
+     *
+     * The return shape is structurally compatible with MeshLedgerSlice so callers
+     * in mesh-tools.ts can pass it directly to buildMeshLedgerReplicaEvidence.
+     */
+    readLedgerSlice(meshId: string, opts?: {
+        afterId?: string;
+        since?: string;
+        kind?: string;
+        limit?: number;
+    }): {
+        protocol: 'adhdev.mesh.ledger.slice.v1';
+        meshId: string;
+        entries: Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; payload: unknown }>;
+        cursor: { afterId: string | null; nextAfterId: string | null; limit: number; hasMore: boolean };
+        sourceOfTruth: { kind: 'local_sqlite'; table: 'mesh_event_ledger'; bounded: true; maxLimit: number };
+    } {
+        // Protocol maximum of 500, default 100 — mirrors mesh-ledger.ts constants.
+        const MAX_LIMIT = 500;
+        const DEFAULT_LIMIT = 100;
+        const limit = (typeof opts?.limit === 'number' && Number.isFinite(opts.limit))
+            ? Math.max(1, Math.min(MAX_LIMIT, Math.floor(opts.limit)))
+            : DEFAULT_LIMIT;
+
+        const afterId = typeof opts?.afterId === 'string' && opts.afterId.trim() ? opts.afterId.trim() : null;
+
+        // Build query: fetch limit+1 rows so we can detect hasMore without a COUNT(*).
+        const params: unknown[] = [meshId];
+        let whereClause = 'mesh_id = ?';
+
+        if (opts?.kind) {
+            whereClause += ' AND kind = ?';
+            params.push(opts.kind);
+        }
+        if (opts?.since) {
+            whereClause += ' AND timestamp >= ?';
+            params.push(opts.since);
+        }
+        if (afterId) {
+            // afterId: return entries with timestamp strictly after the referenced entry's timestamp,
+            // or with the same timestamp but id > afterId (stable pagination).
+            whereClause += ` AND (timestamp > (SELECT timestamp FROM mesh_event_ledger WHERE id = ? AND mesh_id = ?) OR (timestamp = (SELECT timestamp FROM mesh_event_ledger WHERE id = ? AND mesh_id = ?) AND id > ?))`;
+            params.push(afterId, meshId, afterId, meshId, afterId);
+        }
+
+        // Fetch limit+1 to detect hasMore
+        const query = `SELECT * FROM mesh_event_ledger WHERE ${whereClause} ORDER BY timestamp ASC, id ASC LIMIT ?`;
+        params.push(limit + 1);
+
+        const rows = this.db.prepare(query).all(...params) as Array<Record<string, unknown>>;
+        const hasMore = rows.length > limit;
+        const bounded = hasMore ? rows.slice(0, limit) : rows;
+
+        const entries = bounded.map(r => ({
+            id: r.id as string,
+            meshId: r.mesh_id as string,
+            timestamp: r.timestamp as string,
+            kind: r.kind as string,
+            nodeId: r.node_id as string | null,
+            sessionId: r.session_id as string | null,
+            providerType: r.provider_type as string | null,
+            payload: (() => { try { return JSON.parse(r.payload as string); } catch { return {}; } })(),
+        }));
+
+        return {
+            protocol: 'adhdev.mesh.ledger.slice.v1',
+            meshId,
+            entries,
+            cursor: {
+                afterId,
+                nextAfterId: entries.length ? entries[entries.length - 1].id : afterId,
+                limit,
+                hasMore,
+            },
+            sourceOfTruth: {
+                kind: 'local_sqlite',
+                table: 'mesh_event_ledger',
+                bounded: true,
+                maxLimit: MAX_LIMIT,
+            },
+        };
+    }
+
     // ── G3: Pending Coordinator Events ──────────────────────────────────────
 
     insertPendingEvent(event: {
