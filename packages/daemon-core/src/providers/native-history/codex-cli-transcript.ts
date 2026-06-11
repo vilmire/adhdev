@@ -159,6 +159,44 @@ function extractToolOutputContent(payload: Record<string, unknown>): string {
   return '';
 }
 
+function hasAssistantStandardMessageSinceLastUser(records: NativeHistoryMessage[], content: string): boolean {
+  const normalized = content.trim();
+  if (!normalized) return false;
+  for (let i = records.length - 1; i >= 0; i--) {
+    const record = records[i];
+    if (record.kind === 'session_start') continue;
+    if (record.role === 'user') return false;
+    if (record.role === 'assistant' && record.kind === 'standard' && record.content.trim() === normalized) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function pushAssistantStandardMessage(
+  records: NativeHistoryMessage[],
+  sessionId: string,
+  receivedAt: number,
+  content: string,
+  workspace?: string,
+): void {
+  const text = content.trim();
+  if (!text) return;
+  if (hasAssistantStandardMessageSinceLastUser(records, text)) return;
+
+  const msg: NativeHistoryMessage = {
+    ts: new Date(receivedAt).toISOString(),
+    receivedAt,
+    role: 'assistant',
+    content: text,
+    kind: 'standard',
+    agent: 'codex-cli',
+    historySessionId: sessionId,
+  };
+  if (workspace) msg.workspace = workspace;
+  records.push(msg);
+}
+
 /**
  * Read the first line of a Codex JSONL session file and parse the session_meta record.
  * Returns the payload object (containing id, cwd, etc.) or null.
@@ -233,9 +271,30 @@ function parseSessionFile(
       continue;
     }
 
-    if (type !== 'response_item') continue;
-
     const payloadType = String(payload.type ?? '').trim();
+
+    if (type === 'event_msg') {
+      if (payloadType === 'task_complete') {
+        pushAssistantStandardMessage(
+          records,
+          sessionId,
+          receivedAt,
+          flattenCodexContent(payload.last_agent_message),
+          detectedWorkspace,
+        );
+      } else if (payloadType === 'agent_message' && String(payload.phase ?? '').trim() === 'final_answer') {
+        pushAssistantStandardMessage(
+          records,
+          sessionId,
+          receivedAt,
+          flattenCodexContent(payload.message),
+          detectedWorkspace,
+        );
+      }
+      continue;
+    }
+
+    if (type !== 'response_item') continue;
 
     if (payloadType === 'message') {
       const role = String(payload.role ?? '').trim();
@@ -243,6 +302,7 @@ function parseSessionFile(
 
       const content = flattenCodexContent(payload.content);
       if (!content) continue;
+      if (role === 'assistant' && hasAssistantStandardMessageSinceLastUser(records, content)) continue;
 
       const msg: NativeHistoryMessage = {
         ts: new Date(receivedAt).toISOString(),

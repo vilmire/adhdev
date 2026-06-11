@@ -248,6 +248,75 @@ describe('codex-cli-transcript — readSession', () => {
     expect(toolMsgs.some((m) => m.content.includes('my_tool') && m.content.includes('data'))).toBe(true);
     expect(toolMsgs.some((m) => m.content.includes('tool ran successfully'))).toBe(true);
   });
+
+  it('uses task_complete.last_agent_message as final assistant evidence when the message item is absent', async () => {
+    const sessionId = '77777777-0000-0000-0000-000000000001';
+    const dir = path.join(tmpDir, '.codex', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `${sessionId}.jsonl`);
+
+    const meta = JSON.stringify({ type: 'session_meta', timestamp: 1_800_000_000_000, payload: { id: sessionId, cwd: '/work' } });
+    const userMsg = JSON.stringify({ type: 'response_item', timestamp: 1_800_000_001_000, payload: { type: 'message', role: 'user', content: 'Summarize the fix' } });
+    const toolCall = JSON.stringify({ type: 'response_item', timestamp: 1_800_000_002_000, payload: { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: 'npm test' }) } });
+    const toolOutput = JSON.stringify({ type: 'response_item', timestamp: 1_800_000_003_000, payload: { type: 'function_call_output', output: 'passed' } });
+    const complete = JSON.stringify({
+      type: 'event_msg',
+      timestamp: 1_800_000_004_000,
+      payload: {
+        type: 'task_complete',
+        turn_id: 'turn-1',
+        last_agent_message: 'Final answer from completion marker.',
+        completed_at: 1_800_000_004,
+      },
+    });
+    fs.writeFileSync(filePath, [meta, userMsg, toolCall, toolOutput, complete].join('\n') + '\n', 'utf-8');
+
+    const { readSession } = await import('../../../src/providers/native-history/codex-cli-transcript.js');
+    const result = await readSession(filePath);
+
+    expect(result).not.toBeNull();
+    const visible = result!.messages.filter((m) => m.kind !== 'session_start');
+    expect(visible.map((m) => [m.role, m.kind, m.content])).toEqual([
+      ['user', 'standard', 'Summarize the fix'],
+      ['assistant', 'tool', 'shell: npm test'],
+      ['assistant', 'tool', 'passed'],
+      ['assistant', 'standard', 'Final answer from completion marker.'],
+    ]);
+  });
+
+  it('does not duplicate completion event text when the assistant message item is present', async () => {
+    const sessionId = '88888888-0000-0000-0000-000000000001';
+    const dir = path.join(tmpDir, '.codex', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `${sessionId}.jsonl`);
+
+    const meta = JSON.stringify({ type: 'session_meta', timestamp: 1_800_000_000_000, payload: { id: sessionId, cwd: '/work' } });
+    const userMsg = JSON.stringify({ type: 'response_item', timestamp: 1_800_000_001_000, payload: { type: 'message', role: 'user', content: 'Answer once' } });
+    const eventMsg = JSON.stringify({
+      type: 'event_msg',
+      timestamp: 1_800_000_002_000,
+      payload: { type: 'agent_message', message: 'Only one assistant bubble.', phase: 'final_answer' },
+    });
+    const assistantMsg = JSON.stringify({
+      type: 'response_item',
+      timestamp: 1_800_000_002_001,
+      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Only one assistant bubble.' }] },
+    });
+    const complete = JSON.stringify({
+      type: 'event_msg',
+      timestamp: 1_800_000_002_002,
+      payload: { type: 'task_complete', turn_id: 'turn-1', last_agent_message: 'Only one assistant bubble.' },
+    });
+    fs.writeFileSync(filePath, [meta, userMsg, eventMsg, assistantMsg, complete].join('\n') + '\n', 'utf-8');
+
+    const { readSession } = await import('../../../src/providers/native-history/codex-cli-transcript.js');
+    const result = await readSession(filePath);
+
+    expect(result).not.toBeNull();
+    const assistantStandard = result!.messages.filter((m) => m.role === 'assistant' && m.kind === 'standard');
+    expect(assistantStandard).toHaveLength(1);
+    expect(assistantStandard[0].content).toBe('Only one assistant bubble.');
+  });
 });
 
 describe('codex-cli-transcript — listSessions', () => {
