@@ -66,6 +66,7 @@ import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
+import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
 import { homedir, hostname as osHostname } from 'os';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
@@ -3333,6 +3334,7 @@ export class DaemonCommandRouter {
                         success: result.success === true,
                         result,
                         finalBranchConvergenceState: result.finalBranchConvergenceState,
+                        ...(result.blockerContext ? { blockerContext: result.blockerContext } : {}),
                     } : {}),
                 },
             });
@@ -3904,6 +3906,30 @@ export class DaemonCommandRouter {
                 };
             }
 
+            // Push logic: after a successful merge, either auto-push or surface push info
+            // so coordinators don't need manual discovery after each refine.
+            const requireApprovalForPush: boolean = (mesh as any)?.policy?.requireApprovalForPush ?? DEFAULT_MESH_POLICY.requireApprovalForPush;
+            let pushResult: Record<string, unknown> | undefined;
+            if (!requireApprovalForPush) {
+                const pushStarted = Date.now();
+                try {
+                    await execFileAsync('git', ['push', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8' });
+                    pushResult = { pushed: true, remote: 'origin', branch: baseBranch, durationMs: Date.now() - pushStarted };
+                    recordMeshRefineStage(refineStages, 'push', 'passed', pushStarted, pushResult);
+                    finalBranchConvergenceState.status = 'merged_pushed';
+                } catch (e: any) {
+                    pushResult = {
+                        pushed: false,
+                        remote: 'origin',
+                        branch: baseBranch,
+                        error: e?.message || String(e),
+                        stderr: e?.stderr,
+                        durationMs: Date.now() - pushStarted,
+                    };
+                    recordMeshRefineStage(refineStages, 'push', 'failed', pushStarted, pushResult);
+                }
+            }
+
             return {
                 success: true,
                 merged: true,
@@ -3918,6 +3944,14 @@ export class DaemonCommandRouter {
                 refineStages,
                 ...(ledgerError ? { ledgerError } : {}),
                 finalBranchConvergenceState,
+                // Push outcome or readiness info for coordinator.
+                ...(pushResult
+                    ? { pushResult }
+                    : {
+                        pushReady: true,
+                        pushCommand: `git push origin ${baseBranch}`,
+                        pushNote: 'requireApprovalForPush is enabled — run the push command or obtain user approval before pushing.',
+                    }),
             };
         } catch (e: any) {
             return { success: false, error: e.message, refineStages };
@@ -3952,9 +3986,59 @@ export class DaemonCommandRouter {
                                 ? 'cleanup_failed'
                                 : 'merge_failed'; // fallback for unclassified failures
         const isTerminalSuccess = refineTerminalKind === 'completed';
+
+        // Build structured blocker context for task_failed ledger entries so coordinators
+        // can inspect the failure cause without parsing free-form error strings.
+        const blockerContext: Record<string, unknown> | undefined = isTerminalSuccess ? undefined : (() => {
+            const code = typeof result.code === 'string' ? result.code : refineTerminalKind;
+            const stage = refineTerminalKind === 'validation_failed' ? 'validation'
+                : refineTerminalKind === 'submodule_reachability_failed' ? 'submodule_reachability'
+                : refineCode === 'patch_equivalence_failed' ? 'patch_equivalence'
+                : refineCode === 'needs_rebase' || refineCode === 'needs_rebase_with_conflicts' ? 'patch_equivalence'
+                : refineTerminalKind === 'merge_failed' ? 'merge'
+                : refineTerminalKind === 'cleanup_failed' ? 'cleanup'
+                : 'unknown';
+            const ctx: Record<string, unknown> = {
+                stage,
+                reason: code,
+                terminalKind: refineTerminalKind,
+            };
+            if (typeof result.error === 'string') ctx.error = result.error;
+            if (typeof result.blockedReason === 'string') ctx.blockedReason = result.blockedReason;
+            // Patch equivalence details
+            if (stage === 'patch_equivalence' && result.patchEquivalence) {
+                const pe = result.patchEquivalence as Record<string, unknown>;
+                ctx.details = {
+                    expectedPatchId: pe.expectedPatchId,
+                    actualPatchId: pe.actualPatchId,
+                    status: pe.status,
+                    actionableHint: pe.actionableHint,
+                    error: pe.error,
+                };
+            }
+            // Submodule reachability details
+            if (stage === 'submodule_reachability' && Array.isArray(result.unreachableSubmoduleCommits)) {
+                ctx.details = {
+                    unreachableCount: (result.unreachableSubmoduleCommits as unknown[]).length,
+                    paths: (result.unreachableSubmoduleCommits as Array<Record<string, unknown>>).map(e => e.path),
+                    autoPublishAllowed: (result.unreachableSubmoduleCommits as Array<Record<string, unknown>>)[0]?.autoPublishAllowed,
+                };
+            }
+            // Validation details
+            if (stage === 'validation' && result.validationSummary) {
+                const vs = result.validationSummary as Record<string, unknown>;
+                ctx.details = {
+                    failureCode: vs.failureCode,
+                    commandsRun: Array.isArray(vs.commandsRun) ? vs.commandsRun.length : undefined,
+                };
+            }
+            return ctx;
+        })();
+
         const normalizedResult = {
             ...result,
             terminalKind: refineTerminalKind,
+            ...(blockerContext ? { blockerContext } : {}),
             ...(result.nextStep === undefined && !isTerminalSuccess ? {
                 nextStep: refineTerminalKind === 'blocked_review'
                     ? 'Request user review/approval before attempting to merge again.'
