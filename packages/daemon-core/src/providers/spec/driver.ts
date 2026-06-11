@@ -230,6 +230,12 @@ export class SpecDriver {
     private completionIdleKey = '';
     /** Previous screen lines — passed to evaluate() for `changed` condition detection. */
     private prevScreenLines: string[] = [];
+    /** Timestamp when idle was last committed (either direct or via idle_hold_ms).
+     *  Used to suppress immediate idle → busy re-entry from transient `changed`
+     *  condition blips (e.g. completion-marker counter "Completed for Xs" updating
+     *  every second, which triggers cursor_above:changed and bounces back to busy
+     *  right after an idle commit). */
+    private lastIdleCommittedAt = 0;
     /** Timestamp of the last PTY frame that changed the screen content.
      *  Used by screen_active_hold_ms to suppress idle downshifts while
      *  the terminal is still actively updating. */
@@ -303,7 +309,7 @@ export class SpecDriver {
             case 'click_modal_button': this.handleClickModalButton(cmd.index); return;
             case 'attach_image': this.handleAttachImage(cmd.blob, cmd.mime); return;
             case 'resize': this.adapter.resize(cmd.cols, cmd.rows); return;
-            case 'cancel': this.adapter.send_keys('\x03'); return;
+            case 'cancel': this.lastIdleCommittedAt = 0; this.adapter.send_keys('\x03'); return;
             case 'shutdown': this.shutdown(); return;
         }
     }
@@ -595,6 +601,29 @@ export class SpecDriver {
             evState = this.lastBusyState ?? evState;
         }
 
+        // Idle → busy re-entry hold: suppress false-busy transitions that fire
+        // immediately after an idle commit. The most common source is the
+        // `cursor_above: 3, changed: true` condition matching tiny updates
+        // (e.g. "✻ Completed for Ns" counter ticking once per second) right
+        // after the completion hold expired and idle was committed. Without
+        // this guard the dashboard bounces back to generating within 1s of
+        // seeing idle.
+        //
+        // Guard window: prefer screen_active_hold_ms (already the "micro-change
+        // suppressor" window), floor to 1500ms so specs that omit it still
+        // get protection. This is intentionally shorter than busy_hold_ms —
+        // a real new generation (user types a message) will produce many
+        // more decisive signals (spinner, token counter, esc-to-interrupt)
+        // that override the hold long before it expires.
+        const idleReentryHoldMs = Math.max(screenActiveMs, 1500);
+        if (evState.id === 'busy' && this.currentStateId === (this.spec.default_state ?? 'idle')
+                && this.lastIdleCommittedAt > 0
+                && (now - this.lastIdleCommittedAt) < idleReentryHoldMs) {
+            LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] idle→busy suppressed (idle_reentry_hold ageMs=${now - this.lastIdleCommittedAt} holdMs=${idleReentryHoldMs})`);
+            this.scheduleBusyExpiry(idleReentryHoldMs - (now - this.lastIdleCommittedAt) + 50);
+            return;
+        }
+
         if (evState.id === 'busy') {
             this.lastBusyAt = Date.now();
             this.lastBusyState = evState;
@@ -661,6 +690,7 @@ export class SpecDriver {
                     this.pendingIdleState = null;
                     if (!committed) return;
                     LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] idleHold committed after ${idleHoldMs}ms`);
+                    this.lastIdleCommittedAt = Date.now();
                     this.currentStateId = committed.id;
                     this.currentEval = capturedEv;
                     this.pushHistory(committed.id, committed.label, {
@@ -721,6 +751,9 @@ export class SpecDriver {
             }
         }
         if (changed) {
+            if (evState.id === (this.spec.default_state ?? 'idle')) {
+                this.lastIdleCommittedAt = Date.now();
+            }
             this.currentStateId = evState.id;
             const matchedRules = extractMatchedRules(ev);
             // Determine reason and debounce kind for this transition
@@ -799,6 +832,9 @@ export class SpecDriver {
             this.pendingSends.push(text);
             return;
         }
+        // Clear the idle re-entry hold so a new generation starting
+        // immediately after idle doesn't get its busy state suppressed.
+        this.lastIdleCommittedAt = 0;
         this.actuallySendMessage(text);
     }
 
