@@ -113,6 +113,10 @@ function condKind(c: FsmCond): CondKind {
 
 export interface PreviewMap { [path: string]: { result: boolean; detail?: string } | 'loading' }
 
+/** Resolved-section preview: per-section line range + captured text. */
+export interface SectionPreview { id: string; fromLine: number; toLine: number; text: string }
+export type SectionPreviewState = { sections: SectionPreview[]; screenLineCount: number } | 'loading' | { error: string } | null
+
 interface CondProps {
     cond: FsmCond
     path: string
@@ -299,12 +303,17 @@ function NumField({ label, value, onChange }: { label: string; value: number; on
 // section text against the live screen via the regex-preview path (we wrap the
 // section's own bounds into a throwaway condition the parent can evaluate).
 
-function SectionsEditor({ sections, otherSectionIds, onChange }: {
+function SectionsEditor({ sections, otherSectionIds, onChange, onTest, testResult }: {
     sections: Record<string, SectionDefModel>
     otherSectionIds: (self: string) => string[]
     onChange: (next: Record<string, SectionDefModel>) => void
+    onTest: () => void
+    testResult: SectionPreviewState
 }) {
     const ids = Object.keys(sections)
+    const previewById = (testResult && testResult !== 'loading' && !('error' in testResult))
+        ? Object.fromEntries(testResult.sections.map(s => [s.id, s]))
+        : {}
 
     const renameSection = (oldId: string, newId: string) => {
         if (!newId || newId === oldId || sections[newId]) return
@@ -330,10 +339,19 @@ function SectionsEditor({ sections, otherSectionIds, onChange }: {
                 <span className="text-zinc-600 text-[10px]">— how the screen is split; conditions match against these</span>
                 <button
                     type="button"
-                    className="ml-auto text-[10px] text-zinc-300 hover:text-white px-1.5 py-0.5 rounded border border-zinc-700 hover:bg-zinc-700/40"
+                    className="ml-auto text-[10px] text-sky-300 hover:text-sky-100 px-1.5 py-0.5 rounded border border-sky-700/40 hover:bg-sky-600/20"
+                    onClick={onTest}
+                    title="Resolve all sections against the live session screen"
+                >{testResult === 'loading' ? 'testing…' : 'test on live screen'}</button>
+                <button
+                    type="button"
+                    className="text-[10px] text-zinc-300 hover:text-white px-1.5 py-0.5 rounded border border-zinc-700 hover:bg-zinc-700/40"
                     onClick={addSection}
                 >+ section</button>
             </div>
+            {testResult && testResult !== 'loading' && 'error' in testResult && (
+                <div className="text-red-300 bg-red-900/30 border border-red-700/40 rounded p-1.5 text-[10px] mb-1">{testResult.error}</div>
+            )}
             <div className="space-y-1.5">
                 {ids.map(id => {
                     const def = sections[id]
@@ -394,6 +412,19 @@ function SectionsEditor({ sections, otherSectionIds, onChange }: {
                                     </div>
                                 </div>
                             )}
+
+                            {/* Live preview: what this section actually captures */}
+                            {previewById[id] && (
+                                <div className="border-t border-zinc-700/50 pt-1">
+                                    <div className="text-[9px] text-zinc-500 mb-0.5">
+                                        captured lines {previewById[id].fromLine}–{previewById[id].toLine}
+                                        {previewById[id].text.trim() === '' && <span className="text-amber-400 ml-1">(empty — check bounds)</span>}
+                                    </div>
+                                    <pre className="font-mono text-[10px] text-zinc-300 whitespace-pre-wrap break-all bg-black/40 rounded border border-zinc-700/50 px-2 py-1 max-h-28 overflow-y-auto">
+                                        {previewById[id].text || '(empty)'}
+                                    </pre>
+                                </div>
+                            )}
                         </div>
                     )
                 })}
@@ -444,9 +475,11 @@ interface Props {
     onChange: (next: SpecModel) => void
     onPreview: (path: string, cond: FsmCond) => void
     preview: PreviewMap
+    onTestSections: (sections: Record<string, SectionDefModel>) => void
+    sectionPreview: SectionPreviewState
 }
 
-export default function SpecFormBuilder({ model, onChange, onPreview, preview }: Props) {
+export default function SpecFormBuilder({ model, onChange, onPreview, preview, onTestSections, sectionPreview }: Props) {
     const stateIds = model.states.map(s => s.id)
     const sectionIds = Object.keys(model.sections ?? {})
 
@@ -464,6 +497,8 @@ export default function SpecFormBuilder({ model, onChange, onPreview, preview }:
                 sections={model.sections ?? {}}
                 otherSectionIds={(self) => sectionIds.filter(s => s !== self)}
                 onChange={sections => patch({ sections })}
+                onTest={() => onTestSections(model.sections ?? {})}
+                testResult={sectionPreview}
             />
 
             {/* States */}

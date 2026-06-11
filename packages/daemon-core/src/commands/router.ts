@@ -4803,6 +4803,36 @@ export class DaemonCommandRouter {
                 }
             }
 
+            // ── Resolve a sections map against a live session's screen — the
+            //    section editor's "test" button. Returns, for each section id,
+            //    the line range + the text it captures, so the author can SEE
+            //    whether a from_top/until/anchor definition carves the screen
+            //    the way they intend. Accepts an in-progress sections map so it
+            //    previews unsaved edits.
+            case 'resolve_section_preview': {
+                const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim()
+                    : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
+                if (!sessionId) return { success: false, error: 'targetSessionId required' };
+                if (!args?.sections || typeof args.sections !== 'object') return { success: false, error: 'sections map required' };
+                const target = this.deps.sessionRegistry.get(sessionId);
+                if (!target) return { success: false, error: 'Session not found', sessionId };
+                const adapterObj = this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter as any;
+                const snap = adapterObj && typeof adapterObj.getDebugSnapshot === 'function' ? adapterObj.getDebugSnapshot() : null;
+                if (!snap?.screen) return { success: false, error: 'no live screen for session' };
+                const { resolveSections } = await import('../providers/spec/evaluator.js');
+                try {
+                    const lines = String(snap.screen).split('\n').map((l: string) => l.endsWith('\r') ? l.slice(0, -1) : l);
+                    const resolved = resolveSections(args.sections as any, lines);
+                    return {
+                        success: true,
+                        screenLineCount: lines.length,
+                        sections: resolved.map(s => ({ id: s.id, fromLine: s.fromLine, toLine: s.toLine, text: s.text })),
+                    };
+                } catch (e) {
+                    return { success: false, error: `resolve failed: ${(e as Error).message}` };
+                }
+            }
+
             // ── User-level coordinator-prompt files (~/.adhdev/coordinator-prompts/).
             //    These live on this daemon's filesystem and never sync to the
             //    cloud / other daemons — they're per-machine config. The

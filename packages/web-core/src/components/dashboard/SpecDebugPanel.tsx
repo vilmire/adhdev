@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTransport } from '../../context/TransportContext'
 import type { ActiveConversation } from './types'
-import SpecFormBuilder, { type SpecModel, type FsmCond, type PreviewMap } from './SpecFormBuilder'
+import SpecFormBuilder, { type SpecModel, type FsmCond, type PreviewMap, type SectionDefModel, type SectionPreviewState } from './SpecFormBuilder'
 
 interface StateHistoryEntry {
     stateId: string
@@ -211,6 +211,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
     const [saveError, setSaveError] = useState<string | null>(null)
     const [validationErrors, setValidationErrors] = useState<string[]>([])
     const [preview, setPreview] = useState<PreviewMap>({})
+    const [sectionPreview, setSectionPreview] = useState<SectionPreviewState>(null)
     const [autoRefresh, setAutoRefresh] = useState(false)
 
     const daemonId = activeConv.daemonId || activeConv.routeId?.split(':')[0] || activeConv.routeId || ''
@@ -319,6 +320,24 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
             }
         } catch (e: any) {
             setPreview(p => ({ ...p, [path]: { result: false, detail: e?.message } }))
+        }
+    }, [sendCommand, daemonId, sessionId])
+
+    // Resolve the whole sections map against the live screen — shows what each
+    // section actually captures (line range + text).
+    const onTestSections = useCallback(async (sections: Record<string, SectionDefModel>) => {
+        setSectionPreview('loading')
+        try {
+            const raw = await sendCommand(daemonId, 'resolve_section_preview', { targetSessionId: sessionId, sections })
+            const env = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+            const inner = (env.result && typeof env.result === 'object' ? env.result : env) as { success?: boolean; sections?: any[]; screenLineCount?: number; error?: string }
+            if (!inner?.success || !Array.isArray(inner.sections)) {
+                setSectionPreview({ error: inner?.error || 'resolve failed' })
+            } else {
+                setSectionPreview({ sections: inner.sections, screenLineCount: inner.screenLineCount ?? 0 })
+            }
+        } catch (e: any) {
+            setSectionPreview({ error: e?.message || String(e) })
         }
     }, [sendCommand, daemonId, sessionId])
 
@@ -551,7 +570,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     className="w-full h-full min-h-[300px] font-mono text-[11px] leading-relaxed bg-black/40 text-zinc-200 border border-zinc-700 rounded p-3 resize-none outline-none focus:border-sky-500/50"
                                 />
                             ) : (
-                                <SpecFormBuilder model={specModel} onChange={onModelChange} onPreview={onPreview} preview={preview} />
+                                <SpecFormBuilder model={specModel} onChange={onModelChange} onPreview={onPreview} preview={preview} onTestSections={onTestSections} sectionPreview={sectionPreview} />
                             )}
                         </div>
                         <div className="text-[10px] text-zinc-500 shrink-0">
