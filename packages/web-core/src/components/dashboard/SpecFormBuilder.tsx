@@ -553,11 +553,13 @@ export default function SpecFormBuilder({ model, onChange, onPreview, preview }:
                                     >
                                         {stateIds.map(s => <option key={s} value={s}>{s}</option>)}
                                     </select>
+                                    <span className="text-[10px] text-zinc-500 ml-1">label</span>
                                     <input
                                         value={t.label ?? ''}
                                         onChange={e => updateTransition(i, { label: e.target.value || undefined })}
-                                        placeholder="label"
-                                        className="flex-1 min-w-[80px] bg-black/40 text-zinc-300 text-[10px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                        placeholder="debug name only (optional)"
+                                        title="Display name shown in the debug history/transition table. Does not affect behaviour."
+                                        className="flex-1 min-w-[120px] bg-black/40 text-zinc-300 text-[10px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
                                     />
                                     <button type="button" className="text-zinc-500 hover:text-red-300 text-sm px-1" onClick={() => patch({ transitions: model.transitions.filter((_, ti) => ti !== i) })}>×</button>
                                 </div>
