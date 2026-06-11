@@ -231,7 +231,11 @@ function evaluateCondition(
         // changed:false means "region is currently stable" — stable_ms duration
         // is enforced by the driver, not here.
         const result = cond.changed ? didChange : !didChange;
-        trace.push({ kind: 'section', text: `state[${stateId}] changed cond cursor_above=${cond.cursor_above} rows[${startRow},${endRow}) changed=${didChange} expected=${cond.changed} result=${result}` });
+        const stableSuffix = cond.stable_ms != null ? ` stable_ms=${cond.stable_ms}` : '';
+        trace.push({
+            kind: result ? 'state_match' : 'state_skip',
+            text: `state[${stateId}] changed cond cursor_above=${cond.cursor_above} rows[${startRow},${endRow}) changed=${didChange} expected=${cond.changed}${stableSuffix} result=${result}`,
+        });
         return result;
     }
 
