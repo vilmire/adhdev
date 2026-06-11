@@ -535,6 +535,19 @@ export class SpecDriver {
                 evState = this.lastBusyState ?? evState;
             }
         }
+        // Startup grace: suppress idle→busy transitions during the banner-paint
+        // window. The spec author sets startup_grace_ms to cover the time the
+        // terminal spends drawing its initial screen; any busy signal during
+        // that window is noise (cursor_above:changed, layout reflow, etc.).
+        const graceMs = this.spec.debounce?.startup_grace_ms ?? STARTUP_GRACE_MS;
+        const sinceStartMs = now - this.startedAtMs;
+        if (sinceStartMs < graceMs
+                && evState.id === 'busy'
+                && this.currentStateId === (this.spec.default_state ?? 'idle')) {
+            LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] startup grace suppressed idle→busy (sinceStart=${sinceStartMs}ms grace=${graceMs}ms)`);
+            evState = { id: this.spec.default_state ?? 'idle', label: 'Ready', title: null };
+            this.scheduleBusyExpiry(graceMs - sinceStartMs + 50);
+        }
         // stable_ms gate: if the matched idle state has a changed:false/stable_ms
         // condition, verify the region has been stable long enough. If not, pin
         // to busy and schedule a re-evaluation when the stable window expires.
@@ -783,8 +796,7 @@ export class SpecDriver {
         // reading during the banner paint as a real idle. After that,
         // the first non-busy observation is a real prompt-ready signal
         // and we drain any queued send_message calls.
-        const graceMs = this.spec.debounce?.startup_grace_ms ?? STARTUP_GRACE_MS;
-        const sinceStart = Date.now() - this.startedAtMs;
+        const sinceStart = now - this.startedAtMs;
         if (!this.idleSeenOnce && evState.id !== 'busy' && sinceStart >= graceMs) {
             this.idleSeenOnce = true;
             const queued = this.pendingSends.splice(0);
