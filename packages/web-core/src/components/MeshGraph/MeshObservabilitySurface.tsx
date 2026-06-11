@@ -877,12 +877,12 @@ export default function MeshObservabilitySurface({
 
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
-        <div className="flex flex-col gap-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-4">
             {/* ── Card: header + graph + detail panel ── */}
-            <div className={`${meshTheme.cardClass} flex flex-col overflow-hidden rounded-[28px]`} style={{ minHeight: 480 }}>
+            <div className={`${meshTheme.cardClass} relative flex min-h-0 flex-1 flex-col rounded-[28px]`} style={{ minHeight: 480 }}>
 
-                {/* Header — always static, never absolute */}
-                <div className={`shrink-0 flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2.5 border-b ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                {/* Header — floats as overlay on mobile, static on sm+ */}
+                <div className={`absolute inset-x-4 top-4 z-30 max-h-[42dvh] overflow-y-auto sm:static sm:mb-3 sm:overflow-visible shrink-0 flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2.5 border-b ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
                     <div className={`flex min-w-0 flex-1 flex-wrap gap-2 text-xs ${meshTheme.textSecondary}`}>
                         <Badge label={headlineLabel} tone={headlineTone} />
                         {canonicalGraph.stats.blockedReviewNodes > 0 && (
@@ -1040,7 +1040,8 @@ export default function MeshObservabilitySurface({
 
                     {/* Right sidebar — selected node detail */}
                     {selectedGraphNode && detailSelection?.kind === 'node' && (
-                        <div className={`w-72 shrink-0 overflow-y-auto border-l p-4 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                        <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 sm:relative sm:inset-auto sm:w-72 sm:shrink-0 overflow-y-auto border-l p-4 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                            <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Selected node</div>
                             <div className="mb-3 flex items-start justify-between gap-2">
                                 <div className="min-w-0">
                                     <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphNode.label}</div>
@@ -1096,6 +1097,12 @@ export default function MeshObservabilitySurface({
                                 <Row label="Workspace" value={selectedNodeStatus?.workspace ?? selectedGraphNode.workspace} />
                                 {selectedHeadSummary && (
                                     <Row label="HEAD" value={selectedHeadSummary} />
+                                )}
+                                {(selectedGraphNode.dirtyFiles > 0 || selectedGraphNode.ahead > 0 || selectedGraphNode.behind > 0) && (
+                                    <Row label="Dirty/ahead/behind" value={`${selectedGraphNode.dirtyFiles}/${selectedGraphNode.ahead}/${selectedGraphNode.behind}`} />
+                                )}
+                                {selectedNodeSessionEntries.length > 0 && (
+                                    <Row label="Sessions" value={String(selectedNodeSessionEntries.length)} />
                                 )}
                                 {selectedGraphNode.upstream && (
                                     <Row label="Upstream" value={selectedGraphNode.upstream} />

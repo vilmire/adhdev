@@ -44,7 +44,7 @@ describe('MeshObservabilitySurface', () => {
 
   it('keeps mobile graph status badges as an in-graph floating overlay instead of a layout-blocking header', () => {
     const source = fs.readFileSync(
-      path.join(process.cwd(), 'src/components/MeshGraph/MeshObservabilitySurface.tsx'),
+      path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface.tsx'),
       'utf8',
     )
 
@@ -96,7 +96,7 @@ describe('MeshObservabilitySurface', () => {
     expect(graph.nodes.some(node => node.upstreamStatus === 'stale')).toBe(true)
 
     const source = fs.readFileSync(
-      path.join(process.cwd(), 'src/components/MeshGraph/MeshGraphView.tsx'),
+      path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshGraphView.tsx'),
       'utf8',
     )
     expect(source).toContain("upstream unverified")
@@ -276,7 +276,7 @@ describe('MeshObservabilitySurface', () => {
 
   it('keeps selected detail on the same canonical graph node used for rendering', () => {
     const source = fs.readFileSync(
-      path.join(process.cwd(), 'src/components/MeshGraph/MeshObservabilitySurface.tsx'),
+      path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface.tsx'),
       'utf8',
     )
     expect(source).toContain('const statusGraphFingerprint = useMemo(() => getRepoMeshStatusGraphFingerprint(canonicalStatus), [canonicalStatus])')

@@ -1010,6 +1010,12 @@ type DirectionPref = 'auto' | 'LR' | 'TB'
 
 const MINIMAP_NODE_THRESHOLD = 12
 
+function getGraphMinHeightClass(nodeCount: number): string {
+    if (nodeCount >= 16) return 'min-h-[720px]'
+    if (nodeCount >= 10) return 'min-h-[580px]'
+    return 'min-h-[460px]'
+}
+
 export default function MeshGraphView({
     data,
     selectedNodeId = null,
@@ -1102,7 +1108,8 @@ export default function MeshGraphView({
         <MeshGraphThemeContext.Provider value={meshTheme}>
         <MeshGraphCompactContext.Provider value={compact}>
         <MeshGraphDirectionContext.Provider value={direction}>
-        <div ref={surfaceRef} className={`${meshTheme.graphShellClass}`} style={{ height: '100%' }}>
+        <div ref={surfaceRef} className={`${meshTheme.graphShellClass} ${getGraphMinHeightClass(data.nodes.length)}`} style={{ height: '100%' }}>
+            <div className={`pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 px-3 py-1 text-[10px] ${meshTheme.graphStatChipClass}`}>drag or scroll to pan</div>
             <div className="w-full min-w-0 flex-1" style={{ height: '100%' }}>
                 <ReactFlow<FlowNode, FlowEdge>
                     nodes={nodes}
