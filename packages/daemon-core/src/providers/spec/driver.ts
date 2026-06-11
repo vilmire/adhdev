@@ -65,6 +65,45 @@ export type DashboardCommand =
     | { kind: 'cancel' }
     | { kind: 'shutdown' };
 
+/** One state-history entry — the union of fields produced by the v3 SpecDriver
+ *  (debounce-based) and the v4 FsmDriver (transition-based). The cli-adapter
+ *  and debug panel read this shape from either driver. */
+export interface DriverHistoryEntry {
+    stateId: string;
+    label: string;
+    at: number;
+    durationMs: number;
+    reason: string;
+    matchedStateId?: string;
+    matchedRules?: string[];
+    debounceKind?: string;
+    idleHoldMs?: number;
+    busyHoldMs?: number;
+    /** v4: the transition that fired, e.g. "idle→busy". */
+    via?: string;
+}
+
+/** The surface the cli-adapter drives. Implemented by both SpecDriver (v3,
+ *  debounce) and FsmDriver (v4, FSM). Lets the adapter hold either without
+ *  branching on the concrete type. */
+export interface ISpecDriver {
+    subscribe(listener: (ev: DashboardEvent) => void): () => void;
+    start(): void;
+    dispatch(cmd: DashboardCommand): void;
+    snapshot(): string;
+    getCursorPosition(): { row: number; col: number };
+    getScreen(): string;
+    getSpecPath(): string;
+    shutdown(): void;
+    getStateHistory(): ReadonlyArray<DriverHistoryEntry>;
+    getSections(): Array<{ id: string; text: string }> | null;
+    getLastBusyAt(): number;
+    hasIdleHoldPending(): boolean;
+    getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null;
+    /** v4 only — present on FsmDriver. Returns the live transition table. */
+    getFsmDebug?(): unknown;
+}
+
 export interface SpecDriverOpts {
     specPath: string;
     workingDir: string;
@@ -195,7 +234,7 @@ export function matchesCompletionIdleTargetState(
     }
 }
 
-export class SpecDriver {
+export class SpecDriver implements ISpecDriver {
     private spec!: CliSpec;
     private adapter!: TerminalAdapter;
     private listeners = new Set<(ev: DashboardEvent) => void>();
@@ -541,10 +580,10 @@ export class SpecDriver {
         // that window is noise (cursor_above:changed, layout reflow, etc.).
         const graceMs = this.spec.debounce?.startup_grace_ms ?? STARTUP_GRACE_MS;
         const sinceStartMs = now - this.startedAtMs;
-        if (sinceStartMs < graceMs
-                && evState.id === 'busy'
-                && (this.currentStateId === null || this.currentStateId === (this.spec.default_state ?? 'idle'))) {
-            LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] startup grace suppressed idle→busy (sinceStart=${sinceStartMs}ms grace=${graceMs}ms)`);
+        // Startup grace: suppress all busy transitions during the banner-paint
+        // window regardless of current state.
+        if (sinceStartMs < graceMs && evState.id === 'busy') {
+            LOG.info('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] startup grace suppressed busy (sinceStart=${sinceStartMs}ms grace=${graceMs}ms)`);
             evState = { id: this.spec.default_state ?? 'idle', label: 'Ready', title: null };
             this.scheduleBusyExpiry(graceMs - sinceStartMs + 50);
         }
@@ -1026,7 +1065,7 @@ function sectionTextFromSnapshot(spec: CliSpec, screen: string, sectionId: strin
     return ev.sections.find(s => s.id === sectionId)?.text ?? null;
 }
 
-function guessExt(mime: string): string {
+export function guessExt(mime: string): string {
     if (/png/i.test(mime)) return '.png';
     if (/jpe?g/i.test(mime)) return '.jpg';
     if (/gif/i.test(mime)) return '.gif';

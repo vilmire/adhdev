@@ -15,6 +15,36 @@ interface StateHistoryEntry {
     busyHoldMs?: number
 }
 
+/** v4 FSM live condition-eval node (mirrors fsm-evaluator CondResult). */
+interface FsmCondNode {
+    kind: string
+    result: boolean
+    detail: string
+    remainingMs?: number
+    children?: FsmCondNode[]
+}
+
+/** v4 FSM live transition row (mirrors fsm-evaluator TransitionEval). */
+interface FsmTransitionEval {
+    to: string
+    label: string
+    holdSatisfied: boolean
+    holdRemainingMs: number
+    condResult: boolean
+    cond?: FsmCondNode
+    fires: boolean
+    priority: number
+}
+
+interface FsmDebug {
+    currentState: string
+    label: string
+    stateAgeMs: number
+    status: string
+    cursor: { row: number; col: number }
+    transitions: FsmTransitionEval[]
+}
+
 interface SpecSnapshot {
     cliType: string
     spec_id: string
@@ -30,6 +60,8 @@ interface SpecSnapshot {
     lastBusyAt: number
     cursorPosition?: { row: number; col: number } | null
     completionIdleDebounce?: { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null
+    /** v4 FSM live transition table (null for v3 debounce specs). */
+    fsm?: FsmDebug | null
     // Extended fields
     name?: string
     status?: string
@@ -106,6 +138,59 @@ function Divider() {
     return <div className="border-t border-white/8 my-2" />
 }
 
+/** Recursive render of an FSM condition-eval tree — shows each leaf's match
+ *  result and any time countdown so "why isn't it transitioning" is visible. */
+function CondTree({ node, depth = 0 }: { node: FsmCondNode; depth?: number }) {
+    const color = node.result ? 'text-green-300' : 'text-zinc-500'
+    const dot = node.result ? '●' : '○'
+    return (
+        <div style={{ marginLeft: depth * 10 }} className="font-mono text-[10px] leading-relaxed">
+            <span className={color}>{dot} </span>
+            <span className="text-zinc-400">{node.kind}</span>
+            <span className="text-zinc-500"> {node.detail}</span>
+            {node.remainingMs != null && node.remainingMs > 0 && (
+                <span className="text-amber-300"> ({node.remainingMs}ms left)</span>
+            )}
+            {node.children?.map((c, i) => <CondTree key={i} node={c} depth={depth + 1} />)}
+        </div>
+    )
+}
+
+/** One outgoing transition with its fire/hold/cond status. */
+function TransitionRow({ t }: { t: FsmTransitionEval }) {
+    const [open, setOpen] = useState(false)
+    const status = t.fires
+        ? 'text-green-200 bg-green-600/25 border-green-500/40'
+        : !t.holdSatisfied
+            ? 'text-amber-200 bg-amber-600/20 border-amber-500/30'
+            : 'text-zinc-400 bg-zinc-700/30 border-zinc-600/30'
+    return (
+        <div className="border border-zinc-700/50 rounded bg-zinc-800/30 overflow-hidden">
+            <button
+                type="button"
+                className="w-full flex items-center gap-2 px-2 py-1 hover:bg-zinc-700/30 text-left"
+                onClick={() => setOpen(o => !o)}
+            >
+                <span className="text-[10px] text-zinc-500 w-3">{t.cond ? (open ? '▾' : '▸') : ' '}</span>
+                <span className={`font-mono text-[11px] px-1.5 py-0.5 rounded border ${status}`}>→ {t.to}</span>
+                <span className="text-zinc-400 font-mono text-[10px] truncate">{t.label}</span>
+                <span className="ml-auto flex items-center gap-1.5 shrink-0">
+                    {t.fires && <span className="text-green-300 text-[10px] font-mono">FIRES</span>}
+                    {!t.holdSatisfied && <span className="text-amber-300 text-[10px] font-mono">hold {t.holdRemainingMs}ms</span>}
+                    <span className={`text-[10px] font-mono ${t.condResult ? 'text-green-400' : 'text-zinc-600'}`}>
+                        {t.condResult ? 'cond✓' : 'cond✗'}
+                    </span>
+                </span>
+            </button>
+            {open && t.cond && (
+                <div className="px-3 pb-1.5 pt-0.5 bg-black/30 border-t border-zinc-700/50">
+                    <CondTree node={t.cond} />
+                </div>
+            )}
+        </div>
+    )
+}
+
 export default function SpecDebugPanel({ activeConv, onClose }: Props) {
     const { sendCommand } = useTransport()
     const [loading, setLoading] = useState(true)
@@ -114,6 +199,14 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
     const [showScreen, setShowScreen] = useState(false)
     const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['footer']))
     const [snapshotLabel, setSnapshotLabel] = useState<'Snapshot' | 'Copied!'>('Snapshot')
+
+    // ── Live spec editor (load file → edit → save → driver hot-reloads) ──
+    const [editing, setEditing] = useState(false)
+    const [specSource, setSpecSource] = useState('')
+    const [specDirty, setSpecDirty] = useState(false)
+    const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+    const [saveError, setSaveError] = useState<string | null>(null)
+    const [autoRefresh, setAutoRefresh] = useState(false)
 
     const daemonId = activeConv.daemonId || activeConv.routeId?.split(':')[0] || activeConv.routeId || ''
     const sessionId = activeConv.sessionId || ''
@@ -141,11 +234,64 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
 
     useEffect(() => { void load() }, [load])
 
+    // Auto-refresh: poll the FSM debug state on an interval so transitions can
+    // be watched live. Off by default; toggled in the FSM section header.
     useEffect(() => {
-        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+        if (!autoRefresh) return
+        const iv = setInterval(() => { void load() }, 1000)
+        return () => clearInterval(iv)
+    }, [autoRefresh, load])
+
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !editing) onClose() }
         window.addEventListener('keydown', onKey)
         return () => window.removeEventListener('keydown', onKey)
-    }, [onClose])
+    }, [onClose, editing])
+
+    const openEditor = useCallback(async () => {
+        setSaveError(null)
+        setSaveState('idle')
+        try {
+            const raw = await sendCommand(daemonId, 'get_spec_source', { targetSessionId: sessionId })
+            const env = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+            const inner = (env.result && typeof env.result === 'object' ? env.result : env) as { success?: boolean; content?: string; error?: string }
+            if (!inner?.success || typeof inner.content !== 'string') {
+                setSaveError(inner?.error || 'Failed to load spec source')
+                return
+            }
+            setSpecSource(inner.content)
+            setSpecDirty(false)
+            setEditing(true)
+        } catch (e: any) {
+            setSaveError(e?.message || String(e))
+        }
+    }, [sendCommand, daemonId, sessionId])
+
+    const saveSpec = useCallback(async () => {
+        const specPath = data?.snapshot?.specPath
+        if (!specPath) { setSaveError('No spec path on this session'); return }
+        setSaveState('saving')
+        setSaveError(null)
+        try {
+            const raw = await sendCommand(daemonId, 'write_spec_source', { specPath, content: specSource })
+            const env = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+            const inner = (env.result && typeof env.result === 'object' ? env.result : env) as { success?: boolean; error?: string; validationErrors?: string[] }
+            if (!inner?.success) {
+                setSaveState('error')
+                setSaveError(inner?.validationErrors?.join('\n') || inner?.error || 'Save failed')
+                return
+            }
+            setSaveState('saved')
+            setSpecDirty(false)
+            // The driver's fs.watch hot-reloads; refresh after a beat so the
+            // new transition table shows up.
+            setTimeout(() => { void load() }, 400)
+            setTimeout(() => setSaveState('idle'), 1500)
+        } catch (e: any) {
+            setSaveState('error')
+            setSaveError(e?.message || String(e))
+        }
+    }, [sendCommand, daemonId, data?.snapshot?.specPath, specSource, load])
 
     const snap = data?.snapshot
 
@@ -253,6 +399,16 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         )}
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
+                        {snap?.specPath && (
+                            <button
+                                type="button"
+                                className={`text-[11px] transition-colors px-2 py-1 rounded border ${editing ? 'text-sky-200 bg-sky-600/25 border-sky-500/40' : 'text-zinc-300 hover:text-white hover:bg-zinc-700 border-transparent hover:border-zinc-600'}`}
+                                onClick={() => { if (editing) { setEditing(false) } else { void openEditor() } }}
+                                disabled={loading}
+                            >
+                                {editing ? 'Close Editor' : 'Edit Spec'}
+                            </button>
+                        )}
                         <button
                             type="button"
                             className="text-[11px] text-zinc-300 hover:text-white transition-colors px-2 py-1 rounded hover:bg-zinc-700 border border-transparent hover:border-zinc-600"
@@ -280,7 +436,39 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                     </div>
                 </div>
 
+                {/* Spec editor — replaces the body when active. Save writes the
+                    file, the daemon validates + the driver hot-reloads it. */}
+                {editing && (
+                    <div className="flex-1 flex flex-col min-h-0 px-4 py-3 gap-2">
+                        <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[11px] text-zinc-400 font-mono truncate flex-1" title={snap?.specPath}>{snap?.specPath}</span>
+                            {specDirty && <span className="text-amber-300 text-[10px]">unsaved</span>}
+                            <button
+                                type="button"
+                                className={`text-[11px] px-2.5 py-1 rounded border transition-colors ${saveState === 'saving' ? 'text-zinc-500 border-zinc-700' : 'text-green-200 bg-green-600/25 border-green-500/40 hover:bg-green-600/40'}`}
+                                onClick={() => { void saveSpec() }}
+                                disabled={saveState === 'saving'}
+                            >
+                                {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved ✓ (reloading)' : 'Save & Apply'}
+                            </button>
+                        </div>
+                        {saveError && (
+                            <pre className="text-red-300 bg-red-900/40 border border-red-700/50 rounded p-2 text-[10px] whitespace-pre-wrap shrink-0 max-h-28 overflow-y-auto">{saveError}</pre>
+                        )}
+                        <textarea
+                            value={specSource}
+                            onChange={e => { setSpecSource(e.target.value); setSpecDirty(true); setSaveState('idle') }}
+                            spellCheck={false}
+                            className="flex-1 min-h-0 w-full font-mono text-[11px] leading-relaxed bg-black/40 text-zinc-200 border border-zinc-700 rounded p-3 resize-none outline-none focus:border-sky-500/50"
+                        />
+                        <div className="text-[10px] text-zinc-500 shrink-0">
+                            Save validates the spec (JSON + FSM structure) then writes it; the running session hot-reloads with no restart.
+                        </div>
+                    </div>
+                )}
+
                 {/* Body */}
+                {!editing && (
                 <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-[12px]">
                     {error && (
                         <div className="text-red-300 bg-red-900/40 border border-red-700/50 rounded p-2">{error}</div>
@@ -382,6 +570,28 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                         </span>
                                     )}
                                 </div>
+                            )}
+
+                            {/* FSM live transitions (v4 only) */}
+                            {snap.fsm && (
+                                <>
+                                    <Divider />
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1.5">
+                                            <SectionLabel>FSM — outgoing from <span className="text-sky-300 font-mono normal-case">{snap.fsm.currentState}</span> (held {formatDur(snap.fsm.stateAgeMs)})</SectionLabel>
+                                            <label className="ml-auto flex items-center gap-1 text-[10px] text-zinc-500 cursor-pointer select-none mb-1.5">
+                                                <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} className="accent-sky-500" />
+                                                live
+                                            </label>
+                                        </div>
+                                        <div className="space-y-1">
+                                            {snap.fsm.transitions.length === 0 && (
+                                                <div className="text-zinc-600 text-[11px] italic px-1">no outgoing transitions (terminal state)</div>
+                                            )}
+                                            {snap.fsm.transitions.map((t, i) => <TransitionRow key={i} t={t} />)}
+                                        </div>
+                                    </div>
+                                </>
                             )}
 
                             <Divider />
@@ -528,6 +738,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         </>
                     )}
                 </div>
+                )}
             </div>
         </div>
     )

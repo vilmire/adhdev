@@ -81,7 +81,7 @@ function resolveSize(size: number | string | undefined, total: number): number {
  * Resolve v3 sections{} object into an ordered array of ResolvedSection.
  * Two-pass: first anchor/positional, then apply `until` cross-references.
  */
-function resolveSections(
+export function resolveSections(
     sectionsObj: Record<string, SectionDef>,
     lines: string[],
 ): ResolvedSection[] {
@@ -167,7 +167,7 @@ function resolveSections(
     return resolved;
 }
 
-function sectionText(sections: ResolvedSection[], sectionId: string | undefined, fullScreen: string): string {
+export function sectionText(sections: ResolvedSection[], sectionId: string | undefined, fullScreen: string): string {
     if (!sectionId) return fullScreen;
     const found = sections.find(s => s.id === sectionId);
     return found ? found.text : '';
@@ -193,7 +193,7 @@ function isAnyCondition(c: Condition): c is AnyCondition {
     return 'any' in c;
 }
 
-function evaluateCondition(
+export function evaluateCondition(
     cond: Condition,
     sections: ResolvedSection[],
     fullScreen: string,
@@ -321,7 +321,7 @@ function matchState(
     return { matched: true, title };
 }
 
-function extractTitle(
+export function extractTitle(
     rule: ExtractTitle,
     sections: ResolvedSection[],
     fullScreen: string,
@@ -362,7 +362,7 @@ function compileLinePattern(ref: { pattern: string; flags?: string }): RegExp {
     return new RegExp(ref.pattern, flags);
 }
 
-function extractButtonsFromRule(
+export function extractButtonsFromRule(
     rule: ExtractButtons,
     hay: string,
 ): { index: number; label: string; key: string }[] {

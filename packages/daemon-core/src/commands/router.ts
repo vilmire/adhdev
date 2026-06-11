@@ -4641,6 +4641,63 @@ export class DaemonCommandRouter {
                 };
             }
 
+            // ── Spec source read/write for the debug panel's live editor.
+            //    Lets the dashboard load a session's spec.json, edit it, and
+            //    save it back — the driver's fs.watch picks up the change and
+            //    hot-reloads the FSM with no restart. Writes are confined to
+            //    files under ~/.adhdev/providers to avoid arbitrary fs access.
+            case 'get_spec_source': {
+                const fsm = await import('node:fs');
+                const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim()
+                    : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
+                let specPath = typeof args?.specPath === 'string' ? args.specPath : '';
+                if (!specPath && sessionId) {
+                    const target = this.deps.sessionRegistry.get(sessionId);
+                    const adapterObj = target ? this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter : null;
+                    const snap = adapterObj && typeof (adapterObj as any).getDebugSnapshot === 'function' ? (adapterObj as any).getDebugSnapshot() : null;
+                    specPath = snap?.specPath ?? '';
+                }
+                if (!specPath) return { success: false, error: 'specPath or resolvable targetSessionId required' };
+                try {
+                    const content = fsm.readFileSync(specPath, 'utf8');
+                    return { success: true, specPath, content };
+                } catch (e) {
+                    return { success: false, error: `read failed: ${(e as Error).message}`, specPath };
+                }
+            }
+
+            case 'write_spec_source': {
+                const fsm = await import('node:fs');
+                const pathm = await import('node:path');
+                const osm = await import('node:os');
+                const specPath = typeof args?.specPath === 'string' ? args.specPath : '';
+                const content = typeof args?.content === 'string' ? args.content : '';
+                if (!specPath) return { success: false, error: 'specPath required' };
+                if (!content) return { success: false, error: 'content required' };
+                // Confine writes to the providers tree.
+                const providersRoot = pathm.join(osm.homedir(), '.adhdev', 'providers');
+                const resolved = pathm.resolve(specPath);
+                if (!resolved.startsWith(providersRoot)) {
+                    return { success: false, error: `refused: spec path must be under ${providersRoot}` };
+                }
+                // Validate JSON + (if v4) FSM structure before writing so a bad
+                // edit can't break the live session — return precise errors.
+                let parsed: unknown;
+                try { parsed = JSON.parse(content); }
+                catch (e) { return { success: false, error: `invalid JSON: ${(e as Error).message}` }; }
+                if ((parsed as any)?.$schema === 'adhdev:cli/spec@4') {
+                    const { validateFsmSpec } = await import('../providers/spec/fsm-loader.js');
+                    const errs = validateFsmSpec(parsed);
+                    if (errs.length) return { success: false, error: 'spec invalid', validationErrors: errs };
+                }
+                try {
+                    fsm.writeFileSync(resolved, content, 'utf8');
+                    return { success: true, specPath: resolved };
+                } catch (e) {
+                    return { success: false, error: `write failed: ${(e as Error).message}` };
+                }
+            }
+
             // ── User-level coordinator-prompt files (~/.adhdev/coordinator-prompts/).
             //    These live on this daemon's filesystem and never sync to the
             //    cloud / other daemons — they're per-machine config. The

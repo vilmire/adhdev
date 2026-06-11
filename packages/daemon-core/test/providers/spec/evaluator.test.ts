@@ -37,56 +37,10 @@ function loadFixture(provider: string, name: string): any {
     return JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'adhdev-providers/cli', provider, 'fixtures', name), 'utf8'));
 }
 
-describe('spec evaluator — claude-cli', () => {
-    const spec = loadSpecFor('claude-cli');
-
-    it('hits the approval state on the write-modal fixture', () => {
-        const fx = loadFixture('claude-cli', 'missed-approval-write-2026-06-04.json');
-        const ev = evaluate(spec, fx.input.screenText);
-        expect(ev.state.id).toBe('approval');
-        expect(ev.state.label).toBe('Approval requested');
-        expect(ev.state.title).toContain('create');
-        expect(ev.modal).not.toBeNull();
-        expect(ev.modal!.buttons.map(b => b.label)).toEqual([
-            'Yes',
-            "Yes, allow all edits in tmp/ during this session (shift+tab)",
-            'No',
-        ]);
-        expect(ev.modal!.buttons[0].key).toBe('1\r');
-        expect(ev.notifications.map(n => n.id)).toContain('approval_needed');
-        expect(ev.notifications[0].body).toContain('create');
-    });
-
-    it('falls back to idle on a bare prompt screen', () => {
-        const ev = evaluate(spec, '  ▘▘ ▝▝    ~/Work/adhdev\n\n❯ \n');
-        expect(ev.state.id).toBe('idle');
-        expect(ev.modal).toBeNull();
-    });
-
-    it('emits trace entries for sections and state matches', () => {
-        const fx = loadFixture('claude-cli', 'missed-approval-write-2026-06-04.json');
-        const ev = evaluate(spec, fx.input.screenText);
-        const kinds = new Set(ev.trace.map(t => t.kind));
-        expect(kinds.has('section')).toBe(true);
-        expect(kinds.has('state_match')).toBe(true);
-        expect(kinds.has('modal')).toBe(true);
-    });
-
-    it('control_bar visibility tracks the active state', () => {
-        const fx = loadFixture('claude-cli', 'missed-approval-write-2026-06-04.json');
-        const ev = evaluate(spec, fx.input.screenText);
-        const visibleIds = ev.controls.map(c => c.id);
-        // approval state — stop is busy-only, model+image are idle-only, so none visible
-        expect(visibleIds).not.toContain('stop');
-        expect(visibleIds).not.toContain('set_model');
-        expect(visibleIds).not.toContain('attach_image');
-
-        const ev2 = evaluate(spec, '\n❯ \n');
-        const idleIds = ev2.controls.map(c => c.id);
-        expect(idleIds).toContain('set_model');
-        expect(idleIds).toContain('attach_image');
-    });
-});
+// NOTE: claude-cli migrated to the v4 FSM spec (specs/4.0.json). Its state
+// detection (approval modal extraction, idle/busy transitions, control_bar
+// visibility) is now covered by fsm-evaluator.test.ts and the v4 fixture test
+// below. The v3 evaluator is still exercised against codex-cli / cursor specs.
 
 describe('spec evaluator — codex-cli', () => {
     const spec = loadSpecFor('codex-cli');
@@ -387,8 +341,9 @@ describe('spec loader — strict validation', () => {
         if (!res.ok) expect(res.errors.join('; ')).toContain('NOPE');
     });
 
-    it('accepts both providers shipped in this repo', () => {
-        expect(loadSpecResultFor('claude-cli').ok).toBe(true);
+    it('accepts the v3 providers shipped in this repo', () => {
+        // claude-cli is now v4 (FSM) — validated by fsm-loader, not this v3 loader.
         expect(loadSpecResultFor('codex-cli').ok).toBe(true);
+        expect(loadSpecResultFor('antigravity-cli').ok).toBe(true);
     });
 });

@@ -1247,29 +1247,39 @@ export class ProviderLoader {
           // Hand the resolved spec path off to route.ts via a hidden field
           // so the routing layer doesn't have to repeat the candidate walk.
           (resolved as any)._resolvedSpecPath = specPath;
-          const r = loadSpec(specPath);
+          // Extract control_bar + native_history in a schema-agnostic way.
+          // v3 goes through loadSpec (validates/migrates); v4 (FSM) reads the
+          // header fields directly from JSON since loadSpec only knows v1/v3.
+          let specControls: any[] | undefined;
+          let nh: any | undefined;
+          try {
+            const rawSpec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+            if (rawSpec?.$schema === 'adhdev:cli/spec@4') {
+              specControls = rawSpec.control_bar;
+              nh = rawSpec.native_history;
+            } else {
+              const r = loadSpec(specPath);
+              if (r.ok) { specControls = r.spec.control_bar; nh = r.spec.native_history; }
+            }
+          } catch { /* unreadable spec — leave controls/native unavailable */ }
           // Stub each control_bar entry as a provider.scripts.<id>. The
           // upstream invoke_provider_script gate checks that the script
           // name exists on provider.scripts before calling adapter.invokeScript;
           // for spec providers the *actual* dispatch happens inside
           // SpecCliAdapter.invokeScript which maps the name to control_bar.
           // The stub is just a presence marker so the gate doesn't reject.
-          if (r.ok) {
-            const controls = r.spec.control_bar ?? [];
-            if (controls.length > 0) {
-              resolved.scripts = { ...(resolved.scripts || {}) };
-              for (const ctl of controls) {
-                if (!(resolved.scripts as any)[ctl.id]) {
-                  (resolved.scripts as any)[ctl.id] = (..._args: unknown[]) => ({
-                    __spec_control: true,
-                    controlId: ctl.id,
-                    actionType: ctl.action.type,
-                  });
-                }
+          if (specControls && specControls.length > 0) {
+            resolved.scripts = { ...(resolved.scripts || {}) };
+            for (const ctl of specControls) {
+              if (!(resolved.scripts as any)[ctl.id]) {
+                (resolved.scripts as any)[ctl.id] = (..._args: unknown[]) => ({
+                  __spec_control: true,
+                  controlId: ctl.id,
+                  actionType: ctl.action.type,
+                });
               }
             }
           }
-          const nh = r.ok ? r.spec.native_history : undefined;
           if (nh) {
             let reader: ((input: any) => any) | null = null;
             let format = 'spec';

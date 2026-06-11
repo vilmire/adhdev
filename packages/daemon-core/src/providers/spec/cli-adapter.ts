@@ -18,11 +18,13 @@
  */
 'use strict';
 
-import { SpecDriver, type DashboardEvent } from './driver.js';
-import { evaluate } from './evaluator.js';
+import { SpecDriver, type DashboardEvent, type ISpecDriver } from './driver.js';
+import { FsmDriver } from './fsm-driver.js';
 import { executeNativeHistory } from './native-history-executor.js';
 import { loadSpec } from './loader.js';
+import * as fs from 'node:fs';
 import type { CliSpec } from './types.js';
+import type { NativeHistoryConfig, Control } from './types.js';
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
@@ -36,6 +38,14 @@ import {
     type InteractivePrompt,
     type InteractivePromptResponse,
 } from '../types/interactive-prompt.js';
+
+/** Peek at the spec's $schema to choose the driver. Cheap header read. */
+function detectV4Schema(specPath: string): boolean {
+    try {
+        const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+        return raw?.$schema === 'adhdev:cli/spec@4';
+    } catch { return false; }
+}
 
 function stripAnsi(text: string): string {
     // eslint-disable-next-line no-control-regex
@@ -59,8 +69,14 @@ export class SpecCliAdapter implements CliAdapter {
      */
     readonly chatMessagesOwnedExternally = true as const;
 
-    private driver: SpecDriver;
-    private spec: CliSpec;
+    private driver: ISpecDriver;
+    /** Common spec fields the adapter reads, present in both v3 and v4. */
+    private spec: {
+        id: string;
+        name: string;
+        control_bar?: Control[];
+        native_history?: NativeHistoryConfig;
+    };
     private lastEvent: DashboardEvent | null = null;
     private latestState: { id: string; label: string; title: string | null } | null = null;
     private latestModal: { title: string | null; buttons: { index: number; label: string }[] } | null = null;
@@ -97,9 +113,30 @@ export class SpecCliAdapter implements CliAdapter {
         extraEnv: Record<string, string>,
         transportFactory?: PtyTransportFactory,
     ) {
-        const res = loadSpec(specPath);
-        if (!res.ok) throw new Error(`spec invalid (${specPath}): ${res.errors.join('; ')}`);
-        this.spec = res.spec;
+        // Detect the spec schema version up front. v4 (FSM) and v3 (debounce)
+        // use different drivers behind the same ISpecDriver interface.
+        const isV4 = detectV4Schema(specPath);
+
+        if (isV4) {
+            // v4 loader runs inside FsmDriver; read the common header fields
+            // we need here directly from the parsed JSON.
+            const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+            this.spec = {
+                id: raw.id,
+                name: raw.name,
+                control_bar: raw.control_bar,
+                native_history: raw.native_history,
+            };
+        } else {
+            const res = loadSpec(specPath);
+            if (!res.ok) throw new Error(`spec invalid (${specPath}): ${res.errors.join('; ')}`);
+            this.spec = {
+                id: res.spec.id,
+                name: res.spec.name,
+                control_bar: res.spec.control_bar,
+                native_history: res.spec.native_history,
+            };
+        }
         this.cliType = this.spec.id;
         this.cliName = this.spec.name;
         this.workingDir = workingDir;
@@ -107,11 +144,11 @@ export class SpecCliAdapter implements CliAdapter {
 
         // cli-manager.ts allocates providerSessionId per launch and threads
         // it through resume.newSessionArgs as additional cliArgs (e.g.
-        // ["--session-id", "<uuid>"]). We must hand those to SpecDriver
+        // ["--session-id", "<uuid>"]). We must hand those to the driver
         // so the agent uses the daemon's id, otherwise (claude case) the
         // agent generates its own id and the chat-history pipeline can't
         // pair the on-disk transcript with the live session.
-        this.driver = new SpecDriver({
+        const driverOpts = {
             specPath,
             workingDir,
             extraEnv,
@@ -119,7 +156,8 @@ export class SpecCliAdapter implements CliAdapter {
             emitTrace: false,
             transportFactory,
             extraCliArgs: cliArgs,
-        });
+        };
+        this.driver = isV4 ? new FsmDriver(driverOpts) : new SpecDriver(driverOpts);
         this.driver.subscribe((ev) => this.handleEvent(ev));
     }
 
@@ -362,6 +400,10 @@ export class SpecCliAdapter implements CliAdapter {
             specPath: this.driver.getSpecPath(),
             cursorPosition: this.driver.getCursorPosition(),
             completionIdleDebounce: this.driver.getCompletionIdleDebounceState(),
+            // v4 FSM live transition table (null for v3 specs). Every outgoing
+            // transition from the current state with its per-condition match
+            // result + countdown — the canonical "why isn't it moving" answer.
+            fsm: this.driver.getFsmDebug?.() ?? null,
             // Extended fields
             name: this.cliName,
             status: this.getStatus().status,
@@ -445,10 +487,10 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
-    private readCurrentScreenSections(screenText: string): Record<string, string> {
+    private readCurrentScreenSections(_screenText: string): Record<string, string> {
         try {
-            const ev = evaluate(this.spec, screenText);
-            return Object.fromEntries(ev.sections.map(section => [section.id, section.text]));
+            const sections = this.driver.getSections() ?? [];
+            return Object.fromEntries(sections.map(section => [section.id, section.text]));
         } catch {
             return {};
         }
@@ -601,7 +643,13 @@ export class SpecCliAdapter implements CliAdapter {
             providerSessionId: this.providerSessionId ?? null,
             sections: this.driver.getSections?.() ?? null,
             stateHistory: history,
-            specPath: (this.driver as any).opts?.specPath ?? null,
+            specPath: this.driver.getSpecPath?.() ?? null,
+            // v4 FSM live transition table — present only for FsmDriver. Lets
+            // the panel (and the daemon API) show, for the current instant,
+            // every outgoing transition with its per-condition match result
+            // and countdown. This is the canonical "why isn't it transitioning"
+            // answer — no screenshots needed.
+            fsm: this.driver.getFsmDebug?.() ?? null,
             messages,
             committedMessages: messages,
         };
