@@ -90,6 +90,15 @@ export type RepoMeshNodeHealth =
 export type RepoMeshSessionCleanupMode = 'preserve' | 'stop' | 'delete_stopped' | 'stop_and_delete';
 export type RepoMeshSpawnedSessionVisibility = 'visible' | 'hidden';
 
+export interface RepoMeshAutoFastForwardPolicy {
+    /** Defaults to true. Set false to disable daemon-initiated idle fast-forwards. */
+    enabled: boolean;
+    /** Maximum behind count eligible for automatic fast-forward. Missing means no limit. */
+    maxBehind?: number;
+    /** Defaults to true. Require submodule status to be clean before automatic fast-forward. */
+    requireCleanSubmodules?: boolean;
+}
+
 export interface RepoMeshPolicy {
     requirePreTaskCheckpoint: boolean;
     requirePostTaskCheckpoint: boolean;
@@ -117,6 +126,11 @@ export interface RepoMeshPolicy {
      * runtimes are never stopped/deleted unless the mesh owner opts in.
      */
     sessionCleanupOnNodeRemove?: RepoMeshSessionCleanupMode;
+    /**
+     * Daemon-initiated fast-forward for idle clean nodes that are only behind
+     * their tracked upstream. Defaults to enabled.
+     */
+    autoFastForward?: RepoMeshAutoFastForwardPolicy;
     /**
      * Maximum number of automatic retry recommendations for a failed task on the
      * same node before the daemon advises the coordinator to escalate or reassign.
@@ -171,6 +185,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     maxParallelTasks: 2,
     spawnedSessionVisibility: 'visible',
     sessionCleanupOnNodeRemove: 'preserve',
+    autoFastForward: { enabled: true },
     maxTaskRetries: 1,
 };
 
@@ -415,6 +430,10 @@ export interface RepoMeshNodeStatus {
     activeSessionDetails?: RepoMeshSessionStatus[];
     providerPriority?: string[];
     launchReady?: boolean;
+    /** True when the node is clean, ahead=0, behind>0, and safe for fast-forward consideration. */
+    autoFastForwardEligible?: boolean;
+    /** Coordinator-facing suggestion for obvious clean catch-up work. */
+    suggestedAction?: 'auto_fast_forward';
     worktreeBootstrap?: LocalMeshNodeEntry['worktreeBootstrap'];
     launchBlockedReason?: string;
     launchBlockedMessage?: string;

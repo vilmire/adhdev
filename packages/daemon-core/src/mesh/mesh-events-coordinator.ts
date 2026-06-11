@@ -349,6 +349,39 @@ function isDirtyNode(node: any): boolean {
     return node?.health === 'dirty' || node?.git?.dirty === true;
 }
 
+function resolveAutoFastForwardPolicy(mesh: any): { enabled: boolean; maxBehind?: number; requireCleanSubmodules: boolean } {
+    const record = mesh?.policy?.autoFastForward && typeof mesh.policy.autoFastForward === 'object' && !Array.isArray(mesh.policy.autoFastForward)
+        ? mesh.policy.autoFastForward as Record<string, unknown>
+        : {};
+    const maxBehind = Number(record.maxBehind);
+    return {
+        enabled: record.enabled !== false,
+        ...(Number.isFinite(maxBehind) && maxBehind >= 0 ? { maxBehind: Math.floor(maxBehind) } : {}),
+        requireCleanSubmodules: record.requireCleanSubmodules !== false,
+    };
+}
+
+function sessionStateLooksActive(state: any): boolean {
+    const status = readNonEmptyString(state?.status).toLowerCase();
+    const chatStatus = readNonEmptyString(state?.activeChat?.status).toLowerCase();
+    const active = new Set(['generating', 'streaming', 'long_generating', 'working', 'starting', 'waiting_approval']);
+    return active.has(status) || active.has(chatStatus);
+}
+
+function nodeHasActiveMeshWork(components: DaemonComponents, meshId: string, nodeId: string, currentSessionId?: string): boolean {
+    if (nodeHasActiveAssignment(meshId, nodeId)) return true;
+    return components.instanceManager.getByCategory('cli').some((inst: any) => {
+        const state = inst.getState();
+        const settings = state.settings as Record<string, unknown> || {};
+        if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
+        const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+        if (instNodeId !== nodeId) return false;
+        const sessionId = readNonEmptyString(state.instanceId);
+        if (currentSessionId && sessionId === currentSessionId && isIdleSessionState(state)) return false;
+        return sessionStateLooksActive(state);
+    });
+}
+
 function isLaunchableNode(node: any): boolean {
     if (!node || node.status === 'disabled' || node.status === 'removed') return false;
     const health = readNonEmptyString(node.health).toLowerCase();
@@ -759,6 +792,10 @@ async function maybeAutoFastForwardIdleNode(components: DaemonComponents, args: 
     if (!workspace) return;
     if (!existsSync(workspace)) return;
 
+    const policy = resolveAutoFastForwardPolicy(mesh);
+    if (!policy.enabled) return;
+    if (nodeHasActiveMeshWork(components, args.meshId, args.nodeId, args.sessionId)) return;
+
     const throttleKey = `${args.meshId}:${args.nodeId}`;
     const now = Date.now();
     const lastAttempt = idleAutoFastForwardLastAttempt.get(throttleKey) || 0;
@@ -780,6 +817,12 @@ async function maybeAutoFastForwardIdleNode(components: DaemonComponents, args: 
             trigger: 'idle_auto',
         });
         if (!dryRun || dryRun.code !== 'fast_forward_available' || dryRun.allowed !== true) return;
+        const behind = Number(dryRun.current?.behind);
+        if (policy.maxBehind !== undefined && Number.isFinite(behind) && behind > policy.maxBehind) return;
+        if (policy.requireCleanSubmodules) {
+            const submodules = Array.isArray(dryRun.current?.submodules) ? dryRun.current.submodules : [];
+            if (submodules.some((submodule: any) => submodule?.dirty || submodule?.outOfSync || submodule?.error)) return;
+        }
         await fastForwardMeshNode({
             meshId: args.meshId,
             nodeId: args.nodeId,

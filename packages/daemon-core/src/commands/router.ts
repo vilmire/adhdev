@@ -669,6 +669,25 @@ function getGitSubmoduleDriftState(git: Record<string, unknown> | null | undefin
     return { dirty, outOfSync };
 }
 
+function isInlineMeshAutoFastForwardEligible(git: Record<string, unknown> | null | undefined): boolean {
+    if (!git) return false;
+    if (readBooleanValue(git.isGitRepo) !== true) return false;
+    if (!readStringValue(git.branch)) return false;
+    if (!readStringValue(git.upstream)) return false;
+    const upstreamStatus = readStringValue(git.upstreamStatus, git.upstream_status);
+    if (upstreamStatus !== 'fresh') return false;
+    if ((readNumberValue(git.ahead) ?? 0) !== 0) return false;
+    if ((readNumberValue(git.behind) ?? 0) <= 0) return false;
+    const hasConflicts = readBooleanValue(git.hasConflicts)
+        ?? (Array.isArray(git.conflictFiles) && git.conflictFiles.length > 0);
+    if (hasConflicts) return false;
+    if ((readNumberValue(git.stashCount, git.stash_count) ?? 0) > 0) return false;
+    const submoduleDrift = getGitSubmoduleDriftState(git);
+    if (submoduleDrift.dirty || submoduleDrift.outOfSync) return false;
+    const dirty = readBooleanValue(git.dirty) ?? (countGitWorktreeChanges(git) > 0);
+    return dirty !== true && countGitWorktreeChanges(git) === 0;
+}
+
 function deriveMeshNodeHealthFromGit(git: Record<string, unknown> | null | undefined): 'online' | 'dirty' | 'degraded' {
     if (!git || readBooleanValue(git.isGitRepo) === false) return 'degraded';
     const branch = readStringValue(git.branch);
@@ -815,6 +834,12 @@ function applyInlineMeshBranchConvergence(mesh: any, node: any, status: Record<s
     status.isDirty = uncommittedChanges > 0;
     status.uncommittedChanges = uncommittedChanges;
     status.branchConvergence = buildInlineMeshBranchConvergence({ mesh, node, status });
+    status.autoFastForwardEligible = isInlineMeshAutoFastForwardEligible(git);
+    if (status.autoFastForwardEligible) {
+        status.suggestedAction = 'auto_fast_forward';
+    } else {
+        delete status.suggestedAction;
+    }
 }
 
 function summarizeInlineMeshBranchConvergence(nodes: Array<Record<string, unknown>>): Record<string, unknown> {

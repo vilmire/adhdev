@@ -885,8 +885,10 @@ describe('mesh_status', () => {
             branch: 'main',
             head: '710e11de',
             upstream: 'origin/main',
+            upstreamStatus: 'fresh',
             ahead: 0,
             behind: 5,
+            dirty: false,
             staged: 0,
             modified: 0,
             untracked: 0,
@@ -979,6 +981,8 @@ describe('mesh_status', () => {
         providers: ['hermes-cli'],
         lastSeenAt: '2026-05-20T07:00:23.000Z',
         updatedAt: '2026-05-20T07:02:58.779Z',
+        autoFastForwardEligible: true,
+        suggestedAction: 'auto_fast_forward',
       }))
       expect(remoteNode?.connection).toEqual(expect.objectContaining({
         source: 'mesh_peer_status',
@@ -996,6 +1000,7 @@ describe('mesh_status', () => {
         branch: 'main',
         head: '710e11de',
         upstream: 'origin/main',
+        upstreamStatus: 'fresh',
         ahead: 0,
         behind: 5,
         branchConvergence: expect.objectContaining({

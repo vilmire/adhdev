@@ -95,7 +95,17 @@ const SESSION_CLEANUP_MODES = new Set(['preserve', 'stop', 'delete_stopped', 'st
 const SPAWNED_SESSION_VISIBILITY_MODES = new Set(['visible', 'hidden']);
 
 function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMeshPolicy> | undefined): RepoMeshPolicy {
-    const policy: RepoMeshPolicy = { ...DEFAULT_MESH_POLICY, ...(base || {}), ...(patch || {}) };
+    const autoFastForward = normalizeAutoFastForwardPolicy({
+        ...DEFAULT_MESH_POLICY.autoFastForward,
+        ...((base?.autoFastForward && typeof base.autoFastForward === 'object') ? base.autoFastForward : {}),
+        ...((patch?.autoFastForward && typeof patch.autoFastForward === 'object') ? patch.autoFastForward : {}),
+    });
+    const policy: RepoMeshPolicy = {
+        ...DEFAULT_MESH_POLICY,
+        ...(base || {}),
+        ...(patch || {}),
+        autoFastForward,
+    };
     if (!['block', 'warn', 'checkpoint_then_continue'].includes(policy.dirtyWorkspaceBehavior)) {
         policy.dirtyWorkspaceBehavior = 'warn';
     }
@@ -109,6 +119,18 @@ function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMe
         policy.spawnedSessionVisibility = 'visible';
     }
     return policy;
+}
+
+function normalizeAutoFastForwardPolicy(value: unknown): NonNullable<RepoMeshPolicy['autoFastForward']> {
+    const record = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+    const maxBehind = Number(record.maxBehind);
+    return {
+        enabled: record.enabled !== false,
+        ...(Number.isFinite(maxBehind) && maxBehind >= 0 ? { maxBehind: Math.floor(maxBehind) } : {}),
+        requireCleanSubmodules: record.requireCleanSubmodules !== false,
+    };
 }
 
 export function listMeshes(): LocalMeshEntry[] {

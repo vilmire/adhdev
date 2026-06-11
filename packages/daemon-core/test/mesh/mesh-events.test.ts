@@ -427,6 +427,91 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('skips idle auto fast-forward when mesh policy disables it', async () => {
+    const meshId = `mesh_idle_auto_ff_disabled_${Date.now()}`
+    const workspace = fs.mkdtempSync(path.join(tmpdir(), 'adhdev-idle-auto-ff-disabled-'))
+    try {
+      __resetIdleAutoFastForwardForTests()
+      fastForwardMocks.fastForwardMeshNode.mockReset()
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace }],
+        policy: { autoFastForward: { enabled: false } },
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const nextTask = enqueueTask(meshId, 'next queued task')
+      const { components, emit } = createComponents(meshId)
+      components.cliManager = {
+        handleCliCommand: vi.fn(async () => ({ success: true })),
+      }
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:ready',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+      })
+
+      await vi.waitFor(() => {
+        expect(getQueue(meshId).find(task => task.id === nextTask.id)?.status).toBe('assigned')
+      })
+      expect(fastForwardMocks.fastForwardMeshNode).not.toHaveBeenCalled()
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('does not execute idle auto fast-forward when dry-run exceeds maxBehind policy', async () => {
+    const meshId = `mesh_idle_auto_ff_max_${Date.now()}`
+    const workspace = fs.mkdtempSync(path.join(tmpdir(), 'adhdev-idle-auto-ff-max-'))
+    try {
+      __resetIdleAutoFastForwardForTests()
+      fastForwardMocks.fastForwardMeshNode.mockReset()
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace }],
+        policy: { autoFastForward: { enabled: true, maxBehind: 2 } },
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      fastForwardMocks.fastForwardMeshNode.mockResolvedValueOnce({
+        success: true,
+        code: 'fast_forward_available',
+        allowed: true,
+        dryRun: true,
+        willRun: false,
+        executed: false,
+        current: { ahead: 0, behind: 3, submodules: [] },
+      })
+
+      const nextTask = enqueueTask(meshId, 'next queued task')
+      const { components, emit } = createComponents(meshId)
+      components.cliManager = {
+        handleCliCommand: vi.fn(async () => ({ success: true })),
+      }
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:ready',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+      })
+
+      await vi.waitFor(() => {
+        expect(fastForwardMocks.fastForwardMeshNode).toHaveBeenCalledTimes(1)
+        expect(getQueue(meshId).find(task => task.id === nextTask.id)?.status).toBe('assigned')
+      })
+      expect(fastForwardMocks.fastForwardMeshNode.mock.calls[0][0]).toMatchObject({
+        dryRun: true,
+        trigger: 'idle_auto',
+      })
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
   it('records task_completed for direct dispatch (no queue task) via short-generating suppressed path, matched by sessionId', () => {
     // Reproduces Bug 1 for direct dispatch (non-queue) path: no queue task exists,
     // so completedTaskForLedger is null, and the task_completed ledger entry has no taskId.
