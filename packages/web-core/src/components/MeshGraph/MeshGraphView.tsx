@@ -379,12 +379,17 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         />
                     </div>
                 </div>
+                {node.health === 'unknown' && !attentionBadge && (
+                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[9px] italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                        <span className="truncate">Connecting...</span>
+                    </div>
+                )}
                 {attentionBadge && (
                     <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionBadge.label}>
                         <span className="truncate">{attentionBadge.label}</span>
                     </div>
                 )}
-                {!attentionBadge && node.branch && !isSubmoduleNode && (
+                {!attentionBadge && node.branch && !isSubmoduleNode && node.health !== 'unknown' && (
                     <div className={`mt-1 min-w-0 max-w-full truncate text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-2 py-0.5 inline-block`} title={node.branch}>
                         {node.branch}
                     </div>
@@ -526,15 +531,26 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
 
             <div className="mt-3">
                 <div className="flex min-w-0 flex-wrap gap-1.5 text-[10px]">
-                    <span className={`rounded-full border px-2 py-0.5 capitalize ${getBadgeClasses('health', meshTheme.isDark)}`}>
-                        {formatHealth(node.health)}
-                    </span>
+                    {node.health === 'unknown' ? (
+                        <span className={`rounded-full border px-2 py-0.5 italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                            connecting...
+                        </span>
+                    ) : (
+                        <span className={`rounded-full border px-2 py-0.5 capitalize ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                            {formatHealth(node.health)}
+                        </span>
+                    )}
                     {isSubmoduleNode && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('submodule', meshTheme.isDark)}`}>
                             submodule
                         </span>
                     )}
-                    {!isDefaultBranchNode && (
+                    {!isDefaultBranchNode && node.health === 'unknown' && !node.locality && (
+                        <span className={`rounded-full border px-2 py-0.5 italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                            ...
+                        </span>
+                    )}
+                    {!isDefaultBranchNode && (node.health !== 'unknown' || node.locality) && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses(getLocalityBadgeKind(node), meshTheme.isDark)}`}>
                             {formatLocality(node.locality)}
                         </span>

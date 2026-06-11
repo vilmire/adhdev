@@ -1,13 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type {
     GitLogEntry,
+    RepoMeshLedgerSummaryStatus,
     RepoMeshNodeStatus,
+    RepoMeshQueueSummary,
     RepoMeshQueueTask,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import MeshGraphView from './MeshGraphView'
-import { getMeshGraphTheme } from './meshGraphTheme'
+import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import { buildMeshGraph, type MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from '../../utils/repo-mesh-status'
@@ -22,6 +24,8 @@ interface MeshObservabilitySurfaceProps {
     emptyMessage?: string
     daemonId?: string | null
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
+    /** When true, the graph is showing bootstrap inventory data pending live peer truth. */
+    bootstrapFallback?: boolean
 }
 
 type SessionListEntry = {
@@ -366,14 +370,176 @@ function getRepoMeshStatusGraphFingerprint(status: RepoMeshStatus): string {
     ].join('::')
 }
 
+function MeshHealthPanel({
+    canonicalStatus,
+    queueSummary,
+    ledgerSummary,
+    isBootstrapMode,
+    meshTheme,
+}: {
+    canonicalStatus: RepoMeshStatus
+    queueSummary: RepoMeshQueueSummary | null
+    ledgerSummary: RepoMeshLedgerSummaryStatus
+    isBootstrapMode: boolean
+    meshTheme: MeshGraphTheme
+}) {
+    const hasQueueActivity = queueSummary && (queueSummary.active > 0 || queueSummary.historical > 0)
+    const hasLedgerFailures = ledgerSummary.recentFailures > 0 || ledgerSummary.taskFailed > 0
+    const failedQueueTasks = (canonicalStatus.queue as any)?.tasks
+        ? ((canonicalStatus.queue as any).tasks as RepoMeshQueueTask[])
+            .filter(task => task.status === 'failed' || task.status === 'cancelled')
+            .slice(0, 5)
+        : []
+
+    if (!hasQueueActivity && !hasLedgerFailures && canonicalStatus.nodes.length === 0 && !isBootstrapMode) {
+        return null
+    }
+
+    return (
+        <details className={`rounded-2xl border text-xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
+            <summary className={`flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium [&::-webkit-details-marker]:hidden ${meshTheme.textSecondary}`}>
+                <span className="flex-1">Mesh Health Panel</span>
+                {hasLedgerFailures && (
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
+                        {ledgerSummary.recentFailures} recent failures
+                    </span>
+                )}
+                {isBootstrapMode && (
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
+                        awaiting live data
+                    </span>
+                )}
+            </summary>
+            <div className={`border-t px-4 pb-4 pt-3 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                <div className="grid gap-4 sm:grid-cols-3">
+                    {/* Queue activity */}
+                    <div>
+                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Queue Activity</div>
+                        {queueSummary ? (
+                            <div className="flex flex-col gap-1">
+                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
+                                    <span>Pending</span>
+                                    <span className="tabular-nums">{queueSummary.pending}</span>
+                                </div>
+                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
+                                    <span>Active</span>
+                                    <span className={`tabular-nums ${queueSummary.active > 0 ? (meshTheme.isDark ? 'text-cyan-300' : 'text-sky-600') : ''}`}>{queueSummary.active}</span>
+                                </div>
+                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
+                                    <span>Completed</span>
+                                    <span className="tabular-nums">{queueSummary.completed}</span>
+                                </div>
+                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
+                                    <span>Failed</span>
+                                    <span className={`tabular-nums ${queueSummary.failed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}`}>{queueSummary.failed}</span>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className={meshTheme.textMuted}>No queue data</div>
+                        )}
+                        {failedQueueTasks.length > 0 && (
+                            <div className="mt-2 flex flex-col gap-1">
+                                <div className={`text-[9px] uppercase tracking-wide ${meshTheme.textMuted}`}>Failed tasks</div>
+                                {failedQueueTasks.map(task => (
+                                    <div key={task.id} className={`rounded-lg border px-2 py-1 ${meshTheme.isDark ? 'border-rose-400/15 bg-rose-500/8' : 'border-rose-200 bg-rose-50/80'}`}>
+                                        <div className={`font-mono ${meshTheme.textMuted}`}>{task.id.slice(0, 12)}</div>
+                                        {task.message && (
+                                            <div className={`truncate ${meshTheme.isDark ? 'text-rose-200/70' : 'text-rose-700/80'}`}>{task.message.slice(0, 50)}</div>
+                                        )}
+                                        {task.cancelReason && (
+                                            <div className={`truncate ${meshTheme.textMuted}`}>{task.cancelReason.slice(0, 50)}</div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Ledger summary */}
+                    <div>
+                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Ledger</div>
+                        <div className="flex flex-col gap-1">
+                            <div className={`flex justify-between ${meshTheme.textSecondary}`}>
+                                <span>Completed</span>
+                                <span className="tabular-nums">{ledgerSummary.taskCompleted}</span>
+                            </div>
+                            <div className={`flex justify-between ${meshTheme.textSecondary}`}>
+                                <span>Failed</span>
+                                <span className={`tabular-nums ${ledgerSummary.taskFailed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}`}>{ledgerSummary.taskFailed}</span>
+                            </div>
+                            <div className={`flex justify-between ${meshTheme.textSecondary}`}>
+                                <span>Sessions launched</span>
+                                <span className="tabular-nums">{ledgerSummary.sessionLaunched}</span>
+                            </div>
+                            <div className={`flex justify-between ${meshTheme.textSecondary}`}>
+                                <span>Recent failures</span>
+                                <span className={`tabular-nums ${ledgerSummary.recentFailures > 0 ? (meshTheme.isDark ? 'text-amber-300' : 'text-amber-600') : ''}`}>{ledgerSummary.recentFailures}</span>
+                            </div>
+                            {ledgerSummary.lastActivityAt && (
+                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
+                                    <span>Last activity</span>
+                                    <span className={`font-mono ${meshTheme.textMuted}`}>{ledgerSummary.lastActivityAt.slice(0, 16)}</span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Per-node connection status */}
+                    <div>
+                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Node Connections</div>
+                        {canonicalStatus.nodes.length === 0 ? (
+                            <div className={meshTheme.textMuted}>No nodes</div>
+                        ) : (
+                            <div className="flex flex-col gap-1">
+                                {canonicalStatus.nodes.map(node => {
+                                    const connState = node.connection?.state ?? 'unknown'
+                                    const isConnecting = connState === 'unknown' || connState === 'connecting'
+                                    const isFailed = connState === 'failed' || connState === 'closed' || connState === 'disconnected'
+                                    const isConnected = connState === 'connected' || connState === 'self'
+                                    return (
+                                        <div key={node.nodeId} className={`flex items-center justify-between gap-2 rounded-lg border px-2 py-1 ${meshTheme.isDark ? 'border-white/6 bg-white/[0.025]' : 'border-slate-200 bg-white/70'}`}>
+                                            <span className={`min-w-0 truncate ${meshTheme.textSecondary}`} title={node.workspace}>{node.machineLabel}</span>
+                                            <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${
+                                                isConnecting
+                                                    ? (meshTheme.isDark ? 'border-amber-400/25 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700')
+                                                    : isFailed
+                                                        ? (meshTheme.isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700')
+                                                        : isConnected
+                                                            ? (meshTheme.isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
+                                                            : (meshTheme.isDark ? 'border-white/10 bg-white/[0.04] text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600')
+                                            }`}>
+                                                {isConnecting ? '...' : connState}
+                                            </span>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </details>
+    )
+}
+
+function isBootstrapFallbackStatus(status: RepoMeshStatus): boolean {
+    if (status.nodes.length === 0) return false
+    return status.nodes.every(
+        node => node.health === 'unknown'
+            && (!node.connection || node.connection.state === 'unknown'),
+    )
+}
+
 export default function MeshObservabilitySurface({
     status,
     emptyMessage = 'No live mesh graph is available for this coordinator yet.',
     daemonId = null,
     sendDaemonCommand = null,
+    bootstrapFallback,
 }: MeshObservabilitySurfaceProps) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
+    const isBootstrapMode = bootstrapFallback ?? isBootstrapFallbackStatus(status)
     const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
     const statusGraphFingerprint = useMemo(() => getRepoMeshStatusGraphFingerprint(canonicalStatus), [canonicalStatus])
     const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [statusGraphFingerprint]) as MeshGraphData
@@ -672,6 +838,12 @@ export default function MeshObservabilitySurface({
                             </div>
                         </details>
                     </div>
+                    {isBootstrapMode && canonicalGraph.nodes.length > 0 && (
+                        <div className={`mx-2 mb-2 flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-xs ${meshTheme.isDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
+                            <span className={`h-2 w-2 shrink-0 rounded-full animate-pulse ${meshTheme.isDark ? 'bg-amber-400' : 'bg-amber-500'}`} aria-hidden />
+                            <span>Awaiting live data — showing setup inventory until peer mesh_status probes succeed.</span>
+                        </div>
+                    )}
                     {canonicalGraph.nodes.length > 0 ? (
                         <MeshGraphView
                             data={canonicalGraph}
@@ -714,7 +886,9 @@ export default function MeshObservabilitySurface({
                                     <Badge label="hover preview" tone="info" />
                                 </div>
                                 <div className="mb-3 flex flex-wrap gap-2">
-                                    <Badge label={hoveredGraphNode.health} tone={healthTone(hoveredGraphNode.health)} />
+                                    {hoveredGraphNode.health === 'unknown'
+                                        ? <Badge label="..." tone="default" />
+                                        : <Badge label={hoveredGraphNode.health} tone={healthTone(hoveredGraphNode.health)} />}
                                     {hoveredGraphNode.branch && <Badge label={hoveredGraphNode.branch} tone="default" />}
                                     {hoveredGraphNode.ahead > 0 && <Badge label={`ahead ${hoveredGraphNode.ahead}`} tone="warn" />}
                                     {hoveredGraphNode.behind > 0 && <Badge label={`behind ${hoveredGraphNode.behind}`} tone="warn" />}
@@ -796,12 +970,22 @@ export default function MeshObservabilitySurface({
                                     </div>
                                 </div>
                                 <div className="mb-3 flex flex-wrap gap-2">
-                                    <Badge label={selectedNodeStatus?.health ?? selectedGraphNode.health} tone={healthTone(selectedNodeStatus?.health ?? selectedGraphNode.health)} />
+                                    {(() => {
+                                        const h = selectedNodeStatus?.health ?? selectedGraphNode.health
+                                        return h === 'unknown'
+                                            ? <Badge label="connecting..." tone="default" />
+                                            : <Badge label={h} tone={healthTone(h)} />
+                                    })()}
                                     {selectedGraphNode.branch && <Badge label={selectedGraphNode.branch} tone="default" />}
                                     {selectedGraphNode.ahead > 0 && <Badge label={`ahead ${selectedGraphNode.ahead}`} tone="warn" />}
                                     {selectedGraphNode.behind > 0 && <Badge label={`behind ${selectedGraphNode.behind}`} tone="warn" />}
                                     {selectedGraphNode.dirtyFiles > 0 && <Badge label={`${selectedGraphNode.dirtyFiles} dirty`} tone="warn" />}
-                                    {selectedNodeStatus?.connection && <Badge label={describeConnection(selectedNodeStatus)} tone={connectionTone(selectedNodeStatus.connection)} />}
+                                    {selectedNodeStatus?.connection && selectedNodeStatus.connection.state !== 'unknown' && (
+                                        <Badge label={describeConnection(selectedNodeStatus)} tone={connectionTone(selectedNodeStatus.connection)} />
+                                    )}
+                                    {selectedNodeStatus?.connection?.state === 'unknown' && (
+                                        <Badge label="mesh connecting..." tone="warn" />
+                                    )}
                                     {selectedNodeSessionEntries.length > 0 && <Badge label={`${selectedNodeSessionEntries.length} sessions`} tone="info" />}
                                 </div>
                                 <div className="grid gap-2 text-xs sm:grid-cols-2">
@@ -902,6 +1086,15 @@ export default function MeshObservabilitySurface({
                     )}
                 </div>
             </div>
+
+            {/* ── Mesh Health Panel ── */}
+            <MeshHealthPanel
+                canonicalStatus={canonicalStatus}
+                queueSummary={queueSummary}
+                ledgerSummary={ledgerSummary}
+                isBootstrapMode={isBootstrapMode}
+                meshTheme={meshTheme}
+            />
         </div>
         </MeshGraphThemeContext.Provider>
     )
