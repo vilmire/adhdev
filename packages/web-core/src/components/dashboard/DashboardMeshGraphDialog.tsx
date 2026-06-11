@@ -136,7 +136,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             const response = meshOverrides?.loadMeshStatus
                 ? await meshOverrides.loadMeshStatus(daemonId, meshId, {
                     refresh,
-                    retryProfile: refresh ? 'settled' : 'interactive',
+                    retryProfile: 'settled',
                 })
                 : await sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })
             const status = extractRepoMeshStatus(response)

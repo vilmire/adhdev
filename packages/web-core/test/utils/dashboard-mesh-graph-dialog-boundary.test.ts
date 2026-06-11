@@ -37,7 +37,7 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).toContain('meshOverrides?.loadMeshStatus')
     expect(dialogSource).toContain("sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })")
     expect(dialogSource).toContain('meshOverrides.loadMeshStatus(daemonId, meshId, {')
-    expect(dialogSource).toContain('retryProfile: refresh ? \'settled\' : \'interactive\'')
+    expect(dialogSource).toContain("retryProfile: 'settled'")
     expect(dialogSource).not.toContain('buildMeshGraph')
     expect(dialogSource).toContain('setLoading(showInitialLoader)')
     expect(dialogSource).toContain('dashboardMeshGraphStatusCache')
