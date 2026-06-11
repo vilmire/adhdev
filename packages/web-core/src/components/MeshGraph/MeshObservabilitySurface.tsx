@@ -397,6 +397,7 @@ function MeshHealthPanel({
     isBootstrapMode,
     meshTheme,
     sessionEntries,
+    inlineMode = false,
 }: {
     canonicalStatus: RepoMeshStatus
     queueSummary: RepoMeshQueueSummary | null
@@ -404,6 +405,7 @@ function MeshHealthPanel({
     isBootstrapMode: boolean
     meshTheme: MeshGraphTheme
     sessionEntries: SessionListEntry[]
+    inlineMode?: boolean
 }) {
     const hasQueueActivity = queueSummary && (queueSummary.active > 0 || queueSummary.historical > 0)
     const hasLedgerFailures = ledgerSummary.recentFailures > 0 || ledgerSummary.taskFailed > 0
@@ -422,6 +424,178 @@ function MeshHealthPanel({
         && activeRefineJobs.length === 0 && failedRefineJobs.length === 0 && !hasStaleWork && sessionEntries.length === 0) {
         return null
     }
+
+    const dk = meshTheme.isDark
+    const sepClass = `border-t ${dk ? 'border-white/8' : 'border-slate-200'}`
+    const subDetailsClass = `group w-full rounded-lg border text-xs ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`
+    const subSummaryClass = `flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-1.5 [&::-webkit-details-marker]:hidden ${meshTheme.textSecondary}`
+
+    // stat tile: value + label below
+    function StatTile({ label, value, tone }: { label: string; value: number | string; tone?: 'rose' | 'sky' | 'amber' | 'emerald' | 'muted' }) {
+        const valClass = tone === 'rose' ? (dk ? 'text-rose-300' : 'text-rose-600')
+            : tone === 'sky' ? (dk ? 'text-sky-300' : 'text-sky-600')
+            : tone === 'amber' ? (dk ? 'text-amber-300' : 'text-amber-600')
+            : tone === 'emerald' ? (dk ? 'text-emerald-300' : 'text-emerald-600')
+            : tone === 'muted' ? meshTheme.textMuted
+            : meshTheme.textPrimary
+        return (
+            <div className={`flex flex-col items-center rounded-lg border px-2 py-1.5 ${dk ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
+                <span className={`tabular-nums text-sm font-semibold leading-none ${valClass}`}>{value}</span>
+                <span className={`mt-0.5 text-[9px] uppercase tracking-wide ${meshTheme.textMuted}`}>{label}</span>
+            </div>
+        )
+    }
+
+    const contentDiv = (
+        <div className="flex flex-col gap-3 text-xs">
+            {/* Stat tiles grid */}
+            <div className="grid grid-cols-4 gap-1.5">
+                {queueSummary ? (
+                    <>
+                        <StatTile label="Pending" value={queueSummary.pending} />
+                        <StatTile label="Active" value={queueSummary.active} tone={queueSummary.active > 0 ? 'sky' : undefined} />
+                        <StatTile label="Done" value={queueSummary.completed} tone="emerald" />
+                        <StatTile label="Failed" value={queueSummary.failed} tone={queueSummary.failed > 0 ? 'rose' : undefined} />
+                    </>
+                ) : (
+                    <>
+                        <StatTile label="Done" value={ledgerSummary.taskCompleted} tone="emerald" />
+                        <StatTile label="Failed" value={ledgerSummary.taskFailed} tone={ledgerSummary.taskFailed > 0 ? 'rose' : undefined} />
+                        <StatTile label="Sessions" value={ledgerSummary.sessionLaunched} />
+                        <StatTile label="Recent↯" value={ledgerSummary.recentFailures} tone={ledgerSummary.recentFailures > 0 ? 'amber' : 'muted'} />
+                    </>
+                )}
+            </div>
+
+            {/* Secondary stats row when queue present */}
+            {queueSummary && (
+                <div className="grid grid-cols-3 gap-1.5">
+                    <StatTile label="Ledger done" value={ledgerSummary.taskCompleted} tone="emerald" />
+                    <StatTile label="Sessions" value={ledgerSummary.sessionLaunched} />
+                    <StatTile label="Recent↯" value={ledgerSummary.recentFailures} tone={ledgerSummary.recentFailures > 0 ? 'amber' : 'muted'} />
+                </div>
+            )}
+
+            {/* Last activity */}
+            {ledgerSummary.lastActivityAt && (
+                <div className={`flex items-center justify-between ${meshTheme.textMuted}`}>
+                    <span>Last activity</span>
+                    <span className="font-mono text-[10px]">{ledgerSummary.lastActivityAt.slice(5, 16)}</span>
+                </div>
+            )}
+
+            {/* Node connections */}
+            {canonicalStatus.nodes.length > 0 && (
+                <div className={`pt-2.5 ${sepClass}`}>
+                    <div className="flex flex-col gap-1">
+                        {canonicalStatus.nodes.map(node => {
+                            const connState = node.connection?.state ?? 'unknown'
+                            const isConnecting = connState === 'unknown' || connState === 'connecting'
+                            const isFailed = connState === 'failed' || connState === 'closed' || connState === 'disconnected'
+                            const isConnected = connState === 'connected' || connState === 'self'
+                            const dotClass = isConnecting
+                                ? (dk ? 'bg-amber-400' : 'bg-amber-400')
+                                : isFailed
+                                    ? (dk ? 'bg-rose-400' : 'bg-rose-500')
+                                    : isConnected
+                                        ? (dk ? 'bg-emerald-400' : 'bg-emerald-500')
+                                        : (dk ? 'bg-slate-500' : 'bg-slate-400')
+                            return (
+                                <div key={node.nodeId} className="flex items-center gap-2">
+                                    <span className={`size-1.5 shrink-0 rounded-full ${dotClass}`} />
+                                    <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={node.workspace}>{node.machineLabel}</span>
+                                    <span className={`shrink-0 font-mono text-[10px] ${meshTheme.textMuted}`}>{isConnecting ? '…' : connState}</span>
+                                </div>
+                            )
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* Refine jobs — collapsible */}
+            {asyncRefineJobs && asyncRefineJobs.length > 0 && (
+                <div className={`pt-2.5 ${sepClass}`}>
+                    <details className={subDetailsClass}>
+                        <summary className={subSummaryClass}>
+                            <span className="flex-1">Refine jobs</span>
+                            <span className={`tabular-nums ${dk ? 'text-slate-400' : 'text-slate-500'}`}>{asyncRefineJobs.length}</span>
+                            {failedRefineJobs.length > 0 && <span className={dk ? 'text-rose-300' : 'text-rose-600'}>{failedRefineJobs.length} failed</span>}
+                        </summary>
+                        <div className="flex flex-col gap-0.5 px-2.5 pb-2">
+                            {asyncRefineJobs.slice(0, 8).map(job => (
+                                <div key={job.jobId} className="flex items-center gap-2">
+                                    <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`}>
+                                        {job.branch ?? job.jobId.slice(0, 14)}{job.into ? ` → ${job.into}` : ''}
+                                    </span>
+                                    <span className={`shrink-0 text-[9px] font-semibold ${
+                                        job.status === 'failed' ? (dk ? 'text-rose-300' : 'text-rose-600')
+                                        : job.status === 'running' || job.status === 'accepted' ? (dk ? 'text-sky-300' : 'text-sky-600')
+                                        : (dk ? 'text-emerald-300' : 'text-emerald-600')
+                                    }`}>{job.status}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                </div>
+            )}
+
+            {/* Failed queue tasks — collapsible */}
+            {failedQueueTasks.length > 0 && (
+                <div className={asyncRefineJobs && asyncRefineJobs.length > 0 ? '' : `pt-2.5 ${sepClass}`}>
+                    <details className={subDetailsClass}>
+                        <summary className={subSummaryClass}>
+                            <span className={`flex-1 ${dk ? 'text-rose-300' : 'text-rose-600'}`}>Failed tasks</span>
+                            <span className={`tabular-nums ${dk ? 'text-rose-400' : 'text-rose-500'}`}>{failedQueueTasks.length}</span>
+                        </summary>
+                        <div className="flex flex-col gap-1 px-2.5 pb-2">
+                            {failedQueueTasks.map(task => (
+                                <div key={task.id} className="flex flex-col gap-0.5">
+                                    <div className="flex items-center gap-2">
+                                        <span className={`font-mono text-[10px] ${meshTheme.textMuted}`}>{task.id.slice(0, 10)}</span>
+                                        {task.message && <span className={`flex-1 truncate ${dk ? 'text-slate-300' : 'text-slate-700'}`}>{task.message.slice(0, 55)}</span>}
+                                    </div>
+                                    {task.cancelReason && <div className={`truncate text-[10px] ${meshTheme.textMuted}`}>{task.cancelReason.slice(0, 55)}</div>}
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                </div>
+            )}
+
+            {/* Stale work */}
+            {hasStaleWork && (
+                <div className={`flex items-center justify-between pt-2.5 ${sepClass}`}>
+                    <span className={meshTheme.textMuted}>Stale work</span>
+                    <span className={`tabular-nums ${dk ? 'text-amber-300' : 'text-amber-600'}`}>{staleWork!.count}</span>
+                </div>
+            )}
+
+            {/* Sessions — collapsible */}
+            {sessionEntries.length > 0 && (
+                <div className={`pt-2.5 ${sepClass}`}>
+                    <details className={subDetailsClass}>
+                        <summary className={subSummaryClass}>
+                            <span className="flex-1">Sessions</span>
+                            <span className={`tabular-nums ${dk ? 'text-slate-400' : 'text-slate-500'}`}>{sessionEntries.length}</span>
+                        </summary>
+                        <div className="flex flex-col gap-0.5 px-2.5 pb-2">
+                            {sessionEntries.map(entry => (
+                                <div key={entry.session.sessionId} className="flex items-center gap-2">
+                                    <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`} title={entry.session.sessionId}>
+                                        {shortSessionId(entry.session.sessionId)}
+                                    </span>
+                                    <span className={`shrink-0 ${meshTheme.textMuted}`}>{entry.session.providerType || '?'}</span>
+                                    <span className={`shrink-0 text-[9px] font-semibold ${meshTheme.textMuted}`}>{sessionStatusLabel(entry.session)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                </div>
+            )}
+        </div>
+    )
+
+    if (inlineMode) return contentDiv
 
     return (
         <details className={`rounded-2xl border text-xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
@@ -448,194 +622,7 @@ function MeshHealthPanel({
                     </span>
                 )}
             </summary>
-            <div className={`border-t px-4 pb-4 pt-3 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                <div className="grid gap-4 sm:grid-cols-3">
-                    {/* Queue activity */}
-                    <div>
-                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Queue Activity</div>
-                        {queueSummary ? (
-                            <div className="flex flex-col gap-1">
-                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
-                                    <span>Pending</span>
-                                    <span className="tabular-nums">{queueSummary.pending}</span>
-                                </div>
-                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
-                                    <span>Active</span>
-                                    <span className={`tabular-nums ${queueSummary.active > 0 ? (meshTheme.isDark ? 'text-cyan-300' : 'text-sky-600') : ''}`}>{queueSummary.active}</span>
-                                </div>
-                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
-                                    <span>Completed</span>
-                                    <span className="tabular-nums">{queueSummary.completed}</span>
-                                </div>
-                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
-                                    <span>Failed</span>
-                                    <span className={`tabular-nums ${queueSummary.failed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}`}>{queueSummary.failed}</span>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className={meshTheme.textMuted}>No queue data</div>
-                        )}
-                        {failedQueueTasks.length > 0 && (
-                            <div className="mt-2 flex flex-col gap-1">
-                                <div className={`text-[9px] uppercase tracking-wide ${meshTheme.textMuted}`}>Failed tasks</div>
-                                {failedQueueTasks.map(task => (
-                                    <div key={task.id} className={`rounded-lg border px-2 py-1 ${meshTheme.isDark ? 'border-rose-400/15 bg-rose-500/8' : 'border-rose-200 bg-rose-50/80'}`}>
-                                        <div className={`font-mono ${meshTheme.textMuted}`}>{task.id.slice(0, 12)}</div>
-                                        {task.message && (
-                                            <div className={`truncate ${meshTheme.isDark ? 'text-rose-200/70' : 'text-rose-700/80'}`}>{task.message.slice(0, 50)}</div>
-                                        )}
-                                        {task.cancelReason && (
-                                            <div className={`truncate ${meshTheme.textMuted}`}>{task.cancelReason.slice(0, 50)}</div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Ledger summary */}
-                    <div>
-                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Ledger</div>
-                        <div className="flex flex-col gap-1">
-                            <div className={`flex justify-between ${meshTheme.textSecondary}`}>
-                                <span>Completed</span>
-                                <span className="tabular-nums">{ledgerSummary.taskCompleted}</span>
-                            </div>
-                            <div className={`flex justify-between ${meshTheme.textSecondary}`}>
-                                <span>Failed</span>
-                                <span className={`tabular-nums ${ledgerSummary.taskFailed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}`}>{ledgerSummary.taskFailed}</span>
-                            </div>
-                            <div className={`flex justify-between ${meshTheme.textSecondary}`}>
-                                <span>Sessions launched</span>
-                                <span className="tabular-nums">{ledgerSummary.sessionLaunched}</span>
-                            </div>
-                            <div className={`flex justify-between ${meshTheme.textSecondary}`}>
-                                <span>Recent failures</span>
-                                <span className={`tabular-nums ${ledgerSummary.recentFailures > 0 ? (meshTheme.isDark ? 'text-amber-300' : 'text-amber-600') : ''}`}>{ledgerSummary.recentFailures}</span>
-                            </div>
-                            {ledgerSummary.lastActivityAt && (
-                                <div className={`flex justify-between ${meshTheme.textSecondary}`}>
-                                    <span>Last activity</span>
-                                    <span className={`font-mono ${meshTheme.textMuted}`}>{ledgerSummary.lastActivityAt.slice(0, 16)}</span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Per-node connection status */}
-                    <div>
-                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Node Connections</div>
-                        {canonicalStatus.nodes.length === 0 ? (
-                            <div className={meshTheme.textMuted}>No nodes</div>
-                        ) : (
-                            <div className="flex flex-col gap-1">
-                                {canonicalStatus.nodes.map(node => {
-                                    const connState = node.connection?.state ?? 'unknown'
-                                    const isConnecting = connState === 'unknown' || connState === 'connecting'
-                                    const isFailed = connState === 'failed' || connState === 'closed' || connState === 'disconnected'
-                                    const isConnected = connState === 'connected' || connState === 'self'
-                                    return (
-                                        <div key={node.nodeId} className={`flex items-center justify-between gap-2 rounded-lg border px-2 py-1 ${meshTheme.isDark ? 'border-white/6 bg-white/[0.025]' : 'border-slate-200 bg-white/70'}`}>
-                                            <span className={`min-w-0 truncate ${meshTheme.textSecondary}`} title={node.workspace}>{node.machineLabel}</span>
-                                            <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${
-                                                isConnecting
-                                                    ? (meshTheme.isDark ? 'border-amber-400/25 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700')
-                                                    : isFailed
-                                                        ? (meshTheme.isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700')
-                                                        : isConnected
-                                                            ? (meshTheme.isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
-                                                            : (meshTheme.isDark ? 'border-white/10 bg-white/[0.04] text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600')
-                                            }`}>
-                                                {isConnecting ? '...' : connState}
-                                            </span>
-                                        </div>
-                                    )
-                                })}
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* Refine Jobs */}
-                {asyncRefineJobs && asyncRefineJobs.length > 0 && (
-                    <div className={`mt-4 border-t pt-3 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Refine Jobs</div>
-                        <div className="flex flex-col gap-1">
-                            {asyncRefineJobs.slice(0, 8).map(job => (
-                                <div key={job.jobId} className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 ${
-                                    job.status === 'failed'
-                                        ? (meshTheme.isDark ? 'border-rose-400/15 bg-rose-500/8' : 'border-rose-200 bg-rose-50/80')
-                                        : job.status === 'running' || job.status === 'accepted'
-                                            ? (meshTheme.isDark ? 'border-sky-400/15 bg-sky-500/8' : 'border-sky-200 bg-sky-50/80')
-                                            : (meshTheme.isDark ? 'border-white/6 bg-white/[0.02]' : 'border-slate-200 bg-white/60')
-                                }`}>
-                                    <div className="min-w-0 flex-1">
-                                        <span className={`font-mono ${meshTheme.textMuted}`}>{job.jobId.slice(0, 12)}</span>
-                                        {job.branch && (
-                                            <span className={`ml-1.5 ${meshTheme.textMuted}`}>
-                                                {job.branch}{job.into ? ` → ${job.into}` : ''}
-                                            </span>
-                                        )}
-                                    </div>
-                                    <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${
-                                        job.status === 'failed'
-                                            ? (meshTheme.isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700')
-                                            : job.status === 'running' || job.status === 'accepted'
-                                                ? (meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700')
-                                                : (meshTheme.isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
-                                    }`}>
-                                        {job.status}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Stale Work */}
-                {hasStaleWork && (
-                    <div className={`mt-4 border-t pt-3 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Stale Work</div>
-                        <div className={`flex items-center justify-between ${meshTheme.textSecondary}`}>
-                            <span>Stale items</span>
-                            <span className={`tabular-nums ${meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}`}>{staleWork!.count}</span>
-                        </div>
-                        {staleWork!.reasonCounts && Object.keys(staleWork!.reasonCounts).length > 0 && (
-                            <div className="mt-1 flex flex-col gap-0.5">
-                                {Object.entries(staleWork!.reasonCounts).map(([reason, count]) => (
-                                    <div key={reason} className={`flex justify-between ${meshTheme.textMuted}`}>
-                                        <span className="truncate">{reason}</span>
-                                        <span className="tabular-nums">{count}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {/* All Sessions */}
-                {sessionEntries.length > 0 && (
-                    <div className={`mt-4 border-t pt-3 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>All Sessions ({sessionEntries.length})</div>
-                        <div className="flex flex-col gap-1">
-                            {sessionEntries.map(entry => (
-                                <div key={entry.session.sessionId} className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 ${meshTheme.isDark ? 'border-white/6 bg-white/[0.02]' : 'border-slate-200 bg-white/60'}`}>
-                                    <span className={`min-w-0 flex-1 truncate font-mono ${meshTheme.textMuted}`} title={entry.session.sessionId}>
-                                        {shortSessionId(entry.session.sessionId)}
-                                    </span>
-                                    <span className={`shrink-0 ${meshTheme.textMuted}`}>{entry.session.providerType || '?'}</span>
-                                    <span className={`shrink-0 ${meshTheme.textMuted}`}>{sessionRoleLabel(entry.session)}</span>
-                                    <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
-                                        meshTheme.isDark
-                                            ? 'border-white/10 bg-white/[0.04] text-slate-300'
-                                            : 'border-slate-200 bg-slate-100 text-slate-600'
-                                    }`}>{sessionStatusLabel(entry.session)}</span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
+            {contentDiv}
         </details>
     )
 }
@@ -890,9 +877,9 @@ export default function MeshObservabilitySurface({
 
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
-        <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <div className="flex flex-col gap-3">
             {/* ── Card: header + graph + detail panel ── */}
-            <div className={`${meshTheme.cardClass} flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px]`}>
+            <div className={`${meshTheme.cardClass} flex flex-col overflow-hidden rounded-[28px]`} style={{ minHeight: 480 }}>
 
                 {/* Header — always static, never absolute */}
                 <div className={`shrink-0 flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2.5 border-b ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
@@ -946,40 +933,67 @@ export default function MeshObservabilitySurface({
                             <button type="button" onClick={() => setDirectionPref('LR')} className={directionToggleButtonClass(directionPref === 'LR')} title="Left to right">LR</button>
                             <button type="button" onClick={() => setDirectionPref('TB')} className={directionToggleButtonClass(directionPref === 'TB')} title="Top to bottom">TB</button>
                         </div>
-                        <details className={`rounded-xl px-3 py-1.5 text-xs ${meshTheme.isDark ? 'border border-white/10 bg-white/[0.03] text-slate-300' : 'border border-slate-200 bg-slate-50 text-slate-600'}`}>
-                            <summary className={`cursor-pointer list-none font-medium ${meshTheme.textSecondary} [&::-webkit-details-marker]:hidden`}>
-                                Legend
-                            </summary>
-                            <div className="absolute right-4 z-30 mt-2 w-72 rounded-xl border p-3 shadow-xl backdrop-blur-xl ${meshTheme.isDark ? 'border-white/10 bg-slate-950/96' : 'border-slate-200 bg-white/98 shadow-slate-900/10'}">
-                                <div className="flex flex-col gap-3">
-                                    <div className="flex flex-wrap gap-2">
-                                        <Badge label={`${canonicalGraph.stats.dirtyNodes} dirty`} tone={canonicalGraph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
-                                        <Badge label={`${canonicalGraph.stats.orphanNodes} orphan`} tone={canonicalGraph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
-                                        <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
-                                        {stateCounts.length === 0 ? (
-                                            <Badge label="no session metadata" />
-                                        ) : stateCounts.slice(0, 2).map(([label, count]) => (
-                                            <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
-                                        ))}
-                                    </div>
-                                    <div className="flex flex-wrap gap-2">
-                                        <Badge label="Anchor = default branch" tone="info" />
-                                        <Badge label="Peer link = same-branch worktree" tone="default" />
-                                        <Badge label="Submodule link = child checkout" tone="warn" />
-                                    </div>
-                                    {statusWarnings.length > 0 && (
+                        {/* Health panel button */}
+                        <div className="relative">
+                            <details className={`rounded-xl px-3 py-1.5 text-xs ${meshTheme.isDark ? 'border border-white/10 bg-white/[0.03] text-slate-300' : 'border border-slate-200 bg-slate-50 text-slate-600'}`}>
+                                <summary className={`cursor-pointer list-none font-medium ${meshTheme.textSecondary} [&::-webkit-details-marker]:hidden`}>
+                                    {(() => {
+                                        const failedRefine = ((canonicalStatus as any).asyncRefineJobs as AsyncRefineJob[] | undefined)?.filter(j => j.status === 'failed').length ?? 0
+                                        const recentFail = ledgerSummary.recentFailures
+                                        if (failedRefine > 0) return <span className={meshTheme.isDark ? 'text-rose-300' : 'text-rose-600'}>{failedRefine} refine failed</span>
+                                        if (recentFail > 0) return <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{recentFail} failures</span>
+                                        return 'Health'
+                                    })()}
+                                </summary>
+                                <div className={`absolute right-0 z-40 mt-2 w-72 max-h-[70vh] overflow-y-auto rounded-xl border p-4 shadow-xl backdrop-blur-xl ${meshTheme.isDark ? 'border-white/10 bg-slate-950/96' : 'border-slate-200 bg-white/98 shadow-slate-900/10'}`}>
+                                    <MeshHealthPanel
+                                        canonicalStatus={canonicalStatus}
+                                        queueSummary={queueSummary}
+                                        ledgerSummary={ledgerSummary}
+                                        isBootstrapMode={isBootstrapMode}
+                                        meshTheme={meshTheme}
+                                        sessionEntries={sessionEntries}
+                                        inlineMode
+                                    />
+                                </div>
+                            </details>
+                        </div>
+                        <div className="relative">
+                            <details className={`rounded-xl px-3 py-1.5 text-xs ${meshTheme.isDark ? 'border border-white/10 bg-white/[0.03] text-slate-300' : 'border border-slate-200 bg-slate-50 text-slate-600'}`}>
+                                <summary className={`cursor-pointer list-none font-medium ${meshTheme.textSecondary} [&::-webkit-details-marker]:hidden`}>
+                                    Legend
+                                </summary>
+                                <div className={`absolute right-0 z-40 mt-2 w-72 rounded-xl border p-3 shadow-xl backdrop-blur-xl ${meshTheme.isDark ? 'border-white/10 bg-slate-950/96' : 'border-slate-200 bg-white/98 shadow-slate-900/10'}`}>
+                                    <div className="flex flex-col gap-3">
                                         <div className="flex flex-wrap gap-2">
-                                            {statusWarnings.map(warning => (
-                                                <span key={warning} className={meshTheme.isDark ? 'rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100' : 'rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-700'}>{warning}</span>
+                                            <Badge label={`${canonicalGraph.stats.dirtyNodes} dirty`} tone={canonicalGraph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
+                                            <Badge label={`${canonicalGraph.stats.orphanNodes} orphan`} tone={canonicalGraph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
+                                            <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
+                                            {stateCounts.length === 0 ? (
+                                                <Badge label="no session metadata" />
+                                            ) : stateCounts.slice(0, 2).map(([label, count]) => (
+                                                <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
                                             ))}
                                         </div>
-                                    )}
-                                    <div className={`text-xs ${meshTheme.textMuted}`}>
-                                        Hover nodes or edges for a quick preview. Click a node when you want pinned drill-down details.
+                                        <div className="flex flex-wrap gap-2">
+                                            <Badge label="Anchor = default branch" tone="info" />
+                                            <Badge label="Peer link = same-branch worktree" tone="default" />
+                                            <Badge label="Submodule link = child checkout" tone="warn" />
+                                        </div>
+                                        {statusWarnings.length > 0 && (
+                                            <div className="flex flex-wrap gap-2">
+                                                {statusWarnings.map(warning => (
+                                                    <span key={warning} className={meshTheme.isDark ? 'rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100' : 'rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-700'}>{warning}</span>
+                                                ))}
+                                            </div>
+                                        )}
+                                        <div className={`text-xs ${meshTheme.textMuted}`}>
+                                            Hover nodes or edges for a quick preview. Click a node when you want pinned drill-down details.
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        </details>
+                            </details>
+                        </div>
                     </div>
                 </div>
 
@@ -992,15 +1006,14 @@ export default function MeshObservabilitySurface({
                 )}
 
                 {/* Graph canvas + right detail panel */}
-                <div className="relative flex min-h-0 flex-1 min-w-0">
+                <div className="relative flex flex-1 min-w-0" style={{ minHeight: 360 }}>
                     {/* Graph */}
-                    <div className="min-h-0 flex-1 min-w-0">
+                    <div className="flex-1 min-w-0">
                         {canonicalGraph.nodes.length > 0 ? (
                             <MeshGraphView
                                 data={canonicalGraph}
                                 selectedNodeId={selectedNodeId}
                                 directionPref={directionPref}
-                                onDirectionChange={setDirectionPref}
                                 onNodeHoverChange={node => {
                                     setHoveredNodeId(node?.id ?? null)
                                     if (node) setHoveredEdgeId(null)
@@ -1238,15 +1251,6 @@ export default function MeshObservabilitySurface({
                 </div>
             </div>
 
-            {/* ── Mesh Health Panel — closed by default ── */}
-            <MeshHealthPanel
-                canonicalStatus={canonicalStatus}
-                queueSummary={queueSummary}
-                ledgerSummary={ledgerSummary}
-                isBootstrapMode={isBootstrapMode}
-                meshTheme={meshTheme}
-                sessionEntries={sessionEntries}
-            />
         </div>
         </MeshGraphThemeContext.Provider>
     )

@@ -419,12 +419,19 @@ function calculateColumnGap(bounds: MeshGraphLayoutBounds[], compact = false): n
     return Math.min(...xs.slice(1).map((x, index) => x - xs[index]))
 }
 
-export async function buildMeshGraphLayout(data: MeshGraphData, compact = false, direction: MeshGraphDirection = 'LR'): Promise<MeshGraphLayoutResult> {
+export async function buildMeshGraphLayout(data: MeshGraphData, compact = false, direction: MeshGraphDirection = 'LR', measuredHeights?: Map<string, number>): Promise<MeshGraphLayoutResult> {
     const baseLayout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
     const layoutOptions = elkOptionsFor(baseLayout, direction)
     const graphNodes = getOrderedGraphNodes(data)
     const graphNodeById = new Map(graphNodes.map(node => [node.id, node]))
-    const elkGraph = await elk.layout(buildMeshGraphElkInput(data, layoutOptions, compact, direction))
+    const elkInput = buildMeshGraphElkInput(data, layoutOptions, compact, direction)
+    if (measuredHeights && measuredHeights.size > 0) {
+        for (const child of elkInput.children ?? []) {
+            const h = measuredHeights.get(child.id)
+            if (h && h > 0) child.height = h
+        }
+    }
+    const elkGraph = await elk.layout(elkInput)
     const layoutNodes = (elkGraph.children ?? [])
         .map(node => {
             const graphNode = graphNodeById.get(node.id)

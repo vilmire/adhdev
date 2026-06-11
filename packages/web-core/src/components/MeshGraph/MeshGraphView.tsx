@@ -57,7 +57,6 @@ interface MeshGraphViewProps {
     data: MeshGraphData
     selectedNodeId?: string | null
     directionPref?: 'auto' | 'LR' | 'TB'
-    onDirectionChange?: (pref: 'auto' | 'LR' | 'TB') => void
     onNodeClick?: (node: MeshGraphNode) => void
     onNodeHoverChange?: (node: MeshGraphNode | null) => void
     onEdgeHoverChange?: (edge: MeshGraphEdge | null) => void
@@ -811,8 +810,28 @@ const edgeTypes: EdgeTypes = {
     meshEdge: MeshGraphEdgeLine,
 }
 
+async function buildLayoutWithMeasuredHeights(
+    data: MeshGraphData,
+    meshTheme: ReturnType<typeof getMeshGraphTheme>,
+    compact: boolean,
+    direction: MeshGraphDirection,
+    measuredHeights: Map<string, number>,
+): Promise<{ nodes: FlowNode[]; edges: FlowEdge[] }> {
+    const layout = await buildMeshGraphLayout(data, compact, direction, measuredHeights)
+    return buildFlowLayout(data, layout, meshTheme, compact)
+}
+
 async function buildLayout(data: MeshGraphData, meshTheme = getMeshGraphTheme('dark'), compact = false, direction: MeshGraphDirection = 'LR'): Promise<{ nodes: FlowNode[]; edges: FlowEdge[] }> {
     const layout = await buildMeshGraphLayout(data, compact, direction)
+    return buildFlowLayout(data, layout, meshTheme, compact)
+}
+
+function buildFlowLayout(
+    data: MeshGraphData,
+    layout: Awaited<ReturnType<typeof buildMeshGraphLayout>>,
+    meshTheme: ReturnType<typeof getMeshGraphTheme>,
+    compact = false,
+): { nodes: FlowNode[]; edges: FlowEdge[] } {
     const layoutNodeIds = new Set(layout.nodes.map(node => node.id))
     const flowNodes: FlowNode[] = layout.nodes.map(node => ({
         id: node.id,
@@ -954,6 +973,59 @@ function minimapNodeClassName(node: FlowNode): string {
     ].filter(Boolean).join(' ')
 }
 
+function MeshLayoutRefiner({
+    data,
+    meshTheme,
+    compact,
+    direction,
+    layoutFingerprint,
+    containerRef,
+    onRefined,
+}: {
+    data: MeshGraphData
+    meshTheme: ReturnType<typeof getMeshGraphTheme>
+    compact: boolean
+    direction: MeshGraphDirection
+    layoutFingerprint: string
+    containerRef: React.RefObject<HTMLDivElement | null>
+    onRefined: (layout: { nodes: FlowNode[]; edges: FlowEdge[] }) => void
+}) {
+    const nodesInitialized = useNodesInitialized()
+    const reactFlow = useReactFlow<FlowNode, FlowEdge>()
+    const refinedRef = useRef<string | null>(null)
+    const refineKey = `${layoutFingerprint}::${direction}`
+
+    useEffect(() => {
+        if (!nodesInitialized) return
+        if (refinedRef.current === refineKey) return
+        const rfNodes = reactFlow.getNodes()
+        if (rfNodes.length === 0) return
+
+        // Read actual DOM heights — more reliable than React Flow's measured.height
+        // which can lag on variable-height cards (attached chats section, etc.)
+        const measuredHeights = new Map<string, number>()
+        const root = containerRef.current
+        if (root) {
+            for (const n of rfNodes) {
+                const el = root.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(n.id)}"]`)
+                if (el && el.offsetHeight > 0) measuredHeights.set(n.id, el.offsetHeight)
+            }
+        }
+        // Fallback to React Flow's measured property
+        for (const n of rfNodes) {
+            if (!measuredHeights.has(n.id) && n.measured?.height && n.measured.height > 0) {
+                measuredHeights.set(n.id, n.measured.height)
+            }
+        }
+        if (measuredHeights.size === 0) return
+
+        refinedRef.current = refineKey
+        void buildLayoutWithMeasuredHeights(data, meshTheme, compact, direction, measuredHeights).then(onRefined)
+    }, [nodesInitialized, refineKey, reactFlow, containerRef, data, meshTheme, compact, direction, onRefined])
+
+    return null
+}
+
 function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; viewportKey: string }) {
     const nodesInitialized = useNodesInitialized()
     const reactFlow = useReactFlow<FlowNode, FlowEdge>()
@@ -995,7 +1067,6 @@ export default function MeshGraphView({
     data,
     selectedNodeId = null,
     directionPref: directionPrefProp,
-    onDirectionChange,
     onNodeClick,
     onNodeHoverChange,
     onEdgeHoverChange,
@@ -1005,9 +1076,8 @@ export default function MeshGraphView({
     const dataFingerprint = useMemo(() => getMeshGraphDataFingerprint(data), [data])
     const layoutFingerprint = useMemo(() => getMeshGraphLayoutFingerprint(data), [data])
     const compact = data.nodes.length >= COMPACT_NODE_THRESHOLD
-    const [directionPrefInternal, setDirectionPrefInternal] = useState<DirectionPref>('LR')
+    const [directionPrefInternal] = useState<DirectionPref>('LR')
     const directionPref: DirectionPref = directionPrefProp ?? directionPrefInternal
-    const setDirectionPref = onDirectionChange ?? setDirectionPrefInternal
     const direction: MeshGraphDirection = useMemo(
         () => (directionPref === 'auto' ? pickMeshGraphDirection(data) : directionPref),
         [directionPref, dataFingerprint, data],
@@ -1067,8 +1137,8 @@ export default function MeshGraphView({
         <MeshGraphThemeContext.Provider value={meshTheme}>
         <MeshGraphCompactContext.Provider value={compact}>
         <MeshGraphDirectionContext.Provider value={direction}>
-        <div ref={surfaceRef} className={meshTheme.graphShellClass}>
-            <div className="w-full min-w-0 flex-1 min-h-0">
+        <div ref={surfaceRef} className={`${meshTheme.graphShellClass}`} style={{ height: '100%' }}>
+            <div className="w-full min-w-0 flex-1" style={{ height: '100%' }}>
                 <ReactFlow<FlowNode, FlowEdge>
                     nodes={nodes}
                     edges={layout.edges}
@@ -1095,6 +1165,15 @@ export default function MeshGraphView({
                     proOptions={{ hideAttribution: true }}
                 >
                     <MeshViewportController data={data} viewportKey={viewportKey} />
+                    <MeshLayoutRefiner
+                        data={data}
+                        meshTheme={meshTheme}
+                        compact={compact}
+                        direction={direction}
+                        layoutFingerprint={layoutFingerprint}
+                        containerRef={surfaceRef}
+                        onRefined={setLayout}
+                    />
                     <Controls className={meshTheme.graphControlsClass} position="bottom-left" showZoom showFitView showInteractive={false} />
                     {showMinimap && (
                         <MiniMap
