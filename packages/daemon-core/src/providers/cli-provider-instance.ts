@@ -1544,9 +1544,10 @@ export class CliProviderInstance implements ProviderInstance {
                     message: typeof modal?.message === 'string' ? modal.message.trim() : '',
                     buttons: Array.isArray(modal?.buttons) ? modal.buttons.map((button: unknown) => String(button).trim()) : [],
                 });
-                // PTY redraws can briefly leave waiting_approval and then re-enter it.
-                // Keep one coordinator event per logical modal until the turn completes.
-                if (this.lastStatus !== 'waiting_approval' && approvalFingerprint !== this.lastApprovalEventFingerprint) {
+                // PTY redraws repeat the same modal content; fingerprint dedup prevents duplicate events.
+                // Do NOT also gate on lastStatus: consecutive approvals can arrive waiting_approval→waiting_approval
+                // (e.g. antigravity-cli resolves one prompt and immediately shows the next) and would be silently dropped.
+                if (approvalFingerprint !== this.lastApprovalEventFingerprint) {
                     this.lastApprovalEventFingerprint = approvalFingerprint;
                     this.appendRuntimeSystemMessage(
                         this.formatApprovalRequestMessage(modal?.message, modal?.buttons),
