@@ -3701,7 +3701,7 @@ export async function meshReadChat(
             workspace: node.workspace,
             ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
             ...(providerSessionId ? { providerSessionId } : {}),
-            tailLimit: args.tail ?? 3,
+            tailLimit: args.tail ?? 10,
         });
         const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result) as Record<string, any>, {
             key: `mesh:${args.node_id}:${args.session_id}`,
@@ -3715,7 +3715,7 @@ export async function meshReadChat(
             const compactPayload = compactChatPayload(payload, {
                 nodeId: args.node_id,
                 sessionId: args.session_id,
-                limit: args.tail ?? 3,
+                limit: args.tail ?? 10,
             });
             return JSON.stringify(
                 payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
@@ -3728,7 +3728,7 @@ export async function meshReadChat(
         try {
             const targetId = `${node.daemonId}:session:${args.session_id}`;
             const res = await (ctx.transport as CloudTransport).readChat(targetId, {
-                limit: args.tail ?? 3,
+                limit: args.tail ?? 10,
                 sessionId: args.session_id,
             });
             return JSON.stringify(res, null, 2);

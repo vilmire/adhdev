@@ -60,7 +60,12 @@ export function buildCompactMessageTail(
   visibleMessages: CompactChatMessage[],
   opts: { summary?: string; finalAssistant?: CompactChatMessage | undefined; limit: number },
 ): CompactChatMessage[] {
-  return visibleMessages.slice(-opts.limit);
+  const tail = visibleMessages.slice(-opts.limit);
+  // Always include the final assistant message even if it falls outside the tail window.
+  if (opts.finalAssistant && !tail.includes(opts.finalAssistant)) {
+    return [opts.finalAssistant, ...tail];
+  }
+  return tail;
 }
 
 export function compactChatPayload(
