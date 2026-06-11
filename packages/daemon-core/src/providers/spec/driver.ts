@@ -41,7 +41,7 @@ import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import { evaluate, type SpecEvaluation, type TraceEntry } from './evaluator.js';
 import { loadSpec } from './loader.js';
-import type { CliSpec, Control, DelegateTrigger, SectionDef } from './types.js';
+import type { CliSpec, Condition, ChangedCondition, Control, DelegateTrigger, SectionDef } from './types.js';
 import { LOG } from '../../logging/logger.js';
 
 export type DashboardEvent =
@@ -111,6 +111,14 @@ const BUSY_HOLD_MS = 6000;
  *  but is never submitted until the user hits Enter manually. 200ms matches
  *  codex's explicit setting and is barely perceptible to a human caller. */
 const SUBMIT_DELAY_FLOOR_MS = 200;
+
+function collectChangedConditions(when: Condition | undefined): ChangedCondition[] {
+    if (!when) return [];
+    if ('cursor_above' in when && 'changed' in when) return [when as ChangedCondition];
+    if ('all' in when) return when.all.flatMap(c => collectChangedConditions(c));
+    if ('any' in when) return when.any.flatMap(c => collectChangedConditions(c));
+    return [];
+}
 
 function countNewlines(s: string): number {
     let n = 0;
@@ -240,6 +248,9 @@ export class SpecDriver {
      *  Used by screen_active_hold_ms to suppress idle downshifts while
      *  the terminal is still actively updating. */
     private lastScreenChangedAt = 0;
+    /** Per-cursor_above region last-changed timestamps for stable_ms tracking.
+     *  Key: cursor_above value. Value: last time that region changed. */
+    private regionLastChangedAt = new Map<number, number>();
     /** Timer that re-runs evaluate() once the hold window expires. Needed
      *  because the PTY stops emitting once the agent finishes; without an
      *  explicit wake-up there's nothing to trigger the busy → idle
@@ -482,9 +493,24 @@ export class SpecDriver {
         const cursor = this.adapter.getCursorPosition();
         const currentLines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
         const ev = evaluate(this.spec, screen, cursor, this.prevScreenLines.length > 0 ? this.prevScreenLines : undefined);
+        const now = Date.now();
         // Track when the screen last changed for screen_active_hold_ms.
         if (this.prevScreenLines.length > 0 && currentLines.join('\n') !== this.prevScreenLines.join('\n')) {
-            this.lastScreenChangedAt = Date.now();
+            this.lastScreenChangedAt = now;
+        }
+        // Track per-region last-changed timestamps for stable_ms conditions.
+        if (cursor && this.prevScreenLines.length > 0) {
+            for (const state of this.spec.states) {
+                const conditions = collectChangedConditions(state.when);
+                for (const cond of conditions) {
+                    if (cond.stable_ms == null) continue;
+                    const startRow = Math.max(0, cursor.row - cond.cursor_above);
+                    const endRow = cursor.row;
+                    const cur = currentLines.slice(startRow, endRow).join('\n');
+                    const prev = this.prevScreenLines.slice(startRow, endRow).join('\n');
+                    if (cur !== prev) this.regionLastChangedAt.set(cond.cursor_above, now);
+                }
+            }
         }
         // Update prevScreenLines for next evaluation's `changed` condition detection.
         this.prevScreenLines = currentLines;
@@ -500,13 +526,31 @@ export class SpecDriver {
         let evState = ev.state;
         const busyHoldMs = this.spec.debounce?.busy_hold_ms ?? BUSY_HOLD_MS;
         if (this.currentStateId === 'busy' && evState.id === 'idle') {
-            const ageMs = Date.now() - this.lastBusyAt;
+            const ageMs = now - this.lastBusyAt;
             if (ageMs < busyHoldMs) {
                 // Pin to the last seen busy state directly — currentEval can
                 // already be idle at this point (it tracks the previous tick,
                 // which during the flicker is just as likely to be idle as
                 // busy), so we can't rely on it to recover the busy label.
                 evState = this.lastBusyState ?? evState;
+            }
+        }
+        // stable_ms gate: if the matched idle state has a changed:false/stable_ms
+        // condition, verify the region has been stable long enough. If not, pin
+        // to busy and schedule a re-evaluation when the stable window expires.
+        if (evState.id === (this.spec.default_state ?? 'idle') && cursor) {
+            const stableConditions = collectChangedConditions(
+                this.spec.states.find(s => s.id === evState.id)?.when
+            ).filter(c => c.changed === false && c.stable_ms != null);
+            for (const cond of stableConditions) {
+                const lastChanged = this.regionLastChangedAt.get(cond.cursor_above) ?? 0;
+                const stableMs = cond.stable_ms!;
+                const stableAge = lastChanged > 0 ? now - lastChanged : Infinity;
+                if (stableAge < stableMs) {
+                    evState = this.lastBusyState ?? { id: 'busy', label: 'Generating', title: null };
+                    this.scheduleBusyExpiry(stableMs - stableAge + 50);
+                    break;
+                }
             }
         }
         // Modal hold: when in a modal state (approval, picker, etc.) a brief
@@ -538,7 +582,6 @@ export class SpecDriver {
         //    approval appeared and its hold expires immediately after dismissal,
         //    causing a false-idle even though the agent is still generating.
         const postModalGraceMs = busyHoldMs;
-        const now = Date.now();
         const recentlyInModal = isModalState(this.currentStateId) || (this.lastModalAt > 0 && now - this.lastModalAt < postModalGraceMs);
         const recentlyLeftModal = !recentlyInModal && this.lastModalExitAt > 0 && now - this.lastModalExitAt < postModalGraceMs;
         // screen_active_hold_ms: suppress idle downshift while the screen is
@@ -555,7 +598,6 @@ export class SpecDriver {
         if (evState.id === 'busy' && completionIdleRule && !recentlyInModal && !recentlyLeftModal && !screenIsActive) {
             const completionKey = matchesCompletionIdleRule(this.spec, ev, screen);
             if (completionKey) {
-                const now = Date.now();
                 if (completionKey !== this.completionIdleKey) {
                     this.completionIdleKey = completionKey;
                     this.completionIdleFirstSeenAt = now;

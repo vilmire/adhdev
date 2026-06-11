@@ -192,10 +192,13 @@ export interface RegexCondition {
     cursor_col_max?: number;
 }
 
-/** v3 delta condition: N lines above cursor changed vs prevLines. */
+/** v3 delta condition: N lines above cursor changed vs prevLines.
+ *  changed:false + stable_ms: region must be stable for at least N ms. */
 export interface ChangedCondition {
     cursor_above: number;
-    changed: true;
+    changed: boolean;
+    /** Only for changed:false — region must have been stable for this many ms. */
+    stable_ms?: number;
 }
 
 /** v3 AND composite. */

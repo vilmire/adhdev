@@ -227,8 +227,11 @@ function evaluateCondition(
         const endRow = cursor.row; // exclusive
         const currentSlice = curLines.slice(startRow, endRow).join('\n');
         const prevSlice = prevLines.slice(startRow, endRow).join('\n');
-        const result = currentSlice !== prevSlice;
-        trace.push({ kind: 'section', text: `state[${stateId}] changed cond cursor_above=${cond.cursor_above} rows[${startRow},${endRow}) changed=${result}` });
+        const didChange = currentSlice !== prevSlice;
+        // changed:false means "region is currently stable" — stable_ms duration
+        // is enforced by the driver, not here.
+        const result = cond.changed ? didChange : !didChange;
+        trace.push({ kind: 'section', text: `state[${stateId}] changed cond cursor_above=${cond.cursor_above} rows[${startRow},${endRow}) changed=${didChange} expected=${cond.changed} result=${result}` });
         return result;
     }
 

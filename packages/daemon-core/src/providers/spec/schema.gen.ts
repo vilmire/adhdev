@@ -460,7 +460,8 @@ export const SCHEMA_V3 = {
             "required": ["cursor_above", "changed"],
             "properties": {
                 "cursor_above": { "type": "integer", "minimum": 1 },
-                "changed": { "type": "boolean", "const": true }
+                "changed": { "type": "boolean" },
+                "stable_ms": { "type": "integer", "minimum": 0 }
             }
         },
         "allCondition": {
