@@ -127,7 +127,8 @@ export function mergeMeshGraphLiveSessionStatusIntoMeshStatus(
         for (const alias of liveSessionAliases(session)) liveById.set(alias, session)
     }
     let changed = false
-    const nodes = (status.nodes ?? []).map(node => {
+    const sourceNodes = status.nodes ?? []
+    const nodes = sourceNodes.map((node, nodeIndex) => {
         const rawDetails = Array.isArray(node.activeSessionDetails)
             ? node.activeSessionDetails as any[]
             : Array.isArray((node as any).sessions)
@@ -163,10 +164,15 @@ export function mergeMeshGraphLiveSessionStatusIntoMeshStatus(
         for (const sessionId of node.activeSessions ?? []) {
             if (!byId.has(sessionId)) byId.set(sessionId, { sessionId, workspace: node.workspace, isCached: true })
         }
+        const isFirstNode = nodeIndex === 0
         for (const live of liveSessions) {
             const aliases = liveSessionAliases(live)
             if (aliases.some(alias => byId.has(alias))) continue
-            if (live.nodeId !== node.nodeId) continue
+            // Coordinator sessions may report nodeId=null; inject into the matching node
+            // (by nodeId) or, when nodeId is absent, into the first node only.
+            const matchesById = live.nodeId != null && live.nodeId === node.nodeId
+            const matchesAsNullCoordinator = live.isSelfCoordinator && !live.nodeId && isFirstNode
+            if (!matchesById && !matchesAsNullCoordinator) continue
             changed = true
             byId.set(live.sessionId, {
                 sessionId: live.sessionId,

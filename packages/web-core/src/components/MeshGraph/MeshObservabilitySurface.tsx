@@ -50,7 +50,18 @@ type HealPreviewState = {
     executed?: boolean
 }
 
-const EMPTY_LEDGER_SUMMARY = { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 }
+const EMPTY_LEDGER_SUMMARY: RepoMeshLedgerSummaryStatus = {
+    meshId: '',
+    totalEntries: 0,
+    taskDispatched: 0,
+    taskCompleted: 0,
+    taskFailed: 0,
+    taskStalled: 0,
+    sessionLaunched: 0,
+    checkpointCreated: 0,
+    lastActivityAt: null,
+    recentFailures: 0,
+}
 
 const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
 
@@ -370,18 +381,29 @@ function getRepoMeshStatusGraphFingerprint(status: RepoMeshStatus): string {
     ].join('::')
 }
 
+type AsyncRefineJob = {
+    jobId: string
+    status: 'accepted' | 'running' | 'completed' | 'failed'
+    branch?: string
+    into?: string
+    completedAt?: string
+    startedAt?: string
+}
+
 function MeshHealthPanel({
     canonicalStatus,
     queueSummary,
     ledgerSummary,
     isBootstrapMode,
     meshTheme,
+    sessionEntries,
 }: {
     canonicalStatus: RepoMeshStatus
     queueSummary: RepoMeshQueueSummary | null
     ledgerSummary: RepoMeshLedgerSummaryStatus
     isBootstrapMode: boolean
     meshTheme: MeshGraphTheme
+    sessionEntries: SessionListEntry[]
 }) {
     const hasQueueActivity = queueSummary && (queueSummary.active > 0 || queueSummary.historical > 0)
     const hasLedgerFailures = ledgerSummary.recentFailures > 0 || ledgerSummary.taskFailed > 0
@@ -390,15 +412,31 @@ function MeshHealthPanel({
             .filter(task => task.status === 'failed' || task.status === 'cancelled')
             .slice(0, 5)
         : []
+    const asyncRefineJobs = (canonicalStatus as any).asyncRefineJobs as AsyncRefineJob[] | undefined
+    const activeRefineJobs = asyncRefineJobs?.filter(j => j.status === 'running' || j.status === 'accepted') ?? []
+    const failedRefineJobs = asyncRefineJobs?.filter(j => j.status === 'failed') ?? []
+    const staleWork = (canonicalStatus as any).staleDirectWorkSummary as { count: number; reasonCounts?: Record<string, number> } | undefined
+    const hasStaleWork = staleWork && staleWork.count > 0
 
-    if (!hasQueueActivity && !hasLedgerFailures && canonicalStatus.nodes.length === 0 && !isBootstrapMode) {
+    if (!hasQueueActivity && !hasLedgerFailures && canonicalStatus.nodes.length === 0 && !isBootstrapMode
+        && activeRefineJobs.length === 0 && failedRefineJobs.length === 0 && !hasStaleWork && sessionEntries.length === 0) {
         return null
     }
 
     return (
-        <details className={`rounded-2xl border text-xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
+        <details open className={`rounded-2xl border text-xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
             <summary className={`flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium [&::-webkit-details-marker]:hidden ${meshTheme.textSecondary}`}>
                 <span className="flex-1">Mesh Health Panel</span>
+                {activeRefineJobs.length > 0 && (
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700'}`}>
+                        {activeRefineJobs.length} refining
+                    </span>
+                )}
+                {failedRefineJobs.length > 0 && (
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
+                        {failedRefineJobs.length} refine failed
+                    </span>
+                )}
                 {hasLedgerFailures && (
                     <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
                         {ledgerSummary.recentFailures} recent failures
@@ -517,6 +555,86 @@ function MeshHealthPanel({
                         )}
                     </div>
                 </div>
+
+                {/* Refine Jobs */}
+                {asyncRefineJobs && asyncRefineJobs.length > 0 && (
+                    <div className={`mt-4 border-t pt-3 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Refine Jobs</div>
+                        <div className="flex flex-col gap-1">
+                            {asyncRefineJobs.slice(0, 8).map(job => (
+                                <div key={job.jobId} className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 ${
+                                    job.status === 'failed'
+                                        ? (meshTheme.isDark ? 'border-rose-400/15 bg-rose-500/8' : 'border-rose-200 bg-rose-50/80')
+                                        : job.status === 'running' || job.status === 'accepted'
+                                            ? (meshTheme.isDark ? 'border-sky-400/15 bg-sky-500/8' : 'border-sky-200 bg-sky-50/80')
+                                            : (meshTheme.isDark ? 'border-white/6 bg-white/[0.02]' : 'border-slate-200 bg-white/60')
+                                }`}>
+                                    <div className="min-w-0 flex-1">
+                                        <span className={`font-mono ${meshTheme.textMuted}`}>{job.jobId.slice(0, 12)}</span>
+                                        {job.branch && (
+                                            <span className={`ml-1.5 ${meshTheme.textMuted}`}>
+                                                {job.branch}{job.into ? ` → ${job.into}` : ''}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${
+                                        job.status === 'failed'
+                                            ? (meshTheme.isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700')
+                                            : job.status === 'running' || job.status === 'accepted'
+                                                ? (meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700')
+                                                : (meshTheme.isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
+                                    }`}>
+                                        {job.status}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Stale Work */}
+                {hasStaleWork && (
+                    <div className={`mt-4 border-t pt-3 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Stale Work</div>
+                        <div className={`flex items-center justify-between ${meshTheme.textSecondary}`}>
+                            <span>Stale items</span>
+                            <span className={`tabular-nums ${meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}`}>{staleWork!.count}</span>
+                        </div>
+                        {staleWork!.reasonCounts && Object.keys(staleWork!.reasonCounts).length > 0 && (
+                            <div className="mt-1 flex flex-col gap-0.5">
+                                {Object.entries(staleWork!.reasonCounts).map(([reason, count]) => (
+                                    <div key={reason} className={`flex justify-between ${meshTheme.textMuted}`}>
+                                        <span className="truncate">{reason}</span>
+                                        <span className="tabular-nums">{count}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* All Sessions */}
+                {sessionEntries.length > 0 && (
+                    <div className={`mt-4 border-t pt-3 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                        <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>All Sessions ({sessionEntries.length})</div>
+                        <div className="flex flex-col gap-1">
+                            {sessionEntries.map(entry => (
+                                <div key={entry.session.sessionId} className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 ${meshTheme.isDark ? 'border-white/6 bg-white/[0.02]' : 'border-slate-200 bg-white/60'}`}>
+                                    <span className={`min-w-0 flex-1 truncate font-mono ${meshTheme.textMuted}`} title={entry.session.sessionId}>
+                                        {shortSessionId(entry.session.sessionId)}
+                                    </span>
+                                    <span className={`shrink-0 ${meshTheme.textMuted}`}>{entry.session.providerType || '?'}</span>
+                                    <span className={`shrink-0 ${meshTheme.textMuted}`}>{sessionRoleLabel(entry.session)}</span>
+                                    <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
+                                        meshTheme.isDark
+                                            ? 'border-white/10 bg-white/[0.04] text-slate-300'
+                                            : 'border-slate-200 bg-slate-100 text-slate-600'
+                                    }`}>{sessionStatusLabel(entry.session)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
         </details>
     )
@@ -761,7 +879,7 @@ export default function MeshObservabilitySurface({
 
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
-        <div className="flex min-h-0 flex-1 flex-col gap-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
                 <div className={`${meshTheme.cardClass} relative flex min-h-0 flex-1 flex-col rounded-[28px] p-3 sm:p-4`} style={{ minHeight: 420 }}>
                     <div className={`absolute inset-x-4 top-4 z-30 flex max-h-[42dvh] flex-wrap items-start justify-between gap-3 overflow-y-auto rounded-2xl px-3.5 py-3 backdrop-blur-xl sm:static sm:mb-3 sm:max-h-none sm:overflow-visible sm:backdrop-blur-none ${meshTheme.isDark ? 'border border-white/10 bg-slate-950/85 sm:bg-slate-950/45' : 'border border-slate-200 bg-white/95 shadow-lg shadow-slate-900/10 sm:bg-white/95 sm:shadow-sm'}`}>
@@ -1094,6 +1212,7 @@ export default function MeshObservabilitySurface({
                 ledgerSummary={ledgerSummary}
                 isBootstrapMode={isBootstrapMode}
                 meshTheme={meshTheme}
+                sessionEntries={sessionEntries}
             />
         </div>
         </MeshGraphThemeContext.Provider>
