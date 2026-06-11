@@ -14,6 +14,7 @@ import {
 } from '../../hooks/useMeshGraphMetadataSubscription'
 import { extractRepoMeshStatus } from '../../utils/repo-mesh-status'
 import { getMeshGraphTheme } from '../MeshGraph/meshGraphTheme'
+import { hasPendingDashboardMeshRefresh, nextDashboardMeshRefreshDelayMs } from '../../utils/dashboard-mesh-live-refresh'
 
 export {
     collectMeshGraphLiveSessionStatuses as collectDashboardLiveMeshSessionStatuses,
@@ -88,12 +89,23 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const loadInFlightRef = useRef(false)
     const pendingRefreshRef = useRef(false)
     const mountedRef = useRef(true)
+    const pendingGitRetryAttemptRef = useRef(0)
+    const pendingGitRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
     useEffect(() => {
         hasUsableGraphRef.current = meshStatus !== null
     }, [meshStatus])
 
+    const cancelPendingGitRetry = useCallback(() => {
+        if (pendingGitRetryTimerRef.current !== null) {
+            clearTimeout(pendingGitRetryTimerRef.current)
+            pendingGitRetryTimerRef.current = null
+        }
+    }, [])
+
     useEffect(() => {
+        cancelPendingGitRetry()
+        pendingGitRetryAttemptRef.current = 0
         const cachedStatus = cacheKey ? dashboardMeshGraphStatusCache.get(cacheKey) ?? null : null
         setMeshStatus(cachedStatus)
         setLastLoadedAt(cachedStatus?.refreshedAt ?? null)
@@ -101,9 +113,9 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         pendingRefreshRef.current = false
         setRefreshing(false)
         setError(null)
-    }, [cacheKey])
+    }, [cacheKey, cancelPendingGitRetry])
 
-    const loadGraph = useCallback(async (refresh = false) => {
+    const loadGraph = useCallback(async (refresh = false, isAutoRetry = false) => {
         if (!daemonId || !meshId) {
             setError('This coordinator does not expose a live mesh id.')
             setMeshStatus(null)
@@ -115,16 +127,9 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             return
         }
 
-        if (!refresh && cacheKey) {
-            const cachedStatus = dashboardMeshGraphStatusCache.get(cacheKey)
-            if (cachedStatus) {
-                setMeshStatus(cachedStatus)
-                setLastLoadedAt(cachedStatus.refreshedAt || null)
-                hasUsableGraphRef.current = true
-                setLoading(false)
-                setError(null)
-                return
-            }
+        if (!isAutoRetry) {
+            cancelPendingGitRetry()
+            pendingGitRetryAttemptRef.current = 0
         }
 
         loadInFlightRef.current = true
@@ -148,6 +153,18 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             setMeshStatus(status)
             hasUsableGraphRef.current = true
             setLastLoadedAt(status.refreshedAt || new Date().toISOString())
+
+            if (hasPendingDashboardMeshRefresh(status.nodes)) {
+                const delay = nextDashboardMeshRefreshDelayMs(pendingGitRetryAttemptRef.current)
+                if (delay !== null && mountedRef.current) {
+                    pendingGitRetryAttemptRef.current += 1
+                    pendingGitRetryTimerRef.current = setTimeout(() => {
+                        if (mountedRef.current) void loadGraph(true, true)
+                    }, delay)
+                }
+            } else {
+                pendingGitRetryAttemptRef.current = 0
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load live mesh status')
         } finally {
@@ -161,15 +178,17 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 }, 0)
             }
         }
-    }, [cacheKey, daemonId, meshId, meshOverrides, sendDaemonCommand])
+    }, [cacheKey, cancelPendingGitRetry, daemonId, meshId, meshOverrides, sendDaemonCommand])
 
     useEffect(() => {
         mountedRef.current = true
-        loadGraph(false)
+        pendingGitRetryAttemptRef.current = 0
+        loadGraph(true)
         return () => {
             mountedRef.current = false
+            cancelPendingGitRetry()
         }
-    }, [loadGraph])
+    }, [loadGraph, cancelPendingGitRetry])
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
