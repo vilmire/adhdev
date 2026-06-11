@@ -1087,18 +1087,35 @@ export default function MeshObservabilitySurface({
                                 {selectedNodeSessionEntries.length > 0 && <Badge label={`${selectedNodeSessionEntries.length} sessions`} tone="info" />}
                             </div>
                             <div className="grid gap-1.5 text-xs">
-                                <Row label="Machine" value={selectedGraphNode.machineLabel ?? 'not reported'} />
-                                <Row label="Locality" value={selectedGraphNode.locality} />
-                                <Row label="Machine id" value={selectedGraphNode.machineId ?? selectedNodeStatus?.machineId ?? 'not reported'} />
-                                <Row label="Daemon id" value={selectedGraphNode.daemonId ?? selectedNodeStatus?.daemonId ?? 'not reported'} />
+                                {selectedGraphNode.machineLabel && (
+                                    <Row label="Machine" value={selectedGraphNode.machineLabel} />
+                                )}
+                                {selectedGraphNode.locality && selectedGraphNode.locality !== 'unknown' && (
+                                    <Row label="Locality" value={selectedGraphNode.locality} />
+                                )}
                                 <Row label="Workspace" value={selectedNodeStatus?.workspace ?? selectedGraphNode.workspace} />
-                                <Row label="Branch" value={selectedGraphNode.branch ?? 'unknown'} />
-                                <Row label="HEAD" value={selectedHeadSummary ?? (selectedNodeStatus?.gitProbePending ? 'Pending live git probe' : 'not reported')} />
-                                <Row label="Upstream" value={selectedGraphNode.upstream ?? 'none'} />
-                                <Row label="Dirty/ahead/behind" value={`${selectedGraphNode.dirtyFiles} dirty · ↑${selectedGraphNode.ahead}/↓${selectedGraphNode.behind}`} />
-                                <Row label="Source" value={String(selectedNodeStatus?.connection?.source ?? describeGraphNodeSource(selectedGraphNode))} />
-                                <Row label="Transport" value={selectedNodeStatus?.connection?.transport ?? 'unknown'} />
-                                <Row label="Sessions" value={selectedNodeSessionEntries.length > 0 ? selectedNodeSessionEntries.map(entry => sessionStatusLabel(entry.session)).join(', ') : 'none active'} />
+                                {selectedHeadSummary && (
+                                    <Row label="HEAD" value={selectedHeadSummary} />
+                                )}
+                                {selectedGraphNode.upstream && (
+                                    <Row label="Upstream" value={selectedGraphNode.upstream} />
+                                )}
+                                {(() => {
+                                    const src = selectedNodeStatus?.connection?.source ?? describeGraphNodeSource(selectedGraphNode)
+                                    return src && src !== 'unknown' ? <Row label="Source" value={String(src)} /> : null
+                                })()}
+                                {(() => {
+                                    const t = selectedNodeStatus?.connection?.transport
+                                    return t && t !== 'unknown' ? <Row label="Transport" value={t} /> : null
+                                })()}
+                                {(() => {
+                                    const mid = selectedGraphNode.machineId ?? selectedNodeStatus?.machineId
+                                    return mid ? <Row label="Machine id" value={mid} /> : null
+                                })()}
+                                {(() => {
+                                    const did = selectedGraphNode.daemonId ?? selectedNodeStatus?.daemonId
+                                    return did ? <Row label="Daemon id" value={did} /> : null
+                                })()}
                             </div>
                             {selectedNodeSessionEntries.length > 0 && (
                                 <div className="mt-3">
@@ -1208,13 +1225,12 @@ export default function MeshObservabilitySurface({
                                     {hoveredGraphNode.dirtyFiles > 0 && <Badge label={`${hoveredGraphNode.dirtyFiles} dirty`} tone="warn" />}
                                     {hoveredGraphNode.activeSessionCount > 0 && <Badge label={`${hoveredGraphNode.activeSessionCount} sessions`} tone="info" />}
                                 </div>
-                                <div className="grid gap-2 text-xs sm:grid-cols-2">
-                                    <Row label="Machine" value={hoveredGraphNode.machineLabel ?? 'not reported'} />
-                                    <Row label="Locality" value={hoveredGraphNode.locality} />
+                                <div className="grid gap-1.5 text-xs">
+                                    {hoveredGraphNode.machineLabel && <Row label="Machine" value={hoveredGraphNode.machineLabel} />}
+                                    {hoveredGraphNode.locality && hoveredGraphNode.locality !== 'unknown' && <Row label="Locality" value={hoveredGraphNode.locality} />}
                                     <Row label="Workspace" value={hoveredGraphNode.workspace} />
-                                    <Row label="Upstream" value={hoveredGraphNode.upstream ?? 'none'} />
-                                    <Row label="Dirty/ahead/behind" value={`${hoveredGraphNode.dirtyFiles} dirty · ↑${hoveredGraphNode.ahead}/↓${hoveredGraphNode.behind}`} />
-                                    <Row label="Source" value={describeGraphNodeSource(hoveredGraphNode)} />
+                                    {hoveredGraphNode.upstream && <Row label="Upstream" value={hoveredGraphNode.upstream} />}
+                                    {(() => { const s = describeGraphNodeSource(hoveredGraphNode); return s && s !== 'unknown' ? <Row label="Source" value={s} /> : null })()}
                                 </div>
                             </section>
                         </div>
