@@ -497,9 +497,7 @@ export {
   type IpcStatusPayload,
 } from './ipc/local-ipc-server.js';
 
-// ── CLI Spec (adhdev:cli/spec@1) ──
-export { evaluate as evaluateSpec, evaluate } from './providers/spec/evaluator.js';
-export { loadSpec, resolveSpecPath } from './providers/spec/loader.js';
+// ── CLI Spec (adhdev:cli/spec@4) ──
 export { createNativeHistoryDispatcher } from './providers/native-history/index.js';
 export type { ReaderId } from './providers/native-history/index.js';
 export {
@@ -507,12 +505,15 @@ export {
     readAntigravityCliSession, readHermesCliSession,
 } from './providers/native-history/index.js';
 export type {
-    CliSpec, SpecState, ControlAction, Control,
-    NotificationRule, DelegateTrigger, Section,
+    ControlAction, Control,
+    NotificationRule, DelegateTrigger,
 } from './providers/spec/types.js';
-export type { SpecEvaluation, TraceEntry } from './providers/spec/evaluator.js';
-export { SpecDriver } from './providers/spec/driver.js';
-export type { DashboardEvent, DashboardCommand, SpecDriverOpts } from './providers/spec/driver.js';
+export type { TraceEntry } from './providers/spec/evaluator.js';
+export { evaluateFsm } from './providers/spec/fsm-evaluator.js';
+export type { FsmClock } from './providers/spec/fsm-evaluator.js';
+export { validateFsmSpec } from './providers/spec/fsm-loader.js';
+export { FsmDriver } from './providers/spec/fsm-driver.js';
+export type { DashboardEvent, DashboardCommand, SpecDriverOpts, ISpecDriver } from './providers/spec/fsm-driver.js';
 export { TerminalAdapter } from './providers/spec/adapter.js';
 export type { TerminalAdapterOpts, TerminalAdapterHandlers } from './providers/spec/adapter.js';
 

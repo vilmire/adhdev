@@ -137,15 +137,15 @@ describe('claude-cli v4 FSM', () => {
     });
 
     it('busy stays until completion marker is stable', () => {
-        // 0.6s after entering busy, marker present but region not yet stable 1.5s
-        const ev = evaluateFsm(spec, 'busy', doneScreen, { row: 5, col: 2 }, undefined, clk(600, 0));
+        // 3s after entering busy: completion marker present but region not yet stable (6s required)
+        const ev = evaluateFsm(spec, 'busy', doneScreen, { row: 5, col: 2 }, undefined, clk(3000, 0));
         expect(ev.fired).toBeNull();
         const busyIdle = ev.transitions.find(t => t.label === 'busy→idle');
         expect(busyIdle?.condResult).toBe(false);
     });
 
-    it('busy → idle once completion marker stable', () => {
-        const ev = evaluateFsm(spec, 'busy', doneScreen, { row: 5, col: 2 }, undefined, clk(2000, 0));
+    it('busy → idle once completion marker present and region stable for 6s', () => {
+        const ev = evaluateFsm(spec, 'busy', doneScreen, { row: 5, col: 2 }, undefined, clk(7000, 0));
         expect(ev.fired?.to).toBe('idle');
     });
 

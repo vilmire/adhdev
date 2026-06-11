@@ -36,7 +36,6 @@ import {
 } from './external-sources.js';
 import type { ProviderSourceMode } from '../config/config.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
-import { loadSpec } from './spec/loader.js';
 import { executeNativeHistory } from './spec/native-history-executor.js';
 import { createNativeHistoryDispatcher, type ReaderId } from './native-history/dispatcher.js';
 
@@ -1247,20 +1246,13 @@ export class ProviderLoader {
           // Hand the resolved spec path off to route.ts via a hidden field
           // so the routing layer doesn't have to repeat the candidate walk.
           (resolved as any)._resolvedSpecPath = specPath;
-          // Extract control_bar + native_history in a schema-agnostic way.
-          // v3 goes through loadSpec (validates/migrates); v4 (FSM) reads the
-          // header fields directly from JSON since loadSpec only knows v1/v3.
+          // Extract control_bar + native_history directly from the JSON header.
           let specControls: any[] | undefined;
           let nh: any | undefined;
           try {
             const rawSpec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
-            if (rawSpec?.$schema === 'adhdev:cli/spec@4') {
-              specControls = rawSpec.control_bar;
-              nh = rawSpec.native_history;
-            } else {
-              const r = loadSpec(specPath);
-              if (r.ok) { specControls = r.spec.control_bar; nh = r.spec.native_history; }
-            }
+            specControls = rawSpec.control_bar;
+            nh = rawSpec.native_history;
           } catch { /* unreadable spec — leave controls/native unavailable */ }
           // Stub each control_bar entry as a provider.scripts.<id>. The
           // upstream invoke_provider_script gate checks that the script

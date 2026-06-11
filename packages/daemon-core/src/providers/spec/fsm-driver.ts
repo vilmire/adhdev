@@ -26,7 +26,7 @@ import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import {
     resolveSections, sectionText, extractTitle, extractButtonsFromRule,
-    type ResolvedSection,
+    type ResolvedSection, type TraceEntry,
 } from './evaluator.js';
 import { evaluateFsm, type FsmClock, type TransitionEval } from './fsm-evaluator.js';
 import {
@@ -35,12 +35,98 @@ import {
 } from './fsm-types.js';
 import { loadFsmSpec } from './fsm-loader.js';
 import type { Control, DelegateTrigger } from './types.js';
-import {
-    type DashboardEvent, type DashboardCommand, type SpecDriverOpts,
-    type ISpecDriver, type DriverHistoryEntry,
-    resolveSubmitDelayMs, guessExt,
-} from './driver.js';
 import { LOG } from '../../logging/logger.js';
+
+// ── Shared driver types (formerly in driver.ts) ───────────────────────────
+
+export type DashboardEvent =
+    | { kind: 'pty_data'; chunk: string }
+    | { kind: 'state_changed'; state: { id: string; label: string; title: string | null };
+        modal: { title: string | null; buttons: { index: number; label: string }[] } | null;
+        controls: { id: string; label: string; action_type: string }[] }
+    | { kind: 'notification'; id: string; title: string; body: string }
+    | { kind: 'delegate'; id: string; task: string }
+    | { kind: 'spec_trace'; entries: TraceEntry[] }
+    | { kind: 'exit'; exit_code: number }
+    | { kind: 'spec_error'; errors: string[] };
+
+export type DashboardCommand =
+    | { kind: 'send_message'; text: string }
+    | { kind: 'pty_write'; data: string }
+    | { kind: 'click_control'; control_id: string; payload?: unknown }
+    | { kind: 'click_modal_button'; index: number }
+    | { kind: 'attach_image'; blob: string; mime: string }
+    | { kind: 'resize'; cols: number; rows: number }
+    | { kind: 'cancel' }
+    | { kind: 'shutdown' };
+
+export interface DriverHistoryEntry {
+    stateId: string;
+    label: string;
+    at: number;
+    durationMs: number;
+    reason: string;
+    matchedStateId?: string;
+    matchedRules?: string[];
+    debounceKind?: string;
+    idleHoldMs?: number;
+    busyHoldMs?: number;
+    via?: string;
+}
+
+export interface ISpecDriver {
+    subscribe(listener: (ev: DashboardEvent) => void): () => void;
+    start(): void;
+    dispatch(cmd: DashboardCommand): void;
+    snapshot(): string;
+    getCursorPosition(): { row: number; col: number };
+    getScreen(): string;
+    getSpecPath(): string;
+    shutdown(): void;
+    getStateHistory(): ReadonlyArray<DriverHistoryEntry>;
+    getSections(): Array<{ id: string; text: string }> | null;
+    getLastBusyAt(): number;
+    hasIdleHoldPending(): boolean;
+    getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null;
+    getFsmDebug?(): unknown;
+}
+
+export interface SpecDriverOpts {
+    specPath: string;
+    workingDir: string;
+    extraEnv?: Record<string, string>;
+    cols?: number;
+    rows?: number;
+    hotReload?: boolean;
+    emitTrace?: boolean;
+    transportFactory?: PtyTransportFactory;
+    extraCliArgs?: string[];
+}
+
+function countNewlines(s: string): number {
+    let n = 0;
+    for (let i = 0; i < s.length; i += 1) if (s.charCodeAt(i) === 10) n += 1;
+    return n;
+}
+
+const SUBMIT_DELAY_FLOOR_MS = 200;
+
+export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text: string): number {
+    const lines = countNewlines(text);
+    const linesBonus = Math.min(800, lines * 80);
+    const spec = typeof specBeforeSubmit === 'number' && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
+    return Math.max(spec, SUBMIT_DELAY_FLOOR_MS + linesBonus);
+}
+
+export function guessExt(mime: string): string {
+    if (/png/i.test(mime)) return '.png';
+    if (/jpe?g/i.test(mime)) return '.jpg';
+    if (/gif/i.test(mime)) return '.gif';
+    if (/webp/i.test(mime)) return '.webp';
+    return '.bin';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface ModalSnapshot {
     title: string | null;
