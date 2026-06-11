@@ -495,8 +495,8 @@ describe('MeshObservabilitySurface', () => {
       ledger: { entries: [] },
     } as any)
 
-    // submodule state is folded into parent nodes, no separate submodule graph nodes
-    expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(0)
+    // submodule nodes surface as separate graph nodes linked to their parent
+    expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(3)
     const coordinatorNode = graph.nodes.find(n => n.id === 'node_coordinator')
     expect(coordinatorNode?.health).toBe('degraded')
     expect(coordinatorNode?.outOfSync).toBe(true)
