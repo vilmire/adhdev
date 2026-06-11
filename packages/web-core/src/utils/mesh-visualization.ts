@@ -15,8 +15,6 @@ import { canonicalizeRepoMeshStatus, repoMeshNodeHasLiveGitEvidence } from './re
 export type MeshGraphNodeType = 'defaultBranchNode' | 'worktreeNode' | 'orphanNode' | 'submoduleNode'
 export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink' | 'cloneLink'
 
-type MeshGraphSubmoduleStatus = NonNullable<GitRepoStatus['submodules']>[number]
-
 export interface MeshGraphSessionDetail extends RepoMeshSessionStatus {
     chatStatus?: string
     role?: string | null
@@ -26,12 +24,7 @@ export interface MeshGraphSessionDetail extends RepoMeshSessionStatus {
     startedAt?: string | null
 }
 
-type MeshGraphNodeSource = RepoMeshNodeStatus | {
-    kind: 'synthetic-submodule'
-    parentNodeId: string
-    parentWorkspace: string
-    submodule: MeshGraphSubmoduleStatus
-}
+type MeshGraphNodeSource = RepoMeshNodeStatus
 
 export type MeshGraphBranchConvergenceStatus =
     | 'merged_to_main'
@@ -418,11 +411,6 @@ function evaluateBranchConvergence(node: RepoMeshNodeStatus, defaultBranch: stri
     return null
 }
 
-function getSubmoduleHealth(submodule: MeshGraphSubmoduleStatus): RepoMeshNodeHealth {
-    if (submodule.error || submodule.outOfSync) return 'degraded'
-    if (submodule.dirty) return 'dirty'
-    return 'online'
-}
 
 function assessSnapshotCompleteness(args: {
     nodeStatus: RepoMeshNodeStatus
@@ -570,63 +558,6 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             branchToNodeIds.set(branch, ids)
         }
 
-        for (const submodule of git?.submodules ?? []) {
-            const submoduleNodeId = `${graphNode.id}::submodule::${submodule.path}`
-            const submoduleLabel = submodule.path.split('/').filter(Boolean).pop() || submodule.path
-            nodes.push({
-                id: submoduleNodeId,
-                type: 'submoduleNode',
-                label: submoduleLabel,
-                workspace: submodule.repoPath,
-                branch: null,
-                upstream: null,
-                upstreamStatus: null,
-                daemonId: graphNode.daemonId,
-                machineId: graphNode.machineId,
-                machineLabel: graphNode.machineLabel,
-                locality: graphNode.locality,
-                health: getSubmoduleHealth(submodule),
-                ahead: 0,
-                behind: 0,
-                dirty: submodule.dirty,
-                dirtyFiles: submodule.dirty ? 1 : 0,
-                hasConflicts: false,
-                activeSessionCount: 0,
-                activeSessions: [],
-                sessionDetails: [],
-                providers: [],
-                isOrphan: false,
-                orphanReasons: [],
-                error: submodule.error,
-                nextStepHint: submodule.error
-                    || (submodule.outOfSync
-                        ? `${submodule.path} is out of sync with the parent checkout`
-                        : submodule.dirty
-                            ? `${submodule.path} has local changes`
-                            : `${submodule.path} is in sync with the parent checkout`),
-                parentNodeId: graphNode.id,
-                submodulePath: submodule.path,
-                submoduleCommit: submodule.commit,
-                outOfSync: submodule.outOfSync,
-                snapshotCompleteness: 'complete',
-                snapshotWarnings: [],
-                branchConvergence: null,
-                source: {
-                    kind: 'synthetic-submodule',
-                    parentNodeId: graphNode.id,
-                    parentWorkspace: nodeStatus.workspace,
-                    submodule,
-                },
-            })
-            edges.push({
-                id: `${graphNode.id}--${submoduleNodeId}`,
-                source: graphNode.id,
-                target: submoduleNodeId,
-                type: 'submoduleLink',
-                label: submodule.outOfSync ? 'submodule out of sync' : 'submodule',
-                direction: 'directed',
-            })
-        }
     }
 
     const defaultBranchNodeId = inferredDefaultBranch ? `__branch_${inferredDefaultBranch}` : null
@@ -760,8 +691,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const orphanCount = visibleGraphNodes.filter(node => node.isOrphan).length
     const conflictCount = visibleGraphNodes.filter(node => node.hasConflicts).length
     const offlineCount = visibleGraphNodes.filter(node => node.health === 'offline').length
-    const outOfSyncSubmoduleCount = visibleGraphNodes.filter(node => node.type === 'submoduleNode' && node.outOfSync).length
-    const followUpNodes = visibleGraphNodes.filter(node => node.type !== 'submoduleNode' && node.branchConvergence?.needsConvergence).length
+    const followUpNodes = visibleGraphNodes.filter(node => node.branchConvergence?.needsConvergence).length
     const blockedReviewNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'blocked_review').length
     const mergeReadyNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'pushed_feature_branch_needs_merge').length
     const cleanupCandidateNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'cleanup_candidate').length
@@ -786,7 +716,6 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     if (notMergeableNodes > 0) warnings.push(`${notMergeableNodes} workspace(s) have local changes or conflicts blocking convergence`)
     if (conflictCount > 0) warnings.push(`${conflictCount} workspace(s) report merge conflicts`)
     if (offlineCount > 0) warnings.push(`${offlineCount} node(s) are currently offline`)
-    if (outOfSyncSubmoduleCount > 0) warnings.push(`${outOfSyncSubmoduleCount} submodule(s) are out of sync with their parent checkout`)
     warnings.push(...snapshotWarnings)
     if (!inferredDefaultBranch) warnings.push('Could not infer a default branch from live mesh status')
 

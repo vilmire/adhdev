@@ -201,7 +201,7 @@ describe('buildMeshGraph', () => {
         expect(graph.edges.find(e => e.type === 'worktreeLink' && e.label === 'main peers')).toBeUndefined()
     })
 
-    it('links sibling submodules directly to their repo node instead of chaining them together', () => {
+    it('folds submodule state into parent node health without creating separate submodule graph nodes', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_submodules',
             meshName: 'Submodule Mesh',
@@ -227,15 +227,12 @@ describe('buildMeshGraph', () => {
             ],
         } as any)
 
-        const submoduleEdges = graph.edges.filter(edge => edge.type === 'submoduleLink')
-
-        expect(submoduleEdges).toHaveLength(3)
-        expect(new Set(submoduleEdges.map(edge => edge.source))).toEqual(new Set(['node_parent']))
-        expect(submoduleEdges.map(edge => edge.target).sort()).toEqual([
-            'node_parent::submodule::modules/a',
-            'node_parent::submodule::modules/b',
-            'node_parent::submodule::modules/c',
-        ])
+        expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(0)
+        expect(graph.edges.filter(e => e.type === 'submoduleLink')).toHaveLength(0)
+        expect(graph.nodes).toHaveLength(2) // parent + defaultBranchNode
+        const parent = graph.nodes.find(n => n.id === 'node_parent')
+        expect(parent).toBeDefined()
+        expect(parent?.health).toBe('online')
     })
 
     it('preserves machine identity and local-vs-remote hints when daemon metadata is present', () => {
@@ -521,7 +518,7 @@ describe('buildMeshGraph', () => {
         }))
     })
 
-    it('surfaces submodules as child graph nodes with explicit links and warnings', () => {
+    it('folds out-of-sync submodule health into the parent node without creating separate graph nodes', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_submodule',
             meshName: 'Submodule Mesh',
@@ -570,31 +567,13 @@ describe('buildMeshGraph', () => {
             dirty: false,
             outOfSync: true,
         }))
-        expect(graph.nodes).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                id: 'node_main::submodule::oss',
-                type: 'submoduleNode',
-                label: 'oss',
-                workspace: '/repo/main/oss',
-                parentNodeId: 'node_main',
-                submodulePath: 'oss',
-                outOfSync: true,
-            }),
-        ]))
-        expect(graph.edges).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                source: 'node_main',
-                target: 'node_main::submodule::oss',
-                type: 'submoduleLink',
-                label: 'submodule out of sync',
-            }),
-        ]))
+        expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(0)
+        expect(graph.edges.filter(e => e.type === 'submoduleLink')).toHaveLength(0)
         expect(graph.stats).toEqual(expect.objectContaining({
-            totalNodes: 2,
-            errorNodes: 2,
+            totalNodes: 1,
+            errorNodes: 1,
             totalActiveSessions: 1,
         }))
-        expect(graph.warnings).toContain('1 submodule(s) are out of sync with their parent checkout')
     })
 
     it('preserves daemon-provided branch convergence instead of overriding it from local graph heuristics', () => {

@@ -481,23 +481,13 @@ describe('extractRepoMeshStatus', () => {
     })
 
     const graph = buildMeshGraph(normalized as any)
-    expect(graph.nodes).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 'node_303a1ded96a859540d7bf608448d1fcc::submodule::oss',
-        type: 'submoduleNode',
-        workspace: `${repoRoot}/oss`,
-      }),
-    ]))
-    expect(graph.edges).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        source: 'node_303a1ded96a859540d7bf608448d1fcc',
-        target: 'node_303a1ded96a859540d7bf608448d1fcc::submodule::oss',
-        type: 'submoduleLink',
-      }),
-    ]))
+    expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(0)
+    expect(graph.edges.filter(e => e.type === 'submoduleLink')).toHaveLength(0)
+    const parentNode = graph.nodes.find(n => n.id === 'node_303a1ded96a859540d7bf608448d1fcc')
+    expect(parentNode).toBeDefined()
     expect(graph.stats).toMatchObject({
-      totalNodes: 2,
-      onlineNodes: 2,
+      totalNodes: 1,
+      onlineNodes: 1,
       incompleteSnapshotNodes: 0,
       missingSubmoduleSnapshotNodes: 0,
     })
@@ -895,10 +885,8 @@ describe('extractRepoMeshStatus', () => {
       snapshotCompleteness: 'complete',
       submoduleCommit: '083fe011',
     })
-    expect(graph.nodes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'node_303::submodule::adhdev-providers', type: 'submoduleNode' }),
-      expect.objectContaining({ id: 'node_303::submodule::oss', type: 'submoduleNode' }),
-    ]))
+    expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(0)
+    expect(graph.edges.filter(e => e.type === 'submoduleLink')).toHaveLength(0)
     expect(graphNode?.snapshotWarnings).toEqual([])
   })
 
@@ -1358,10 +1346,8 @@ describe('extractRepoMeshStatus', () => {
       snapshotCompleteness: 'complete',
       branchConvergence: expect.objectContaining({ status: 'blocked_review', needsConvergence: true }),
     })
-    expect(graph.nodes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'node_303::submodule::oss', type: 'submoduleNode' }),
-      expect.objectContaining({ id: 'node_303::submodule::adhdev-providers', type: 'submoduleNode' }),
-    ]))
+    expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(0)
+    expect(graph.edges.filter(e => e.type === 'submoduleLink')).toHaveLength(0)
     expect(graphNode?.snapshotWarnings).toEqual([])
     expect(graph.snapshotWarnings).toEqual([])
   })

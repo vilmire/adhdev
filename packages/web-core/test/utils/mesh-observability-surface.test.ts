@@ -409,7 +409,7 @@ describe('MeshObservabilitySurface', () => {
     })).toBeNull()
   })
 
-  it('keeps deterministic ELK layout boxes separated for long labels and sibling submodules', async () => {
+  it('keeps deterministic ELK layout boxes separated for long labels without submodule nodes', async () => {
     const graph = buildMeshGraph({
       meshId: 'mesh_spacing',
       meshName: 'Spacing Mesh',
@@ -495,6 +495,12 @@ describe('MeshObservabilitySurface', () => {
       ledger: { entries: [] },
     } as any)
 
+    // submodule state is folded into parent nodes, no separate submodule graph nodes
+    expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(0)
+    const coordinatorNode = graph.nodes.find(n => n.id === 'node_coordinator')
+    expect(coordinatorNode?.health).toBe('degraded')
+    expect(coordinatorNode?.outOfSync).toBe(true)
+
     const layout = await buildMeshGraphLayout(graph as any)
     const boxes = new Map(layout.nodes.map(node => [node.id, {
       left: node.position.x,
@@ -516,19 +522,8 @@ describe('MeshObservabilitySurface', () => {
     }
 
     const parent = boxes.get('node_coordinator')!
-    const parentChildren = [
-      boxes.get('node_coordinator::submodule::oss/packages/web-core-with-long-path')!,
-      boxes.get('node_coordinator::submodule::vendor/extremely-long-submodule-name')!,
-    ].sort((a, b) => a.left - b.left)
-    const child = parentChildren[0]
-    const secondChild = parentChildren[1]
     const peer = boxes.get('node_peer')!
-
-    // ELK RIGHT layout: same-branch nodes share a layer and submodules move to the next layer.
     expect(peer.top).toBeGreaterThanOrEqual(parent.top)
-    expect(child.left).toBeGreaterThan(parent.right)
-    expect(secondChild.left).toBe(child.left)
-    expect(secondChild.top - child.bottom).toBeGreaterThanOrEqual(MESH_GRAPH_LAYOUT.nodeGap)
   })
 
 })
