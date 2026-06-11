@@ -38,12 +38,14 @@ function formatCompletionMetadata(event: Record<string, unknown>): string {
     const finalAssistantPresent = typeof completionDiagnostic?.finalAssistantPresent === 'boolean'
         ? String(completionDiagnostic.finalAssistantPresent)
         : '';
+    const evidenceLevel = readNonEmptyString(event.evidenceLevel);
     const parts = [
         readNonEmptyString(event.targetSessionId) ? `session_id=${readNonEmptyString(event.targetSessionId)}` : '',
         readNonEmptyString(event.providerType) ? `provider=${readNonEmptyString(event.providerType)}` : '',
         readNonEmptyString(event.providerSessionId) ? `provider_session_id=${readNonEmptyString(event.providerSessionId)}` : '',
         diagnosticReason ? `completion_diagnostic=${diagnosticReason}` : '',
         finalAssistantPresent ? `final_assistant=${finalAssistantPresent}` : '',
+        evidenceLevel && evidenceLevel !== 'sufficient' ? `evidence_level=${evidenceLevel}` : '',
     ].filter(Boolean);
     return parts.length > 0 ? ` (${parts.join('; ')})` : '';
 }
@@ -59,7 +61,10 @@ export function buildMeshSystemMessage(args: {
         if (args.metadataEvent.source === 'long_generating_reconciliation') {
             return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The long-generating monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
         }
-        return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. This completion came from the agent status event path; use mesh_read_chat once to review its final progress, but do not poll repeatedly.`;
+        const reviewNote = args.metadataEvent.reviewRecommended === true
+            ? ' Completion evidence is insufficient — verify via git status or provider_session_id before assuming the task is done. Use mesh_read_chat once if needed, but do not poll repeatedly.'
+            : ' Use mesh_read_chat once to review its final progress, but do not poll repeatedly.';
+        return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. This completion came from the agent status event path;${reviewNote}`;
     }
     if (args.event === 'agent:waiting_approval') {
         return `[System] ${args.nodeLabel} is waiting for approval to proceed${metadata}. You may use mesh_read_chat and mesh_approve to handle it.`;
