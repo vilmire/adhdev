@@ -4743,6 +4743,66 @@ export class DaemonCommandRouter {
                 }
             }
 
+            // ── Validate an in-progress spec (string or object) without writing.
+            //    The form builder calls this on every change so Save can stay
+            //    disabled while there are structural / reference / regex errors.
+            case 'validate_spec': {
+                let parsed: unknown = args?.spec;
+                if (typeof args?.content === 'string') {
+                    try { parsed = JSON.parse(args.content); }
+                    catch (e) { return { success: true, valid: false, errors: [`invalid JSON: ${(e as Error).message}`] }; }
+                }
+                if (!parsed || typeof parsed !== 'object') {
+                    return { success: true, valid: false, errors: ['spec must be an object or content string'] };
+                }
+                const schema = (parsed as any).$schema;
+                if (schema === 'adhdev:cli/spec@4') {
+                    const { validateFsmSpec } = await import('../providers/spec/fsm-loader.js');
+                    const errors = validateFsmSpec(parsed);
+                    return { success: true, valid: errors.length === 0, errors };
+                }
+                // v1/v3 left to the legacy loader path; the builder is v4-only.
+                return { success: true, valid: false, errors: [`unsupported $schema "${schema}" — form builder is v4-only`] };
+            }
+
+            // ── Evaluate a single condition against a live session's current
+            //    screen — powers the editor's "does this match right now?"
+            //    preview. Returns the recursive match tree.
+            case 'eval_condition_preview': {
+                const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim()
+                    : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
+                if (!sessionId) return { success: false, error: 'targetSessionId required' };
+                if (!args?.condition || typeof args.condition !== 'object') return { success: false, error: 'condition required' };
+                const target = this.deps.sessionRegistry.get(sessionId);
+                if (!target) return { success: false, error: 'Session not found', sessionId };
+                const adapterObj = this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter as any;
+                const snap = adapterObj && typeof adapterObj.getDebugSnapshot === 'function' ? adapterObj.getDebugSnapshot() : null;
+                if (!snap?.screen) return { success: false, error: 'no live screen for session' };
+                // Reconstruct the sections map the spec would resolve. We pass
+                // the spec's sections so section-scoped regexes resolve the same
+                // way they do at runtime; fall back to the on-disk spec.
+                let sectionsDef: Record<string, unknown> | undefined;
+                try {
+                    const fsm2 = await import('node:fs');
+                    if (snap.specPath) {
+                        const raw = JSON.parse(fsm2.readFileSync(snap.specPath, 'utf8'));
+                        sectionsDef = raw?.sections;
+                    }
+                } catch { /* fall back to whole-screen matching */ }
+                const { evaluateConditionPreview } = await import('../providers/spec/fsm-evaluator.js');
+                try {
+                    const result = evaluateConditionPreview(
+                        args.condition,
+                        sectionsDef as any,
+                        snap.screen,
+                        snap.cursorPosition ?? undefined,
+                    );
+                    return { success: true, result, sections: snap.sections ?? null };
+                } catch (e) {
+                    return { success: false, error: `eval failed: ${(e as Error).message}` };
+                }
+            }
+
             // ── User-level coordinator-prompt files (~/.adhdev/coordinator-prompts/).
             //    These live on this daemon's filesystem and never sync to the
             //    cloud / other daemons — they're per-machine config. The

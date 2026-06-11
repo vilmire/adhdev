@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTransport } from '../../context/TransportContext'
 import type { ActiveConversation } from './types'
+import SpecFormBuilder, { type SpecModel, type FsmCond, type PreviewMap } from './SpecFormBuilder'
 
 interface StateHistoryEntry {
     stateId: string
@@ -200,12 +201,16 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
     const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['footer']))
     const [snapshotLabel, setSnapshotLabel] = useState<'Snapshot' | 'Copied!'>('Snapshot')
 
-    // ── Live spec editor (load file → edit → save → driver hot-reloads) ──
+    // ── Live spec editor (load file → structured edit → save → hot-reload) ──
     const [editing, setEditing] = useState(false)
+    const [specModel, setSpecModel] = useState<SpecModel | null>(null)
+    const [rawMode, setRawMode] = useState(false)
     const [specSource, setSpecSource] = useState('')
     const [specDirty, setSpecDirty] = useState(false)
     const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
     const [saveError, setSaveError] = useState<string | null>(null)
+    const [validationErrors, setValidationErrors] = useState<string[]>([])
+    const [preview, setPreview] = useState<PreviewMap>({})
     const [autoRefresh, setAutoRefresh] = useState(false)
 
     const daemonId = activeConv.daemonId || activeConv.routeId?.split(':')[0] || activeConv.routeId || ''
@@ -248,9 +253,22 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
         return () => window.removeEventListener('keydown', onKey)
     }, [onClose, editing])
 
+    // Validate the current model on the daemon (structure + refs + regex).
+    const validateModel = useCallback(async (m: SpecModel) => {
+        try {
+            const raw = await sendCommand(daemonId, 'validate_spec', { content: JSON.stringify(m) })
+            const env = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+            const inner = (env.result && typeof env.result === 'object' ? env.result : env) as { valid?: boolean; errors?: string[] }
+            setValidationErrors(inner?.valid ? [] : (inner?.errors ?? ['validation failed']))
+        } catch (e: any) {
+            setValidationErrors([e?.message || String(e)])
+        }
+    }, [sendCommand, daemonId])
+
     const openEditor = useCallback(async () => {
         setSaveError(null)
         setSaveState('idle')
+        setPreview({})
         try {
             const raw = await sendCommand(daemonId, 'get_spec_source', { targetSessionId: sessionId })
             const env = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
@@ -260,20 +278,61 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                 return
             }
             setSpecSource(inner.content)
+            let parsed: SpecModel | null = null
+            try { parsed = JSON.parse(inner.content) as SpecModel } catch { /* raw-only fallback */ }
+            if (parsed && parsed.$schema === 'adhdev:cli/spec@4') {
+                setSpecModel(parsed)
+                setRawMode(false)
+                void validateModel(parsed)
+            } else {
+                // Non-v4 spec — fall back to raw text editing.
+                setSpecModel(null)
+                setRawMode(true)
+            }
             setSpecDirty(false)
             setEditing(true)
         } catch (e: any) {
             setSaveError(e?.message || String(e))
+        }
+    }, [sendCommand, daemonId, sessionId, validateModel])
+
+    // Edit a model field → re-validate (debounced lightly by React batching).
+    const onModelChange = useCallback((next: SpecModel) => {
+        setSpecModel(next)
+        setSpecSource(JSON.stringify(next, null, 2))
+        setSpecDirty(true)
+        setSaveState('idle')
+        void validateModel(next)
+    }, [validateModel])
+
+    // Test one condition against the live session screen.
+    const onPreview = useCallback(async (path: string, cond: FsmCond) => {
+        setPreview(p => ({ ...p, [path]: 'loading' }))
+        try {
+            const raw = await sendCommand(daemonId, 'eval_condition_preview', { targetSessionId: sessionId, condition: cond })
+            const env = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+            const inner = (env.result && typeof env.result === 'object' ? env.result : env) as { success?: boolean; result?: { result: boolean; detail?: string }; error?: string }
+            if (!inner?.success || !inner.result) {
+                setPreview(p => ({ ...p, [path]: { result: false, detail: inner?.error } }))
+            } else {
+                setPreview(p => ({ ...p, [path]: { result: inner.result!.result, detail: inner.result!.detail } }))
+            }
+        } catch (e: any) {
+            setPreview(p => ({ ...p, [path]: { result: false, detail: e?.message } }))
         }
     }, [sendCommand, daemonId, sessionId])
 
     const saveSpec = useCallback(async () => {
         const specPath = data?.snapshot?.specPath
         if (!specPath) { setSaveError('No spec path on this session'); return }
+        if (!rawMode && validationErrors.length > 0) { setSaveError('Fix validation errors before saving'); return }
+        // In form mode the model is the source of truth; serialize it. In raw
+        // mode the textarea is.
+        const content = !rawMode && specModel ? JSON.stringify(specModel, null, 2) : specSource
         setSaveState('saving')
         setSaveError(null)
         try {
-            const raw = await sendCommand(daemonId, 'write_spec_source', { specPath, content: specSource })
+            const raw = await sendCommand(daemonId, 'write_spec_source', { specPath, content })
             const env = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
             const inner = (env.result && typeof env.result === 'object' ? env.result : env) as { success?: boolean; error?: string; validationErrors?: string[] }
             if (!inner?.success) {
@@ -291,7 +350,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
             setSaveState('error')
             setSaveError(e?.message || String(e))
         }
-    }, [sendCommand, daemonId, data?.snapshot?.specPath, specSource, load])
+    }, [sendCommand, daemonId, data?.snapshot?.specPath, specSource, specModel, rawMode, validationErrors, load])
 
     const snap = data?.snapshot
 
@@ -436,18 +495,41 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                     </div>
                 </div>
 
-                {/* Spec editor — replaces the body when active. Save writes the
-                    file, the daemon validates + the driver hot-reloads it. */}
+                {/* Spec editor — structured FSM builder (form) or raw JSON.
+                    Save serializes the model, the daemon re-validates, and the
+                    driver fs.watch hot-reloads the running session. */}
                 {editing && (
                     <div className="flex-1 flex flex-col min-h-0 px-4 py-3 gap-2">
                         <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-[11px] text-zinc-400 font-mono truncate flex-1" title={snap?.specPath}>{snap?.specPath}</span>
+                            <div className="inline-flex rounded border border-zinc-700 overflow-hidden text-[10px]">
+                                <button
+                                    type="button"
+                                    className={`px-2 py-0.5 ${!rawMode ? 'bg-sky-600/30 text-sky-100' : 'text-zinc-400 hover:bg-zinc-700/40'}`}
+                                    onClick={() => {
+                                        // form → ensure model parsed from current source
+                                        if (rawMode) {
+                                            try { const m = JSON.parse(specSource) as SpecModel; setSpecModel(m); void validateModel(m) } catch { /* stay raw */ return }
+                                        }
+                                        setRawMode(false)
+                                    }}
+                                    disabled={!specModel && rawMode}
+                                >Form</button>
+                                <button
+                                    type="button"
+                                    className={`px-2 py-0.5 ${rawMode ? 'bg-sky-600/30 text-sky-100' : 'text-zinc-400 hover:bg-zinc-700/40'}`}
+                                    onClick={() => { if (specModel) setSpecSource(JSON.stringify(specModel, null, 2)); setRawMode(true) }}
+                                >JSON</button>
+                            </div>
+                            <span className="text-[10px] text-zinc-500 font-mono truncate flex-1" title={snap?.specPath}>{(snap?.specPath ?? '').split('/').slice(-3).join('/')}</span>
                             {specDirty && <span className="text-amber-300 text-[10px]">unsaved</span>}
+                            {!rawMode && validationErrors.length > 0 && (
+                                <span className="text-red-300 text-[10px]">{validationErrors.length} error{validationErrors.length > 1 ? 's' : ''}</span>
+                            )}
                             <button
                                 type="button"
-                                className={`text-[11px] px-2.5 py-1 rounded border transition-colors ${saveState === 'saving' ? 'text-zinc-500 border-zinc-700' : 'text-green-200 bg-green-600/25 border-green-500/40 hover:bg-green-600/40'}`}
+                                className={`text-[11px] px-2.5 py-1 rounded border transition-colors ${(saveState === 'saving' || (!rawMode && validationErrors.length > 0)) ? 'text-zinc-600 border-zinc-700 cursor-not-allowed' : 'text-green-200 bg-green-600/25 border-green-500/40 hover:bg-green-600/40'}`}
                                 onClick={() => { void saveSpec() }}
-                                disabled={saveState === 'saving'}
+                                disabled={saveState === 'saving' || (!rawMode && validationErrors.length > 0)}
                             >
                                 {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved ✓ (reloading)' : 'Save & Apply'}
                             </button>
@@ -455,14 +537,27 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         {saveError && (
                             <pre className="text-red-300 bg-red-900/40 border border-red-700/50 rounded p-2 text-[10px] whitespace-pre-wrap shrink-0 max-h-28 overflow-y-auto">{saveError}</pre>
                         )}
-                        <textarea
-                            value={specSource}
-                            onChange={e => { setSpecSource(e.target.value); setSpecDirty(true); setSaveState('idle') }}
-                            spellCheck={false}
-                            className="flex-1 min-h-0 w-full font-mono text-[11px] leading-relaxed bg-black/40 text-zinc-200 border border-zinc-700 rounded p-3 resize-none outline-none focus:border-sky-500/50"
-                        />
+                        {!rawMode && validationErrors.length > 0 && (
+                            <div className="text-red-300 bg-red-900/30 border border-red-700/40 rounded p-1.5 text-[10px] shrink-0 max-h-24 overflow-y-auto space-y-0.5">
+                                {validationErrors.map((e, i) => <div key={i} className="font-mono">{e}</div>)}
+                            </div>
+                        )}
+                        <div className="flex-1 min-h-0 overflow-y-auto">
+                            {rawMode || !specModel ? (
+                                <textarea
+                                    value={specSource}
+                                    onChange={e => { setSpecSource(e.target.value); setSpecDirty(true); setSaveState('idle') }}
+                                    spellCheck={false}
+                                    className="w-full h-full min-h-[300px] font-mono text-[11px] leading-relaxed bg-black/40 text-zinc-200 border border-zinc-700 rounded p-3 resize-none outline-none focus:border-sky-500/50"
+                                />
+                            ) : (
+                                <SpecFormBuilder model={specModel} onChange={onModelChange} onPreview={onPreview} preview={preview} />
+                            )}
+                        </div>
                         <div className="text-[10px] text-zinc-500 shrink-0">
-                            Save validates the spec (JSON + FSM structure) then writes it; the running session hot-reloads with no restart.
+                            {rawMode
+                                ? 'Raw JSON — validated on save.'
+                                : 'Build the FSM; from/to are constrained to existing states. "test" evaluates a condition against the live screen. Save hot-reloads the session.'}
                         </div>
                     </div>
                 )}

@@ -14,7 +14,7 @@
  */
 'use strict';
 
-import type { Condition } from './types.js';
+import type { Condition, SectionDef } from './types.js';
 import {
     resolveSections, evaluateCondition, type ResolvedSection, type TraceEntry,
 } from './evaluator.js';
@@ -232,4 +232,24 @@ export function evaluateFsm(
     }
 
     return { sections, transitions, fired, trace: legacyTrace };
+}
+
+/**
+ * Evaluate a single condition against a screen + section map — for the spec
+ * editor's live preview ("does this regex match the current screen right
+ * now?"). Time leaves (elapsed_ms/stable_ms) are evaluated against a synthetic
+ * clock where the state was just entered, so they report their countdown
+ * rather than firing; the preview is about screen-content match, not timing.
+ */
+export function evaluateConditionPreview(
+    cond: FsmCondition,
+    sections: Record<string, SectionDef> | undefined,
+    screenText: string,
+    cursor?: { row: number; col: number },
+): CondResult {
+    const lines = screenText.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
+    const cleanScreen = lines.join('\n');
+    const resolved = resolveSections(sections ?? {}, lines);
+    const clock: FsmClock = { now: 0, stateEnteredAt: 0, regionLastChangedAt: new Map() };
+    return evalCond(cond, resolved, cleanScreen, cursor, undefined, clock, [], 'preview');
 }
