@@ -479,19 +479,26 @@ export default function SpecFormBuilder({ model, onChange, onPreview, preview }:
                 <div className="space-y-1.5">
                     {model.states.map((s, i) => (
                         <div key={i} className="border border-zinc-700/60 rounded bg-zinc-800/30 p-2 space-y-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                                <input
-                                    value={s.id}
-                                    onChange={e => updateState(i, { id: e.target.value })}
-                                    className="w-28 bg-black/40 text-sky-300 font-mono text-[11px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
-                                />
-                                <input
-                                    value={s.label}
-                                    onChange={e => updateState(i, { label: e.target.value })}
-                                    placeholder="label"
-                                    className="flex-1 bg-black/40 text-zinc-200 text-[11px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
-                                />
-                                <button type="button" className="text-zinc-500 hover:text-red-300 text-sm px-1" onClick={() => patch({ states: model.states.filter((_, si) => si !== i) })}>×</button>
+                            <div className="flex items-end gap-2 flex-wrap">
+                                <label className="flex flex-col gap-0.5">
+                                    <span className="text-[9px] text-zinc-500 uppercase tracking-wide">id (used by transitions)</span>
+                                    <input
+                                        value={s.id}
+                                        onChange={e => updateState(i, { id: e.target.value })}
+                                        placeholder="idle"
+                                        className="w-32 bg-black/40 text-sky-300 font-mono text-[11px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                    />
+                                </label>
+                                <label className="flex flex-col gap-0.5 flex-1">
+                                    <span className="text-[9px] text-zinc-500 uppercase tracking-wide">label (shown in dashboard)</span>
+                                    <input
+                                        value={s.label}
+                                        onChange={e => updateState(i, { label: e.target.value })}
+                                        placeholder="Ready"
+                                        className="w-full bg-black/40 text-zinc-200 text-[11px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                    />
+                                </label>
+                                <button type="button" className="text-zinc-500 hover:text-red-300 text-sm px-1 pb-0.5" onClick={() => patch({ states: model.states.filter((_, si) => si !== i) })}>×</button>
                             </div>
                             <div className="flex items-center gap-3 text-[10px] text-zinc-400 flex-wrap">
                                 <label className="flex items-center gap-1">
