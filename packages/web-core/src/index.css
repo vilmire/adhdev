@@ -1211,9 +1211,12 @@
     }
 
     .chat-activity-toggle-bar {
+        position: absolute;
+        top: 6px;
+        right: 12px;
+        z-index: 10;
         display: flex;
         justify-content: flex-end;
-        padding: 6px 12px 0;
         pointer-events: none;
     }
 

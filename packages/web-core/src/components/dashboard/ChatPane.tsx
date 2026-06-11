@@ -394,7 +394,7 @@ export default function ChatPane({
     }, [activeConv.connectionState, activeConv.status, canOpenPanel, handleFocusAgent, hasMoreHistory, historyMessages.length, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
 
     return (
-        <div className="flex-1 min-h-0 w-full flex flex-col">
+        <div className="flex-1 min-h-0 w-full flex flex-col relative">
             {/* Message Stream */}
 {/* Compact chat header. The old Activity toggle lived here but it didn't carry
                 its weight — activity rows already follow the user's preference, and the
