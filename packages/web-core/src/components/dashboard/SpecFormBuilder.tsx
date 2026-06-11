@@ -24,6 +24,22 @@ export type FsmCond =
     | { any: FsmCond[] }
     | { not: FsmCond }
 
+/** Screen section definition (mirrors SectionDef in types.ts). A section is
+ *  either positional (from_top/from_bottom + until) or anchor-based (a regex
+ *  that locates the section's start). */
+export interface SectionDefModel {
+    from_top?: number | string
+    from_bottom?: number | string
+    until?: string
+    anchor?: string
+    anchor_flags?: string
+    anchor_last?: boolean
+    anchor_context?: { prev?: string; next?: string; prev_flags?: string; next_flags?: string }
+    lines?: number
+    until_regex?: string
+    until_regex_flags?: string
+}
+
 export interface FsmStateModel {
     id: string
     label: string
@@ -50,7 +66,7 @@ export interface SpecModel {
     cli_version_range?: string
     spawn_args?: string[]
     send_message: { submit_key: string; delay_ms_before_submit?: number; delay_ms_per_char?: number }
-    sections: Record<string, unknown>
+    sections: Record<string, SectionDefModel>
     states: FsmStateModel[]
     transitions: FsmTransitionModel[]
     control_bar?: unknown[]
@@ -276,6 +292,151 @@ function NumField({ label, value, onChange }: { label: string; value: number; on
     )
 }
 
+// ── Sections editor ─────────────────────────────────────────────────────────
+//
+// A section is positional (from_top/from_bottom + until) OR anchor-based
+// (a regex that locates its start). The "test" button previews the resolved
+// section text against the live screen via the regex-preview path (we wrap the
+// section's own bounds into a throwaway condition the parent can evaluate).
+
+function SectionsEditor({ sections, otherSectionIds, onChange }: {
+    sections: Record<string, SectionDefModel>
+    otherSectionIds: (self: string) => string[]
+    onChange: (next: Record<string, SectionDefModel>) => void
+}) {
+    const ids = Object.keys(sections)
+
+    const renameSection = (oldId: string, newId: string) => {
+        if (!newId || newId === oldId || sections[newId]) return
+        const next: Record<string, SectionDefModel> = {}
+        for (const [k, v] of Object.entries(sections)) next[k === oldId ? newId : k] = v
+        onChange(next)
+    }
+    const updateSection = (id: string, def: SectionDefModel) =>
+        onChange({ ...sections, [id]: def })
+    const removeSection = (id: string) => {
+        const next = { ...sections }; delete next[id]; onChange(next)
+    }
+    const addSection = () => {
+        let n = 'section'; let i = 1
+        while (sections[n]) { n = `section${i++}` }
+        onChange({ ...sections, [n]: { from_top: 0 } })
+    }
+
+    return (
+        <div>
+            <div className="flex items-center gap-2 mb-1">
+                <span className="text-zinc-400 text-[10px] uppercase tracking-widest font-semibold">Sections</span>
+                <span className="text-zinc-600 text-[10px]">— how the screen is split; conditions match against these</span>
+                <button
+                    type="button"
+                    className="ml-auto text-[10px] text-zinc-300 hover:text-white px-1.5 py-0.5 rounded border border-zinc-700 hover:bg-zinc-700/40"
+                    onClick={addSection}
+                >+ section</button>
+            </div>
+            <div className="space-y-1.5">
+                {ids.map(id => {
+                    const def = sections[id]
+                    const mode: 'anchor' | 'positional' = def.anchor != null ? 'anchor' : 'positional'
+                    const setMode = (m: 'anchor' | 'positional') => {
+                        if (m === 'anchor') updateSection(id, { anchor: def.anchor ?? '^', anchor_last: def.anchor_last, until: def.until })
+                        else updateSection(id, { from_top: def.from_top ?? 0, until: def.until })
+                    }
+                    return (
+                        <div key={id} className="border border-zinc-700/60 rounded bg-zinc-800/30 p-2 space-y-1.5">
+                            <div className="flex items-center gap-2">
+                                <input
+                                    value={id}
+                                    onChange={e => renameSection(id, e.target.value.trim())}
+                                    className="w-28 bg-black/40 text-sky-300 font-mono text-[11px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                />
+                                <div className="inline-flex rounded border border-zinc-700 overflow-hidden text-[10px]">
+                                    <button type="button" className={`px-1.5 py-0.5 ${mode === 'positional' ? 'bg-sky-600/30 text-sky-100' : 'text-zinc-400 hover:bg-zinc-700/40'}`} onClick={() => setMode('positional')}>positional</button>
+                                    <button type="button" className={`px-1.5 py-0.5 ${mode === 'anchor' ? 'bg-sky-600/30 text-sky-100' : 'text-zinc-400 hover:bg-zinc-700/40'}`} onClick={() => setMode('anchor')}>anchor</button>
+                                </div>
+                                <button type="button" className="ml-auto text-zinc-500 hover:text-red-300 text-sm px-1" onClick={() => removeSection(id)}>×</button>
+                            </div>
+
+                            {mode === 'positional' ? (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <NumField label="from_top" value={typeof def.from_top === 'number' ? def.from_top : 0} onChange={v => updateSection(id, { ...def, from_top: v, from_bottom: undefined })} />
+                                    <NumField label="from_bottom" value={typeof def.from_bottom === 'number' ? def.from_bottom : 0} onChange={v => updateSection(id, { ...def, from_bottom: v || undefined })} />
+                                    <UntilField def={def} otherIds={otherSectionIds(id)} onChange={d => updateSection(id, d)} />
+                                </div>
+                            ) : (
+                                <div className="space-y-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="text-[10px] text-zinc-500 w-16">anchor</span>
+                                        <input
+                                            value={def.anchor ?? ''}
+                                            onChange={e => updateSection(id, { ...def, anchor: e.target.value })}
+                                            placeholder="^regex locating section start"
+                                            spellCheck={false}
+                                            className="flex-1 bg-black/40 text-zinc-200 text-[10px] font-mono rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                        />
+                                        <label className="flex items-center gap-1 text-[10px] text-zinc-400">
+                                            <input type="checkbox" checked={!!def.anchor_last} onChange={e => updateSection(id, { ...def, anchor_last: e.target.checked || undefined })} className="accent-sky-500" />
+                                            last
+                                        </label>
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <UntilField def={def} otherIds={otherSectionIds(id)} onChange={d => updateSection(id, d)} />
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="text-[10px] text-zinc-500 w-16">ctx next</span>
+                                        <input
+                                            value={def.anchor_context?.next ?? ''}
+                                            onChange={e => updateSection(id, { ...def, anchor_context: { ...def.anchor_context, next: e.target.value || undefined } })}
+                                            placeholder="optional: line after anchor must match"
+                                            spellCheck={false}
+                                            className="flex-1 bg-black/40 text-zinc-300 text-[10px] font-mono rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )
+                })}
+            </div>
+        </div>
+    )
+}
+
+/** `until` is either another section id (dropdown) or a regex (starts with ^). */
+function UntilField({ def, otherIds, onChange }: {
+    def: SectionDefModel; otherIds: string[]; onChange: (d: SectionDefModel) => void
+}) {
+    const val = def.until ?? ''
+    const isRegex = val.startsWith('^')
+    return (
+        <label className="flex items-center gap-1 text-[10px] text-zinc-400">
+            until
+            <select
+                value={isRegex ? '__regex__' : val}
+                onChange={e => {
+                    const v = e.target.value
+                    if (v === '') onChange({ ...def, until: undefined })
+                    else if (v === '__regex__') onChange({ ...def, until: val.startsWith('^') ? val : '^' })
+                    else onChange({ ...def, until: v })
+                }}
+                className="bg-zinc-900 text-sky-300 rounded border border-zinc-700 px-1 py-0.5"
+            >
+                <option value="">(none)</option>
+                {otherIds.map(s => <option key={s} value={s}>{s}</option>)}
+                <option value="__regex__">regex…</option>
+            </select>
+            {isRegex && (
+                <input
+                    value={val}
+                    onChange={e => onChange({ ...def, until: e.target.value })}
+                    spellCheck={false}
+                    className="w-40 bg-black/40 text-zinc-200 font-mono rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                />
+            )}
+        </label>
+    )
+}
+
 // ── Top-level builder ───────────────────────────────────────────────────────
 
 interface Props {
@@ -298,6 +459,13 @@ export default function SpecFormBuilder({ model, onChange, onPreview, preview }:
 
     return (
         <div className="space-y-3">
+            {/* Sections — the screen-splitting layer everything else references */}
+            <SectionsEditor
+                sections={model.sections ?? {}}
+                otherSectionIds={(self) => sectionIds.filter(s => s !== self)}
+                onChange={sections => patch({ sections })}
+            />
+
             {/* States */}
             <div>
                 <div className="flex items-center gap-2 mb-1">

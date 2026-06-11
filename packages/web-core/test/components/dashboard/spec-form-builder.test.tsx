@@ -6,7 +6,12 @@ import SpecFormBuilder, { type SpecModel } from '../../../src/components/dashboa
 const model: SpecModel = {
   $schema: 'adhdev:cli/spec@4', id: 'x', name: 'X', binary: 'x',
   send_message: { submit_key: '\r' },
-  sections: { body: {}, footer: {}, status: {}, modal: {} },
+  sections: {
+    footer: { anchor: '^[❯›>]', anchor_last: true },
+    body: { from_top: 0, until: 'modal' },
+    status: { from_bottom: 4, until: 'footer' },
+    modal: { anchor: '^[─╌]+$', anchor_last: true },
+  },
   states: [
     { id: 'starting', label: 'Starting', initial: true },
     { id: 'idle', label: 'Ready' },
@@ -35,5 +40,20 @@ describe('SpecFormBuilder', () => {
     // section dropdown options
     expect(html).toContain('body')
     expect(html).toContain('footer')
+  })
+
+  it('renders the Sections editor with anchor + positional fields', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SpecFormBuilder, { model, onChange: () => {}, onPreview: () => {}, preview: {} })
+    )
+    expect(html).toContain('Sections')
+    // anchor-based section's anchor regex value present
+    expect(html).toContain('^[❯›&gt;]')
+    // positional / anchor mode toggles
+    expect(html).toContain('positional')
+    expect(html).toContain('anchor')
+    // from_top / from_bottom numeric fields
+    expect(html).toContain('from_top')
+    expect(html).toContain('from_bottom')
   })
 })
