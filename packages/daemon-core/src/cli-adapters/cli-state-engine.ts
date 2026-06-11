@@ -555,11 +555,35 @@ export class CliStateEngine {
         // The real completion gate is applyIdle's idleFinishCandidate +
         // idleFinish timeout, which requires stable quiet AND a parsed
         // assistant message.
+        //
+        // Fast-path exception: only release the hold if the parser shows a
+        // *current-turn* final standard assistant after the last user message,
+        // and it is not still streaming. Using !!lastParsedAssistant was too
+        // broad — it matched previous-turn assistant messages and caused
+        // false-idle between the first assistant text chunk and the first
+        // tool call (the agent outputs text, then immediately begins tool use;
+        // the gap between them hit this fast path and committed idle).
+        const hasFinalCurrentTurnAssistant = (() => {
+            if (parsedStatus !== 'idle') return false;
+            const msgs: any[] = Array.isArray(parsedMessages) ? parsedMessages : [];
+            let lastUserIdx = -1;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i]?.role === 'user') { lastUserIdx = i; break; }
+            }
+            // No user message visible: fall back to any non-streaming standard assistant.
+            const searchSlice = lastUserIdx >= 0 ? msgs.slice(lastUserIdx + 1) : msgs;
+            return searchSlice.some((m: any) => {
+                if (!m || m.role !== 'assistant') return false;
+                if (typeof m.content !== 'string' || !m.content.trim()) return false;
+                const kind = typeof m.kind === 'string' && m.kind.trim() ? m.kind.trim() : 'standard';
+                return kind === 'standard' && m.meta?.streaming !== true;
+            });
+        })();
         const shouldHoldGenerating = status === 'idle'
             && this.isWaitingForResponse
             && !!this.currentTurnScope
             && !modal
-            && !(parsedStatus === 'idle' && !!lastParsedAssistant);
+            && !hasFinalCurrentTurnAssistant;
 
         if (shouldHoldGenerating) { this.applyHoldGenerating(ctx); return; }
         if (status === 'error') {

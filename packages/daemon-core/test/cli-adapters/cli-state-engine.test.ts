@@ -439,8 +439,8 @@ describe('CliStateEngine', () => {
             expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
         })
 
-        it('bypasses the hold and falls through to applyIdle when parsedStatus=idle with final assistant', () => {
-            // Even during an active turn, if the parser confirms idle + assistant,
+        it('bypasses the hold and falls through to applyIdle when parsedStatus=idle with final assistant after user', () => {
+            // Even during an active turn, if the parser confirms idle + current-turn assistant,
             // the shouldHoldGenerating exception fires and applyIdle runs instead of hold.
             // applyIdle does not immediately set idle — it arms an idleFinishCandidate timer.
             // We verify it did NOT enter applyHoldGenerating (which records 'recent_activity_hold').
@@ -478,6 +478,83 @@ describe('CliStateEngine', () => {
             const history = engine.getStatusHistory()
             const holdEntry = history.find(h => h.trigger === 'recent_activity_hold')
             expect(holdEntry).toBeUndefined()
+        })
+
+        it('holds generating when parser shows assistant text but no user message yet (first chunk before tool call)', () => {
+            // Regression: agent outputs first text chunk ("I'll explore..."), then immediately
+            // begins tool calls. Between the text and the first tool call the PTY briefly shows
+            // the prompt footer (❯). The old fast-path used !!lastParsedAssistant which matched
+            // the just-emitted text and released the hold, causing false-idle.
+            // The fixed fast-path requires a *current-turn* final standard assistant
+            // (non-streaming, preceded by a user message). With no user message visible yet,
+            // the hold must stay.
+            const { engine, transport, callbacks } = buildEngine()
+
+            const stalePast = Date.now() - 5000
+            transport.getSnapshot = () => makeSnap({
+                lastNonEmptyOutputAt: stalePast,
+                lastScreenChangeAt: stalePast,
+                isWaitingForResponse: true,
+            })
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    // Only an assistant message visible — no user message yet in PTY
+                    { role: 'assistant', kind: 'standard', content: "I'll explore the codebase first.", meta: {} },
+                ],
+                activeModal: null,
+                parsedStatus: 'idle',
+            }))
+
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = {
+                prompt: 'implement feature X',
+                startedAt: Date.now() - 500,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+            engine.setStatus('generating')
+
+            engine.evaluateSettled(transport.getSnapshot())
+
+            // Must hold generating — turn is still active, no confirmed current-turn completion
+            expect(engine.currentStatus).toBe('generating')
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+        })
+
+        it('holds generating when parser shows streaming assistant (meta.streaming=true)', () => {
+            // A streaming assistant message is not a final completion signal.
+            const { engine, transport, callbacks } = buildEngine()
+
+            const stalePast = Date.now() - 5000
+            transport.getSnapshot = () => makeSnap({
+                lastNonEmptyOutputAt: stalePast,
+                lastScreenChangeAt: stalePast,
+                isWaitingForResponse: true,
+            })
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'hello' },
+                    { role: 'assistant', kind: 'standard', content: 'Still streaming...', meta: { streaming: true } },
+                ],
+                activeModal: null,
+                parsedStatus: 'idle',
+            }))
+
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = {
+                prompt: 'hello',
+                startedAt: Date.now() - 1000,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+            engine.setStatus('generating')
+
+            engine.evaluateSettled(transport.getSnapshot())
+
+            expect(engine.currentStatus).toBe('generating')
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
         })
     })
 
