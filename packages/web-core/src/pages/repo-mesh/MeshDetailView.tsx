@@ -37,6 +37,7 @@ interface Props {
     graphLoading: boolean
     graphError: string | null
     graphProvenance: 'idle' | 'first_paint' | 'settling' | 'settled'
+    graphBootstrapFallback?: boolean
     onRefreshGraph: (refresh?: boolean) => void
 
     // Queue
@@ -131,6 +132,7 @@ export function MeshDetailView({
     graphLoading,
     graphError,
     graphProvenance,
+    graphBootstrapFallback = false,
     onRefreshGraph,
     queueSummary,
     queueLoading,
@@ -328,6 +330,12 @@ export function MeshDetailView({
                         <IconRefresh size={13} />{graphLoading ? 'Loading...' : 'Refresh Graph'}
                     </button>
                 </div>
+                {graphBootstrapFallback && (
+                    <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-200">
+                        <span className="mt-0.5 shrink-0 text-amber-400" aria-hidden>⚠</span>
+                        <span>Connecting to coordinator — showing setup inventory. Live data will appear shortly.</span>
+                    </div>
+                )}
                 {graphError && <div className="mb-3 text-[12px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">{graphError}</div>}
                 {!displayedMeshStatus ? (
                     <div className="text-[12px] text-text-muted rounded-lg border border-border-subtle bg-bg-secondary px-3 py-3">
@@ -343,6 +351,7 @@ export function MeshDetailView({
                             : 'Refresh the graph to inspect queue activity, sessions, node drift, and mesh topology.'}
                         daemonId={activeDaemonId}
                         sendDaemonCommand={sendCommand}
+                        bootstrapFallback={graphBootstrapFallback}
                     />
                 )}
             </Section>

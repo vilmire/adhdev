@@ -91,7 +91,7 @@ export default function RepoMesh() {
     const {
         meshGraphStatus, setMeshGraphStatus,
         graphLoading, graphError, setGraphError,
-        graphProvenance,
+        graphProvenance, graphBootstrapFallback,
         loadGraph,
     } = useMeshGraph({ selectedMeshId, loadMeshStatus, extractStatus, normalizeNode })
 
@@ -349,6 +349,7 @@ export default function RepoMesh() {
             graphLoading={graphLoading}
             graphError={graphError}
             graphProvenance={graphProvenance}
+            graphBootstrapFallback={graphBootstrapFallback}
             onRefreshGraph={() => loadGraph(resolvedActiveDaemonId, selectedMeshId, true)}
             queueSummary={queueSummary}
             queueLoading={queueLoading}

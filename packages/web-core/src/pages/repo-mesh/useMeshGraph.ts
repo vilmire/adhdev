@@ -14,6 +14,11 @@ interface UseMeshGraphOptions {
     normalizeNode?: RepoMeshContextValue['normalizeNode']
 }
 
+function readBootstrapFallback(response: unknown): boolean {
+    if (!response || typeof response !== 'object') return false
+    return (response as Record<string, unknown>)._bootstrapFallback === true
+}
+
 export function useMeshGraph({
     selectedMeshId,
     loadMeshStatus,
@@ -24,6 +29,7 @@ export function useMeshGraph({
     const [graphLoading, setGraphLoading] = useState(false)
     const [graphError, setGraphError] = useState<string | null>(null)
     const [graphProvenance, setGraphProvenance] = useState<'idle' | 'first_paint' | 'settling' | 'settled'>('idle')
+    const [graphBootstrapFallback, setGraphBootstrapFallback] = useState(false)
 
     async function loadGraph(activeDaemonId: string, meshId: string | null = selectedMeshId, refresh = false) {
         if (!activeDaemonId || !meshId) return
@@ -35,6 +41,7 @@ export function useMeshGraph({
                 refresh,
                 retryProfile: refresh ? 'settled' : 'interactive',
             })
+            setGraphBootstrapFallback(readBootstrapFallback(response))
             const rawStatus = extractStatus(response)
             const status = normalizeNode && rawStatus
                 ? {
@@ -68,6 +75,7 @@ export function useMeshGraph({
         graphError,
         setGraphError,
         graphProvenance,
+        graphBootstrapFallback,
         loadGraph,
     }
 }
