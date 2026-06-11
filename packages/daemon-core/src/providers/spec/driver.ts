@@ -230,6 +230,10 @@ export class SpecDriver {
     private completionIdleKey = '';
     /** Previous screen lines — passed to evaluate() for `changed` condition detection. */
     private prevScreenLines: string[] = [];
+    /** Timestamp of the last PTY frame that changed the screen content.
+     *  Used by screen_active_hold_ms to suppress idle downshifts while
+     *  the terminal is still actively updating. */
+    private lastScreenChangedAt = 0;
     /** Timer that re-runs evaluate() once the hold window expires. Needed
      *  because the PTY stops emitting once the agent finishes; without an
      *  explicit wake-up there's nothing to trigger the busy → idle
@@ -470,9 +474,14 @@ export class SpecDriver {
     private reevaluate(forceEmit = false): void {
         const screen = this.adapter.snapshot();
         const cursor = this.adapter.getCursorPosition();
+        const currentLines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
         const ev = evaluate(this.spec, screen, cursor, this.prevScreenLines.length > 0 ? this.prevScreenLines : undefined);
+        // Track when the screen last changed for screen_active_hold_ms.
+        if (this.prevScreenLines.length > 0 && currentLines.join('\n') !== this.prevScreenLines.join('\n')) {
+            this.lastScreenChangedAt = Date.now();
+        }
         // Update prevScreenLines for next evaluation's `changed` condition detection.
-        this.prevScreenLines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
+        this.prevScreenLines = currentLines;
 
         // Busy hold: many TUIs flicker between busy and idle every frame
         // (claude in particular — its token counter appears and disappears
@@ -513,6 +522,7 @@ export class SpecDriver {
             }
         }
         const completionIdleRule = this.spec.debounce?.completion_idle_after;
+        const screenActiveHoldMs = this.spec.debounce?.screen_active_hold_ms;
         let busyWakeMs = busyHoldMs;
         // Don't fire completion_idle_after while in a modal state (approval,
         // picker, etc.) or within a grace period after leaving one.  Two cases:
@@ -525,7 +535,18 @@ export class SpecDriver {
         const now = Date.now();
         const recentlyInModal = isModalState(this.currentStateId) || (this.lastModalAt > 0 && now - this.lastModalAt < postModalGraceMs);
         const recentlyLeftModal = !recentlyInModal && this.lastModalExitAt > 0 && now - this.lastModalExitAt < postModalGraceMs;
-        if (evState.id === 'busy' && completionIdleRule && !recentlyInModal && !recentlyLeftModal) {
+        // screen_active_hold_ms: suppress idle downshift while the screen is
+        // actively changing. Any PTY frame that mutates screen content resets
+        // lastScreenChangedAt; we hold off until it has been stable for the
+        // configured duration. Applies to both completion_idle_after and the
+        // busy_hold expiry path below.
+        const screenActiveMs = screenActiveHoldMs ?? 0;
+        const screenStableMs = this.lastScreenChangedAt > 0 ? now - this.lastScreenChangedAt : Infinity;
+        const screenIsActive = screenActiveMs > 0 && screenStableMs < screenActiveMs;
+        if (screenIsActive) {
+            busyWakeMs = Math.min(busyWakeMs, screenActiveMs - screenStableMs + 50);
+        }
+        if (evState.id === 'busy' && completionIdleRule && !recentlyInModal && !recentlyLeftModal && !screenIsActive) {
             const completionKey = matchesCompletionIdleRule(this.spec, ev, screen);
             if (completionKey) {
                 const now = Date.now();
@@ -560,8 +581,18 @@ export class SpecDriver {
                 this.completionIdleFirstSeenAt = 0;
             }
         } else if (evState.id !== 'busy') {
-            this.completionIdleKey = '';
-            this.completionIdleFirstSeenAt = 0;
+            if (!screenIsActive) {
+                this.completionIdleKey = '';
+                this.completionIdleFirstSeenAt = 0;
+            }
+        }
+
+        // screen_active_hold_ms: if the screen is still changing and the
+        // evaluator wants to downshift from busy to idle, pin to busy instead.
+        // This catches paths not covered by the completion_idle_after gate above
+        // (e.g. direct idle via busy_hold expiry or default-state fallback).
+        if (screenIsActive && this.currentStateId === 'busy' && evState.id === (this.spec.default_state ?? 'idle')) {
+            evState = this.lastBusyState ?? evState;
         }
 
         if (evState.id === 'busy') {

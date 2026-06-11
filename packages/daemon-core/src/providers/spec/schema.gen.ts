@@ -384,6 +384,7 @@ export const SCHEMA_V3 = {
                 "busy_hold_ms": { "type": "integer", "minimum": 0 },
                 "idle_hold_ms": { "type": "integer", "minimum": 0 },
                 "startup_grace_ms": { "type": "integer", "minimum": 0 },
+                "screen_active_hold_ms": { "type": "integer", "minimum": 0 },
                 "completion_marker": {
                     "type": "object",
                     "additionalProperties": false,

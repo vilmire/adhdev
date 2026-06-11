@@ -273,6 +273,11 @@ export interface CliSpec {
         busy_hold_ms?: number;
         idle_hold_ms?: number;
         startup_grace_ms?: number;
+        /** Suppress idle downshift while the screen is actively changing.
+         *  When set, any PTY frame that changes the screen resets a timer;
+         *  idle transitions (busy_hold expiry and completion_idle_after) are
+         *  blocked until the screen has been stable for this many ms. */
+        screen_active_hold_ms?: number;
         completion_marker?: {
             section?: string;
             matches: string;
@@ -291,6 +296,7 @@ export interface CliSpec {
         busy_hold_ms?: number;
         idle_hold_ms?: number;
         startup_grace_ms?: number;
+        screen_active_hold_ms?: number;
         /**
          * Legacy field name for completion_marker. Populated by the loader
          * from `timing.completion_marker` for backward compat.

@@ -79,6 +79,7 @@ function attachDebounceAlias(spec: CliSpec): void {
         ...(t.busy_hold_ms !== undefined ? { busy_hold_ms: t.busy_hold_ms } : {}),
         ...(t.idle_hold_ms !== undefined ? { idle_hold_ms: t.idle_hold_ms } : {}),
         ...(t.startup_grace_ms !== undefined ? { startup_grace_ms: t.startup_grace_ms } : {}),
+        ...(t.screen_active_hold_ms !== undefined ? { screen_active_hold_ms: t.screen_active_hold_ms } : {}),
         ...(cm ? {
             completion_idle_after: {
                 ...(cm.section ? { section: cm.section } : {}),
