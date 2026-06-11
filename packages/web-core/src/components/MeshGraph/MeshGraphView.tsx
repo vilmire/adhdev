@@ -56,6 +56,8 @@ const COMPACT_NODE_THRESHOLD = 7
 interface MeshGraphViewProps {
     data: MeshGraphData
     selectedNodeId?: string | null
+    directionPref?: 'auto' | 'LR' | 'TB'
+    onDirectionChange?: (pref: 'auto' | 'LR' | 'TB') => void
     onNodeClick?: (node: MeshGraphNode) => void
     onNodeHoverChange?: (node: MeshGraphNode | null) => void
     onEdgeHoverChange?: (edge: MeshGraphEdge | null) => void
@@ -985,12 +987,6 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
     return null
 }
 
-function getGraphMinHeightClass(nodeCount: number): string {
-    if (nodeCount >= 16) return 'min-h-[720px]'
-    if (nodeCount >= 10) return 'min-h-[580px]'
-    return 'min-h-[460px]'
-}
-
 type DirectionPref = 'auto' | 'LR' | 'TB'
 
 const MINIMAP_NODE_THRESHOLD = 12
@@ -998,6 +994,8 @@ const MINIMAP_NODE_THRESHOLD = 12
 export default function MeshGraphView({
     data,
     selectedNodeId = null,
+    directionPref: directionPrefProp,
+    onDirectionChange,
     onNodeClick,
     onNodeHoverChange,
     onEdgeHoverChange,
@@ -1007,7 +1005,9 @@ export default function MeshGraphView({
     const dataFingerprint = useMemo(() => getMeshGraphDataFingerprint(data), [data])
     const layoutFingerprint = useMemo(() => getMeshGraphLayoutFingerprint(data), [data])
     const compact = data.nodes.length >= COMPACT_NODE_THRESHOLD
-    const [directionPref, setDirectionPref] = useState<DirectionPref>('LR')
+    const [directionPrefInternal, setDirectionPrefInternal] = useState<DirectionPref>('LR')
+    const directionPref: DirectionPref = directionPrefProp ?? directionPrefInternal
+    const setDirectionPref = onDirectionChange ?? setDirectionPrefInternal
     const direction: MeshGraphDirection = useMemo(
         () => (directionPref === 'auto' ? pickMeshGraphDirection(data) : directionPref),
         [directionPref, dataFingerprint, data],
@@ -1063,67 +1063,12 @@ export default function MeshGraphView({
         }
     }, [])
 
-    const graphMinHeightClass = getGraphMinHeightClass(data.nodes.length)
-
-    const directionToggleButtonClass = (active: boolean) =>
-        active
-            ? meshTheme.isDark
-                ? 'rounded-md border border-cyan-400/40 bg-cyan-500/15 px-2 py-0.5 text-cyan-100'
-                : 'rounded-md border border-sky-400 bg-sky-100 px-2 py-0.5 text-sky-800'
-            : meshTheme.isDark
-                ? 'rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-slate-400 hover:text-slate-200'
-                : 'rounded-md border border-slate-300 bg-white/80 px-2 py-0.5 text-slate-500 hover:text-slate-800'
-
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
         <MeshGraphCompactContext.Provider value={compact}>
         <MeshGraphDirectionContext.Provider value={direction}>
         <div ref={surfaceRef} className={meshTheme.graphShellClass}>
-            <div className={`shrink-0 flex flex-wrap items-center justify-between gap-2 px-3 pt-3 pb-2 text-[11px] ${meshTheme.textSecondary}`}>
-                <div className="flex flex-wrap gap-2">
-                    <span className={meshTheme.graphStatChipClass}>
-                        {data.stats.totalNodes} node{data.stats.totalNodes === 1 ? '' : 's'}
-                    </span>
-                    {data.stats.totalActiveSessions > 0 && (
-                        <span className={meshTheme.isDark ? 'rounded-full border border-emerald-400/25 bg-emerald-500/12 px-3 py-1 text-emerald-100' : 'rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-emerald-700'}>
-                            {data.stats.totalActiveSessions} active session{data.stats.totalActiveSessions === 1 ? '' : 's'}
-                        </span>
-                    )}
-                    {data.stats.orphanNodes > 0 && (
-                        <span className={meshTheme.isDark ? 'rounded-full border border-orange-400/25 bg-orange-500/12 px-3 py-1 text-orange-100' : 'rounded-full border border-orange-300 bg-orange-50 px-3 py-1 text-orange-700'}>
-                            {data.stats.orphanNodes} need attention
-                        </span>
-                    )}
-                    {compact && (
-                        <span className={meshTheme.isDark ? 'rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-slate-400' : 'rounded-full border border-slate-200 bg-slate-50/80 px-3 py-1 text-slate-500'}>
-                            dense view · hover for details
-                        </span>
-                    )}
-                </div>
-                <div className="flex items-center gap-2">
-                    <div
-                        className={meshTheme.isDark
-                            ? 'flex items-center gap-0.5 rounded-md border border-white/10 bg-slate-950/40 p-0.5 text-[10px]'
-                            : 'flex items-center gap-0.5 rounded-md border border-slate-300 bg-white/70 p-0.5 text-[10px]'}
-                        role="group"
-                        aria-label="Graph layout direction"
-                    >
-                        <button type="button" onClick={() => setDirectionPref('auto')} className={directionToggleButtonClass(directionPref === 'auto')} title={`Auto (currently ${direction === 'TB' ? 'top-bottom' : 'left-right'})`}>
-                            Auto
-                        </button>
-                        <button type="button" onClick={() => setDirectionPref('LR')} className={directionToggleButtonClass(directionPref === 'LR')} title="Left to right">
-                            LR
-                        </button>
-                        <button type="button" onClick={() => setDirectionPref('TB')} className={directionToggleButtonClass(directionPref === 'TB')} title="Top to bottom">
-                            TB
-                        </button>
-                    </div>
-                    <div className={meshTheme.graphHintChipClass}>
-                        {compact ? 'drag or scroll to pan' : 'drag or scroll to pan'}
-                    </div>
-                </div>
-            </div>
-            <div className={`w-full min-w-0 flex-1 min-h-0 ${graphMinHeightClass}`}>
+            <div className="w-full min-w-0 flex-1 min-h-0">
                 <ReactFlow<FlowNode, FlowEdge>
                     nodes={nodes}
                     edges={layout.edges}

@@ -424,7 +424,7 @@ function MeshHealthPanel({
     }
 
     return (
-        <details open className={`rounded-2xl border text-xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
+        <details className={`rounded-2xl border text-xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
             <summary className={`flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium [&::-webkit-details-marker]:hidden ${meshTheme.textSecondary}`}>
                 <span className="flex-1">Mesh Health Panel</span>
                 {activeRefineJobs.length > 0 && (
@@ -877,124 +877,306 @@ export default function MeshObservabilitySurface({
             : 'mesh converged'
     const headlineTone = canonicalGraph.stats.followUpNodes > 0 ? 'danger' : hasSnapshotGaps ? 'warn' : 'good'
 
+    const [directionPref, setDirectionPref] = useState<'auto' | 'LR' | 'TB'>('LR')
+
+    const directionToggleButtonClass = (active: boolean) =>
+        active
+            ? meshTheme.isDark
+                ? 'rounded-md border border-cyan-400/40 bg-cyan-500/15 px-2 py-0.5 text-cyan-100'
+                : 'rounded-md border border-sky-400 bg-sky-100 px-2 py-0.5 text-sky-800'
+            : meshTheme.isDark
+                ? 'rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-slate-400 hover:text-slate-200'
+                : 'rounded-md border border-slate-300 bg-white/80 px-2 py-0.5 text-slate-500 hover:text-slate-800'
+
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
-                <div className={`${meshTheme.cardClass} relative flex min-h-0 flex-1 flex-col rounded-[28px] p-3 sm:p-4`} style={{ minHeight: 420 }}>
-                    <div className={`absolute inset-x-4 top-4 z-30 flex max-h-[42dvh] flex-wrap items-start justify-between gap-3 overflow-y-auto rounded-2xl px-3.5 py-3 backdrop-blur-xl sm:static sm:mb-3 sm:max-h-none sm:overflow-visible sm:backdrop-blur-none ${meshTheme.isDark ? 'border border-white/10 bg-slate-950/85 sm:bg-slate-950/45' : 'border border-slate-200 bg-white/95 shadow-lg shadow-slate-900/10 sm:bg-white/95 sm:shadow-sm'}`}>
-                        <div className={`flex min-w-0 flex-1 flex-wrap gap-2 text-xs ${meshTheme.textSecondary}`}>
-                            <Badge
-                                label={headlineLabel}
-                                tone={headlineTone}
-                            />
-                            {canonicalGraph.stats.blockedReviewNodes > 0 && (
-                                <Badge label={`${canonicalGraph.stats.blockedReviewNodes} blocked review`} tone="danger" />
-                            )}
-                            {canonicalGraph.stats.notMergeableNodes > 0 && (
-                                <Badge label={`${canonicalGraph.stats.notMergeableNodes} not mergeable`} tone="danger" />
-                            )}
-                            {canonicalGraph.stats.mergeReadyNodes > 0 && (
-                                <Badge label={`${canonicalGraph.stats.mergeReadyNodes} need merge`} tone="warn" />
-                            )}
-                            {canonicalGraph.stats.cleanupCandidateNodes > 0 && (
-                                <Badge label={`${canonicalGraph.stats.cleanupCandidateNodes} refine/cleanup`} tone="info" />
-                            )}
-                            {canonicalGraph.stats.offlineNodes > 0 && (
-                                <Badge label={`${canonicalGraph.stats.offlineNodes} offline`} tone="danger" />
-                            )}
-                            {canonicalGraph.stats.incompleteSnapshotNodes > 0 && (
-                                <Badge label={`${canonicalGraph.stats.incompleteSnapshotNodes} incomplete peer snapshot`} tone="warn" />
-                            )}
-                            {canonicalGraph.stats.missingGitSnapshotNodes > 0 && (
-                                <Badge label={`${canonicalGraph.stats.missingGitSnapshotNodes} no git snapshot`} tone="warn" />
-                            )}
-                            {canonicalGraph.stats.missingSubmoduleSnapshotNodes > 0 && (
-                                <Badge label={`${canonicalGraph.stats.missingSubmoduleSnapshotNodes} missing submodule visibility`} tone="warn" />
-                            )}
-                            {canonicalGraph.stats.staleGitSnapshotNodes > 0 && (
-                                <Badge label={`${canonicalGraph.stats.staleGitSnapshotNodes} stale peer snapshot`} tone="warn" />
-                            )}
-                            {(queueSummary?.active ?? 0) > 0 && (
-                                <Badge label={`${queueSummary?.active ?? 0} active queue`} tone="info" />
-                            )}
-                            <Badge label={`${canonicalGraph.stats.totalNodes} nodes`} tone="default" />
-                            {canonicalGraph.stats.totalActiveSessions > 0 && (
-                                <Badge label={`${canonicalGraph.stats.totalActiveSessions} attached chats`} tone="info" />
-                            )}
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
+            {/* ── Card: header + graph + detail panel ── */}
+            <div className={`${meshTheme.cardClass} flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px]`}>
+
+                {/* Header — always static, never absolute */}
+                <div className={`shrink-0 flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2.5 border-b ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                    <div className={`flex min-w-0 flex-1 flex-wrap gap-2 text-xs ${meshTheme.textSecondary}`}>
+                        <Badge label={headlineLabel} tone={headlineTone} />
+                        {canonicalGraph.stats.blockedReviewNodes > 0 && (
+                            <Badge label={`${canonicalGraph.stats.blockedReviewNodes} blocked review`} tone="danger" />
+                        )}
+                        {canonicalGraph.stats.notMergeableNodes > 0 && (
+                            <Badge label={`${canonicalGraph.stats.notMergeableNodes} not mergeable`} tone="danger" />
+                        )}
+                        {canonicalGraph.stats.mergeReadyNodes > 0 && (
+                            <Badge label={`${canonicalGraph.stats.mergeReadyNodes} need merge`} tone="warn" />
+                        )}
+                        {canonicalGraph.stats.cleanupCandidateNodes > 0 && (
+                            <Badge label={`${canonicalGraph.stats.cleanupCandidateNodes} refine/cleanup`} tone="info" />
+                        )}
+                        {canonicalGraph.stats.offlineNodes > 0 && (
+                            <Badge label={`${canonicalGraph.stats.offlineNodes} offline`} tone="danger" />
+                        )}
+                        {canonicalGraph.stats.incompleteSnapshotNodes > 0 && (
+                            <Badge label={`${canonicalGraph.stats.incompleteSnapshotNodes} incomplete peer snapshot`} tone="warn" />
+                        )}
+                        {canonicalGraph.stats.missingGitSnapshotNodes > 0 && (
+                            <Badge label={`${canonicalGraph.stats.missingGitSnapshotNodes} no git snapshot`} tone="warn" />
+                        )}
+                        {canonicalGraph.stats.missingSubmoduleSnapshotNodes > 0 && (
+                            <Badge label={`${canonicalGraph.stats.missingSubmoduleSnapshotNodes} missing submodule visibility`} tone="warn" />
+                        )}
+                        {canonicalGraph.stats.staleGitSnapshotNodes > 0 && (
+                            <Badge label={`${canonicalGraph.stats.staleGitSnapshotNodes} stale peer snapshot`} tone="warn" />
+                        )}
+                        {(queueSummary?.active ?? 0) > 0 && (
+                            <Badge label={`${queueSummary?.active ?? 0} active queue`} tone="info" />
+                        )}
+                        <Badge label={`${canonicalGraph.stats.totalNodes} nodes`} tone="default" />
+                        {canonicalGraph.stats.totalActiveSessions > 0 && (
+                            <Badge label={`${canonicalGraph.stats.totalActiveSessions} attached chats`} tone="info" />
+                        )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                        {/* Direction toggle */}
+                        <div
+                            className={meshTheme.isDark
+                                ? 'flex items-center gap-0.5 rounded-md border border-white/10 bg-slate-950/40 p-0.5 text-[10px]'
+                                : 'flex items-center gap-0.5 rounded-md border border-slate-300 bg-white/70 p-0.5 text-[10px]'}
+                            role="group"
+                            aria-label="Graph layout direction"
+                        >
+                            <button type="button" onClick={() => setDirectionPref('auto')} className={directionToggleButtonClass(directionPref === 'auto')} title="Auto-detect direction">Auto</button>
+                            <button type="button" onClick={() => setDirectionPref('LR')} className={directionToggleButtonClass(directionPref === 'LR')} title="Left to right">LR</button>
+                            <button type="button" onClick={() => setDirectionPref('TB')} className={directionToggleButtonClass(directionPref === 'TB')} title="Top to bottom">TB</button>
                         </div>
-                        <details className={`max-w-full rounded-xl px-3 py-2 text-xs ${meshTheme.isDark ? 'border border-white/10 bg-white/[0.03] text-slate-300' : 'border border-slate-200 bg-slate-50 text-slate-600'}`}>
+                        <details className={`rounded-xl px-3 py-1.5 text-xs ${meshTheme.isDark ? 'border border-white/10 bg-white/[0.03] text-slate-300' : 'border border-slate-200 bg-slate-50 text-slate-600'}`}>
                             <summary className={`cursor-pointer list-none font-medium ${meshTheme.textSecondary} [&::-webkit-details-marker]:hidden`}>
-                                Legend & secondary details
+                                Legend
                             </summary>
-                            <div className="mt-3 flex flex-col gap-3">
-                                <div className="flex flex-wrap gap-2">
-                                    <Badge label={`${canonicalGraph.stats.dirtyNodes} dirty`} tone={canonicalGraph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
-                                    <Badge label={`${canonicalGraph.stats.orphanNodes} orphan`} tone={canonicalGraph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
-                                    <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
-                                    {stateCounts.length === 0 ? (
-                                        <Badge label="no session metadata" />
-                                    ) : stateCounts.slice(0, 2).map(([label, count]) => (
-                                        <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
-                                    ))}
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    <Badge label="Anchor = default branch" tone="info" />
-                                    <Badge label="Peer link = same-branch worktree" tone="default" />
-                                    <Badge label="Submodule link = child checkout" tone="warn" />
-                                </div>
-                                {statusWarnings.length > 0 && (
+                            <div className="absolute right-4 z-30 mt-2 w-72 rounded-xl border p-3 shadow-xl backdrop-blur-xl ${meshTheme.isDark ? 'border-white/10 bg-slate-950/96' : 'border-slate-200 bg-white/98 shadow-slate-900/10'}">
+                                <div className="flex flex-col gap-3">
                                     <div className="flex flex-wrap gap-2">
-                                        {statusWarnings.map(warning => (
-                                            <span key={warning} className={meshTheme.isDark ? 'rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100' : 'rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-700'}>{warning}</span>
+                                        <Badge label={`${canonicalGraph.stats.dirtyNodes} dirty`} tone={canonicalGraph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
+                                        <Badge label={`${canonicalGraph.stats.orphanNodes} orphan`} tone={canonicalGraph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
+                                        <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
+                                        {stateCounts.length === 0 ? (
+                                            <Badge label="no session metadata" />
+                                        ) : stateCounts.slice(0, 2).map(([label, count]) => (
+                                            <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
                                         ))}
                                     </div>
-                                )}
-                                <div className={`text-xs ${meshTheme.textMuted}`}>
-                                    Hover nodes or edges for a quick preview. Click a node when you want pinned drill-down details.
+                                    <div className="flex flex-wrap gap-2">
+                                        <Badge label="Anchor = default branch" tone="info" />
+                                        <Badge label="Peer link = same-branch worktree" tone="default" />
+                                        <Badge label="Submodule link = child checkout" tone="warn" />
+                                    </div>
+                                    {statusWarnings.length > 0 && (
+                                        <div className="flex flex-wrap gap-2">
+                                            {statusWarnings.map(warning => (
+                                                <span key={warning} className={meshTheme.isDark ? 'rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100' : 'rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-700'}>{warning}</span>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <div className={`text-xs ${meshTheme.textMuted}`}>
+                                        Hover nodes or edges for a quick preview. Click a node when you want pinned drill-down details.
+                                    </div>
                                 </div>
                             </div>
                         </details>
                     </div>
-                    {isBootstrapMode && canonicalGraph.nodes.length > 0 && (
-                        <div className={`mx-2 mb-2 flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-xs ${meshTheme.isDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
-                            <span className={`h-2 w-2 shrink-0 rounded-full animate-pulse ${meshTheme.isDark ? 'bg-amber-400' : 'bg-amber-500'}`} aria-hidden />
-                            <span>Awaiting live data — showing setup inventory until peer mesh_status probes succeed.</span>
+                </div>
+
+                {/* Bootstrap banner */}
+                {isBootstrapMode && canonicalGraph.nodes.length > 0 && (
+                    <div className={`shrink-0 mx-4 mt-2 flex items-center gap-2 rounded-xl border px-3.5 py-2 text-xs ${meshTheme.isDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
+                        <span className={`h-2 w-2 shrink-0 rounded-full animate-pulse ${meshTheme.isDark ? 'bg-amber-400' : 'bg-amber-500'}`} aria-hidden />
+                        <span>Awaiting live data — showing setup inventory until peer mesh_status probes succeed.</span>
+                    </div>
+                )}
+
+                {/* Graph canvas + right detail panel */}
+                <div className="relative flex min-h-0 flex-1 min-w-0">
+                    {/* Graph */}
+                    <div className="min-h-0 flex-1 min-w-0">
+                        {canonicalGraph.nodes.length > 0 ? (
+                            <MeshGraphView
+                                data={canonicalGraph}
+                                selectedNodeId={selectedNodeId}
+                                directionPref={directionPref}
+                                onDirectionChange={setDirectionPref}
+                                onNodeHoverChange={node => {
+                                    setHoveredNodeId(node?.id ?? null)
+                                    if (node) setHoveredEdgeId(null)
+                                }}
+                                onEdgeHoverChange={edge => {
+                                    setHoveredEdgeId(edge?.id ?? null)
+                                    if (edge) setHoveredNodeId(null)
+                                }}
+                                onNodeClick={node => {
+                                    const shouldCollapse = detailSelection?.kind === 'node' && selectedNodeId === node.id
+                                    if (shouldCollapse) {
+                                        setSelectedNodeId(null)
+                                        setDetailSelection(null)
+                                        return
+                                    }
+                                    setSelectedNodeId(node.id)
+                                    setDetailSelection({ kind: 'node', nodeId: node.id })
+                                }}
+                            />
+                        ) : (
+                            <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{emptyMessage}</div>
+                        )}
+                    </div>
+
+                    {/* Right sidebar — selected node detail */}
+                    {selectedGraphNode && detailSelection?.kind === 'node' && (
+                        <div className={`w-72 shrink-0 overflow-y-auto border-l p-4 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                            <div className="mb-3 flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                    <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphNode.label}</div>
+                                    <div className={`mt-0.5 font-mono text-[11px] ${meshTheme.textMuted}`}>{selectedGraphNode.id.slice(0, 16)}</div>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                    {selectedGraphNode.behind > 0 && (
+                                        <button
+                                            type="button"
+                                            onClick={() => { void handleHealSelectedNode() }}
+                                            disabled={!canHealSelectedNode || healingNodeId === selectedGraphNode.id}
+                                            className={meshTheme.isDark ? 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-45' : 'rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45'}
+                                        >
+                                            {healingNodeId === selectedGraphNode.id ? 'Checking' : 'Heal'}
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={closeGraphDetail}
+                                        aria-label="Close detail panel"
+                                        className={meshTheme.isDark ? 'rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-slate-200 transition hover:bg-white/[0.08]' : 'rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600 transition hover:bg-slate-50'}
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="mb-3 flex flex-wrap gap-1.5">
+                                {(() => {
+                                    const h = selectedNodeStatus?.health ?? selectedGraphNode.health
+                                    return h === 'unknown'
+                                        ? <Badge label="connecting..." tone="default" />
+                                        : <Badge label={h} tone={healthTone(h)} />
+                                })()}
+                                {selectedGraphNode.branch && <Badge label={selectedGraphNode.branch} tone="default" />}
+                                {selectedGraphNode.ahead > 0 && <Badge label={`ahead ${selectedGraphNode.ahead}`} tone="warn" />}
+                                {selectedGraphNode.behind > 0 && <Badge label={`behind ${selectedGraphNode.behind}`} tone="warn" />}
+                                {selectedGraphNode.dirtyFiles > 0 && <Badge label={`${selectedGraphNode.dirtyFiles} dirty`} tone="warn" />}
+                                {selectedNodeStatus?.connection && selectedNodeStatus.connection.state !== 'unknown' && (
+                                    <Badge label={describeConnection(selectedNodeStatus)} tone={connectionTone(selectedNodeStatus.connection)} />
+                                )}
+                                {selectedNodeStatus?.connection?.state === 'unknown' && (
+                                    <Badge label="mesh connecting..." tone="warn" />
+                                )}
+                                {selectedNodeSessionEntries.length > 0 && <Badge label={`${selectedNodeSessionEntries.length} sessions`} tone="info" />}
+                            </div>
+                            <div className="grid gap-1.5 text-xs">
+                                <Row label="Machine" value={selectedGraphNode.machineLabel ?? 'not reported'} />
+                                <Row label="Locality" value={selectedGraphNode.locality} />
+                                <Row label="Machine id" value={selectedGraphNode.machineId ?? selectedNodeStatus?.machineId ?? 'not reported'} />
+                                <Row label="Daemon id" value={selectedGraphNode.daemonId ?? selectedNodeStatus?.daemonId ?? 'not reported'} />
+                                <Row label="Workspace" value={selectedNodeStatus?.workspace ?? selectedGraphNode.workspace} />
+                                <Row label="Branch" value={selectedGraphNode.branch ?? 'unknown'} />
+                                <Row label="HEAD" value={selectedHeadSummary ?? (selectedNodeStatus?.gitProbePending ? 'Pending live git probe' : 'not reported')} />
+                                <Row label="Upstream" value={selectedGraphNode.upstream ?? 'none'} />
+                                <Row label="Dirty/ahead/behind" value={`${selectedGraphNode.dirtyFiles} dirty · ↑${selectedGraphNode.ahead}/↓${selectedGraphNode.behind}`} />
+                                <Row label="Source" value={String(selectedNodeStatus?.connection?.source ?? describeGraphNodeSource(selectedGraphNode))} />
+                                <Row label="Transport" value={selectedNodeStatus?.connection?.transport ?? 'unknown'} />
+                                <Row label="Sessions" value={selectedNodeSessionEntries.length > 0 ? selectedNodeSessionEntries.map(entry => sessionStatusLabel(entry.session)).join(', ') : 'none active'} />
+                            </div>
+                            {selectedNodeSessionEntries.length > 0 && (
+                                <div className="mt-3">
+                                    <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Active Sessions</div>
+                                    <div className="flex flex-col gap-1.5">
+                                        {selectedNodeSessionEntries.map(entry => (
+                                            <div key={entry.session.sessionId} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className={`min-w-0 truncate font-mono select-text ${meshTheme.textMuted}`} title={entry.session.sessionId}>{shortSessionId(entry.session.sessionId)}</span>
+                                                    <Badge label={sessionStatusLabel(entry.session)} tone={sessionTone(sessionStatusLabel(entry.session))} />
+                                                </div>
+                                                <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 ${meshTheme.textMuted}`}>
+                                                    <span className="truncate">{entry.session.providerType || 'provider unknown'}</span>
+                                                    <span>{sessionRoleLabel(entry.session)}</span>
+                                                    <span>{sessionElapsedLabel(entry.session)}</span>
+                                                </div>
+                                                {entry.session.statusNote && (
+                                                    <div className={`mt-1 text-[10px] leading-4 ${meshTheme.textMuted}`}>
+                                                        {entry.session.statusNote}
+                                                    </div>
+                                                )}
+                                                <div className={`mt-0.5 truncate ${meshTheme.textMuted}`} title={entry.session.workspace || entry.workspace}>
+                                                    {(entry.session.workspace || entry.workspace).slice(0, 38)}{entry.branch ? ` · ${entry.branch}` : ''}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            <div className="mt-3">
+                                <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Ledger (mesh-wide)</div>
+                                <div className="grid grid-cols-2 gap-1.5">
+                                    <Row label="Completed" value={String(ledgerSummary.taskCompleted)} />
+                                    <Row label="Failed" value={<span className={ledgerSummary.taskFailed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}>{ledgerSummary.taskFailed}</span>} />
+                                    <Row label="Launched" value={String(ledgerSummary.sessionLaunched)} />
+                                    <Row label="Recent failures" value={<span className={ledgerSummary.recentFailures > 0 ? (meshTheme.isDark ? 'text-amber-300' : 'text-amber-600') : ''}>{ledgerSummary.recentFailures}</span>} />
+                                </div>
+                            </div>
+                            {(() => {
+                                const queueTasks = (canonicalStatus.queue as any)?.tasks ?? (canonicalStatus.queue as any)?.items ?? null
+                                if (!Array.isArray(queueTasks) || queueTasks.length === 0) return null
+                                const nodeTasks = (queueTasks as RepoMeshQueueTask[]).filter(task => getQueueTaskNodeTarget(task) === selectedNodeId).slice(0, 3)
+                                if (nodeTasks.length === 0) return null
+                                return (
+                                    <div className="mt-3">
+                                        <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Queue tasks</div>
+                                        <div className="flex flex-col gap-1.5">
+                                            {nodeTasks.map(task => (
+                                                <div key={task.id} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className={`font-mono ${meshTheme.textMuted}`}>{task.id.slice(0, 12)}</span>
+                                                        <Badge label={task.status ?? 'unknown'} tone={sessionTone(task.status)} />
+                                                    </div>
+                                                    {task.message && (
+                                                        <div className={`mt-0.5 truncate ${meshTheme.textMuted}`}>{task.message.slice(0, 48)}</div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )
+                            })()}
+                            {selectedGraphNode.snapshotWarnings.length > 0 && (
+                                <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-xs text-amber-100' : 'mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800'}>
+                                    <div className="font-medium">Key warning</div>
+                                    <div className="mt-1">{selectedGraphNode.snapshotWarnings[0]}</div>
+                                </div>
+                            )}
+                            {selectedGraphNode.branchConvergence?.nextStep && (
+                                <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
+                                    <div className="font-medium">Follow-up</div>
+                                    <div className="mt-1">{selectedGraphNode.branchConvergence.nextStep}</div>
+                                </div>
+                            )}
+                            {healPreview && (
+                                <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-xs text-emerald-100' : 'mt-3 rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-800'}>
+                                    <div className="font-medium">{healPreview.phase === 'execute' ? 'Heal result' : 'Heal preview'}</div>
+                                    <div className="mt-1">{healPreview.code ?? healPreview.error ?? 'No result code returned.'}</div>
+                                </div>
+                            )}
                         </div>
                     )}
-                    {canonicalGraph.nodes.length > 0 ? (
-                        <MeshGraphView
-                            data={canonicalGraph}
-                            selectedNodeId={selectedNodeId}
-                            onNodeHoverChange={node => {
-                                setHoveredNodeId(node?.id ?? null)
-                                if (node) setHoveredEdgeId(null)
-                            }}
-                            onEdgeHoverChange={edge => {
-                                setHoveredEdgeId(edge?.id ?? null)
-                                if (edge) setHoveredNodeId(null)
-                            }}
-                            onNodeClick={node => {
-                                const shouldCollapse = detailSelection?.kind === 'node' && selectedNodeId === node.id
-                                if (shouldCollapse) {
-                                    setSelectedNodeId(null)
-                                    setDetailSelection(null)
-                                    return
-                                }
-                                setSelectedNodeId(node.id)
-                                setDetailSelection({ kind: 'node', nodeId: node.id })
-                            }}
-                        />
-                    ) : (
-                        <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{emptyMessage}</div>
-                    )}
+
+                    {/* Hover preview — node (only when no selection) */}
                     {!selectedGraphNode && hoveredGraphNode && (
-                        <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center p-2 sm:inset-x-auto sm:right-5 sm:top-24 sm:bottom-auto sm:justify-end">
+                        <div className="pointer-events-none absolute bottom-3 right-4 z-20">
                             <section
                                 aria-label="Hovered node preview"
                                 className={meshTheme.isDark
-                                    ? 'w-full max-w-[min(24rem,calc(100vw-2.5rem))] rounded-2xl border border-white/12 bg-slate-950/94 p-4 shadow-2xl shadow-black/35 backdrop-blur-xl'
-                                    : 'w-full max-w-[min(24rem,calc(100vw-2.5rem))] rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/12 backdrop-blur-xl'}
+                                    ? 'w-[22rem] rounded-2xl border border-white/12 bg-slate-950/94 p-4 shadow-2xl shadow-black/35 backdrop-blur-xl'
+                                    : 'w-[22rem] rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/12 backdrop-blur-xl'}
                             >
                                 <div className="mb-3 flex items-start justify-between gap-3">
                                     <div className="min-w-0">
@@ -1024,13 +1206,15 @@ export default function MeshObservabilitySurface({
                             </section>
                         </div>
                     )}
+
+                    {/* Hover preview — edge */}
                     {!selectedGraphNode && !hoveredGraphNode && hoveredGraphEdge && (
-                        <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center p-2 sm:inset-x-auto sm:right-5 sm:top-24 sm:bottom-auto sm:justify-end">
+                        <div className="pointer-events-none absolute bottom-3 right-4 z-20">
                             <section
                                 aria-label="Hovered edge preview"
                                 className={meshTheme.isDark
-                                    ? 'w-full max-w-[min(22rem,calc(100vw-2.5rem))] rounded-2xl border border-white/12 bg-slate-950/94 p-4 shadow-2xl shadow-black/35 backdrop-blur-xl'
-                                    : 'w-full max-w-[min(22rem,calc(100vw-2.5rem))] rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/12 backdrop-blur-xl'}
+                                    ? 'w-[20rem] rounded-2xl border border-white/12 bg-slate-950/94 p-4 shadow-2xl shadow-black/35 backdrop-blur-xl'
+                                    : 'w-[20rem] rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/12 backdrop-blur-xl'}
                             >
                                 <div className="mb-3 flex items-start justify-between gap-3">
                                     <div className="min-w-0">
@@ -1051,161 +1235,10 @@ export default function MeshObservabilitySurface({
                             </section>
                         </div>
                     )}
-                    {selectedGraphNode && detailSelection?.kind === 'node' && (
-                        <div className="absolute inset-x-3 bottom-3 top-20 z-20 flex items-end justify-center p-2 sm:inset-5 sm:top-24 sm:items-start sm:justify-end" onClick={closeGraphDetail} role="presentation">
-                            <section
-                                role="dialog"
-                                aria-modal="false"
-                                aria-label="Selected node"
-                                className={meshTheme.isDark
-                                    ? 'max-h-[min(72vh,540px)] w-full max-w-[min(28rem,calc(100vw-2.5rem))] overflow-y-auto rounded-2xl border border-white/12 bg-slate-950/96 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl'
-                                    : 'max-h-[min(72vh,540px)] w-full max-w-[min(28rem,calc(100vw-2.5rem))] overflow-y-auto rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/15 backdrop-blur-xl'}
-                                onClick={event => event.stopPropagation()}
-                            >
-                                <div className="mb-3 flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphNode.label}</div>
-                                        <div className={`mt-1 font-mono text-[11px] ${meshTheme.textMuted}`}>{selectedGraphNode.id.slice(0, 16)}</div>
-                                    </div>
-                                    <div className="flex shrink-0 items-center gap-2">
-                                        {selectedGraphNode.behind > 0 && (
-                                            <button
-                                                type="button"
-                                                onClick={() => { void handleHealSelectedNode() }}
-                                                disabled={!canHealSelectedNode || healingNodeId === selectedGraphNode.id}
-                                                className={meshTheme.isDark ? 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-45' : 'rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45'}
-                                            >
-                                                {healingNodeId === selectedGraphNode.id ? 'Checking' : 'Heal'}
-                                            </button>
-                                        )}
-                                        <button
-                                            type="button"
-                                            onClick={closeGraphDetail}
-                                            className={meshTheme.isDark ? 'rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-slate-200 transition hover:bg-white/[0.08]' : 'rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:bg-slate-50'}
-                                        >
-                                            Close
-                                        </button>
-                                    </div>
-                                </div>
-                                <div className="mb-3 flex flex-wrap gap-2">
-                                    {(() => {
-                                        const h = selectedNodeStatus?.health ?? selectedGraphNode.health
-                                        return h === 'unknown'
-                                            ? <Badge label="connecting..." tone="default" />
-                                            : <Badge label={h} tone={healthTone(h)} />
-                                    })()}
-                                    {selectedGraphNode.branch && <Badge label={selectedGraphNode.branch} tone="default" />}
-                                    {selectedGraphNode.ahead > 0 && <Badge label={`ahead ${selectedGraphNode.ahead}`} tone="warn" />}
-                                    {selectedGraphNode.behind > 0 && <Badge label={`behind ${selectedGraphNode.behind}`} tone="warn" />}
-                                    {selectedGraphNode.dirtyFiles > 0 && <Badge label={`${selectedGraphNode.dirtyFiles} dirty`} tone="warn" />}
-                                    {selectedNodeStatus?.connection && selectedNodeStatus.connection.state !== 'unknown' && (
-                                        <Badge label={describeConnection(selectedNodeStatus)} tone={connectionTone(selectedNodeStatus.connection)} />
-                                    )}
-                                    {selectedNodeStatus?.connection?.state === 'unknown' && (
-                                        <Badge label="mesh connecting..." tone="warn" />
-                                    )}
-                                    {selectedNodeSessionEntries.length > 0 && <Badge label={`${selectedNodeSessionEntries.length} sessions`} tone="info" />}
-                                </div>
-                                <div className="grid gap-2 text-xs sm:grid-cols-2">
-                                    <Row label="Machine" value={selectedGraphNode.machineLabel ?? 'not reported'} />
-                                    <Row label="Locality" value={selectedGraphNode.locality} />
-                                    <Row label="Machine id" value={selectedGraphNode.machineId ?? selectedNodeStatus?.machineId ?? 'not reported'} />
-                                    <Row label="Daemon id" value={selectedGraphNode.daemonId ?? selectedNodeStatus?.daemonId ?? 'not reported'} />
-                                    <Row label="Workspace" value={selectedNodeStatus?.workspace ?? selectedGraphNode.workspace} />
-                                    <Row label="Branch" value={selectedGraphNode.branch ?? 'unknown'} />
-                                    <Row label="HEAD" value={selectedHeadSummary ?? (selectedNodeStatus?.gitProbePending ? 'Pending live git probe' : 'not reported')} />
-                                    <Row label="Upstream" value={selectedGraphNode.upstream ?? 'none'} />
-                                    <Row label="Dirty/ahead/behind" value={`${selectedGraphNode.dirtyFiles} dirty · ↑${selectedGraphNode.ahead}/↓${selectedGraphNode.behind}`} />
-                                    <Row label="Source" value={String(selectedNodeStatus?.connection?.source ?? describeGraphNodeSource(selectedGraphNode))} />
-                                    <Row label="Transport" value={selectedNodeStatus?.connection?.transport ?? 'unknown'} />
-                                    <Row label="Sessions" value={selectedNodeSessionEntries.length > 0 ? selectedNodeSessionEntries.map(entry => sessionStatusLabel(entry.session)).join(', ') : 'none active'} />
-                                </div>
-                                {selectedNodeSessionEntries.length > 0 && (
-                                    <div className="mt-3">
-                                        <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Active Sessions</div>
-                                        <div className="flex flex-col gap-1.5">
-                                            {selectedNodeSessionEntries.map(entry => (
-                                                <div key={entry.session.sessionId} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span className={`min-w-0 truncate font-mono select-text ${meshTheme.textMuted}`} title={entry.session.sessionId}>{shortSessionId(entry.session.sessionId)}</span>
-                                                        <Badge label={sessionStatusLabel(entry.session)} tone={sessionTone(sessionStatusLabel(entry.session))} />
-                                                    </div>
-                                                    <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 ${meshTheme.textMuted}`}>
-                                                        <span className="truncate">{entry.session.providerType || 'provider unknown'}</span>
-                                                        <span>{sessionRoleLabel(entry.session)}</span>
-                                                        <span>{sessionElapsedLabel(entry.session)}</span>
-                                                    </div>
-                                                    {entry.session.statusNote && (
-                                                        <div className={`mt-1 text-[10px] leading-4 ${meshTheme.textMuted}`}>
-                                                            {entry.session.statusNote}
-                                                        </div>
-                                                    )}
-                                                    <div className={`mt-0.5 truncate ${meshTheme.textMuted}`} title={entry.session.workspace || entry.workspace}>
-                                                        {(entry.session.workspace || entry.workspace).slice(0, 42)}{entry.branch ? ` · ${entry.branch}` : ''}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                                <div className="mt-3">
-                                    <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Ledger (mesh-wide)</div>
-                                    <div className="grid grid-cols-2 gap-1.5">
-                                        <Row label="Completed" value={String(ledgerSummary.taskCompleted)} />
-                                        <Row label="Failed" value={<span className={ledgerSummary.taskFailed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}>{ledgerSummary.taskFailed}</span>} />
-                                        <Row label="Launched" value={String(ledgerSummary.sessionLaunched)} />
-                                        <Row label="Recent failures" value={<span className={ledgerSummary.recentFailures > 0 ? (meshTheme.isDark ? 'text-amber-300' : 'text-amber-600') : ''}>{ledgerSummary.recentFailures}</span>} />
-                                    </div>
-                                </div>
-                                {(() => {
-                                    const queueTasks = (canonicalStatus.queue as any)?.tasks ?? (canonicalStatus.queue as any)?.items ?? null
-                                    if (!Array.isArray(queueTasks) || queueTasks.length === 0) return null
-                                    const nodeTasks = (queueTasks as RepoMeshQueueTask[]).filter(task => getQueueTaskNodeTarget(task) === selectedNodeId).slice(0, 3)
-                                    if (nodeTasks.length === 0) return null
-                                    return (
-                                        <div className="mt-3">
-                                            <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Queue tasks</div>
-                                            <div className="flex flex-col gap-1.5">
-                                                {nodeTasks.map(task => (
-                                                    <div key={task.id} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
-                                                        <div className="flex items-center justify-between gap-2">
-                                                            <span className={`font-mono ${meshTheme.textMuted}`}>{task.id.slice(0, 12)}</span>
-                                                            <Badge label={task.status ?? 'unknown'} tone={sessionTone(task.status)} />
-                                                        </div>
-                                                        {task.message && (
-                                                            <div className={`mt-0.5 truncate ${meshTheme.textMuted}`}>{task.message.slice(0, 48)}</div>
-                                                        )}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )
-                                })()}
-                                {selectedGraphNode.snapshotWarnings.length > 0 && (
-                                    <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-xs text-amber-100' : 'mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800'}>
-                                        <div className="font-medium">Key warning</div>
-                                        <div className="mt-1">{selectedGraphNode.snapshotWarnings[0]}</div>
-                                    </div>
-                                )}
-                                {selectedGraphNode.branchConvergence?.nextStep && (
-                                    <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
-                                        <div className="font-medium">Follow-up</div>
-                                        <div className="mt-1">{selectedGraphNode.branchConvergence.nextStep}</div>
-                                    </div>
-                                )}
-                                {healPreview && (
-                                    <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-xs text-emerald-100' : 'mt-3 rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-800'}>
-                                        <div className="font-medium">{healPreview.phase === 'execute' ? 'Heal result' : 'Heal preview'}</div>
-                                        <div className="mt-1">{healPreview.code ?? healPreview.error ?? 'No result code returned.'}</div>
-                                    </div>
-                                )}
-                            </section>
-                        </div>
-                    )}
                 </div>
             </div>
 
-            {/* ── Mesh Health Panel ── */}
+            {/* ── Mesh Health Panel — closed by default ── */}
             <MeshHealthPanel
                 canonicalStatus={canonicalStatus}
                 queueSummary={queueSummary}
