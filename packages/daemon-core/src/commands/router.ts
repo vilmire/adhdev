@@ -3455,11 +3455,31 @@ export class DaemonCommandRouter {
 
             const { stdout: baseBranchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8' });
             const baseBranch = baseBranchStdout.trim();
-            const { stdout: baseHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+
+            // Fetch origin so baseHead reflects the latest pushed state, not a stale local HEAD.
+            // This prevents patch_equivalence failures when sequential Refines push to origin/main
+            // but the local main checkout hasn't been fast-forwarded yet.
+            let fetchWarning: string | undefined;
+            try {
+                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8' });
+            } catch (e: any) {
+                fetchWarning = `git fetch origin ${baseBranch} failed (proceeding with local HEAD): ${e?.message}`;
+            }
+
+            // Prefer origin/<baseBranch> as the authoritative base; fall back to local HEAD if fetch failed.
+            let baseHeadRaw: string;
+            try {
+                const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8' });
+                baseHeadRaw = stdout.trim();
+            } catch {
+                const { stdout: localHead } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+                baseHeadRaw = localHead.trim();
+            }
+
             const { stdout: branchHeadStdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8' });
-            const baseHead = baseHeadStdout.trim();
+            const baseHead = baseHeadRaw;
             let branchHead = branchHeadStdout.trim();
-            recordMeshRefineStage(refineStages, 'resolve_refs', 'passed', resolveStarted, { branch, baseBranch, baseHead, branchHead });
+            recordMeshRefineStage(refineStages, 'resolve_refs', 'passed', resolveStarted, { branch, baseBranch, baseHead, branchHead, ...(fetchWarning ? { fetchWarning } : {}) });
 
             const validationStarted = Date.now();
             const validationSummary = await runMeshRefineValidationGate(mesh, node.workspace, {
