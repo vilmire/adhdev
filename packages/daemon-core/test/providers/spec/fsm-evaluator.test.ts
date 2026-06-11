@@ -45,11 +45,30 @@ const banner = [
     '  ➜ adhdev git:(main)',
 ].join('\n');
 
+// Real generating frame: the active spinner "✢ <verb>ing…" is present.
 const busyScreen = [
-    '⏺ Bash(git commit -m ...)',
-    '  ⎿  [main abc123] fix something',
+    '⏺ Working on it.',
     '',
-    '✻ Crunched for 12s',
+    '❯ write an essay',
+    '',
+    '✢ Contemplating…',
+    '',
+    '────────────────────────────────────────────────────────────────────────────────',
+    '❯',
+    '────────────────────────────────────────────────────────────────────────────────',
+].join('\n')
+
+// Idle screen that still shows a COMPLETED tool output (⎿) and a number-free
+// prompt — the false-busy / approval-flicker trigger we fixed. ⎿ and ❯ alone
+// must NOT score as busy or approval.
+const idleWithToolOutput = [
+    '⏺ Done.',
+    '',
+    '✻ Brewed for 3s',
+    '',
+    '❯ /model',
+    '  ⎿  Set model to Opus 4.8 (default) and saved',
+    '     new sessions',
     '',
     '────────────────────────────────────────────────────────────────────────────────',
     '❯',
@@ -98,9 +117,23 @@ describe('claude-cli v4 FSM', () => {
         expect(ev.fired).toBeNull();
     });
 
-    it('idle → busy on real busy signal (⎿ / spinner)', () => {
+    it('idle → busy on the active spinner (✢ …ing…)', () => {
         const ev = evaluateFsm(spec, 'idle', busyScreen, { row: 5, col: 2 }, undefined, clk(10000, 5000));
         expect(ev.fired?.to).toBe('busy');
+    });
+
+    it('does NOT go busy on a leftover ⎿ tool-output (regression: approval/busy flicker)', () => {
+        // ⎿ is a COMPLETED tool-output marker, not an active-generation signal.
+        // A finished /model command leaves it on screen; the FSM must stay idle.
+        const ev = evaluateFsm(spec, 'idle', idleWithToolOutput, { row: 9, col: 1 }, undefined, clk(10000, 5000));
+        expect(ev.fired).toBeNull();
+    });
+
+    it('does NOT score approval on a bare ❯ prompt with leftover output', () => {
+        // footer is "❯" alone (no "❯ 1."), so →approval must not fire.
+        const ev = evaluateFsm(spec, 'idle', idleWithToolOutput, { row: 9, col: 1 }, undefined, clk(10000, 5000));
+        const toApproval = ev.transitions.find(t => t.to === 'approval');
+        expect(toApproval?.condResult).toBe(false);
     });
 
     it('busy stays until completion marker is stable', () => {

@@ -2322,6 +2322,48 @@ function normalizeCommandArgsWithInteractionId(args: any): Record<string, unknow
     return base;
 }
 
+/**
+ * Confine a spec path to ~/.adhdev/providers, defeating both prefix-bypass
+ * (e.g. ".../providers-evil") and symlink escape. Resolves the real path of
+ * the *parent* directory (the file may not exist yet for writes), requires the
+ * basename to be a literal `*.json`, and re-joins under the verified parent so
+ * the returned path can't point outside the tree. Used by get/write_spec_source.
+ */
+function resolveSpecPathInProviders(
+    specPath: string,
+    fsm: typeof import('node:fs'),
+    pathm: typeof import('node:path'),
+    osm: typeof import('node:os'),
+): { ok: true; path: string } | { ok: false; error: string } {
+    let rootReal: string;
+    try {
+        rootReal = fsm.realpathSync(pathm.join(osm.homedir(), '.adhdev', 'providers'));
+    } catch (e) {
+        return { ok: false, error: `providers root unavailable: ${(e as Error).message}` };
+    }
+    const resolved = pathm.resolve(specPath);
+    const base = pathm.basename(resolved);
+    if (!/^[\w.-]+\.json$/.test(base)) {
+        return { ok: false, error: 'refused: spec file must be a *.json basename' };
+    }
+    let parentReal: string;
+    try {
+        parentReal = fsm.realpathSync(pathm.dirname(resolved));
+    } catch (e) {
+        return { ok: false, error: `spec directory not found: ${(e as Error).message}` };
+    }
+    if (parentReal !== rootReal && !parentReal.startsWith(rootReal + pathm.sep)) {
+        return { ok: false, error: 'refused: spec path must be under the providers root' };
+    }
+    const safe = pathm.join(parentReal, base);
+    // Reject if the final file itself is a symlink pointing elsewhere.
+    try {
+        const st = fsm.lstatSync(safe);
+        if (st.isSymbolicLink()) return { ok: false, error: 'refused: spec path is a symlink' };
+    } catch { /* file may not exist yet (write case) — fine */ }
+    return { ok: true, path: safe };
+}
+
 function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor | null {
     if (!record || typeof record !== 'object') return null;
     const runtimeId = typeof record.sessionId === 'string' ? record.sessionId : '';
@@ -4648,6 +4690,8 @@ export class DaemonCommandRouter {
             //    files under ~/.adhdev/providers to avoid arbitrary fs access.
             case 'get_spec_source': {
                 const fsm = await import('node:fs');
+                const pathm = await import('node:path');
+                const osm = await import('node:os');
                 const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim()
                     : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
                 let specPath = typeof args?.specPath === 'string' ? args.specPath : '';
@@ -4658,9 +4702,13 @@ export class DaemonCommandRouter {
                     specPath = snap?.specPath ?? '';
                 }
                 if (!specPath) return { success: false, error: 'specPath or resolvable targetSessionId required' };
+                // Confine reads to the providers tree, resolving symlinks so a
+                // crafted path can't escape via a symlinked spec file.
+                const safe = resolveSpecPathInProviders(specPath, fsm, pathm, osm);
+                if (!safe.ok) return { success: false, error: safe.error, specPath };
                 try {
-                    const content = fsm.readFileSync(specPath, 'utf8');
-                    return { success: true, specPath, content };
+                    const content = fsm.readFileSync(safe.path, 'utf8');
+                    return { success: true, specPath: safe.path, content };
                 } catch (e) {
                     return { success: false, error: `read failed: ${(e as Error).message}`, specPath };
                 }
@@ -4674,12 +4722,9 @@ export class DaemonCommandRouter {
                 const content = typeof args?.content === 'string' ? args.content : '';
                 if (!specPath) return { success: false, error: 'specPath required' };
                 if (!content) return { success: false, error: 'content required' };
-                // Confine writes to the providers tree.
-                const providersRoot = pathm.join(osm.homedir(), '.adhdev', 'providers');
-                const resolved = pathm.resolve(specPath);
-                if (!resolved.startsWith(providersRoot)) {
-                    return { success: false, error: `refused: spec path must be under ${providersRoot}` };
-                }
+                // Confine writes to the providers tree (symlink-safe — see helper).
+                const safe = resolveSpecPathInProviders(specPath, fsm, pathm, osm);
+                if (!safe.ok) return { success: false, error: safe.error };
                 // Validate JSON + (if v4) FSM structure before writing so a bad
                 // edit can't break the live session — return precise errors.
                 let parsed: unknown;
@@ -4691,8 +4736,8 @@ export class DaemonCommandRouter {
                     if (errs.length) return { success: false, error: 'spec invalid', validationErrors: errs };
                 }
                 try {
-                    fsm.writeFileSync(resolved, content, 'utf8');
-                    return { success: true, specPath: resolved };
+                    fsm.writeFileSync(safe.path, content, 'utf8');
+                    return { success: true, specPath: safe.path };
                 } catch (e) {
                     return { success: false, error: `write failed: ${(e as Error).message}` };
                 }
