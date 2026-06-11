@@ -543,7 +543,7 @@ export class SpecDriver {
         const sinceStartMs = now - this.startedAtMs;
         if (sinceStartMs < graceMs
                 && evState.id === 'busy'
-                && this.currentStateId === (this.spec.default_state ?? 'idle')) {
+                && (this.currentStateId === null || this.currentStateId === (this.spec.default_state ?? 'idle'))) {
             LOG.debug('SpecDriver', `[${this.opts.specPath.split('/').slice(-3).join('/')}] startup grace suppressed idle→busy (sinceStart=${sinceStartMs}ms grace=${graceMs}ms)`);
             evState = { id: this.spec.default_state ?? 'idle', label: 'Ready', title: null };
             this.scheduleBusyExpiry(graceMs - sinceStartMs + 50);
