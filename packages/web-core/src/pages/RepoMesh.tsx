@@ -41,7 +41,7 @@ export default function RepoMesh() {
     const {
         sendCommand, sendData, daemons, userName,
         loadMeshStatus, launchCoordinator, loadLiveMesh,
-        extractStatus, unwrapResult, normalizeMesh,
+        extractStatus, unwrapResult, normalizeMesh, normalizeNode,
         resolveCommandTarget, features,
     } = ctx
 
@@ -93,7 +93,7 @@ export default function RepoMesh() {
         graphLoading, graphError, setGraphError,
         graphProvenance,
         loadGraph,
-    } = useMeshGraph({ selectedMeshId, loadMeshStatus, extractStatus })
+    } = useMeshGraph({ selectedMeshId, loadMeshStatus, extractStatus, normalizeNode })
 
     // ─── Coordinator daemon selection (cloud) ───
     // Kept here so it can be passed into both useMeshNodeActions and useMeshQueue

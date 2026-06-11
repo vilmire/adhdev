@@ -11,12 +11,14 @@ interface UseMeshGraphOptions {
     selectedMeshId: string | null
     loadMeshStatus: RepoMeshContextValue['loadMeshStatus']
     extractStatus: RepoMeshContextValue['extractStatus']
+    normalizeNode?: RepoMeshContextValue['normalizeNode']
 }
 
 export function useMeshGraph({
     selectedMeshId,
     loadMeshStatus,
     extractStatus,
+    normalizeNode,
 }: UseMeshGraphOptions) {
     const [meshGraphStatus, setMeshGraphStatus] = useState<RepoMeshStatus | null>(null)
     const [graphLoading, setGraphLoading] = useState(false)
@@ -33,7 +35,15 @@ export function useMeshGraph({
                 refresh,
                 retryProfile: refresh ? 'settled' : 'interactive',
             })
-            const status = extractStatus(response)
+            const rawStatus = extractStatus(response)
+            const status = normalizeNode && rawStatus
+                ? {
+                    ...rawStatus,
+                    nodes: (rawStatus.nodes ?? []).map((node: any) =>
+                        normalizeNode(node, rawStatus.meshId ?? meshId, '')
+                    ),
+                }
+                : rawStatus
             if (status) {
                 setMeshGraphStatus(status)
                 setGraphProvenance('settled')
