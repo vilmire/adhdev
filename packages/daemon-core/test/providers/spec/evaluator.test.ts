@@ -3,9 +3,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { evaluate } from '../../../src/providers/spec/evaluator.js';
 import { loadSpec } from '../../../src/providers/spec/loader.js';
+import { loadFsmSpec, validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 import type { CliSpec } from '../../../src/providers/spec/types.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
+
+/** Load a v3/v1 spec by explicit path (bypasses the compatibility redirect). */
+function loadSpecByPath(specPath: string): CliSpec {
+    const res = loadSpec(specPath);
+    if (!res.ok) throw new Error(`spec load failed for ${specPath}: ${res.errors.join('; ')}`);
+    return res.spec;
+}
 
 function loadSpecFor(provider: string): CliSpec {
     const providerDir = path.join(REPO_ROOT, 'adhdev-providers/cli', provider);
@@ -21,7 +29,8 @@ function loadSpecFor(provider: string): CliSpec {
     return res.spec;
 }
 
-function loadSpecResultFor(provider: string) {
+/** Returns ok:true for v3 specs (via v3 loader) and v4 specs (via fsm-loader). */
+function loadSpecResultFor(provider: string): { ok: boolean; errors?: string[] } {
     const providerDir = path.join(REPO_ROOT, 'adhdev-providers/cli', provider);
     const manifestPath = path.join(providerDir, 'provider.v1.json');
     let specPath = path.join(providerDir, 'spec.json');
@@ -29,6 +38,11 @@ function loadSpecResultFor(provider: string) {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
         const declaredSpec = manifest?.compatibility?.find((entry: any) => typeof entry?.spec === 'string')?.spec;
         if (declaredSpec) specPath = path.join(providerDir, declaredSpec);
+    }
+    const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+    if ((raw as any).$schema === 'adhdev:cli/spec@4') {
+        const errors = validateFsmSpec(raw);
+        return { ok: errors.length === 0, errors };
     }
     return loadSpec(specPath);
 }
@@ -43,7 +57,9 @@ function loadFixture(provider: string, name: string): any {
 // below. The v3 evaluator is still exercised against codex-cli / cursor specs.
 
 describe('spec evaluator — codex-cli', () => {
-    const spec = loadSpecFor('codex-cli');
+    // codex-cli migrated to v4 FSM (specs/4.0.json). These tests remain on the
+    // historical v3 spec file so the v3 evaluator path stays covered.
+    const spec = loadSpecByPath(path.join(REPO_ROOT, 'adhdev-providers/cli/codex-cli/specs/0.137.json'));
 
     it('hits update_banner state on the codex update fixture', () => {
         const fx = loadFixture('codex-cli', 'false-stuck-update-banner-2026-06-04.json');

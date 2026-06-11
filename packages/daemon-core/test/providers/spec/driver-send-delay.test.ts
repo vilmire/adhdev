@@ -3,10 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolveSubmitDelayMs } from '../../../src/providers/spec/driver.js';
 import { loadSpec } from '../../../src/providers/spec/loader.js';
+import { loadFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
 
-function loadSpecFor(provider: string) {
+function loadSpecFor(provider: string): { send_message: { delay_ms_before_submit?: number } } {
     const providerDir = path.join(REPO_ROOT, 'adhdev-providers/cli', provider);
     const manifestPath = path.join(providerDir, 'provider.v1.json');
     let specPath = path.join(providerDir, 'spec.json');
@@ -14,6 +15,13 @@ function loadSpecFor(provider: string) {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
         const declaredSpec = manifest?.compatibility?.find((entry: any) => typeof entry?.spec === 'string')?.spec;
         if (declaredSpec) specPath = path.join(providerDir, declaredSpec);
+    }
+    // Try v4 first; fall back to v3/v1
+    const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+    if ((raw as any).$schema === 'adhdev:cli/spec@4') {
+        const res = loadFsmSpec(specPath);
+        if (!res.ok) throw new Error(`spec load failed for ${provider}: ${res.errors.join('; ')}`);
+        return res.spec;
     }
     const res = loadSpec(specPath);
     if (!res.ok) throw new Error(`spec load failed for ${provider}: ${res.errors.join('; ')}`);
