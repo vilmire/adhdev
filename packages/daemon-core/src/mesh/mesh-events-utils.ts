@@ -97,6 +97,15 @@ export function buildMeshSystemMessage(args: {
     if (args.event === 'monitor:long_generating') {
         return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for pendingCoordinatorEvents or a completion/status event; if the user explicitly asks for status, make one bounded status check and then wait again.`;
     }
+    if (args.event === 'worktree_bootstrap_complete') {
+        const worktreePath = readNonEmptyString(args.metadataEvent.worktreePath);
+        const durationMs = typeof args.metadataEvent.durationMs === 'number' ? args.metadataEvent.durationMs : undefined;
+        return `[System] ${args.nodeLabel} worktree bootstrap completed${worktreePath ? ` at ${worktreePath}` : ''}${durationMs !== undefined ? ` in ${Math.round(durationMs / 1000)}s` : ''}. The worktree is ready — use \`mesh_launch_session\` to start an agent.`;
+    }
+    if (args.event === 'worktree_bootstrap_failed') {
+        const error = readNonEmptyString(args.metadataEvent.error);
+        return `[System] ${args.nodeLabel} worktree bootstrap failed${error ? `: ${error}` : '.'}. Use \`mesh_retry_node_bootstrap\` to retry or inspect the node state.`;
+    }
     if (args.event === 'refine:accepted') {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
         return `[System] Refinery accepted async job${jobId ? ` ${jobId}` : ''} for ${args.nodeLabel}. Completion/failure will be delivered as a terminal refine event; do not poll repeatedly.`;

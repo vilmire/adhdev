@@ -5916,11 +5916,14 @@ export class DaemonCommandRouter {
                     let worktreeCleanup: Record<string, unknown> | undefined;
                     if (node?.isLocalWorktree) {
                         const nodeDaemonId = typeof node.daemonId === 'string' ? node.daemonId.trim() : undefined;
-                        const isRemoteWorktree = nodeDaemonId && nodeDaemonId !== this.deps.statusInstanceId && this.deps.dispatchMeshCommand;
+                        const isRemoteWorktree = nodeDaemonId && nodeDaemonId !== this.deps.statusInstanceId && this.deps.dispatchMeshCommand
+                            && !args?._meshDirectDispatch;
                         if (isRemoteWorktree) {
                             // Worktree lives on a different machine — ask that daemon to clean it up.
+                            // _meshDirectDispatch prevents re-forwarding when stored daemonId uses legacy format.
                             const forwarded = await this.deps.dispatchMeshCommand!(nodeDaemonId!, 'remove_mesh_node', {
                                 ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+                                _meshDirectDispatch: true,
                             });
                             return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
                         }
@@ -6007,10 +6010,14 @@ export class DaemonCommandRouter {
                     if (!sourceNode) return { success: false, error: `Source node '${sourceNodeId}' not found in mesh` };
 
                     // Forward to the source node's daemon if it's on a different machine.
+                    // _meshDirectDispatch prevents infinite re-forwarding when the stored daemonId
+                    // uses a legacy format that doesn't match the receiving daemon's statusInstanceId.
                     const sourceDaemonId = typeof sourceNode.daemonId === 'string' ? sourceNode.daemonId.trim() : undefined;
-                    if (sourceDaemonId && sourceDaemonId !== this.deps.statusInstanceId && this.deps.dispatchMeshCommand) {
+                    if (sourceDaemonId && sourceDaemonId !== this.deps.statusInstanceId && this.deps.dispatchMeshCommand
+                        && !args?._meshDirectDispatch) {
                         const forwarded = await this.deps.dispatchMeshCommand(sourceDaemonId, 'clone_mesh_node', {
                             ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+                            _meshDirectDispatch: true,
                         });
                         return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
                     }
@@ -6271,10 +6278,13 @@ export class DaemonCommandRouter {
                     if (!node.isLocalWorktree) return { success: false, error: 'Node is not a local worktree node' };
 
                     // Bootstrap runs scripts in the worktree path — forward to the node's daemon if remote.
+                    // _meshDirectDispatch prevents re-forwarding when stored daemonId uses legacy format.
                     const nodeDaemonId = typeof node.daemonId === 'string' ? node.daemonId.trim() : undefined;
-                    if (nodeDaemonId && nodeDaemonId !== this.deps.statusInstanceId && this.deps.dispatchMeshCommand) {
+                    if (nodeDaemonId && nodeDaemonId !== this.deps.statusInstanceId && this.deps.dispatchMeshCommand
+                        && !args?._meshDirectDispatch) {
                         const forwarded = await this.deps.dispatchMeshCommand(nodeDaemonId, 'retry_mesh_node_bootstrap', {
                             ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+                            _meshDirectDispatch: true,
                         });
                         return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
                     }
