@@ -595,9 +595,10 @@ export class CliProviderInstance implements ProviderInstance {
             typeof adapterStatus?.providerSessionId === 'string' ? adapterStatus.providerSessionId : '',
         );
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, Date.now());
+        const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
         let visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
             ? 'error'
-            : (autoApproveActive ? 'generating' : adapterStatus.status);
+            : (autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status);
         const externalNativeFinal = this.getExternalNativeFinalReconciliation(parsedStatus?.messages, adapterStatus);
         if (externalNativeFinal && isCliGeneratingLikeStatus(visibleStatus)) {
             visibleStatus = 'idle';
@@ -718,7 +719,7 @@ export class CliProviderInstance implements ProviderInstance {
         });
         const activeChatStatus = parseErrorMessage
             ? 'error'
-            : autoApproveActive && parsedStatus?.status === 'waiting_approval'
+            : (autoApproveActive && parsedStatus?.status === 'waiting_approval') || autoApproveHoldIdle
             ? 'generating'
             : (adapterStatus.status !== 'idle'
                 ? visibleStatus
@@ -743,7 +744,7 @@ export class CliProviderInstance implements ProviderInstance {
                 title: parsedStatus?.title || dirName,
                 status: finalChatStatus,
                 messages: statusMessages,
-                activeModal: autoApproveActive ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
+                activeModal: (autoApproveActive || autoApproveHoldIdle) ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
                 activeInteractivePrompt: this.activeInteractivePrompt,
                 inputContent: '',
             },
@@ -788,7 +789,8 @@ export class CliProviderInstance implements ProviderInstance {
     getHotChatSessionState(): HotChatSessionState {
         const adapterStatus = this.adapter.getStatus({ allowParse: false });
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
-        const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
+        const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
+        const visibleStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status;
         const runtime = this.adapter.getRuntimeMetadata();
         return {
             id: this.instanceId,
@@ -803,7 +805,8 @@ export class CliProviderInstance implements ProviderInstance {
     getSessionModalState(sessionId?: string): SessionModalState {
         const adapterStatus = this.adapter.getStatus({ allowParse: true });
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
-        const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
+        const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
+        const visibleStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status;
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
         return {
             // Honor the caller-supplied sessionId — InstanceMgr rejects the
@@ -813,7 +816,7 @@ export class CliProviderInstance implements ProviderInstance {
             id: sessionId ?? this.instanceId,
             status: visibleStatus,
             title: dirName,
-            activeModal: autoApproveActive ? null : adapterStatus.activeModal,
+            activeModal: (autoApproveActive || autoApproveHoldIdle) ? null : adapterStatus.activeModal,
         };
     }
 
