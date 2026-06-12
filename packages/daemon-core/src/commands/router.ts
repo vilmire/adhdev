@@ -5866,12 +5866,15 @@ export class DaemonCommandRouter {
                     nodeDaemonId = typeof node?.daemonId === 'string' ? node.daemonId.trim() : undefined;
                 }
                 // If the target node belongs to a remote daemon, forward the command there.
+                // _meshDirectDispatch prevents re-forwarding (and P2P self-dial) when the stored
+                // daemonId uses a legacy format that doesn't match the receiving daemon's identity.
                 const selfDaemonId = this.deps.statusInstanceId;
                 const isRemote = nodeDaemonId && selfDaemonId && nodeDaemonId !== selfDaemonId;
-                if (isRemote && this.deps.dispatchMeshCommand) {
+                if (isRemote && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
                     const forwarded = await this.deps.dispatchMeshCommand(nodeDaemonId!, 'fast_forward_mesh_node', {
                         ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
                         workspace,
+                        _meshDirectDispatch: true,
                     });
                     return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
                 }
