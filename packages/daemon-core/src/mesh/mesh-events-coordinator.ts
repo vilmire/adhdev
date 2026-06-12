@@ -6,7 +6,7 @@ import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents } from './mesh-work-queue.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -499,7 +499,12 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
     });
 }
 
-async function resolveUsableProvider(components: DaemonComponents, nodeId: string, node: any): Promise<{ providerType?: string; reason?: string }> {
+async function resolveUsableProvider(
+    components: DaemonComponents,
+    nodeId: string,
+    node: any,
+    requiredTags?: string[],
+): Promise<{ providerType?: string; reason?: string }> {
     const providerPriority = normalizeProviderPriority(node?.policy);
     if (!providerPriority.length) return { reason: 'missing_provider_priority' };
     const providerLoader = components.providerLoader;
@@ -510,6 +515,12 @@ async function resolveUsableProvider(components: DaemonComponents, nodeId: strin
         const normalizedType = typeof providerLoader.resolveAlias === 'function'
             ? providerLoader.resolveAlias(requestedType)
             : requestedType;
+        // Skip providers that can't satisfy the task's requiredTags (e.g. provider=hermes-cli
+        // means only hermes-cli qualifies, not any other type in providerPriority).
+        if (requiredTags?.length && !nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, normalizedType))) {
+            failed.push(`${requestedType}: required_tags_mismatch`);
+            continue;
+        }
         if (typeof providerLoader.isMachineProviderEnabled === 'function' && !providerLoader.isMachineProviderEnabled(normalizedType)) {
             failed.push(`${requestedType}: disabled`);
             continue;
@@ -552,10 +563,23 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
         }
 
         const candidateNodes = Array.isArray(mesh?.nodes)
-            ? mesh.nodes.filter((node: any) => task.targetNodeId ? node?.id === task.targetNodeId : true)
+            ? mesh.nodes.filter((node: any) => {
+                if (task.targetNodeId && node?.id !== task.targetNodeId) return false;
+                // Skip nodes that can never satisfy requiredTags regardless of which provider
+                // from providerPriority is selected. A node satisfies tags if at least one
+                // provider in its priority list would produce matching capability tags.
+                if (task.requiredTags?.length) {
+                    const priorities = normalizeProviderPriority(node?.policy);
+                    const providerCandidates = priorities.length ? priorities : [undefined as unknown as string];
+                    return providerCandidates.some(p =>
+                        nodeSatisfiesRequiredTags(task.requiredTags, buildMeshNodeCapabilityTags(node, p))
+                    );
+                }
+                return true;
+            })
             : [];
         if (!candidateNodes.length) {
-            markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'no_matching_node', nodeId: task.targetNodeId });
+            markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'no_node_satisfies_required_tags', nodeId: task.targetNodeId });
             continue;
         }
 
@@ -599,7 +623,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
 
             autoLaunchInProgress.add(launchKey);
             try {
-                const resolved = await resolveUsableProvider(components, nodeId, node);
+                const resolved = await resolveUsableProvider(components, nodeId, node, task.requiredTags);
                 if (!resolved.providerType) {
                     markAutoLaunch(meshId, task.id, { status: 'skipped', reason: resolved.reason || 'provider_unusable', nodeId });
                     continue;

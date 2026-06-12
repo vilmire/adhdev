@@ -1555,6 +1555,59 @@ describe('setupMeshEventForwarding', () => {
       cleanupMeshFiles(meshId)
     }
   })
+
+  it('skips nodes whose providerPriority cannot satisfy task requiredTags during auto-launch', async () => {
+    const meshId = `mesh_auto_launch_tags_skip_${Date.now()}`
+    try {
+      // Node only has claude-cli, but task requires provider=hermes-cli
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['claude-cli'] } }],
+        policy: { maxParallelTasks: 2 },
+      })
+      detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/claude' })
+      enqueueTask(meshId, 'hermes-only task', { requiredTags: ['provider=hermes-cli'] })
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      const [entry] = getQueue(meshId)
+      expect(entry.status).toBe('pending')
+      expect(entry.autoLaunch?.reason).toBe('no_node_satisfies_required_tags')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('auto-launches with the matching provider when node providerPriority includes the required provider=X tag', async () => {
+    const meshId = `mesh_auto_launch_tags_match_${Date.now()}`
+    try {
+      // Node has both providers; task requires hermes-cli specifically
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['claude-cli', 'hermes-cli'] } }],
+        policy: { maxParallelTasks: 2 },
+      })
+      // Both providers are detected; hermes-cli must be selected (not claude-cli)
+      detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
+      const queued = enqueueTask(meshId, 'hermes task', { requiredTags: ['provider=hermes-cli'] })
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
+        cliType: 'hermes-cli',
+      }))
+      const [entry] = getQueue(meshId)
+      expect(entry.status).toBe('assigned')
+      expect(entry.id).toBe(queued.id)
+      expect(entry.autoLaunch?.status).toBe('completed')
+      expect(entry.autoLaunch?.providerType).toBe('hermes-cli')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
 })
 
 describe('Codex coordinator stuck-generating: refine terminal event delivery', () => {
