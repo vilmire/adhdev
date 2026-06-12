@@ -3491,6 +3491,7 @@ export async function meshSendTask(
                 : false;
             const taskId = randomUUID();
             const dispatchedAt = new Date().toISOString();
+            const coordinatorDaemonId = resolveCoordinatorNode(ctx)?.daemonId || ctx.localDaemonId;
             // Stamp the mesh assignment via meshContext so the daemon can
             // attach it to the target instance BEFORE prompt injection.
             // setupMeshEventForwarding reads state.settings.meshNodeFor +
@@ -3498,6 +3499,8 @@ export async function meshSendTask(
             // this, plain CLI sessions targeted by mesh_send_task --direct
             // would silently drop generating_completed and the coordinator
             // would never observe task_completed.
+            // coordinatorDaemonId is required so the completion event is
+            // routed to the correct coordinator pendingCoordinatorEvents queue.
             const dispatchResult = await commandForNode(ctx, node, 'agent_command', {
                 targetSessionId: args.session_id,
                 agentType: resolvedProviderType,
@@ -3509,6 +3512,7 @@ export async function meshSendTask(
                     meshId: ctx.mesh.id,
                     nodeId: args.node_id,
                     taskId,
+                    ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
                 },
             });
             const dispatchPayload = unwrapCommandPayload(dispatchResult);
