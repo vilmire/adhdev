@@ -673,6 +673,7 @@ export class DaemonCliManager {
                 transport: 'pty',
                 adapterKey: key,
                 instanceKey: key,
+                workspace: resolvedDir,
                 // attachExisting === true means we're restoring an already-spawned
                 // hosted runtime after a daemon restart, not starting a fresh PTY.
                 // The real spawn time is in the past and we don't have it on the
@@ -757,6 +758,7 @@ export class DaemonCliManager {
                 transport: 'acp',
                 adapterKey: key,
                 instanceKey: key,
+                workspace: resolvedDir,
             });
 
  // Register ACP entry in adapter map (getStatus queries from acpInstance in real-time)
