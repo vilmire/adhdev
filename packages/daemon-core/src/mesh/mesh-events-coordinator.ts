@@ -1318,7 +1318,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return true;
     });
 
-    const isRefineTerminalEvent = new Set(['refine:completed', 'refine:failed']).has(args.event);
+    const isTerminalEvent = new Set(['refine:completed', 'refine:failed', 'agent:generating_completed', 'agent:stopped']).has(args.event);
 
     if (coordinatorInstances.length === 0) {
         if (queuePendingMeshCoordinatorEvent({
@@ -1340,7 +1340,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return { success: true, forwarded: 0 };
     }
 
-    const allCoordinatorsGenerating = isRefineTerminalEvent && coordinatorInstances.every((inst) => {
+    const allCoordinatorsGenerating = isTerminalEvent && coordinatorInstances.every((inst) => {
         const s = inst.getState();
         const status = readNonEmptyString(s.status).toLowerCase();
         const activeChatStatus = readNonEmptyString(s.activeChat?.status).toLowerCase();
@@ -1348,7 +1348,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             || activeChatStatus === 'generating' || activeChatStatus === 'streaming';
     });
 
-    if (!isRefineTerminalEvent || allCoordinatorsGenerating) {
+    if (!isTerminalEvent || allCoordinatorsGenerating) {
         if (queuePendingMeshCoordinatorEvent({
                 event: args.event,
                 meshId: args.meshId,
