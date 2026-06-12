@@ -2545,9 +2545,15 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
         const historyLimit = normalizeReadChatTailLimit(args);
         try {
             const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h);
+            const targetSid = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+            const registrySessionWorkspace = targetSid
+                ? (h.ctx?.sessionRegistry?.get?.(targetSid) as any)?.workspace
+                : undefined;
             const workspace = typeof (h.currentSession as any)?.workspace === 'string'
                 ? (h.currentSession as any).workspace
-                : undefined;
+                : typeof registrySessionWorkspace === 'string'
+                    ? registrySessionWorkspace
+                    : undefined;
             const intendedWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
             const supportsNative = supportsCliNativeTranscript(agentStr, provider)
                 && isNativeSourceCanonicalHistory(provider?.nativeHistory);
