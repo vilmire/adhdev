@@ -1343,7 +1343,7 @@ export class CliProviderInstance implements ProviderInstance {
         const externalNativeFinal = this.getExternalNativeFinalReconciliation(undefined, latestStatus);
         const latestVisibleStatus = externalNativeFinal && isCliGeneratingLikeStatus(latestStatus.status)
             ? 'idle'
-            : (latestAutoApproveActive ? 'generating' : latestStatus.status);
+            : (latestAutoApproveActive || this.autoApproveBusy ? 'generating' : latestStatus.status);
         LOG.debug('CLI', `[${this.type}] flush attempt: adapterStatus=${latestStatus.status} latestVisible=${latestVisibleStatus} externalNativeFinal=${!!externalNativeFinal} generatingStartedAt=${this.generatingStartedAt} isWaitingForResponse=${!!(this.adapter as any)?.isWaitingForResponse} hasPartial=${!!this.adapter.getPartialResponse?.()}`);
         if (latestVisibleStatus !== 'idle') {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
@@ -1460,7 +1460,7 @@ export class CliProviderInstance implements ProviderInstance {
                 this.autoApproveBusy = false;
                 this.autoApproveBusyTimer = null;
                 this.lastAutoApprovalSignature = '';
-            }, 2000);
+            }, 5000);
             this.recordAutoApproval(modal?.message, buttonLabel, now);
             setTimeout(() => {
                 this.adapter.resolveModal(buttonIndex);
