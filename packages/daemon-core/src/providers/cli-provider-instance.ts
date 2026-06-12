@@ -1483,9 +1483,14 @@ export class CliProviderInstance implements ProviderInstance {
         const rawStatus = adapterStatus.status;
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, now);
         const externalNativeFinal = this.getExternalNativeFinalReconciliation(undefined, adapterStatus);
+        // During the autoApproveBusy window (2s after firing approval key), the PTY
+        // can briefly report 'idle' before the next generating phase starts. Treat that
+        // transient idle as 'generating' to suppress a spurious agent:generating_completed
+        // push notification. externalNativeFinal still wins to allow hard-stop overrides.
+        const autoApproveHoldIdle = this.autoApproveBusy && rawStatus === 'idle';
         const newStatus = externalNativeFinal && isCliGeneratingLikeStatus(rawStatus)
             ? 'idle'
-            : (autoApproveActive ? 'generating' : rawStatus);
+            : (autoApproveActive || autoApproveHoldIdle ? 'generating' : rawStatus);
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const partial = this.adapter.getPartialResponse();
