@@ -342,6 +342,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         settings: state.settings,
         ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
+        ...(state.settings?.spawnedSessionVisibility === 'hidden' && { surfaceHidden: true }),
     };
 }
 
@@ -383,6 +384,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         settings: state.settings,
         ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
+        ...(state.settings?.spawnedSessionVisibility === 'hidden' && { surfaceHidden: true }),
     };
 }
 

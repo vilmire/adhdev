@@ -188,7 +188,8 @@ export function buildIdeConversations(
     if (useConversationFirst) {
         const nativeSessionId = ide.sessionId || ide.instanceId;
         const isMeshCoordinator = ide.settings?.meshCoordinatorFor;
-        const isMeshNode = ide.settings?.meshNodeFor;
+        const isMeshNode = ide.settings?.meshNodeFor
+            || (!ide.settings?.meshCoordinatorFor && ide.settings?.launchedByCoordinator);
         const roleSuffix = isMeshCoordinator ? ' (Coordinator)' : isMeshNode ? ' (Mesh Node)' : '';
         const agentName = providerLabel + roleSuffix;
         const modal = ide.activeChat?.activeModal;
@@ -380,11 +381,13 @@ export function buildConversations(
     connectionStates?: Record<string, string>,
 ): ActiveConversation[] {
     const machineNames = buildMachineNameMap(allIdes);
-    const conversations = chatIdes.flatMap((ide) => buildScopedIdeConversations(ide, {
-        machineNames,
-        connectionStates,
-        defaultConnectionState: 'new',
-    }));
+    const conversations = chatIdes
+        .filter(ide => !ide.surfaceHidden)
+        .flatMap((ide) => buildScopedIdeConversations(ide, {
+            machineNames,
+            connectionStates,
+            defaultConnectionState: 'new',
+        }));
     logConversationIdentitySummary(conversations);
     return conversations;
 }
