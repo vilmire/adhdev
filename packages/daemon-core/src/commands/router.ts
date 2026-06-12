@@ -2862,7 +2862,59 @@ export class DaemonCommandRouter {
         } catch (e: any) {
             const message = String(e?.message || e || 'worktree cleanup failed');
             const dirty = message.includes('dirty worktree') || message.includes('local changes');
-            const submoduleForceBlocked = /working trees containing submodules cannot be moved or removed/i.test(message) && !forceFallbackConvergence.allow;
+            const isSubmoduleGuard = /working trees containing submodules cannot be moved or removed/i.test(message);
+            const submoduleForceBlocked = isSubmoduleGuard && !forceFallbackConvergence.allow;
+
+            // Fallback 1: submodule guard on --force path — deinit submodules first, then retry remove
+            if (isSubmoduleGuard && forceFallbackConvergence.allow) {
+                const { execFile } = await import('node:child_process');
+                const { promisify } = await import('node:util');
+                const execFileAsync = promisify(execFile);
+                const GIT_TIMEOUT_CLEANUP = 30_000;
+                const GIT_MAX_BUFFER_CLEANUP = 4 * 1024 * 1024;
+                try {
+                    await execFileAsync('git', ['-C', workspace, 'submodule', 'deinit', '--all', '-f'], {
+                        encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true,
+                    });
+                    await execFileAsync('git', ['worktree', 'remove', '--force', workspace], {
+                        cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true,
+                    });
+                    return {
+                        success: true,
+                        removedPath: workspace,
+                        repoRoot,
+                        fallback: 'git_worktree_remove_submodule_deinit' as const,
+                        forced: true,
+                        reason: 'working_trees_containing_submodules' as const,
+                        convergence: forceFallbackConvergence,
+                    };
+                } catch (deinitError: any) {
+                    // Fallback 2: deinit+remove still failed — rmSync + prune
+                    try {
+                        fs.rmSync(workspace, { recursive: true, force: true });
+                        await execFileAsync('git', ['worktree', 'prune'], {
+                            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true,
+                        });
+                        return {
+                            success: true,
+                            removedPath: workspace,
+                            repoRoot,
+                            fallback: 'fs_rm_worktree_prune' as const,
+                            forced: true,
+                            reason: 'working_trees_containing_submodules' as const,
+                            convergence: forceFallbackConvergence,
+                        };
+                    } catch (rmError: any) {
+                        return {
+                            success: false,
+                            code: 'mesh_worktree_cleanup_failed',
+                            error: `All removal fallbacks exhausted. deinit+remove: ${deinitError?.message || deinitError}; rmSync+prune: ${rmError?.message || rmError}`,
+                            recoveryHint: 'Manually remove the worktree directory and run git worktree prune from the source repo.',
+                        };
+                    }
+                }
+            }
+
             return {
                 success: false,
                 code: dirty
@@ -2891,8 +2943,18 @@ export class DaemonCommandRouter {
         const metadataStatus = typeof args.node?.branchConvergence?.status === 'string'
             ? args.node.branchConvergence.status
             : '';
-        if (metadataStatus === 'merged_to_main' || metadataStatus === 'cleanup_candidate') {
+        if (metadataStatus === 'merged_to_main' || metadataStatus === 'cleanup_candidate' || metadataStatus === 'merged_pushed') {
             return { allow: true, status: metadataStatus, source: 'node_branch_convergence' };
+        }
+
+        // Also allow when the node's last recorded refine job reached final convergence merged_pushed
+        const refinedConvergence = typeof args.node?.refineState?.finalBranchConvergenceState?.status === 'string'
+            ? args.node.refineState.finalBranchConvergenceState.status
+            : typeof args.node?.lastRefineResult?.finalBranchConvergenceState?.status === 'string'
+                ? args.node.lastRefineResult.finalBranchConvergenceState.status
+                : '';
+        if (refinedConvergence === 'merged_pushed' || refinedConvergence === 'merged_to_main') {
+            return { allow: true, status: refinedConvergence, source: 'node_refine_state' };
         }
 
         const { execFile } = await import('node:child_process');
@@ -4229,12 +4291,63 @@ export class DaemonCommandRouter {
                 return { success: true };
             }
 
-            case 'launch_cli':
+            case 'launch_cli': {
+                const launchResult = await this.deps.cliManager.handleCliCommand(cmd, args);
+                // Bug C fix (part 1): when launching a mesh node worker session, surface
+                // bootstrapPending:true if the node's worktree bootstrap is still running.
+                // This is informational — the launch is NOT blocked here (blocking is done
+                // upstream by getWorktreeBootstrapLaunchBlock in the MCP layer).
+                const meshNodeId = readStringValue((args?.settings as any)?.meshNodeId);
+                const meshId = readStringValue((args?.settings as any)?.meshNodeFor);
+                if (meshNodeId && meshId && launchResult?.success !== false) {
+                    try {
+                        const { getMesh } = await import('../config/mesh-config.js');
+                        const meshObj = getMesh(meshId) ?? this.getCachedInlineMesh(meshId);
+                        const nodeObj = Array.isArray(meshObj?.nodes)
+                            ? meshObj.nodes.find((n: any) => n.id === meshNodeId || n.nodeId === meshNodeId)
+                            : undefined;
+                        const bootstrapStatus = readStringValue(nodeObj?.worktreeBootstrap?.status);
+                        if (bootstrapStatus === 'running') {
+                            return { success: true, ...launchResult, bootstrapPending: true };
+                        }
+                    } catch { /* best-effort — do not fail launch for bootstrap probe errors */ }
+                }
+                return launchResult;
+            }
             case 'stop_cli':
             case 'set_cli_view_mode':
-            case 'record_provider_pty':
-            case 'agent_command': {
+            case 'record_provider_pty': {
                 return this.deps.cliManager.handleCliCommand(cmd, args);
+            }
+            case 'agent_command': {
+                const agentResult = await this.deps.cliManager.handleCliCommand(cmd, args);
+                // Bug C fix (part 2): when dispatching a task to a mesh node session, override
+                // the dispatch acknowledgement risk reason to 'bootstrap_still_running' when
+                // the target node's worktree bootstrap is still running. Informational only —
+                // dispatch is NOT blocked.
+                const meshCtx = args?.meshContext as Record<string, unknown> | undefined;
+                const dispatchNodeId = readStringValue(meshCtx?.nodeId);
+                const dispatchMeshId = readStringValue(meshCtx?.meshId);
+                if (dispatchNodeId && dispatchMeshId && agentResult?.success !== false) {
+                    try {
+                        const { getMesh } = await import('../config/mesh-config.js');
+                        const meshObj = getMesh(dispatchMeshId) ?? this.getCachedInlineMesh(dispatchMeshId);
+                        const nodeObj = Array.isArray(meshObj?.nodes)
+                            ? meshObj.nodes.find((n: any) => n.id === dispatchNodeId || n.nodeId === dispatchNodeId)
+                            : undefined;
+                        const bootstrapStatus = readStringValue(nodeObj?.worktreeBootstrap?.status);
+                        if (bootstrapStatus === 'running') {
+                            return {
+                                success: true,
+                                ...agentResult,
+                                dispatchAcknowledgementRisk: true,
+                                dispatchAcknowledgementRiskReason: 'bootstrap_still_running',
+                                nextAction: 'Wait for worktree_bootstrap_complete event before dispatching work to this node.',
+                            };
+                        }
+                    } catch { /* best-effort */ }
+                }
+                return agentResult;
             }
 
             // ─── Logs ───
@@ -6163,7 +6276,40 @@ export class DaemonCommandRouter {
                 const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue trigger');
                 if (ownerFailure) return ownerFailure;
                 try {
-                    const { triggerMeshQueue } = await import('../mesh/mesh-events.js');
+                    const { triggerMeshQueue, tryAssignQueueTask } = await import('../mesh/mesh-events.js');
+
+                    // Bug A fix: when preferredNodeId is provided, attempt to claim a pending
+                    // task for the preferred node's idle session first, before the general
+                    // round-robin trigger picks a different node.
+                    const preferredNodeId = typeof args?.preferredNodeId === 'string' ? args.preferredNodeId.trim() : '';
+                    if (preferredNodeId) {
+                        const cliInstances = this.deps.instanceManager.getByCategory('cli');
+                        // Sort: preferred node's sessions first, others after
+                        const sorted = [...cliInstances].sort((a, b) => {
+                            const aSettings = a.getState().settings as Record<string, unknown> || {};
+                            const bSettings = b.getState().settings as Record<string, unknown> || {};
+                            const aNode = readStringValue(aSettings.meshNodeId, aSettings.nodeId);
+                            const bNode = readStringValue(bSettings.meshNodeId, bSettings.nodeId);
+                            return (aNode === preferredNodeId ? -1 : 0) - (bNode === preferredNodeId ? -1 : 0);
+                        });
+                        for (const inst of sorted) {
+                            const state = inst.getState();
+                            const settings = state.settings as Record<string, unknown> || {};
+                            const nodeId = readStringValue(settings.meshNodeId, settings.nodeId);
+                            if (!nodeId || nodeId !== preferredNodeId) continue;
+                            const meshNodeFor = readStringValue(settings.meshNodeFor);
+                            if (meshNodeFor !== meshId) continue;
+                            const status = (readStringValue(state.status) || '').toLowerCase();
+                            if (status !== 'idle') continue;
+                            const sessionId = typeof state.instanceId === 'string' ? state.instanceId : '';
+                            const providerType = readStringValue(state.type, settings.providerType) || '';
+                            if (sessionId && providerType) {
+                                tryAssignQueueTask(this.deps as any, meshId, nodeId, sessionId, providerType);
+                                break;
+                            }
+                        }
+                    }
+
                     const trigger = await triggerMeshQueue(this.deps as any, meshId);
                     return { success: true, trigger };
                 } catch (e: any) {
