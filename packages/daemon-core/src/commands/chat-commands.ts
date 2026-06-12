@@ -2160,11 +2160,18 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             let selectedTranscriptAuthority = transcriptAuthority;
             let selectedCoverage = coverage;
             let selectedStatus = returnedStatus;
-            const sessionWorkspace = typeof (h.currentSession as any)?.workspace === 'string'
+            const _targetSidForWs = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+            const _registryWs = _targetSidForWs
+                ? (h.ctx?.sessionRegistry?.get?.(_targetSidForWs) as any)?.workspace
+                : undefined;
+            const _currentSessionWs = typeof (h.currentSession as any)?.workspace === 'string'
                 ? (h.currentSession as any).workspace
                 : typeof adapter.workingDir === 'string'
                     ? adapter.workingDir
                     : undefined;
+            const sessionWorkspace = _targetSidForWs
+                ? (typeof _registryWs === 'string' ? _registryWs : (typeof args?.workspace === 'string' ? args.workspace : undefined) ?? _currentSessionWs)
+                : _currentSessionWs;
             const intendedWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
             // ───────────────────────────────────────────────────────────
             //  Chat source decision via ChatSourceMachine (A2 big-bang).
