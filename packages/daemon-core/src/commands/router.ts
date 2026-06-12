@@ -6142,26 +6142,34 @@ export class DaemonCommandRouter {
                     const emitBootstrapEvent = (eventStatus: 'bootstrap_complete' | 'bootstrap_failed', bootstrapState: WorktreeBootstrapState, startedAtMs: number, extraPayload?: Record<string, unknown>): void => {
                         try {
                             const durationMs = Date.now() - startedAtMs;
-                            const eventPayload: PendingMeshCoordinatorEvent = {
-                                event: `worktree_${eventStatus}`,
+                            const event = `worktree_${eventStatus}` as const;
+                            const metadataEvent = {
+                                source: 'clone_mesh_node_bootstrap',
+                                nodeId: node.id,
+                                status: eventStatus,
+                                worktreePath: result.worktreePath,
+                                durationMs,
+                                bootstrapStatus: bootstrapState.status,
+                                ...(bootstrapState.error ? { error: bootstrapState.error } : {}),
+                                ...(bootstrapState.exitCode !== undefined ? { exitCode: bootstrapState.exitCode } : {}),
+                                ...(extraPayload || {}),
+                            };
+                            if (typeof this.deps.instanceManager?.getByCategory === 'function') {
+                                const forwarded = handleMeshForwardEvent(
+                                    { instanceManager: this.deps.instanceManager } as any,
+                                    { event, meshId, nodeId: node.id, workspace: result.worktreePath, metadataEvent },
+                                );
+                                if (forwarded?.success === true) return;
+                            }
+                            queuePendingMeshCoordinatorEvent({
+                                event,
                                 meshId,
                                 nodeLabel: node.id,
                                 nodeId: node.id,
                                 workspace: result.worktreePath,
-                                metadataEvent: {
-                                    source: 'clone_mesh_node_bootstrap',
-                                    nodeId: node.id,
-                                    status: eventStatus,
-                                    worktreePath: result.worktreePath,
-                                    durationMs,
-                                    bootstrapStatus: bootstrapState.status,
-                                    ...(bootstrapState.error ? { error: bootstrapState.error } : {}),
-                                    ...(bootstrapState.exitCode !== undefined ? { exitCode: bootstrapState.exitCode } : {}),
-                                    ...(extraPayload || {}),
-                                },
+                                metadataEvent,
                                 queuedAt: Date.now(),
-                            };
-                            queuePendingMeshCoordinatorEvent(eventPayload);
+                            });
                         } catch { /* event emission is best-effort */ }
                     };
 

@@ -870,6 +870,8 @@ const MESH_COORDINATOR_EVENTS = new Set([
     'refine:accepted',
     'refine:completed',
     'refine:failed',
+    'worktree_bootstrap_complete',
+    'worktree_bootstrap_failed',
 ]);
 
 const EVENT_TO_LEDGER_KIND: Record<string, MeshLedgerKind> = {
