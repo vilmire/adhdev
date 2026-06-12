@@ -760,10 +760,12 @@ export default function MeshObservabilitySurface({
         if (!selectedGraphNode || !selectedHealDaemonId || !sendDaemonCommand || !canHealSelectedNode) return
         setHealingNodeId(selectedGraphNode.id)
         setHealPreview(null)
+        const healWorkspace = selectedNodeStatus?.workspace ?? selectedGraphNode.workspace ?? ''
         try {
             const dryRunRaw = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
                 meshId: canonicalStatus.meshId,
                 nodeId: selectedGraphNode.id,
+                workspace: healWorkspace,
                 dryRun: true,
                 execute: false,
             })
@@ -781,6 +783,7 @@ export default function MeshObservabilitySurface({
             const executedRaw = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
                 meshId: canonicalStatus.meshId,
                 nodeId: selectedGraphNode.id,
+                workspace: healWorkspace,
                 dryRun: false,
                 execute: true,
             })
