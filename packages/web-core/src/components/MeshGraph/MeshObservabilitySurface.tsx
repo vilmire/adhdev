@@ -761,12 +761,14 @@ export default function MeshObservabilitySurface({
         setHealingNodeId(selectedGraphNode.id)
         setHealPreview(null)
         try {
-            const dryRun = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
+            const dryRunRaw = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
                 meshId: canonicalStatus.meshId,
                 nodeId: selectedGraphNode.id,
                 dryRun: true,
                 execute: false,
             })
+            // Cloud wraps the daemon response in { success, result }; standalone returns it directly.
+            const dryRun = dryRunRaw?.result ?? dryRunRaw
             setHealPreview({
                 phase: 'dry_run',
                 code: typeof dryRun?.code === 'string' ? dryRun.code : undefined,
@@ -776,12 +778,13 @@ export default function MeshObservabilitySurface({
             if (!dryRun?.success || dryRun.code !== 'fast_forward_available') return
             const ok = window.confirm(`Apply fast-forward for ${selectedGraphNode.label}?`)
             if (!ok) return
-            const executed = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
+            const executedRaw = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
                 meshId: canonicalStatus.meshId,
                 nodeId: selectedGraphNode.id,
                 dryRun: false,
                 execute: true,
             })
+            const executed = executedRaw?.result ?? executedRaw
             setHealPreview({
                 phase: 'execute',
                 code: typeof executed?.code === 'string' ? executed.code : undefined,
