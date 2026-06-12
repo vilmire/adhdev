@@ -144,6 +144,11 @@ if [ -f "$MCP_SERVER_SOURCE" ]; then
     echo "  ✅ $MCP_SERVER_SOURCE → $NEW_VERSION"
 fi
 
+# ── Sync lock file after version bump ──
+
+echo "[version-bump] syncing oss/package-lock.json..."
+npm install --package-lock-only 2>/dev/null || npm install --package-lock-only
+
 # ── CHANGELOG stub ──
 
 TODAY=$(date +%Y-%m-%d)

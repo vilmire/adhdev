@@ -39,7 +39,7 @@ import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../sessi
 import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
 import { buildSessionEntries } from '../status/builders.js';
 import { registerMeshCoordinator, getCoordinatorForSession } from '../mesh/coordinator-registry.js';
-import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
+import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, type PendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { buildPreviewFreshness } from '../mesh/preview-freshness.js';
@@ -845,7 +845,12 @@ function applyInlineMeshBranchConvergence(mesh: any, node: any, status: Record<s
 
 function summarizeInlineMeshBranchConvergence(nodes: Array<Record<string, unknown>>): Record<string, unknown> {
     const followUps = nodes
-        .filter(node => readObjectRecord(node.branchConvergence).needsConvergence === true)
+        .filter(node => {
+            if (readObjectRecord(node.branchConvergence).needsConvergence !== true) return false;
+            const workspace = typeof node.workspace === 'string' ? node.workspace : '';
+            if (workspace && !fs.existsSync(workspace)) return false;
+            return true;
+        })
         .map(node => {
             const convergence = readObjectRecord(node.branchConvergence);
             return {
@@ -3500,15 +3505,35 @@ export class DaemonCommandRouter {
                 { validationStatus: validationSummary.status, commandsRun: validationSummary.commandsRun.length },
             );
             if (validationSummary.status === 'failed') {
+                const firstFailedCmd = Array.isArray(validationSummary.commandsRun)
+                    ? (validationSummary.commandsRun as Array<Record<string, unknown>>).find(c => c.success === false)
+                    : undefined;
+                const buildValidationFailedError = (): string => {
+                    const base = validationSummary.failureCode === 'missing_dependencies'
+                        ? 'Refinery validation dependencies are missing; merge/refine was not attempted. Configure validation.bootstrapCommands if Refinery should bootstrap dependencies before validation.'
+                        : validationSummary.failureCode === 'dependency_bootstrap_failed'
+                            ? 'Refinery dependency/bootstrap command failed; merge/refine was not attempted.'
+                            : 'Refinery validation gate failed; merge/refine was not attempted.';
+                    if (!firstFailedCmd) return base;
+                    const cmdName = typeof firstFailedCmd.displayCommand === 'string' ? firstFailedCmd.displayCommand
+                        : typeof firstFailedCmd.command === 'string'
+                            ? [firstFailedCmd.command, ...(Array.isArray(firstFailedCmd.args) ? firstFailedCmd.args : [])].join(' ').trim()
+                            : typeof firstFailedCmd.cmd === 'string' ? firstFailedCmd.cmd : '';
+                    const rawOutput = [firstFailedCmd.stdout, firstFailedCmd.stderr, firstFailedCmd.output]
+                        .filter(s => typeof s === 'string' && s.length > 0)
+                        .join('\n');
+                    const tail = rawOutput.length > 800 ? rawOutput.slice(-800) : rawOutput;
+                    return [
+                        base,
+                        cmdName ? `First failing command: ${cmdName}` : '',
+                        tail ? `Output (tail):\n${tail}` : '',
+                    ].filter(Boolean).join('\n');
+                };
                 return {
                     success: false,
                     code: validationSummary.failureCode || 'validation_failed',
                     convergenceStatus: 'blocked_review',
-                    error: validationSummary.failureCode === 'missing_dependencies'
-                        ? 'Refinery validation dependencies are missing; merge/refine was not attempted. Configure validation.bootstrapCommands if Refinery should bootstrap dependencies before validation.'
-                        : validationSummary.failureCode === 'dependency_bootstrap_failed'
-                            ? 'Refinery dependency/bootstrap command failed; merge/refine was not attempted.'
-                            : 'Refinery validation gate failed; merge/refine was not attempted.',
+                    error: buildValidationFailedError(),
                     branch,
                     into: baseBranch,
                     validationSummary,
@@ -5786,9 +5811,16 @@ export class DaemonCommandRouter {
                         // keeps showing up in the dashboard graph until the cache
                         // ages out on its own.
                         if (removed) this.invalidateAggregateMeshStatus(meshId);
+                        // Node was already absent from the inline mesh (e.g. removed by a
+                        // prior refine cleanup). Treat as removed so caller gets removed:true.
+                        if (!removed && !node) removed = true;
                     } else {
                         const { removeNode } = await import('../config/mesh-config.js');
                         removed = removeNode(meshId, nodeId);
+                        // Node already absent from config (e.g. removed by a prior refine
+                        // cleanup after a successful Refinery merge). Treat as removed so
+                        // the response is accurate.
+                        if (!removed && !node) removed = true;
                         if (removed) this.invalidateAggregateMeshStatus(meshId);
                     }
 
@@ -5994,17 +6026,50 @@ export class DaemonCommandRouter {
                         new Promise<{ completed: false }>((resolve) => setTimeout(() => resolve({ completed: false }), setupWaitMs)),
                     ]);
 
-                    if (!setupResult.completed) {
-                        setupPromise.catch((error: any) => {
-                            const failedState: WorktreeBootstrapState = {
-                                ...runningBootstrapState,
-                                status: 'failed',
-                                completedAt: new Date().toISOString(),
-                                error: error?.message || String(error),
+                    const emitBootstrapEvent = (eventStatus: 'bootstrap_complete' | 'bootstrap_failed', bootstrapState: WorktreeBootstrapState, startedAtMs: number, extraPayload?: Record<string, unknown>): void => {
+                        try {
+                            const durationMs = Date.now() - startedAtMs;
+                            const eventPayload: PendingMeshCoordinatorEvent = {
+                                event: `worktree_${eventStatus}`,
+                                meshId,
+                                nodeLabel: node.id,
+                                nodeId: node.id,
+                                workspace: result.worktreePath,
+                                metadataEvent: {
+                                    source: 'clone_mesh_node_bootstrap',
+                                    nodeId: node.id,
+                                    status: eventStatus,
+                                    worktreePath: result.worktreePath,
+                                    durationMs,
+                                    bootstrapStatus: bootstrapState.status,
+                                    ...(bootstrapState.error ? { error: bootstrapState.error } : {}),
+                                    ...(bootstrapState.exitCode !== undefined ? { exitCode: bootstrapState.exitCode } : {}),
+                                    ...(extraPayload || {}),
+                                },
+                                queuedAt: Date.now(),
                             };
-                            void persistWorktreeSetupState(failedState);
-                            void appendCloneLedger(false, failedState);
-                        });
+                            queuePendingMeshCoordinatorEvent(eventPayload);
+                        } catch { /* event emission is best-effort */ }
+                    };
+
+                    const bootstrapStartedMs = Date.now();
+
+                    if (!setupResult.completed) {
+                        setupPromise
+                            .then(({ bootstrapState }) => {
+                                emitBootstrapEvent('bootstrap_complete', bootstrapState, bootstrapStartedMs);
+                            })
+                            .catch((error: any) => {
+                                const failedState: WorktreeBootstrapState = {
+                                    ...runningBootstrapState,
+                                    status: 'failed',
+                                    completedAt: new Date().toISOString(),
+                                    error: error?.message || String(error),
+                                };
+                                void persistWorktreeSetupState(failedState);
+                                void appendCloneLedger(false, failedState);
+                                emitBootstrapEvent('bootstrap_failed', failedState, bootstrapStartedMs, { error: error?.message || String(error) });
+                            });
                         return {
                             success: true,
                             async: true,
@@ -6022,6 +6087,7 @@ export class DaemonCommandRouter {
                     }
 
                     const { submodulesInitialized, bootstrapState } = setupResult.value;
+                    emitBootstrapEvent('bootstrap_complete', bootstrapState, bootstrapStartedMs);
                     return {
                         success: true,
                         node,
