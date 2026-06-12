@@ -282,6 +282,17 @@ export function tryAssignQueueTask(
         }
     }
 
+    // Stamp mesh context onto the session so completion events route correctly
+    // via setupMeshEventForwarding. Without this, manually-opened idle sessions
+    // (mesh_launch_session without auto-launch) lack meshNodeFor/meshNodeId and
+    // agent:generating_completed is silently dropped as isMeshDelegate=false.
+    try {
+        const inst = components.instanceManager.getInstance(sessionId);
+        if (inst && typeof inst.updateSettings === 'function') {
+            inst.updateSettings({ meshNodeFor: meshId, meshNodeId: nodeId, launchedByCoordinator: true });
+        }
+    } catch { /* best-effort — dispatch still proceeds */ }
+
     const delivery = createSessionDelivery({
         meshId,
         nodeId,

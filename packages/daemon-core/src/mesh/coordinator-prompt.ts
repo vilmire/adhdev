@@ -388,6 +388,7 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Refinery is config-driven.** \`mesh_refine_node\` must run validation from \`.adhdev/refine.{json,yaml,yml}\` or \`repo-mesh.refine.*\`. Heuristics are scaffolding only.
 - **Submodule reachability = publish-needed.** \`submodule_reachability_failed\` → classify as \`blocked_review\`, request user approval to push to submodule main, then rerun \`mesh_refine_node\`.
 - **Honor per-node instructions.** When a node carries a 📌 Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words — quote it verbatim so the worker agent sees exactly what the user wrote.
+- **Mission status does not update itself.** When a mission's tasks are all done or the work is abandoned, explicitly call \`mesh_mission_upsert\` to set status \`completed\` or \`abandoned\`. Never leave a finished mission in \`active\`. All-cancelled tasks with no further work → \`abandoned\`.
 - **Never fabricate tool results.** Always call the actual tool.
 - **Keep the user informed.** One or two sentences after each delegation round.${coordinatorNote}`;
 }
