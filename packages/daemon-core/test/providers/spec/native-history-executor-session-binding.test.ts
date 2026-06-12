@@ -55,6 +55,21 @@ function writeRollout(
     return filePath;
 }
 
+function writeClaudeTranscript(projectsDir: string, workspace: string, sessionId: string): string {
+    const resolvedWorkspace = fs.realpathSync(workspace);
+    const projectDir = resolvedWorkspace.replace(/[^A-Za-z0-9_-]/g, '-');
+    const filePath = path.join(projectsDir, projectDir, `${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, `${JSON.stringify({
+        type: 'user',
+        sessionId,
+        cwd: resolvedWorkspace,
+        timestamp: new Date().toISOString(),
+        message: { role: 'user', content: 'WORKTREE' },
+    })}\n`, 'utf-8');
+    return filePath;
+}
+
 beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'native-history-binding-'));
 });
@@ -307,5 +322,38 @@ describe('executeJsonl — concurrent codex-cli sessions in same workspace', () 
             sessionStartedAtMs: t0,
         });
         expect(result).toBeNull();
+    });
+});
+
+describe('executeJsonl — claude-cli worktree project path', () => {
+    it('uses Claude project-name sanitization for dotted worktree directories', () => {
+        const workspace = path.join(tmpDir, '.adhdev-worktrees', 'adhdev', 'feature-branch');
+        fs.mkdirSync(workspace, { recursive: true });
+        const sessionId = '439230e9-6d83-4211-9c6c-5c4f1558806f';
+        const transcript = writeClaudeTranscript(path.join(tmpDir, '.claude', 'projects'), workspace, sessionId);
+        const cfg = {
+            source: {
+                kind: 'jsonl' as const,
+                path: `${tmpDir}/.claude/projects/{cwd_claude_project}/{session_id}.jsonl`,
+                session_id_from: 'filename_uuid' as const,
+                message_filter: { where: "$.type == 'user' || $.type == 'assistant'" },
+                message_map: {
+                    role: '$.message.role',
+                    content: '$.message.content',
+                    timestamp_ms: '$.timestamp',
+                },
+            },
+        };
+
+        const result = executeNativeHistory(cfg, {
+            workspace,
+            historySessionId: sessionId,
+        });
+
+        expect(result?.sourcePath).toBe(transcript);
+        expect(result?.providerSessionId).toBe(sessionId);
+        expect(result?.messages.map(message => message.content)).toEqual(['WORKTREE']);
+        expect(path.dirname(transcript)).toContain('-adhdev-worktrees-');
+        expect(path.dirname(transcript)).not.toContain('-.adhdev-worktrees-');
     });
 });

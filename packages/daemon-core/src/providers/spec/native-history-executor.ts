@@ -295,11 +295,9 @@ function expandPath(template: string, input: NativeHistoryInput): string | null 
     // Re-expand ~ in case the fallback used it.
     if (out.startsWith('~/')) out = path.join(os.homedir(), out.slice(2));
     const now = new Date();
-    // claude (and a couple of other Anthropic-CLI–style providers) writes
-    // its per-cwd transcript under the *resolved* path
-    // (/private/tmp/foo, not /tmp/foo on macOS where /tmp -> /private/tmp).
-    // Without realpath, the spec template `~/.claude/projects/{cwd_dashed}/…`
-    // builds `-tmp-foo` and never finds the actual `-private-tmp-foo` dir.
+    // Claude writes per-cwd transcripts under the resolved path and replaces
+    // every non-alphanumeric project-path character except `_` and `-` with
+    // `-`. Realpath also handles aliases such as /tmp -> /private/tmp.
     const workspaceRaw = input.workspace ?? '';
     let workspaceResolved = workspaceRaw;
     if (workspaceRaw) {
@@ -309,6 +307,7 @@ function expandPath(template: string, input: NativeHistoryInput): string | null 
     const vars: Record<string, string> = {
         cwd: workspaceResolved,
         cwd_dashed: workspaceResolved.replace(/\//g, '-'),
+        cwd_claude_project: claudeProjectDirName(workspaceResolved),
         session_id: input.providerSessionId || input.sessionId || input.historySessionId || '',
         yyyy: String(now.getFullYear()),
         mm: String(now.getMonth() + 1).padStart(2, '0'),
@@ -327,6 +326,10 @@ function expandPath(template: string, input: NativeHistoryInput): string | null 
     });
     if (missing) return null;
     return out;
+}
+
+function claudeProjectDirName(workspace: string): string {
+    return workspace.replace(/[^A-Za-z0-9_-]/g, '-');
 }
 
 function globToRegex(pattern: string): RegExp {
@@ -463,6 +466,7 @@ function expandPathForDate(template: string, input: NativeHistoryInput, day: Dat
     const vars: Record<string, string> = {
         cwd: workspaceResolved,
         cwd_dashed: workspaceResolved.replace(/\//g, '-'),
+        cwd_claude_project: claudeProjectDirName(workspaceResolved),
         session_id: input.providerSessionId || input.sessionId || input.historySessionId || '',
         yyyy: String(day.getFullYear()),
         mm: String(day.getMonth() + 1).padStart(2, '0'),
