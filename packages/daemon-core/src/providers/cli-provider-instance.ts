@@ -853,13 +853,14 @@ export class CliProviderInstance implements ProviderInstance {
      * completion events silently drop because the forwarder has nothing to
      * match against.
      */
-    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string }): void {
+    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string }): void {
         if (!assignment?.meshId) return;
         this.settings = {
             ...this.settings,
             meshNodeFor: assignment.meshId,
             ...(assignment.nodeId ? { meshNodeId: assignment.nodeId } : {}),
             ...(assignment.taskId ? { meshActiveTaskId: assignment.taskId } : {}),
+            ...(assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {}),
         };
         this.adapter.updateRuntimeSettings?.(this.settings);
     }

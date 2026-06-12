@@ -310,7 +310,7 @@ export class ProviderInstanceManager {
      *  --direct so the worker's completion event has a coordinator routing
      *  marker in state.settings). Returns true if the instance existed and
      *  the stamp was applied. */
-    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string }): boolean {
+    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string }): boolean {
         const inst = this.instances.get(instanceId);
         if (!inst || typeof inst.attachMeshAssignment !== 'function') {
             try {
@@ -322,7 +322,7 @@ export class ProviderInstanceManager {
         inst.attachMeshAssignment(assignment);
         try {
             const { LOG } = require('../logging/logger.js');
-            LOG.info?.('MeshDispatch', `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ''} task=${assignment.taskId || ''}`);
+            LOG.info?.('MeshDispatch', `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ''} task=${assignment.taskId || ''} coordinator=${assignment.coordinatorDaemonId || ''}`);
         } catch { /* noop */ }
         return true;
     }

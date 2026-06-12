@@ -1325,6 +1325,7 @@ export class DaemonCliManager {
                                 meshId: meshContext.meshId,
                                 ...(typeof meshContext.nodeId === 'string' && meshContext.nodeId ? { nodeId: meshContext.nodeId } : {}),
                                 ...(typeof meshContext.taskId === 'string' && meshContext.taskId ? { taskId: meshContext.taskId } : {}),
+                                ...(typeof meshContext.coordinatorDaemonId === 'string' && meshContext.coordinatorDaemonId ? { coordinatorDaemonId: meshContext.coordinatorDaemonId } : {}),
                             });
                         } catch { /* best-effort */ }
                     }

@@ -3369,6 +3369,7 @@ export async function meshSendTask(
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
             const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ''));
             const taskId = randomUUID();
+            const coordinatorDaemonId = resolveCoordinatorNode(ctx)?.daemonId || ctx.localDaemonId;
             const result = await ipcDispatchToRemoteAgent(ctx, node, {
                 session_id: args.session_id,
                 message: args.message,
@@ -3378,6 +3379,7 @@ export async function meshSendTask(
                     meshId: ctx.mesh.id,
                     nodeId: args.node_id,
                     taskId,
+                    ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
                 },
             });
             if (result.success) {
