@@ -258,11 +258,18 @@ export function tryAssignQueueTask(
                 message: task.message,
                 status: 'delivering',
             });
+            const localDaemonIdForDispatch = readNonEmptyString(loadConfig().machineId) || undefined;
             components.dispatchMeshCommand(node.daemonId, 'agent_command', {
                 targetSessionId: sessionId,
                 cliType: providerType,
                 action: 'send_chat',
                 message: task.message,
+                meshContext: {
+                    meshId,
+                    nodeId,
+                    taskId: task.id,
+                    ...(localDaemonIdForDispatch ? { coordinatorDaemonId: localDaemonIdForDispatch } : {}),
+                },
             }).then(() => {
                 updateSessionDeliveryStatus(delivery.id, 'delivered');
             }).catch((e: any) => {
