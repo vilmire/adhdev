@@ -5852,14 +5852,28 @@ export class DaemonCommandRouter {
                 let submoduleIgnorePaths = Array.isArray(args?.submoduleIgnorePaths)
                     ? args.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string')
                     : undefined;
-                if (!workspace && meshId && nodeId) {
+                let nodeDaemonId: string | undefined;
+                if (meshId && nodeId) {
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
                     const mesh = meshRecord?.mesh;
                     const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
-                    workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
+                    if (!workspace) {
+                        workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
+                    }
                     if (!submoduleIgnorePaths && Array.isArray(node?.policy?.submoduleIgnorePaths)) {
                         submoduleIgnorePaths = node.policy.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string');
                     }
+                    nodeDaemonId = typeof node?.daemonId === 'string' ? node.daemonId.trim() : undefined;
+                }
+                // If the target node belongs to a remote daemon, forward the command there.
+                const selfDaemonId = this.deps.statusInstanceId;
+                const isRemote = nodeDaemonId && selfDaemonId && nodeDaemonId !== selfDaemonId;
+                if (isRemote && this.deps.dispatchMeshCommand) {
+                    const forwarded = await this.deps.dispatchMeshCommand(nodeDaemonId!, 'fast_forward_mesh_node', {
+                        ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+                        workspace,
+                    });
+                    return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
                 }
                 const result = await (fastForwardMeshNode({
                     meshId: meshId || undefined,
