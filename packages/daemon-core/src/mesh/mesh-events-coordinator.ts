@@ -10,7 +10,7 @@ import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, 
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import {
     findRecentTerminalLedgerEvidence,
@@ -1487,5 +1487,37 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
             event: event.event,
             metadataEvent: event,
         });
+    });
+
+    // Auto-flush pending coordinator events when a coordinator session becomes idle.
+    components.instanceManager.onEvent((event) => {
+        if (event.event !== 'agent:ready' && event.event !== 'agent:generating_completed') return;
+
+        const instanceId = readNonEmptyString(event.instanceId);
+        if (!instanceId) return;
+
+        const sourceInstance = components.instanceManager.getInstance(instanceId);
+        if (!sourceInstance || sourceInstance.category !== 'cli') return;
+        const state = sourceInstance.getState();
+        const settings = state.settings && typeof state.settings === 'object' ? state.settings as Record<string, unknown> : {};
+
+        const coordinatorMeshId = readNonEmptyString(settings.meshCoordinatorFor);
+        if (!coordinatorMeshId) return;
+
+        const status = readNonEmptyString(state.status).toLowerCase();
+        if (status !== 'idle') return;
+
+        try {
+            const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
+            const pendingEvents = drainPendingMeshCoordinatorEvents(coordinatorMeshId, localDaemonId);
+            if (pendingEvents.length === 0) return;
+            LOG.info('MeshEvents', `Auto-flushing ${pendingEvents.length} pending coordinator event(s) for mesh ${coordinatorMeshId} on coordinator idle`);
+            for (const pending of pendingEvents) {
+                if (!pending.coordinatorMessage) continue;
+                sourceInstance.onEvent('send_message', { input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage } });
+            }
+        } catch (e: any) {
+            LOG.warn('MeshEvents', `Failed to auto-flush pending coordinator events: ${e?.message || e}`);
+        }
     });
 }
