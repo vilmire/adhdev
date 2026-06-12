@@ -2,9 +2,8 @@
  * ADHDev MCP Server
  *
  * Exposes IDE agent sessions as MCP tools via stdio transport.
- * Three modes:
+ * Two modes:
  *   local  — talks to standalone daemon at localhost:3847
- *   cloud  — talks to ADHDev cloud API with an API key
  *   ipc    — talks to cloud daemon local IPC at localhost:19222
  */
 
@@ -17,9 +16,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { LocalTransport } from './transports/local.js';
-import { CloudTransport } from './transports/cloud.js';
 import { IpcTransport } from './transports/ipc.js';
-import type { McpTransport } from './transports/mode.js';
+import type { CommandTransport } from './transports/mode.js';
 
 import { LIST_SESSIONS_TOOL, listSessions } from './tools/list-sessions.js';
 import { LIST_DAEMONS_TOOL, listDaemons } from './tools/list-daemons.js';
@@ -50,13 +48,10 @@ import {
 import type { MeshContext } from './tools/mesh-tools.js';
 
 export interface AdhdevMcpServerOptions {
-  mode: 'local' | 'cloud' | 'ipc';
+  mode: 'local' | 'ipc';
   // local options
   port?: number;
   password?: string;
-  // cloud options
-  apiKey?: string;
-  baseUrl?: string;
   // mesh mode (optional — restricts tools to mesh-scoped set)
   meshId?: string;
 }
@@ -71,12 +66,10 @@ export async function buildMeshModeCoordinatorPrompt(mesh: any): Promise<string>
 }
 
 export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void> {
-  const transport: McpTransport =
-    opts.mode === 'cloud'
-      ? new CloudTransport({ apiKey: opts.apiKey!, baseUrl: opts.baseUrl })
-      : opts.mode === 'ipc'
-        ? new IpcTransport({ port: opts.port })
-        : new LocalTransport({ port: opts.port, password: opts.password });
+  const transport: CommandTransport =
+    opts.mode === 'ipc'
+      ? new IpcTransport({ port: opts.port })
+      : new LocalTransport({ port: opts.port, password: opts.password });
 
   // Verify connectivity before registering tools
   const alive = await transport.ping();
@@ -84,9 +77,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     const hint =
       opts.mode === 'local'
         ? `Make sure the standalone daemon is running (adhdev standalone or npx @adhdev/daemon-standalone).`
-        : opts.mode === 'ipc'
-          ? `Make sure the cloud daemon is running with local IPC enabled (adhdev daemon).`
-          : `Check your API key and network connectivity.`;
+        : `Make sure the cloud daemon is running with local IPC enabled (adhdev daemon).`;
     process.stderr.write(`[adhdev-mcp] Cannot reach ${opts.mode} daemon. ${hint}\n`);
     process.exit(1);
   }
@@ -107,60 +98,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       }
     }
 
-    // Priority 2: Cloud API (when running with --api-key)
-    if (!mesh && opts.mode === 'cloud' && opts.apiKey) {
-      try {
-        const base = opts.baseUrl || 'https://api.adhf.dev';
-        const res = await fetch(`${base}/api/v1/repo-meshes/${opts.meshId}`, {
-          headers: { 'Authorization': `Bearer ${opts.apiKey}`, 'Content-Type': 'application/json' },
-        });
-        if (res.ok) {
-          const data = await res.json() as any;
-          const rm = data.mesh;
-          const nodes = data.nodes || [];
-          // Convert cloud D1 record → LocalMeshEntry shape for mesh tools
-          let policy: any = {};
-          try { policy = JSON.parse(rm.policy_json || rm.policy || '{}'); } catch { /* */ }
-          let coordinator: any = {};
-          try { coordinator = JSON.parse(rm.coordinator_json || rm.coordinator_config || '{}'); } catch { /* */ }
-          mesh = {
-            id: rm.id,
-            name: rm.name,
-            repoIdentity: rm.repo_identity,
-            repoRemoteUrl: rm.repo_remote_url,
-            defaultBranch: rm.default_branch,
-            policy: {
-              requirePreTaskCheckpoint: false,
-              requirePostTaskCheckpoint: true,
-              requireApprovalForPush: true,
-              allowAutoPublishSubmoduleMainCommits: false,
-              requireApprovalForDestructiveGit: true,
-              dirtyWorkspaceBehavior: 'warn',
-              maxParallelTasks: 2,
-              spawnedSessionVisibility: 'visible',
-              ...policy,
-            },
-            coordinator,
-            nodes: nodes.map((n: any) => ({
-              id: n.id,
-              workspace: n.workspace,
-              repoRoot: n.repo_root,
-              daemonId: n.daemon_id,
-              userOverrides: {},
-              policy: {},
-              isLocalWorktree: false,
-            })),
-            createdAt: rm.created_at,
-            updatedAt: rm.updated_at,
-          };
-          process.stderr.write(`[adhdev-mcp] Loaded mesh config from cloud API\n`);
-        }
-      } catch (e: any) {
-        process.stderr.write(`[adhdev-mcp] Cloud mesh fetch failed, falling back to local: ${e.message}\n`);
-      }
-    }
-
-    // Priority 3: Local ~/.adhdev/meshes.json
+    // Priority 2: Local ~/.adhdev/meshes.json
     if (!mesh) {
       try {
         const { getMesh } = await import('@adhdev/daemon-core');
@@ -185,7 +123,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     }
 
     if (!mesh) {
-      process.stderr.write(`[adhdev-mcp] Mesh '${opts.meshId}' not found in ${opts.mode === 'cloud' ? 'cloud or local' : 'local'} config. Use 'adhdev mesh list' to see available meshes.\n`);
+      process.stderr.write(`[adhdev-mcp] Mesh '${opts.meshId}' not found in local config. Use 'adhdev mesh list' to see available meshes.\n`);
       process.exit(1);
     }
 
@@ -332,7 +270,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           return { content: [{ type: 'text', text }] };
         }
         case 'list_sessions': {
-          const text = await listSessions(transport, { format: a.format, daemon_id: a.daemon_id });
+          const text = await listSessions(transport, { format: a.format });
           return { content: [{ type: 'text', text }] };
         }
         case 'read_chat': {
@@ -348,12 +286,12 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           return { content: [{ type: 'text', text }] };
         }
         case 'send_chat': {
-          const text = await sendChat(transport, { message: a.message, session_id: a.session_id, daemon_id: a.daemon_id });
+          const text = await sendChat(transport, { message: a.message, session_id: a.session_id });
           return { content: [{ type: 'text', text }] };
         }
         case 'approve': {
           const action = a.action === 'reject' ? 'reject' : 'approve';
-          const text = await approve(transport, { action, session_id: a.session_id, daemon_id: a.daemon_id });
+          const text = await approve(transport, { action, session_id: a.session_id });
           return { content: [{ type: 'text', text }] };
         }
         case 'screenshot': {
@@ -366,23 +304,23 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           return { content: [{ type: 'text', text: result.text }] };
         }
         case 'git_status': {
-          const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, daemon_id: a.daemon_id, format: a.format });
+          const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format });
           return { content: [{ type: 'text', text }] };
         }
         case 'git_log': {
-          const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, daemon_id: a.daemon_id, format: a.format });
+          const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format });
           return { content: [{ type: 'text', text }] };
         }
         case 'git_diff': {
-          const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, daemon_id: a.daemon_id, format: a.format });
+          const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format });
           return { content: [{ type: 'text', text }] };
         }
         case 'git_checkpoint': {
-          const text = await gitCheckpoint(transport, { workspace: a.workspace, message: a.message, include_untracked: a.include_untracked, daemon_id: a.daemon_id });
+          const text = await gitCheckpoint(transport, { workspace: a.workspace, message: a.message, include_untracked: a.include_untracked });
           return { content: [{ type: 'text', text }] };
         }
         case 'git_push': {
-          const text = await gitPush(transport, { workspace: a.workspace, remote: a.remote, branch: a.branch, daemon_id: a.daemon_id });
+          const text = await gitPush(transport, { workspace: a.workspace, remote: a.remote, branch: a.branch });
           return { content: [{ type: 'text', text }] };
         }
         case 'launch_session': {
@@ -390,20 +328,18 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
             type: a.type,
             workspace: a.workspace,
             model: a.model,
-            daemon_id: a.daemon_id,
           });
           return { content: [{ type: 'text', text }] };
         }
         case 'stop_session': {
           const text = await stopSession(transport, {
             session_id: a.session_id,
-            daemon_id: a.daemon_id,
             type: a.type,
           });
           return { content: [{ type: 'text', text }] };
         }
         case 'check_pending': {
-          const text = await checkPending(transport, { daemon_id: a.daemon_id, format: a.format });
+          const text = await checkPending(transport, { format: a.format });
           return { content: [{ type: 'text', text }] };
         }
         default:

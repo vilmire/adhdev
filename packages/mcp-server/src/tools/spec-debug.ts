@@ -1,5 +1,4 @@
-import type { McpTransport } from '../transports/mode.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const SPEC_DEBUG_TOOL = {
@@ -12,10 +11,6 @@ export const SPEC_DEBUG_TOOL = {
         type: 'string',
         description: 'Target session ID (from list_sessions).',
       },
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID (cloud mode only). Omit for local mode.',
-      },
       ...FORMAT_PROP,
     },
     required: ['session_id'],
@@ -23,24 +18,16 @@ export const SPEC_DEBUG_TOOL = {
 };
 
 export async function specDebug(
-  transport: McpTransport,
+  transport: CommandTransport,
   args: {
     session_id?: string;
-    daemon_id?: string;
     format?: 'text' | 'json';
   },
 ): Promise<string> {
   const sessionId = typeof args.session_id === 'string' ? args.session_id.trim() : '';
   if (!sessionId) throw new Error('session_id is required');
 
-  let result: any;
-  if (isLocalTransport(transport)) {
-    result = await transport.command('get_spec_debug', { targetSessionId: sessionId });
-  } else {
-    if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-    const targetId = `${args.daemon_id}:session:${sessionId}`;
-    result = await transport.sendCommand(targetId, 'get_spec_debug', { targetSessionId: sessionId });
-  }
+  const result = await transport.command('get_spec_debug', { targetSessionId: sessionId });
 
   return formatSpecDebugResult(result, { sessionId, format: args.format });
 }

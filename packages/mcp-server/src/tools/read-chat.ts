@@ -1,5 +1,4 @@
-import type { McpTransport } from '../transports/mode.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 import { compactChatPayload, messageContent } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory, type RapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import { FORMAT_PROP } from './list-sessions.js';
@@ -18,10 +17,6 @@ export const READ_CHAT_TOOL = {
         type: 'number',
         description: 'Max messages to return (default: 50).',
       },
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID (cloud mode only). Omit for local mode.',
-      },
       compact: {
         type: 'boolean',
         description: 'Opt-in compact mode: filters tool/terminal/system/internal/control/debug/status chatter and returns user-visible messages plus lightweight summary metadata.',
@@ -33,29 +28,17 @@ export const READ_CHAT_TOOL = {
 };
 
 export async function readChat(
-  transport: McpTransport,
-  args: { session_id?: string; limit?: number; daemon_id?: string; format?: 'text' | 'json'; compact?: boolean },
+  transport: CommandTransport,
+  args: { session_id?: string; limit?: number; format?: 'text' | 'json'; compact?: boolean },
 ): Promise<string> {
   const limit = args.limit ?? 50;
 
-  if (isLocalTransport(transport)) {
-    const result = await transport.command('read_chat', {
-      ...(args.session_id ? { targetSessionId: args.session_id } : {}),
-      tailLimit: limit,
-    });
-    const annotated = annotateRapidReadChatAdvisory(result as Record<string, any>, {
-      key: `local:${args.session_id ?? '__active__'}`,
-      toolName: 'read_chat',
-      completionCallbackExpected: false,
-    });
-    return formatChatResult(annotated, args.session_id, args.format, limit, args.compact);
-  }
-
-  if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-  const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
-  const result = await transport.readChat(targetId, { limit, sessionId: args.session_id });
+  const result = await transport.command('read_chat', {
+    ...(args.session_id ? { targetSessionId: args.session_id } : {}),
+    tailLimit: limit,
+  });
   const annotated = annotateRapidReadChatAdvisory(result as Record<string, any>, {
-    key: `cloud:${args.daemon_id}:${args.session_id ?? '__active__'}`,
+    key: `local:${args.session_id ?? '__active__'}`,
     toolName: 'read_chat',
     completionCallbackExpected: false,
   });

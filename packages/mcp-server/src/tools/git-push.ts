@@ -1,5 +1,4 @@
-import type { McpTransport } from '../transports/mode.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 
 export const GIT_PUSH_TOOL = {
   name: 'git_push',
@@ -23,42 +22,25 @@ export const GIT_PUSH_TOOL = {
         type: 'string',
         description: 'Branch to push (default: current branch).',
       },
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID (cloud mode only, required).',
-      },
     },
     required: ['workspace'],
   },
 };
 
 export async function gitPush(
-  transport: McpTransport,
+  transport: CommandTransport,
   args: {
     workspace: string;
     remote?: string;
     branch?: string;
-    daemon_id?: string;
   },
 ): Promise<string> {
-  let raw: any;
-
-  if (isLocalTransport(transport)) {
-    raw = await transport.command('git_push', {
-      workspace: args.workspace,
-      remote: args.remote ?? 'origin',
-      ...(args.branch ? { branch: args.branch } : {}),
-    });
-    raw = raw?.push ?? raw;
-  } else {
-    if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-    const result = await transport.gitPush(args.daemon_id, {
-      workspace: args.workspace,
-      remote: args.remote,
-      branch: args.branch,
-    });
-    raw = result?.push ?? result;
-  }
+  let raw: any = await transport.command('git_push', {
+    workspace: args.workspace,
+    remote: args.remote ?? 'origin',
+    ...(args.branch ? { branch: args.branch } : {}),
+  });
+  raw = raw?.push ?? raw;
 
   if (raw?.success === false || raw?.reason) {
     const msg = raw?.error ?? raw?.reason ?? 'unknown';

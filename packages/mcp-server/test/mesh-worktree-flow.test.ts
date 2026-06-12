@@ -1919,9 +1919,8 @@ test('mesh_status and mesh_git_status request refreshed upstream truth and block
   assert.ok(calls.filter(call => call.command === 'git_status').every(call => call.args.refreshUpstream === true));
 });
 
-test('mesh_git_status source requests refreshed upstream truth for cloud and local transport paths', () => {
+test('mesh_git_status source requests refreshed upstream truth', () => {
   const source = readFileSync(join(new URL('../src/tools/mesh-tools.ts', import.meta.url).pathname), 'utf8');
-  assert.match(source, /gitStatus\(node\.daemonId, node\.workspace, true, true\)/);
   assert.match(source, /refreshUpstream: true,/);
 });
 
@@ -3360,8 +3359,9 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
   assert.equal(agentCommandCalls[0]?.targetSessionId, 'session-worker');
 });
 
-test('mesh tool registry documents the 25 exposed mesh tools including queue cancel/requeue, read-debug, direct fast-forward, worktree clone/remove/refine, refine config planning, session cleanup, reconcile-ledger, and mission upsert', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 25);
+test('mesh tool registry documents the 26 exposed mesh tools including queue cancel/requeue, read-debug, direct fast-forward, worktree clone/remove/refine, refine config planning, session cleanup, reconcile-ledger, review inbox, and mission upsert', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 26);
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_review_inbox'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_mission_upsert'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_read_debug'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_fast_forward_node'));

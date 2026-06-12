@@ -48,25 +48,3 @@ test('stopSession local mode surfaces explicit type resolution errors', async ()
   );
 });
 
-test('stopSession cloud mode sends session id and omits unresolved type', async () => {
-  const calls: Array<{ daemonId: string; opts: Record<string, unknown> }> = [];
-  const cloudTransport = {
-    async getStatus() {
-      throw new Error('cloud getStatus(targetId) must not be used for stop_session');
-    },
-    async stop(daemonId: string, opts: Record<string, unknown>) {
-      calls.push({ daemonId, opts });
-      return { success: true };
-    },
-  } as any;
-
-  const output = await stopSession(cloudTransport, {
-    daemon_id: 'daemon-cloud-1',
-    session_id: 'session-1',
-  });
-
-  assert.equal(output, 'Session session-1 stopped.');
-  assert.deepEqual(calls, [
-    { daemonId: 'daemon-cloud-1', opts: { id: 'session-1' } },
-  ]);
-});

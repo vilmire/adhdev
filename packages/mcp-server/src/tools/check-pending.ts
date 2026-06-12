@@ -1,6 +1,4 @@
-import type { CommandTransport, McpTransport } from '../transports/mode.js';
-import type { CloudTransport } from '../transports/cloud.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const CHECK_PENDING_TOOL = {
@@ -12,10 +10,6 @@ export const CHECK_PENDING_TOOL = {
   inputSchema: {
     type: 'object' as const,
     properties: {
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID to check (cloud mode). Omit to check all daemons.',
-      },
       ...FORMAT_PROP,
     },
     required: [],
@@ -23,18 +17,8 @@ export const CHECK_PENDING_TOOL = {
 };
 
 export async function checkPending(
-  transport: McpTransport,
-  args: { daemon_id?: string; format?: 'text' | 'json' },
-): Promise<string> {
-  if (isLocalTransport(transport)) {
-    return checkPendingLocal(transport, args.format);
-  }
-  return checkPendingCloud(transport, args.daemon_id, args.format);
-}
-
-async function checkPendingLocal(
   transport: CommandTransport,
-  format?: 'text' | 'json',
+  args: { format?: 'text' | 'json' },
 ): Promise<string> {
   const status = await transport.getStatus();
   const sessions: any[] = status?.sessions ?? [];
@@ -43,7 +27,7 @@ async function checkPendingLocal(
     (s) => s.status === 'waiting_approval' || s.agentStatus === 'waiting_approval',
   );
 
-  if (format === 'json') {
+  if (args.format === 'json') {
     return JSON.stringify({
       pending: pending.map((s) => ({
         session_id: s.id,
@@ -63,65 +47,6 @@ async function checkPendingLocal(
     if (s.providerType) parts.push(`type: ${s.providerType}`);
     if (modal?.message) parts.push(`prompt: ${modal.message}`);
     if (modal?.buttons?.length) parts.push(`buttons: ${modal.buttons.join(', ')}`);
-    return parts.join('\n  ');
-  });
-  return `Pending approvals (${pending.length}):\n\n${lines.join('\n\n')}`;
-}
-
-async function checkPendingCloud(
-  transport: CloudTransport,
-  daemonId?: string,
-  format?: 'text' | 'json',
-): Promise<string> {
-  const pending: Array<{ daemonId: string; session: any }> = [];
-
-  if (daemonId) {
-    const daemonStatus = await transport.getDaemonStatus(daemonId);
-    const sessions: any[] = daemonStatus?.sessions ?? [];
-    for (const s of sessions) {
-      if (s.status === 'waiting_approval') pending.push({ daemonId, session: s });
-    }
-  } else {
-    const data = await transport.listDaemons();
-    const daemons: any[] = data?.daemons ?? [];
-
-    // Process in batches of 5 to avoid flooding the API with concurrent requests
-    for (let i = 0; i < daemons.length; i += 5) {
-      await Promise.allSettled(
-        daemons.slice(i, i + 5).map(async (d) => {
-          try {
-            const daemonStatus = await transport.getDaemonStatus(d.id);
-            const sessions: any[] = daemonStatus?.sessions ?? [];
-            for (const s of sessions) {
-              if (s.status === 'waiting_approval') pending.push({ daemonId: d.id, session: s });
-            }
-          } catch {
-            // skip unreachable daemons
-          }
-        }),
-      );
-    }
-  }
-
-  if (format === 'json') {
-    return JSON.stringify({
-      pending: pending.map(({ daemonId: dId, session: s }) => ({
-        daemon_id: dId,
-        session_id: s.id,
-        workspace: s.workspace ?? null,
-        type: s.providerType ?? null,
-        modal_message: null,
-        buttons: [],
-      })),
-    }, null, 2);
-  }
-
-  if (pending.length === 0) return 'No sessions waiting for approval.';
-  const lines = pending.map(({ daemonId: dId, session: s }) => {
-    const parts = [`daemon_id: ${dId}`, `session_id: ${s.id}`];
-    if (s.workspace) parts.push(`workspace: ${s.workspace}`);
-    if (s.providerType) parts.push(`type: ${s.providerType}`);
-    parts.push('(use read_chat to see the approval prompt)');
     return parts.join('\n  ');
   });
   return `Pending approvals (${pending.length}):\n\n${lines.join('\n\n')}`;

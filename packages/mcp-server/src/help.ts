@@ -25,24 +25,20 @@ ADHDev MCP Server
 
 Usage:
   adhdev mcp                                    Local mode (requires standalone daemon)
-  adhdev mcp --api-key <key>                    Cloud mode (ADHDev cloud API)
   adhdev mcp --mode ipc --repo-mesh <mesh_id>   Cloud daemon IPC mesh mode
   adhdev-mcp --help                             Compatibility bin (same server, legacy package entrypoint)
 
 Options:
-  --mode <mode>           Transport: local, cloud, or ipc
+  --mode <mode>           Transport: local or ipc
   --port <n>              Standalone or IPC daemon port (defaults: local 3847, ipc 19222)
   --password <pass>       Standalone daemon password (if set)
-  --api-key <key>         ADHDev cloud API key (switches to cloud mode)
-  --base-url <url>        Override cloud API base URL
   --repo-mesh <mesh_id>   Enable mesh mode — exposes only mesh-scoped coordinator tools
   --help                  Show this help
 
 Environment variables:
-  ADHDEV_API_KEY      API key (cloud mode)
   ADHDEV_PASSWORD     Daemon password (local mode)
   ADHDEV_MESH_ID      Mesh ID (mesh mode)
-  ADHDEV_MCP_TRANSPORT Transport: local, cloud, or ipc
+  ADHDEV_MCP_TRANSPORT Transport: local or ipc
 
 Standard tools:   ${STANDARD_TOOLS.join(', ')}
 Mesh tools:       ${meshTools.join(', ')}

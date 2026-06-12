@@ -5,17 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { CloudTransport } from '../src/transports/cloud.js';
-import { LocalTransport } from '../src/transports/local.js';
-import { isLocalTransport } from '../src/transports/mode.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-test('isLocalTransport treats IPC transport as command-routed and keeps cloud separate', () => {
-  assert.equal(isLocalTransport(new LocalTransport()), true);
-  assert.equal(isLocalTransport(new IpcTransport()), true);
-  assert.equal(isLocalTransport(new CloudTransport({ apiKey: 'adk_test' })), false);
-});
 
 test('IpcTransport sends only one command when daemon sends duplicate welcome messages', async () => {
   const previousWebSocket = (globalThis as any).WebSocket;

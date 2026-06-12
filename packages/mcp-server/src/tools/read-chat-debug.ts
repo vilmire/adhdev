@@ -1,5 +1,4 @@
-import type { McpTransport } from '../transports/mode.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const READ_CHAT_DEBUG_TOOL = {
@@ -11,10 +10,6 @@ export const READ_CHAT_DEBUG_TOOL = {
       session_id: {
         type: 'string',
         description: 'Target session ID (from list_sessions). Required for reliable routing.',
-      },
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID (cloud mode only). Omit for local mode.',
       },
       agent_type: {
         type: 'string',
@@ -36,10 +31,9 @@ export const READ_CHAT_DEBUG_TOOL = {
 };
 
 export async function readChatDebug(
-  transport: McpTransport,
+  transport: CommandTransport,
   args: {
     session_id?: string;
-    daemon_id?: string;
     agent_type?: string;
     limit?: number;
     delivery?: 'daemon_file' | 'inline';
@@ -58,19 +52,7 @@ export async function readChatDebug(
     ...(delivery === 'daemon_file' ? { delivery: 'daemon_file' } : {}),
   };
 
-  let result: any;
-  if (isLocalTransport(transport)) {
-    result = await transport.command('get_chat_debug_bundle', commandArgs);
-  } else {
-    if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-    const targetId = `${args.daemon_id}:session:${sessionId}`;
-    result = await transport.getChatDebugBundle(targetId, {
-      sessionId,
-      agentType: args.agent_type,
-      tailLimit,
-      delivery,
-    });
-  }
+  const result = await transport.command('get_chat_debug_bundle', commandArgs);
 
   return formatChatDebugResult(result, { sessionId, delivery, format: args.format });
 }

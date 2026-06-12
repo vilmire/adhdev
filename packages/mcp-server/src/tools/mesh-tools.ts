@@ -5,21 +5,20 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 25 tools: mesh_status, mesh_mission_upsert, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
+ * 26 tools: mesh_status, mesh_mission_upsert, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *           mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
  *           mesh_read_debug, mesh_launch_session, mesh_git_status,
  *           mesh_fast_forward_node, mesh_checkpoint, mesh_approve,
  *           mesh_clone_node, mesh_remove_node, mesh_refine_node,
  *           mesh_refine_config_schema, mesh_validate_refine_config,
  *           mesh_suggest_refine_config, mesh_refine_plan,
- *           mesh_cleanup_sessions, mesh_task_history, mesh_reconcile_ledger
+ *           mesh_cleanup_sessions, mesh_task_history, mesh_reconcile_ledger,
+ *           mesh_review_inbox
  */
 
 import { randomUUID } from 'node:crypto';
-import { CloudTransport } from '../transports/cloud.js';
 import { IpcTransport } from '../transports/ipc.js';
-import { isLocalTransport } from '../transports/mode.js';
-import type { McpTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 import { compactChatPayload, isCoordinatorVisibleMessage, messageContent } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
@@ -62,7 +61,7 @@ import {
 
 export interface MeshContext {
     mesh: LocalMeshEntry;
-    transport: McpTransport;
+    transport: CommandTransport;
     /** Daemon ID for this local machine (local mode) */
     localDaemonId?: string;
     /** Machine Registry ID for this local machine */
@@ -172,7 +171,6 @@ type QueueViewMode = 'all' | 'active' | 'historical';
  * created or removed worktree nodes through clone_mesh_node/remove_mesh_node.
  */
 async function refreshMeshFromDaemon(ctx: MeshContext): Promise<void> {
-    if (!isLocalTransport(ctx.transport)) return;
     try {
         const result = await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id }) as any;
         if (!result?.success || !Array.isArray(result.mesh?.nodes)) return;
@@ -806,15 +804,12 @@ async function triggerMeshQueueAndReport(
     node?: LocalMeshNodeEntry,
     opts?: { localNode?: boolean },
 ): Promise<Record<string, unknown> | undefined> {
-    if (!(isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport)) return undefined;
     try {
         let raw: any;
         if (ctx.transport instanceof IpcTransport && node?.daemonId && opts?.localNode === false) {
             raw = await ctx.transport.meshCommand(node.daemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id });
-        } else if (isLocalTransport(ctx.transport)) {
-            raw = await ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id });
         } else {
-            return undefined;
+            raw = await ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id });
         }
         const payload = unwrapCommandPayload(raw);
         const trigger = payload?.trigger && typeof payload.trigger === 'object' ? payload.trigger : payload;
@@ -1686,9 +1681,7 @@ async function collectRelatedRepoStatuses(ctx: MeshContext, node: LocalMeshNodeE
     const results: Array<Record<string, unknown>> = [];
     for (const repo of relatedRepos) {
         try {
-            const statusResult = !isLocalTransport(ctx.transport) && node.daemonId
-                ? await (ctx.transport as CloudTransport).gitStatus(node.daemonId, repo.workspace, false, true)
-                : await commandForNode(ctx, node, 'git_status', { workspace: repo.workspace, refreshUpstream: true });
+            const statusResult = await commandForNode(ctx, node, 'git_status', { workspace: repo.workspace, refreshUpstream: true });
             const status = extractGitStatus(statusResult);
             results.push(summarizeRelatedRepoStatus(repo, status));
         } catch (e: any) {
@@ -1962,11 +1955,7 @@ async function commandForNode(
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
         return ctx.transport.meshCommand(node.daemonId, command, args);
     }
-    if (isLocalTransport(ctx.transport)) {
-        return ctx.transport.command(command, args);
-    }
-    const identity = buildNodeMachineIdentity(ctx, node);
-    throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}' (hostname=${identity.hostname || 'unknown'}, coordinatorHostname=${identity.coordinatorHostname || 'unknown'}, sameMachine=${identity.sameMachine})`);
+    return ctx.transport.command(command, args);
 }
 
 function normalizePendingMeshCoordinatorEvents(value: any): any[] {
@@ -2069,17 +2058,13 @@ async function drainCoordinatorPendingEvents(
         return surfacedEvents;
     }
 
-    if (isLocalTransport(ctx.transport)) {
-        // (B3) Pass localDaemonId so unicast events targeted at other
-        // coordinators are skipped (and requeued) instead of being silently
-        // consumed by this MCP. drainPendingMeshCoordinatorEvents already
-        // accepts the second arg in the base; we were the missing wiring.
-        const events = (drainPendingMeshCoordinatorEvents(ctx.mesh.id, ctx.localDaemonId) as any[]).filter(matchesCurrentMesh);
-        events.forEach(rememberMeshSessionProviderMetadataFromEvent);
-        return events;
-    }
-
-    return [];
+    // (B3) Pass localDaemonId so unicast events targeted at other
+    // coordinators are skipped (and requeued) instead of being silently
+    // consumed by this MCP. drainPendingMeshCoordinatorEvents already
+    // accepts the second arg in the base; we were the missing wiring.
+    const events = (drainPendingMeshCoordinatorEvents(ctx.mesh.id, ctx.localDaemonId) as any[]).filter(matchesCurrentMesh);
+    events.forEach(rememberMeshSessionProviderMetadataFromEvent);
+    return events;
 }
 
 function isP2pTransportUnavailableError(error: unknown): boolean {
@@ -2520,49 +2505,27 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         };
 
         try {
-            if (!isLocalTransport(transport) && node.daemonId) {
-                const result = await (transport as CloudTransport).gitStatus(node.daemonId, node.workspace, false, true);
-                const status = extractGitStatus(result);
-                const uncommittedChanges = countUncommittedChanges(status);
-                const dirty = isGitStatusDirty(status);
-                entry.health = status?.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
-                assignFullGitSnapshot(entry, status);
-                entry.branch = status?.branch;
-                entry.isDirty = dirty;
-                entry.uncommittedChanges = uncommittedChanges;
-                entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
-                // Submodule out-of-sync warning
-                const submodules = extractSubmodules(result, (node.policy as any)?.submoduleIgnorePaths || []);
-                if (submodules && submodules.some((s: any) => s?.outOfSync)) {
-                    entry.submoduleWarning = 'One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.';
-                    entry.outOfSyncSubmodules = submodules.filter((s: any) => s?.outOfSync).map((s: any) => s.path);
-                }
-            } else if (isLocalTransport(transport)) {
-                const autoDiscover = (node.policy as any)?.autoDiscoverSubmodules !== false;
-                const statusResult = await commandForNode(ctx, node, 'git_status', {
-                    workspace: node.workspace,
-                    refreshUpstream: true,
-                    includeSubmodules: autoDiscover,
-                    submoduleIgnorePaths: (node.policy as any)?.submoduleIgnorePaths || undefined,
-                });
-                const status = extractGitStatus(statusResult);
-                const uncommittedChanges = countUncommittedChanges(status);
-                const dirty = isGitStatusDirty(status);
-                entry.health = status?.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
-                assignFullGitSnapshot(entry, status);
-                entry.branch = status?.branch;
-                entry.isDirty = dirty;
-                entry.uncommittedChanges = uncommittedChanges;
-                entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
-                // Submodule out-of-sync warning
-                const submodules = extractSubmodules(statusResult, (node.policy as any)?.submoduleIgnorePaths || []);
-                if (submodules && submodules.some((s: any) => s?.outOfSync)) {
-                    entry.submoduleWarning = 'One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.';
-                    entry.outOfSyncSubmodules = submodules.filter((s: any) => s?.outOfSync).map((s: any) => s.path);
-                }
-            } else {
-                entry.health = 'unknown';
-                entry.note = 'No daemonId available for cloud status probe';
+            const autoDiscover = (node.policy as any)?.autoDiscoverSubmodules !== false;
+            const statusResult = await commandForNode(ctx, node, 'git_status', {
+                workspace: node.workspace,
+                refreshUpstream: true,
+                includeSubmodules: autoDiscover,
+                submoduleIgnorePaths: (node.policy as any)?.submoduleIgnorePaths || undefined,
+            });
+            const status = extractGitStatus(statusResult);
+            const uncommittedChanges = countUncommittedChanges(status);
+            const dirty = isGitStatusDirty(status);
+            entry.health = status?.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
+            assignFullGitSnapshot(entry, status);
+            entry.branch = status?.branch;
+            entry.isDirty = dirty;
+            entry.uncommittedChanges = uncommittedChanges;
+            entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+            // Submodule out-of-sync warning
+            const submodules = extractSubmodules(statusResult, (node.policy as any)?.submoduleIgnorePaths || []);
+            if (submodules && submodules.some((s: any) => s?.outOfSync)) {
+                entry.submoduleWarning = 'One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.';
+                entry.outOfSyncSubmodules = submodules.filter((s: any) => s?.outOfSync).map((s: any) => s.path);
             }
         } catch (e: any) {
             const failure = buildCoordinatorP2pRelayFailure(e, {
@@ -2974,7 +2937,7 @@ export async function meshEnqueueTask(
         const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId });
 
         // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
-        if (isLocalTransport(ctx.transport) && !(ctx.transport instanceof IpcTransport)) {
+        if (!(ctx.transport instanceof IpcTransport)) {
             const queueTrigger = await triggerMeshQueueAndReport(ctx);
             return JSON.stringify({
                 success: true,
@@ -2992,7 +2955,7 @@ export async function meshEnqueueTask(
         //    Remote daemons on other machines cannot read the local queue file.
         //    Strategy: trigger local queue for local nodes, and for remote nodes
         //    directly P2P-dispatch to the first idle session found (enqueue-and-push).
-        if (ctx.transport instanceof IpcTransport) {
+        {
             // 1. Trigger local queue for local node pick-up
             const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
@@ -3061,9 +3024,6 @@ export async function meshEnqueueTask(
                 ...buildQueueTriggerGuidance(queueTrigger),
             });
         }
-
-        // ── CloudTransport fallback ───────────────────────────────────────────────
-        return JSON.stringify({ success: true, source: 'queue', taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
     } catch (e: any) {
         const message = e?.message || String(e);
         if (message.includes('live_debug_readonly_guardrail_violation')) {
@@ -3192,9 +3152,7 @@ export async function meshQueueCancel(
         if (!taskId) return JSON.stringify({ success: false, error: 'task_id required' });
         const task = cancelTask(ctx.mesh.id, taskId, { reason: args.reason });
         if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
-        if (isLocalTransport(ctx.transport)) {
-            ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-        }
+        ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         return JSON.stringify({ success: true, task }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
@@ -3242,9 +3200,7 @@ export async function meshQueueRequeue(
                 hint: 'Use force=true to bypass the retry cap for explicit operator recovery.',
             }, null, 2);
         }
-        if (isLocalTransport(ctx.transport)) {
-            ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-        }
+        ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         return JSON.stringify({ success: true, task }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
@@ -3276,7 +3232,7 @@ export async function meshSendTask(
     }
 
     let explicitTargetSession: any | undefined;
-    if (args.session_id && isWorkerTaskMode(taskMode) && (ctx.transport instanceof IpcTransport || isLocalTransport(ctx.transport))) {
+    if (args.session_id && isWorkerTaskMode(taskMode)) {
         try {
             const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
             const sessions = extractStatusMetadataSessions(statusResult);
@@ -3347,17 +3303,6 @@ export async function meshSendTask(
     }
 
     try {
-        // ── CloudTransport: delegate to Cloud API ──────────────────────────────
-        if (!isLocalTransport(ctx.transport) && node.daemonId) {
-            const res = await (ctx.transport as CloudTransport).meshEnqueueTask(node.daemonId, {
-                meshId: ctx.mesh.id,
-                message: args.message,
-                targetNodeId: args.node_id,
-                ...(taskMode ? { taskMode } : {}),
-            });
-            return JSON.stringify(res);
-        }
-
         // ── IpcTransport + remote node: direct P2P agent_command dispatch ──────
         //
         // The local queue file (mesh-ledger/*.queue.json) is stored on THIS
@@ -3427,7 +3372,7 @@ export async function meshSendTask(
         // If the coordinator explicitly targets a runtime session, push directly
         // and surface route failures immediately instead of creating a queue item
         // that can remain pending forever when the session was already stopped.
-        if (args.session_id && isLocalTransport(ctx.transport)) {
+        if (args.session_id) {
             const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
             let resolvedProviderType = cached?.providerType || '';
             if (!resolvedProviderType) {
@@ -3645,14 +3590,10 @@ export async function meshSendTask(
             taskMode,
         });
 
-        const queueTrigger = isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport
-            ? await triggerMeshQueueAndReport(ctx)
-            : undefined;
+        const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
         // Also drain any pending coordinator events so the caller sees them inline
-        const pendingEvents = isLocalTransport(ctx.transport)
-            ? drainPendingMeshCoordinatorEvents(ctx.mesh.id, ctx.localDaemonId)
-            : [];
+        const pendingEvents = drainPendingMeshCoordinatorEvents(ctx.mesh.id, ctx.localDaemonId);
 
         const result: Record<string, unknown> = {
             success: true,
@@ -3688,58 +3629,41 @@ export async function meshReadChat(
         return JSON.stringify(buildMissingNodeReadChatRecovery(ctx, args), null, 2);
     }
 
-    if (ctx.transport instanceof IpcTransport || isLocalTransport(ctx.transport)) {
-        await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
-    }
+    await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
 
-    if (isLocalTransport(ctx.transport)) {
-        const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
-        const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
-            ? args.provider_session_id.trim()
-            : cached?.providerSessionId;
-        const result = await commandForNode(ctx, node, 'read_chat', {
+    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+    const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
+        ? args.provider_session_id.trim()
+        : cached?.providerSessionId;
+    const result = await commandForNode(ctx, node, 'read_chat', {
+        sessionId: args.session_id,
+        targetSessionId: args.session_id,
+        workspace: node.workspace,
+        ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
+        ...(providerSessionId ? { providerSessionId } : {}),
+        tailLimit: args.tail ?? 10,
+    });
+    const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result) as Record<string, any>, {
+        key: `mesh:${args.node_id}:${args.session_id}`,
+        toolName: 'mesh_read_chat',
+        completionCallbackExpected: true,
+    });
+    // Default compact=true to keep coordinator context lean.
+    // Pass compact=false explicitly only when full transcript detail is needed for debugging.
+    const useCompact = args.compact !== false;
+    if (useCompact) {
+        const compactPayload = compactChatPayload(payload, {
+            nodeId: args.node_id,
             sessionId: args.session_id,
-            targetSessionId: args.session_id,
-            workspace: node.workspace,
-            ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
-            ...(providerSessionId ? { providerSessionId } : {}),
-            tailLimit: args.tail ?? 10,
+            limit: args.tail ?? 10,
         });
-        const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result) as Record<string, any>, {
-            key: `mesh:${args.node_id}:${args.session_id}`,
-            toolName: 'mesh_read_chat',
-            completionCallbackExpected: true,
-        });
-        // Default compact=true to keep coordinator context lean.
-        // Pass compact=false explicitly only when full transcript detail is needed for debugging.
-        const useCompact = args.compact !== false;
-        if (useCompact) {
-            const compactPayload = compactChatPayload(payload, {
-                nodeId: args.node_id,
-                sessionId: args.session_id,
-                limit: args.tail ?? 10,
-            });
-            return JSON.stringify(
-                payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
-                null,
-                2,
-            );
-        }
-        return JSON.stringify(payload, null, 2);
-    } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-        try {
-            const targetId = `${node.daemonId}:session:${args.session_id}`;
-            const res = await (ctx.transport as CloudTransport).readChat(targetId, {
-                limit: args.tail ?? 10,
-                sessionId: args.session_id,
-            });
-            return JSON.stringify(res, null, 2);
-        } catch (e: any) {
-            return JSON.stringify({ success: false, error: e.message });
-        }
-    } else {
-        return JSON.stringify({ error: 'Cloud mesh read_chat requires node daemonId' });
+        return JSON.stringify(
+            payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
+            null,
+            2,
+        );
     }
+    return JSON.stringify(payload, null, 2);
 }
 
 export async function meshReadDebug(
@@ -3748,38 +3672,22 @@ export async function meshReadDebug(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
-    if (isLocalTransport(ctx.transport)) {
-        const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
-        const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
-            ? args.provider_session_id.trim()
-            : cached?.providerSessionId;
-        const delivery = args.delivery === 'inline' ? undefined : 'daemon_file';
-        const result = await commandForNode(ctx, node, 'get_chat_debug_bundle', {
-            sessionId: args.session_id,
-            targetSessionId: args.session_id,
-            workspace: node.workspace,
-            ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
-            ...(providerSessionId ? { providerSessionId } : {}),
-            tailLimit: args.tail ?? 40,
-            ...(delivery ? { delivery } : {}),
-        });
-        const payload = unwrapCommandPayload(result);
-        return JSON.stringify(payload, null, 2);
-    } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-        try {
-            const targetId = `${node.daemonId}:session:${args.session_id}`;
-            const res = await (ctx.transport as CloudTransport).getChatDebugBundle(targetId, {
-                sessionId: args.session_id,
-                tailLimit: args.tail ?? 40,
-                delivery: args.delivery,
-            });
-            return JSON.stringify(res, null, 2);
-        } catch (e: any) {
-            return JSON.stringify({ success: false, error: e.message });
-        }
-    }
-
-    return JSON.stringify({ error: 'Cloud mesh read_debug requires node daemonId' });
+    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+    const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
+        ? args.provider_session_id.trim()
+        : cached?.providerSessionId;
+    const delivery = args.delivery === 'inline' ? undefined : 'daemon_file';
+    const result = await commandForNode(ctx, node, 'get_chat_debug_bundle', {
+        sessionId: args.session_id,
+        targetSessionId: args.session_id,
+        workspace: node.workspace,
+        ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
+        ...(providerSessionId ? { providerSessionId } : {}),
+        tailLimit: args.tail ?? 40,
+        ...(delivery ? { delivery } : {}),
+    });
+    const payload = unwrapCommandPayload(result);
+    return JSON.stringify(payload, null, 2);
 }
 
 export async function meshLaunchSession(
@@ -3790,7 +3698,7 @@ export async function meshLaunchSession(
     const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node, ctx.mesh.policy);
     if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
 
-    if (isLocalTransport(ctx.transport)) {
+    {
         let resolvedProviderType = typeof args.type === 'string' && args.type.trim() ? args.type : '';
         if (!resolvedProviderType) {
             const providerPriority = readProviderPriority(node.policy);
@@ -3885,54 +3793,6 @@ export async function meshLaunchSession(
             queueTrigger,
             ...buildQueueTriggerGuidance(queueTrigger),
         }, null, 2);
-    } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-        let resolvedProviderType = typeof args.type === 'string' && args.type.trim() ? args.type : '';
-        if (!resolvedProviderType) {
-            const providerPriority = readProviderPriority(node.policy);
-            if (!providerPriority.length) {
-                return JSON.stringify({ success: false, error: missingProviderPriorityMessage(args.node_id) });
-            }
-            resolvedProviderType = providerPriority[0]; // Best effort for cloud, skip detection
-        }
-
-        const coordinatorNode = resolveCoordinatorNode(ctx);
-        const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
-        const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
-        if (!coordinatorDaemonId) {
-            return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
-        }
-
-        try {
-            const res = await (ctx.transport as CloudTransport).launch(node.daemonId, {
-                type: resolvedProviderType,
-                dir: node.workspace,
-                settings: {
-                    meshNodeFor: ctx.mesh.id,
-                    meshNodeId: args.node_id,
-                    spawnedSessionVisibility,
-                    ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
-                    ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
-                    launchedByCoordinator: true
-                }
-            });
-
-            const runtimeSessionId = typeof res?.sessionId === 'string' ? res.sessionId : typeof res?.id === 'string' ? res.id : '';
-            try {
-                appendLedgerEntry(ctx.mesh.id, {
-                    kind: 'session_launched',
-                    nodeId: args.node_id,
-                    sessionId: runtimeSessionId || undefined,
-                    providerType: resolvedProviderType,
-                    payload: {},
-                });
-            } catch { /* best-effort */ }
-
-            return JSON.stringify({ ...res, resolvedProviderType }, null, 2);
-        } catch (e: any) {
-            return JSON.stringify(recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
-        }
-    } else {
-        return JSON.stringify({ error: 'Cloud mesh launch_session requires node daemonId' });
     }
 }
 
@@ -3947,37 +3807,23 @@ export async function meshGitStatus(
     const submoduleIgnorePaths = (node.policy as any)?.submoduleIgnorePaths || [];
 
     try {
-        if (!isLocalTransport(ctx.transport) && node.daemonId) {
-            const result = await (ctx.transport as CloudTransport).gitStatus(node.daemonId, node.workspace, true, true);
-            return JSON.stringify({
-                nodeId: args.node_id,
-                workspace: node.workspace,
-                status: extractGitStatus(result),
-                diff: extractGitDiff(result),
-                submodules: autoDiscoverSubmodules ? extractSubmodules(result, submoduleIgnorePaths) : undefined,
-                relatedRepos: await collectRelatedRepoStatuses(ctx, node),
-            }, null, 2);
-        } else if (isLocalTransport(ctx.transport)) {
-            const statusResult = await commandForNode(ctx, node, 'git_status', {
-                workspace: node.workspace,
-                refreshUpstream: true,
-                includeSubmodules: autoDiscoverSubmodules,
-                submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : undefined,
-            });
-            const diffResult = await commandForNode(ctx, node, 'git_diff_summary', {
-                workspace: node.workspace,
-            });
-            return JSON.stringify({
-                nodeId: args.node_id,
-                workspace: node.workspace,
-                status: extractGitStatus(statusResult),
-                diff: extractGitDiff(diffResult),
-                submodules: autoDiscoverSubmodules ? extractSubmodules(statusResult, submoduleIgnorePaths) : undefined,
-                relatedRepos: await collectRelatedRepoStatuses(ctx, node),
-            }, null, 2);
-        } else {
-            return JSON.stringify({ error: 'No daemonId available for cloud git_status probe' });
-        }
+        const statusResult = await commandForNode(ctx, node, 'git_status', {
+            workspace: node.workspace,
+            refreshUpstream: true,
+            includeSubmodules: autoDiscoverSubmodules,
+            submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : undefined,
+        });
+        const diffResult = await commandForNode(ctx, node, 'git_diff_summary', {
+            workspace: node.workspace,
+        });
+        return JSON.stringify({
+            nodeId: args.node_id,
+            workspace: node.workspace,
+            status: extractGitStatus(statusResult),
+            diff: extractGitDiff(diffResult),
+            submodules: autoDiscoverSubmodules ? extractSubmodules(statusResult, submoduleIgnorePaths) : undefined,
+            relatedRepos: await collectRelatedRepoStatuses(ctx, node),
+        }, null, 2);
     } catch (e: any) {
         const failure = buildCoordinatorP2pRelayFailure(e, {
             command: 'git_status',
@@ -4053,56 +3899,28 @@ export async function meshCheckpoint(
         return JSON.stringify({ error: `Node '${args.node_id}' is read-only — cannot checkpoint` });
     }
 
-    if (isLocalTransport(ctx.transport)) {
-        const result = await commandForNode(ctx, node, 'git_checkpoint', {
-            workspace: node.workspace,
-            message: args.message,
-            includeUntracked: true,
-        });
+    const result = await commandForNode(ctx, node, 'git_checkpoint', {
+        workspace: node.workspace,
+        message: args.message,
+        includeUntracked: true,
+    });
 
-        // Record checkpoint in ledger
-        try {
-            appendLedgerEntry(ctx.mesh.id, {
-                kind: 'checkpoint_created',
-                nodeId: args.node_id,
-                payload: {
-                    message: args.message,
-                    commit: (result as any)?.checkpoint?.commit,
-                    outcome: (result as any)?.checkpoint?.status || ((result as any)?.checkpoint?.noop ? 'skipped' : undefined),
-                    noop: (result as any)?.checkpoint?.noop === true,
-                    reason: (result as any)?.checkpoint?.reason,
-                },
-            });
-        } catch { /* ledger append is best-effort */ }
-
-        return JSON.stringify(result, null, 2);
-    } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-        try {
-            const res = await (ctx.transport as CloudTransport).gitCheckpoint(node.daemonId, {
-                workspace: node.workspace,
+    // Record checkpoint in ledger
+    try {
+        appendLedgerEntry(ctx.mesh.id, {
+            kind: 'checkpoint_created',
+            nodeId: args.node_id,
+            payload: {
                 message: args.message,
-                includeUntracked: true,
-            });
-            try {
-                appendLedgerEntry(ctx.mesh.id, {
-                    kind: 'checkpoint_created',
-                    nodeId: args.node_id,
-                    payload: {
-                        message: args.message,
-                        commit: (res as any)?.checkpoint?.commit,
-                        outcome: (res as any)?.checkpoint?.status || ((res as any)?.checkpoint?.noop ? 'skipped' : undefined),
-                        noop: (res as any)?.checkpoint?.noop === true,
-                        reason: (res as any)?.checkpoint?.reason,
-                    },
-                });
-            } catch { /* best-effort */ }
-            return JSON.stringify(res, null, 2);
-        } catch (e: any) {
-            return JSON.stringify({ success: false, error: e.message });
-        }
-    } else {
-        return JSON.stringify({ error: 'Cloud mesh checkpoint requires node daemonId' });
-    }
+                commit: (result as any)?.checkpoint?.commit,
+                outcome: (result as any)?.checkpoint?.status || ((result as any)?.checkpoint?.noop ? 'skipped' : undefined),
+                noop: (result as any)?.checkpoint?.noop === true,
+                reason: (result as any)?.checkpoint?.reason,
+            },
+        });
+    } catch { /* ledger append is best-effort */ }
+
+    return JSON.stringify(result, null, 2);
 }
 
 export async function meshApprove(
@@ -4111,29 +3929,17 @@ export async function meshApprove(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
 
-    if (isLocalTransport(ctx.transport)) {
-        const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
-        const providerSessionId = cached?.providerSessionId;
-        const result = await commandForNode(ctx, node, 'resolve_action', {
-            sessionId: args.session_id,
-            targetSessionId: args.session_id,
-            workspace: node.workspace,
-            ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
-            ...(providerSessionId ? { providerSessionId } : {}),
-            action: args.action === 'reject' ? 'reject' : 'approve',
-        });
-        return JSON.stringify(result, null, 2);
-    } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-        try {
-            const targetId = `${node.daemonId}:session:${args.session_id}`;
-            const res = await (ctx.transport as CloudTransport).approve(targetId, args.action === 'reject' ? 'reject' : 'approve');
-            return JSON.stringify(res, null, 2);
-        } catch (e: any) {
-            return JSON.stringify({ success: false, error: e.message });
-        }
-    } else {
-        return JSON.stringify({ error: 'Cloud mesh approve requires node daemonId' });
-    }
+    const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
+    const providerSessionId = cached?.providerSessionId;
+    const result = await commandForNode(ctx, node, 'resolve_action', {
+        sessionId: args.session_id,
+        targetSessionId: args.session_id,
+        workspace: node.workspace,
+        ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
+        ...(providerSessionId ? { providerSessionId } : {}),
+        action: args.action === 'reject' ? 'reject' : 'approve',
+    });
+    return JSON.stringify(result, null, 2);
 }
 
 export async function meshCloneNode(
@@ -4142,47 +3948,22 @@ export async function meshCloneNode(
 ): Promise<string> {
     const sourceNode = await findNodeWithRefresh(ctx, args.source_node_id);
 
-    if (isLocalTransport(ctx.transport)) {
-        const result = await commandForNode(ctx, sourceNode, 'clone_mesh_node', {
-            meshId: ctx.mesh.id,
-            sourceNodeId: args.source_node_id,
-            branch: args.branch,
-            baseBranch: args.base_branch,
-            inlineMesh: ctx.mesh,
-        });
-        const clonePayload = extractCloneNodePayload(result);
-        if (clonePayload?.success && clonePayload.node?.id) {
-            const existingIndex = ctx.mesh.nodes.findIndex(n => n.id === clonePayload.node.id);
-            if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
-            else ctx.mesh.nodes.push(clonePayload.node);
-            ctx.mesh.updatedAt = new Date().toISOString();
-            await syncCoordinatorDaemonMeshCache(ctx);
-        }
-        return JSON.stringify(result, null, 2);
-    } else if (!isLocalTransport(ctx.transport) && sourceNode.daemonId) {
-        try {
-            const res = await (ctx.transport as CloudTransport).meshCloneNode(sourceNode.daemonId, {
-                meshId: ctx.mesh.id,
-                sourceNodeId: args.source_node_id,
-                branch: args.branch,
-                baseBranch: args.base_branch,
-                inlineMesh: ctx.mesh,
-            });
-            const clonePayload = extractCloneNodePayload(res);
-            if (clonePayload?.success && clonePayload.node?.id) {
-                const existingIndex = ctx.mesh.nodes.findIndex(n => n.id === clonePayload.node.id);
-                if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
-                else ctx.mesh.nodes.push(clonePayload.node);
-                ctx.mesh.updatedAt = new Date().toISOString();
-                await syncCoordinatorDaemonMeshCache(ctx);
-            }
-            return JSON.stringify(res, null, 2);
-        } catch (e: any) {
-            return JSON.stringify({ success: false, error: e.message });
-        }
-    } else {
-        return JSON.stringify({ error: 'Cloud mesh clone_node requires source node daemonId' });
+    const result = await commandForNode(ctx, sourceNode, 'clone_mesh_node', {
+        meshId: ctx.mesh.id,
+        sourceNodeId: args.source_node_id,
+        branch: args.branch,
+        baseBranch: args.base_branch,
+        inlineMesh: ctx.mesh,
+    });
+    const clonePayload = extractCloneNodePayload(result);
+    if (clonePayload?.success && clonePayload.node?.id) {
+        const existingIndex = ctx.mesh.nodes.findIndex(n => n.id === clonePayload.node.id);
+        if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
+        else ctx.mesh.nodes.push(clonePayload.node);
+        ctx.mesh.updatedAt = new Date().toISOString();
+        await syncCoordinatorDaemonMeshCache(ctx);
     }
+    return JSON.stringify(result, null, 2);
 }
 
 export async function meshCleanupSessions(
@@ -4191,33 +3972,15 @@ export async function meshCleanupSessions(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
-    if (isLocalTransport(ctx.transport)) {
-        const result = await commandForNode(ctx, node, 'cleanup_mesh_sessions', {
-            meshId: ctx.mesh.id,
-            nodeId: args.node_id,
-            mode: args.mode,
-            sessionIds: args.session_ids,
-            dryRun: args.dry_run === true,
-            inlineMesh: ctx.mesh,
-        });
-        return JSON.stringify(result, null, 2);
-    } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-        try {
-            const res = await (ctx.transport as CloudTransport).meshCleanupSessions(node.daemonId, {
-                meshId: ctx.mesh.id,
-                nodeId: args.node_id,
-                mode: args.mode,
-                sessionIds: args.session_ids,
-                dryRun: args.dry_run === true,
-                inlineMesh: ctx.mesh,
-            });
-            return JSON.stringify(res, null, 2);
-        } catch (e: any) {
-            return JSON.stringify({ success: false, error: e.message });
-        }
-    } else {
-        return JSON.stringify({ error: 'Cloud mesh cleanup_sessions requires node daemonId' });
-    }
+    const result = await commandForNode(ctx, node, 'cleanup_mesh_sessions', {
+        meshId: ctx.mesh.id,
+        nodeId: args.node_id,
+        mode: args.mode,
+        sessionIds: args.session_ids,
+        dryRun: args.dry_run === true,
+        inlineMesh: ctx.mesh,
+    });
+    return JSON.stringify(result, null, 2);
 }
 
 export async function meshRemoveNode(
@@ -4226,61 +3989,38 @@ export async function meshRemoveNode(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
-    if (isLocalTransport(ctx.transport)) {
-        const removeArgs = buildRemoveNodeArgs(ctx, args.node_id, args.session_cleanup_mode);
-        let result: any;
-        let transportFallback: Record<string, unknown> | undefined;
-        try {
-            result = await commandForNode(ctx, node, 'remove_mesh_node', removeArgs);
-        } catch (e: any) {
-            if (ctx.transport instanceof IpcTransport && (node as any).isLocalWorktree && isP2pTransportUnavailableError(e)) {
-                result = await ctx.transport.command('remove_mesh_node', removeArgs);
-                transportFallback = {
-                    from: 'p2p_mesh_relay',
-                    to: 'local_control_plane',
-                    reason: e?.message || String(e),
-                };
-            } else {
-                return JSON.stringify({
-                    success: false,
-                    code: isP2pTransportUnavailableError(e) ? 'p2p_unavailable' : 'mesh_remove_node_failed',
-                    error: e?.message || String(e),
-                    recoveryHint: isP2pTransportUnavailableError(e)
-                        ? 'If this is an ADHDev-managed local worktree, retry from a coordinator connected to the daemon that owns the worktree; dashboard command/data-plane traffic still requires P2P.'
-                        : 'Inspect mesh_status and retry after resolving the reported failure.',
-                }, null, 2);
-            }
+    const removeArgs = buildRemoveNodeArgs(ctx, args.node_id, args.session_cleanup_mode);
+    let result: any;
+    let transportFallback: Record<string, unknown> | undefined;
+    try {
+        result = await commandForNode(ctx, node, 'remove_mesh_node', removeArgs);
+    } catch (e: any) {
+        if (ctx.transport instanceof IpcTransport && (node as any).isLocalWorktree && isP2pTransportUnavailableError(e)) {
+            result = await ctx.transport.command('remove_mesh_node', removeArgs);
+            transportFallback = {
+                from: 'p2p_mesh_relay',
+                to: 'local_control_plane',
+                reason: e?.message || String(e),
+            };
+        } else {
+            return JSON.stringify({
+                success: false,
+                code: isP2pTransportUnavailableError(e) ? 'p2p_unavailable' : 'mesh_remove_node_failed',
+                error: e?.message || String(e),
+                recoveryHint: isP2pTransportUnavailableError(e)
+                    ? 'If this is an ADHDev-managed local worktree, retry from a coordinator connected to the daemon that owns the worktree; dashboard command/data-plane traffic still requires P2P.'
+                    : 'Inspect mesh_status and retry after resolving the reported failure.',
+            }, null, 2);
         }
-        if (result?.success && result.removed !== false) {
-            const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
-            if (idx >= 0) {
-                ctx.mesh.nodes.splice(idx, 1);
-                ctx.mesh.updatedAt = new Date().toISOString();
-            }
-        }
-        return JSON.stringify({ ...(result || {}), ...(transportFallback ? { transportFallback } : {}) }, null, 2);
-    } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-        try {
-            const res = await (ctx.transport as CloudTransport).meshRemoveNode(node.daemonId, {
-                meshId: ctx.mesh.id,
-                nodeId: args.node_id,
-                ...(args.session_cleanup_mode ? { sessionCleanupMode: args.session_cleanup_mode } : {}),
-                inlineMesh: ctx.mesh,
-            });
-            if (res?.success && res.removed !== false) {
-                const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
-                if (idx >= 0) {
-                    ctx.mesh.nodes.splice(idx, 1);
-                    ctx.mesh.updatedAt = new Date().toISOString();
-                }
-            }
-            return JSON.stringify(res, null, 2);
-        } catch (e: any) {
-            return JSON.stringify({ success: false, error: e.message });
-        }
-    } else {
-        return JSON.stringify({ error: 'Cloud mesh remove_node requires node daemonId' });
     }
+    if (result?.success && result.removed !== false) {
+        const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
+        if (idx >= 0) {
+            ctx.mesh.nodes.splice(idx, 1);
+            ctx.mesh.updatedAt = new Date().toISOString();
+        }
+    }
+    return JSON.stringify({ ...(result || {}), ...(transportFallback ? { transportFallback } : {}) }, null, 2);
 }
 
 function resolveRefineConfigNode(ctx: MeshContext, nodeId?: string): LocalMeshNodeEntry {
@@ -4340,50 +4080,25 @@ export async function meshRefineNode(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
-    if (isLocalTransport(ctx.transport)) {
-        const result = await commandForNode(ctx, node, 'refine_mesh_node', {
-            meshId: ctx.mesh.id,
-            nodeId: args.node_id,
-            inlineMesh: ctx.mesh,
-        });
-        if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
-            const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
-            if (idx >= 0) {
-                ctx.mesh.nodes.splice(idx, 1);
-                ctx.mesh.updatedAt = new Date().toISOString();
-            }
+    const result = await commandForNode(ctx, node, 'refine_mesh_node', {
+        meshId: ctx.mesh.id,
+        nodeId: args.node_id,
+        inlineMesh: ctx.mesh,
+    });
+    if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
+        const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
+        if (idx >= 0) {
+            ctx.mesh.nodes.splice(idx, 1);
+            ctx.mesh.updatedAt = new Date().toISOString();
         }
-        return JSON.stringify(result, null, 2);
-    } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-        try {
-            const res = await (ctx.transport as CloudTransport).meshRefineNode(node.daemonId, {
-                meshId: ctx.mesh.id,
-                nodeId: args.node_id,
-                inlineMesh: ctx.mesh,
-            });
-            if (res?.success && res.async !== true && res.removeResult?.removed !== false) {
-                const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
-                if (idx >= 0) {
-                    ctx.mesh.nodes.splice(idx, 1);
-                    ctx.mesh.updatedAt = new Date().toISOString();
-                }
-            }
-            return JSON.stringify(res, null, 2);
-        } catch (e: any) {
-            return JSON.stringify({ success: false, error: e.message });
-        }
-    } else {
-        return JSON.stringify({ error: 'Cloud mesh refine_node requires node daemonId' });
     }
+    return JSON.stringify(result, null, 2);
 }
 
 export async function meshReviewInbox(
     ctx: MeshContext,
     args: { mesh_id?: string } = {},
 ): Promise<string> {
-    if (!isLocalTransport(ctx.transport)) {
-        return JSON.stringify({ error: 'mesh_review_inbox requires a local daemon transport (M4.0 scope: local nodes only)' });
-    }
     await refreshMeshFromDaemon(ctx);
     const meshId = (args.mesh_id ?? ctx.mesh.id).trim();
     const result = await commandForNode(ctx, ctx.mesh.nodes[0], 'get_mesh_review_inbox', {

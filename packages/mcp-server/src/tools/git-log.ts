@@ -1,5 +1,4 @@
-import type { McpTransport } from '../transports/mode.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const GIT_LOG_TOOL = {
@@ -30,10 +29,6 @@ export const GIT_LOG_TOOL = {
         type: 'string',
         description: 'Only commits before this date (ISO 8601 or git date string, optional).',
       },
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID (cloud mode only, required).',
-      },
       ...FORMAT_PROP,
     },
     required: ['workspace'],
@@ -41,39 +36,26 @@ export const GIT_LOG_TOOL = {
 };
 
 export async function gitLog(
-  transport: McpTransport,
+  transport: CommandTransport,
   args: {
     workspace: string;
     limit?: number;
     file?: string;
     since?: string;
     until?: string;
-    daemon_id?: string;
     format?: 'text' | 'json';
   },
 ): Promise<string> {
   const limit = Math.max(1, Math.min(100, args.limit ?? 20));
 
-  let raw: any;
-  if (isLocalTransport(transport)) {
-    raw = await transport.command('git_log', {
-      workspace: args.workspace,
-      limit,
-      ...(args.file ? { path: args.file } : {}),
-      ...(args.since ? { since: args.since } : {}),
-      ...(args.until ? { until: args.until } : {}),
-    });
-    raw = raw?.log ?? raw;
-  } else {
-    if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-    const result = await transport.gitLog(args.daemon_id, args.workspace, {
-      limit,
-      file: args.file,
-      since: args.since,
-      until: args.until,
-    });
-    raw = result?.log ?? result;
-  }
+  let raw: any = await transport.command('git_log', {
+    workspace: args.workspace,
+    limit,
+    ...(args.file ? { path: args.file } : {}),
+    ...(args.since ? { since: args.since } : {}),
+    ...(args.until ? { until: args.until } : {}),
+  });
+  raw = raw?.log ?? raw;
 
   if (raw?.success === false || raw?.reason) {
     const msg = raw?.error ?? raw?.reason ?? 'unknown';

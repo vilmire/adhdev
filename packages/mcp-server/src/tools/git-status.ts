@@ -1,5 +1,4 @@
-import type { McpTransport } from '../transports/mode.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const GIT_STATUS_TOOL = {
@@ -16,10 +15,6 @@ export const GIT_STATUS_TOOL = {
         type: 'boolean',
         description: 'Include changed file list (default: true).',
       },
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID (cloud mode only).',
-      },
       ...FORMAT_PROP,
     },
     required: ['workspace'],
@@ -27,37 +22,21 @@ export const GIT_STATUS_TOOL = {
 };
 
 export async function gitStatus(
-  transport: McpTransport,
-  args: { workspace: string; include_diff?: boolean; daemon_id?: string; format?: 'text' | 'json' },
+  transport: CommandTransport,
+  args: { workspace: string; include_diff?: boolean; format?: 'text' | 'json' },
 ): Promise<string> {
-  let status: any;
   let diffSummary: any;
 
-  if (isLocalTransport(transport)) {
-    const statusResult = await transport.command('git_status', {
+  const statusResult = await transport.command('git_status', {
+    workspace: args.workspace,
+  });
+  const status: any = statusResult?.status ?? statusResult;
+
+  if (args.include_diff !== false) {
+    const diffResult = await transport.command('git_diff_summary', {
       workspace: args.workspace,
     });
-    status = statusResult?.status ?? statusResult;
-
-    if (args.include_diff !== false) {
-      const diffResult = await transport.command('git_diff_summary', {
-        workspace: args.workspace,
-      });
-      diffSummary = diffResult?.diffSummary ?? diffResult;
-    }
-  } else {
-    if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-    const result = await transport.gitStatus(
-      args.daemon_id,
-      args.workspace,
-      args.include_diff !== false,
-    );
-    if (result?.error) {
-      if (args.format === 'json') return JSON.stringify({ error: result.error }, null, 2);
-      return `Error: ${result.error}`;
-    }
-    status = result?.status;
-    diffSummary = result?.diff;
+    diffSummary = diffResult?.diffSummary ?? diffResult;
   }
 
   if (status?.success === false || status?.reason) {

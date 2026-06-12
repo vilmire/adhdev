@@ -1,5 +1,4 @@
-import type { CommandTransport, McpTransport } from '../transports/mode.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const GIT_DIFF_TOOL = {
@@ -27,10 +26,6 @@ export const GIT_DIFF_TOOL = {
         type: 'boolean',
         description: 'Show staged changes instead of unstaged (default: false).',
       },
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID (cloud mode only, required).',
-      },
       ...FORMAT_PROP,
     },
     required: ['workspace'],
@@ -48,36 +43,19 @@ interface FileDiffResult {
 }
 
 export async function gitDiff(
-  transport: McpTransport,
+  transport: CommandTransport,
   args: {
     workspace: string;
     file?: string;
     max_lines?: number;
     staged?: boolean;
-    daemon_id?: string;
     format?: 'text' | 'json';
   },
 ): Promise<string> {
   const maxLines = Math.max(10, Math.min(2000, args.max_lines ?? 300));
   const staged = args.staged ?? false;
 
-  if (isLocalTransport(transport)) {
-    return localGitDiff(transport, args.workspace, args.file, maxLines, staged, args.format);
-  }
-
-  if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-  const result = await transport.gitDiff(args.daemon_id, args.workspace, {
-    file: args.file,
-    maxLines,
-    staged,
-  });
-
-  if (result?.error) {
-    if (args.format === 'json') return JSON.stringify({ error: result.error }, null, 2);
-    return `Git diff error: ${result.error}`;
-  }
-
-  return formatDiffResult(result, args.format);
+  return localGitDiff(transport, args.workspace, args.file, maxLines, staged, args.format);
 }
 
 async function localGitDiff(

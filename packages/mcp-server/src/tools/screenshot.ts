@@ -1,12 +1,9 @@
-import type { McpTransport } from '../transports/mode.js';
-import type { CloudTransport } from '../transports/cloud.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 
 export const SCREENSHOT_TOOL = {
   name: 'screenshot',
   description:
-    'Capture a screenshot of the current IDE window. Returns the image. ' +
-    'Local mode only — screenshots require direct P2P access to the daemon and are not available in cloud mode.',
+    'Capture a screenshot of the current IDE window. Returns the image.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -20,19 +17,12 @@ export const SCREENSHOT_TOOL = {
 };
 
 export async function screenshot(
-  transport: McpTransport,
+  transport: CommandTransport,
   args: { session_id?: string },
 ): Promise<{ type: 'image'; data: string; mimeType: string } | { type: 'text'; text: string }> {
-  let result: any;
-
-  if (isLocalTransport(transport)) {
-    result = await transport.command('screenshot', {
-      ...(args.session_id ? { targetSessionId: args.session_id } : {}),
-    });
-  } else {
-    // CloudTransport: use shortcuts status endpoint — screenshot not on shortcuts, fall back to error
-    return { type: 'text', text: 'Screenshots are not available in cloud mode. Run adhdev mcp in local mode (requires standalone daemon).' };
-  }
+  const result: any = await transport.command('screenshot', {
+    ...(args.session_id ? { targetSessionId: args.session_id } : {}),
+  });
 
   if (result?.success === false) {
     return { type: 'text', text: `Error: ${result.error ?? 'screenshot failed'}` };

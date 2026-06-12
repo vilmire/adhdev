@@ -1,6 +1,4 @@
-import type { McpTransport } from '../transports/mode.js';
-import type { CloudTransport } from '../transports/cloud.js';
-import { isLocalTransport } from '../transports/mode.js';
+import type { CommandTransport } from '../transports/mode.js';
 
 export const LAUNCH_SESSION_TOOL = {
   name: 'launch_session',
@@ -22,41 +20,23 @@ export const LAUNCH_SESSION_TOOL = {
         type: 'string',
         description: 'Model override for ACP agents (e.g. claude-opus-4-7).',
       },
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID (cloud mode only). Required in cloud mode.',
-      },
     },
     required: ['type'],
   },
 };
 
 export async function launchSession(
-  transport: McpTransport,
-  args: { type: string; workspace?: string; model?: string; daemon_id?: string },
+  transport: CommandTransport,
+  args: { type: string; workspace?: string; model?: string },
 ): Promise<string> {
-  if (isLocalTransport(transport)) {
-    // LocalTransport
-    const isCliOrAcp =
-      args.type.includes('-cli') || args.type.includes('-acp') || args.type === 'codex';
-    const commandType = isCliOrAcp ? 'launch_cli' : 'launch_ide';
-    const payload: Record<string, unknown> = isCliOrAcp
-      ? { cliType: args.type, dir: args.workspace ?? '~', ...(args.model ? { model: args.model } : {}) }
-      : { ideType: args.type, enableCdp: true };
-    const result = await transport.command(commandType, payload);
-    if (result?.success === false) return `Error: ${result.error ?? 'launch failed'}`;
-    const id = result?.id ?? result?.sessionId;
-    return id ? `Session launched. id: ${id}, type: ${args.type}` : `Launched: ${JSON.stringify(result)}`;
-  }
-
-  // CloudTransport
-  if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-  const result = await transport.launch(args.daemon_id, {
-    type: args.type,
-    dir: args.workspace,
-    model: args.model,
-  });
-  if (result?.success === false || result?.error) return `Error: ${result.error ?? 'launch failed'}`;
+  const isCliOrAcp =
+    args.type.includes('-cli') || args.type.includes('-acp') || args.type === 'codex';
+  const commandType = isCliOrAcp ? 'launch_cli' : 'launch_ide';
+  const payload: Record<string, unknown> = isCliOrAcp
+    ? { cliType: args.type, dir: args.workspace ?? '~', ...(args.model ? { model: args.model } : {}) }
+    : { ideType: args.type, enableCdp: true };
+  const result = await transport.command(commandType, payload);
+  if (result?.success === false) return `Error: ${result.error ?? 'launch failed'}`;
   const id = result?.id ?? result?.sessionId;
   return id ? `Session launched. id: ${id}, type: ${args.type}` : `Launched: ${JSON.stringify(result)}`;
 }
