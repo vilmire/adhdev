@@ -171,7 +171,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('buffers delegated completion events for MCP coordinators even when a CLI coordinator is present', () => {
+  it('injects agent:generating_completed directly when CLI coordinator is idle (terminal event — no dual MCP buffer)', () => {
     const meshId = `mesh_completion_pending_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -189,30 +189,15 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 12345,
       })
 
+      // Terminal event: idle coordinator receives direct inject, NOT buffered to pending queue
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-      emit({
-        event: 'agent:generating_completed',
-        instanceId: 'runtime-session-1',
-        targetSessionId: 'runtime-session-1',
-        providerType: 'codex-cli',
-        providerSessionId: 'codex-history-1',
-        finalSummary: 'done',
-        timestamp: 12345,
-      })
+      const [eventName, payload] = coordinator.onEvent.mock.calls[0]
+      expect(eventName).toBe('send_message')
+      expect(payload.input.textFallback).toContain('has completed its task')
+
+      // Idle coordinator path does not dual-buffer terminal events (consistent with refine:completed behaviour)
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0]).toMatchObject({
-        event: 'agent:generating_completed',
-        meshId,
-        nodeId: 'node_child_1',
-        metadataEvent: {
-          targetSessionId: 'runtime-session-1',
-          providerType: 'codex-cli',
-          providerSessionId: 'codex-history-1',
-          finalSummary: 'done',
-        },
-      })
-      expect(pending[0].coordinatorMessage).toContain('has completed its task')
+      expect(pending).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1743,6 +1728,75 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0].event).toBe('refine:accepted')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('buffers agent:generating_completed to pending events when CLI coordinator is generating', () => {
+    const meshId = `mesh_codex_gen_completed_generating_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      const { components, coordinator } = createGeneratingCoordinatorComponents(meshId, 'generating')
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node-worker',
+        instanceId: 'worker-session-1',
+        targetSessionId: 'worker-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'claude-history-1',
+        duration: 42,
+        timestamp: 99999,
+      })
+
+      // When coordinator is generating, inject must be skipped to avoid corrupting the active PTY input stream.
+      expect(result).toMatchObject({ success: true, forwarded: 0, bufferedForGeneratingCoordinator: true })
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+
+      // Event must be in pending queue so coordinator drains it via get_pending_mesh_events after going idle.
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node-worker',
+        metadataEvent: expect.objectContaining({
+          providerType: 'claude-cli',
+          providerSessionId: 'claude-history-1',
+        }),
+      })
+      expect(pending[0].coordinatorMessage).toContain('has completed its task')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does NOT buffer agent:generating_completed when CLI coordinator is idle (injects directly)', () => {
+    const meshId = `mesh_codex_gen_completed_idle_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      const { components, coordinator } = createGeneratingCoordinatorComponents(meshId, 'idle')
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node-worker',
+        instanceId: 'worker-session-2',
+        targetSessionId: 'worker-session-2',
+        providerType: 'codex-cli',
+        providerSessionId: 'codex-history-2',
+        duration: 10,
+        timestamp: 88888,
+      })
+
+      expect(result).toMatchObject({ success: true, forwarded: 1 })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+
+      // Idle coordinator receives event directly — no pending buffer (consistent with refine:completed behaviour)
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
