@@ -2549,12 +2549,18 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const registrySessionWorkspace = targetSid
                 ? (h.ctx?.sessionRegistry?.get?.(targetSid) as any)?.workspace
                 : undefined;
-            const workspace = typeof (h.currentSession as any)?.workspace === 'string'
+            const currentSessionWorkspace = typeof (h.currentSession as any)?.workspace === 'string'
                 ? (h.currentSession as any).workspace
-                : typeof registrySessionWorkspace === 'string'
-                    ? registrySessionWorkspace
-                    : undefined;
-            const intendedWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
+                : undefined;
+            const argsWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
+            // When reading a different session (targetSid), prefer that session's registered
+            // workspace (or the caller-supplied args.workspace) over the current (coordinator)
+            // session's workspace — otherwise the coordinator's cwd shadows the worker's cwd
+            // and history lookups find the wrong files.
+            const workspace = targetSid
+                ? (typeof registrySessionWorkspace === 'string' ? registrySessionWorkspace : argsWorkspace ?? currentSessionWorkspace)
+                : (typeof currentSessionWorkspace === 'string' ? currentSessionWorkspace : undefined);
+            const intendedWorkspace = argsWorkspace;
             const supportsNative = supportsCliNativeTranscript(agentStr, provider)
                 && isNativeSourceCanonicalHistory(provider?.nativeHistory);
             const history = supportsNative
