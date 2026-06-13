@@ -12,6 +12,7 @@ import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeli
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, markMeshCoordinatorEventDirectDelivered } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { resolveWorkerDelegateRouting } from './mesh-routing.js';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -1590,63 +1591,22 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         const instanceId = readNonEmptyString(event.instanceId);
         if (!instanceId) return;
 
-        const sourceInstance = components.instanceManager.getInstance(instanceId);
-        if (!sourceInstance || sourceInstance.category !== 'cli') return;
-        const state = sourceInstance.getState();
-        const workspace = readNonEmptyString(state.workspace);
-        if (!workspace) return;
-        const settings = state.settings && typeof state.settings === 'object' ? state.settings as Record<string, unknown> : {};
-
-        const coordinatorMeshId = readNonEmptyString(settings.meshCoordinatorFor);
-        let meshIdFromDirectDispatch = '';
-        if (coordinatorMeshId) {
-            try {
-                const hasActiveDispatch =
-                    getActiveDirectDispatches(coordinatorMeshId).some(d => d.sessionId === instanceId)
-                    || hasUnterminalDirectDispatchLedgerEntry(coordinatorMeshId, instanceId);
-                if (hasActiveDispatch) meshIdFromDirectDispatch = coordinatorMeshId;
-            } catch { /* best-effort */ }
-            if (!meshIdFromDirectDispatch) return;
-        }
-
-        const meshIdFromRuntime = readNonEmptyString(settings.meshNodeFor) || meshIdFromDirectDispatch;
-
-        // A mesh worker must be recognised as a delegate even if its meshNodeFor stamp is
-        // missing. Worker launch envelopes are assembled from several settings, and in
-        // practice a worker can arrive carrying only meshCoordinatorDaemonId (the routing
-        // anchor) without meshNodeFor — e.g. when the node/mesh stamp was dropped on a
-        // direct dispatch or a relaunch. Gating delegate routing solely on meshNodeFor then
-        // silently drops the completion: setupMeshEventForwarding returns here, the
-        // coordinator filter can't resolve args.meshId, and the event only lands in the
-        // pending queue that an idle/generating coordinator never drains. Treat any of the
-        // worker-envelope markers as proof of delegation and recover the mesh id by
-        // workspace when the runtime id is absent.
-        const hasWorkerEnvelope = Boolean(
-            meshIdFromRuntime
-            || settings.launchedByCoordinator
-            || readNonEmptyString(settings.meshCoordinatorDaemonId)
-            || readNonEmptyString(settings.meshCoordinatorNodeId),
-        );
-        if (!hasWorkerEnvelope) return;
-
-        const mesh = meshIdFromRuntime ? getMeshWithCache(components, meshIdFromRuntime) : getCachedMeshByWorkspace(workspace);
-        const meshId = meshIdFromRuntime || readNonEmptyString(mesh?.id);
-        if (!meshId) return;
-
-        const targetNode = mesh?.nodes?.find((n: any) => n.workspace === workspace);
-        const runtimeNodeId = readNonEmptyString(settings.meshNodeId);
-        const resolvedNodeId = targetNode?.id || runtimeNodeId;
-        const nodeLabel = targetNode
-            ? `Node '${targetNode.id}'`
-            : runtimeNodeId
-                ? `Node '${runtimeNodeId}'`
-                : `Agent at ${workspace}`;
+        // R1: all session→node→mesh→coordinator interpretation is folded into the single
+        // resolveWorkerDelegateRouting() resolver. No stamp (meshNodeFor / meshNodeId /
+        // meshCoordinatorDaemonId / meshCoordinatorNodeId / launchedByCoordinator) is read
+        // here to make a routing decision — the resolver is the one authority, and the
+        // forwarder consumes its typed result only.
+        const routing = resolveWorkerDelegateRouting(components, instanceId, {
+            getMeshById: (meshId) => getMeshWithCache(components, meshId),
+            getMeshByWorkspace: (workspace) => getCachedMeshByWorkspace(workspace),
+        });
+        if (!routing.isDelegate) return;
 
         injectMeshSystemMessage(components, {
-            meshId,
+            meshId: routing.meshId,
             sourceInstanceId: instanceId,
-            nodeId: resolvedNodeId,
-            nodeLabel,
+            nodeId: routing.nodeId,
+            nodeLabel: routing.nodeLabel,
             event: event.event,
             metadataEvent: event,
         });
