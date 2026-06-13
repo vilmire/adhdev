@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { getLedgerDir, readLedgerEntries } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId } from './mesh-events-utils.js';
+import { buildMeshSystemMessage, canonicalDaemonId, readNonEmptyString, readRecord, resolveEventSessionId } from './mesh-events-utils.js';
 
 // ---------------------------------------------------------------------------
 // MCP coordinator pending-event queue — FILE-BASED PERSISTENCE
@@ -99,22 +99,26 @@ export function markMeshCoordinatorEventDirectDelivered(
     coordinatorDaemonId: string,
     event: PendingMeshCoordinatorEvent,
 ): void {
-    if (!coordinatorDaemonId) return;
+    // Canonicalize so the raw machineId used at inject time and the prefixed instanceId the
+    // coordinator drains with resolve to the same key.
+    const canonical = canonicalDaemonId(coordinatorDaemonId);
+    if (!canonical) return;
     const fingerprint = buildPendingEventFingerprint(event);
     if (!fingerprint.trim()) return;
     try {
         const store = MeshRuntimeStore.getInstance();
-        store.recordDirectDelivered(coordinatorDaemonId, fingerprint, DIRECT_DELIVERED_TTL_MS);
+        store.recordDirectDelivered(canonical, fingerprint, DIRECT_DELIVERED_TTL_MS);
         store.sweepExpiredDirectDelivered();
     } catch { /* best-effort — a duplicate is preferable to a crash */ }
 }
 
 function wasDirectDeliveredToCoordinator(coordinatorDaemonId: string, event: PendingMeshCoordinatorEvent): boolean {
-    if (!coordinatorDaemonId) return false;
+    const canonical = canonicalDaemonId(coordinatorDaemonId);
+    if (!canonical) return false;
     const fingerprint = buildPendingEventFingerprint(event);
     if (!fingerprint.trim()) return false;
     try {
-        return MeshRuntimeStore.getInstance().wasDirectDelivered(coordinatorDaemonId, fingerprint);
+        return MeshRuntimeStore.getInstance().wasDirectDelivered(canonical, fingerprint);
     } catch {
         return false;
     }

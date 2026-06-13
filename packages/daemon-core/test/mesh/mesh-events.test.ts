@@ -288,6 +288,52 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('R3 standalone: prefixed worker stamp (standalone_<machineId>) still injects AND dedupes the prefixed drain', () => {
+    // Standalone divergence: the MCP coordinator reports ctx.localDaemonId as the runtime
+    // instanceId `standalone_<machineId>` and (a) stamps that prefixed id onto workers as
+    // meshCoordinatorDaemonId, (b) drains get_pending_mesh_events with it. The core forwarder
+    // uses the RAW machineId (loadConfig().machineId) as localDaemonId. A literal !== would
+    // (1) exclude the live local coordinator from direct inject (R2 break) and (2) miss the R3
+    // dedup (marker keyed raw, drain keyed prefixed). canonicalDaemonId reconciles both.
+    const meshId = `mesh_r3_standalone_prefix_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+      })
+      // Worker carries the PREFIXED coordinator daemon id, as standalone stamps it.
+      const { components, emit, coordinator } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+        meshCoordinatorDaemonId: 'standalone_test-machine',
+      })
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'claude-history-standalone',
+        finalSummary: 'done',
+        timestamp: 99003,
+      })
+
+      // R2: the local coordinator must still receive the direct inject despite the prefix.
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+
+      // R3: the coordinator drains with its prefixed instanceId — must NOT re-deliver.
+      const scopedDrain = drainPendingMeshCoordinatorEvents(meshId, 'standalone_test-machine')
+      expect(scopedDrain).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('R3: a DIFFERENT coordinator daemon still drains the queued event (dual delivery preserved for others)', () => {
     // The dedup is scoped per coordinator daemon: only the daemon that received the direct inject
     // skips the queued copy. A coordinator on another daemon (or an unscoped/MCP-only consumer)

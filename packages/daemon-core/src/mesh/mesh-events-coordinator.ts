@@ -25,6 +25,7 @@ import {
     resolveEventSessionId,
     readRefineJobId,
     readWorkerResultMetadata,
+    sameDaemonId,
 } from './mesh-events-utils.js';
 
 // ---------------------------------------------------------------------------
@@ -1365,7 +1366,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const instState = inst.getState();
         if (instState.settings?.meshCoordinatorFor !== args.meshId) return false;
         if (args.sourceInstanceId && instState.instanceId === args.sourceInstanceId) return false;
-        if (workerCoordinatorDaemonId && localDaemonId && workerCoordinatorDaemonId !== localDaemonId) return false;
+        // canonicalize: the worker stamps the prefixed daemon id (standalone_/daemon_) while
+        // localDaemonId is the raw machineId — a literal !== wrongly excludes the local coordinator.
+        if (workerCoordinatorDaemonId && localDaemonId && !sameDaemonId(workerCoordinatorDaemonId, localDaemonId)) return false;
         return true;
     });
 
@@ -1377,7 +1380,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // core forwarder path, so local-vs-remote is one code path and standalone == cloud for
         // the local case. The pending queue remains the fallback when there is no remote target
         // or the transport send fails (e.g. P2P down), so MCP coordinators can still backfill.
-        const remoteCoordinatorDaemonId = workerCoordinatorDaemonId && localDaemonId && workerCoordinatorDaemonId !== localDaemonId
+        const remoteCoordinatorDaemonId = workerCoordinatorDaemonId && localDaemonId && !sameDaemonId(workerCoordinatorDaemonId, localDaemonId)
             ? workerCoordinatorDaemonId
             : '';
         if (remoteCoordinatorDaemonId && components.dispatchMeshCommand) {
@@ -1458,6 +1461,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // would re-deliver the queued copy → the user saw the same completion twice. Mark the event
     // direct-delivered to THIS daemon so that coordinator's own drain skips it. The queue entry
     // stays for every OTHER consumer (idle / MCP-only / remote) that did not get the direct inject.
+    // markMeshCoordinatorEventDirectDelivered canonicalizes the id internally so the raw
+    // machineId here matches the prefixed instanceId (standalone_mach_X) the coordinator drains with.
     if (localDaemonId) {
         markMeshCoordinatorEventDirectDelivered(localDaemonId, pendingEvent);
     }

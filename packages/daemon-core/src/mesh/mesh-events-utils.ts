@@ -10,6 +10,26 @@ export function readRecord(value: unknown): Record<string, unknown> | undefined 
         : undefined;
 }
 
+// A single daemon is identified three ways across the system: the raw machineId
+// (`mach_X`, what loadConfig().machineId returns and what the core forwarder uses as
+// localDaemonId), the cloud daemon id (`daemon_mach_X`), and the standalone daemon id
+// (`standalone_mach_X`, the runtime instanceId the MCP coordinator reports as
+// ctx.localDaemonId). Worker envelope stamps (meshCoordinatorDaemonId) and coordinator
+// drains use the prefixed forms, while the forwarder compares against the raw id — so a
+// naive `===` treats the same daemon as remote and breaks both coordinator matching and
+// the R3 direct-delivered dedup. Canonicalize to the raw id before comparing.
+export function canonicalDaemonId(value: unknown): string {
+    const id = readNonEmptyString(value);
+    if (!id) return '';
+    return id.replace(/^(?:daemon|standalone)_/, '');
+}
+
+export function sameDaemonId(a: unknown, b: unknown): boolean {
+    const ca = canonicalDaemonId(a);
+    const cb = canonicalDaemonId(b);
+    return ca !== '' && ca === cb;
+}
+
 export function resolveEventSessionId(event: Record<string, unknown>, fallback?: unknown): string {
     return readNonEmptyString(event.targetSessionId)
         || readNonEmptyString(event.sessionId)
