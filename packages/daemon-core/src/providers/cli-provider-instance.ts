@@ -1214,6 +1214,33 @@ export class CliProviderInstance implements ProviderInstance {
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         const finalAssistantEvidence = this.completionFinalAssistantEvidence(parsed?.messages);
         const allowMissingAssistantTimeout = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
+
+        // Transcript settle guard: even when a final assistant message is present, a
+        // native-source transcript the CLI is still appending to (the final assistant turn
+        // lands in chunks) yields a *partial* finalSummary if read mid-flush — e.g. a 77-char
+        // prefix "...base 8e788950, and". Re-read the transcript and compare against the prior
+        // probe: if the last assistant message is still growing (msgCount or contentLen
+        // increased since the previous probe), it is mid-write — block and retry. Once two
+        // consecutive probes agree, the turn is fully flushed and we finalize. This keys on
+        // observed growth, not wall-clock age, so an already-settled transcript finalizes with
+        // no added latency. Matters most for worktree workers (cwd → a different projects/
+        // folder than the primary checkout, where flush timing skews the read).
+        if (adapterOwnsMessagesElsewhere && finalAssistantEvidence.source === 'external-native') {
+            const prevProbe = (pending.transcriptProbeHistory || [])[ (pending.transcriptProbeHistory?.length ?? 0) - 1 ];
+            this.readExternalCompletionMessages();
+            const settleProbe = this.lastExternalCompletionProbe;
+            if (settleProbe && prevProbe) {
+                const stillGrowing = settleProbe.msgCount > prevProbe.msgCount
+                    || (settleProbe.lastRole === 'assistant' && settleProbe.contentLen > prevProbe.contentLen);
+                if (stillGrowing) {
+                    this.recordPendingTranscriptProbe(pending);
+                    return { reason: `transcript_settling:${prevProbe.contentLen}->${settleProbe.contentLen}`, terminal: false };
+                }
+            } else if (settleProbe) {
+                // First observation: record a baseline so the next flush attempt can detect growth.
+                this.recordPendingTranscriptProbe(pending);
+            }
+        }
         LOG.debug('CLI', `[${this.type}] finalAssistantEvidence: present=${finalAssistantEvidence.present} source=${finalAssistantEvidence.source} adapterOwnsMessagesElsewhere=${adapterOwnsMessagesElsewhere} parsedStatus=${parsedStatus}`);
         if (!finalAssistantEvidence.present) {
             if (adapterOwnsMessagesElsewhere) {
