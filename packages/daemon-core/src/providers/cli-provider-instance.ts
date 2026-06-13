@@ -1088,8 +1088,31 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private completionFinalSummary(parsedMessages: unknown): string | undefined {
-        const evidence = this.completionFinalAssistantEvidence(parsedMessages);
-        return extractFinalSummaryFromMessages(evidence.messages as any);
+        // For native-source providers (claude-cli: chatMessagesOwnedExternally), the PTY
+        // screen parse is NOT the source of truth for the final summary — the terminal
+        // wraps/scrolls/clips text, so a screen-parsed assistant message is often a partial
+        // prefix (e.g. 76 chars of a 112-char turn). The append-only native transcript holds
+        // the complete turn. Prefer it whenever it yields a longer/complete summary; fall back
+        // to the parsed screen only when the transcript is unavailable. This is the real cause
+        // of the truncated finalSummary — independent of cloud vs standalone (it surfaces on
+        // any short, fast-completing task where screen parse wins the race).
+        const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
+        const parsedSummary = extractFinalSummaryFromMessages(
+            (this.completionHasFinalAssistantMessage(parsedMessages)
+                ? (Array.isArray(parsedMessages) ? parsedMessages : [])
+                : []) as any,
+        );
+        if (adapterOwnsMessagesElsewhere) {
+            const externalMessages = this.readExternalCompletionMessages();
+            const externalSummary = externalMessages
+                ? extractFinalSummaryFromMessages(externalMessages as any)
+                : '';
+            // The transcript is authoritative for native-source providers. Use it unless it is
+            // empty (not yet written) — only then fall back to whatever the screen parsed.
+            if (externalSummary) return externalSummary;
+            return parsedSummary || undefined;
+        }
+        return parsedSummary || undefined;
     }
 
     private buildCompletedFinalizationDiagnostic(args: {
@@ -1214,33 +1237,6 @@ export class CliProviderInstance implements ProviderInstance {
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         const finalAssistantEvidence = this.completionFinalAssistantEvidence(parsed?.messages);
         const allowMissingAssistantTimeout = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
-
-        // Transcript settle guard: even when a final assistant message is present, a
-        // native-source transcript the CLI is still appending to (the final assistant turn
-        // lands in chunks) yields a *partial* finalSummary if read mid-flush — e.g. a 77-char
-        // prefix "...base 8e788950, and". Re-read the transcript and compare against the prior
-        // probe: if the last assistant message is still growing (msgCount or contentLen
-        // increased since the previous probe), it is mid-write — block and retry. Once two
-        // consecutive probes agree, the turn is fully flushed and we finalize. This keys on
-        // observed growth, not wall-clock age, so an already-settled transcript finalizes with
-        // no added latency. Matters most for worktree workers (cwd → a different projects/
-        // folder than the primary checkout, where flush timing skews the read).
-        if (adapterOwnsMessagesElsewhere && finalAssistantEvidence.source === 'external-native') {
-            const prevProbe = (pending.transcriptProbeHistory || [])[ (pending.transcriptProbeHistory?.length ?? 0) - 1 ];
-            this.readExternalCompletionMessages();
-            const settleProbe = this.lastExternalCompletionProbe;
-            if (settleProbe && prevProbe) {
-                const stillGrowing = settleProbe.msgCount > prevProbe.msgCount
-                    || (settleProbe.lastRole === 'assistant' && settleProbe.contentLen > prevProbe.contentLen);
-                if (stillGrowing) {
-                    this.recordPendingTranscriptProbe(pending);
-                    return { reason: `transcript_settling:${prevProbe.contentLen}->${settleProbe.contentLen}`, terminal: false };
-                }
-            } else if (settleProbe) {
-                // First observation: record a baseline so the next flush attempt can detect growth.
-                this.recordPendingTranscriptProbe(pending);
-            }
-        }
         LOG.debug('CLI', `[${this.type}] finalAssistantEvidence: present=${finalAssistantEvidence.present} source=${finalAssistantEvidence.source} adapterOwnsMessagesElsewhere=${adapterOwnsMessagesElsewhere} parsedStatus=${parsedStatus}`);
         if (!finalAssistantEvidence.present) {
             if (adapterOwnsMessagesElsewhere) {
