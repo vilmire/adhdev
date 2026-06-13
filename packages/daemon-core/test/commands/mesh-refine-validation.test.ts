@@ -399,7 +399,9 @@ describe('refine_mesh_node validation gate', () => {
       expect(terminal.kind).toBe('task_completed')
       expect((terminal.payload as any).result).toMatchObject({ success: true, merged: true })
       const events = drainPendingMeshCoordinatorEvents(mesh.id)
-      expect(events.some(event => event.event === 'refine:accepted' && (event.metadataEvent as any).jobId === first.jobId)).toBe(true)
+      // Once the terminal refine:completed exists for the job, the provisional
+      // refine:accepted is reconciled away — the coordinator only needs the outcome.
+      expect(events.some(event => event.event === 'refine:accepted' && (event.metadataEvent as any).jobId === first.jobId)).toBe(false)
       expect(events.some(event => event.event === 'refine:completed' && (event.metadataEvent as any).jobId === first.jobId)).toBe(true)
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR

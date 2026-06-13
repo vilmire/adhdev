@@ -185,12 +185,20 @@ function refineTerminalEventFromLedger(meshId: string, pending: readonly Pending
 
 function reconcilePendingMeshCoordinatorEvents(meshId: string, events: PendingMeshCoordinatorEvent[]): PendingMeshCoordinatorEvent[] {
     const backfilled = refineTerminalEventFromLedger(meshId, events);
-    if (backfilled.length === 0) return events;
-    const terminalJobIds = new Set(backfilled.map(event => readRefineJobId(event)).filter(Boolean));
-    return [
-        ...events.filter(event => !(event.event === 'refine:accepted' && terminalJobIds.has(readRefineJobId(event)))),
-        ...backfilled,
-    ];
+    // A refine:accepted event is a provisional "job accepted, result to follow" signal.
+    // Once its terminal (completed/failed) counterpart for the same jobId exists — whether
+    // already direct-queued into the pending store OR backfilled from the ledger here — the
+    // accepted is superseded and is dropped so the coordinator isn't shown stale duplicate
+    // noise alongside the terminal outcome.
+    const terminalJobIds = new Set(
+        [...events.filter(event => REFINE_TERMINAL_EVENTS.has(event.event)), ...backfilled]
+            .map(event => readRefineJobId(event))
+            .filter(Boolean),
+    );
+    const reconciled = terminalJobIds.size === 0
+        ? events
+        : events.filter(event => !(event.event === 'refine:accepted' && terminalJobIds.has(readRefineJobId(event))));
+    return backfilled.length === 0 ? reconciled : [...reconciled, ...backfilled];
 }
 
 const MAX_PENDING_EVENTS_BYTES = 100 * 1024; // 100 KB — keep the pending file small
