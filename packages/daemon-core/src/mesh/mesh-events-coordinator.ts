@@ -1340,7 +1340,18 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return { success: true, forwarded: 0 };
     }
 
-    if (!isTerminalEvent) {
+    // When all coordinators are generating, buffer terminal events rather than injecting
+    // them mid-turn. Injecting into a generating PTY corrupts the input stream and gets
+    // silently dropped. The auto-flush on idle transition delivers from the pending queue.
+    const activeStatuses = new Set(['generating', 'streaming', 'long_generating', 'working', 'starting', 'waiting_approval']);
+    const allCoordinatorsGenerating = isTerminalEvent && coordinatorInstances.every((coord) => {
+        const s = coord.getState();
+        const status = readNonEmptyString(s.status).toLowerCase();
+        const activeChatStatus = readNonEmptyString(s.activeChat?.status).toLowerCase();
+        return activeStatuses.has(status) || activeStatuses.has(activeChatStatus);
+    });
+
+    if (!isTerminalEvent || allCoordinatorsGenerating) {
         if (queuePendingMeshCoordinatorEvent({
                 event: args.event,
                 meshId: args.meshId,
@@ -1355,8 +1366,16 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 queuedAt: Date.now(),
                 ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
             })) {
-            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+            if (allCoordinatorsGenerating) {
+                LOG.info('MeshEvents', `Queued ${args.event} for generating CLI coordinator (mesh ${args.meshId}) — will be delivered via auto-flush when coordinator returns to idle`);
+            } else {
+                LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+            }
         }
+    }
+
+    if (allCoordinatorsGenerating) {
+        return { success: true, forwarded: 0, bufferedForGeneratingCoordinator: true };
     }
 
     for (const coord of coordinatorInstances) {
