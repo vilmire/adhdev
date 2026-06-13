@@ -26,4 +26,5 @@ export {
     setupMeshEventForwarding,
     isMeshCoordinatorEvent,
     __resetIdleAutoFastForwardForTests,
+    __resetMeshWorkspaceCacheForTests,
 } from './mesh-events-coordinator.js';

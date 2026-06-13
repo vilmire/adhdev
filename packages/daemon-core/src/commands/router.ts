@@ -40,6 +40,7 @@ import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } f
 import { buildSessionEntries } from '../status/builders.js';
 import { registerMeshCoordinator, getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, type PendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
+import { getRecentUnroutableDeliveries } from '../mesh/mesh-routing.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { buildPreviewFreshness } from '../mesh/preview-freshness.js';
@@ -7364,6 +7365,10 @@ export class DaemonCommandRouter {
                         ? args.coordinatorDaemonId.trim()
                         : (this.deps.statusInstanceId || undefined);
                     const pendingCoordinatorEvents = getPendingMeshCoordinatorEvents(meshId, callerCoordinatorDaemonId);
+                    // R4: surface recent fail-loud routing drops so a coordinator/operator can see
+                    // that a worker completion was lost (envelope present, mesh unresolved) instead
+                    // of it vanishing silently. Diagnostic-only — never cached (see omit below).
+                    const unroutableDeliveries = getRecentUnroutableDeliveries();
                     const previewFreshness = (() => {
                         const localRepoRoot = nodeStatuses
                             .map((node: any) => readStringValue(node?.git?.repoRoot, node?.repoRoot, node?.workspace))
@@ -7425,6 +7430,7 @@ export class DaemonCommandRouter {
                         ...(asyncRefineJobs.length > 0 ? { asyncRefineJobs } : {}),
                         ...(historicalSessions ? { historicalSessions } : {}),
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
+                        ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
                         activeRefineJobs: Array.from(this.runningRefineJobs.values())
                             .filter(job => job.meshId === meshId)
                             .map(job => ({
@@ -7436,11 +7442,13 @@ export class DaemonCommandRouter {
                                 targetCoordinatorDaemonId: job.targetCoordinatorDaemonId,
                             })),
                     };
-                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, ...cacheableStatusResult } = statusResult as any;
+                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, unroutableDeliveries: _unroutableDeliveries, ...cacheableStatusResult } = statusResult as any;
                     const rememberedStatus = this.rememberAggregateMeshStatus(meshId, cacheableStatusResult, refreshReason);
-                    const returnedStatus = pendingCoordinatorEvents.length > 0
-                        ? { ...rememberedStatus, pendingCoordinatorEvents }
-                        : rememberedStatus;
+                    const returnedStatus = {
+                        ...rememberedStatus,
+                        ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
+                        ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
+                    };
                     logRepoMeshStatusDebug('return_live', {
                         meshId,
                         command: 'mesh_status',

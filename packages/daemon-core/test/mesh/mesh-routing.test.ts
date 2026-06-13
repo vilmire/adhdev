@@ -14,7 +14,24 @@ vi.mock('../../src/mesh/mesh-events-stale.js', () => ({
   hasUnterminalDirectDispatchLedgerEntry: dispatchMocks.hasUnterminalDirectDispatchLedgerEntry,
 }))
 
-import { resolveWorkerDelegateRouting } from '../../src/mesh/mesh-routing.js'
+// Isolate the ledger so delivery_unroutable diagnostics are inspectable without real file I/O.
+const ledgerMocks = vi.hoisted(() => ({
+  appendLedgerEntry: vi.fn((meshId: string, partial: any) => ({ id: 'x', meshId, timestamp: new Date(0).toISOString(), ...partial })),
+  readLedgerEntries: vi.fn(() => [] as any[]),
+}))
+vi.mock('../../src/mesh/mesh-ledger.js', () => ({
+  appendLedgerEntry: ledgerMocks.appendLedgerEntry,
+  readLedgerEntries: ledgerMocks.readLedgerEntries,
+}))
+
+import {
+  resolveWorkerDelegateRouting,
+  recordUnroutableDelegateEvent,
+  isUnroutableDelegateRejection,
+  getRecentUnroutableDeliveries,
+  UNROUTABLE_DIAGNOSTIC_STREAM,
+  __resetUnroutableDiagnosticsForTests,
+} from '../../src/mesh/mesh-routing.js'
 
 const MESH = {
   id: 'mesh_1',
@@ -187,14 +204,101 @@ describe('resolveWorkerDelegateRouting', () => {
       expect(r).toMatchObject({ isDelegate: false, rejectionReason: 'no_worker_envelope' })
     })
 
-    it('rejects when the envelope is present but no mesh can be resolved', () => {
+    it('rejects when the envelope is present but no mesh can be resolved, carrying context', () => {
       deps.getMeshByWorkspace.mockReturnValueOnce(undefined)
       const r = resolveWorkerDelegateRouting(
-        makeComponents({ settings: { launchedByCoordinator: true } }),
+        makeComponents({ settings: { launchedByCoordinator: true, meshCoordinatorDaemonId: 'daemon_x' } }),
         'session-1',
         deps,
       )
-      expect(r).toMatchObject({ isDelegate: false, rejectionReason: 'mesh_unresolved' })
+      // R4: rejection still carries workspace/sessionId/coordinatorDaemonId so the
+      // delivery_unroutable diagnostic can name the dropped event's origin.
+      expect(r).toMatchObject({
+        isDelegate: false,
+        rejectionReason: 'mesh_unresolved',
+        workspace: '/repo/worktree-a',
+        sessionId: 'session-1',
+        coordinatorDaemonId: 'daemon_x',
+      })
     })
+  })
+})
+
+describe('R4 fail-loud routing diagnostics', () => {
+  beforeEach(() => {
+    ledgerMocks.appendLedgerEntry.mockClear()
+    ledgerMocks.readLedgerEntries.mockReset()
+    ledgerMocks.readLedgerEntries.mockReturnValue([])
+    __resetUnroutableDiagnosticsForTests()
+  })
+
+  const unresolved = (sessionId = 'session-1'): any => ({
+    isDelegate: false,
+    rejectionReason: 'mesh_unresolved',
+    meshId: '',
+    nodeId: '',
+    nodeLabel: '',
+    coordinatorDaemonId: 'daemon_x',
+    workspace: '/repo/worktree-a',
+    sessionId,
+  })
+
+  it('isUnroutableDelegateRejection is true only for mesh_unresolved', () => {
+    expect(isUnroutableDelegateRejection(unresolved())).toBe(true)
+    for (const reason of ['not_cli', 'no_workspace', 'no_worker_envelope', 'coordinator_not_dispatch_target']) {
+      expect(isUnroutableDelegateRejection({ ...unresolved(), rejectionReason: reason } as any)).toBe(false)
+    }
+    expect(isUnroutableDelegateRejection({ ...unresolved(), isDelegate: true, rejectionReason: undefined } as any)).toBe(false)
+  })
+
+  it('writes a delivery_unroutable ledger entry for an enveloped-but-unresolved drop', () => {
+    const wrote = recordUnroutableDelegateEvent(unresolved(), 'agent:generating_completed')
+    expect(wrote).toBe(true)
+    expect(ledgerMocks.appendLedgerEntry).toHaveBeenCalledTimes(1)
+    const [meshId, partial] = ledgerMocks.appendLedgerEntry.mock.calls[0]
+    expect(meshId).toBe(UNROUTABLE_DIAGNOSTIC_STREAM)
+    expect(partial.kind).toBe('delivery_unroutable')
+    expect(partial.sessionId).toBe('session-1')
+    expect(partial.payload).toMatchObject({
+      event: 'agent:generating_completed',
+      reason: 'mesh_unresolved',
+      workspace: '/repo/worktree-a',
+      coordinatorDaemonId: 'daemon_x',
+    })
+  })
+
+  it('is a no-op for benign (non-diagnostic) rejections', () => {
+    for (const reason of ['not_cli', 'no_workspace', 'no_worker_envelope', 'coordinator_not_dispatch_target']) {
+      expect(recordUnroutableDelegateEvent({ ...unresolved(), rejectionReason: reason } as any, 'agent:generating_completed')).toBe(false)
+    }
+    expect(ledgerMocks.appendLedgerEntry).not.toHaveBeenCalled()
+  })
+
+  it('dedups repeated drops from the same session+event within the window', () => {
+    expect(recordUnroutableDelegateEvent(unresolved(), 'agent:generating_completed')).toBe(true)
+    expect(recordUnroutableDelegateEvent(unresolved(), 'agent:generating_completed')).toBe(false)
+    // A different event from the same session is NOT deduped.
+    expect(recordUnroutableDelegateEvent(unresolved(), 'agent:waiting_approval')).toBe(true)
+    expect(ledgerMocks.appendLedgerEntry).toHaveBeenCalledTimes(2)
+  })
+
+  it('getRecentUnroutableDeliveries reads the diagnostic stream newest-first', () => {
+    const now = Date.now()
+    ledgerMocks.readLedgerEntries.mockReturnValue([
+      { id: '1', meshId: UNROUTABLE_DIAGNOSTIC_STREAM, kind: 'delivery_unroutable', timestamp: new Date(now - 1000).toISOString(), sessionId: 'sess-a', payload: { event: 'agent:generating_completed', workspace: '/w/a' } },
+      { id: '2', meshId: UNROUTABLE_DIAGNOSTIC_STREAM, kind: 'delivery_unroutable', timestamp: new Date(now - 500).toISOString(), sessionId: 'sess-b', payload: { event: 'agent:waiting_approval', workspace: '/w/b', coordinatorDaemonId: 'daemon_y' } },
+    ] as any)
+    const recent = getRecentUnroutableDeliveries()
+    expect(recent).toHaveLength(2)
+    expect(recent[0]).toMatchObject({ sessionId: 'sess-b', event: 'agent:waiting_approval', workspace: '/w/b', coordinatorDaemonId: 'daemon_y' })
+    expect(recent[1]).toMatchObject({ sessionId: 'sess-a', event: 'agent:generating_completed', workspace: '/w/a' })
+  })
+
+  it('getRecentUnroutableDeliveries excludes entries older than the window', () => {
+    const now = Date.now()
+    ledgerMocks.readLedgerEntries.mockReturnValue([
+      { id: '1', meshId: UNROUTABLE_DIAGNOSTIC_STREAM, kind: 'delivery_unroutable', timestamp: new Date(now - 2 * 60 * 60 * 1000).toISOString(), sessionId: 'old', payload: { event: 'agent:generating_completed' } },
+    ] as any)
+    expect(getRecentUnroutableDeliveries({ sinceMs: 60 * 60 * 1000 })).toHaveLength(0)
   })
 })

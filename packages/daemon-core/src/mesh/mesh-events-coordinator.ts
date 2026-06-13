@@ -12,7 +12,7 @@ import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeli
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, markMeshCoordinatorEventDirectDelivered } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
-import { resolveWorkerDelegateRouting } from './mesh-routing.js';
+import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent } from './mesh-routing.js';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -53,6 +53,10 @@ function getCachedMeshByWorkspace(workspace: string): any {
 
 export function __resetIdleAutoFastForwardForTests(): void {
     idleAutoFastForwardLastAttempt.clear();
+}
+
+export function __resetMeshWorkspaceCacheForTests(): void {
+    meshByWorkspaceCache.clear();
 }
 
 function sweepExpiredRemoteIdleSessions(): void {
@@ -1600,7 +1604,14 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
             getMeshById: (meshId) => getMeshWithCache(components, meshId),
             getMeshByWorkspace: (workspace) => getCachedMeshByWorkspace(workspace),
         });
-        if (!routing.isDelegate) return;
+        if (!routing.isDelegate) {
+            // R4: a worker that presented a valid envelope but resolved to no mesh used to be
+            // dropped silently. Leave a fail-loud diagnostic so the missing completion is
+            // traceable. Benign non-delegate rejections (not_cli / no_workspace / etc.) are
+            // no-ops inside recordUnroutableDelegateEvent.
+            recordUnroutableDelegateEvent(routing, event.event);
+            return;
+        }
 
         injectMeshSystemMessage(components, {
             meshId: routing.meshId,

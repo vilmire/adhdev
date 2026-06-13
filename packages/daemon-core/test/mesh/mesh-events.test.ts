@@ -45,9 +45,10 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
   fastForwardMeshNode: fastForwardMocks.fastForwardMeshNode,
 }))
 
-import { __resetIdleAutoFastForwardForTests, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
+import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
 
 function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>) {
   let listener: ((event: any) => void) | undefined
@@ -98,6 +99,7 @@ function cleanupMeshFiles(meshId: string) {
   __clearMeshQueueForTests(meshId)
   __resetMeshRuntimeStoreForTests()
   __resetIdleAutoFastForwardForTests()
+  __resetMeshWorkspaceCacheForTests()
   fastForwardMocks.fastForwardMeshNode.mockReset()
   if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
   if (fs.existsSync(ledgerPath)) fs.unlinkSync(ledgerPath)
@@ -212,6 +214,48 @@ describe('setupMeshEventForwarding', () => {
       expect(payload.force).toBe(true)
     } finally {
       cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('R4: emits a delivery_unroutable diagnostic when an enveloped worker resolves to no mesh', () => {
+    // The worker presents a valid envelope (launchedByCoordinator) but neither the mesh-id
+    // lookup nor the workspace lookup resolves a mesh. Before R4 the completion was dropped
+    // silently — no coordinator inject, no queue, no trace. R4 leaves a fail-loud
+    // delivery_unroutable ledger entry so the lost completion is discoverable.
+    const meshId = `mesh_unroutable_${Date.now()}`
+    __resetUnroutableDiagnosticsForTests()
+    __resetMeshWorkspaceCacheForTests() // ensure no prior test cached /repo/worktree-a → a real mesh
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined) // no mesh resolvable by workspace either
+      const { components, emit, coordinator } = createComponents(meshId, {
+        launchedByCoordinator: true, // envelope present, but meshNodeFor absent and workspace unresolved
+      })
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        timestamp: 4242,
+      })
+
+      // The event was unroutable: no coordinator inject.
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+
+      // A fail-loud diagnostic landed in the shared unroutable stream.
+      const diagnostics = readLedgerEntries(UNROUTABLE_DIAGNOSTIC_STREAM, { kind: ['delivery_unroutable'] })
+      const mine = diagnostics.filter(d => (d.payload as any)?.workspace === '/repo/worktree-a' && d.sessionId === 'runtime-session-1')
+      expect(mine.length).toBeGreaterThanOrEqual(1)
+      expect((mine[mine.length - 1].payload as any).event).toBe('agent:generating_completed')
+      expect((mine[mine.length - 1].payload as any).reason).toBe('mesh_unresolved')
+    } finally {
+      cleanupMeshFiles(meshId)
+      // The diagnostic stream is shared across meshes; clean our entries up too.
+      const diagPath = path.join(getLedgerDir(), `${UNROUTABLE_DIAGNOSTIC_STREAM}.jsonl`)
+      if (fs.existsSync(diagPath)) fs.unlinkSync(diagPath)
+      __resetUnroutableDiagnosticsForTests()
     }
   })
 
