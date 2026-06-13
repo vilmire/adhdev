@@ -92,6 +92,8 @@ export interface DaemonInitConfig {
     dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<any>;
     /** Returns selected-coordinator mesh peer telemetry for a target daemon when available. */
     getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
+    /** Cloud-only: P2P dashboard metadata sync after the core forwarder handles a mesh event. */
+    onMeshCoordinatorEventForwarded?: (payload: Record<string, unknown>) => void;
 }
 
 // ─── Result ───
@@ -110,6 +112,11 @@ export interface DaemonComponents {
     detectedIdes: { value: IDEInfo[] };
     refreshProviderAvailability: (providerType?: string) => Promise<void>;
     dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<any>;
+    // Cloud-only hook: after the single core forwarder handles a mesh coordinator event, cloud
+    // uses this to keep its P2P dashboard view in sync (mesh-owned session metadata + flush
+    // subscriptions). Injected by daemon-cloud; absent/no-op on standalone. Replaces cloud's
+    // former separate instanceManager.onEvent listener so the event path stays single-listener.
+    onMeshCoordinatorEventForwarded?: (payload: Record<string, unknown>) => void;
 }
 
 export interface DaemonDevSupportOptions {
@@ -348,6 +355,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         detectedIdes: detectedIdesRef,
         refreshProviderAvailability,
         dispatchMeshCommand: config.dispatchMeshCommand,
+        onMeshCoordinatorEventForwarded: config.onMeshCoordinatorEventForwarded,
     };
 
     // 11. Setup Mesh Event Forwarding

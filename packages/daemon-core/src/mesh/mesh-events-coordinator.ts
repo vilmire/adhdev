@@ -980,6 +980,22 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         (sourceSession?.getState()?.settings as Record<string, unknown>)?.meshCoordinatorDaemonId,
     );
     const localDaemonId = readNonEmptyString(loadConfig().machineId);
+
+    // R2: cloud P2P dashboard metadata sync. The cloud daemon used to do this from its own
+    // relay listener; now the single core forwarder invokes the injected hook (no-op on
+    // standalone) so the event path stays single-listener and the local code path is identical
+    // across standalone and cloud.
+    if (components.onMeshCoordinatorEventForwarded) {
+        try {
+            components.onMeshCoordinatorEventForwarded({
+                event: args.event,
+                meshId: args.meshId,
+                nodeId: eventNodeId || undefined,
+                ...args.metadataEvent,
+            });
+        } catch { /* dashboard metadata sync is best-effort */ }
+    }
+
     const intentionalCleanupStop = shouldSuppressIntentionalCleanupStop({
         event: args.event,
         meshId: args.meshId,
@@ -1354,6 +1370,45 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     });
 
     if (coordinatorInstances.length === 0) {
+        // R2: the coordinator is not a live instance on THIS daemon. If it lives on a remote
+        // daemon, forward over the injected transport (dispatchMeshCommand, supplied by cloud as
+        // P2P; absent/no-op on standalone). This replaces cloud's separate
+        // relayRemoteMeshCoordinatorEvent listener — remote delivery is now part of the single
+        // core forwarder path, so local-vs-remote is one code path and standalone == cloud for
+        // the local case. The pending queue remains the fallback when there is no remote target
+        // or the transport send fails (e.g. P2P down), so MCP coordinators can still backfill.
+        const remoteCoordinatorDaemonId = workerCoordinatorDaemonId && localDaemonId && workerCoordinatorDaemonId !== localDaemonId
+            ? workerCoordinatorDaemonId
+            : '';
+        if (remoteCoordinatorDaemonId && components.dispatchMeshCommand) {
+            const forwardPayload: Record<string, unknown> = {
+                event: args.event,
+                meshId: args.meshId,
+                nodeId: args.nodeId || undefined,
+                workspace: readNonEmptyString(args.metadataEvent.workspace),
+                ...args.metadataEvent,
+                ...(recoveryContext ? { recoveryContext } : {}),
+            };
+            components.dispatchMeshCommand(remoteCoordinatorDaemonId, 'mesh_forward_event', forwardPayload)
+                .then(() => {
+                    LOG.info('MeshEvents', `Forwarded ${args.event} for mesh ${args.meshId} to remote coordinator daemon ${remoteCoordinatorDaemonId.slice(0, 12)}…`);
+                })
+                .catch((error: any) => {
+                    LOG.warn('MeshEvents', `Remote forward of ${args.event} failed (${error?.message || error}); queuing for backfill`);
+                    queuePendingMeshCoordinatorEvent({
+                        event: args.event,
+                        meshId: args.meshId,
+                        nodeLabel: args.nodeLabel,
+                        nodeId: args.nodeId || undefined,
+                        workspace: readNonEmptyString(args.metadataEvent.workspace),
+                        metadataEvent: { ...args.metadataEvent, ...(recoveryContext ? { recoveryContext } : {}) },
+                        coordinatorMessage: messageText,
+                        queuedAt: Date.now(),
+                        targetCoordinatorDaemonId: remoteCoordinatorDaemonId,
+                    });
+                });
+            return { success: true, forwarded: 0, remoteForwarded: true };
+        }
         if (queuePendingMeshCoordinatorEvent({
                 event: args.event,
                 meshId: args.meshId,
