@@ -1338,28 +1338,28 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return { success: true, forwarded: 0 };
     }
 
-    // Non-terminal events are also queued for MCP coordinator dual delivery.
-    // Terminal events are forwarded directly without buffering — previously
-    // they were buffered when coordinators were generating and auto-flushed on
-    // idle, but auto-flush was unreliable and events were silently lost.
-    const isTerminalEvent = new Set(['refine:completed', 'refine:failed', 'agent:generating_completed', 'agent:stopped']).has(args.event);
-    if (!isTerminalEvent) {
-        if (queuePendingMeshCoordinatorEvent({
-                event: args.event,
-                meshId: args.meshId,
-                nodeLabel: args.nodeLabel,
-                nodeId: args.nodeId || undefined,
-                workspace: readNonEmptyString(args.metadataEvent.workspace),
-                metadataEvent: {
-                    ...args.metadataEvent,
-                    ...(recoveryContext ? { recoveryContext } : {}),
-                },
-                coordinatorMessage: messageText,
-                queuedAt: Date.now(),
-                ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
-            })) {
-            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
-        }
+    // All events — terminal and non-terminal — are queued for MCP coordinator
+    // delivery via the pending-events file/SQLite path. This ensures that MCP
+    // coordinators (which poll via get_pending_mesh_events / mesh_status) always
+    // receive terminal events even when a live CLI coordinator session is present.
+    // Previously, terminal events skipped the queue and were only direct-injected
+    // into live CLI coordinators via send_message, which silently dropped them
+    // when the coordinator was in a generating state.
+    if (queuePendingMeshCoordinatorEvent({
+            event: args.event,
+            meshId: args.meshId,
+            nodeLabel: args.nodeLabel,
+            nodeId: args.nodeId || undefined,
+            workspace: readNonEmptyString(args.metadataEvent.workspace),
+            metadataEvent: {
+                ...args.metadataEvent,
+                ...(recoveryContext ? { recoveryContext } : {}),
+            },
+            coordinatorMessage: messageText,
+            queuedAt: Date.now(),
+            ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
+        })) {
+        LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
     }
 
     for (const coord of coordinatorInstances) {

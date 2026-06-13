@@ -171,7 +171,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('injects agent:generating_completed directly when CLI coordinator is idle (terminal event — no dual MCP buffer)', () => {
+  it('injects agent:generating_completed directly to CLI coordinator AND queues for MCP coordinator', () => {
     const meshId = `mesh_completion_pending_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -189,15 +189,17 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 12345,
       })
 
-      // Terminal event: idle coordinator receives direct inject, NOT buffered to pending queue
+      // CLI coordinator receives direct inject
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       const [eventName, payload] = coordinator.onEvent.mock.calls[0]
       expect(eventName).toBe('send_message')
       expect(payload.input.textFallback).toContain('has completed its task')
 
-      // Idle coordinator path does not dual-buffer terminal events (consistent with refine:completed behaviour)
+      // Terminal events are also queued for MCP coordinator dual delivery so that
+      // coordinators polling via mesh_status/get_pending_mesh_events always receive them.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(0)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('agent:generating_completed')
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1636,9 +1638,10 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       expect(result).toMatchObject({ success: true, forwarded: 1 })
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
 
-      // Terminal events are no longer buffered to pending queue when coordinator instances exist.
+      // Terminal events are also queued for MCP coordinator dual delivery.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(0)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('refine:completed')
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1663,14 +1666,16 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       expect(result).toMatchObject({ success: true, forwarded: 1 })
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
 
+      // Terminal events are also queued for MCP coordinator dual delivery.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(0)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('refine:failed')
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('does NOT buffer refine:completed to pending events when CLI coordinator is idle (normal path)', () => {
+  it('buffers refine:completed to pending events for MCP coordinator even when CLI coordinator is idle', () => {
     const meshId = `mesh_codex_refine_idle_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -1688,9 +1693,10 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       expect(result).toMatchObject({ success: true, forwarded: 1 })
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
 
-      // Idle coordinator receives directly — should NOT buffer to pending queue
+      // Terminal events are queued for MCP coordinator dual delivery regardless of CLI coordinator state.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(0)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('refine:completed')
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1742,15 +1748,16 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       expect(result).toMatchObject({ success: true, forwarded: 1 })
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
 
-      // Terminal events no longer buffered to pending queue when coordinator instances exist.
+      // Terminal events are also queued for MCP coordinator dual delivery.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(0)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('agent:generating_completed')
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('does NOT buffer agent:generating_completed when CLI coordinator is idle (injects directly)', () => {
+  it('buffers agent:generating_completed for MCP coordinator even when CLI coordinator is idle', () => {
     const meshId = `mesh_codex_gen_completed_idle_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -1771,9 +1778,10 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       expect(result).toMatchObject({ success: true, forwarded: 1 })
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
 
-      // Idle coordinator receives event directly — no pending buffer (consistent with refine:completed behaviour)
+      // Terminal events queued for MCP coordinator dual delivery regardless of CLI coordinator state.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(0)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('agent:generating_completed')
     } finally {
       cleanupMeshFiles(meshId)
     }

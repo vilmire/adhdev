@@ -60,6 +60,12 @@ function hasPendingRefineTerminalEventDuplicate(event: PendingMeshCoordinatorEve
 
 export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent): string {
     const metadata = readRecord(event.metadataEvent) || {};
+    // Bootstrap events are node-scoped: dedup by meshId+event+nodeId only.
+    // They carry no sessionId/taskId/timestamp — using those fields would produce
+    // an empty fingerprint that defeats dedup entirely.
+    if (event.event === 'worktree_bootstrap_complete' || event.event === 'worktree_bootstrap_failed') {
+        return [event.meshId, event.event, event.nodeId || ''].join('::');
+    }
     const sessionId = resolveEventSessionId(metadata);
     const providerSessionId = readNonEmptyString(metadata.providerSessionId);
     const taskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord(metadata.payload)?.taskId);
