@@ -927,6 +927,27 @@ export function isMeshCoordinatorEvent(eventName: unknown): eventName is string 
     return typeof eventName === 'string' && MESH_COORDINATOR_EVENTS.has(eventName);
 }
 
+// Terminal events that the coordinator is actively blocked waiting on. When the
+// coordinator CLI session dispatches a task (e.g. mesh_send_task) it stays in
+// `generating` until the result arrives — but a generating coordinator queues
+// incoming send_message calls into its adapter's pendingOutboundQueue, which is
+// only flushed on the coordinator's OWN idle transition. That transition can't
+// happen until it receives this very event → deadlock. We force-inject these so
+// they bypass the busy send-guard and land in the PTY while generating.
+const MESH_FORCE_INJECT_EVENTS = new Set([
+    'agent:generating_completed',
+    'agent:stopped',
+    'agent:waiting_approval',
+    'refine:completed',
+    'refine:failed',
+    'worktree_bootstrap_complete',
+    'worktree_bootstrap_failed',
+]);
+
+function shouldForceInjectMeshEvent(eventName: unknown): boolean {
+    return typeof eventName === 'string' && MESH_FORCE_INJECT_EVENTS.has(eventName);
+}
+
 function injectMeshSystemMessage(components: DaemonComponents, args: {
     meshId: string;
     sourceInstanceId?: string;
@@ -1362,10 +1383,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
     }
 
+    const forceInject = shouldForceInjectMeshEvent(args.event);
     for (const coord of coordinatorInstances) {
         const coordState = coord.getState();
-        LOG.info('MeshEvents', `Forwarding mesh event to coordinator ${coordState.instanceId}`);
-        coord.onEvent('send_message', { input: { text: messageText, textFallback: messageText } });
+        LOG.info('MeshEvents', `Forwarding mesh event to coordinator ${coordState.instanceId}${forceInject ? ' (force)' : ''}`);
+        coord.onEvent('send_message', {
+            input: { text: messageText, textFallback: messageText },
+            ...(forceInject ? { force: true } : {}),
+        });
     }
     return { success: true, forwarded: coordinatorInstances.length };
 }
@@ -1449,7 +1474,11 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                                     LOG.info('MeshEvents', `Auto-flushing ${pendingEvents.length} pending coordinator event(s) for mesh ${coordinatorMeshId} on coordinator idle`);
                                     for (const pending of pendingEvents) {
                                         if (!pending.coordinatorMessage) continue;
-                                        flushSource.onEvent('send_message', { input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage } });
+                                        const forcePending = shouldForceInjectMeshEvent(pending.event);
+                                        flushSource.onEvent('send_message', {
+                                            input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage },
+                                            ...(forcePending ? { force: true } : {}),
+                                        });
                                     }
                                 }
                             } catch (e: any) {

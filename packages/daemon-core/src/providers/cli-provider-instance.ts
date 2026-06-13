@@ -885,7 +885,13 @@ export class CliProviderInstance implements ProviderInstance {
             assertProviderSupportsDeclaredInput(this.provider, input);
             const promptText = buildCliStructuredInputPrompt(input);
             if (promptText) {
-                void this.adapter.sendMessage(promptText).catch((e: any) => {
+                // force:true bypasses the busy/generating send guard so terminal mesh
+                // events (completion/failure/bootstrap) land in a coordinator session that
+                // is itself parked in `generating` while awaiting that very event.
+                // Without it the message is queued and only flushed on the coordinator's
+                // own idle transition — which never happens until it receives the message.
+                const force = data?.force === true;
+                void this.adapter.sendMessage(promptText, force ? { force: true } : {}).catch((e: any) => {
                     LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);
                 });
             }

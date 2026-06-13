@@ -194,12 +194,76 @@ describe('setupMeshEventForwarding', () => {
       const [eventName, payload] = coordinator.onEvent.mock.calls[0]
       expect(eventName).toBe('send_message')
       expect(payload.input.textFallback).toContain('has completed its task')
+      // Completion is a terminal event the coordinator may be blocked-generating on,
+      // so it must be force-injected to bypass the busy send-guard / pendingOutboundQueue.
+      expect(payload.force).toBe(true)
 
       // Terminal events are also queued for MCP coordinator dual delivery so that
       // coordinators polling via mesh_status/get_pending_mesh_events always receive them.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0].event).toBe('agent:generating_completed')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('force-injects terminal events so a generating coordinator is not deadlocked, but not non-terminal status events', () => {
+    // Regression for the long-standing "recorded but never injected into coordinator chat"
+    // deadlock: a coordinator CLI session that dispatched a task stays in `generating`
+    // while awaiting the result. A generating coordinator queues incoming send_message
+    // calls into its adapter's pendingOutboundQueue, which is only flushed on the
+    // coordinator's OWN idle transition — a transition that cannot happen until it
+    // receives the completion. Terminal events must therefore be force-injected so they
+    // bypass the busy send-guard. Non-terminal status events (generating_started) must
+    // NOT be forced, since they are mere informational chatter.
+    const meshId = `mesh_force_inject_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit, coordinator } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      // Terminal completion → force inject
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'codex-history-force',
+        finalSummary: 'done',
+        timestamp: 22221,
+      })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
+
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does not force-inject non-terminal long-generating alerts into the coordinator', () => {
+    // long_generating is informational — the coordinator should receive it through the
+    // normal (queueable) path, not force-written into a generating PTY as noise.
+    const meshId = `mesh_no_force_long_gen_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit, coordinator } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      emit({
+        event: 'monitor:long_generating',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        timestamp: 33331,
+      })
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][0]).toBe('send_message')
+      expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('still reported as generating')
+      expect(coordinator.onEvent.mock.calls[0][1].force).toBeUndefined()
     } finally {
       cleanupMeshFiles(meshId)
     }
