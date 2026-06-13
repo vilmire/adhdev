@@ -2015,11 +2015,15 @@ async function drainCoordinatorPendingEvents(
         };
 
         try {
-            surfacedEvents.push(
-                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', pendingEventArgs) as any)
-                    .filter(matchesCurrentMesh),
-            );
-            surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);
+            const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', pendingEventArgs) as any)
+                .filter(matchesCurrentMesh);
+            for (const event of localEvents) {
+                const payload = buildMeshForwardPayloadFromPendingEvent(event);
+                if (!payload.event || !payload.meshId) continue;
+                try { await ctx.transport.command('mesh_forward_event', payload); } catch { /* best-effort */ }
+                rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
+                surfacedEvents.push(event);
+            }
         } catch {
             // Non-fatal: pending events are best-effort.
         }
@@ -2046,11 +2050,15 @@ async function drainCoordinatorPendingEvents(
         }
 
         try {
-            surfacedEvents.push(
-                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', pendingEventArgs) as any)
-                    .filter(matchesCurrentMesh),
-            );
-            surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);
+            const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', pendingEventArgs) as any)
+                .filter(matchesCurrentMesh);
+            for (const event of localEvents) {
+                const payload = buildMeshForwardPayloadFromPendingEvent(event);
+                if (!payload.event || !payload.meshId) continue;
+                try { await ctx.transport.command('mesh_forward_event', payload); } catch { /* best-effort */ }
+                rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
+                surfacedEvents.push(event);
+            }
         } catch {
             // Non-fatal: pending events are best-effort.
         }
