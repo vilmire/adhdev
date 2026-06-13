@@ -606,6 +606,85 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('does not suppress a direct-dispatch completion against prior terminal ledger evidence, so the coordinator still observes task_completed', () => {
+    // Regression for the "task_completed silently idle" bug: a session direct-dispatched via
+    // mesh_send_task (tracked in mesh_direct_dispatches, NOT the work queue) completes. A prior
+    // terminal ledger entry exists for the same session with a matching finalSummary — e.g. a
+    // reconciliation/ready-derived task_completed. The dedup at injectMeshSystemMessage gated only
+    // on sessionHasActiveAssignment(), which inspected the work queue alone and was therefore blind
+    // to in-flight direct dispatches. It wrongly classified the canonical agent:generating_completed
+    // as a duplicate and returned forwarded:0 WITHOUT queuing a pending coordinator event, so a
+    // coordinator polling get_pending_mesh_events never observed the completion and the session went
+    // silently idle. The active direct dispatch must keep the completion alive: exactly one
+    // task_completed pending coordinator event, even when no live CLI coordinator is present
+    // (MCP/polling coordinator) and even when the coordinator is generating (force path).
+    const meshId = `mesh_direct_no_suppress_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // An active direct dispatch (mesh_send_task, validation) targeting the session.
+      insertDirectDispatch(meshId, {
+        taskId: 'task_direct_validation',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        message: 'validate the worktree',
+        taskMode: 'validation',
+        via: 'local_direct',
+        dispatchedAt: new Date().toISOString(),
+      })
+
+      // Prior terminal ledger evidence for the SAME session with a matching finalSummary.
+      // This is exactly the shape findRecentTerminalLedgerEvidence keys off to suppress.
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        payload: {
+          event: 'agent:generating_completed',
+          taskId: 'task_direct_validation',
+          providerSessionId: 'provider-history-validation',
+          finalSummary: 'validation report: all green',
+          completedViaReady: true,
+        },
+      })
+
+      const { components, emit, coordinator } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'provider-history-validation',
+        finalSummary: 'validation report: all green',
+        timestamp: Date.now(),
+      })
+
+      // The completion must NOT be suppressed. The MCP/polling coordinator drains exactly one
+      // task_completed event from the shared pending queue.
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('agent:generating_completed')
+      expect(pending[0].metadataEvent.targetSessionId).toBe('runtime-session-1')
+
+      // A live CLI coordinator (if present) is force-injected so a generating coordinator
+      // awaiting this very completion is not deadlocked.
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][0]).toBe('send_message')
+      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
+      expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('has completed its task')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('records a second task_completed for same-session continuations after an earlier completion', () => {
     const meshId = `mesh_same_session_continuation_${Date.now()}`
     try {

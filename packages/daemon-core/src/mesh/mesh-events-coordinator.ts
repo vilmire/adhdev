@@ -438,7 +438,21 @@ function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean {
 }
 
 function sessionHasActiveAssignment(meshId: string, sessionId: string): boolean {
-    return getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedSessionId === sessionId);
+    if (getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedSessionId === sessionId)) {
+        return true;
+    }
+    // Direct dispatches (mesh_send_task) are tracked in mesh_direct_dispatches, not the
+    // work queue. A session completing a still-active direct dispatch IS an active
+    // assignment — without this, findRecentTerminalLedgerEvidence dedup wrongly suppresses
+    // the canonical agent:generating_completed for direct-dispatch tasks (validation/general),
+    // so the coordinator polling get_pending_mesh_events never observes task_completed and the
+    // session goes silently idle. This check runs before markSessionTerminal marks the
+    // dispatch terminal, so the in-flight dispatch is still observable here.
+    try {
+        if (getActiveDirectDispatches(meshId).some(d => d.sessionId === sessionId)) return true;
+        if (hasUnterminalDirectDispatchLedgerEntry(meshId, sessionId)) return true;
+    } catch { /* best-effort — fall through to false */ }
+    return false;
 }
 
 function liveSessionCountForNode(components: DaemonComponents, meshId: string, nodeId: string): number {
