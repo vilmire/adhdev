@@ -1424,6 +1424,54 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
 
 export function setupMeshEventForwarding(components: DaemonComponents) {
     components.instanceManager.onEvent((event) => {
+        // --- Coordinator idle auto-flush ---
+        // When a coordinator session becomes idle, flush any pending coordinator events
+        // that accumulated while it was generating. This runs before the delegate routing
+        // below so that coordinator-own idle transitions are handled first.
+        // Exception: a coordinator that is itself a direct-dispatch target still needs
+        // to go through delegate routing so that the dispatching coordinator receives a
+        // pendingCoordinatorEvents entry for the completion.
+        if (event.event === 'agent:ready' || event.event === 'agent:generating_completed') {
+            const flushInstanceId = readNonEmptyString(event.instanceId);
+            if (flushInstanceId) {
+                const flushSource = components.instanceManager.getInstance(flushInstanceId);
+                if (flushSource && flushSource.category === 'cli') {
+                    const flushState = flushSource.getState();
+                    const flushSettings = flushState.settings && typeof flushState.settings === 'object' ? flushState.settings as Record<string, unknown> : {};
+                    const coordinatorMeshId = readNonEmptyString(flushSettings.meshCoordinatorFor);
+                    if (coordinatorMeshId) {
+                        const status = readNonEmptyString(flushState.status).toLowerCase();
+                        if (status === 'idle') {
+                            try {
+                                const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
+                                const pendingEvents = drainPendingMeshCoordinatorEvents(coordinatorMeshId, localDaemonId);
+                                if (pendingEvents.length > 0) {
+                                    LOG.info('MeshEvents', `Auto-flushing ${pendingEvents.length} pending coordinator event(s) for mesh ${coordinatorMeshId} on coordinator idle`);
+                                    for (const pending of pendingEvents) {
+                                        if (!pending.coordinatorMessage) continue;
+                                        flushSource.onEvent('send_message', { input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage } });
+                                    }
+                                }
+                            } catch (e: any) {
+                                LOG.warn('MeshEvents', `Failed to auto-flush pending coordinator events: ${e?.message || e}`);
+                            }
+                        }
+                        // Skip delegate routing unless this coordinator session is itself
+                        // a direct-dispatch target — in that case fall through so the
+                        // dispatching coordinator gets a pendingCoordinatorEvents entry.
+                        let hasDirectDispatch = false;
+                        try {
+                            hasDirectDispatch =
+                                getActiveDirectDispatches(coordinatorMeshId).some(d => d.sessionId === flushInstanceId)
+                                || hasUnterminalDirectDispatchLedgerEntry(coordinatorMeshId, flushInstanceId);
+                        } catch { /* best-effort */ }
+                        if (!hasDirectDispatch) return;
+                    }
+                }
+            }
+        }
+
+        // --- Delegate event routing ---
         if (!isMeshCoordinatorEvent(event.event)) return;
 
         const instanceId = readNonEmptyString(event.instanceId);
@@ -1474,37 +1522,5 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
             event: event.event,
             metadataEvent: event,
         });
-    });
-
-    // Auto-flush pending coordinator events when a coordinator session becomes idle.
-    components.instanceManager.onEvent((event) => {
-        if (event.event !== 'agent:ready' && event.event !== 'agent:generating_completed') return;
-
-        const instanceId = readNonEmptyString(event.instanceId);
-        if (!instanceId) return;
-
-        const sourceInstance = components.instanceManager.getInstance(instanceId);
-        if (!sourceInstance || sourceInstance.category !== 'cli') return;
-        const state = sourceInstance.getState();
-        const settings = state.settings && typeof state.settings === 'object' ? state.settings as Record<string, unknown> : {};
-
-        const coordinatorMeshId = readNonEmptyString(settings.meshCoordinatorFor);
-        if (!coordinatorMeshId) return;
-
-        const status = readNonEmptyString(state.status).toLowerCase();
-        if (status !== 'idle') return;
-
-        try {
-            const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
-            const pendingEvents = drainPendingMeshCoordinatorEvents(coordinatorMeshId, localDaemonId);
-            if (pendingEvents.length === 0) return;
-            LOG.info('MeshEvents', `Auto-flushing ${pendingEvents.length} pending coordinator event(s) for mesh ${coordinatorMeshId} on coordinator idle`);
-            for (const pending of pendingEvents) {
-                if (!pending.coordinatorMessage) continue;
-                sourceInstance.onEvent('send_message', { input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage } });
-            }
-        } catch (e: any) {
-            LOG.warn('MeshEvents', `Failed to auto-flush pending coordinator events: ${e?.message || e}`);
-        }
     });
 }
