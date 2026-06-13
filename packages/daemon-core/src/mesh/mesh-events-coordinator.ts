@@ -1318,8 +1318,6 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return true;
     });
 
-    const isTerminalEvent = new Set(['refine:completed', 'refine:failed', 'agent:generating_completed', 'agent:stopped']).has(args.event);
-
     if (coordinatorInstances.length === 0) {
         if (queuePendingMeshCoordinatorEvent({
                 event: args.event,
@@ -1340,18 +1338,12 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return { success: true, forwarded: 0 };
     }
 
-    // When all coordinators are generating, buffer terminal events rather than injecting
-    // them mid-turn. Injecting into a generating PTY corrupts the input stream and gets
-    // silently dropped. The auto-flush on idle transition delivers from the pending queue.
-    const activeStatuses = new Set(['generating', 'streaming', 'long_generating', 'working', 'starting', 'waiting_approval']);
-    const allCoordinatorsGenerating = isTerminalEvent && coordinatorInstances.every((coord) => {
-        const s = coord.getState();
-        const status = readNonEmptyString(s.status).toLowerCase();
-        const activeChatStatus = readNonEmptyString(s.activeChat?.status).toLowerCase();
-        return activeStatuses.has(status) || activeStatuses.has(activeChatStatus);
-    });
-
-    if (!isTerminalEvent || allCoordinatorsGenerating) {
+    // Non-terminal events are also queued for MCP coordinator dual delivery.
+    // Terminal events are forwarded directly without buffering — previously
+    // they were buffered when coordinators were generating and auto-flushed on
+    // idle, but auto-flush was unreliable and events were silently lost.
+    const isTerminalEvent = new Set(['refine:completed', 'refine:failed', 'agent:generating_completed', 'agent:stopped']).has(args.event);
+    if (!isTerminalEvent) {
         if (queuePendingMeshCoordinatorEvent({
                 event: args.event,
                 meshId: args.meshId,
@@ -1366,16 +1358,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 queuedAt: Date.now(),
                 ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
             })) {
-            if (allCoordinatorsGenerating) {
-                LOG.info('MeshEvents', `Queued ${args.event} for generating CLI coordinator (mesh ${args.meshId}) — will be delivered via auto-flush when coordinator returns to idle`);
-            } else {
-                LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
-            }
+            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
         }
-    }
-
-    if (allCoordinatorsGenerating) {
-        return { success: true, forwarded: 0, bufferedForGeneratingCoordinator: true };
     }
 
     for (const coord of coordinatorInstances) {

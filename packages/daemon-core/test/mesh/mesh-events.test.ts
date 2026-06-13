@@ -1617,7 +1617,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     return { components: { instanceManager } as any, coordinator }
   }
 
-  it('buffers refine:completed to pending events when CLI coordinator is generating', () => {
+  it('forwards refine:completed directly to CLI coordinator even when generating', () => {
     const meshId = `mesh_codex_refine_completed_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -1632,27 +1632,19 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         result: { success: true, merged: true, branch: 'fix/branch', into: 'main' },
       })
 
-      // When coordinator is generating, do NOT inject via send_message — only buffer to pending queue.
-      // Injecting into a generating PTY corrupts the input stream and leaves Codex stuck generating.
-      expect(result).toMatchObject({ success: true, forwarded: 0, bufferedForGeneratingCoordinator: true })
-      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      // Always forward directly — generating coordinators receive events immediately.
+      expect(result).toMatchObject({ success: true, forwarded: 1 })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
 
-      // Terminal event must be in pending queue so coordinator can drain it via get_pending_mesh_events
-      // once it returns to idle after its current generation turn.
+      // Terminal events are no longer buffered to pending queue when coordinator instances exist.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0]).toMatchObject({
-        event: 'refine:completed',
-        meshId,
-        nodeId: 'node-worktree',
-      })
-      expect(pending[0].coordinatorMessage).toContain('completed successfully')
+      expect(pending).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('buffers refine:failed to pending events when CLI coordinator is generating', () => {
+  it('forwards refine:failed directly to CLI coordinator even when generating', () => {
     const meshId = `mesh_codex_refine_failed_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -1667,17 +1659,12 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         result: { success: false, code: 'validation_failed', error: 'Tests failed' },
       })
 
-      // When coordinator is generating, do NOT inject via send_message — only buffer to pending queue.
-      expect(result).toMatchObject({ success: true, forwarded: 0, bufferedForGeneratingCoordinator: true })
-      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      // Always forward directly — generating coordinators receive events immediately.
+      expect(result).toMatchObject({ success: true, forwarded: 1 })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
 
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0]).toMatchObject({
-        event: 'refine:failed',
-        meshId,
-      })
-      expect(pending[0].coordinatorMessage).toContain('failed')
+      expect(pending).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1709,7 +1696,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
-  it('buffers refine:accepted to pending events whether coordinator is generating or idle (non-terminal event dual delivery)', () => {
+  it('forwards refine:accepted directly and also buffers for MCP dual delivery (non-terminal event)', () => {
     const meshId = `mesh_codex_refine_accepted_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -1724,7 +1711,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       })
 
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-      // Non-terminal events always buffer for MCP dual delivery
+      // Non-terminal events buffer for MCP dual delivery regardless of coordinator state
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0].event).toBe('refine:accepted')
@@ -1733,7 +1720,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
-  it('buffers agent:generating_completed to pending events when CLI coordinator is generating', () => {
+  it('forwards agent:generating_completed directly to CLI coordinator even when generating', () => {
     const meshId = `mesh_codex_gen_completed_generating_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -1751,23 +1738,13 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         timestamp: 99999,
       })
 
-      // When coordinator is generating, inject must be skipped to avoid corrupting the active PTY input stream.
-      expect(result).toMatchObject({ success: true, forwarded: 0, bufferedForGeneratingCoordinator: true })
-      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      // Always forward directly — generating coordinators receive events immediately.
+      expect(result).toMatchObject({ success: true, forwarded: 1 })
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
 
-      // Event must be in pending queue so coordinator drains it via get_pending_mesh_events after going idle.
+      // Terminal events no longer buffered to pending queue when coordinator instances exist.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0]).toMatchObject({
-        event: 'agent:generating_completed',
-        meshId,
-        nodeId: 'node-worker',
-        metadataEvent: expect.objectContaining({
-          providerType: 'claude-cli',
-          providerSessionId: 'claude-history-1',
-        }),
-      })
-      expect(pending[0].coordinatorMessage).toContain('has completed its task')
+      expect(pending).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
