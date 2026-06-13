@@ -627,16 +627,33 @@ function reconcileInlineMeshCache(cached: any, incoming: any): any {
         if (nodeId) cachedById.set(nodeId, node);
     }
 
+    const mergedIncomingIds = new Set<string>();
     const nodes = incomingNodes.map((incomingNode: any) => {
         const nodeId = readInlineMeshNodeId(incomingNode);
         const cachedNode = nodeId ? cachedById.get(nodeId) : undefined;
         if (!cachedNode && preserveCachedMembership) return null;
+        if (nodeId) mergedIncomingIds.add(nodeId);
         if (!cachedNode) return incomingNode;
         if (hasInlineMeshTransientNodeState(incomingNode)) {
             return { ...cachedNode, ...incomingNode };
         }
         return { ...stripInlineMeshTransientNodeState(cachedNode), ...incomingNode };
     }).filter(Boolean);
+
+    // When the cached membership is authoritative (newer than the incoming
+    // snapshot), nodes that exist only in the cache must survive reconciliation.
+    // A freshly cloned worktree node lives only in the coordinator's cache until
+    // the next snapshot catches up; iterating incomingNodes alone would silently
+    // drop it, making the node invisible to get_mesh / membership reads even
+    // though worktree_bootstrap_complete already fired.
+    if (preserveCachedMembership) {
+        for (const cachedNode of cachedNodes) {
+            const nodeId = readInlineMeshNodeId(cachedNode);
+            if (nodeId && !mergedIncomingIds.has(nodeId)) {
+                nodes.push(cachedNode);
+            }
+        }
+    }
 
     return {
         ...cached,
@@ -6005,7 +6022,16 @@ export class DaemonCommandRouter {
                 if (ownerFailure) return ownerFailure;
 
                 try {
-                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    // Resolve with preferInline so the clone writes the new node into the
+                    // same representation that get_mesh reads back. The MCP coordinator
+                    // passes inlineMesh on every mesh command, so when it owns an inline
+                    // mesh the membership read path (get_mesh, preferInline: true) returns
+                    // the inline cache. Without preferInline here, clone could resolve to a
+                    // local-config mesh and write the node only to config — leaving the
+                    // inline cache (and therefore get_mesh / refreshMeshFromDaemon) without
+                    // the node, so the new worktree node is never visible in live mesh
+                    // membership even though worktree_bootstrap_complete fires.
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
 
@@ -6064,6 +6090,13 @@ export class DaemonCommandRouter {
                             policy: { ...(sourceNode.policy || {}) },
                         });
                         if (!node) return { success: false, error: 'Failed to register worktree node' };
+                        // Also reconcile the freshly-registered node into any warmed inline
+                        // cache for this mesh. get_mesh (preferInline: true) reads the inline
+                        // cache first when one exists; if we only wrote to local config the
+                        // node would be invisible to membership reads. updateInlineMeshNode is
+                        // a no-op when no inline cache is present.
+                        const inlineForReconcile = this.getCachedInlineMesh(meshId);
+                        if (inlineForReconcile) this.updateInlineMeshNode(meshId, inlineForReconcile, node);
                         this.invalidateAggregateMeshStatus(meshId);
                     }
 
