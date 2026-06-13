@@ -49,12 +49,12 @@ import { __resetIdleAutoFastForwardForTests, drainPendingMeshCoordinatorEvents, 
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 
-function createComponents(meshId = 'mesh_inline_1') {
+function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>) {
   let listener: ((event: any) => void) | undefined
   const sourceState = {
     instanceId: 'runtime-session-1',
     workspace: '/repo/worktree-a',
-    settings: {
+    settings: workerSettings ?? {
       meshNodeFor: meshId,
       meshNodeId: 'node_child_1',
     },
@@ -166,6 +166,50 @@ describe('setupMeshEventForwarding', () => {
       expect(text).toContain('status event path')
       expect(text).toContain('mesh_read_chat once')
       expect(text).toContain('do not poll repeatedly')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('forwards completion when the worker carries only meshCoordinatorDaemonId (meshNodeFor stamp missing)', () => {
+    // Regression: a cloud worker can arrive with meshCoordinatorDaemonId set but meshNodeFor
+    // undefined (envelope stamp dropped on a relaunch / direct dispatch). Gating delegate
+    // routing on meshNodeFor alone made setupMeshEventForwarding return early, so the
+    // completion only landed in the pending queue and the coordinator was never injected —
+    // exactly the "completed but coordinator not notified" symptom. The worker envelope
+    // marker (meshCoordinatorDaemonId) must be enough to route, recovering the mesh id by
+    // workspace.
+    const meshId = `mesh_envelope_only_${Date.now()}`
+    try {
+      const meshByWorkspace = {
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+      }
+      meshConfigMocks.getMesh.mockReturnValue(meshByWorkspace)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(meshByWorkspace)
+      const { components, emit, coordinator } = createComponents(meshId, {
+        // No meshNodeFor — only the routing anchor stamped by the launch envelope hardening.
+        meshCoordinatorDaemonId: 'test-machine',
+        launchedByCoordinator: true,
+      })
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'claude-history-1',
+        finalSummary: 'done',
+        timestamp: 99,
+      })
+
+      // Coordinator must be injected, not just queued.
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [eventName, payload] = coordinator.onEvent.mock.calls[0]
+      expect(eventName).toBe('send_message')
+      expect(payload.input.textFallback).toContain('has completed its task')
+      expect(payload.force).toBe(true)
     } finally {
       cleanupMeshFiles(meshId)
     }

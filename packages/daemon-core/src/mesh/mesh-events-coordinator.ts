@@ -1541,8 +1541,23 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
 
         const meshIdFromRuntime = readNonEmptyString(settings.meshNodeFor) || meshIdFromDirectDispatch;
 
-        const isMeshDelegate = Boolean(meshIdFromRuntime || settings.launchedByCoordinator);
-        if (!isMeshDelegate) return;
+        // A mesh worker must be recognised as a delegate even if its meshNodeFor stamp is
+        // missing. Worker launch envelopes are assembled from several settings, and in
+        // practice a worker can arrive carrying only meshCoordinatorDaemonId (the routing
+        // anchor) without meshNodeFor — e.g. when the node/mesh stamp was dropped on a
+        // direct dispatch or a relaunch. Gating delegate routing solely on meshNodeFor then
+        // silently drops the completion: setupMeshEventForwarding returns here, the
+        // coordinator filter can't resolve args.meshId, and the event only lands in the
+        // pending queue that an idle/generating coordinator never drains. Treat any of the
+        // worker-envelope markers as proof of delegation and recover the mesh id by
+        // workspace when the runtime id is absent.
+        const hasWorkerEnvelope = Boolean(
+            meshIdFromRuntime
+            || settings.launchedByCoordinator
+            || readNonEmptyString(settings.meshCoordinatorDaemonId)
+            || readNonEmptyString(settings.meshCoordinatorNodeId),
+        );
+        if (!hasWorkerEnvelope) return;
 
         const mesh = meshIdFromRuntime ? getMeshWithCache(components, meshIdFromRuntime) : getCachedMeshByWorkspace(workspace);
         const meshId = meshIdFromRuntime || readNonEmptyString(mesh?.id);
