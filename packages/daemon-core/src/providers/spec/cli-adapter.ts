@@ -68,7 +68,7 @@ export class SpecCliAdapter implements CliAdapter {
         native_history?: NativeHistoryConfig;
     };
     private lastEvent: DashboardEvent | null = null;
-    private latestState: { id: string; label: string; title: string | null } | null = null;
+    private latestState: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' } | null = null;
     private latestModal: { title: string | null; buttons: { index: number; label: string }[] } | null = null;
     private statusCallback: (() => void) | null = null;
     private ptyDataCallback: ((data: string) => void) | null = null;
@@ -159,21 +159,25 @@ export class SpecCliAdapter implements CliAdapter {
         const state = this.latestState;
         if (!state) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
 
+        // The FSM state is authoritative for status. We do NOT infer status from whether
+        // a modal was parsed this frame: a modal/approval state whose buttons briefly fail
+        // to parse (PTY repaint) must still report waiting_approval, not collapse to idle —
+        // that collapse fired false completions while a session sat at an approval prompt.
         const modal = this.latestModal;
-        const lc = state.id.toLowerCase();
-        if (modal) {
+        if (state.status === 'approval') {
             return {
                 status: 'waiting_approval',
                 messages: [],
-                activeModal: {
-                    message: modal.title ?? state.label,
-                    buttons: modal.buttons.map(b => b.label),
-                },
+                // Surface buttons when we have them; an approval state with no parsed
+                // modal this frame still stays waiting_approval (no activeModal yet).
+                activeModal: modal
+                    ? { message: modal.title ?? state.label, buttons: modal.buttons.map(b => b.label) }
+                    : null,
                 activeInteractivePrompt: this.activeInteractivePrompt,
                 ...sessionFields,
             };
         }
-        if (lc === 'busy' || lc === 'generating') {
+        if (state.status === 'generating') {
             return { status: 'generating', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
         }
         return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };

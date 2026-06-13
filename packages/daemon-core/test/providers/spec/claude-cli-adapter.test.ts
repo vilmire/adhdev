@@ -50,7 +50,7 @@ function makeAdapter(screenText: string): any {
       states: [{ id: 'idle', label: 'Ready', when: { regex: '.*' } }],
       default_state: 'idle',
     },
-    latestState: { id: 'idle', label: 'Ready', title: null },
+    latestState: { id: 'idle', label: 'Ready', title: null, status: 'idle' },
     latestModal: null,
     activeInteractivePrompt: null,
     interactivePromptTransport: null,
@@ -104,6 +104,47 @@ describe('SpecCliAdapter — claude-cli screen fallbacks', () => {
       kind: 'standard',
       content: '안녕하세요! 가위바위보 한 판 해요.',
     })]);
+  });
+});
+
+describe('SpecCliAdapter — FSM state is authoritative for status', () => {
+  // Regression: an approval state whose modal buttons briefly fail to parse (PTY
+  // repaint → latestModal=null) used to collapse to 'idle', firing a false
+  // task_completed while the session sat at an approval prompt. Status must follow
+  // the FSM state.status, not the presence of a parsed modal.
+  it('keeps waiting_approval when the FSM state is approval but the modal failed to parse this frame', () => {
+    const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+    adapter.latestState = { id: 'approval', label: 'Approval requested', title: null, status: 'approval' };
+    adapter.latestModal = null; // modal-parse miss
+
+    expect(adapter.getStatus().status).toBe('waiting_approval');
+    expect(adapter.getStatus().activeModal).toBeNull();
+  });
+
+  it('surfaces modal buttons when the approval state has a parsed modal', () => {
+    const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+    adapter.latestState = { id: 'approval', label: 'Approval requested', title: 'Proceed?', status: 'approval' };
+    adapter.latestModal = { title: 'Proceed?', buttons: [{ index: 0, label: 'Yes' }, { index: 1, label: 'No' }] };
+
+    const status = adapter.getStatus();
+    expect(status.status).toBe('waiting_approval');
+    expect(status.activeModal).toEqual({ message: 'Proceed?', buttons: ['Yes', 'No'] });
+  });
+
+  it('reports generating for a busy state regardless of modal', () => {
+    const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+    adapter.latestState = { id: 'busy', label: 'Generating', title: null, status: 'generating' };
+    adapter.latestModal = null;
+
+    expect(adapter.getStatus().status).toBe('generating');
+  });
+
+  it('reports idle only when the FSM state itself is idle', () => {
+    const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+    adapter.latestState = { id: 'idle', label: 'Ready', title: null, status: 'idle' };
+    adapter.latestModal = null;
+
+    expect(adapter.getStatus().status).toBe('idle');
   });
 });
 

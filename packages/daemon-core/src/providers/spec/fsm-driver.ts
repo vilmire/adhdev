@@ -41,7 +41,7 @@ import { LOG } from '../../logging/logger.js';
 
 export type DashboardEvent =
     | { kind: 'pty_data'; chunk: string }
-    | { kind: 'state_changed'; state: { id: string; label: string; title: string | null };
+    | { kind: 'state_changed'; state: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' };
         modal: { title: string | null; buttons: { index: number; label: string }[] } | null;
         controls: { id: string; label: string; action_type: string }[] }
     | { kind: 'notification'; id: string; title: string; body: string }
@@ -144,7 +144,7 @@ type HistoryEntry = DriverHistoryEntry;
 /** Per-state evaluation snapshot (mirrors v3 SpecEvaluation shape for the
  *  parts the cli-adapter / panel consume). */
 interface CurrentEval {
-    state: { id: string; label: string; title: string | null };
+    state: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' };
     modal: ModalSnapshot | null;
     controls: VisibleControl[];
 }
@@ -432,7 +432,12 @@ export class FsmDriver implements ISpecDriver {
         const title = modal?.title ?? this.deriveTitle(state, sections, lines.join('\n'));
 
         const next: CurrentEval = {
-            state: { id: state.id, label: state.label, title },
+            // status is derived from the FSM state itself (statusForState), NOT from
+            // whether a modal was parsed this frame. A modal state whose buttons briefly
+            // fail to parse (PTY repaint → deriveModal returns null) must still report
+            // its authoritative status (e.g. 'approval'), so the adapter never collapses
+            // an approval/busy state to idle on a transient modal-parse miss.
+            state: { id: state.id, label: state.label, title, status: statusForState(state) },
             modal,
             controls,
         };
