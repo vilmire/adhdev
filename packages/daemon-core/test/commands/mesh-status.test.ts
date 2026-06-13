@@ -1168,7 +1168,7 @@ describe('mesh_status', () => {
     }
   })
 
-  it('surfaces and drains pending coordinator events through mesh_status instead of requiring chat polling', async () => {
+  it('surfaces pending coordinator events through mesh_status (peek only — drain requires get_pending_mesh_events)', async () => {
     const configDir = await mkdtemp(join(tmpdir(), 'mesh-status-pending-events-'))
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-pending-events-')
     const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
@@ -1242,8 +1242,12 @@ describe('mesh_status', () => {
         }),
       ])
       expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
-      expect(drainPendingMeshCoordinatorEvents(mesh.id)).toEqual([])
 
+      // mesh_status is peek-only — events are NOT consumed; still present for drain.
+      expect(drainPendingMeshCoordinatorEvents(mesh.id)).toHaveLength(1)
+
+      // After explicit drain via get_pending_mesh_events, mesh_status no longer surfaces them.
+      await router.execute('get_pending_mesh_events', { meshId: mesh.id })
       const cachedAfterDrain = await router.execute('mesh_status', { meshId: mesh.id }) as any
       expect(cachedAfterDrain.success).toBe(true)
       expect(cachedAfterDrain.pendingCoordinatorEvents).toBeUndefined()

@@ -7301,19 +7301,15 @@ export class DaemonCommandRouter {
                         nodeStatuses.push(status);
                     }
 
-                    // (B3) Resolve the coordinator daemon scope for the drain.
-                    // Emit-time always tags events with the worker's
-                    // targetCoordinatorDaemonId and writes them to the
-                    // scoped pending-events file. If the caller (MCP tool,
-                    // dashboard, etc.) doesn't tell us which coordinator
-                    // they're running under, fall back to *this daemon's*
-                    // ID — the caller reached us over our IPC/WS, so they
-                    // are by definition under this daemon. Falling back to
-                    // undefined would silently miss every scoped event.
+                    // (B3) Resolve the coordinator daemon scope for the peek.
+                    // mesh_status is a read-only status query — it must not consume
+                    // (drain) pending events as a side effect. Coordinators that see
+                    // pendingCoordinatorEvents in the response are expected to call
+                    // get_pending_mesh_events to explicitly drain them after processing.
                     const callerCoordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
                         ? args.coordinatorDaemonId.trim()
                         : (this.deps.statusInstanceId || undefined);
-                    const pendingCoordinatorEvents = drainPendingMeshCoordinatorEvents(meshId, callerCoordinatorDaemonId);
+                    const pendingCoordinatorEvents = getPendingMeshCoordinatorEvents(meshId, callerCoordinatorDaemonId);
                     const previewFreshness = (() => {
                         const localRepoRoot = nodeStatuses
                             .map((node: any) => readStringValue(node?.git?.repoRoot, node?.repoRoot, node?.workspace))
@@ -7323,7 +7319,7 @@ export class DaemonCommandRouter {
                     const asyncRefineJobs = buildMeshAsyncRefineJobs({
                         meshId,
                         ledgerEntries: asyncRefineLedgerEntries,
-                        pendingEvents: pendingCoordinatorEvents,
+                        pendingEvents: [...pendingCoordinatorEvents],
                     });
                     const historicalSessions = buildHistoricalMeshSessions({
                         meshId,
