@@ -224,11 +224,6 @@ var IpcTransport = class {
   }
 };
 
-// src/transports/mode.ts
-function isLocalTransport(transport) {
-  return typeof transport.command === "function";
-}
-
 // src/tools/chat-compact.ts
 function messageContent(message) {
   const content = message?.content;
@@ -248,8 +243,36 @@ function isCoordinatorVisibleMessage(message) {
   if (meta?.internal === true || meta?.debug === true || meta?.control === true || meta?.userVisible === false || meta?.user_visible === false) return false;
   return role === "user" || role === "assistant" || role === "agent";
 }
+function summarizeToolMessage(message) {
+  if (!message || typeof message !== "object") return null;
+  const kind = String(message.kind ?? message.type ?? message.messageKind ?? "").toLowerCase();
+  const role = String(message.role ?? "").toLowerCase();
+  if (kind === "terminal" || kind === "bash") {
+    const cmd = message.command ?? message.cmd ?? message.input ?? messageContent(message);
+    const exit = message.exitCode ?? message.exit_code ?? message.code;
+    const cmdShort = typeof cmd === "string" ? cmd.split("\n")[0].slice(0, 120) : null;
+    if (!cmdShort) return null;
+    return exit !== void 0 && exit !== null ? `[Bash] ${cmdShort} \u2192 exit ${exit}` : `[Bash] ${cmdShort}`;
+  }
+  if (kind === "tool_call" || kind === "tool" || role === "tool") {
+    const name = message.name ?? message.toolName ?? message.tool_name ?? message.function?.name;
+    if (typeof name === "string" && name.trim()) return `[Tool] ${name.trim()}`;
+    return null;
+  }
+  if (kind === "tool_result") {
+    const exit = message.exitCode ?? message.exit_code ?? message.code;
+    const name = message.name ?? message.toolName ?? message.tool_name;
+    const label = typeof name === "string" && name.trim() ? name.trim() : "tool";
+    return exit !== void 0 && exit !== null ? `[Tool result: ${label}] exit ${exit}` : null;
+  }
+  return null;
+}
 function buildCompactMessageTail(visibleMessages, opts) {
-  return visibleMessages.slice(-opts.limit);
+  const tail = visibleMessages.slice(-opts.limit);
+  if (opts.finalAssistant && !tail.includes(opts.finalAssistant)) {
+    return [opts.finalAssistant, ...tail];
+  }
+  return tail;
 }
 function compactChatPayload(payload, opts = {}) {
   const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
@@ -261,6 +284,9 @@ function compactChatPayload(payload, opts = {}) {
   });
   const summary = typeof payload?.summary === "string" && payload.summary.trim() ? payload.summary.trim() : messageContent(finalAssistant).trim();
   const messages = buildCompactMessageTail(visible, { summary, finalAssistant, limit });
+  const toolSummaries = rawMessages.filter((m) => !isCoordinatorVisibleMessage(m)).map(summarizeToolMessage).filter((s) => s !== null);
+  const omittedMessages = Math.max(0, rawMessages.length - messages.length);
+  const filteredMessages = Math.max(0, rawMessages.length - visible.length);
   return {
     success: payload?.success !== false,
     compact: true,
@@ -270,8 +296,9 @@ function compactChatPayload(payload, opts = {}) {
     providerSessionId: payload?.providerSessionId ?? null,
     totalMessages: rawMessages.length,
     visibleMessages: visible.length,
-    filteredMessages: visible.length,
-    omittedMessages: Math.max(0, rawMessages.length - visible.length),
+    filteredMessages,
+    omittedMessages,
+    ...toolSummaries.length > 0 ? { toolSummaries } : {},
     summary,
     ...payload?.changedFiles !== void 0 ? { changedFiles: payload.changedFiles } : {},
     ...payload?.testsRun !== void 0 ? { testsRun: payload.testsRun } : {},
@@ -378,7 +405,6 @@ var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
 var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
 var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
 async function refreshMeshFromDaemon(ctx) {
-  if (!isLocalTransport(ctx.transport)) return;
   try {
     const result = await ctx.transport.command("get_mesh", { meshId: ctx.mesh.id });
     if (!result?.success || !Array.isArray(result.mesh?.nodes)) return;
@@ -902,15 +928,12 @@ async function reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, d
   return { attempted, reconciled, skipped };
 }
 async function triggerMeshQueueAndReport(ctx, node, opts) {
-  if (!(isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport)) return void 0;
   try {
     let raw;
     if (ctx.transport instanceof IpcTransport && node?.daemonId && opts?.localNode === false) {
       raw = await ctx.transport.meshCommand(node.daemonId, "trigger_mesh_queue", { meshId: ctx.mesh.id });
-    } else if (isLocalTransport(ctx.transport)) {
-      raw = await ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id });
     } else {
-      return void 0;
+      raw = await ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id });
     }
     const payload = unwrapCommandPayload(raw);
     const trigger = payload?.trigger && typeof payload.trigger === "object" ? payload.trigger : payload;
@@ -1560,7 +1583,7 @@ async function collectRelatedRepoStatuses(ctx, node) {
   const results = [];
   for (const repo of relatedRepos) {
     try {
-      const statusResult = !isLocalTransport(ctx.transport) && node.daemonId ? await ctx.transport.gitStatus(node.daemonId, repo.workspace, false, true) : await commandForNode(ctx, node, "git_status", { workspace: repo.workspace, refreshUpstream: true });
+      const statusResult = await commandForNode(ctx, node, "git_status", { workspace: repo.workspace, refreshUpstream: true });
       const status = extractGitStatus(statusResult);
       results.push(summarizeRelatedRepoStatus(repo, status));
     } catch (e) {
@@ -1608,9 +1631,21 @@ function getNodeLaunchReadiness(node) {
     launchBlockedMessage: missingProviderPriorityMessage(node.id)
   };
 }
-function getWorktreeBootstrapLaunchBlock(node) {
+function getWorktreeBootstrapLaunchBlock(node, meshPolicy) {
+  if (!node.isLocalWorktree) return void 0;
   const bootstrap = node.worktreeBootstrap;
-  if (!node.isLocalWorktree || bootstrap?.status !== "failed" || bootstrap?.required === false) return void 0;
+  const requireReady = !!(meshPolicy && typeof meshPolicy === "object" && meshPolicy.requireBootstrapBeforeLaunch === true);
+  if (requireReady && bootstrap?.status !== "ready") {
+    return {
+      success: false,
+      code: "bootstrap_not_ready",
+      error: `Node '${node.id}' bootstrap state is '${bootstrap?.status ?? "unknown"}' and mesh policy requireBootstrapBeforeLaunch is enabled.`,
+      nodeId: node.id,
+      worktreeBootstrap: bootstrap ?? null,
+      recoveryHint: "Run the worktree bootstrap (clone runOnClone or a refine with bootstrap inherit) until the node reports ready, or disable requireBootstrapBeforeLaunch."
+    };
+  }
+  if (bootstrap?.status !== "failed" || bootstrap?.required === false) return void 0;
   return {
     success: false,
     code: "worktree_bootstrap_failed",
@@ -1767,11 +1802,7 @@ async function commandForNode(ctx, node, command, args = {}) {
   if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
     return ctx.transport.meshCommand(node.daemonId, command, args);
   }
-  if (isLocalTransport(ctx.transport)) {
-    return ctx.transport.command(command, args);
-  }
-  const identity = buildNodeMachineIdentity(ctx, node);
-  throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}' (hostname=${identity.hostname || "unknown"}, coordinatorHostname=${identity.coordinatorHostname || "unknown"}, sameMachine=${identity.sameMachine})`);
+  return ctx.transport.command(command, args);
 }
 function normalizePendingMeshCoordinatorEvents(value) {
   const payload = unwrapCommandPayload(value);
@@ -1817,10 +1848,19 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
       ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
     };
     try {
-      surfacedEvents.push(
-        ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh)
-      );
-      surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);
+      const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh);
+      for (const event of localEvents) {
+        const payload = buildMeshForwardPayloadFromPendingEvent(event);
+        if (!payload.event || !payload.meshId) continue;
+        let injected = false;
+        try {
+          await ctx.transport.command("mesh_forward_event", payload);
+          injected = true;
+        } catch {
+        }
+        rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
+        if (!injected) surfacedEvents.push(event);
+      }
     } catch {
     }
     for (const node of ctx.mesh.nodes) {
@@ -1841,20 +1881,26 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
       }
     }
     try {
-      surfacedEvents.push(
-        ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh)
-      );
-      surfacedEvents.forEach(rememberMeshSessionProviderMetadataFromEvent);
+      const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh);
+      for (const event of localEvents) {
+        const payload = buildMeshForwardPayloadFromPendingEvent(event);
+        if (!payload.event || !payload.meshId) continue;
+        let injected = false;
+        try {
+          await ctx.transport.command("mesh_forward_event", payload);
+          injected = true;
+        } catch {
+        }
+        rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
+        if (!injected) surfacedEvents.push(event);
+      }
     } catch {
     }
     return surfacedEvents;
   }
-  if (isLocalTransport(ctx.transport)) {
-    const events = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId).filter(matchesCurrentMesh);
-    events.forEach(rememberMeshSessionProviderMetadataFromEvent);
-    return events;
-  }
-  return [];
+  const events = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId).filter(matchesCurrentMesh);
+  events.forEach(rememberMeshSessionProviderMetadataFromEvent);
+  return events;
 }
 function isP2pTransportUnavailableError(error) {
   return (0, import_daemon_core.isP2pRelayTransportFailure)(error);
@@ -1898,7 +1944,11 @@ var MESH_ENQUEUE_TASK_TOOL = {
       task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch." },
       taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
       requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu." },
-      required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." }
+      required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." },
+      depends_on: { type: "array", items: { type: "string" }, description: "Task ids that must complete before this task becomes claimable. Cycles are rejected at enqueue." },
+      dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
+      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id)." },
+      missionId: { type: "string", description: "CamelCase alias for mission_id." }
     },
     required: ["message"]
   }
@@ -1936,7 +1986,7 @@ var MESH_QUEUE_CANCEL_TOOL = {
 };
 var MESH_QUEUE_REQUEUE_TOOL = {
   name: "mesh_queue_requeue",
-  description: "Return a mesh queue task to pending for retry. By default clears stale assigned owner and target session so another live session can claim it.",
+  description: "Return a mesh queue task to pending for retry. By default clears stale assigned owner and target session so another live session can claim it. When the task has exceeded its retry cap it is auto-failed instead; use force=true to override.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1945,7 +1995,8 @@ var MESH_QUEUE_REQUEUE_TOOL = {
       target_node_id: { type: "string", description: "Optional replacement target node ID." },
       target_session_id: { type: "string", description: "Optional replacement target runtime session ID." },
       clear_target_node: { type: "boolean", description: "When true, remove any existing target node constraint." },
-      keep_target_session: { type: "boolean", description: "When true, preserve an existing target session if target_session_id is not provided. Defaults false to avoid stale session targets." }
+      keep_target_session: { type: "boolean", description: "When true, preserve an existing target session if target_session_id is not provided. Defaults false to avoid stale session targets." },
+      force: { type: "boolean", description: "When true, bypass the retry cap and requeue even if maxRetries has been exceeded. Use only for explicit operator recovery." }
     },
     required: ["task_id"]
   }
@@ -2043,6 +2094,20 @@ var MESH_CHECKPOINT_TOOL = {
       message: { type: "string", description: "Checkpoint commit message." }
     },
     required: ["node_id", "message"]
+  }
+};
+var MESH_MISSION_UPSERT_TOOL = {
+  name: "mesh_mission_upsert",
+  description: "Create or update a persistent mission record so the plan survives coordinator restarts. Create a mission before enqueueing a multi-task batch, attach tasks via mesh_enqueue_task mission_id, and update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses \u2014 there is no separate progress field.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      mission_id: { type: "string", description: "Mission id to update. Omit to create a new mission." },
+      title: { type: "string", description: "Short mission title." },
+      goal: { type: "string", description: "Free-text mission goal/definition of done." },
+      status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Mission lifecycle status. Defaults to active on create." }
+    },
+    required: ["title"]
   }
 };
 var MESH_APPROVE_TOOL = {
@@ -2182,6 +2247,17 @@ var MESH_REFINE_PLAN_TOOL = {
     required: ["node_id"]
   }
 };
+var MESH_REVIEW_INBOX_TOOL = {
+  name: "mesh_review_inbox",
+  description: "List local worktree nodes that need human review: merge candidates (pushed feature branches ready to merge) and Refinery-blocked review results. Returns evidence summaries, diff stats vs. the default branch, and suggested actions (Refine / Requeue / Dismiss). Remote nodes are excluded in M4.0.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      mesh_id: { type: "string", description: "Mesh ID (optional \u2014 inferred from active mesh if omitted)." }
+    },
+    required: []
+  }
+};
 var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_LIST_NODES_TOOL,
@@ -2206,9 +2282,12 @@ var ALL_MESH_TOOLS = [
   MESH_REFINE_PLAN_TOOL,
   MESH_CLEANUP_SESSIONS_TOOL,
   MESH_TASK_HISTORY_TOOL,
-  MESH_RECONCILE_LEDGER_TOOL
+  MESH_RECONCILE_LEDGER_TOOL,
+  MESH_MISSION_UPSERT_TOOL,
+  MESH_REVIEW_INBOX_TOOL
 ];
 async function meshStatus(ctx, args = {}) {
+  const rateResult = (0, import_daemon_core.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_status" });
   await refreshMeshFromDaemon(ctx);
   const { mesh, transport } = ctx;
   let ledgerSummary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
@@ -2222,47 +2301,26 @@ async function meshStatus(ctx, args = {}) {
       ...getNodeLaunchReadiness(node)
     };
     try {
-      if (!isLocalTransport(transport) && node.daemonId) {
-        const result = await transport.gitStatus(node.daemonId, node.workspace, false, true);
-        const status = extractGitStatus(result);
-        const uncommittedChanges = countUncommittedChanges(status);
-        const dirty = isGitStatusDirty(status);
-        entry.health = status?.isGitRepo ? dirty ? "dirty" : "online" : "degraded";
-        assignFullGitSnapshot(entry, status);
-        entry.branch = status?.branch;
-        entry.isDirty = dirty;
-        entry.uncommittedChanges = uncommittedChanges;
-        entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
-        const submodules = extractSubmodules(result, node.policy?.submoduleIgnorePaths || []);
-        if (submodules && submodules.some((s) => s?.outOfSync)) {
-          entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
-          entry.outOfSyncSubmodules = submodules.filter((s) => s?.outOfSync).map((s) => s.path);
-        }
-      } else if (isLocalTransport(transport)) {
-        const autoDiscover = node.policy?.autoDiscoverSubmodules !== false;
-        const statusResult = await commandForNode(ctx, node, "git_status", {
-          workspace: node.workspace,
-          refreshUpstream: true,
-          includeSubmodules: autoDiscover,
-          submoduleIgnorePaths: node.policy?.submoduleIgnorePaths || void 0
-        });
-        const status = extractGitStatus(statusResult);
-        const uncommittedChanges = countUncommittedChanges(status);
-        const dirty = isGitStatusDirty(status);
-        entry.health = status?.isGitRepo ? dirty ? "dirty" : "online" : "degraded";
-        assignFullGitSnapshot(entry, status);
-        entry.branch = status?.branch;
-        entry.isDirty = dirty;
-        entry.uncommittedChanges = uncommittedChanges;
-        entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
-        const submodules = extractSubmodules(statusResult, node.policy?.submoduleIgnorePaths || []);
-        if (submodules && submodules.some((s) => s?.outOfSync)) {
-          entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
-          entry.outOfSyncSubmodules = submodules.filter((s) => s?.outOfSync).map((s) => s.path);
-        }
-      } else {
-        entry.health = "unknown";
-        entry.note = "No daemonId available for cloud status probe";
+      const autoDiscover = node.policy?.autoDiscoverSubmodules !== false;
+      const statusResult = await commandForNode(ctx, node, "git_status", {
+        workspace: node.workspace,
+        refreshUpstream: true,
+        includeSubmodules: autoDiscover,
+        submoduleIgnorePaths: node.policy?.submoduleIgnorePaths || void 0
+      });
+      const status = extractGitStatus(statusResult);
+      const uncommittedChanges = countUncommittedChanges(status);
+      const dirty = isGitStatusDirty(status);
+      entry.health = status?.isGitRepo ? dirty ? "dirty" : "online" : "degraded";
+      assignFullGitSnapshot(entry, status);
+      entry.branch = status?.branch;
+      entry.isDirty = dirty;
+      entry.uncommittedChanges = uncommittedChanges;
+      entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+      const submodules = extractSubmodules(statusResult, node.policy?.submoduleIgnorePaths || []);
+      if (submodules && submodules.some((s) => s?.outOfSync)) {
+        entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
+        entry.outOfSyncSubmodules = submodules.filter((s) => s?.outOfSync).map((s) => s.path);
       }
     } catch (e) {
       const failure = buildCoordinatorP2pRelayFailure(e, {
@@ -2396,6 +2454,7 @@ async function meshStatus(ctx, args = {}) {
     ...args.includeTerminalDirectWork === true ? { terminalDirectWork: activeWorkEvidence.terminalDirectWork } : {},
     activeWorkSummary: activeWorkEvidence.summary,
     ...pollingGuidance ? { pollingGuidance } : {},
+    ...rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: "rate_limit_exceeded", tool: "mesh_status", callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {},
     branchConvergenceSummary: summarizeBranchConvergence(results),
     ...coordinatorSessions.length > 0 ? {
       coordinatorSessions,
@@ -2408,6 +2467,19 @@ async function meshStatus(ctx, args = {}) {
   };
   try {
     response.ledgerSummary = ledgerSummary;
+  } catch {
+  }
+  try {
+    const missions = (0, import_daemon_core.getActiveMeshMissionSummaries)(mesh.id);
+    if (missions.length > 0) {
+      response.missions = missions.map((mission) => {
+        try {
+          return { ...mission, stats: (0, import_daemon_core.computeMeshMissionStats)(mesh.id, mission.id) };
+        } catch {
+          return mission;
+        }
+      });
+    }
   } catch {
   }
   try {
@@ -2438,10 +2510,20 @@ async function meshTaskHistory(ctx, args) {
     payload: e.payload ? slimLedgerPayload(e.payload) : e.payload
   }));
   const summary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
+  let taskStats;
+  try {
+    const taskIds = [...new Set(rawEntries.map((e) => typeof e.payload?.taskId === "string" ? e.payload.taskId : "").filter(Boolean))];
+    if (taskIds.length > 0) {
+      const stats = (0, import_daemon_core.computeMeshTaskStats)(mesh.id, { taskIds });
+      if (stats.length > 0) taskStats = stats;
+    }
+  } catch {
+  }
   return JSON.stringify({
     meshId: mesh.id,
     entries,
     summary,
+    ...taskStats ? { taskStats } : {},
     ...pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}
   }, null, 2);
 }
@@ -2460,7 +2542,7 @@ async function meshReconcileLedger(ctx, args) {
   for (const node of nodes) {
     try {
       if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {
-        const slice2 = (0, import_daemon_core.readLedgerSlice)(ctx.mesh.id, queryArgs);
+        const slice2 = (0, import_daemon_core.readLedgerSliceFromStore)(ctx.mesh.id, queryArgs);
         replicas.push((0, import_daemon_core.buildMeshLedgerReplicaEvidence)({
           nodeId: node.id,
           daemonId: node.daemonId,
@@ -2544,12 +2626,33 @@ async function meshListNodes(ctx) {
     }))
   }, null, 2);
 }
+async function meshMissionUpsert(ctx, args) {
+  try {
+    const mission = (0, import_daemon_core.upsertMeshMission)(ctx.mesh.id, {
+      id: readString(args.mission_id) || readString(args.missionId) || void 0,
+      title: args.title,
+      goal: typeof args.goal === "string" ? args.goal : void 0,
+      status: readString(args.status) || void 0
+    });
+    return JSON.stringify({
+      success: true,
+      mission,
+      nextAction: "Attach tasks with mesh_enqueue_task mission_id and depends_on. mesh_status shows live task aggregates for this mission."
+    });
+  } catch (e) {
+    const message = e?.message || String(e);
+    const code = message.includes("mission_title_required") ? "mission_title_required" : message.includes("invalid_mission_status") ? "invalid_mission_status" : void 0;
+    return JSON.stringify({ success: false, ...code ? { code } : {}, error: message });
+  }
+}
 async function meshEnqueueTask(ctx, args) {
   const taskMode = readString(args.task_mode) || readString(args.taskMode);
   const requiredTags = (0, import_daemon_core.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
+  const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
+  const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
   try {
-    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags });
-    if (isLocalTransport(ctx.transport) && !(ctx.transport instanceof IpcTransport)) {
+    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId });
+    if (!(ctx.transport instanceof IpcTransport)) {
       const queueTrigger = await triggerMeshQueueAndReport(ctx);
       return JSON.stringify({
         success: true,
@@ -2562,7 +2665,7 @@ async function meshEnqueueTask(ctx, args) {
         ...buildQueueTriggerGuidance(queueTrigger)
       });
     }
-    if (ctx.transport instanceof IpcTransport) {
+    {
       const queueTrigger = await triggerMeshQueueAndReport(ctx);
       const dispatchPromises = [];
       for (const node of ctx.mesh.nodes) {
@@ -2626,21 +2729,31 @@ async function meshEnqueueTask(ctx, args) {
         ...buildQueueTriggerGuidance(queueTrigger)
       });
     }
-    return JSON.stringify({ success: true, source: "queue", taskId: task.id, status: task.status, taskMode: task.taskMode, requiredTags: task.requiredTags });
   } catch (e) {
     const message = e?.message || String(e);
     if (message.includes("live_debug_readonly_guardrail_violation")) {
       return JSON.stringify({ success: false, code: "live_debug_readonly_guardrail_violation", taskMode, error: message });
     }
+    if (message.includes("dependency_cycle_detected")) {
+      return JSON.stringify({ success: false, code: "dependency_cycle_detected", dependsOn, error: message });
+    }
     return JSON.stringify({ success: false, error: message });
   }
 }
 async function meshViewQueue(ctx, args) {
+  const rateResult = (0, import_daemon_core.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_view_queue" });
   try {
     await refreshMeshFromDaemon(ctx);
     const statusFilter = sanitizeQueueStatusFilter(args.status);
     const view = normalizeQueueViewMode(args.view);
-    const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness((0, import_daemon_core.getQueue)(ctx.mesh.id), ctx.mesh));
+    const rawQueue = (0, import_daemon_core.getQueue)(ctx.mesh.id);
+    const statusById = new Map(rawQueue.map((task) => [task.id, task.status]));
+    const withDependencies = rawQueue.map((task) => {
+      if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) return task;
+      const depState = (0, import_daemon_core.describeTaskDependencyState)(task, statusById);
+      return { ...task, ...depState };
+    });
+    const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh));
     const queue = filterQueueForView(fullQueue, view, statusFilter);
     const summary = buildQueueStatusSummary(fullQueue);
     const visibleSummary = buildQueueStatusSummary(queue);
@@ -2692,6 +2805,7 @@ async function meshViewQueue(ctx, args) {
       staleDirectWork: activeWorkEvidence.staleDirectWork,
       activeWorkSummary: activeWorkEvidence.summary,
       ...pollingGuidance ? { pollingGuidance } : {},
+      ...rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: "rate_limit_exceeded", tool: "mesh_view_queue", callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {},
       summary,
       visibleSummary,
       activeCounts: summary.activeCounts,
@@ -2730,10 +2844,8 @@ async function meshQueueCancel(ctx, args) {
     if (!taskId) return JSON.stringify({ success: false, error: "task_id required" });
     const task = (0, import_daemon_core.cancelTask)(ctx.mesh.id, taskId, { reason: args.reason });
     if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
-    if (isLocalTransport(ctx.transport)) {
-      ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
-      });
-    }
+    ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
+    });
     return JSON.stringify({ success: true, task }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e.message });
@@ -2751,13 +2863,21 @@ async function meshQueueRequeue(ctx, args) {
       targetNodeId,
       targetSessionId,
       clearTargetNode: args.clear_target_node === true || args.clearTargetNode === true,
-      clearTargetSession: targetSessionId ? false : !keepTargetSession
+      clearTargetSession: targetSessionId ? false : !keepTargetSession,
+      force: args.force === true
     });
     if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
-    if (isLocalTransport(ctx.transport)) {
-      ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
-      });
+    if (task.status === "failed" && task.cancelReason?.startsWith("max_retries_exceeded")) {
+      return JSON.stringify({
+        success: false,
+        code: "max_retries_exceeded",
+        error: task.cancelReason,
+        task,
+        hint: "Use force=true to bypass the retry cap for explicit operator recovery."
+      }, null, 2);
     }
+    ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
+    });
     return JSON.stringify({ success: true, task }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e.message });
@@ -2782,7 +2902,7 @@ async function meshSendTask(ctx, args) {
     return JSON.stringify({ error: `Node '${args.node_id}' is read-only` });
   }
   let explicitTargetSession;
-  if (args.session_id && isWorkerTaskMode(taskMode) && (ctx.transport instanceof IpcTransport || isLocalTransport(ctx.transport))) {
+  if (args.session_id && isWorkerTaskMode(taskMode)) {
     try {
       const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
       const sessions = extractStatusMetadataSessions(statusResult);
@@ -2837,19 +2957,11 @@ async function meshSendTask(ctx, args) {
     });
   }
   try {
-    if (!isLocalTransport(ctx.transport) && node.daemonId) {
-      const res = await ctx.transport.meshEnqueueTask(node.daemonId, {
-        meshId: ctx.mesh.id,
-        message: args.message,
-        targetNodeId: args.node_id,
-        ...taskMode ? { taskMode } : {}
-      });
-      return JSON.stringify(res);
-    }
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
       const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ""));
       const taskId = (0, import_node_crypto.randomUUID)();
+      const coordinatorDaemonId = resolveCoordinatorNode(ctx)?.daemonId || ctx.localDaemonId;
       const result2 = await ipcDispatchToRemoteAgent(ctx, node, {
         session_id: args.session_id,
         message: args.message,
@@ -2858,7 +2970,8 @@ async function meshSendTask(ctx, args) {
         meshContext: {
           meshId: ctx.mesh.id,
           nodeId: args.node_id,
-          taskId
+          taskId,
+          ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
         }
       });
       if (result2.success) {
@@ -2901,7 +3014,7 @@ async function meshSendTask(ctx, args) {
         dispatched: result2.success === true
       });
     }
-    if (args.session_id && isLocalTransport(ctx.transport)) {
+    if (args.session_id) {
       const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
       let resolvedProviderType = cached?.providerType || "";
       if (!resolvedProviderType) {
@@ -3008,6 +3121,7 @@ async function meshSendTask(ctx, args) {
       const sessionWasIdle = explicitTargetSession ? isIdleSessionRecord(explicitTargetSession) : false;
       const taskId = (0, import_node_crypto.randomUUID)();
       const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
+      const coordinatorDaemonId = resolveCoordinatorNode(ctx)?.daemonId || ctx.localDaemonId;
       const dispatchResult = await commandForNode(ctx, node, "agent_command", {
         targetSessionId: args.session_id,
         agentType: resolvedProviderType,
@@ -3018,7 +3132,8 @@ async function meshSendTask(ctx, args) {
         meshContext: {
           meshId: ctx.mesh.id,
           nodeId: args.node_id,
-          taskId
+          taskId,
+          ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
         }
       });
       const dispatchPayload = unwrapCommandPayload(dispatchResult);
@@ -3098,8 +3213,8 @@ async function meshSendTask(ctx, args) {
       targetSessionId: args.session_id,
       taskMode
     });
-    const queueTrigger = isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport ? await triggerMeshQueueAndReport(ctx) : void 0;
-    const pendingEvents = isLocalTransport(ctx.transport) ? (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId) : [];
+    const queueTrigger = await triggerMeshQueueAndReport(ctx);
+    const pendingEvents = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId);
     const result = {
       success: true,
       source: "queue",
@@ -3129,91 +3244,59 @@ async function meshReadChat(ctx, args) {
   if (!node) {
     return JSON.stringify(buildMissingNodeReadChatRecovery(ctx, args), null, 2);
   }
-  if (ctx.transport instanceof IpcTransport || isLocalTransport(ctx.transport)) {
-    await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
-  }
-  if (isLocalTransport(ctx.transport)) {
-    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
-    const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached?.providerSessionId;
-    const result = await commandForNode(ctx, node, "read_chat", {
+  await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
+  const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+  const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached?.providerSessionId;
+  const result = await commandForNode(ctx, node, "read_chat", {
+    sessionId: args.session_id,
+    targetSessionId: args.session_id,
+    workspace: node.workspace,
+    ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
+    ...providerSessionId ? { providerSessionId } : {},
+    tailLimit: args.tail ?? 10
+  });
+  const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result), {
+    key: `mesh:${args.node_id}:${args.session_id}`,
+    toolName: "mesh_read_chat",
+    completionCallbackExpected: true
+  });
+  const useCompact = args.compact !== false;
+  if (useCompact) {
+    const compactPayload = compactChatPayload(payload, {
+      nodeId: args.node_id,
       sessionId: args.session_id,
-      targetSessionId: args.session_id,
-      workspace: node.workspace,
-      ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
-      ...providerSessionId ? { providerSessionId } : {},
-      tailLimit: args.tail ?? 3
+      limit: args.tail ?? 10
     });
-    const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result), {
-      key: `mesh:${args.node_id}:${args.session_id}`,
-      toolName: "mesh_read_chat",
-      completionCallbackExpected: true
-    });
-    const useCompact = args.compact !== false;
-    if (useCompact) {
-      const compactPayload = compactChatPayload(payload, {
-        nodeId: args.node_id,
-        sessionId: args.session_id,
-        limit: args.tail ?? 3
-      });
-      return JSON.stringify(
-        payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
-        null,
-        2
-      );
-    }
-    return JSON.stringify(payload, null, 2);
-  } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-    try {
-      const targetId = `${node.daemonId}:session:${args.session_id}`;
-      const res = await ctx.transport.readChat(targetId, {
-        limit: args.tail ?? 3,
-        sessionId: args.session_id
-      });
-      return JSON.stringify(res, null, 2);
-    } catch (e) {
-      return JSON.stringify({ success: false, error: e.message });
-    }
-  } else {
-    return JSON.stringify({ error: "Cloud mesh read_chat requires node daemonId" });
+    return JSON.stringify(
+      payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
+      null,
+      2
+    );
   }
+  return JSON.stringify(payload, null, 2);
 }
 async function meshReadDebug(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
-  if (isLocalTransport(ctx.transport)) {
-    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
-    const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached?.providerSessionId;
-    const delivery = args.delivery === "inline" ? void 0 : "daemon_file";
-    const result = await commandForNode(ctx, node, "get_chat_debug_bundle", {
-      sessionId: args.session_id,
-      targetSessionId: args.session_id,
-      workspace: node.workspace,
-      ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
-      ...providerSessionId ? { providerSessionId } : {},
-      tailLimit: args.tail ?? 40,
-      ...delivery ? { delivery } : {}
-    });
-    const payload = unwrapCommandPayload(result);
-    return JSON.stringify(payload, null, 2);
-  } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-    try {
-      const targetId = `${node.daemonId}:session:${args.session_id}`;
-      const res = await ctx.transport.getChatDebugBundle(targetId, {
-        sessionId: args.session_id,
-        tailLimit: args.tail ?? 40,
-        delivery: args.delivery
-      });
-      return JSON.stringify(res, null, 2);
-    } catch (e) {
-      return JSON.stringify({ success: false, error: e.message });
-    }
-  }
-  return JSON.stringify({ error: "Cloud mesh read_debug requires node daemonId" });
+  const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+  const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached?.providerSessionId;
+  const delivery = args.delivery === "inline" ? void 0 : "daemon_file";
+  const result = await commandForNode(ctx, node, "get_chat_debug_bundle", {
+    sessionId: args.session_id,
+    targetSessionId: args.session_id,
+    workspace: node.workspace,
+    ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
+    ...providerSessionId ? { providerSessionId } : {},
+    tailLimit: args.tail ?? 40,
+    ...delivery ? { delivery } : {}
+  });
+  const payload = unwrapCommandPayload(result);
+  return JSON.stringify(payload, null, 2);
 }
 async function meshLaunchSession(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
-  const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node);
+  const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node, ctx.mesh.policy);
   if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
-  if (isLocalTransport(ctx.transport)) {
+  {
     let resolvedProviderType = typeof args.type === "string" && args.type.trim() ? args.type : "";
     if (!resolvedProviderType) {
       const providerPriority = readProviderPriority(node.policy);
@@ -3247,6 +3330,9 @@ async function meshLaunchSession(ctx, args) {
         cliType: resolvedProviderType,
         dir: node.workspace,
         settings: {
+          // Worker launch envelope (A5): structured metadata so worker sessions
+          // know their role and can route completion events back correctly.
+          role: "worker",
           meshNodeFor: ctx.mesh.id,
           meshNodeId: args.node_id,
           spawnedSessionVisibility,
@@ -3290,51 +3376,6 @@ async function meshLaunchSession(ctx, args) {
       queueTrigger,
       ...buildQueueTriggerGuidance(queueTrigger)
     }, null, 2);
-  } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-    let resolvedProviderType = typeof args.type === "string" && args.type.trim() ? args.type : "";
-    if (!resolvedProviderType) {
-      const providerPriority = readProviderPriority(node.policy);
-      if (!providerPriority.length) {
-        return JSON.stringify({ success: false, error: missingProviderPriorityMessage(args.node_id) });
-      }
-      resolvedProviderType = providerPriority[0];
-    }
-    const coordinatorNode = resolveCoordinatorNode(ctx);
-    const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
-    const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
-    if (!coordinatorDaemonId) {
-      return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
-    }
-    try {
-      const res = await ctx.transport.launch(node.daemonId, {
-        type: resolvedProviderType,
-        dir: node.workspace,
-        settings: {
-          meshNodeFor: ctx.mesh.id,
-          meshNodeId: args.node_id,
-          spawnedSessionVisibility,
-          ...coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {},
-          ...coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {},
-          launchedByCoordinator: true
-        }
-      });
-      const runtimeSessionId = typeof res?.sessionId === "string" ? res.sessionId : typeof res?.id === "string" ? res.id : "";
-      try {
-        (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
-          kind: "session_launched",
-          nodeId: args.node_id,
-          sessionId: runtimeSessionId || void 0,
-          providerType: resolvedProviderType,
-          payload: {}
-        });
-      } catch {
-      }
-      return JSON.stringify({ ...res, resolvedProviderType }, null, 2);
-    } catch (e) {
-      return JSON.stringify(recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
-    }
-  } else {
-    return JSON.stringify({ error: "Cloud mesh launch_session requires node daemonId" });
   }
 }
 async function meshGitStatus(ctx, args) {
@@ -3342,37 +3383,23 @@ async function meshGitStatus(ctx, args) {
   const autoDiscoverSubmodules = node.policy?.autoDiscoverSubmodules !== false;
   const submoduleIgnorePaths = node.policy?.submoduleIgnorePaths || [];
   try {
-    if (!isLocalTransport(ctx.transport) && node.daemonId) {
-      const result = await ctx.transport.gitStatus(node.daemonId, node.workspace, true, true);
-      return JSON.stringify({
-        nodeId: args.node_id,
-        workspace: node.workspace,
-        status: extractGitStatus(result),
-        diff: extractGitDiff(result),
-        submodules: autoDiscoverSubmodules ? extractSubmodules(result, submoduleIgnorePaths) : void 0,
-        relatedRepos: await collectRelatedRepoStatuses(ctx, node)
-      }, null, 2);
-    } else if (isLocalTransport(ctx.transport)) {
-      const statusResult = await commandForNode(ctx, node, "git_status", {
-        workspace: node.workspace,
-        refreshUpstream: true,
-        includeSubmodules: autoDiscoverSubmodules,
-        submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : void 0
-      });
-      const diffResult = await commandForNode(ctx, node, "git_diff_summary", {
-        workspace: node.workspace
-      });
-      return JSON.stringify({
-        nodeId: args.node_id,
-        workspace: node.workspace,
-        status: extractGitStatus(statusResult),
-        diff: extractGitDiff(diffResult),
-        submodules: autoDiscoverSubmodules ? extractSubmodules(statusResult, submoduleIgnorePaths) : void 0,
-        relatedRepos: await collectRelatedRepoStatuses(ctx, node)
-      }, null, 2);
-    } else {
-      return JSON.stringify({ error: "No daemonId available for cloud git_status probe" });
-    }
+    const statusResult = await commandForNode(ctx, node, "git_status", {
+      workspace: node.workspace,
+      refreshUpstream: true,
+      includeSubmodules: autoDiscoverSubmodules,
+      submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : void 0
+    });
+    const diffResult = await commandForNode(ctx, node, "git_diff_summary", {
+      workspace: node.workspace
+    });
+    return JSON.stringify({
+      nodeId: args.node_id,
+      workspace: node.workspace,
+      status: extractGitStatus(statusResult),
+      diff: extractGitDiff(diffResult),
+      submodules: autoDiscoverSubmodules ? extractSubmodules(statusResult, submoduleIgnorePaths) : void 0,
+      relatedRepos: await collectRelatedRepoStatuses(ctx, node)
+    }, null, 2);
   } catch (e) {
     const failure = buildCoordinatorP2pRelayFailure(e, {
       command: "git_status",
@@ -3435,211 +3462,104 @@ async function meshCheckpoint(ctx, args) {
   if (node.policy?.readOnly) {
     return JSON.stringify({ error: `Node '${args.node_id}' is read-only \u2014 cannot checkpoint` });
   }
-  if (isLocalTransport(ctx.transport)) {
-    const result = await commandForNode(ctx, node, "git_checkpoint", {
-      workspace: node.workspace,
-      message: args.message,
-      includeUntracked: true
-    });
-    try {
-      (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
-        kind: "checkpoint_created",
-        nodeId: args.node_id,
-        payload: {
-          message: args.message,
-          commit: result?.checkpoint?.commit,
-          outcome: result?.checkpoint?.status || (result?.checkpoint?.noop ? "skipped" : void 0),
-          noop: result?.checkpoint?.noop === true,
-          reason: result?.checkpoint?.reason
-        }
-      });
-    } catch {
-    }
-    return JSON.stringify(result, null, 2);
-  } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-    try {
-      const res = await ctx.transport.gitCheckpoint(node.daemonId, {
-        workspace: node.workspace,
+  const result = await commandForNode(ctx, node, "git_checkpoint", {
+    workspace: node.workspace,
+    message: args.message,
+    includeUntracked: true
+  });
+  try {
+    (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+      kind: "checkpoint_created",
+      nodeId: args.node_id,
+      payload: {
         message: args.message,
-        includeUntracked: true
-      });
-      try {
-        (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
-          kind: "checkpoint_created",
-          nodeId: args.node_id,
-          payload: {
-            message: args.message,
-            commit: res?.checkpoint?.commit,
-            outcome: res?.checkpoint?.status || (res?.checkpoint?.noop ? "skipped" : void 0),
-            noop: res?.checkpoint?.noop === true,
-            reason: res?.checkpoint?.reason
-          }
-        });
-      } catch {
+        commit: result?.checkpoint?.commit,
+        outcome: result?.checkpoint?.status || (result?.checkpoint?.noop ? "skipped" : void 0),
+        noop: result?.checkpoint?.noop === true,
+        reason: result?.checkpoint?.reason
       }
-      return JSON.stringify(res, null, 2);
-    } catch (e) {
-      return JSON.stringify({ success: false, error: e.message });
-    }
-  } else {
-    return JSON.stringify({ error: "Cloud mesh checkpoint requires node daemonId" });
+    });
+  } catch {
   }
+  return JSON.stringify(result, null, 2);
 }
 async function meshApprove(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
-  if (isLocalTransport(ctx.transport)) {
-    const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
-    const providerSessionId = cached?.providerSessionId;
-    const result = await commandForNode(ctx, node, "resolve_action", {
-      sessionId: args.session_id,
-      targetSessionId: args.session_id,
-      workspace: node.workspace,
-      ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
-      ...providerSessionId ? { providerSessionId } : {},
-      action: args.action === "reject" ? "reject" : "approve"
-    });
-    return JSON.stringify(result, null, 2);
-  } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-    try {
-      const targetId = `${node.daemonId}:session:${args.session_id}`;
-      const res = await ctx.transport.approve(targetId, args.action === "reject" ? "reject" : "approve");
-      return JSON.stringify(res, null, 2);
-    } catch (e) {
-      return JSON.stringify({ success: false, error: e.message });
-    }
-  } else {
-    return JSON.stringify({ error: "Cloud mesh approve requires node daemonId" });
-  }
+  const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
+  const providerSessionId = cached?.providerSessionId;
+  const result = await commandForNode(ctx, node, "resolve_action", {
+    sessionId: args.session_id,
+    targetSessionId: args.session_id,
+    workspace: node.workspace,
+    ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
+    ...providerSessionId ? { providerSessionId } : {},
+    action: args.action === "reject" ? "reject" : "approve"
+  });
+  return JSON.stringify(result, null, 2);
 }
 async function meshCloneNode(ctx, args) {
   const sourceNode = await findNodeWithRefresh(ctx, args.source_node_id);
-  if (isLocalTransport(ctx.transport)) {
-    const result = await commandForNode(ctx, sourceNode, "clone_mesh_node", {
-      meshId: ctx.mesh.id,
-      sourceNodeId: args.source_node_id,
-      branch: args.branch,
-      baseBranch: args.base_branch,
-      inlineMesh: ctx.mesh
-    });
-    const clonePayload = extractCloneNodePayload(result);
-    if (clonePayload?.success && clonePayload.node?.id) {
-      const existingIndex = ctx.mesh.nodes.findIndex((n) => n.id === clonePayload.node.id);
-      if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
-      else ctx.mesh.nodes.push(clonePayload.node);
-      ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-      await syncCoordinatorDaemonMeshCache(ctx);
-    }
-    return JSON.stringify(result, null, 2);
-  } else if (!isLocalTransport(ctx.transport) && sourceNode.daemonId) {
-    try {
-      const res = await ctx.transport.meshCloneNode(sourceNode.daemonId, {
-        meshId: ctx.mesh.id,
-        sourceNodeId: args.source_node_id,
-        branch: args.branch,
-        baseBranch: args.base_branch,
-        inlineMesh: ctx.mesh
-      });
-      const clonePayload = extractCloneNodePayload(res);
-      if (clonePayload?.success && clonePayload.node?.id) {
-        const existingIndex = ctx.mesh.nodes.findIndex((n) => n.id === clonePayload.node.id);
-        if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
-        else ctx.mesh.nodes.push(clonePayload.node);
-        ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-        await syncCoordinatorDaemonMeshCache(ctx);
-      }
-      return JSON.stringify(res, null, 2);
-    } catch (e) {
-      return JSON.stringify({ success: false, error: e.message });
-    }
-  } else {
-    return JSON.stringify({ error: "Cloud mesh clone_node requires source node daemonId" });
+  const result = await commandForNode(ctx, sourceNode, "clone_mesh_node", {
+    meshId: ctx.mesh.id,
+    sourceNodeId: args.source_node_id,
+    branch: args.branch,
+    baseBranch: args.base_branch,
+    inlineMesh: ctx.mesh
+  });
+  const clonePayload = extractCloneNodePayload(result);
+  if (clonePayload?.success && clonePayload.node?.id) {
+    const existingIndex = ctx.mesh.nodes.findIndex((n) => n.id === clonePayload.node.id);
+    if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
+    else ctx.mesh.nodes.push(clonePayload.node);
+    ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    await syncCoordinatorDaemonMeshCache(ctx);
   }
+  return JSON.stringify(result, null, 2);
 }
 async function meshCleanupSessions(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
-  if (isLocalTransport(ctx.transport)) {
-    const result = await commandForNode(ctx, node, "cleanup_mesh_sessions", {
-      meshId: ctx.mesh.id,
-      nodeId: args.node_id,
-      mode: args.mode,
-      sessionIds: args.session_ids,
-      dryRun: args.dry_run === true,
-      inlineMesh: ctx.mesh
-    });
-    return JSON.stringify(result, null, 2);
-  } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-    try {
-      const res = await ctx.transport.meshCleanupSessions(node.daemonId, {
-        meshId: ctx.mesh.id,
-        nodeId: args.node_id,
-        mode: args.mode,
-        sessionIds: args.session_ids,
-        dryRun: args.dry_run === true,
-        inlineMesh: ctx.mesh
-      });
-      return JSON.stringify(res, null, 2);
-    } catch (e) {
-      return JSON.stringify({ success: false, error: e.message });
-    }
-  } else {
-    return JSON.stringify({ error: "Cloud mesh cleanup_sessions requires node daemonId" });
-  }
+  const result = await commandForNode(ctx, node, "cleanup_mesh_sessions", {
+    meshId: ctx.mesh.id,
+    nodeId: args.node_id,
+    mode: args.mode,
+    sessionIds: args.session_ids,
+    dryRun: args.dry_run === true,
+    inlineMesh: ctx.mesh
+  });
+  return JSON.stringify(result, null, 2);
 }
 async function meshRemoveNode(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
-  if (isLocalTransport(ctx.transport)) {
-    const removeArgs = buildRemoveNodeArgs(ctx, args.node_id, args.session_cleanup_mode);
-    let result;
-    let transportFallback;
-    try {
-      result = await commandForNode(ctx, node, "remove_mesh_node", removeArgs);
-    } catch (e) {
-      if (ctx.transport instanceof IpcTransport && node.isLocalWorktree && isP2pTransportUnavailableError(e)) {
-        result = await ctx.transport.command("remove_mesh_node", removeArgs);
-        transportFallback = {
-          from: "p2p_mesh_relay",
-          to: "local_control_plane",
-          reason: e?.message || String(e)
-        };
-      } else {
-        return JSON.stringify({
-          success: false,
-          code: isP2pTransportUnavailableError(e) ? "p2p_unavailable" : "mesh_remove_node_failed",
-          error: e?.message || String(e),
-          recoveryHint: isP2pTransportUnavailableError(e) ? "If this is an ADHDev-managed local worktree, retry from a coordinator connected to the daemon that owns the worktree; dashboard command/data-plane traffic still requires P2P." : "Inspect mesh_status and retry after resolving the reported failure."
-        }, null, 2);
-      }
+  const removeArgs = buildRemoveNodeArgs(ctx, args.node_id, args.session_cleanup_mode);
+  let result;
+  let transportFallback;
+  try {
+    result = await commandForNode(ctx, node, "remove_mesh_node", removeArgs);
+  } catch (e) {
+    if (ctx.transport instanceof IpcTransport && node.isLocalWorktree && isP2pTransportUnavailableError(e)) {
+      result = await ctx.transport.command("remove_mesh_node", removeArgs);
+      transportFallback = {
+        from: "p2p_mesh_relay",
+        to: "local_control_plane",
+        reason: e?.message || String(e)
+      };
+    } else {
+      return JSON.stringify({
+        success: false,
+        code: isP2pTransportUnavailableError(e) ? "p2p_unavailable" : "mesh_remove_node_failed",
+        error: e?.message || String(e),
+        recoveryHint: isP2pTransportUnavailableError(e) ? "If this is an ADHDev-managed local worktree, retry from a coordinator connected to the daemon that owns the worktree; dashboard command/data-plane traffic still requires P2P." : "Inspect mesh_status and retry after resolving the reported failure."
+      }, null, 2);
     }
-    if (result?.success && result.removed !== false) {
-      const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
-      if (idx >= 0) {
-        ctx.mesh.nodes.splice(idx, 1);
-        ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-      }
-    }
-    return JSON.stringify({ ...result || {}, ...transportFallback ? { transportFallback } : {} }, null, 2);
-  } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-    try {
-      const res = await ctx.transport.meshRemoveNode(node.daemonId, {
-        meshId: ctx.mesh.id,
-        nodeId: args.node_id,
-        ...args.session_cleanup_mode ? { sessionCleanupMode: args.session_cleanup_mode } : {},
-        inlineMesh: ctx.mesh
-      });
-      if (res?.success && res.removed !== false) {
-        const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
-        if (idx >= 0) {
-          ctx.mesh.nodes.splice(idx, 1);
-          ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-        }
-      }
-      return JSON.stringify(res, null, 2);
-    } catch (e) {
-      return JSON.stringify({ success: false, error: e.message });
-    }
-  } else {
-    return JSON.stringify({ error: "Cloud mesh remove_node requires node daemonId" });
   }
+  if (result?.success && result.removed !== false) {
+    const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
+    if (idx >= 0) {
+      ctx.mesh.nodes.splice(idx, 1);
+      ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    }
+  }
+  return JSON.stringify({ ...result || {}, ...transportFallback ? { transportFallback } : {} }, null, 2);
 }
 function resolveRefineConfigNode(ctx, nodeId) {
   if (nodeId) return findNode(ctx.mesh, nodeId);
@@ -3680,41 +3600,28 @@ async function meshRefinePlan(ctx, args) {
 }
 async function meshRefineNode(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
-  if (isLocalTransport(ctx.transport)) {
-    const result = await commandForNode(ctx, node, "refine_mesh_node", {
-      meshId: ctx.mesh.id,
-      nodeId: args.node_id,
-      inlineMesh: ctx.mesh
-    });
-    if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
-      const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
-      if (idx >= 0) {
-        ctx.mesh.nodes.splice(idx, 1);
-        ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-      }
+  const result = await commandForNode(ctx, node, "refine_mesh_node", {
+    meshId: ctx.mesh.id,
+    nodeId: args.node_id,
+    inlineMesh: ctx.mesh
+  });
+  if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
+    const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
+    if (idx >= 0) {
+      ctx.mesh.nodes.splice(idx, 1);
+      ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     }
-    return JSON.stringify(result, null, 2);
-  } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
-    try {
-      const res = await ctx.transport.meshRefineNode(node.daemonId, {
-        meshId: ctx.mesh.id,
-        nodeId: args.node_id,
-        inlineMesh: ctx.mesh
-      });
-      if (res?.success && res.async !== true && res.removeResult?.removed !== false) {
-        const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
-        if (idx >= 0) {
-          ctx.mesh.nodes.splice(idx, 1);
-          ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-        }
-      }
-      return JSON.stringify(res, null, 2);
-    } catch (e) {
-      return JSON.stringify({ success: false, error: e.message });
-    }
-  } else {
-    return JSON.stringify({ error: "Cloud mesh refine_node requires node daemonId" });
   }
+  return JSON.stringify(result, null, 2);
+}
+async function meshReviewInbox(ctx, args = {}) {
+  await refreshMeshFromDaemon(ctx);
+  const meshId = (args.mesh_id ?? ctx.mesh.id).trim();
+  const result = await commandForNode(ctx, ctx.mesh.nodes[0], "get_mesh_review_inbox", {
+    meshId,
+    inlineMesh: ctx.mesh
+  });
+  return JSON.stringify(result, null, 2);
 }
 
 // src/help.ts
@@ -3742,24 +3649,20 @@ ADHDev MCP Server
 
 Usage:
   adhdev mcp                                    Local mode (requires standalone daemon)
-  adhdev mcp --api-key <key>                    Cloud mode (ADHDev cloud API)
   adhdev mcp --mode ipc --repo-mesh <mesh_id>   Cloud daemon IPC mesh mode
   adhdev-mcp --help                             Compatibility bin (same server, legacy package entrypoint)
 
 Options:
-  --mode <mode>           Transport: local, cloud, or ipc
+  --mode <mode>           Transport: local or ipc
   --port <n>              Standalone or IPC daemon port (defaults: local 3847, ipc 19222)
   --password <pass>       Standalone daemon password (if set)
-  --api-key <key>         ADHDev cloud API key (switches to cloud mode)
-  --base-url <url>        Override cloud API base URL
   --repo-mesh <mesh_id>   Enable mesh mode \u2014 exposes only mesh-scoped coordinator tools
   --help                  Show this help
 
 Environment variables:
-  ADHDEV_API_KEY      API key (cloud mode)
   ADHDEV_PASSWORD     Daemon password (local mode)
   ADHDEV_MESH_ID      Mesh ID (mesh mode)
-  ADHDEV_MCP_TRANSPORT Transport: local, cloud, or ipc
+  ADHDEV_MCP_TRANSPORT Transport: local or ipc
 
 Standard tools:   ${STANDARD_TOOLS.join(", ")}
 Mesh tools:       ${meshTools.join(", ")}
@@ -3813,269 +3716,6 @@ var LocalTransport = class {
   }
 };
 
-// src/transports/cloud.ts
-var DEFAULT_BASE_URL = "https://api.adhf.dev";
-var CloudTransport = class {
-  baseUrl;
-  apiKey;
-  constructor(opts) {
-    this.apiKey = opts.apiKey;
-    this.baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
-  }
-  headers() {
-    return {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${this.apiKey}`
-    };
-  }
-  async listRemoteMeshes() {
-    const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes`, { headers: this.headers() });
-    if (!res.ok) throw new Error(`List remote meshes failed: ${res.status}`);
-    return res.json();
-  }
-  async createRemoteMesh(data) {
-    const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error(`Create remote mesh failed: ${res.status}`);
-    return res.json();
-  }
-  async deleteRemoteMesh(meshId) {
-    const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes/${encodeURIComponent(meshId)}`, {
-      method: "DELETE",
-      headers: this.headers()
-    });
-    if (!res.ok) throw new Error(`Delete remote mesh failed: ${res.status}`);
-  }
-  async listDaemons() {
-    const res = await fetch(`${this.baseUrl}/api/v1/daemons`, { headers: this.headers() });
-    if (!res.ok) throw new Error(`List daemons failed: ${res.status}`);
-    return res.json();
-  }
-  async getStatus(targetId) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(targetId)}/status`,
-      { headers: this.headers() }
-    );
-    if (!res.ok) throw new Error(`Status failed: ${res.status}`);
-    return res.json();
-  }
-  /** Get all sessions for a daemon (returns CompactSessionEntry[]). */
-  async getDaemonStatus(daemonId) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/daemons/${encodeURIComponent(daemonId)}/status`,
-      { headers: this.headers() }
-    );
-    if (!res.ok) throw new Error(`Daemon status failed: ${res.status}`);
-    return res.json();
-  }
-  async readChat(targetId, opts = {}) {
-    const params = new URLSearchParams();
-    if (opts.limit) params.set("limit", String(opts.limit));
-    if (opts.sessionId) params.set("sessionId", opts.sessionId);
-    const qs = params.toString() ? `?${params}` : "";
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(targetId)}/chat${qs}`,
-      { headers: this.headers() }
-    );
-    if (!res.ok) throw new Error(`Read chat failed: ${res.status}`);
-    return res.json();
-  }
-  async getChatDebugBundle(targetId, opts = {}) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(targetId)}/chat/debug`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({
-          ...opts.agentType ? { agentType: opts.agentType } : {},
-          ...opts.sessionId ? { sessionId: opts.sessionId } : {},
-          ...opts.tailLimit ? { tailLimit: opts.tailLimit } : {},
-          ...opts.delivery ? { delivery: opts.delivery } : {}
-        })
-      }
-    );
-    if (!res.ok) throw new Error(`Chat debug bundle failed: ${res.status}`);
-    return res.json();
-  }
-  async sendChat(targetId, message, opts = {}) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(targetId)}/chat`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({ message, ...opts })
-      }
-    );
-    if (!res.ok) throw new Error(`Send chat failed: ${res.status}`);
-    return res.json();
-  }
-  async approve(targetId, action, agentType) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(targetId)}/approve`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({ action, ...agentType ? { agentType } : {} })
-      }
-    );
-    if (!res.ok) throw new Error(`Approve failed: ${res.status}`);
-    return res.json();
-  }
-  async gitStatus(daemonId, workspace, includeDiff = true, refreshUpstream = false) {
-    const params = new URLSearchParams({ workspace, includeDiff: String(includeDiff), refreshUpstream: String(refreshUpstream) });
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-status?${params}`,
-      { headers: this.headers() }
-    );
-    if (!res.ok) throw new Error(`Git status failed: ${res.status}`);
-    return res.json();
-  }
-  async stop(daemonId, opts) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/stop`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(opts)
-      }
-    );
-    if (!res.ok) throw new Error(`Stop failed: ${res.status}`);
-    return res.json();
-  }
-  async launch(daemonId, opts) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/launch`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(opts)
-      }
-    );
-    if (!res.ok) throw new Error(`Launch failed: ${res.status}`);
-    return res.json();
-  }
-  async gitLog(daemonId, workspace, opts = {}) {
-    const params = new URLSearchParams({ workspace });
-    if (opts.limit) params.set("limit", String(opts.limit));
-    if (opts.file) params.set("file", opts.file);
-    if (opts.since) params.set("since", opts.since);
-    if (opts.until) params.set("until", opts.until);
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-log?${params}`,
-      { headers: this.headers() }
-    );
-    if (!res.ok) throw new Error(`Git log failed: ${res.status}`);
-    return res.json();
-  }
-  async gitDiff(daemonId, workspace, opts = {}) {
-    const params = new URLSearchParams({ workspace });
-    if (opts.file) params.set("file", opts.file);
-    if (opts.maxLines) params.set("maxLines", String(opts.maxLines));
-    if (opts.staged) params.set("staged", "true");
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-diff?${params}`,
-      { headers: this.headers() }
-    );
-    if (!res.ok) throw new Error(`Git diff failed: ${res.status}`);
-    return res.json();
-  }
-  async gitPush(daemonId, opts) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-push`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(opts)
-      }
-    );
-    if (!res.ok) throw new Error(`Git push failed: ${res.status}`);
-    return res.json();
-  }
-  async gitCheckpoint(daemonId, opts) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-checkpoint`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(opts)
-      }
-    );
-    if (!res.ok) throw new Error(`Git checkpoint failed: ${res.status}`);
-    return res.json();
-  }
-  async meshCloneNode(daemonId, payload) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/clone-node`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(payload)
-      }
-    );
-    if (!res.ok) throw new Error(`Mesh clone node failed: ${res.status}`);
-    return res.json();
-  }
-  async meshRemoveNode(daemonId, payload) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/remove-node`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(payload)
-      }
-    );
-    if (!res.ok) throw new Error(`Mesh remove node failed: ${res.status}`);
-    return res.json();
-  }
-  async meshCleanupSessions(daemonId, payload) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/cleanup-sessions`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(payload)
-      }
-    );
-    if (!res.ok) throw new Error(`Mesh cleanup sessions failed: ${res.status}`);
-    return res.json();
-  }
-  async meshEnqueueTask(daemonId, payload) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/enqueue`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(payload)
-      }
-    );
-    if (!res.ok) throw new Error(`Mesh enqueue task failed: ${res.status}`);
-    return res.json();
-  }
-  async meshRefineNode(daemonId, payload) {
-    const res = await fetch(
-      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/refine-node`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(payload)
-      }
-    );
-    if (!res.ok) throw new Error(`Mesh refine node failed: ${res.status}`);
-    return res.json();
-  }
-  async ping() {
-    try {
-      await this.listDaemons();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-};
-
 // src/tools/list-sessions.ts
 var FORMAT_PROP = {
   format: {
@@ -4086,14 +3726,10 @@ var FORMAT_PROP = {
 };
 var LIST_SESSIONS_TOOL = {
   name: "list_sessions",
-  description: "List all connected agent sessions. In cloud mode, fetches session state from each daemon (data is sourced from daemon WS status reports, up to 30s stale). Pass daemon_id to scope to a single daemon.",
+  description: "List all connected agent sessions.",
   inputSchema: {
     type: "object",
     properties: {
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only). Omit to list sessions across all daemons."
-      },
       ...FORMAT_PROP
     },
     required: []
@@ -4101,87 +3737,35 @@ var LIST_SESSIONS_TOOL = {
 };
 async function listSessions(transport, args = {}) {
   const asJson = args.format === "json";
-  if (isLocalTransport(transport)) {
-    const status = await transport.getStatus();
-    const sessions = status?.sessions ?? [];
-    if (asJson) {
-      return JSON.stringify({
-        sessions: sessions.map((s) => ({
-          id: s.id,
-          type: s.providerType ?? s.type ?? "unknown",
-          label: s.label ?? null,
-          status: s.status ?? s.agentStatus ?? null,
-          workspace: s.workspace ?? null
-        }))
-      }, null, 2);
-    }
-    if (sessions.length === 0) return "No active sessions.";
-    const lines = sessions.map((s) => {
-      const parts = [`id: ${s.id}`, `type: ${s.providerType ?? s.type ?? "unknown"}`];
-      if (s.label) parts.push(`label: ${s.label}`);
-      if (s.status ?? s.agentStatus) parts.push(`status: ${s.status ?? s.agentStatus}`);
-      if (s.workspace) parts.push(`workspace: ${s.workspace}`);
-      return parts.join(", ");
-    });
-    return `Sessions (${sessions.length}):
-${lines.join("\n")}`;
-  }
-  return listSessionsCloud(transport, args.daemon_id, asJson);
-}
-async function listSessionsCloud(transport, daemonId, asJson) {
-  const collected = [];
-  if (daemonId) {
-    const daemonStatus = await transport.getDaemonStatus(daemonId);
-    for (const s of daemonStatus?.sessions ?? []) {
-      collected.push({ daemonId, session: s });
-    }
-  } else {
-    const data = await transport.listDaemons();
-    const daemons = data?.daemons ?? [];
-    for (let i = 0; i < daemons.length; i += 5) {
-      await Promise.allSettled(
-        daemons.slice(i, i + 5).map(async (d) => {
-          try {
-            const daemonStatus = await transport.getDaemonStatus(d.id);
-            for (const s of daemonStatus?.sessions ?? []) {
-              collected.push({ daemonId: d.id, session: s });
-            }
-          } catch {
-          }
-        })
-      );
-    }
-  }
+  const status = await transport.getStatus();
+  const sessions = status?.sessions ?? [];
   if (asJson) {
     return JSON.stringify({
-      sessions: collected.map(({ daemonId: dId, session: s }) => ({
-        daemon_id: dId,
+      sessions: sessions.map((s) => ({
         id: s.id,
-        type: s.providerType ?? "unknown",
-        status: s.status ?? null,
+        type: s.providerType ?? s.type ?? "unknown",
+        label: s.label ?? null,
+        status: s.status ?? s.agentStatus ?? null,
         workspace: s.workspace ?? null
       }))
     }, null, 2);
   }
-  if (collected.length === 0) return "No active sessions.";
-  const lines = collected.map(({ daemonId: dId, session: s }) => {
-    const parts = [
-      `daemon: ${dId}`,
-      `session: ${s.id}`,
-      `type: ${s.providerType ?? "unknown"}`
-    ];
-    if (s.status) parts.push(`status: ${s.status}`);
+  if (sessions.length === 0) return "No active sessions.";
+  const lines = sessions.map((s) => {
+    const parts = [`id: ${s.id}`, `type: ${s.providerType ?? s.type ?? "unknown"}`];
+    if (s.label) parts.push(`label: ${s.label}`);
+    if (s.status ?? s.agentStatus) parts.push(`status: ${s.status ?? s.agentStatus}`);
     if (s.workspace) parts.push(`workspace: ${s.workspace}`);
     return parts.join(", ");
   });
-  return `Sessions (${collected.length}):
+  return `Sessions (${sessions.length}):
 ${lines.join("\n")}`;
 }
 
 // src/tools/list-daemons.ts
 var LIST_DAEMONS_TOOL = {
   name: "list_daemons",
-  description: "List all connected daemons (machines running the ADHDev agent). Use this to discover daemon IDs before calling launch_session, git_status, or other tools that require daemon_id. In local mode returns the single standalone daemon info.",
+  description: "List the connected daemon (machine running the ADHDev agent). Returns the daemon identity extracted from its status report.",
   inputSchema: {
     type: "object",
     properties: {
@@ -4192,46 +3776,17 @@ var LIST_DAEMONS_TOOL = {
 };
 async function listDaemons(transport, args = {}) {
   const asJson = args.format === "json";
-  if (isLocalTransport(transport)) {
-    const status = await transport.getStatus();
-    const daemon = {
-      id: status?.id ?? status?.instanceId ?? "standalone",
-      hostname: status?.hostname ?? status?.machine?.hostname ?? "localhost",
-      platform: status?.platform ?? status?.machine?.platform ?? "unknown",
-      version: status?.version ?? null,
-      sessions: (status?.sessions ?? []).length
-    };
-    if (asJson) return JSON.stringify({ daemons: [daemon] }, null, 2);
-    return `Daemons (1):
+  const status = await transport.getStatus();
+  const daemon = {
+    id: status?.id ?? status?.instanceId ?? "standalone",
+    hostname: status?.hostname ?? status?.machine?.hostname ?? "localhost",
+    platform: status?.platform ?? status?.machine?.platform ?? "unknown",
+    version: status?.version ?? null,
+    sessions: (status?.sessions ?? []).length
+  };
+  if (asJson) return JSON.stringify({ daemons: [daemon] }, null, 2);
+  return `Daemons (1):
   id: ${daemon.id}, hostname: ${daemon.hostname}, platform: ${daemon.platform}${daemon.version ? `, version: ${daemon.version}` : ""}, sessions: ${daemon.sessions}`;
-  }
-  const data = await transport.listDaemons();
-  const daemons = data?.daemons ?? [];
-  if (asJson) {
-    return JSON.stringify({
-      daemons: daemons.map((d) => ({
-        id: d.id,
-        hostname: d.hostname ?? null,
-        platform: d.platform ?? null,
-        nickname: d.nickname ?? null,
-        version: d.version ?? null,
-        p2p_available: d.p2p?.available ?? null,
-        cdp_connected: d.cdpConnected ?? null
-      }))
-    }, null, 2);
-  }
-  if (daemons.length === 0) return "No connected daemons.";
-  const lines = daemons.map((d) => {
-    const parts = [`id: ${d.id}`];
-    if (d.nickname) parts.push(`nickname: ${d.nickname}`);
-    if (d.hostname) parts.push(`hostname: ${d.hostname}`);
-    if (d.platform) parts.push(`platform: ${d.platform}`);
-    if (d.version) parts.push(`version: ${d.version}`);
-    if (d.p2p?.available != null) parts.push(`p2p: ${d.p2p.available ? "yes" : "no"}`);
-    return parts.join(", ");
-  });
-  return `Daemons (${daemons.length}):
-${lines.join("\n")}`;
 }
 
 // src/tools/read-chat.ts
@@ -4249,10 +3804,6 @@ var READ_CHAT_TOOL = {
         type: "number",
         description: "Max messages to return (default: 50)."
       },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only). Omit for local mode."
-      },
       compact: {
         type: "boolean",
         description: "Opt-in compact mode: filters tool/terminal/system/internal/control/debug/status chatter and returns user-visible messages plus lightweight summary metadata."
@@ -4264,23 +3815,12 @@ var READ_CHAT_TOOL = {
 };
 async function readChat(transport, args) {
   const limit = args.limit ?? 50;
-  if (isLocalTransport(transport)) {
-    const result2 = await transport.command("read_chat", {
-      ...args.session_id ? { targetSessionId: args.session_id } : {},
-      tailLimit: limit
-    });
-    const annotated2 = annotateRapidReadChatAdvisory(result2, {
-      key: `local:${args.session_id ?? "__active__"}`,
-      toolName: "read_chat",
-      completionCallbackExpected: false
-    });
-    return formatChatResult(annotated2, args.session_id, args.format, limit, args.compact);
-  }
-  if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-  const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
-  const result = await transport.readChat(targetId, { limit, sessionId: args.session_id });
+  const result = await transport.command("read_chat", {
+    ...args.session_id ? { targetSessionId: args.session_id } : {},
+    tailLimit: limit
+  });
   const annotated = annotateRapidReadChatAdvisory(result, {
-    key: `cloud:${args.daemon_id}:${args.session_id ?? "__active__"}`,
+    key: `local:${args.session_id ?? "__active__"}`,
     toolName: "read_chat",
     completionCallbackExpected: false
   });
@@ -4370,10 +3910,6 @@ var READ_CHAT_DEBUG_TOOL = {
         type: "string",
         description: "Target session ID (from list_sessions). Required for reliable routing."
       },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only). Omit for local mode."
-      },
       agent_type: {
         type: "string",
         description: "Optional provider/agent type hint, e.g. hermes-cli, claude-cli, codex-cli."
@@ -4403,19 +3939,7 @@ async function readChatDebug(transport, args) {
     ...args.agent_type ? { agentType: args.agent_type, providerType: args.agent_type } : {},
     ...delivery === "daemon_file" ? { delivery: "daemon_file" } : {}
   };
-  let result;
-  if (isLocalTransport(transport)) {
-    result = await transport.command("get_chat_debug_bundle", commandArgs);
-  } else {
-    if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-    const targetId = `${args.daemon_id}:session:${sessionId}`;
-    result = await transport.getChatDebugBundle(targetId, {
-      sessionId,
-      agentType: args.agent_type,
-      tailLimit,
-      delivery
-    });
-  }
+  const result = await transport.command("get_chat_debug_bundle", commandArgs);
   return formatChatDebugResult(result, { sessionId, delivery, format: args.format });
 }
 function formatChatDebugResult(result, options) {
@@ -4457,10 +3981,6 @@ var SPEC_DEBUG_TOOL = {
         type: "string",
         description: "Target session ID (from list_sessions)."
       },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only). Omit for local mode."
-      },
       ...FORMAT_PROP
     },
     required: ["session_id"]
@@ -4469,14 +3989,7 @@ var SPEC_DEBUG_TOOL = {
 async function specDebug(transport, args) {
   const sessionId = typeof args.session_id === "string" ? args.session_id.trim() : "";
   if (!sessionId) throw new Error("session_id is required");
-  let result;
-  if (isLocalTransport(transport)) {
-    result = await transport.command("get_spec_debug", { targetSessionId: sessionId });
-  } else {
-    if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-    const targetId = `${args.daemon_id}:session:${sessionId}`;
-    result = await transport.sendCommand(targetId, "get_spec_debug", { targetSessionId: sessionId });
-  }
+  const result = await transport.command("get_spec_debug", { targetSessionId: sessionId });
   return formatSpecDebugResult(result, { sessionId, format: args.format });
 }
 function formatSpecDebugResult(result, options) {
@@ -4544,10 +4057,6 @@ var SEND_CHAT_TOOL = {
       session_id: {
         type: "string",
         description: "Target session ID (from list_sessions). Omit to use the active session."
-      },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only). Omit for local mode."
       }
     },
     required: ["message"]
@@ -4555,18 +4064,9 @@ var SEND_CHAT_TOOL = {
 };
 async function sendChat(transport, args) {
   if (!args.message?.trim()) throw new Error("message is required");
-  if (isLocalTransport(transport)) {
-    const result2 = await transport.command("send_chat", {
-      message: args.message,
-      ...args.session_id ? { targetSessionId: args.session_id } : {}
-    });
-    if (result2?.success === false) return `Error: ${result2.error ?? "send_chat failed"}`;
-    return "Message sent.";
-  }
-  if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-  const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
-  const result = await transport.sendChat(targetId, args.message, {
-    ...args.session_id ? { sessionId: args.session_id } : {}
+  const result = await transport.command("send_chat", {
+    message: args.message,
+    ...args.session_id ? { targetSessionId: args.session_id } : {}
   });
   if (result?.success === false) return `Error: ${result.error ?? "send_chat failed"}`;
   return "Message sent.";
@@ -4587,10 +4087,6 @@ var APPROVE_TOOL = {
       session_id: {
         type: "string",
         description: "Target session ID. Omit to use the active session."
-      },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only)."
       }
     },
     required: ["action"]
@@ -4598,25 +4094,18 @@ var APPROVE_TOOL = {
 };
 async function approve(transport, args) {
   const action = args.action === "reject" ? "reject" : "approve";
-  if (isLocalTransport(transport)) {
-    const result2 = await transport.command("resolve_action", {
-      action,
-      ...args.session_id ? { targetSessionId: args.session_id } : {}
-    });
-    if (result2?.success === false) return `Error: ${result2.error ?? "resolve_action failed"}`;
-    return `Action ${action}d.`;
-  }
-  if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-  const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
-  const result = await transport.approve(targetId, action);
-  if (result?.success === false) return `Error: ${result.error ?? "approve failed"}`;
+  const result = await transport.command("resolve_action", {
+    action,
+    ...args.session_id ? { targetSessionId: args.session_id } : {}
+  });
+  if (result?.success === false) return `Error: ${result.error ?? "resolve_action failed"}`;
   return `Action ${action}d.`;
 }
 
 // src/tools/screenshot.ts
 var SCREENSHOT_TOOL = {
   name: "screenshot",
-  description: "Capture a screenshot of the current IDE window. Returns the image. Local mode only \u2014 screenshots require direct P2P access to the daemon and are not available in cloud mode.",
+  description: "Capture a screenshot of the current IDE window. Returns the image.",
   inputSchema: {
     type: "object",
     properties: {
@@ -4629,14 +4118,9 @@ var SCREENSHOT_TOOL = {
   }
 };
 async function screenshot(transport, args) {
-  let result;
-  if (isLocalTransport(transport)) {
-    result = await transport.command("screenshot", {
-      ...args.session_id ? { targetSessionId: args.session_id } : {}
-    });
-  } else {
-    return { type: "text", text: "Screenshots are not available in cloud mode. Run adhdev mcp in local mode (requires standalone daemon)." };
-  }
+  const result = await transport.command("screenshot", {
+    ...args.session_id ? { targetSessionId: args.session_id } : {}
+  });
   if (result?.success === false) {
     return { type: "text", text: `Error: ${result.error ?? "screenshot failed"}` };
   }
@@ -4663,42 +4147,22 @@ var GIT_STATUS_TOOL = {
         type: "boolean",
         description: "Include changed file list (default: true)."
       },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only)."
-      },
       ...FORMAT_PROP
     },
     required: ["workspace"]
   }
 };
 async function gitStatus(transport, args) {
-  let status;
   let diffSummary;
-  if (isLocalTransport(transport)) {
-    const statusResult = await transport.command("git_status", {
+  const statusResult = await transport.command("git_status", {
+    workspace: args.workspace
+  });
+  const status = statusResult?.status ?? statusResult;
+  if (args.include_diff !== false) {
+    const diffResult = await transport.command("git_diff_summary", {
       workspace: args.workspace
     });
-    status = statusResult?.status ?? statusResult;
-    if (args.include_diff !== false) {
-      const diffResult = await transport.command("git_diff_summary", {
-        workspace: args.workspace
-      });
-      diffSummary = diffResult?.diffSummary ?? diffResult;
-    }
-  } else {
-    if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-    const result = await transport.gitStatus(
-      args.daemon_id,
-      args.workspace,
-      args.include_diff !== false
-    );
-    if (result?.error) {
-      if (args.format === "json") return JSON.stringify({ error: result.error }, null, 2);
-      return `Error: ${result.error}`;
-    }
-    status = result?.status;
-    diffSummary = result?.diff;
+    diffSummary = diffResult?.diffSummary ?? diffResult;
   }
   if (status?.success === false || status?.reason) {
     const msg = status?.error ?? status?.reason ?? "unknown";
@@ -4790,10 +4254,6 @@ var GIT_LOG_TOOL = {
         type: "string",
         description: "Only commits before this date (ISO 8601 or git date string, optional)."
       },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only, required)."
-      },
       ...FORMAT_PROP
     },
     required: ["workspace"]
@@ -4801,26 +4261,14 @@ var GIT_LOG_TOOL = {
 };
 async function gitLog(transport, args) {
   const limit = Math.max(1, Math.min(100, args.limit ?? 20));
-  let raw;
-  if (isLocalTransport(transport)) {
-    raw = await transport.command("git_log", {
-      workspace: args.workspace,
-      limit,
-      ...args.file ? { path: args.file } : {},
-      ...args.since ? { since: args.since } : {},
-      ...args.until ? { until: args.until } : {}
-    });
-    raw = raw?.log ?? raw;
-  } else {
-    if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-    const result = await transport.gitLog(args.daemon_id, args.workspace, {
-      limit,
-      file: args.file,
-      since: args.since,
-      until: args.until
-    });
-    raw = result?.log ?? result;
-  }
+  let raw = await transport.command("git_log", {
+    workspace: args.workspace,
+    limit,
+    ...args.file ? { path: args.file } : {},
+    ...args.since ? { since: args.since } : {},
+    ...args.until ? { until: args.until } : {}
+  });
+  raw = raw?.log ?? raw;
   if (raw?.success === false || raw?.reason) {
     const msg = raw?.error ?? raw?.reason ?? "unknown";
     if (args.format === "json") return JSON.stringify({ error: msg }, null, 2);
@@ -4883,10 +4331,6 @@ var GIT_DIFF_TOOL = {
         type: "boolean",
         description: "Show staged changes instead of unstaged (default: false)."
       },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only, required)."
-      },
       ...FORMAT_PROP
     },
     required: ["workspace"]
@@ -4895,20 +4339,7 @@ var GIT_DIFF_TOOL = {
 async function gitDiff(transport, args) {
   const maxLines = Math.max(10, Math.min(2e3, args.max_lines ?? 300));
   const staged = args.staged ?? false;
-  if (isLocalTransport(transport)) {
-    return localGitDiff(transport, args.workspace, args.file, maxLines, staged, args.format);
-  }
-  if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-  const result = await transport.gitDiff(args.daemon_id, args.workspace, {
-    file: args.file,
-    maxLines,
-    staged
-  });
-  if (result?.error) {
-    if (args.format === "json") return JSON.stringify({ error: result.error }, null, 2);
-    return `Git diff error: ${result.error}`;
-  }
-  return formatDiffResult(result, args.format);
+  return localGitDiff(transport, args.workspace, args.file, maxLines, staged, args.format);
 }
 async function localGitDiff(transport, workspace, file, maxLines, staged, format) {
   if (file) {
@@ -5030,10 +4461,6 @@ var GIT_CHECKPOINT_TOOL = {
       include_untracked: {
         type: "boolean",
         description: "Also stage and commit untracked files (default: false)."
-      },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only, required)."
       }
     },
     required: ["workspace", "message"]
@@ -5043,23 +4470,12 @@ async function gitCheckpoint(transport, args) {
   const message = args.message?.trim();
   if (!message) return "Error: message is required";
   if (message.length > 200) return "Error: message must be 200 characters or fewer";
-  let raw;
-  if (isLocalTransport(transport)) {
-    raw = await transport.command("git_checkpoint", {
-      workspace: args.workspace,
-      message,
-      includeUntracked: args.include_untracked ?? false
-    });
-    raw = raw?.checkpoint ?? raw;
-  } else {
-    if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-    const result = await transport.gitCheckpoint(args.daemon_id, {
-      workspace: args.workspace,
-      message,
-      includeUntracked: args.include_untracked ?? false
-    });
-    raw = result?.checkpoint ?? result;
-  }
+  let raw = await transport.command("git_checkpoint", {
+    workspace: args.workspace,
+    message,
+    includeUntracked: args.include_untracked ?? false
+  });
+  raw = raw?.checkpoint ?? raw;
   if (raw?.success === false || raw?.reason) {
     const msg = raw?.error ?? raw?.reason ?? "unknown";
     if (msg.includes("Nothing to commit") || msg.includes("nothing to commit")) {
@@ -5090,33 +4506,18 @@ var GIT_PUSH_TOOL = {
       branch: {
         type: "string",
         description: "Branch to push (default: current branch)."
-      },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only, required)."
       }
     },
     required: ["workspace"]
   }
 };
 async function gitPush(transport, args) {
-  let raw;
-  if (isLocalTransport(transport)) {
-    raw = await transport.command("git_push", {
-      workspace: args.workspace,
-      remote: args.remote ?? "origin",
-      ...args.branch ? { branch: args.branch } : {}
-    });
-    raw = raw?.push ?? raw;
-  } else {
-    if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-    const result = await transport.gitPush(args.daemon_id, {
-      workspace: args.workspace,
-      remote: args.remote,
-      branch: args.branch
-    });
-    raw = result?.push ?? result;
-  }
+  let raw = await transport.command("git_push", {
+    workspace: args.workspace,
+    remote: args.remote ?? "origin",
+    ...args.branch ? { branch: args.branch } : {}
+  });
+  raw = raw?.push ?? raw;
   if (raw?.success === false || raw?.reason) {
     const msg = raw?.error ?? raw?.reason ?? "unknown";
     return `Git push error: ${msg}`;
@@ -5147,32 +4548,17 @@ var LAUNCH_SESSION_TOOL = {
       model: {
         type: "string",
         description: "Model override for ACP agents (e.g. claude-opus-4-7)."
-      },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only). Required in cloud mode."
       }
     },
     required: ["type"]
   }
 };
 async function launchSession(transport, args) {
-  if (isLocalTransport(transport)) {
-    const isCliOrAcp = args.type.includes("-cli") || args.type.includes("-acp") || args.type === "codex";
-    const commandType = isCliOrAcp ? "launch_cli" : "launch_ide";
-    const payload = isCliOrAcp ? { cliType: args.type, dir: args.workspace ?? "~", ...args.model ? { model: args.model } : {} } : { ideType: args.type, enableCdp: true };
-    const result2 = await transport.command(commandType, payload);
-    if (result2?.success === false) return `Error: ${result2.error ?? "launch failed"}`;
-    const id2 = result2?.id ?? result2?.sessionId;
-    return id2 ? `Session launched. id: ${id2}, type: ${args.type}` : `Launched: ${JSON.stringify(result2)}`;
-  }
-  if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-  const result = await transport.launch(args.daemon_id, {
-    type: args.type,
-    dir: args.workspace,
-    model: args.model
-  });
-  if (result?.success === false || result?.error) return `Error: ${result.error ?? "launch failed"}`;
+  const isCliOrAcp = args.type.includes("-cli") || args.type.includes("-acp") || args.type === "codex";
+  const commandType = isCliOrAcp ? "launch_cli" : "launch_ide";
+  const payload = isCliOrAcp ? { cliType: args.type, dir: args.workspace ?? "~", ...args.model ? { model: args.model } : {} } : { ideType: args.type, enableCdp: true };
+  const result = await transport.command(commandType, payload);
+  if (result?.success === false) return `Error: ${result.error ?? "launch failed"}`;
   const id = result?.id ?? result?.sessionId;
   return id ? `Session launched. id: ${id}, type: ${args.type}` : `Launched: ${JSON.stringify(result)}`;
 }
@@ -5188,43 +4574,29 @@ var STOP_SESSION_TOOL = {
         type: "string",
         description: "Session ID to stop (from list_sessions)."
       },
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID (cloud mode only, required)."
-      },
       type: {
         type: "string",
-        description: "Provider type (e.g. hermes-cli, claude-cli). Local mode auto-resolves from session_id if omitted; cloud mode forwards the session_id and omits type unless explicitly provided."
+        description: "Provider type (e.g. hermes-cli, claude-cli). Auto-resolved from session_id if omitted."
       }
     },
     required: ["session_id"]
   }
 };
 async function stopSession(transport, args) {
-  if (isLocalTransport(transport)) {
-    const local = transport;
-    let resolvedType = args.type;
-    if (!resolvedType) {
-      const status = await local.getStatus();
-      const session = (status?.sessions ?? []).find((s) => s.id === args.session_id);
-      resolvedType = session?.providerType ?? session?.type;
-    }
-    if (!resolvedType) {
-      return `Error: could not resolve session type for ${args.session_id}. Pass type= explicitly.`;
-    }
-    const result2 = await local.command("stop_cli", {
-      targetSessionId: args.session_id,
-      cliType: resolvedType
-    });
-    if (result2?.success === false) return `Error: ${result2.error ?? "stop failed"}`;
-    return `Session ${args.session_id} stopped.`;
+  let resolvedType = args.type;
+  if (!resolvedType) {
+    const status = await transport.getStatus();
+    const session = (status?.sessions ?? []).find((s) => s.id === args.session_id);
+    resolvedType = session?.providerType ?? session?.type;
   }
-  if (!args.daemon_id) throw new Error("daemon_id is required in cloud mode");
-  const result = await transport.stop(args.daemon_id, {
-    id: args.session_id,
-    ...args.type ? { type: args.type } : {}
+  if (!resolvedType) {
+    return `Error: could not resolve session type for ${args.session_id}. Pass type= explicitly.`;
+  }
+  const result = await transport.command("stop_cli", {
+    targetSessionId: args.session_id,
+    cliType: resolvedType
   });
-  if (result?.success === false || result?.error) return `Error: ${result.error ?? "stop failed"}`;
+  if (result?.success === false) return `Error: ${result.error ?? "stop failed"}`;
   return `Session ${args.session_id} stopped.`;
 }
 
@@ -5235,28 +4607,18 @@ var CHECK_PENDING_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
-      daemon_id: {
-        type: "string",
-        description: "Daemon ID to check (cloud mode). Omit to check all daemons."
-      },
       ...FORMAT_PROP
     },
     required: []
   }
 };
 async function checkPending(transport, args) {
-  if (isLocalTransport(transport)) {
-    return checkPendingLocal(transport, args.format);
-  }
-  return checkPendingCloud(transport, args.daemon_id, args.format);
-}
-async function checkPendingLocal(transport, format) {
   const status = await transport.getStatus();
   const sessions = status?.sessions ?? [];
   const pending = sessions.filter(
     (s) => s.status === "waiting_approval" || s.agentStatus === "waiting_approval"
   );
-  if (format === "json") {
+  if (args.format === "json") {
     return JSON.stringify({
       pending: pending.map((s) => ({
         session_id: s.id,
@@ -5281,56 +4643,6 @@ async function checkPendingLocal(transport, format) {
 
 ${lines.join("\n\n")}`;
 }
-async function checkPendingCloud(transport, daemonId, format) {
-  const pending = [];
-  if (daemonId) {
-    const daemonStatus = await transport.getDaemonStatus(daemonId);
-    const sessions = daemonStatus?.sessions ?? [];
-    for (const s of sessions) {
-      if (s.status === "waiting_approval") pending.push({ daemonId, session: s });
-    }
-  } else {
-    const data = await transport.listDaemons();
-    const daemons = data?.daemons ?? [];
-    for (let i = 0; i < daemons.length; i += 5) {
-      await Promise.allSettled(
-        daemons.slice(i, i + 5).map(async (d) => {
-          try {
-            const daemonStatus = await transport.getDaemonStatus(d.id);
-            const sessions = daemonStatus?.sessions ?? [];
-            for (const s of sessions) {
-              if (s.status === "waiting_approval") pending.push({ daemonId: d.id, session: s });
-            }
-          } catch {
-          }
-        })
-      );
-    }
-  }
-  if (format === "json") {
-    return JSON.stringify({
-      pending: pending.map(({ daemonId: dId, session: s }) => ({
-        daemon_id: dId,
-        session_id: s.id,
-        workspace: s.workspace ?? null,
-        type: s.providerType ?? null,
-        modal_message: null,
-        buttons: []
-      }))
-    }, null, 2);
-  }
-  if (pending.length === 0) return "No sessions waiting for approval.";
-  const lines = pending.map(({ daemonId: dId, session: s }) => {
-    const parts = [`daemon_id: ${dId}`, `session_id: ${s.id}`];
-    if (s.workspace) parts.push(`workspace: ${s.workspace}`);
-    if (s.providerType) parts.push(`type: ${s.providerType}`);
-    parts.push("(use read_chat to see the approval prompt)");
-    return parts.join("\n  ");
-  });
-  return `Pending approvals (${pending.length}):
-
-${lines.join("\n\n")}`;
-}
 
 // src/server.ts
 async function buildMeshModeCoordinatorPrompt(mesh) {
@@ -5342,10 +4654,10 @@ async function buildMeshModeCoordinatorPrompt(mesh) {
   }
 }
 async function startMcpServer(opts) {
-  const transport = opts.mode === "cloud" ? new CloudTransport({ apiKey: opts.apiKey, baseUrl: opts.baseUrl }) : opts.mode === "ipc" ? new IpcTransport({ port: opts.port }) : new LocalTransport({ port: opts.port, password: opts.password });
+  const transport = opts.mode === "ipc" ? new IpcTransport({ port: opts.port }) : new LocalTransport({ port: opts.port, password: opts.password });
   const alive = await transport.ping();
   if (!alive) {
-    const hint = opts.mode === "local" ? `Make sure the standalone daemon is running (adhdev standalone or npx @adhdev/daemon-standalone).` : opts.mode === "ipc" ? `Make sure the cloud daemon is running with local IPC enabled (adhdev daemon).` : `Check your API key and network connectivity.`;
+    const hint = opts.mode === "local" ? `Make sure the standalone daemon is running (adhdev standalone or npx @adhdev/daemon-standalone).` : `Make sure the cloud daemon is running with local IPC enabled (adhdev daemon).`;
     process.stderr.write(`[adhdev-mcp] Cannot reach ${opts.mode} daemon. ${hint}
 `);
     process.exit(1);
@@ -5360,64 +4672,6 @@ async function startMcpServer(opts) {
 `);
       } catch (e) {
         process.stderr.write(`[adhdev-mcp] Failed to parse ADHDEV_INLINE_MESH: ${e.message}
-`);
-      }
-    }
-    if (!mesh && opts.mode === "cloud" && opts.apiKey) {
-      try {
-        const base = opts.baseUrl || "https://api.adhf.dev";
-        const res = await fetch(`${base}/api/v1/repo-meshes/${opts.meshId}`, {
-          headers: { "Authorization": `Bearer ${opts.apiKey}`, "Content-Type": "application/json" }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const rm = data.mesh;
-          const nodes = data.nodes || [];
-          let policy = {};
-          try {
-            policy = JSON.parse(rm.policy_json || rm.policy || "{}");
-          } catch {
-          }
-          let coordinator = {};
-          try {
-            coordinator = JSON.parse(rm.coordinator_json || rm.coordinator_config || "{}");
-          } catch {
-          }
-          mesh = {
-            id: rm.id,
-            name: rm.name,
-            repoIdentity: rm.repo_identity,
-            repoRemoteUrl: rm.repo_remote_url,
-            defaultBranch: rm.default_branch,
-            policy: {
-              requirePreTaskCheckpoint: false,
-              requirePostTaskCheckpoint: true,
-              requireApprovalForPush: true,
-              allowAutoPublishSubmoduleMainCommits: false,
-              requireApprovalForDestructiveGit: true,
-              dirtyWorkspaceBehavior: "warn",
-              maxParallelTasks: 2,
-              spawnedSessionVisibility: "visible",
-              ...policy
-            },
-            coordinator,
-            nodes: nodes.map((n) => ({
-              id: n.id,
-              workspace: n.workspace,
-              repoRoot: n.repo_root,
-              daemonId: n.daemon_id,
-              userOverrides: {},
-              policy: {},
-              isLocalWorktree: false
-            })),
-            createdAt: rm.created_at,
-            updatedAt: rm.updated_at
-          };
-          process.stderr.write(`[adhdev-mcp] Loaded mesh config from cloud API
-`);
-        }
-      } catch (e) {
-        process.stderr.write(`[adhdev-mcp] Cloud mesh fetch failed, falling back to local: ${e.message}
 `);
       }
     }
@@ -5444,7 +4698,7 @@ async function startMcpServer(opts) {
       }
     }
     if (!mesh) {
-      process.stderr.write(`[adhdev-mcp] Mesh '${opts.meshId}' not found in ${opts.mode === "cloud" ? "cloud or local" : "local"} config. Use 'adhdev mesh list' to see available meshes.
+      process.stderr.write(`[adhdev-mcp] Mesh '${opts.meshId}' not found in local config. Use 'adhdev mesh list' to see available meshes.
 `);
       process.exit(1);
     }
@@ -5570,6 +4824,12 @@ async function startMcpServer(opts) {
           case "mesh_reconcile_ledger":
             text = await meshReconcileLedger(meshCtx, a);
             break;
+          case "mesh_mission_upsert":
+            text = await meshMissionUpsert(meshCtx, a);
+            break;
+          case "mesh_review_inbox":
+            text = await meshReviewInbox(meshCtx, a);
+            break;
           default:
             return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
         }
@@ -5617,7 +4877,7 @@ async function startMcpServer(opts) {
           return { content: [{ type: "text", text }] };
         }
         case "list_sessions": {
-          const text = await listSessions(transport, { format: a.format, daemon_id: a.daemon_id });
+          const text = await listSessions(transport, { format: a.format });
           return { content: [{ type: "text", text }] };
         }
         case "read_chat": {
@@ -5633,12 +4893,12 @@ async function startMcpServer(opts) {
           return { content: [{ type: "text", text }] };
         }
         case "send_chat": {
-          const text = await sendChat(transport, { message: a.message, session_id: a.session_id, daemon_id: a.daemon_id });
+          const text = await sendChat(transport, { message: a.message, session_id: a.session_id });
           return { content: [{ type: "text", text }] };
         }
         case "approve": {
           const action = a.action === "reject" ? "reject" : "approve";
-          const text = await approve(transport, { action, session_id: a.session_id, daemon_id: a.daemon_id });
+          const text = await approve(transport, { action, session_id: a.session_id });
           return { content: [{ type: "text", text }] };
         }
         case "screenshot": {
@@ -5651,44 +4911,42 @@ async function startMcpServer(opts) {
           return { content: [{ type: "text", text: result.text }] };
         }
         case "git_status": {
-          const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, daemon_id: a.daemon_id, format: a.format });
+          const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format });
           return { content: [{ type: "text", text }] };
         }
         case "git_log": {
-          const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, daemon_id: a.daemon_id, format: a.format });
+          const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format });
           return { content: [{ type: "text", text }] };
         }
         case "git_diff": {
-          const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, daemon_id: a.daemon_id, format: a.format });
+          const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format });
           return { content: [{ type: "text", text }] };
         }
         case "git_checkpoint": {
-          const text = await gitCheckpoint(transport, { workspace: a.workspace, message: a.message, include_untracked: a.include_untracked, daemon_id: a.daemon_id });
+          const text = await gitCheckpoint(transport, { workspace: a.workspace, message: a.message, include_untracked: a.include_untracked });
           return { content: [{ type: "text", text }] };
         }
         case "git_push": {
-          const text = await gitPush(transport, { workspace: a.workspace, remote: a.remote, branch: a.branch, daemon_id: a.daemon_id });
+          const text = await gitPush(transport, { workspace: a.workspace, remote: a.remote, branch: a.branch });
           return { content: [{ type: "text", text }] };
         }
         case "launch_session": {
           const text = await launchSession(transport, {
             type: a.type,
             workspace: a.workspace,
-            model: a.model,
-            daemon_id: a.daemon_id
+            model: a.model
           });
           return { content: [{ type: "text", text }] };
         }
         case "stop_session": {
           const text = await stopSession(transport, {
             session_id: a.session_id,
-            daemon_id: a.daemon_id,
             type: a.type
           });
           return { content: [{ type: "text", text }] };
         }
         case "check_pending": {
-          const text = await checkPending(transport, { daemon_id: a.daemon_id, format: a.format });
+          const text = await checkPending(transport, { format: a.format });
           return { content: [{ type: "text", text }] };
         }
         default:
@@ -5710,26 +4968,18 @@ async function startMcpServer(opts) {
 // src/index.ts
 function parseArgs(argv, env = process.env) {
   const args = argv.slice(2);
-  let apiKey;
-  let baseUrl;
   let port;
   let password;
   let meshId;
   let explicitMode;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if ((arg === "--api-key" || arg === "-k") && args[i + 1]) {
-      apiKey = args[++i];
-    } else if (arg?.startsWith("--api-key=")) {
-      apiKey = arg.slice("--api-key=".length);
-    } else if (arg === "--base-url" && args[i + 1]) {
-      baseUrl = args[++i];
-    } else if (arg === "--mode" && args[i + 1]) {
+    if (arg === "--mode" && args[i + 1]) {
       const value = String(args[++i]).trim();
-      if (value === "local" || value === "cloud" || value === "ipc") explicitMode = value;
+      if (value === "local" || value === "ipc") explicitMode = value;
     } else if (arg?.startsWith("--mode=")) {
       const value = arg.slice("--mode=".length).trim();
-      if (value === "local" || value === "cloud" || value === "ipc") explicitMode = value;
+      if (value === "local" || value === "ipc") explicitMode = value;
     } else if (arg === "--port" && args[i + 1]) {
       port = Number(args[++i]);
     } else if (arg?.startsWith("--port=")) {
@@ -5745,15 +4995,14 @@ function parseArgs(argv, env = process.env) {
       process.exit(0);
     }
   }
-  if (!apiKey && env.ADHDEV_API_KEY) apiKey = env.ADHDEV_API_KEY;
   if (!password && env.ADHDEV_PASSWORD) password = env.ADHDEV_PASSWORD;
   if (!meshId && env.ADHDEV_MESH_ID) meshId = env.ADHDEV_MESH_ID;
   if (!explicitMode && env.ADHDEV_MCP_TRANSPORT) {
     const value = env.ADHDEV_MCP_TRANSPORT.trim();
-    if (value === "local" || value === "cloud" || value === "ipc") explicitMode = value;
+    if (value === "local" || value === "ipc") explicitMode = value;
   }
-  const mode = explicitMode || (apiKey ? "cloud" : meshId && env.ADHDEV_INLINE_MESH ? "ipc" : "local");
-  return { mode, port, password, apiKey, baseUrl, meshId };
+  const mode = explicitMode || (meshId && env.ADHDEV_INLINE_MESH ? "ipc" : "local");
+  return { mode, port, password, meshId };
 }
 function printHelp() {
   console.error(buildMcpHelpText());
