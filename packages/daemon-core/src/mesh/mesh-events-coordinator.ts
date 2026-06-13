@@ -10,7 +10,7 @@ import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, 
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
+import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, markMeshCoordinatorEventDirectDelivered } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import {
     findRecentTerminalLedgerEvidence,
@@ -1435,21 +1435,31 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // Previously, terminal events skipped the queue and were only direct-injected
     // into live CLI coordinators via send_message, which silently dropped them
     // when the coordinator was in a generating state.
-    if (queuePendingMeshCoordinatorEvent({
-            event: args.event,
-            meshId: args.meshId,
-            nodeLabel: args.nodeLabel,
-            nodeId: args.nodeId || undefined,
-            workspace: readNonEmptyString(args.metadataEvent.workspace),
-            metadataEvent: {
-                ...args.metadataEvent,
-                ...(recoveryContext ? { recoveryContext } : {}),
-            },
-            coordinatorMessage: messageText,
-            queuedAt: Date.now(),
-            ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
-        })) {
+    const pendingEvent = {
+        event: args.event,
+        meshId: args.meshId,
+        nodeLabel: args.nodeLabel,
+        nodeId: args.nodeId || undefined,
+        workspace: readNonEmptyString(args.metadataEvent.workspace),
+        metadataEvent: {
+            ...args.metadataEvent,
+            ...(recoveryContext ? { recoveryContext } : {}),
+        },
+        coordinatorMessage: messageText,
+        queuedAt: Date.now(),
+        ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
+    };
+    if (queuePendingMeshCoordinatorEvent(pendingEvent)) {
         LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+    }
+
+    // R3: the live coordinators below receive this event directly in their PTY. They (or their
+    // MCP client) also poll get_pending_mesh_events with coordinatorDaemonId = this daemon, which
+    // would re-deliver the queued copy → the user saw the same completion twice. Mark the event
+    // direct-delivered to THIS daemon so that coordinator's own drain skips it. The queue entry
+    // stays for every OTHER consumer (idle / MCP-only / remote) that did not get the direct inject.
+    if (localDaemonId) {
+        markMeshCoordinatorEventDirectDelivered(localDaemonId, pendingEvent);
     }
 
     const forceInject = shouldForceInjectMeshEvent(args.event);

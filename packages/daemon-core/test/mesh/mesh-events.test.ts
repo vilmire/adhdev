@@ -242,11 +242,76 @@ describe('setupMeshEventForwarding', () => {
       // so it must be force-injected to bypass the busy send-guard / pendingOutboundQueue.
       expect(payload.force).toBe(true)
 
-      // Terminal events are also queued for MCP coordinator dual delivery so that
-      // coordinators polling via mesh_status/get_pending_mesh_events always receive them.
+      // Terminal events are still queued so that OTHER consumers (idle / MCP-only / remote
+      // coordinators) that did not receive the direct inject can backfill via the queue. An
+      // unscoped drain (no coordinatorDaemonId — a consumer that did not get the direct inject)
+      // still sees the event.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0].event).toBe('agent:generating_completed')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('R3: the same live coordinator that got the direct inject does not re-drain the queued copy (exactly-once)', () => {
+    // The dual-delivery bug: a live CLI coordinator receives a terminal event twice — once via
+    // the direct PTY inject (coord.onEvent), once by draining the queued copy through its own
+    // get_pending_mesh_events poll (which passes coordinatorDaemonId = ctx.localDaemonId). The
+    // coordinator daemon here is 'test-machine' (loadConfig().machineId mock). The event is
+    // direct-injected, so a drain SCOPED to that daemon must skip the queued copy.
+    const meshId = `mesh_r3_exactly_once_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit, coordinator } = createComponents(meshId)
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'codex-history-r3',
+        finalSummary: 'done',
+        timestamp: 99001,
+      })
+
+      // Coordinator got it once in its PTY.
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+
+      // Its own poll (scoped to its daemon) must NOT re-deliver the same event.
+      const scopedDrain = drainPendingMeshCoordinatorEvents(meshId, 'test-machine')
+      expect(scopedDrain).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('R3: a DIFFERENT coordinator daemon still drains the queued event (dual delivery preserved for others)', () => {
+    // The dedup is scoped per coordinator daemon: only the daemon that received the direct inject
+    // skips the queued copy. A coordinator on another daemon (or an unscoped/MCP-only consumer)
+    // never received the inject and must still backfill from the queue.
+    const meshId = `mesh_r3_other_daemon_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit } = createComponents(meshId)
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'codex-history-r3b',
+        finalSummary: 'done',
+        timestamp: 99002,
+      })
+
+      const otherDaemonDrain = drainPendingMeshCoordinatorEvents(meshId, 'some-other-daemon')
+      expect(otherDaemonDrain).toHaveLength(1)
+      expect(otherDaemonDrain[0].event).toBe('agent:generating_completed')
     } finally {
       cleanupMeshFiles(meshId)
     }

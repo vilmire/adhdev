@@ -117,6 +117,21 @@ export class MeshRuntimeStore {
                 expires_at INTEGER NOT NULL
             );
 
+            -- R3: idempotent coordinator inbox. When a terminal/force-inject event is
+            -- direct-injected into a LIVE local CLI coordinator (coord.onEvent('send_message')),
+            -- we record (coordinator_daemon_id, fingerprint) here. That same coordinator also
+            -- polls get_pending_mesh_events, which would re-deliver the queued copy of the very
+            -- event it just received in its PTY → user sees the completion twice. The drain for
+            -- a coordinator daemon filters out events already direct-delivered to it, giving
+            -- exactly-once-per-coordinator while keeping the queue for other consumers (idle /
+            -- MCP-only / remote) that did NOT receive the direct inject.
+            CREATE TABLE IF NOT EXISTS mesh_direct_delivered_events (
+                coordinator_daemon_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (coordinator_daemon_id, fingerprint)
+            );
+
             CREATE TABLE IF NOT EXISTS mesh_direct_dispatches (
                 task_id TEXT PRIMARY KEY,
                 mesh_id TEXT NOT NULL,
@@ -279,6 +294,28 @@ export class MeshRuntimeStore {
 
     sweepExpiredFingerprints(): void {
         this.db.prepare('DELETE FROM mesh_completion_fingerprints WHERE expires_at <= ?').run(Date.now());
+    }
+
+    // R3: record that an event (by pending-event fingerprint) was direct-injected into a live
+    // coordinator on the given daemon, so that coordinator's own drain skips the queued copy.
+    recordDirectDelivered(coordinatorDaemonId: string, fingerprint: string, ttlMs: number): void {
+        if (!coordinatorDaemonId || !fingerprint) return;
+        this.db.prepare(
+            'INSERT OR REPLACE INTO mesh_direct_delivered_events (coordinator_daemon_id, fingerprint, expires_at) VALUES (?, ?, ?)'
+        ).run(coordinatorDaemonId, fingerprint, Date.now() + ttlMs);
+        this.maybeCheckpointWal();
+    }
+
+    wasDirectDelivered(coordinatorDaemonId: string, fingerprint: string): boolean {
+        if (!coordinatorDaemonId || !fingerprint) return false;
+        const row = this.db.prepare(
+            'SELECT 1 FROM mesh_direct_delivered_events WHERE coordinator_daemon_id = ? AND fingerprint = ? AND expires_at > ?'
+        ).get(coordinatorDaemonId, fingerprint, Date.now());
+        return row !== undefined;
+    }
+
+    sweepExpiredDirectDelivered(): void {
+        this.db.prepare('DELETE FROM mesh_direct_delivered_events WHERE expires_at <= ?').run(Date.now());
     }
 
     private maybeCheckpointWal(): void {

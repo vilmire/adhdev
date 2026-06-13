@@ -11,6 +11,7 @@ export {
     drainPendingMeshCoordinatorEvents,
     getPendingMeshCoordinatorEvents,
     clearPendingMeshCoordinatorEvents,
+    markMeshCoordinatorEventDirectDelivered,
 } from './mesh-events-pending.js';
 
 export {
