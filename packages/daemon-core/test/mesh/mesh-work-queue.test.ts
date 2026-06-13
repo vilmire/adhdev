@@ -14,6 +14,7 @@ import {
     nodeSatisfiesRequiredTags,
     hasPendingDependents,
     describeTaskDependencyState,
+    validateMeshTaskModeRequest,
     __clearMeshQueueForTests,
     __replaceMeshQueueForTests,
     __resetMeshRuntimeStoreForTests
@@ -586,5 +587,74 @@ describe('buildMeshNodeCapabilityTags — worktree tag auto-registration', () =>
         const worktreeClaim = claimNextTask(meshId, 'node-worktree', 'sess-worktree', worktreeTags);
         expect(worktreeClaim).not.toBeNull();
         expect(worktreeClaim!.message).toBe('fix task');
+    });
+});
+
+describe('validateMeshTaskModeRequest — live_debug_readonly git guardrail', () => {
+    const expectAllowed = (message: string) => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', message);
+        expect(result.violations).not.toContain('git_mutation');
+        expect(result.valid).toBe(true);
+    };
+    const expectGitMutation = (message: string) => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', message);
+        expect(result.violations).toContain('git_mutation');
+        expect(result.valid).toBe(false);
+    };
+
+    describe('allows read-only git diagnostics', () => {
+        const readOnly = [
+            'git stash list',
+            "git stash show --stat 'stash@{0}'",
+            'git stash show',
+            'git status -sb',
+            'git diff --stat',
+            'git log --oneline -20',
+            'git show HEAD',
+            'git rev-parse HEAD',
+            'git branch --list',
+            'git branch -l',
+            'git submodule status',
+            'git checkout-index -a --prefix=/tmp/dump/',
+            'run git stash list then git diff --stat to inspect the working tree',
+        ];
+        for (const msg of readOnly) {
+            it(`allows: ${msg}`, () => expectAllowed(msg));
+        }
+    });
+
+    describe('still blocks real git mutations', () => {
+        const mutations = [
+            'git stash pop',
+            'git stash drop',
+            'git stash apply',
+            'git stash push',
+            'git stash', // bare stash defaults to push
+            'git stash clear',
+            'git checkout main',
+            'git checkout -- src/file.ts',
+            'git switch feature',
+            'git reset --hard',
+            'git restore .',
+            'git clean -fd',
+            'git submodule update --init --recursive',
+            'git rebase main',
+            'git merge origin/main',
+            'git commit -m "x"',
+            'git add -A',
+            'git push origin main',
+            'git rm file.ts',
+            'git mv a b',
+            'first run git status, then git reset --hard to recover',
+        ];
+        for (const msg of mutations) {
+            it(`blocks: ${msg}`, () => expectGitMutation(msg));
+        }
+    });
+
+    it('does not block non-git "push" prose (e.g. push notification)', () => {
+        // bare "push" word is no longer a git_mutation trigger
+        const result = validateMeshTaskModeRequest('live_debug_readonly', 'inspect the push notification queue');
+        expect(result.violations).not.toContain('git_mutation');
     });
 });

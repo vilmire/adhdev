@@ -22,13 +22,67 @@ export interface MeshTaskModeValidationResult {
 
 const LIVE_DEBUG_READONLY_FORBIDDEN: Array<{ label: string; pattern: RegExp }> = [
     { label: 'source_edit', pattern: /\b(edit|modify|patch|apply\s+patch|write\s+(?:to\s+)?(?:file|source)|overwrite|delete\s+file|remove\s+file|create\s+file|touch\s+file)\b/i },
-    { label: 'git_mutation', pattern: /\b(?:git\s+(?:add|commit|push|reset|rebase|clean|checkout|switch|merge|tag|restore|rm|mv|stash|worktree\s+(?:add|remove|move))|push\b)/i },
     { label: 'checkpoint', pattern: /\b(checkpoint|mesh_checkpoint)\b/i },
     { label: 'deploy_or_version_bump', pattern: /\b(deploy|wrangler\s+deploy|version[-\s]?bump|npm\s+version|release|npm\s+publish|yarn\s+publish|pnpm\s+publish)\b/i },
     { label: 'destructive_shell', pattern: /\b(rm\s+-rf|mv\s+\S+\s+\S+|truncate\s|tee\s+\S+|sed\s+-i|shred\b)\b/i },
     { label: 'package_install', pattern: /\b(npm\s+(?:install|i|add|link|uninstall|remove)|yarn\s+(?:add|remove|link)|pnpm\s+(?:add|remove|link)|pip\s+install|brew\s+install|apt\s+install|cargo\s+install)\b/i },
     { label: 'container_mutation', pattern: /\b(docker\s+(?:build|run|exec|push|tag|rmi|rm|create|start|stop|kill)|kubectl\s+(?:apply|delete|patch|replace|create|scale))\b/i },
 ];
+
+/**
+ * Git subcommands that mutate the working tree, index, refs, or remote.
+ * `stash` and `checkout` are intentionally absent here: they have read-only
+ * variants (`git stash list`/`show`, `git checkout-index`) and are classified
+ * token-by-token in {@link detectGitMutation} rather than by bare keyword.
+ */
+const GIT_MUTATION_SUBCOMMANDS = new Set([
+    'add', 'commit', 'push', 'reset', 'rebase', 'clean', 'switch', 'merge',
+    'tag', 'restore', 'rm', 'mv', 'cherry-pick', 'revert', 'pull', 'fetch',
+    'am', 'apply', 'gc', 'prune',
+]);
+
+/**
+ * Read-only `git stash` variants. Any other `git stash <x>` (pop/apply/drop/
+ * push/save/clear, or bare `git stash` which defaults to push) is a mutation.
+ */
+const GIT_STASH_READONLY_SUBCOMMANDS = new Set(['list', 'show']);
+
+/**
+ * Detects a true git mutation in free-text task message, token-aware so that
+ * read-only diagnostics (`git stash list`, `git stash show --stat`,
+ * `git checkout-index`, `git status`, `git diff`, `git log`, ...) are allowed.
+ * Returns true only when a genuine mutating git invocation is present.
+ */
+function detectGitMutation(message: string): boolean {
+    const re = /\bgit\s+([a-z][a-z0-9-]*)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(message)) !== null) {
+        const sub = match[1].toLowerCase();
+        if (GIT_MUTATION_SUBCOMMANDS.has(sub)) return true;
+        if (sub === 'stash') {
+            // Token following `git stash`; read-only only for list/show.
+            const after = message.slice(re.lastIndex).match(/^\s+([a-z][a-z0-9-]*)/i);
+            const next = after ? after[1].toLowerCase() : '';
+            if (!GIT_STASH_READONLY_SUBCOMMANDS.has(next)) return true; // bare stash = push, or pop/apply/drop/...
+        } else if (sub === 'checkout') {
+            // `git checkout <ref/path>` mutates; `git checkout-index` is matched
+            // as its own token by the regex (sub === 'checkout-index') and is read-only.
+            return true;
+        } else if (sub === 'submodule') {
+            // `git submodule update` mutates; `git submodule status` is read-only.
+            const after = message.slice(re.lastIndex).match(/^\s+([a-z][a-z0-9-]*)/i);
+            const next = after ? after[1].toLowerCase() : '';
+            if (next === 'update' || next === 'add' || next === 'sync' || next === 'deinit') return true;
+        } else if (sub === 'worktree') {
+            const after = message.slice(re.lastIndex).match(/^\s+([a-z][a-z0-9-]*)/i);
+            const next = after ? after[1].toLowerCase() : '';
+            if (next === 'add' || next === 'remove' || next === 'move' || next === 'prune') return true;
+        }
+        // checkout-index, stash-with-no-next-already-handled, status/diff/log/show/
+        // rev-parse/branch/submodule status fall through as read-only.
+    }
+    return false;
+}
 
 export function normalizeMeshTaskMode(value: unknown): MeshTaskMode | undefined {
     if (typeof value !== 'string') return undefined;
@@ -44,9 +98,13 @@ export function validateMeshTaskModeRequest(mode: unknown, message: string): Mes
     if (taskMode !== 'live_debug_readonly') {
         return { valid: true, taskMode, violations: [] };
     }
+    const text = message || '';
     const violations = LIVE_DEBUG_READONLY_FORBIDDEN
-        .filter(rule => rule.pattern.test(message || ''))
+        .filter(rule => rule.pattern.test(text))
         .map(rule => rule.label);
+    if (detectGitMutation(text)) {
+        violations.push('git_mutation');
+    }
     return {
         valid: violations.length === 0,
         taskMode,
