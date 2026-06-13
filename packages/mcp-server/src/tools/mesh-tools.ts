@@ -2020,9 +2020,13 @@ async function drainCoordinatorPendingEvents(
             for (const event of localEvents) {
                 const payload = buildMeshForwardPayloadFromPendingEvent(event);
                 if (!payload.event || !payload.meshId) continue;
-                try { await ctx.transport.command('mesh_forward_event', payload); } catch { /* best-effort */ }
+                let injected = false;
+                try {
+                    await ctx.transport.command('mesh_forward_event', payload);
+                    injected = true;
+                } catch { /* best-effort */ }
                 rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-                surfacedEvents.push(event);
+                if (!injected) surfacedEvents.push(event);
             }
         } catch {
             // Non-fatal: pending events are best-effort.
@@ -2055,9 +2059,13 @@ async function drainCoordinatorPendingEvents(
             for (const event of localEvents) {
                 const payload = buildMeshForwardPayloadFromPendingEvent(event);
                 if (!payload.event || !payload.meshId) continue;
-                try { await ctx.transport.command('mesh_forward_event', payload); } catch { /* best-effort */ }
+                let injected = false;
+                try {
+                    await ctx.transport.command('mesh_forward_event', payload);
+                    injected = true;
+                } catch { /* best-effort */ }
                 rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-                surfacedEvents.push(event);
+                if (!injected) surfacedEvents.push(event);
             }
         } catch {
             // Non-fatal: pending events are best-effort.
