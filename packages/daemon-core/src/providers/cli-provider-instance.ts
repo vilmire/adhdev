@@ -73,12 +73,6 @@ type CompletionFinalAssistantEvidence = {
     source: 'parsed' | 'external-native' | 'unavailable';
 };
 
-type ExternalNativeFinalReconciliation = {
-    fingerprint: string;
-    finalSummary: string;
-    evidence: CompletionFinalAssistantEvidence;
-};
-
 type ExternalTranscriptProbe = {
     readAt: number;
     msgCount: number;
@@ -376,7 +370,6 @@ export class CliProviderInstance implements ProviderInstance {
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     private lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
     private lastAcknowledgedUserInputAt = 0;
-    private externalBusyIdleFingerprint = '';
     private lastNativeSourceCanonicalCheckAt = 0;
     private lastNativeSourceCanonicalCacheKey: string | undefined = undefined;
     private cachedSqliteDb: {
@@ -599,17 +592,11 @@ export class CliProviderInstance implements ProviderInstance {
         let visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
             ? 'error'
             : (autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status);
-        const externalNativeFinal = this.getExternalNativeFinalReconciliation(parsedStatus?.messages, adapterStatus);
-        if (externalNativeFinal && isCliGeneratingLikeStatus(visibleStatus)) {
-            visibleStatus = 'idle';
-        }
-        // Adapter raw status can lag behind parsed/native evidence: if the spec driver
-        // has not yet emitted a state_changed(idle) event but the parsed transcript
-        // already shows a final assistant turn, treat the session as idle so that
-        // getState() agrees with what detectStatusTransition already recorded via
-        // lastStatus. Without this guard, getState() returns 'generating' even after
-        // the instance's lastStatus has flipped to 'idle', causing the dashboard to
-        // show a perpetual generating spinner.
+        // getState() must agree with the status the FSM-driven detectStatusTransition()
+        // already committed to lastStatus. The adapter's own status is authoritative; we do
+        // not second-guess it with native-transcript shape. Only reconcile a generating-like
+        // read down to idle when our own lastStatus has already flipped idle (avoids a
+        // perpetual dashboard spinner during the brief window before the next getStatus()).
         if (isCliGeneratingLikeStatus(visibleStatus) && this.lastStatus === 'idle') {
             visibleStatus = 'idle';
         }
@@ -940,7 +927,6 @@ export class CliProviderInstance implements ProviderInstance {
 
         const receivedAt = Date.now();
         this.lastAcknowledgedUserInputAt = receivedAt;
-        this.externalBusyIdleFingerprint = '';
         const dedupKey = `user_input_ack:${crypto
             .createHash('sha256')
             .update(`${this.instanceId}:${content}:${receivedAt}`)
@@ -1106,59 +1092,6 @@ export class CliProviderInstance implements ProviderInstance {
         return extractFinalSummaryFromMessages(evidence.messages as any);
     }
 
-    private externalNativeFinalFingerprint(evidence: CompletionFinalAssistantEvidence): string {
-        const messages = Array.isArray(evidence.messages) ? evidence.messages : [];
-        const visibleMessages = messages.filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
-        const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
-        const content = lastVisible ? flattenContent(lastVisible.content).trim() : '';
-        const receivedAt = lastVisible ? getMessageTime(lastVisible) : 0;
-        const probe = this.lastExternalCompletionProbe;
-        return crypto
-            .createHash('sha256')
-            .update([
-                this.type,
-                this.providerSessionId || '',
-                probe?.sourcePath || '',
-                String(probe?.sourceMtimeMs || 0),
-                String(receivedAt || 0),
-                content.slice(-500),
-            ].join('\0'))
-            .digest('hex')
-            .slice(0, 24);
-    }
-
-    private getExternalNativeFinalReconciliation(parsedMessages: unknown, adapterStatus: any): ExternalNativeFinalReconciliation | null {
-        const rawStatus = typeof adapterStatus?.status === 'string' ? adapterStatus.status.trim() : '';
-        if (!isCliGeneratingLikeStatus(rawStatus)) return null;
-        if (hasNonEmptyCliModalButtons(adapterStatus?.activeModal ?? adapterStatus?.modal)) return null;
-
-        const evidence = this.completionFinalAssistantEvidence(parsedMessages);
-        if (evidence.source !== 'external-native' || !evidence.present) return null;
-
-        const messages = Array.isArray(evidence.messages) ? evidence.messages : [];
-        const visibleMessages = messages.filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
-        const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
-        const lastMessageAt = lastVisible ? getMessageTime(lastVisible) : 0;
-        const sourceMtimeMs = Number(this.lastExternalCompletionProbe?.sourceMtimeMs || 0);
-        const minEvidenceAt = Math.max(
-            this.startedAt > 0 ? this.startedAt - 5_000 : 0,
-            this.generatingStartedAt > 0 ? this.generatingStartedAt - 5_000 : 0,
-            this.lastAcknowledgedUserInputAt > 0 ? this.lastAcknowledgedUserInputAt - 1_000 : 0,
-        );
-        if (minEvidenceAt > 0 && lastMessageAt > 0 && lastMessageAt < minEvidenceAt && sourceMtimeMs < minEvidenceAt) {
-            return null;
-        }
-
-        const finalSummary = extractFinalSummaryFromMessages(evidence.messages as any);
-        if (!finalSummary) return null;
-        const fingerprint = this.externalNativeFinalFingerprint(evidence);
-        if (fingerprint === this.externalBusyIdleFingerprint) {
-            return { fingerprint, finalSummary, evidence };
-        }
-        this.externalBusyIdleFingerprint = fingerprint;
-        return { fingerprint, finalSummary, evidence };
-    }
-
     private buildCompletedFinalizationDiagnostic(args: {
         blockReason: string;
         latestStatus?: any;
@@ -1248,13 +1181,12 @@ export class CliProviderInstance implements ProviderInstance {
         return true;
     }
 
-    private getCompletedFinalizationBlock(latestVisibleStatus: string, pending: CompletedDebouncePending, opts?: { externalNativeFinal?: ExternalNativeFinalReconciliation | null }): CompletedFinalizationBlock | null {
+    private getCompletedFinalizationBlock(latestVisibleStatus: string, pending: CompletedDebouncePending): CompletedFinalizationBlock | null {
         if (latestVisibleStatus !== 'idle') return { reason: `status:${latestVisibleStatus}`, terminal: true };
 
         const adapterAny = this.adapter as any;
         const approvalResolvedIdle = pending.previousStatus === 'waiting_approval';
-        const externalNativeFinal = opts?.externalNativeFinal || null;
-        if (!approvalResolvedIdle && !externalNativeFinal) {
+        if (!approvalResolvedIdle) {
             if (adapterAny?.isWaitingForResponse === true) return { reason: 'adapter_waiting_for_response', terminal: true };
             if (adapterAny?.currentTurnScope) return { reason: 'adapter_turn_scope_active', terminal: true };
             if (this.hasAdapterPendingResponse()) return { reason: 'adapter_pending_response', terminal: true };
@@ -1263,7 +1195,7 @@ export class CliProviderInstance implements ProviderInstance {
         const partial = typeof this.adapter.getPartialResponse === 'function'
             ? this.adapter.getPartialResponse()
             : '';
-        if (!externalNativeFinal && typeof partial === 'string' && partial.trim()) return { reason: 'partial_response_pending', terminal: true };
+        if (typeof partial === 'string' && partial.trim()) return { reason: 'partial_response_pending', terminal: true };
 
         let parsed: any;
         try {
@@ -1275,7 +1207,6 @@ export class CliProviderInstance implements ProviderInstance {
         const parsedStatus = typeof parsed?.status === 'string' ? parsed.status : 'unknown';
         if (parsedStatus !== 'idle') {
             const adapterStatus = this.adapter.getStatus({ allowParse: false });
-            if (externalNativeFinal && isCliGeneratingLikeStatus(parsedStatus)) return null;
             if (this.shouldSuppressStaleParsedBusyStatus(parsed, adapterStatus)) return null;
             return { reason: `parsed_status:${parsedStatus}`, terminal: isCliGeneratingLikeStatus(parsedStatus) };
         }
@@ -1347,11 +1278,8 @@ export class CliProviderInstance implements ProviderInstance {
 
         const latestStatus = this.adapter.getStatus({ allowParse: false });
         const latestAutoApproveActive = latestStatus.status === 'waiting_approval' && this.shouldAutoApprove();
-        const externalNativeFinal = this.getExternalNativeFinalReconciliation(undefined, latestStatus);
-        const latestVisibleStatus = externalNativeFinal && isCliGeneratingLikeStatus(latestStatus.status)
-            ? 'idle'
-            : (latestAutoApproveActive || this.autoApproveBusy ? 'generating' : latestStatus.status);
-        LOG.debug('CLI', `[${this.type}] flush attempt: adapterStatus=${latestStatus.status} latestVisible=${latestVisibleStatus} externalNativeFinal=${!!externalNativeFinal} generatingStartedAt=${this.generatingStartedAt} isWaitingForResponse=${!!(this.adapter as any)?.isWaitingForResponse} hasPartial=${!!this.adapter.getPartialResponse?.()}`);
+        const latestVisibleStatus = latestAutoApproveActive || this.autoApproveBusy ? 'generating' : latestStatus.status;
+        LOG.debug('CLI', `[${this.type}] flush attempt: adapterStatus=${latestStatus.status} latestVisible=${latestVisibleStatus} generatingStartedAt=${this.generatingStartedAt} isWaitingForResponse=${!!(this.adapter as any)?.isWaitingForResponse} hasPartial=${!!this.adapter.getPartialResponse?.()}`);
         if (latestVisibleStatus !== 'idle') {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
             this.completedDebouncePending = null;
@@ -1359,7 +1287,7 @@ export class CliProviderInstance implements ProviderInstance {
             return;
         }
 
-        const block = this.getCompletedFinalizationBlock(latestVisibleStatus, pending, { externalNativeFinal });
+        const block = this.getCompletedFinalizationBlock(latestVisibleStatus, pending);
         if (block) {
             const blockReason = block.reason;
             const waitedMs = Date.now() - pending.firstObservedAt;
@@ -1404,18 +1332,7 @@ export class CliProviderInstance implements ProviderInstance {
             chatTitle: pending.chatTitle,
             duration: pending.duration,
             timestamp: pending.timestamp,
-            finalSummary: externalNativeFinal?.finalSummary || this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
-            ...(externalNativeFinal ? {
-                completionDiagnostic: {
-                    providerType: this.type,
-                    sessionId: this.instanceId,
-                    providerSessionId: this.providerSessionId || null,
-                    reconciliationReason: 'external_native_final_assistant_while_adapter_busy',
-                    finalAssistantPresent: true,
-                    finalAssistantEvidenceSource: externalNativeFinal.evidence.source,
-                    externalFinalFingerprint: externalNativeFinal.fingerprint,
-                },
-            } : {}),
+            finalSummary: this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
         });
         this.completedDebouncePending = null;
         this.completedDebounceTimer = null;
@@ -1492,15 +1409,13 @@ export class CliProviderInstance implements ProviderInstance {
         const parsedStatus = null;
         const rawStatus = adapterStatus.status;
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, now);
-        const externalNativeFinal = this.getExternalNativeFinalReconciliation(undefined, adapterStatus);
         // During the autoApproveBusy window (2s after firing approval key), the PTY
         // can briefly report 'idle' before the next generating phase starts. Treat that
         // transient idle as 'generating' to suppress a spurious agent:generating_completed
-        // push notification. externalNativeFinal still wins to allow hard-stop overrides.
+        // push notification. The adapter's status is otherwise authoritative — native
+        // transcript shape does NOT override the FSM's busy/idle decision.
         const autoApproveHoldIdle = this.autoApproveBusy && rawStatus === 'idle';
-        const newStatus = externalNativeFinal && isCliGeneratingLikeStatus(rawStatus)
-            ? 'idle'
-            : (autoApproveActive || autoApproveHoldIdle ? 'generating' : rawStatus);
+        const newStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : rawStatus;
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const partial = this.adapter.getPartialResponse();

@@ -724,7 +724,14 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     }
   })
 
-  it('reconciles external-native final assistant when the PTY stays generating', () => {
+  // State is decided by the FSM/adapter, not by native-transcript shape. The native
+  // history is only the *message* source: once the adapter reports idle, completion
+  // fires and finalSummary is pulled from the native transcript. While the adapter
+  // stays generating, no completion is emitted — even if the transcript already shows
+  // a final assistant message. (The old external-native-final override that forced
+  // generating→idle from transcript shape was removed: it fired task_completed tens of
+  // seconds early during post-approval busy flaps.)
+  it('emits completion at FSM idle and pulls finalSummary from native history; never overrides a generating adapter', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2027-01-15T08:00:00Z'))
     try {
@@ -752,13 +759,14 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.historyWriter = { appendNewMessages: vi.fn() }
       instance.lastStatus = 'idle'
 
-      const status = 'generating'
+      let status = 'generating'
+      let parsedStatus = 'generating'
       instance.adapter = {
         chatMessagesOwnedExternally: true,
         getStatus: () => ({ status, activeModal: null, messages: [] }),
-        isProcessing: () => true,
-        getScriptParsedStatus: () => ({ status: 'generating', title: 'Antigravity', messages: [] }),
-        getPartialResponse: () => '⣾ Working...',
+        isProcessing: () => status === 'generating',
+        getScriptParsedStatus: () => ({ status: parsedStatus, title: 'Antigravity', messages: nativeMessages }),
+        getPartialResponse: () => (status === 'generating' ? '⣾ Working...' : ''),
         getRuntimeMetadata: () => null,
       }
       instance.recordAcknowledgedUserInput('Update README')
@@ -767,6 +775,8 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       vi.advanceTimersByTime(3000)
       expect(events.map((event) => event.event)).toContain('agent:generating_started')
 
+      // The transcript already shows a final assistant message, but the adapter is
+      // still generating. No completion may fire — FSM is authoritative.
       nativeMessages = [
         ...nativeMessages,
         { role: 'assistant', kind: 'standard', content: 'README updated.', receivedAt: Date.now() + 1_000 },
@@ -774,15 +784,19 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       vi.advanceTimersByTime(1000)
       instance.detectStatusTransition()
       vi.advanceTimersByTime(3000)
+      expect(events.find((event) => event.event === 'agent:generating_completed')).toBeUndefined()
+      expect(instance.getState().status).toBe('generating')
+
+      // Now the FSM settles idle — completion fires, finalSummary comes from the
+      // native transcript's final assistant message.
+      status = 'idle'
+      parsedStatus = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
 
       const completed = events.find((event) => event.event === 'agent:generating_completed')
-      expect(completed).toMatchObject({
-        finalSummary: 'README updated.',
-        completionDiagnostic: {
-          reconciliationReason: 'external_native_final_assistant_while_adapter_busy',
-          finalAssistantEvidenceSource: 'external-native',
-        },
-      })
+      expect(completed).toBeDefined()
+      expect(completed.finalSummary).toBe('README updated.')
       expect(instance.getState().status).toBe('idle')
       expect(instance.getState().activeChat.status).toBe('idle')
     } finally {
