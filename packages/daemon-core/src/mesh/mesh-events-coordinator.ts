@@ -1340,15 +1340,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return { success: true, forwarded: 0 };
     }
 
-    const allCoordinatorsGenerating = isTerminalEvent && coordinatorInstances.every((inst) => {
-        const s = inst.getState();
-        const status = readNonEmptyString(s.status).toLowerCase();
-        const activeChatStatus = readNonEmptyString(s.activeChat?.status).toLowerCase();
-        return status === 'generating' || status === 'streaming' || status === 'long_generating'
-            || activeChatStatus === 'generating' || activeChatStatus === 'streaming';
-    });
-
-    if (!isTerminalEvent || allCoordinatorsGenerating) {
+    if (!isTerminalEvent) {
         if (queuePendingMeshCoordinatorEvent({
                 event: args.event,
                 meshId: args.meshId,
@@ -1363,16 +1355,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 queuedAt: Date.now(),
                 ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
             })) {
-            if (allCoordinatorsGenerating) {
-                LOG.info('MeshEvents', `Queued ${args.event} for generating CLI coordinator (mesh ${args.meshId}) — will be delivered via get_pending_mesh_events when coordinator returns to idle`);
-            } else {
-                LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
-            }
+            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
         }
-    }
-
-    if (allCoordinatorsGenerating) {
-        return { success: true, forwarded: 0, bufferedForGeneratingCoordinator: true };
     }
 
     for (const coord of coordinatorInstances) {
