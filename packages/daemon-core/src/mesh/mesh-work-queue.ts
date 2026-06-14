@@ -331,6 +331,68 @@ export function enqueueTask(
 }
 
 /**
+ * Record a direct-dispatch task (mesh_send_task) as an already-assigned queue
+ * entry so it is attributable to a mission.
+ *
+ * Direct dispatch normally bypasses the queue entirely — the task lives only in
+ * the ledger + mesh_direct_dispatches table, neither of which carries a
+ * missionId, so {@link summarizeMissionTasks}/{@link computeMeshTaskStats}
+ * (which both scan the queue for `task.missionId`) count it as 0. When a
+ * mission is attached, we materialise the same queue entry shape an enqueued
+ * task would have, but pre-assigned to the dispatched node/session and stamped
+ * with the dispatch timestamp. The terminal event path (updateSessionTaskStatus
+ * → findAssignedBySession) then flips it to completed/failed exactly like a
+ * pulled task, so mission total + completed aggregates work with no extra wiring.
+ *
+ * Intentionally separate from {@link enqueueTask}: enqueue creates `pending`
+ * work for the queue to assign, whereas this records work already dispatched
+ * out-of-band. They share the missionId stamping rule and mode validation.
+ */
+export function recordDirectDispatchTask(
+    meshId: string,
+    message: string,
+    opts: {
+        id: string;
+        missionId: string;
+        assignedNodeId?: string;
+        assignedSessionId?: string;
+        taskMode?: MeshTaskMode | string;
+        dispatchedAt?: string;
+    },
+): MeshWorkQueueEntry | null {
+    const missionId = typeof opts.missionId === 'string' ? opts.missionId.trim() : '';
+    if (!missionId) return null;
+    const taskId = typeof opts.id === 'string' ? opts.id.trim() : '';
+    if (!taskId) return null;
+    const modeValidation = validateMeshTaskModeRequest(opts.taskMode, message);
+    if (!modeValidation.valid) {
+        throw new Error(`live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(', ')})`);
+    }
+    const now = opts.dispatchedAt && opts.dispatchedAt.trim() ? opts.dispatchedAt : new Date().toISOString();
+    return withQueueLock(meshId, () => {
+        if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId)) {
+            // Already materialised (e.g. retry of the same dispatch) — leave it untouched.
+            return null;
+        }
+        const entry: MeshWorkQueueEntry = {
+            id: taskId,
+            meshId,
+            message,
+            status: 'assigned',
+            ...(modeValidation.taskMode ? { taskMode: modeValidation.taskMode } : {}),
+            missionId,
+            ...(opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {}),
+            ...(opts.assignedSessionId ? { targetSessionId: opts.assignedSessionId, assignedSessionId: opts.assignedSessionId } : {}),
+            dispatchTimestamp: now,
+            createdAt: now,
+            updatedAt: now,
+        };
+        MeshRuntimeStore.getInstance().insertQueueEntry(entry);
+        return entry;
+    });
+}
+
+/**
  * Get all tasks in the queue, optionally filtered by status.
  */
 export function getQueue(meshId: string, opts?: { status?: MeshTaskStatus[] }): MeshWorkQueueEntry[] {

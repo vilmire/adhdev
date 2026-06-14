@@ -46,6 +46,7 @@ import {
     getLedgerSummary,
     getSessionRecoveryContext,
     insertDirectDispatch,
+    recordDirectDispatchTask,
     isP2pRelayTransportFailure,
     markStaleDirectDispatches,
     nodeSatisfiesRequiredTags,
@@ -2233,6 +2234,8 @@ export const MESH_SEND_TASK_TOOL = {
             message: { type: 'string', description: 'Natural-language task to send to the agent.' },
             task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch.' },
             taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
+            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch.' },
+            missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
         },
         required: ['node_id', 'session_id', 'message'],
     },
@@ -3303,9 +3306,18 @@ export async function meshQueueRequeue(
 
 export async function meshSendTask(
     ctx: MeshContext,
-    args: { node_id: string; session_id?: string; message: string; task_mode?: string; taskMode?: string },
+    args: {
+        node_id: string; session_id?: string; message: string;
+        task_mode?: string; taskMode?: string;
+        mission_id?: string; missionId?: string;
+    },
 ): Promise<string> {
     const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
+    // Optional mission attribution. When set, the direct-dispatched task is also
+    // materialised as an assigned queue entry so it counts toward the mission's
+    // task aggregates — see recordDirectDispatchTask. Absent → unattributed
+    // direct dispatch as before (backward compatible).
+    const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
     const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, args.message);
     if (!modeValidation.valid) {
         return JSON.stringify({
@@ -3449,6 +3461,16 @@ export async function meshSendTask(
                         via: 'p2p_direct',
                         dispatchedAt,
                     });
+                    if (missionId) {
+                        recordDirectDispatchTask(ctx.mesh.id, args.message, {
+                            id: taskId,
+                            missionId,
+                            assignedNodeId: args.node_id,
+                            assignedSessionId: dispatchedSessionId,
+                            taskMode,
+                            dispatchedAt,
+                        });
+                    }
                 } catch { /* best-effort */ }
             }
             return JSON.stringify({
@@ -3646,6 +3668,18 @@ export async function meshSendTask(
                 dispatchedToIdleSession: sessionWasIdle,
                 dispatchedAt,
             });
+            if (missionId) {
+                try {
+                    recordDirectDispatchTask(ctx.mesh.id, args.message, {
+                        id: taskId,
+                        missionId,
+                        assignedNodeId: args.node_id,
+                        assignedSessionId: args.session_id,
+                        taskMode,
+                        dispatchedAt,
+                    });
+                } catch { /* best-effort */ }
+            }
             // Create a delivery record for session-level ACK tracking
             let deliveryId: string | undefined;
             try {
@@ -3686,6 +3720,7 @@ export async function meshSendTask(
             targetNodeId: args.node_id,
             targetSessionId: args.session_id,
             taskMode,
+            ...(missionId ? { missionId } : {}),
         });
 
         const queueTrigger = await triggerMeshQueueAndReport(ctx);
