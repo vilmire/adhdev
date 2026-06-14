@@ -410,6 +410,16 @@ function scoreRepoMeshStatusTruth(status: RepoMeshStatus): number {
     const currentStatus = readString(sourceOfTruth.currentStatus)
     if (currentStatus === 'live_git_and_session_probes') score += 100
     if (sourceOfTruth.coordinatorOwnsLiveTruth === true) score += 25
+    // SINGLE-RESPONSE ASSUMPTION: pickBestRepoMeshStatus only ever compares
+    // variants drawn from ONE daemon response (extractRepoMeshStatus is the sole
+    // caller; cloud + standalone are both single-daemon with no cross-source
+    // merge). So `directPeerTruth.satisfied` is a constant across all candidates
+    // in any single call — this +15 shifts every candidate equally and cannot
+    // change which one wins. It would only become a latent bug if a future caller
+    // compared CROSS-SOURCE candidates (e.g. a satisfied=true STALE snapshot vs a
+    // satisfied=false FRESH one). The refreshedAt freshness tiebreaker in
+    // pickBestRepoMeshStatus mitigates exactly that case: a clearly-fresher
+    // candidate is not beaten by a marginally-richer stale one. Keep the +15.
     if (directPeerTruth.satisfied === true) score += 15
     for (const node of status.nodes) {
         const git = node.git
@@ -432,13 +442,49 @@ function scoreRepoMeshStatusTruth(status: RepoMeshStatus): number {
     return score
 }
 
-function pickBestRepoMeshStatus(candidates: unknown[]): RepoMeshStatus | null {
-    let best: { status: RepoMeshStatus; score: number } | null = null
+// Parse a RepoMeshStatus.refreshedAt ISO timestamp into epoch millis for
+// freshness comparison. Absent / malformed / non-finite timestamps collapse to 0
+// (treated as the oldest possible) so a candidate without a usable refreshedAt
+// never wins a tiebreak and we never throw on a bad string.
+function parseRefreshedAtMillis(status: RepoMeshStatus): number {
+    const raw = (status as unknown as JsonRecord).refreshedAt
+    if (typeof raw !== 'string' || raw.length === 0) return 0
+    const millis = Date.parse(raw)
+    return Number.isFinite(millis) ? millis : 0
+}
+
+// Score gap within which we treat two candidates as a near-tie and let freshness
+// decide. Small enough that the truth score stays the primary signal (a richer
+// live-git snapshot still wins decisively), large enough that the directPeerTruth
+// +15 (the single-response-assumption constant documented in
+// scoreRepoMeshStatusTruth) cannot let a stale candidate beat a fresher one in a
+// hypothetical cross-source comparison.
+const REPO_MESH_FRESHNESS_TIE_SCORE_GAP = 20
+
+// Exported for focused freshness-tiebreaker regression tests. extractRepoMeshStatus
+// remains the only production caller (single-daemon, single-response).
+export function pickBestRepoMeshStatus(candidates: unknown[]): RepoMeshStatus | null {
+    let best: { status: RepoMeshStatus; score: number; refreshedAt: number } | null = null
     for (const candidate of candidates) {
         const normalized = normalizeRepoMeshStatus(readRecord(candidate))
         if (!normalized) continue
         const score = scoreRepoMeshStatusTruth(normalized)
-        if (!best || score > best.score) best = { status: normalized, score }
+        const refreshedAt = parseRefreshedAtMillis(normalized)
+        if (!best) {
+            best = { status: normalized, score, refreshedAt }
+            continue
+        }
+        // Primary signal: truth score (content richness). When the scores are
+        // within REPO_MESH_FRESHNESS_TIE_SCORE_GAP of each other, break the
+        // (near-)tie by the newer refreshedAt so a fresher candidate is not lost
+        // to a marginally-richer stale one. Strictly-higher scores outside the
+        // gap still win outright; equal/absent timestamps keep the incumbent,
+        // preserving existing single-candidate / equal-timestamp behavior.
+        const nearTie = Math.abs(score - best.score) <= REPO_MESH_FRESHNESS_TIE_SCORE_GAP
+        const wins = nearTie
+            ? refreshedAt > best.refreshedAt || (refreshedAt === best.refreshedAt && score > best.score)
+            : score > best.score
+        if (wins) best = { status: normalized, score, refreshedAt }
     }
     return best?.status ?? null
 }

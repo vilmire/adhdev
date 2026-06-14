@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
-import { extractRepoMeshStatus } from '../../src/utils/repo-mesh-status'
+import { extractRepoMeshStatus, pickBestRepoMeshStatus } from '../../src/utils/repo-mesh-status'
 import { describeProviders, summarizeNodeDrift, summarizeSelectedHead } from '../../src/components/MeshGraph/MeshObservabilitySurface'
 
 describe('extractRepoMeshStatus', () => {
@@ -1544,5 +1544,138 @@ describe('extractRepoMeshStatus', () => {
 
   it('returns null for unrelated payloads', () => {
     expect(extractRepoMeshStatus({ success: true, result: { ok: true } } as any)).toBeNull()
+  })
+})
+
+describe('pickBestRepoMeshStatus freshness tiebreaker', () => {
+  // Minimal valid RepoMeshStatus: meshId/meshName/repoIdentity/refreshedAt are all
+  // required by normalizeRepoMeshStatus. Keep nodes light so the truth-score delta
+  // between candidates is controllable per-test.
+  const baseStatus = (overrides: Record<string, unknown>) => ({
+    meshId: 'mesh_fresh',
+    meshName: 'ADHDev',
+    repoIdentity: 'github.com/vilmire/adhdev',
+    refreshedAt: '2026-01-01T00:00:00Z',
+    nodes: [],
+    ...overrides,
+  })
+
+  // A node that adds richness (truth score) without adding freshness. Each one is
+  // worth ~57 truth points (live git + fresh upstream).
+  const richNode = (nodeId: string) => ({
+    nodeId,
+    machineLabel: nodeId,
+    workspace: `/repo/${nodeId}`,
+    health: 'online',
+    providers: [],
+    git: {
+      isGitRepo: true,
+      branch: 'main',
+      upstream: 'origin/main',
+      headCommit: 'abc1234',
+      upstreamStatus: 'fresh',
+      staged: 0,
+      modified: 0,
+      untracked: 0,
+      deleted: 0,
+      renamed: 0,
+      hasConflicts: false,
+      lastCheckedAt: Date.parse('2026-01-01T00:00:00.000Z'),
+    },
+  })
+
+  // A node worth only ~15 truth points (bare isGitRepo) — small enough that adding
+  // one keeps two candidates inside the freshness near-tie gap (20).
+  const leanNode = (nodeId: string) => ({
+    nodeId,
+    machineLabel: nodeId,
+    workspace: `/repo/${nodeId}`,
+    health: 'online',
+    providers: [],
+    git: { isGitRepo: true },
+  })
+
+  it('Item1: a fresher leaner candidate wins a near-tie over a marginally-richer stale one', () => {
+    // stale candidate is marginally richer (+~15 from one extra lean node, within
+    // the 20-point freshness gap) but clearly older → freshness must decide.
+    const stale = baseStatus({
+      meshId: 'mesh_stale_rich',
+      refreshedAt: '2026-01-01T00:00:00Z',
+      nodes: [richNode('n1'), leanNode('n2')],
+    })
+    const fresh = baseStatus({
+      meshId: 'mesh_fresh_lean',
+      refreshedAt: '2026-06-15T00:00:00Z',
+      nodes: [richNode('n1')],
+    })
+    const best = pickBestRepoMeshStatus([stale, fresh])
+    expect(best?.meshId).toBe('mesh_fresh_lean')
+    // order-independent: incumbent-first must reach the same verdict.
+    expect(pickBestRepoMeshStatus([fresh, stale])?.meshId).toBe('mesh_fresh_lean')
+  })
+
+  it('Item1: a decisively richer candidate still wins despite being older (score stays primary)', () => {
+    // richButOld outscores leanButFresh by far more than the 20-point gap, so the
+    // score stays primary and freshness does NOT override it.
+    const richButOld = baseStatus({
+      meshId: 'mesh_rich_old',
+      refreshedAt: '2026-01-01T00:00:00Z',
+      nodes: [richNode('n1'), richNode('n2'), richNode('n3'), richNode('n4')],
+    })
+    const leanButFresh = baseStatus({
+      meshId: 'mesh_lean_fresh',
+      refreshedAt: '2026-06-15T00:00:00Z',
+      nodes: [],
+    })
+    expect(pickBestRepoMeshStatus([richButOld, leanButFresh])?.meshId).toBe('mesh_rich_old')
+    expect(pickBestRepoMeshStatus([leanButFresh, richButOld])?.meshId).toBe('mesh_rich_old')
+  })
+
+  it('Item1: equal scores with equal/absent refreshedAt keep the incumbent (no regression)', () => {
+    const a = baseStatus({ meshId: 'mesh_a', refreshedAt: '2026-01-01T00:00:00Z', nodes: [richNode('n1')] })
+    const b = baseStatus({ meshId: 'mesh_b', refreshedAt: '2026-01-01T00:00:00Z', nodes: [richNode('n1')] })
+    // identical score + identical timestamp → first one (incumbent) wins.
+    expect(pickBestRepoMeshStatus([a, b])?.meshId).toBe('mesh_a')
+    expect(pickBestRepoMeshStatus([b, a])?.meshId).toBe('mesh_b')
+  })
+
+  it('Item1: a single candidate is returned unchanged', () => {
+    const only = baseStatus({ meshId: 'mesh_only', nodes: [richNode('n1')] })
+    expect(pickBestRepoMeshStatus([only])?.meshId).toBe('mesh_only')
+  })
+
+  it('Item1: malformed/absent refreshedAt is treated as oldest and never throws', () => {
+    const badTimestamp = baseStatus({
+      meshId: 'mesh_bad_ts',
+      refreshedAt: 'not-a-date',
+      nodes: [richNode('n1')],
+    })
+    const goodFresh = baseStatus({
+      meshId: 'mesh_good_fresh',
+      refreshedAt: '2026-06-15T00:00:00Z',
+      nodes: [richNode('n1')],
+    })
+    // bad timestamp parses to 0 (oldest); equal score → the parseable-fresh wins the near-tie.
+    expect(pickBestRepoMeshStatus([badTimestamp, goodFresh])?.meshId).toBe('mesh_good_fresh')
+  })
+
+  it('Item2: a satisfied=true STALE candidate loses to a satisfied=false FRESH one (tiebreaker neutralizes directPeerTruth +15)', () => {
+    // Cross-source shape the single-response assumption does NOT cover: the stale
+    // candidate carries directPeerTruth.satisfied=true (the +15 richness boost),
+    // the fresh one does not. The freshness tiebreaker must still pick the fresh.
+    const satisfiedStale = baseStatus({
+      meshId: 'mesh_satisfied_stale',
+      refreshedAt: '2026-01-01T00:00:00Z',
+      sourceOfTruth: { directPeerTruth: { satisfied: true } },
+      nodes: [richNode('n1')],
+    })
+    const unsatisfiedFresh = baseStatus({
+      meshId: 'mesh_unsatisfied_fresh',
+      refreshedAt: '2026-06-15T00:00:00Z',
+      sourceOfTruth: { directPeerTruth: { satisfied: false } },
+      nodes: [richNode('n1')],
+    })
+    expect(pickBestRepoMeshStatus([satisfiedStale, unsatisfiedFresh])?.meshId).toBe('mesh_unsatisfied_fresh')
+    expect(pickBestRepoMeshStatus([unsatisfiedFresh, satisfiedStale])?.meshId).toBe('mesh_unsatisfied_fresh')
   })
 })
