@@ -647,6 +647,58 @@ function buildCompactQueueMaintenanceReport(maintenance: Record<string, unknown>
     };
 }
 
+// Compact-mode bounds for mesh_view_queue active rows. Active (pending/assigned)
+// rows are kept — they drive dispatch decisions — but a busy mesh can have dozens
+// of them, each carrying the full task `message` (often multi-KB). Truncate the
+// message and cap the row count so the active queue can't blow the token cap.
+const COMPACT_MAX_ACTIVE_QUEUE_ROWS = 15;
+const COMPACT_QUEUE_MESSAGE_CAP = 140;
+const COMPACT_MAX_ACTIVE_WORK_ROWS = 12;
+
+function truncateForCompact(value: unknown, cap: number): unknown {
+    if (typeof value !== 'string') return value;
+    return value.length > cap ? value.slice(0, cap) + '…' : value;
+}
+
+// Slim an active queue row for compact mode: truncate the long free-text message
+// and elide any oversized nested field. Status/ids/deps/tags (the dispatch-relevant
+// scalars) are preserved.
+function compactQueueRow(task: any): any {
+    if (!task || typeof task !== 'object') return task;
+    const slim: any = {};
+    for (const [k, v] of Object.entries(task)) {
+        if (k === 'message') slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+        else slim[k] = elideLargeNestedValue(k, v);
+    }
+    return slim;
+}
+
+function compactQueueRows(rows: any[]): { rows: any[]; omitted: number } {
+    const capped = rows.slice(0, COMPACT_MAX_ACTIVE_QUEUE_ROWS).map(compactQueueRow);
+    return { rows: capped, omitted: Math.max(0, rows.length - capped.length) };
+}
+
+// Slim an activeWork record for compact mode: the full per-record `message` /
+// `taskSummary` / `taskTitle` blobs are the dominant payload weight on a busy mesh.
+// Truncate them and cap the array.
+function compactActiveWorkRecord(record: any): any {
+    if (!record || typeof record !== 'object') return record;
+    const slim: any = {};
+    for (const [k, v] of Object.entries(record)) {
+        if (k === 'message') slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+        else if (k === 'taskSummary') slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+        else if (k === 'taskTitle') slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+        else slim[k] = elideLargeNestedValue(k, v);
+    }
+    return slim;
+}
+
+function compactActiveWorkRecords(records: any[]): { records: any[]; omitted: number } {
+    if (!Array.isArray(records)) return { records, omitted: 0 };
+    const capped = records.slice(0, COMPACT_MAX_ACTIVE_WORK_ROWS).map(compactActiveWorkRecord);
+    return { records: capped, omitted: Math.max(0, records.length - capped.length) };
+}
+
 function annotateQueueStaleness(queue: any[], mesh?: LocalMeshEntry): any[] {
     const liveness = buildQueueLivenessIndex(mesh);
     const now = Date.now();
@@ -1044,6 +1096,175 @@ function buildCompactGitSnapshot(status: any): Record<string, unknown> | undefin
         if (status[key] !== undefined) slim[key] = status[key];
     }
     return slim;
+}
+
+// Compact-mode submodules fold: the full submodules array (path/commit/status/
+// branch per submodule) is repeated on every node that shares a superproject, so
+// it grows O(nodes × submodules). In compact mode we keep the actionable signal
+// (count + the out-of-sync paths, which drive convergence decisions) and drop the
+// per-submodule commit/status blobs. The full array stays in verbose. Out-of-sync
+// paths are also surfaced separately on the node as `outOfSyncSubmodules`.
+function summarizeCompactSubmodules(submodules: any): Record<string, unknown> | undefined {
+    if (!Array.isArray(submodules) || submodules.length === 0) return undefined;
+    const outOfSync = submodules.filter((s: any) => s?.outOfSync).map((s: any) => s?.path).filter(Boolean);
+    return {
+        count: submodules.length,
+        ...(outOfSync.length > 0 ? { outOfSyncPaths: outOfSync } : {}),
+    };
+}
+
+// Compact-mode per-node fold for mesh_status. The dashboard/verbose payload
+// (`results`) is untouched; this only slims the LLM-facing node copy. It folds
+// the repetitive heavy fields that scale O(nodes):
+//   - git: slim scalar snapshot + summarized submodules (no full file lists/blobs)
+//   - machine: drop the verbose identityEvidence[] array and the long
+//     localityReason string (which interpolates every evidence token) — keep the
+//     resolved scalars (displayName/daemonId/machineId/hostname/sameMachine/locality)
+//   - staleDaemonBuild: the full ~300-char warning + duplicated build fields are
+//     already aggregated ONCE at the top level under staleDaemonBuilds[] +
+//     staleDaemonBuildWarning. On the node, collapse to a short boolean-ish flag so
+//     the per-node copy isn't N× the same warning text.
+//   - branchConvergence: keep the decision fields (status/needsConvergence/reason/
+//     branch/ahead/behind); drop the long per-node nextStep prose (it is echoed in
+//     nextStepHints and branchConvergenceSummary).
+// Any remaining oversized nested blob is elided by the generic byte guard.
+function compactMeshStatusNode(entry: any): any {
+    if (!entry || typeof entry !== 'object') return entry;
+    const next: any = { ...entry };
+
+    if (next.git !== undefined) {
+        const slimGit = buildCompactGitSnapshot(next.git);
+        if (slimGit) {
+            if (slimGit.submodules !== undefined) {
+                const subSummary = summarizeCompactSubmodules(slimGit.submodules);
+                if (subSummary) slimGit.submodules = subSummary;
+                else delete slimGit.submodules;
+            }
+            next.git = slimGit;
+        }
+    }
+
+    if (next.machine && typeof next.machine === 'object') {
+        const m = next.machine as Record<string, unknown>;
+        next.machine = {
+            daemonId: m.daemonId,
+            machineId: m.machineId,
+            hostname: m.hostname,
+            displayName: m.displayName,
+            sameMachine: m.sameMachine,
+            locality: m.locality,
+        };
+    }
+
+    // submoduleWarning is a fixed ~120-char prose string repeated on every node
+    // with an out-of-sync submodule. The actionable signal (which submodules) is
+    // already on `outOfSyncSubmodules`; collapse the prose to a boolean flag in
+    // compact mode.
+    if (typeof next.submoduleWarning === 'string') {
+        next.submodulesOutOfSync = true;
+        delete next.submoduleWarning;
+    }
+
+    if (next.staleDaemonBuild && typeof next.staleDaemonBuild === 'object') {
+        const b = next.staleDaemonBuild as Record<string, unknown>;
+        // Replace the full per-node object (warning prose + build fields, all of
+        // which are aggregated top-level) with a terse flag. The daemonId lets the
+        // coordinator cross-reference the top-level staleDaemonBuilds[] entry.
+        next.staleDaemonBuild = {
+            scope: b.scope,
+            isDaemonAffecting: b.isDaemonAffecting !== false,
+            seeStaleDaemonBuilds: true,
+        };
+    }
+
+    // branchConvergence is kept intact for detailed compact nodes (it carries the
+    // actionable per-node nextStep). It is small per-node and bounded by the
+    // detail byte-budget; the larger repetition lives in branchConvergenceSummary,
+    // which is capped separately. Quiet nodes drop nextStep via minimalCompactNode.
+
+    // Generic backstop: elide any other oversized nested blob on the node.
+    for (const k of Object.keys(next)) {
+        if (k === 'git' || k === 'machine' || k === 'branchConvergence' || k === 'staleDaemonBuild' || k === 'sessions') continue;
+        next[k] = elideLargeNestedValue(k, next[k]);
+    }
+
+    return next;
+}
+
+// Compact mode bounds the node array so the payload stays under the MCP token cap
+// regardless of how many worktree nodes a mesh has. EVERY node stays present and
+// individually addressable (coordinators look nodes up by id), but "quiet" nodes —
+// healthy/clean, no sessions, nothing to converge — are reduced to a minimal stub
+// (id/workspace/health/branch/launchReady + branchConvergence decision scalars)
+// while "noteworthy" nodes (anything actionable) keep the full compact detail. On
+// top of that the detailed set is held to a serialized byte budget (highest
+// severity first); when the budget is exceeded the lowest-priority detailed nodes
+// degrade to the same minimal stub so even a mesh of all-noteworthy nodes can't
+// blow the cap. No node is ever dropped — only its detail level is reduced.
+const COMPACT_DETAILED_NODES_BYTE_BUDGET = 9000;
+// Total byte budget for the whole compact node array (detail + minimal stubs).
+// Nodes that don't fit even as a stub are folded into a counts+id-list summary so
+// the array stays bounded on pathologically large meshes; every node id is still
+// listed in foldedNodes.nodeIds, so nothing becomes undiscoverable.
+const COMPACT_NODES_TOTAL_BYTE_BUDGET = 13000;
+
+// Rough severity ranking so that when the byte budget forces a downgrade, the most
+// urgent nodes (errors/degraded/blocked launches) are the ones kept in detail.
+function compactNodeSeverity(entry: any): number {
+    if (!entry || typeof entry !== 'object') return 0;
+    if (entry.error || (entry.health && entry.health !== 'online' && entry.health !== 'dirty')) return 5;
+    if (entry.launchReady === false) return 4;
+    if (entry.isDirty === true || entry.health === 'dirty') return 3;
+    if (entry.branchConvergence?.needsConvergence === true) return 2;
+    if (entry.staleDaemonBuild || entry.submodulesOutOfSync || entry.recoveryHints) return 1;
+    return 0;
+}
+
+function isNoteworthyCompactNode(entry: any): boolean {
+    if (!entry || typeof entry !== 'object') return true;
+    if (entry.health && entry.health !== 'online') return true;
+    if (entry.isDirty === true) return true;
+    if (entry.error) return true;
+    if (entry.launchReady === false) return true;
+    if (entry.staleDaemonBuild) return true;
+    if (entry.submoduleWarning || entry.submodulesOutOfSync) return true;
+    if (entry.recoveryHints) return true;
+    if (Array.isArray(entry.nextStepHints) && entry.nextStepHints.length > 0) return true;
+    if (entry.branchConvergence?.needsConvergence === true) return true;
+    const sessionCount = Array.isArray(entry.sessions)
+        ? entry.sessions.length
+        : (entry.sessionSummary?.total ?? 0);
+    if (sessionCount > 0) return true;
+    return false;
+}
+
+// Minimal per-node stub for quiet nodes / byte-budget overflow. Keeps the fields a
+// coordinator needs to find and reason about a node (id/workspace/health/branch/
+// launchReady) plus the branchConvergence decision scalars, marked `folded` so
+// callers know the full compact detail is available via verbose.
+function minimalCompactNode(entry: any): any {
+    if (!entry || typeof entry !== 'object') return entry;
+    const bc = entry.branchConvergence && typeof entry.branchConvergence === 'object'
+        ? {
+            status: entry.branchConvergence.status,
+            needsConvergence: entry.branchConvergence.needsConvergence,
+            reason: entry.branchConvergence.reason,
+            branch: entry.branchConvergence.branch,
+        }
+        : undefined;
+    return {
+        nodeId: entry.nodeId,
+        workspace: entry.workspace,
+        daemonId: entry.daemonId,
+        health: entry.health,
+        branch: entry.branch,
+        launchReady: entry.launchReady,
+        ...(entry.providerPriority !== undefined ? { providerPriority: entry.providerPriority } : {}),
+        ...(entry.launchBlockedReason !== undefined ? { launchBlockedReason: entry.launchBlockedReason } : {}),
+        ...(bc ? { branchConvergence: bc } : {}),
+        ...(entry.sessionSummary ? { sessionSummary: entry.sessionSummary } : {}),
+        folded: true,
+    };
 }
 
 // Fold a node's slim session list into status/provider counts. Compact mode
@@ -2114,23 +2335,45 @@ function buildBranchConvergence(
     };
 }
 
-function summarizeBranchConvergence(nodes: any[]): Record<string, unknown> {
-    const followUps = nodes
+// In compact mode the per-node followUp rows are capped so this summary can't grow
+// unbounded with node count; the dropped rows are folded into a by-status count and
+// the full list stays available via verbose.
+const COMPACT_MAX_CONVERGENCE_FOLLOWUPS = 12;
+
+function summarizeBranchConvergence(nodes: any[], compact = false): Record<string, unknown> {
+    const allFollowUps = nodes
         .filter(node => node?.branchConvergence?.needsConvergence === true)
         .map(node => ({
             nodeId: node.nodeId,
-            workspace: node.workspace,
+            // workspace is a long absolute path redundant with nodeId — drop it in
+            // compact mode to keep this summary bounded.
+            ...(compact ? {} : { workspace: node.workspace }),
             branch: node.branchConvergence.branch,
             status: node.branchConvergence.status,
             reason: node.branchConvergence.reason,
-            nextStep: node.branchConvergence.nextStep,
+            // The per-node nextStep is long prose that repeats node ids/branch names.
+            // In compact mode drop it (the status+reason carry the actionable signal;
+            // verbose still surfaces the full nextStep) so this summary stays bounded
+            // as node count grows.
+            ...(compact ? {} : { nextStep: node.branchConvergence.nextStep }),
         }));
 
+    const byStatus: Record<string, number> = {};
+    for (const f of allFollowUps) {
+        const s = typeof f.status === 'string' ? f.status : 'unknown';
+        byStatus[s] = (byStatus[s] ?? 0) + 1;
+    }
+
+    const followUps = compact ? allFollowUps.slice(0, COMPACT_MAX_CONVERGENCE_FOLLOWUPS) : allFollowUps;
+    const omitted = allFollowUps.length - followUps.length;
+
     return {
-        needsFollowUp: followUps.length > 0,
-        unresolvedCount: followUps.length,
+        needsFollowUp: allFollowUps.length > 0,
+        unresolvedCount: allFollowUps.length,
+        byStatus,
         requiredFinalStates: ['merged_to_main', 'pushed_feature_branch_needs_merge', 'blocked_review', 'cleanup_candidate', 'not_mergeable'],
         followUps,
+        ...(omitted > 0 ? { followUpsOmitted: omitted, followUpsHint: 'Per-node followUp rows are capped in compact mode; counts above are complete. Use verbose=true for the full list.' } : {}),
     };
 }
 
@@ -3021,33 +3264,107 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             ...(Array.isArray(behind.affectedPackages) && behind.affectedPackages.length > 0
                 ? { affectedPackages: behind.affectedPackages }
                 : {}),
-            warning: behind.warning,
+            // The full ~300-char warning prose is identical for every entry and is
+            // already emitted ONCE at the top level as `staleDaemonBuildWarning`.
+            // Keep it per-entry only in verbose to avoid N× duplication in compact.
+            ...(compact ? {} : { warning: behind.warning }),
         });
     }
     const daemonAffectingStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting !== false);
     const webOnlyStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting === false);
 
+    let stubbedNodeCount = 0;
+    let foldedNodesSummary: Record<string, unknown> | undefined;
     const nodesForResponse = compact
-        ? results.map((entry: any) => {
-            if (!entry || typeof entry !== 'object') return entry;
-            const next: any = { ...entry };
-            if (next.git !== undefined) {
-                const slimGit = buildCompactGitSnapshot(next.git);
-                if (slimGit) next.git = slimGit;
+        ? (() => {
+            const compacted = results.map((entry: any) => {
+                const next = compactMeshStatusNode(entry);
+                if (!next || typeof next !== 'object') return next;
+                if (Array.isArray(next.sessions)) {
+                    next.sessionSummary = summarizeNodeSessions(next.sessions);
+                    // Drop the full per-node array unless explicitly opted in. The
+                    // de-duplicated full lists are available under top-level
+                    // `daemonSessions` keyed by daemonId.
+                    if (!includeSessions) delete next.sessions;
+                }
+                // Build stamp is folded per-daemon under top-level `daemonBuilds`;
+                // drop the repetitive per-node copy in compact mode.
+                if (next.daemonBuild !== undefined) delete next.daemonBuild;
+                return next;
+            });
+
+            // Two-tier bounding, highest-severity first:
+            //  1. detail byte-budget — noteworthy nodes get full compact detail until
+            //     COMPACT_DETAILED_NODES_BYTE_BUDGET is spent; the rest degrade to a stub.
+            //  2. total node-array byte-budget — quiet/overflow nodes are emitted as
+            //     minimal stubs until COMPACT_NODES_TOTAL_BYTE_BUDGET is spent; any node
+            //     beyond that is fully folded into the foldedNodes id-list summary.
+            // Nodes that survive in the array keep their ORIGINAL order. Every node id is
+            // either in the array (detail or stub) or listed in foldedNodes.nodeIds.
+            const noteworthy = compacted.filter((n: any) => n && typeof n === 'object' && isNoteworthyCompactNode(n));
+            const ranked = [...noteworthy].sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+            const detailedIds = new Set<string>();
+            let detailSpent = 0;
+            for (const n of ranked) {
+                const cost = JSON.stringify(n).length + 1;
+                if (detailedIds.size === 0 || detailSpent + cost <= COMPACT_DETAILED_NODES_BYTE_BUDGET) {
+                    detailedIds.add(String(n.nodeId));
+                    detailSpent += cost;
+                }
             }
-            if (Array.isArray(next.sessions)) {
-                next.sessionSummary = summarizeNodeSessions(next.sessions);
-                // Drop the full per-node array unless explicitly opted in. The
-                // de-duplicated full lists are available under top-level
-                // `daemonSessions` keyed by daemonId.
-                if (!includeSessions) delete next.sessions;
+
+            // severity order for awarding the remaining total budget to stubs
+            const stubOrder = [...compacted]
+                .filter((n: any) => n && typeof n === 'object')
+                .sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+            const keptIds = new Set<string>(detailedIds);
+            let totalSpent = detailSpent;
+            for (const n of stubOrder) {
+                const id = String(n.nodeId);
+                if (keptIds.has(id)) continue;
+                const stubCost = JSON.stringify(minimalCompactNode(n)).length + 1;
+                if (totalSpent + stubCost <= COMPACT_NODES_TOTAL_BYTE_BUDGET) {
+                    keptIds.add(id);
+                    totalSpent += stubCost;
+                }
             }
-            // Build stamp is folded per-daemon under top-level `daemonBuilds`;
-            // drop the repetitive per-node copy in compact mode. The stale
-            // warning (rare, actionable) stays on the node.
-            if (next.daemonBuild !== undefined) delete next.daemonBuild;
-            return next;
-        })
+
+            const fullyFolded: any[] = [];
+            const out = compacted
+                .map((n: any) => {
+                    if (!n || typeof n !== 'object') return n;
+                    const id = String(n.nodeId);
+                    if (detailedIds.has(id)) return n;
+                    if (keptIds.has(id)) {
+                        stubbedNodeCount += 1;
+                        return minimalCompactNode(n);
+                    }
+                    fullyFolded.push(n);
+                    return null;
+                })
+                .filter((n: any) => n !== null);
+
+            if (fullyFolded.length > 0) {
+                const byBranchConvergence: Record<string, number> = {};
+                const byHealth: Record<string, number> = {};
+                const nodeIds: string[] = [];
+                for (const n of fullyFolded) {
+                    const bc = typeof n?.branchConvergence?.status === 'string' ? n.branchConvergence.status : 'unknown';
+                    byBranchConvergence[bc] = (byBranchConvergence[bc] ?? 0) + 1;
+                    const h = typeof n?.health === 'string' ? n.health : 'unknown';
+                    byHealth[h] = (byHealth[h] ?? 0) + 1;
+                    if (n?.nodeId) nodeIds.push(String(n.nodeId));
+                }
+                foldedNodesSummary = {
+                    count: fullyFolded.length,
+                    note: 'Node-array byte budget reached: these nodes are listed by id only. Query a specific node_id or use verbose=true for their detail.',
+                    byHealth,
+                    byBranchConvergence,
+                    nodeIds,
+                };
+            }
+            return out;
+        })()
         : results;
 
     const response: Record<string, unknown> = {
@@ -3064,6 +3381,12 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             historicalEvidenceOnly: ['recoveryHints', 'ledgerSummary'],
         },
         nodes: nodesForResponse,
+        ...(compact && stubbedNodeCount > 0
+            ? {
+                stubbedNodesNote: `${stubbedNodeCount} node(s) in the array above are reduced to a minimal stub (marked folded:true) in compact mode — healthy/clean nodes plus any beyond the detail byte-budget. They remain addressable by node_id; use verbose=true for their full detail.`,
+            }
+            : {}),
+        ...(compact && foldedNodesSummary ? { foldedNodes: foldedNodesSummary } : {}),
         ...(compact && Object.keys(daemonSessions).length > 0 ? { daemonSessions } : {}),
         ...(Object.keys(daemonBuilds).length > 0 ? { daemonBuilds } : {}),
         ...(staleDaemonBuilds.length > 0 ? { staleDaemonBuilds } : {}),
@@ -3085,7 +3408,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         activeWorkSummary: activeWorkEvidence.summary,
         ...(pollingGuidance ? { pollingGuidance } : {}),
         ...(rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: 'rate_limit_exceeded', tool: 'mesh_status', callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {}),
-        branchConvergenceSummary: summarizeBranchConvergence(results),
+        branchConvergenceSummary: summarizeBranchConvergence(results, compact),
         ...(coordinatorSessions.length > 0
             ? {
                 coordinatorSessions,
@@ -3640,11 +3963,18 @@ export async function meshViewQueue(
         // Drop them in favor of the status counts that summary/visibleSummary already
         // carry, but keep pending/assigned active rows — those drive coordinator
         // dispatch decisions. verbose=true returns every row as before.
-        const visibleQueue = compact
-            ? queue.filter((task: any) => !HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')))
-            : queue;
+        const activeOnlyQueue = queue.filter((task: any) => !HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
+        // Compact mode: cap active rows and truncate per-row messages (a busy mesh
+        // can carry dozens of multi-KB task messages → 70KB+ in the active array).
+        const compactQueueResult = compact ? compactQueueRows(activeOnlyQueue) : { rows: activeOnlyQueue, omitted: 0 };
+        const visibleQueue = compact ? compactQueueResult.rows : queue;
         const wantActiveQueueArray = view === 'active' || statusFilter?.some(status => ACTIVE_QUEUE_STATUSES.has(status));
         const wantHistoricalQueueArray = !compact && (view === 'historical' || requestedHistoricalRows);
+        // activeWork carries the full task message/summary per record — the single
+        // largest payload source on a busy mesh. Slim + cap it in compact mode.
+        const activeWorkResult = compact
+            ? compactActiveWorkRecords(activeWorkEvidence.activeWork)
+            : { records: activeWorkEvidence.activeWork, omitted: 0 };
 
         // staleDirectWork is a full MeshActiveWorkRecord[] of orphaned/historical
         // direct dispatches — it is the second major payload-bloat source (the first
@@ -3675,7 +4005,15 @@ export async function meshViewQueue(
             },
             queue: visibleQueue,
             ...(compact ? { historicalRowsOmitted: true, historicalRowsHint: 'Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows.' } : {}),
-            activeWork: activeWorkEvidence.activeWork,
+            ...(compact && compactQueueResult.omitted > 0 ? {
+                activeRowsOmitted: compactQueueResult.omitted,
+                activeRowsHint: `Showing the first ${COMPACT_MAX_ACTIVE_QUEUE_ROWS} active rows (per-row messages truncated). ${compactQueueResult.omitted} more active row(s) omitted — see activeCount/activeCounts for the complete total or use verbose=true.`,
+            } : {}),
+            activeWork: activeWorkResult.records,
+            ...(compact && activeWorkResult.omitted > 0 ? {
+                activeWorkOmitted: activeWorkResult.omitted,
+                activeWorkHint: `Showing the first ${COMPACT_MAX_ACTIVE_WORK_ROWS} active-work records (messages truncated). ${activeWorkResult.omitted} more omitted — see activeWorkSummary for complete counts or use verbose=true.`,
+            } : {}),
             staleDirectWorkSummary,
             ...(compact ? {} : { staleDirectWork: activeWorkEvidence.staleDirectWork }),
             activeWorkSummary: activeWorkEvidence.summary,
@@ -3691,7 +4029,7 @@ export async function meshViewQueue(
             historicalCount: summary.historicalCount,
             visibleActiveCount: visibleSummary.activeCount,
             visibleHistoricalCount: visibleSummary.historicalCount,
-            staleAssignedTasks,
+            staleAssignedTasks: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks,
             staleAssignedCount: (maintenance as any).staleAssignedCount,
             queueMaintenance: maintenanceForResponse,
             cleanupDryRun: maintenanceForResponse,
@@ -3700,14 +4038,18 @@ export async function meshViewQueue(
                 dispatchFailureCount: recentDispatchFailures.length,
                 dispatchFailureNote: 'Remote P2P dispatch attempts that failed. Affected tasks remain pending and may require mesh_queue_requeue if no idle session picks them up.',
             } : {}),
-            ...(wantActiveQueueArray ? {
+            ...(wantActiveQueueArray && !compact ? {
                 activeQueue: queue.filter((task: any) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || ''))),
             } : {}),
+            // In compact mode the `queue` field already holds exactly the slimmed+
+            // capped active rows, so the separate activeQueue array would be a verbatim
+            // duplicate (it doubled the payload). Point callers at `queue` instead.
+            ...(wantActiveQueueArray && compact ? { activeQueueHint: 'In compact mode the active rows are in `queue` (already filtered to pending/assigned). Use verbose=true for the separate full activeQueue array.' } : {}),
             ...(wantHistoricalQueueArray ? {
                 historicalQueue: queue.filter((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || ''))),
             } : {}),
             // Back-compat alias for callers already reading the first hardening payload.
-            staleAssignments: staleAssignedTasks,
+            staleAssignments: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks,
         }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
