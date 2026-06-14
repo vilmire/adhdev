@@ -151,8 +151,12 @@ function getHealthClasses(node: MeshGraphNode, selected: boolean, isDark: boolea
     }
 }
 
-function getBadgeClasses(kind: 'health' | 'dirty' | 'conflict' | 'orphan' | 'meta' | 'submodule', isDark: boolean): string {
+function getBadgeClasses(kind: 'health' | 'dirty' | 'conflict' | 'orphan' | 'meta' | 'submodule' | 'refineDone', isDark: boolean): string {
     switch (kind) {
+        case 'refineDone':
+            return isDark
+                ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200'
+                : 'border-emerald-300 bg-emerald-50 text-emerald-700'
         case 'health':
             return isDark
                 ? 'border-white/10 bg-slate-950/60 text-slate-200'
@@ -584,6 +588,13 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     {node.isOrphan && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
                             needs follow-up
+                        </span>
+                    )}
+                    {/* The attention badge above already surfaces in-progress/failed refine state;
+                        the card only adds the recent-completed case it does not show. */}
+                    {!isSubmoduleNode && node.refineJobStatus === 'completed' && (
+                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('refineDone', meshTheme.isDark)}`} title={node.refineJobBranch ? `refined ${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` : 'refine completed'}>
+                            refined
                         </span>
                     )}
                 </div>

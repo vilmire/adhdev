@@ -58,6 +58,11 @@ export function getMeshGraphAttentionBadge(node: MeshGraphNode): { label: string
         if (!node.upstream && node.branch && node.branch !== convergence.defaultBranch) return { label: 'push branch', tone: 'warn' }
         return { label: 'blocked review', tone: 'danger' }
     }
+    // Refine job state ranks below the hard convergence blockers above (not_mergeable /
+    // blocked_review drift already returned) but above orphan/offline — a live or failed
+    // refine is the more actionable signal for an otherwise-idle worktree.
+    if (node.refineJobStatus === 'failed') return { label: 'refine failed', tone: 'danger' }
+    if (node.refineJobStatus === 'running' || node.refineJobStatus === 'accepted') return { label: 'refining…', tone: 'info' }
     if (convergence?.status === 'pushed_feature_branch_needs_merge') return { label: 'needs merge', tone: 'warn' }
     if (convergence?.status === 'cleanup_candidate') return { label: 'refine worktree', tone: 'info' }
     if (node.isOrphan) return { label: 'needs follow-up', tone: 'warn' }

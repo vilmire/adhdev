@@ -90,7 +90,31 @@ export interface MeshGraphNode {
     snapshotCompleteness: 'complete' | 'pending_git' | 'missing_git' | 'missing_submodule_report' | 'stale'
     snapshotWarnings: string[]
     branchConvergence: MeshGraphBranchConvergence | null
+    refineJobStatus?: MeshGraphRefineJobStatus | null
+    refineJobId?: string | null
+    refineJobBranch?: string | null
+    refineJobInto?: string | null
     source: MeshGraphNodeSource
+}
+
+export type MeshGraphRefineJobStatus = 'accepted' | 'running' | 'completed' | 'failed'
+
+/**
+ * Shape of an entry in `RepoMeshStatus.asyncRefineJobs` as it reaches the browser.
+ * Mirrors daemon-core `MeshAsyncRefineJobSummary` (mesh-refine-status.ts) — we only
+ * read the fields the graph needs; the daemon owns the full schema.
+ */
+interface MeshGraphAsyncRefineJob {
+    jobId: string
+    status: MeshGraphRefineJobStatus
+    nodeId?: string
+    targetNodeId?: string
+    workspace?: string
+    branch?: string
+    into?: string
+    lastUpdatedAt?: string
+    startedAt?: string
+    completedAt?: string
 }
 
 export interface MeshGraphEdge {
@@ -125,6 +149,8 @@ export interface MeshGraph {
         missingGitSnapshotNodes: number
         missingSubmoduleSnapshotNodes: number
         staleGitSnapshotNodes: number
+        activeRefineNodes: number
+        failedRefineNodes: number
         totalActiveSessions: number
     }
     warnings: string[]
@@ -342,6 +368,76 @@ function readSourceOfTruthWarnings(status: RepoMeshStatus): string[] {
     return warnings
 }
 
+function readAsyncRefineJobs(status: RepoMeshStatus): MeshGraphAsyncRefineJob[] {
+    const raw = (status as unknown as { asyncRefineJobs?: unknown }).asyncRefineJobs
+    if (!Array.isArray(raw)) return []
+    const jobs: MeshGraphAsyncRefineJob[] = []
+    for (const entry of raw) {
+        if (!entry || typeof entry !== 'object') continue
+        const record = entry as Record<string, unknown>
+        const jobId = typeof record.jobId === 'string' ? record.jobId : null
+        const status = record.status
+        if (!jobId) continue
+        if (status !== 'accepted' && status !== 'running' && status !== 'completed' && status !== 'failed') continue
+        jobs.push({
+            jobId,
+            status,
+            nodeId: typeof record.nodeId === 'string' ? record.nodeId : undefined,
+            targetNodeId: typeof record.targetNodeId === 'string' ? record.targetNodeId : undefined,
+            workspace: typeof record.workspace === 'string' ? record.workspace : undefined,
+            branch: typeof record.branch === 'string' ? record.branch : undefined,
+            into: typeof record.into === 'string' ? record.into : undefined,
+            lastUpdatedAt: typeof record.lastUpdatedAt === 'string' ? record.lastUpdatedAt : undefined,
+            startedAt: typeof record.startedAt === 'string' ? record.startedAt : undefined,
+            completedAt: typeof record.completedAt === 'string' ? record.completedAt : undefined,
+        })
+    }
+    return jobs
+}
+
+function refineJobStatusPriority(status: MeshGraphRefineJobStatus): number {
+    switch (status) {
+        case 'running':
+        case 'accepted':
+            return 0 // in progress wins
+        case 'failed':
+            return 1
+        case 'completed':
+        default:
+            return 2
+    }
+}
+
+function refineJobActivityMs(job: MeshGraphAsyncRefineJob): number {
+    const raw = job.lastUpdatedAt || job.completedAt || job.startedAt || ''
+    return parseTimestampMs(raw) ?? 0
+}
+
+/** Pick the most relevant refine job for a node: in-progress > failed > recent completed,
+ * breaking ties by newest activity (lastUpdatedAt). */
+function pickDominantRefineJob(jobs: MeshGraphAsyncRefineJob[]): MeshGraphAsyncRefineJob | null {
+    if (jobs.length === 0) return null
+    return jobs.reduce((best, current) => {
+        const bestPriority = refineJobStatusPriority(best.status)
+        const currentPriority = refineJobStatusPriority(current.status)
+        if (currentPriority !== bestPriority) return currentPriority < bestPriority ? current : best
+        return refineJobActivityMs(current) > refineJobActivityMs(best) ? current : best
+    })
+}
+
+/** Map each refine job to a node id (nodeId preferred, falling back to targetNodeId). */
+function groupRefineJobsByNode(jobs: MeshGraphAsyncRefineJob[]): Map<string, MeshGraphAsyncRefineJob[]> {
+    const byNode = new Map<string, MeshGraphAsyncRefineJob[]>()
+    for (const job of jobs) {
+        const nodeId = job.nodeId?.trim() || job.targetNodeId?.trim()
+        if (!nodeId) continue
+        const list = byNode.get(nodeId) ?? []
+        list.push(job)
+        byNode.set(nodeId, list)
+    }
+    return byNode
+}
+
 function isCleanDefaultBranchMember(node: MeshGraphNode, defaultBranch: string): boolean {
     return node.type !== 'submoduleNode'
         && node.branch === defaultBranch
@@ -510,6 +606,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const edges: MeshGraphEdge[] = []
     const warnings: string[] = readSourceOfTruthWarnings(canonicalStatus)
     const branchToNodeIds = new Map<string, string[]>()
+    const refineJobsByNode = groupRefineJobsByNode(readAsyncRefineJobs(canonicalStatus))
 
     for (const nodeStatus of canonicalStatus.nodes) {
         const git = nodeStatus.git
@@ -527,6 +624,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             ? (nodeStatus as any).clonedFromNodeId
             : null
         const sessionDetails = readNodeSessionDetails(nodeStatus)
+        const dominantRefineJob = pickDominantRefineJob(refineJobsByNode.get(nodeStatus.nodeId) ?? [])
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
@@ -562,6 +660,10 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             snapshotCompleteness: snapshotAssessment.snapshotCompleteness,
             snapshotWarnings: snapshotAssessment.snapshotWarnings,
             branchConvergence,
+            refineJobStatus: dominantRefineJob?.status ?? null,
+            refineJobId: dominantRefineJob?.jobId ?? null,
+            refineJobBranch: dominantRefineJob?.branch ?? null,
+            refineJobInto: dominantRefineJob?.into ?? null,
             source: nodeStatus,
         }
         nodes.push(graphNode)
@@ -772,6 +874,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const missingGitSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'missing_git').length
     const missingSubmoduleSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'missing_submodule_report').length
     const staleGitSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'stale').length
+    const activeRefineNodes = visibleGraphNodes.filter(node => node.refineJobStatus === 'running' || node.refineJobStatus === 'accepted').length
+    const failedRefineNodes = visibleGraphNodes.filter(node => node.refineJobStatus === 'failed').length
     const snapshotWarnings = [
         pendingGitSnapshotNodes > 0 ? `${pendingGitSnapshotNodes} node(s) are still waiting for a live peer git snapshot` : null,
         missingGitSnapshotNodes > 0 ? `${missingGitSnapshotNodes} node(s) have no visible peer git snapshot` : null,
@@ -814,6 +918,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             missingGitSnapshotNodes,
             missingSubmoduleSnapshotNodes,
             staleGitSnapshotNodes,
+            activeRefineNodes,
+            failedRefineNodes,
             totalActiveSessions: visibleGraphNodes.reduce((total, node) => total + node.activeSessionCount, 0),
         },
         warnings,

@@ -41,6 +41,10 @@ function graphNode(overrides: Partial<MeshGraphNode>): MeshGraphNode {
     snapshotCompleteness: overrides.snapshotCompleteness ?? 'complete',
     snapshotWarnings: overrides.snapshotWarnings ?? [],
     branchConvergence: overrides.branchConvergence ?? null,
+    refineJobStatus: overrides.refineJobStatus ?? null,
+    refineJobId: overrides.refineJobId ?? null,
+    refineJobBranch: overrides.refineJobBranch ?? null,
+    refineJobInto: overrides.refineJobInto ?? null,
     source: overrides.source || {
       nodeId: overrides.id || 'node-1',
       machineLabel: overrides.machineLabel ?? 'Mac Studio',
@@ -76,6 +80,8 @@ function graphData(nodes: MeshGraphNode[]): MeshGraphData {
       missingGitSnapshotNodes: nodes.filter(node => node.snapshotCompleteness === 'missing_git').length,
       missingSubmoduleSnapshotNodes: nodes.filter(node => node.snapshotCompleteness === 'missing_submodule_report').length,
       staleGitSnapshotNodes: nodes.filter(node => node.snapshotCompleteness === 'stale').length,
+      activeRefineNodes: nodes.filter(node => node.refineJobStatus === 'running' || node.refineJobStatus === 'accepted').length,
+      failedRefineNodes: nodes.filter(node => node.refineJobStatus === 'failed').length,
       totalActiveSessions: nodes.reduce((sum, node) => sum + node.activeSessionCount, 0),
     },
     warnings: [],
@@ -155,6 +161,42 @@ describe('meshGraphViewModel', () => {
     expect(formatMeshGraphAheadBehind(node)).toBe('behind 3')
     expect(getMeshGraphAttentionBadge(node)).toEqual({ label: 'behind 3', tone: 'danger' })
     expect(shouldShowMeshGraphCallout(node)).toBe(true)
+  })
+
+  it('surfaces in-progress and failed refine jobs as attention badges', () => {
+    expect(getMeshGraphAttentionBadge(graphNode({ id: 'n-refining', refineJobStatus: 'running' })))
+      .toEqual({ label: 'refining…', tone: 'info' })
+    expect(getMeshGraphAttentionBadge(graphNode({ id: 'n-accepted', refineJobStatus: 'accepted' })))
+      .toEqual({ label: 'refining…', tone: 'info' })
+    expect(getMeshGraphAttentionBadge(graphNode({ id: 'n-failed', refineJobStatus: 'failed' })))
+      .toEqual({ label: 'refine failed', tone: 'danger' })
+    // completed refine is not promoted to an attention badge (card badge handles it)
+    expect(getMeshGraphAttentionBadge(graphNode({ id: 'n-done', refineJobStatus: 'completed' })))
+      .toBeNull()
+  })
+
+  it('keeps hard convergence blockers ahead of refine attention badges', () => {
+    const notMergeable = graphNode({
+      id: 'n-blocked',
+      refineJobStatus: 'failed',
+      hasConflicts: true,
+      branchConvergence: {
+        status: 'not_mergeable',
+        needsConvergence: true,
+        reason: 'dirty_or_conflicts',
+        nextStep: null,
+        branch: 'feat/x',
+        defaultBranch: 'main',
+        upstream: null,
+        upstreamStatus: null,
+        ahead: 0,
+        behind: 0,
+        dirty: true,
+        hasConflicts: true,
+      },
+    })
+    // not_mergeable must win over 'refine failed'
+    expect(getMeshGraphAttentionBadge(notMergeable)).toEqual({ label: 'conflicts present', tone: 'danger' })
   })
 
 })

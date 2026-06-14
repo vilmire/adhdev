@@ -903,4 +903,83 @@ describe('buildMeshGraph', () => {
         expect(graph.edges.filter(edge => edge.type === 'cloneLink')).toHaveLength(0)
     })
 
+    it('maps asyncRefineJobs onto nodes and aggregates refine stats', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_refine',
+            meshName: 'Refine Mesh',
+            repoIdentity: 'git@github.com:test/repo.git',
+            refreshedAt: '2026-06-14T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_running',
+                    machineLabel: 'Running',
+                    workspace: '/repo/running',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: baseGit('feat/running'),
+                },
+                {
+                    nodeId: 'node_failed',
+                    machineLabel: 'Failed',
+                    workspace: '/repo/failed',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: baseGit('feat/failed'),
+                },
+            ],
+            asyncRefineJobs: [
+                { jobId: 'job_run', status: 'running', nodeId: 'node_running', branch: 'feat/running', into: 'main', lastUpdatedAt: '2026-06-14T00:01:00.000Z' },
+                // older completed on the same node — in-progress should win
+                { jobId: 'job_done', status: 'completed', nodeId: 'node_running', lastUpdatedAt: '2026-06-13T00:00:00.000Z' },
+                // node_failed only addressed via targetNodeId fallback
+                { jobId: 'job_fail', status: 'failed', targetNodeId: 'node_failed', lastUpdatedAt: '2026-06-14T00:00:30.000Z' },
+            ],
+        } as any)
+
+        const runningNode = graph.nodes.find(node => node.id === 'node_running')
+        expect(runningNode?.refineJobStatus).toBe('running')
+        expect(runningNode?.refineJobId).toBe('job_run')
+        expect(runningNode?.refineJobBranch).toBe('feat/running')
+        expect(runningNode?.refineJobInto).toBe('main')
+
+        const failedNode = graph.nodes.find(node => node.id === 'node_failed')
+        expect(failedNode?.refineJobStatus).toBe('failed')
+        expect(failedNode?.refineJobId).toBe('job_fail')
+
+        expect(graph.stats.activeRefineNodes).toBe(1)
+        expect(graph.stats.failedRefineNodes).toBe(1)
+    })
+
+    it('prefers failed over completed when no in-progress refine job exists', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_refine_priority',
+            meshName: 'Refine Priority',
+            repoIdentity: 'git@github.com:test/repo.git',
+            refreshedAt: '2026-06-14T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_mixed',
+                    machineLabel: 'Mixed',
+                    workspace: '/repo/mixed',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: baseGit('feat/mixed'),
+                },
+            ],
+            asyncRefineJobs: [
+                // completed is newer, but failed should win over completed
+                { jobId: 'job_done', status: 'completed', nodeId: 'node_mixed', lastUpdatedAt: '2026-06-14T00:05:00.000Z' },
+                { jobId: 'job_fail', status: 'failed', nodeId: 'node_mixed', lastUpdatedAt: '2026-06-14T00:01:00.000Z' },
+            ],
+        } as any)
+
+        const mixedNode = graph.nodes.find(node => node.id === 'node_mixed')
+        expect(mixedNode?.refineJobStatus).toBe('failed')
+        expect(graph.stats.failedRefineNodes).toBe(1)
+        expect(graph.stats.activeRefineNodes).toBe(0)
+    })
+
 })
