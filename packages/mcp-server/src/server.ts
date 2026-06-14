@@ -41,7 +41,7 @@ import {
   meshReadDebug,
   meshLaunchSession, meshGitStatus, meshFastForwardNode, meshCheckpoint, meshApprove,
   meshCloneNode, meshRemoveNode, meshRefineNode,
-  meshRefineConfigSchema, meshValidateRefineConfig, meshSuggestRefineConfig, meshRefinePlan,
+  meshRefineConfigSchema, meshValidateRefineConfig, meshSuggestRefineConfig, meshRefinePlan, meshRefineBatch,
   meshCleanupSessions, meshTaskHistory, meshReconcileLedger, meshMissionUpsert,
   meshReviewInbox
 } from './tools/mesh-tools.js';
@@ -205,6 +205,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_clone_node': text = await meshCloneNode(meshCtx, a as any); break;
           case 'mesh_remove_node': text = await meshRemoveNode(meshCtx, a as any); break;
           case 'mesh_refine_node': text = await meshRefineNode(meshCtx, a as any); break;
+          case 'mesh_refine_batch': text = await meshRefineBatch(meshCtx, a as any); break;
           case 'mesh_refine_config_schema': text = await meshRefineConfigSchema(meshCtx); break;
           case 'mesh_validate_refine_config': text = await meshValidateRefineConfig(meshCtx, a as any); break;
           case 'mesh_suggest_refine_config': text = await meshSuggestRefineConfig(meshCtx, a as any); break;

@@ -43,6 +43,7 @@ import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMe
 import { getRecentUnroutableDeliveries } from '../mesh/mesh-routing.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
+import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import { buildPreviewFreshness } from '../mesh/preview-freshness.js';
 import { buildMeshAsyncRefineJobs } from '../mesh/mesh-refine-status.js';
 import {
@@ -4126,6 +4127,251 @@ export class DaemonCommandRouter {
         }
     }
 
+    /**
+     * Batch refinery: converge multiple sibling worktree nodes onto the base branch
+     * in one sequential pipeline, absorbing the rebase + patch-equivalence churn that
+     * arises when several siblings touch the same submodule.
+     *
+     * Reuses executeMeshRefineNodeSynchronously per node — every node goes through the
+     * exact same validation / patch-equivalence / submodule-reachability / merge / cleanup
+     * gates, including its built-in auto-rebase onto fresh origin/<base>. Because each
+     * node fetches origin/<base> at the start of its own refine, a node merged earlier in
+     * the batch advances the base, and the next node's refine auto-rebases onto it before
+     * re-running patch-equivalence. No force-push, no reset — conflicting nodes are
+     * isolated as blocked_review while the rest of the batch proceeds.
+     */
+    private async batchRefineMeshNodes(meshId: string, requestedNodeIds: string[] | undefined, args: any): Promise<CommandRouterResult> {
+        // preferInline: same membership authority as refine_mesh_node — inline-cache-only
+        // clone nodes (created in this MCP session) must resolve.
+        const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+        const mesh = meshRecord?.mesh;
+        if (!mesh) return { success: false, error: `Mesh '${meshId}' not found` };
+
+        const allNodes: any[] = Array.isArray(mesh.nodes) ? mesh.nodes : [];
+        const isConvergeable = (n: any) => n?.isLocalWorktree && typeof n.workspace === 'string' && n.workspace;
+
+        let targetNodes: any[];
+        if (Array.isArray(requestedNodeIds) && requestedNodeIds.length > 0) {
+            targetNodes = [];
+            const missing: string[] = [];
+            const nonWorktree: string[] = [];
+            for (const nodeId of requestedNodeIds) {
+                const node = allNodes.find(n => n.id === nodeId || n.nodeId === nodeId);
+                if (!node) { missing.push(nodeId); continue; }
+                if (!isConvergeable(node)) { nonWorktree.push(nodeId); continue; }
+                targetNodes.push(node);
+            }
+            if (missing.length || nonWorktree.length) {
+                return {
+                    success: false,
+                    error: 'One or more requested nodes are not convergeable local worktree nodes.',
+                    ...(missing.length ? { missingNodeIds: missing } : {}),
+                    ...(nonWorktree.length ? { nonWorktreeNodeIds: nonWorktree } : {}),
+                };
+            }
+        } else {
+            // Auto-collect: every local worktree node is a convergence candidate.
+            targetNodes = allNodes.filter(isConvergeable);
+        }
+
+        if (targetNodes.length === 0) {
+            return { success: true, batch: true, dryRun: args?.dryRun !== false, nodeCount: 0, order: [], results: [], note: 'No convergeable local worktree nodes found.' };
+        }
+
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+
+        // Resolve the base repo root and a base ref to analyze change areas against.
+        const resolveRepoRootFor = (node: any): string | undefined => {
+            const sourceNode = node.clonedFromNodeId
+                ? allNodes.find(n => n.id === node.clonedFromNodeId || n.nodeId === node.clonedFromNodeId)
+                : allNodes.find(n => !n.isLocalWorktree);
+            return sourceNode?.repoRoot || sourceNode?.workspace;
+        };
+
+        // Analyze change areas for ordering. The repoRoot is shared across siblings of
+        // the same source; resolve a base ref (origin/<base> preferred) once per repoRoot.
+        const repoRootBaseRef = new Map<string, string>();
+        const submodulePathsByRepoRoot = new Map<string, Set<string>>();
+        const resolveBaseRef = async (repoRoot: string): Promise<string> => {
+            const cached = repoRootBaseRef.get(repoRoot);
+            if (cached) return cached;
+            let baseBranch = 'main';
+            try {
+                const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8' });
+                if (stdout.trim()) baseBranch = stdout.trim();
+            } catch { /* fall back to main */ }
+            let baseRef = 'HEAD';
+            try {
+                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8' });
+            } catch { /* offline / no remote — fall through to local refs */ }
+            try {
+                const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8' });
+                baseRef = stdout.trim();
+            } catch {
+                try {
+                    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+                    baseRef = stdout.trim();
+                } catch { /* leave HEAD */ }
+            }
+            repoRootBaseRef.set(repoRoot, baseRef);
+            return baseRef;
+        };
+
+        const changeAreas: Array<Awaited<ReturnType<typeof analyzeMeshRefineNodeChangeArea>>> = [];
+        for (const node of targetNodes) {
+            const repoRoot = resolveRepoRootFor(node);
+            let branch = typeof node.worktreeBranch === 'string' ? node.worktreeBranch : '';
+            try {
+                const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8' });
+                if (stdout.trim()) branch = stdout.trim();
+            } catch { /* use stored worktreeBranch */ }
+
+            if (!repoRoot || !branch) {
+                changeAreas.push({
+                    nodeId: node.id, workspace: node.workspace, branch: branch || '(unknown)',
+                    changedTopLevelPaths: [], changedFiles: [], touchedSubmodulePaths: [],
+                    touchesSubmodule: false, aheadCount: 0,
+                    error: !repoRoot ? 'source repoRoot not found' : 'branch not resolved',
+                });
+                continue;
+            }
+            if (!submodulePathsByRepoRoot.has(repoRoot)) {
+                // Resolve declared submodule paths once per repo root.
+                let subPaths = new Set<string>();
+                try {
+                    const { stdout } = await execFileAsync('git', ['config', '--file', '.gitmodules', '--get-regexp', 'path'], { cwd: repoRoot, encoding: 'utf8' });
+                    for (const line of stdout.split('\n')) {
+                        const trimmed = line.trim();
+                        const spaceIdx = trimmed.indexOf(' ');
+                        if (spaceIdx === -1) continue;
+                        const value = trimmed.slice(spaceIdx + 1).trim();
+                        if (value) subPaths.add(value);
+                    }
+                } catch { subPaths = new Set(); }
+                submodulePathsByRepoRoot.set(repoRoot, subPaths);
+            }
+            const baseRef = await resolveBaseRef(repoRoot);
+            let branchRef = branch;
+            try {
+                const { stdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8' });
+                branchRef = stdout.trim() || branch;
+            } catch { /* use branch name */ }
+            changeAreas.push(await analyzeMeshRefineNodeChangeArea({
+                nodeId: node.id,
+                workspace: node.workspace,
+                branch,
+                baseRef,
+                branchRef,
+                diffCwd: node.workspace,
+                submodulePaths: submodulePathsByRepoRoot.get(repoRoot)!,
+            }));
+        }
+
+        const ordering = orderMeshRefineBatchNodes(changeAreas);
+        const orderedNodes = ordering.order
+            .map(nodeId => targetNodes.find(n => n.id === nodeId || n.nodeId === nodeId))
+            .filter((n): n is any => !!n);
+
+        const dryRun = args?.dryRun !== false && args?.execute !== true;
+        if (dryRun) {
+            return {
+                success: true,
+                batch: true,
+                dryRun: true,
+                nodeCount: orderedNodes.length,
+                order: ordering.order,
+                orderingRationale: ordering.rationale,
+                changeAreas: ordering.changeAreas,
+                plan: orderedNodes.map(node => ({
+                    nodeId: node.id,
+                    workspace: node.workspace,
+                    validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
+                    mergeWillRun: false,
+                })),
+                note: 'Dry-run: no validation, rebase, or merge was executed. Re-run with execute=true to converge nodes in this order.',
+            };
+        }
+
+        // Execute: refine each node in order. The per-node refine pipeline fetches
+        // origin/<base> fresh, so each merged sibling advances the base before the
+        // next node's auto-rebase + patch-equivalence re-check. A blocked/failed node
+        // is isolated; the batch continues with the remaining nodes.
+        type BatchNodeOutcome = {
+            nodeId: string;
+            workspace: string;
+            convergence: 'merged_to_main' | 'blocked_review' | 'skipped_patch_equivalent' | 'not_mergeable';
+            code?: string;
+            reason?: string;
+            stage?: string;
+            error?: string;
+            finalBranchConvergenceState?: Record<string, unknown>;
+        };
+        const results: BatchNodeOutcome[] = [];
+        for (const node of orderedNodes) {
+            let result: Record<string, unknown>;
+            try {
+                result = await this.executeMeshRefineNodeSynchronously(meshId, node.id, args) as Record<string, unknown>;
+            } catch (e: any) {
+                result = { success: false, error: e?.message || String(e) };
+            }
+            const code = typeof result.code === 'string' ? result.code : '';
+            // already_merged (branch content already on base via another path) is a
+            // non-error skip regardless of success flag — the worktree converges with
+            // no new merge. A real `git merge` conflict surfaces as merge_failed →
+            // not_mergeable. Everything else that failed is isolated as blocked_review.
+            let convergence: BatchNodeOutcome['convergence'];
+            if (code === 'already_merged' && result.alreadyMergedViaOtherPath) {
+                convergence = 'skipped_patch_equivalent';
+            } else if (result.success === true) {
+                convergence = 'merged_to_main';
+            } else if (code === 'merge_failed') {
+                convergence = 'not_mergeable';
+            } else {
+                convergence = 'blocked_review';
+            }
+            const fbcs = (result.finalBranchConvergenceState && typeof result.finalBranchConvergenceState === 'object')
+                ? result.finalBranchConvergenceState as Record<string, unknown>
+                : undefined;
+            const stage = Array.isArray(result.refineStages)
+                ? (result.refineStages as Array<Record<string, unknown>>).filter(s => s.status === 'failed').map(s => s.stage).filter(Boolean).pop() as string | undefined
+                : undefined;
+            results.push({
+                nodeId: node.id,
+                workspace: node.workspace,
+                convergence,
+                ...(code ? { code } : {}),
+                ...(typeof result.blockedReason === 'string' ? { reason: result.blockedReason } : {}),
+                ...(stage ? { stage } : {}),
+                ...(typeof result.error === 'string' ? { error: result.error } : {}),
+                ...(fbcs ? { finalBranchConvergenceState: fbcs } : {}),
+            });
+        }
+
+        const summary = {
+            merged: results.filter(r => r.convergence === 'merged_to_main').length,
+            skipped: results.filter(r => r.convergence === 'skipped_patch_equivalent').length,
+            blocked: results.filter(r => r.convergence === 'blocked_review').length,
+            notMergeable: results.filter(r => r.convergence === 'not_mergeable').length,
+        };
+        const allConverged = summary.blocked === 0 && summary.notMergeable === 0;
+        return {
+            success: true,
+            batch: true,
+            dryRun: false,
+            nodeCount: orderedNodes.length,
+            order: ordering.order,
+            orderingRationale: ordering.rationale,
+            summary,
+            allConverged,
+            results,
+            ...(allConverged ? {} : {
+                nextStep: 'Resolve blocked_review / not_mergeable nodes manually (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.',
+            }),
+        };
+    }
+
     private async finishMeshRefineJob(handle: MeshRefineJobHandle, args: any): Promise<void> {
         const key = this.buildRefineJobKey(handle.meshId, handle.targetNodeId);
         let result: Record<string, unknown>;
@@ -5942,6 +6188,15 @@ export class DaemonCommandRouter {
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
                 return this.startMeshRefineJob(meshId, nodeId, args);
+            }
+
+            case 'batch_refine_mesh_nodes': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                const requestedNodeIds = Array.isArray(args?.nodeIds)
+                    ? (args.nodeIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
+                    : undefined;
+                return this.batchRefineMeshNodes(meshId, requestedNodeIds, args);
             }
 
             case 'remove_mesh_node': {

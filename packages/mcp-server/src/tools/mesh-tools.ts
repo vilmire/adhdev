@@ -2450,6 +2450,27 @@ export const MESH_REFINE_NODE_TOOL = {
     },
 };
 
+export const MESH_REFINE_BATCH_TOOL = {
+    name: 'mesh_refine_batch',
+    description: 'Batch Refinery: converge multiple sibling worktree nodes onto the base branch in one conflict-aware sequential pipeline. '
+        + 'Orders nodes by change-area (non-submodule nodes first, submodule-touching nodes serialized last) so each merged sibling advances the base and the next node auto-rebases + re-checks patch-equivalence before its own merge. '
+        + 'Each node runs the same validation/patch-equivalence/submodule-reachability/merge/cleanup gates as mesh_refine_node. '
+        + 'Conflicting or blocked nodes are isolated as blocked_review while the rest of the batch proceeds. Defaults to dry-run (plan only); set execute=true to converge. Never force-pushes or resets.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional explicit node IDs to converge, in any order (the tool computes the safe merge order). When omitted, all local worktree nodes that need convergence are auto-collected.',
+            },
+            execute: { type: 'boolean', description: 'When true, run validation/rebase/merge for each node in order. Defaults false/dry-run.' },
+            dry_run: { type: 'boolean', description: 'Preview the ordering + per-node validation plan without executing. Defaults true unless execute=true; dry_run=true overrides execute.' },
+        },
+        required: [],
+    },
+};
+
 export const MESH_REFINE_CONFIG_SCHEMA_TOOL = {
     name: 'mesh_refine_config_schema',
     description: 'Return the Repo Mesh Refinery config JSON schema and supported repo-local config locations. This is the validation source of truth; heuristic command detection is suggestions-only.',
@@ -2521,6 +2542,7 @@ export const ALL_MESH_TOOLS = [
     MESH_CLONE_NODE_TOOL,
     MESH_REMOVE_NODE_TOOL,
     MESH_REFINE_NODE_TOOL,
+    MESH_REFINE_BATCH_TOOL,
     MESH_REFINE_CONFIG_SCHEMA_TOOL,
     MESH_VALIDATE_REFINE_CONFIG_TOOL,
     MESH_SUGGEST_REFINE_CONFIG_TOOL,
@@ -4224,6 +4246,44 @@ export async function meshRefineNode(
             ctx.mesh.nodes.splice(idx, 1);
             ctx.mesh.updatedAt = new Date().toISOString();
         }
+    }
+    return JSON.stringify(result, null, 2);
+}
+
+export async function meshRefineBatch(
+    ctx: MeshContext,
+    args: { node_ids?: string[]; execute?: boolean; dry_run?: boolean } = {},
+): Promise<string> {
+    // Refresh so auto-collection and explicit node IDs resolve against the latest
+    // mesh membership (siblings may have been created/removed in this MCP session).
+    await refreshMeshFromDaemon(ctx);
+    const nodeIds = Array.isArray(args.node_ids)
+        ? args.node_ids.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
+        : undefined;
+
+    // The batch orchestrator runs on the coordinator daemon that owns the source repo
+    // and worktrees. Drive it through the local control-plane transport (the same
+    // daemon that hosts these worktree nodes), passing inlineMesh so inline-cache-only
+    // clone nodes resolve.
+    const result = await ctx.transport.command('batch_refine_mesh_nodes', {
+        meshId: ctx.mesh.id,
+        ...(nodeIds ? { nodeIds } : {}),
+        ...(args.execute !== undefined ? { execute: args.execute } : {}),
+        ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
+        inlineMesh: ctx.mesh,
+    });
+
+    // On a successful execute, prune merged/skipped nodes from the local mesh snapshot
+    // so subsequent tool calls don't re-target already-converged worktrees.
+    const payload = unwrapCommandPayload(result) ?? result;
+    if (payload?.batch && payload?.dryRun === false && Array.isArray(payload?.results)) {
+        for (const outcome of payload.results) {
+            if (outcome?.convergence === 'merged_to_main' || outcome?.convergence === 'skipped_patch_equivalent') {
+                const idx = ctx.mesh.nodes.findIndex(n => n.id === outcome.nodeId);
+                if (idx >= 0) ctx.mesh.nodes.splice(idx, 1);
+            }
+        }
+        ctx.mesh.updatedAt = new Date().toISOString();
     }
     return JSON.stringify(result, null, 2);
 }
