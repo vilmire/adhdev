@@ -1397,6 +1397,15 @@ type MeshRefinePatchEquivalenceSummary = {
     stdout?: string;
     stderr?: string;
     actionableHint?: MeshRefineSubmoduleConflictHint;
+    /**
+     * Set when a `merge-tree` submodule conflict was reclassified as a trivial
+     * gitlink fast-forward and the gate passed via a synthesized merge tree.
+     */
+    gitlinkTrivialFastForward?: {
+        resolved: boolean;
+        gitlinks: Array<{ path: string; baseCommit?: string; branchCommit?: string; fastForward: boolean }>;
+        reason?: string;
+    };
 };
 
 type MeshRefineEffectiveDiffSummary = {
@@ -1597,8 +1606,46 @@ async function runMeshRefinePatchEquivalenceGate(
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
         });
         const mergeBase = git(['merge-base', baseHead, branchHead]).trim();
-        const mergeTreeStdout = git(['merge-tree', '--write-tree', baseHead, branchHead]);
-        const mergedTree = mergeTreeStdout.trim().split(/\s+/)[0] || '';
+
+        // `git merge-tree --write-tree` refuses to merge gitlinks that differ
+        // across base/branch even when the advance is a strict fast-forward,
+        // failing with "Recursive merging with submodules currently only
+        // supports trivial cases". When that happens we check whether the
+        // conflict is *entirely* trivial-ff gitlinks and, if so, synthesize the
+        // merged tree ourselves (base tree + branch-side gitlinks).
+        let mergedTree = '';
+        let mergeTreeStdout = '';
+        let gitlinkTrivialFastForward: MeshRefinePatchEquivalenceSummary['gitlinkTrivialFastForward'];
+        try {
+            mergeTreeStdout = git(['merge-tree', '--write-tree', baseHead, branchHead]);
+            mergedTree = mergeTreeStdout.trim().split(/\s+/)[0] || '';
+        } catch (mergeTreeErr: any) {
+            const output = `${mergeTreeErr?.message || ''}\n${mergeTreeErr?.stdout || ''}\n${mergeTreeErr?.stderr || ''}`;
+            const isSubmoduleConflict = /(submodule|160000)/i.test(output)
+                || /Recursive merging with submodules/i.test(output);
+            if (!isSubmoduleConflict) throw mergeTreeErr;
+            const evaluation = evaluateGitlinkTrivialFastForward(repoRoot, baseHead, branchHead);
+            if (!evaluation.trivial) {
+                return {
+                    status: 'failed',
+                    equivalent: false,
+                    baseHead,
+                    branchHead,
+                    mergeBase: mergeBase || undefined,
+                    durationMs: Date.now() - startedAt,
+                    error: mergeTreeErr?.message || String(mergeTreeErr),
+                    stdout: truncateValidationOutput(mergeTreeErr?.stdout),
+                    stderr: truncateValidationOutput(mergeTreeErr?.stderr),
+                    gitlinkTrivialFastForward: { resolved: false, gitlinks: evaluation.gitlinks, reason: evaluation.reason },
+                    actionableHint: buildPatchEquivalenceSubmoduleConflictHint(repoRoot, baseHead, branchHead, output),
+                };
+            }
+            // All conflicting gitlinks fast-forward and nothing else conflicts:
+            // synthesize the merge result as base's tree with branch-side gitlinks.
+            mergedTree = synthesizeTrivialFastForwardMergeTree(repoRoot, baseHead, branchHead, evaluation.gitlinks) || '';
+            gitlinkTrivialFastForward = { resolved: true, gitlinks: evaluation.gitlinks };
+        }
+
         if (!mergeBase || !mergedTree) {
             return {
                 status: 'failed',
@@ -1610,6 +1657,7 @@ async function runMeshRefinePatchEquivalenceGate(
                 durationMs: Date.now() - startedAt,
                 error: 'patch equivalence preflight could not resolve merge-base or synthetic merge tree',
                 stdout: truncateValidationOutput(mergeTreeStdout),
+                gitlinkTrivialFastForward,
             };
         }
         const expectedPatchId = await computeGitPatchId(repoRoot, mergeBase, branchHead);
@@ -1625,6 +1673,7 @@ async function runMeshRefinePatchEquivalenceGate(
             expectedPatchId,
             actualPatchId,
             durationMs: Date.now() - startedAt,
+            gitlinkTrivialFastForward,
         };
     } catch (e: any) {
         return {
@@ -1801,6 +1850,230 @@ function readTreeObject(repoRoot: string, ref: string, path: string): string | u
         }).trim();
         const match = output.match(/\bcommit\s+([0-9a-f]{40})\b/i);
         return match?.[1];
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Resolve the absolute path to the repo's real git directory. In a linked
+ * worktree, `.git` is a file pointing elsewhere, so we cannot assume a `.git`
+ * subdirectory exists — a temporary index file must live in the actual git dir.
+ */
+function resolveGitDir(repoRoot: string): string {
+    const out = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        maxBuffer: 1024 * 1024,
+    }).trim();
+    return out;
+}
+
+/**
+ * Result of evaluating whether a `git merge-tree --write-tree` submodule
+ * conflict is in fact a trivial gitlink fast-forward that should pass the
+ * patch-equivalence gate.
+ *
+ * `git merge-tree` (and `git merge` with the default recursive strategy)
+ * refuses to 3-way merge gitlinks unless the case is "trivial" — and it
+ * treats *any* gitlink that differs across merge-base/base/branch as
+ * non-trivial, even when the branch-side commit is a strict descendant of the
+ * base-side commit (i.e. a real fast-forward). Refinery only ever wants to
+ * accept the branch's recorded gitlink, so a fast-forwardable bump is safe to
+ * resolve to the branch side without any conflict.
+ */
+type GitlinkTrivialFastForwardEvaluation = {
+    /** True only when the merge-tree conflict is *fully* explained by trivial-ff gitlinks. */
+    trivial: boolean;
+    /** Why the evaluation declined to treat the conflict as trivial (set when trivial=false). */
+    reason?: string;
+    /** Per-path detail for the changed gitlinks that were inspected. */
+    gitlinks: Array<{
+        path: string;
+        baseCommit?: string;
+        branchCommit?: string;
+        fastForward: boolean;
+    }>;
+};
+
+/**
+ * Check, inside a submodule repo, whether `baseCommit` is an ancestor of
+ * `branchCommit` (i.e. advancing the gitlink from base→branch is a pure
+ * fast-forward). Returns false on any error or when either commit is missing
+ * locally — safety first, ambiguity stays "not a fast-forward".
+ */
+function isSubmoduleFastForward(submoduleRepoPath: string, baseCommit: string, branchCommit: string): boolean {
+    if (!baseCommit || !branchCommit) return false;
+    if (baseCommit === branchCommit) return true;
+    try {
+        if (!fs.existsSync(submoduleRepoPath)) return false;
+        // Both commits must exist locally for the ancestry check to be meaningful.
+        execFileSync('git', ['cat-file', '-e', `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        execFileSync('git', ['cat-file', '-e', `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        // exit 0 ⇒ baseCommit is an ancestor of branchCommit ⇒ branch fast-forwards base.
+        execFileSync('git', ['merge-base', '--is-ancestor', baseCommit, branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Read the set of paths that differ between two refs, tagging whether each is a
+ * gitlink (submodule, mode 160000) on either side. Returns one entry per
+ * changed path. Empty on error.
+ */
+function readChangedPathKinds(repoRoot: string, fromRef: string, toRef: string): Array<{ path: string; isGitlink: boolean }> {
+    try {
+        const output = execFileSync('git', ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+        });
+        const result: Array<{ path: string; isGitlink: boolean }> = [];
+        const seen = new Set<string>();
+        for (const line of output.split('\n')) {
+            if (!line.trim()) continue;
+            const metaAndPath = line.split('\t');
+            const meta = metaAndPath[0] || '';
+            const path = metaAndPath[metaAndPath.length - 1]?.trim();
+            if (!path || seen.has(path)) continue;
+            seen.add(path);
+            const parts = meta.split(/\s+/);
+            const isGitlink = !!(parts[0]?.includes('160000') || parts[1]?.includes('160000'));
+            result.push({ path, isGitlink });
+        }
+        return result;
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Decide whether a merge-tree submodule conflict between base and branch is a
+ * trivial gitlink fast-forward (and nothing else).
+ *
+ * The conflict is treated as trivial ONLY when:
+ *   1. at least one changed gitlink exists,
+ *   2. every changed gitlink fast-forwards (base-commit is an ancestor of the
+ *      branch-commit inside that submodule's repo), and
+ *   3. the *only* paths that changed on both sides of the merge (i.e. the paths
+ *      that could possibly produce a 3-way conflict — the intersection of
+ *      mergeBase→base and mergeBase→branch changes) are gitlinks. Any
+ *      overlapping non-gitlink path means a genuine content conflict could be
+ *      hiding behind the submodule failure, so we keep the block.
+ *
+ * If any of these fail, the conflict is left as a genuine block. This never
+ * passes a regular-file conflict or a diverged (non-ff) gitlink.
+ */
+export function evaluateGitlinkTrivialFastForward(
+    repoRoot: string,
+    baseHead: string,
+    branchHead: string,
+): GitlinkTrivialFastForwardEvaluation {
+    const changedGitlinks = readChangedGitlinkPaths(repoRoot, baseHead, branchHead).map(path => {
+        const baseCommit = readTreeObject(repoRoot, baseHead, path);
+        const branchCommit = readTreeObject(repoRoot, branchHead, path);
+        const submoduleRepoPath = pathResolve(repoRoot, path);
+        const fastForward = !!baseCommit && !!branchCommit
+            && isSubmoduleFastForward(submoduleRepoPath, baseCommit, branchCommit);
+        return { path, baseCommit, branchCommit, fastForward };
+    });
+
+    if (changedGitlinks.length === 0) {
+        return { trivial: false, reason: 'no_changed_gitlinks', gitlinks: changedGitlinks };
+    }
+
+    const nonFastForward = changedGitlinks.filter(entry => !entry.fastForward);
+    if (nonFastForward.length > 0) {
+        return {
+            trivial: false,
+            reason: `diverged_gitlinks:${nonFastForward.map(entry => entry.path).join(',')}`,
+            gitlinks: changedGitlinks,
+        };
+    }
+
+    // Prove there is no *other* conflict (regular files, or a gitlink that
+    // diverged on both sides). A 3-way merge can only conflict on a path that
+    // changed on BOTH sides relative to the merge-base. Compute that overlap and
+    // require every overlapping path to be a gitlink — non-gitlink overlap means
+    // a genuine content conflict that must stay blocked.
+    let mergeBase = '';
+    try {
+        mergeBase = execFileSync('git', ['merge-base', baseHead, branchHead], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: 1024 * 1024,
+        }).trim();
+    } catch {
+        return { trivial: false, reason: 'merge_base_unresolved', gitlinks: changedGitlinks };
+    }
+    if (!mergeBase) {
+        return { trivial: false, reason: 'merge_base_unresolved', gitlinks: changedGitlinks };
+    }
+
+    const baseSideChanges = readChangedPathKinds(repoRoot, mergeBase, baseHead);
+    const branchSideChanges = readChangedPathKinds(repoRoot, mergeBase, branchHead);
+    const baseChangedPaths = new Map(baseSideChanges.map(entry => [entry.path, entry]));
+    // Overlapping paths = candidates for a real 3-way conflict.
+    const overlapping = branchSideChanges.filter(entry => baseChangedPaths.has(entry.path));
+    const nonGitlinkOverlap = overlapping.filter(entry => {
+        const baseEntry = baseChangedPaths.get(entry.path);
+        return !(entry.isGitlink && baseEntry?.isGitlink);
+    });
+    if (nonGitlinkOverlap.length > 0) {
+        return {
+            trivial: false,
+            reason: `non_gitlink_overlap:${nonGitlinkOverlap.map(entry => entry.path).join(',')}`,
+            gitlinks: changedGitlinks,
+        };
+    }
+
+    return { trivial: true, gitlinks: changedGitlinks };
+}
+
+/**
+ * Synthesize the merge result for a trivial gitlink fast-forward: take
+ * `baseHead`'s tree and overlay each changed gitlink's branch-side commit.
+ * This mirrors what `git merge-tree` would have produced had it not bailed on
+ * the submodule recursion limitation. Returns the tree SHA, or undefined on
+ * failure. Caller must have already proven (via evaluateGitlinkTrivialFastForward)
+ * that every changed gitlink fast-forwards and no other path conflicts.
+ */
+function synthesizeTrivialFastForwardMergeTree(
+    repoRoot: string,
+    baseHead: string,
+    branchHead: string,
+    gitlinks: Array<{ path: string; branchCommit?: string }>,
+): string | undefined {
+    try {
+        const baseTree = execFileSync('git', ['rev-parse', `${baseHead}^{tree}`], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: 1024 * 1024,
+        }).trim();
+        if (!baseTree) return undefined;
+        const updates = gitlinks
+            .filter(entry => entry.branchCommit)
+            .map(entry => `160000 commit ${entry.branchCommit}\t${entry.path}`)
+            .join('\n');
+        if (!updates) return baseTree;
+        const tmpIndex = pathJoin(resolveGitDir(repoRoot), `adhdev-refine-ff-${baseHead.slice(0, 12)}-${branchHead.slice(0, 12)}.index`);
+        const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
+        try {
+            execFileSync('git', ['read-tree', baseTree], { cwd: repoRoot, env, stdio: 'ignore' });
+            execFileSync('git', ['update-index', '--index-info'], {
+                cwd: repoRoot,
+                env,
+                input: `${updates}\n`,
+                encoding: 'utf8',
+                stdio: ['pipe', 'ignore', 'ignore'],
+            });
+            const newTree = execFileSync('git', ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
+            return newTree || undefined;
+        } finally {
+            try { fs.rmSync(tmpIndex, { force: true }); } catch { /* ignore */ }
+        }
     } catch {
         return undefined;
     }
