@@ -34,6 +34,34 @@ function writeHistorySession(agentType: string, historySessionId: string, count:
   return filePath
 }
 
+// Write a single session split across multiple daily JSONL files so the
+// bounded-tail read path has to span more than one file to satisfy the window.
+function writeHistorySessionAcrossDates(
+  agentType: string,
+  historySessionId: string,
+  perFileCounts: Array<{ date: string; count: number }>,
+) {
+  let globalIndex = 0
+  for (const { date, count } of perFileCounts) {
+    const filePath = buildHistoryFilePath(agentType, historySessionId, date)
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    const lines = Array.from({ length: count }, () => {
+      const index = globalIndex++
+      return JSON.stringify({
+        ts: new Date(1_700_000_000_000 + index * 1000).toISOString(),
+        receivedAt: 1_700_000_000_000 + index * 1000,
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `msg-${index + 1}`,
+        agent: agentType,
+        historySessionId,
+        sessionTitle: 'History Session',
+      })
+    })
+    fs.writeFileSync(filePath, `${lines.join('\n')}\n`, 'utf-8')
+  }
+  return globalIndex
+}
+
 function buildHistoryIndexPath(agentType: string) {
   return path.join(mockHomeDir, '.adhdev', 'history', agentType, '.saved-history-index.json')
 }
@@ -467,6 +495,70 @@ describe('chat-history config helpers', () => {
     expect(second.sessions.find(session => session.historySessionId === '20260417_202020_beta')).toMatchObject({
       messageCount: 2,
     })
+  })
+
+  it('bounded-tail read returns the same last-N messages as a full read+slice across multiple history files', async () => {
+    // 5 daily files, 250 messages total — the bounded path must span files.
+    const total = writeHistorySessionAcrossDates('hermes-cli', 'history-multi', [
+      { date: '2026-04-13', count: 50 },
+      { date: '2026-04-14', count: 50 },
+      { date: '2026-04-15', count: 50 },
+      { date: '2026-04-16', count: 50 },
+      { date: '2026-04-17', count: 50 },
+    ])
+    expect(total).toBe(250)
+    const { readChatHistory } = await import('../../src/config/chat-history.js')
+
+    // Full read (large limit triggers the unbounded path) then slice the tail.
+    const full = readChatHistory('hermes-cli', 0, Number.MAX_SAFE_INTEGER, 'history-multi')
+    expect(full.messages).toHaveLength(250)
+
+    for (const tail of [1, 30, 60, 200]) {
+      const bounded = readChatHistory('hermes-cli', 0, tail, 'history-multi')
+      const expected = full.messages.slice(-tail)
+      expect(bounded.messages.map(m => m.content)).toEqual(expected.map(m => m.content))
+      expect(bounded.hasMore).toBe(tail < 250)
+    }
+
+    // Equivalence must also hold with an excludeRecentCount window (older-page reads).
+    const boundedExclude = readChatHistory('hermes-cli', 0, 30, 'history-multi', 40)
+    const fullExcludeEnd = full.messages.length - 40
+    const expectedExclude = full.messages.slice(Math.max(0, fullExcludeEnd - 30), fullExcludeEnd)
+    expect(boundedExclude.messages.map(m => m.content)).toEqual(expectedExclude.map(m => m.content))
+  })
+
+  it('serves an unchanged bounded-tail read from cache and refreshes it after an append', async () => {
+    const filePath = writeHistorySession('hermes-cli', 'history-cache', 80)
+    const { readChatHistory } = await import('../../src/config/chat-history.js')
+
+    const first = readChatHistory('hermes-cli', 0, 30, 'history-cache')
+    expect(first.messages.map(m => m.content)).toEqual(
+      Array.from({ length: 30 }, (_, i) => `msg-${i + 51}`),
+    )
+
+    // Make the file unreadable: a cache HIT must still return the same tail
+    // without touching disk content.
+    fs.chmodSync(filePath, 0o000)
+    const cached = readChatHistory('hermes-cli', 0, 30, 'history-cache')
+    fs.chmodSync(filePath, 0o600)
+    expect(cached.messages.map(m => m.content)).toEqual(first.messages.map(m => m.content))
+
+    // Appending changes the size+mtime signature, so the next read must refresh.
+    fs.appendFileSync(filePath, `${JSON.stringify({
+      ts: new Date(1_700_000_000_000 + 80 * 1000).toISOString(),
+      receivedAt: 1_700_000_000_000 + 80 * 1000,
+      role: 'user',
+      content: 'msg-81',
+      agent: 'hermes-cli',
+      historySessionId: 'history-cache',
+      sessionTitle: 'History Session',
+    })}\n`, 'utf-8')
+
+    const refreshed = readChatHistory('hermes-cli', 0, 30, 'history-cache')
+    expect(refreshed.messages[refreshed.messages.length - 1].content).toBe('msg-81')
+    expect(refreshed.messages.map(m => m.content)).toEqual(
+      Array.from({ length: 30 }, (_, i) => `msg-${i + 52}`),
+    )
   })
 
   it('lists all non-empty saved-history sessions regardless of provider-specific ID format', async () => {

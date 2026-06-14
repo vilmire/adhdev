@@ -58,6 +58,40 @@ const savedHistoryFileSummaryCache = new Map<string, SavedHistoryFileSummaryCach
 const savedHistoryBackgroundRefresh = new Set<string>();
 const savedHistoryRollupInFlight = new Set<string>();
 
+// Bounded-tail read cache. The dashboard re-subscribes and polls hot sessions
+// every ~2.5s; without a cache each poll re-reads/parses/sorts the whole
+// conversation just to slice a small tail. We key on (type, sessionId,
+// pagination args) plus the on-disk size+mtime signature so an UNCHANGED
+// session returns the previously computed tail in O(1) and only re-reads when a
+// new message is appended (signature changes). The map is bounded by a small
+// LRU to keep memory flat regardless of how many sessions are touched.
+interface BoundedTailCacheEntry {
+    signature: string;
+    result: { messages: HistoryMessage[]; hasMore: boolean };
+}
+
+const BOUNDED_TAIL_CACHE_MAX_ENTRIES = 64;
+const boundedTailReadCache = new Map<string, BoundedTailCacheEntry>();
+
+function readBoundedTailCache(key: string, signature: string): { messages: HistoryMessage[]; hasMore: boolean } | null {
+    const cached = boundedTailReadCache.get(key);
+    if (!cached || cached.signature !== signature) return null;
+    // Refresh LRU recency.
+    boundedTailReadCache.delete(key);
+    boundedTailReadCache.set(key, cached);
+    return cached.result;
+}
+
+function writeBoundedTailCache(key: string, signature: string, result: { messages: HistoryMessage[]; hasMore: boolean }): void {
+    boundedTailReadCache.delete(key);
+    boundedTailReadCache.set(key, { signature, result });
+    while (boundedTailReadCache.size > BOUNDED_TAIL_CACHE_MAX_ENTRIES) {
+        const oldest = boundedTailReadCache.keys().next().value;
+        if (oldest === undefined) break;
+        boundedTailReadCache.delete(oldest);
+    }
+}
+
 interface HistoryMessage {
     ts: string;           // ISO timestamp
     receivedAt: number;   // epoch ms
@@ -1180,6 +1214,79 @@ function pageHistoryRecords(
     return { messages: sliced, hasMore: startInclusive > 0 };
 }
 
+// A finite tail request can be served by reading only the newest files instead
+// of the whole conversation. Treat very large limits (e.g. MAX_SAFE_INTEGER, or
+// anything past a generous ceiling) as a full-history request so restore/seed
+// callers keep their existing behavior.
+const BOUNDED_TAIL_MAX_LIMIT = 5_000;
+// Slack added to the requested window before sorting/dedup/collapse so the
+// boundary message at the top of the tail dedupes/collapses identically to a
+// full read. Modest and bounded — it only widens the parse window, not output.
+const BOUNDED_TAIL_SLACK = 50;
+
+function isBoundedTailRequest(limit: number, offset: number, excludeRecentCount: number): boolean {
+    const numericLimit = Number(limit);
+    if (!Number.isFinite(numericLimit) || numericLimit <= 0) return false;
+    if (numericLimit > BOUNDED_TAIL_MAX_LIMIT) return false;
+    const numericOffset = Number(offset);
+    const numericExclude = Number(excludeRecentCount);
+    if (!Number.isFinite(numericOffset) || !Number.isFinite(numericExclude)) return false;
+    return true;
+}
+
+// Read newest-first only as many files as needed to cover the requested window
+// plus slack. listHistoryFiles already returns files reversed (newest-first), so
+// we accumulate (de-duped) candidates from the end and stop once we have enough,
+// then hand the bounded window to pageHistoryRecords in chronological order.
+function readBoundedTailRecords(
+    agentType: string,
+    dir: string,
+    files: string[],
+    needed: number,
+): { records: HistoryMessage[]; readAllFiles: boolean } {
+    const collected: HistoryMessage[] = [];
+    const seen = new Set<string>();
+    let readAllFiles = true;
+
+    for (let f = 0; f < files.length; f++) {
+        const filePath = path.join(dir, files[f]);
+        let content: string;
+        try {
+            content = fs.readFileSync(filePath, 'utf-8');
+        } catch {
+            continue;
+        }
+        const lines = content.trim().split('\n').filter(Boolean);
+        // Walk this file's lines newest-first so we fill the tail window from the
+        // bottom. seen-dedup keeps the same first-wins-by-newest semantics the
+        // full read produced (files are processed newest-first there too).
+        for (let i = lines.length - 1; i >= 0; i--) {
+            try {
+                const parsed = JSON.parse(lines[i]) as HistoryMessage;
+                const sanitizedMessage = sanitizeHistoryMessage(agentType, parsed);
+                if (!sanitizedMessage) continue;
+                const hash = buildHistoryMessageHash(agentType, sanitizedMessage);
+                if (seen.has(hash)) continue;
+                seen.add(hash);
+                collected.push(sanitizedMessage);
+            } catch { /* skip invalid lines */ }
+        }
+        // Stop once we have the window AND there is at least one more file (so a
+        // potential older boundary message exists). If this is the last file we
+        // fall through and mark the whole history as read.
+        if (collected.length >= needed && f < files.length - 1) {
+            readAllFiles = false;
+            break;
+        }
+    }
+
+    // collected is newest-first across the bounded window; restore chronological
+    // (oldest-first) order before paging. pageHistoryRecords re-sorts by
+    // receivedAt regardless, so this is purely for stable input ordering.
+    collected.reverse();
+    return { records: collected, readAllFiles };
+}
+
 export function readChatHistory(
     agentType: string,
     offset: number = 0,
@@ -1195,6 +1302,33 @@ export function readChatHistory(
 
  // JSONL file list — filter by persistent history key when specified
         const files = listHistoryFiles(dir, historySessionId);
+
+        const bounded = isBoundedTailRequest(limit, offset, excludeRecentCount);
+
+        if (bounded) {
+            const fileSignatures = buildSavedHistoryFileSignatureMap(dir, files);
+            const cacheKey = `${sanitized}\0${historySessionId || ''}\0${offset}\0${limit}\0${excludeRecentCount}\0${historyBehavior?.collapseConsecutiveAssistantTurns ? '1' : '0'}`;
+            const signature = buildSavedHistoryCacheSignature(files, fileSignatures);
+            const cached = readBoundedTailCache(cacheKey, signature);
+            if (cached) return cached;
+
+            // Window large enough that the top boundary dedupes/collapses the same
+            // as a full read. hasMore reflects whether older messages exist beyond
+            // the window we actually read.
+            const numericLimit = Math.max(1, Number(limit));
+            const numericOffset = Math.max(0, Number(offset));
+            const numericExclude = Math.max(0, Number(excludeRecentCount));
+            const needed = numericLimit + numericOffset + numericExclude + Math.max(BOUNDED_TAIL_SLACK, numericLimit);
+            const { records, readAllFiles } = readBoundedTailRecords(agentType, dir, files, needed);
+            const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior);
+            // If we read every file, the conversation is fully represented in the
+            // window and pageHistoryRecords' hasMore is authoritative. If we
+            // stopped early there are older messages we never read, so hasMore
+            // must stay true regardless of the in-window slice position.
+            const boundedResult = readAllFiles ? result : { messages: result.messages, hasMore: true };
+            writeBoundedTailCache(cacheKey, signature, boundedResult);
+            return boundedResult;
+        }
 
         const allMessages: HistoryMessage[] = [];
         const seen = new Set<string>();

@@ -2135,6 +2135,14 @@ export class CliProviderInstance implements ProviderInstance {
             if (!materializeProviderNativeHistory(this.type, canonicalHistory, this.providerSessionId, this.workingDir, this.provider.scripts as any)) {
                 return false;
             }
+            // Full read is intentional: lastPersistedHistoryMessages is the COMPLETE
+            // session transcript — emitted as statusMessages and used as the
+            // prefix-comparison base for incremental appends — so a bounded tail
+            // would both truncate output and break prefix dedup. This is gated to
+            // once-per-2s (cache key above) for resume/manual launches only, so it
+            // does not run on the per-subscribe/per-poll dashboard tail path (that
+            // path goes through handleReadChat → readChatHistory with a bounded
+            // tailLimit, which is now O(tail)).
             const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
             this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
                 role: message.role,

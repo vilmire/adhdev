@@ -33,6 +33,13 @@ import { filterUserFacingChatMessages, normalizeChatMessages } from '../provider
 
 const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
+// Minimum tail floor for hot-path history/mirror reads. The dashboard requests a
+// bounded tail (~60); we keep a small floor so a tiny requested tailLimit still
+// has enough surrounding context for seed/mirror dedup correctness, but it must
+// NOT dominate the hot subscribe/poll path the way the previous 200 floor did.
+// readChatHistory now serves this as an O(tail) bounded read, so the cost scales
+// with this floor, not with total accumulated history.
+const HOT_TAIL_MIN_LIMIT = 60;
 const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
 // (A2.2) CLI_NATIVE_HISTORY_FRESH_MS removed with isNativeHistoryFreshEnough.
 // Hardcoded native-transcript provider allow-list. Deprecated. Kept only as a
@@ -963,7 +970,7 @@ function readExactRuntimeMirrorMessages(args: {
     const history = readChatHistory(
         args.providerType,
         0,
-        Math.max(args.tailLimit || 0, 200),
+        Math.max(args.tailLimit || 0, HOT_TAIL_MIN_LIMIT),
         targetSessionId,
         0,
         args.historyBehavior,
@@ -2206,7 +2213,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const nativeHistoryLimit = Math.max(
                 normalizeReadChatTailLimit(args) || 0,
                 returnedMessages.length,
-                200,
+                HOT_TAIL_MIN_LIMIT,
             );
             const nativeHistorySessionId = supportsNative
                 ? resolveCliNativeHistorySessionId(args, historySessionId, providerSessionId)
