@@ -2486,7 +2486,8 @@ export const MESH_REFINE_BATCH_TOOL = {
     description: 'Batch Refinery: converge multiple sibling worktree nodes onto the base branch in one conflict-aware sequential pipeline. '
         + 'Orders nodes by change-area (non-submodule nodes first, submodule-touching nodes serialized last) so each merged sibling advances the base and the next node auto-rebases + re-checks patch-equivalence before its own merge. '
         + 'Each node runs the same validation/patch-equivalence/submodule-reachability/merge/cleanup gates as mesh_refine_node. '
-        + 'Conflicting or blocked nodes are isolated as blocked_review while the rest of the batch proceeds. Defaults to dry-run (plan only); set execute=true to converge. Never force-pushes or resets.',
+        + 'Conflicting or blocked nodes are isolated as blocked_review while the rest of the batch proceeds. Defaults to dry-run (plan only); set execute=true to converge. Never force-pushes or resets. '
+        + 'execute=true is async: the immediate response is async:true / status:\'accepted\' with the batch jobId and ordered target node list; per-node convergence runs in the background and the aggregate completion/failure (with per-node merged / blocked_review / not_mergeable results) is delivered as a terminal refine event via pending mesh events and the ledger — do not re-invoke while a batch is in flight. dry_run returns the plan synchronously.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -4320,10 +4321,13 @@ export async function meshRefineBatch(
         inlineMesh: ctx.mesh,
     });
 
-    // On a successful execute, prune merged/skipped nodes from the local mesh snapshot
-    // so subsequent tool calls don't re-target already-converged worktrees.
+    // On a successful synchronous execute, prune merged/skipped nodes from the local
+    // mesh snapshot so subsequent tool calls don't re-target already-converged worktrees.
+    // The execute path is now async (async:true / status:'accepted') — per-node results
+    // arrive later via terminal refine events, so there is nothing to prune yet. Only the
+    // legacy/synchronous batch result (with inline `results`) is pruned here.
     const payload = unwrapCommandPayload(result) ?? result;
-    if (payload?.batch && payload?.dryRun === false && Array.isArray(payload?.results)) {
+    if (payload?.batch && payload?.dryRun === false && payload?.async !== true && Array.isArray(payload?.results)) {
         for (const outcome of payload.results) {
             if (outcome?.convergence === 'merged_to_main' || outcome?.convergence === 'skipped_patch_equivalent') {
                 const idx = ctx.mesh.nodes.findIndex(n => n.id === outcome.nodeId);

@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { orderMeshRefineBatchNodes } from '../../src/mesh/mesh-refine-batch'
 import type { MeshRefineBatchNodeChangeArea } from '../../src/mesh/mesh-refine-batch'
+import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
+import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events'
 
 // ── Pure ordering unit tests (no git, no native bindings) ──────────────────
 
@@ -141,6 +143,40 @@ function withConfigDir(root: string) {
   process.env.ADHDEV_CONFIG_DIR = join(root, '.adhdev')
 }
 
+// Execute is async: the immediate response is an accepted batch job handle; the
+// aggregate per-node results arrive in the terminal ledger entry + refine event.
+function expectAcceptedBatch(result: any, expectedNodeIds: string[]) {
+  expect(result).toMatchObject({ success: true, async: true, batch: true, status: 'accepted' })
+  expect(result.jobId).toMatch(/^refine_batch_/)
+  expect(result.interactionId).toMatch(/^ix_/)
+  expect(result.startedAt).toMatch(/T/)
+  expect([...result.nodeIds].sort()).toEqual([...expectedNodeIds].sort())
+}
+
+async function waitForBatchLedger(meshId: string, jobId: string, timeoutMs = 90000): Promise<any> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const entries = readLedgerEntries(meshId)
+    const terminal = entries.find(entry =>
+      (entry.kind === 'task_completed' || entry.kind === 'task_failed')
+      && (entry.payload as any)?.refineJob?.batch === true
+      && (entry.payload as any)?.refineJob?.jobId === jobId
+    )
+    if (terminal) return terminal
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  throw new Error(`Timed out waiting for batch refine job ${jobId}`)
+}
+
+// Run an async batch execute end-to-end: dispatch → assert accepted → await terminal
+// ledger → return the aggregate result payload the background job produced.
+async function executeBatchAndAwait(router: any, meshId: string, args: any, expectedNodeIds: string[]): Promise<any> {
+  const accepted: any = await router.execute('batch_refine_mesh_nodes', { meshId, execute: true, ...args })
+  expectAcceptedBatch(accepted, expectedNodeIds)
+  const terminal = await waitForBatchLedger(meshId, accepted.jobId)
+  return { accepted, terminal, result: terminal.payload.result }
+}
+
 describe('batch_refine_mesh_nodes', () => {
   beforeAll(() => { vi.setConfig({ testTimeout: 120000 }) })
 
@@ -233,7 +269,7 @@ describe('batch_refine_mesh_nodes', () => {
       const mesh = meshWith(repo, [a.node, b.node])
       const router = createRouter()
 
-      const result: any = await router.execute('batch_refine_mesh_nodes', { meshId: mesh.id, execute: true, inlineMesh: mesh })
+      const { result } = await executeBatchAndAwait(router, mesh.id, { inlineMesh: mesh }, ['node-a', 'node-b'])
       expect(result).toMatchObject({ success: true, batch: true, dryRun: false, allConverged: true })
       expect(result.summary).toMatchObject({ merged: 2, blocked: 0, notMergeable: 0 })
       const byId = Object.fromEntries(result.results.map((r: any) => [r.nodeId, r]))
@@ -272,9 +308,9 @@ describe('batch_refine_mesh_nodes', () => {
       const router = createRouter()
 
       // Force order so node-a merges first, then node-conflict (must conflict), then node-d.
-      const result: any = await router.execute('batch_refine_mesh_nodes', {
-        meshId: mesh.id, execute: true, nodeIds: ['node-a', 'node-conflict', 'node-d'], inlineMesh: mesh,
-      })
+      const { result } = await executeBatchAndAwait(router, mesh.id, {
+        nodeIds: ['node-a', 'node-conflict', 'node-d'], inlineMesh: mesh,
+      }, ['node-a', 'node-conflict', 'node-d'])
       expect(result).toMatchObject({ success: true, batch: true, dryRun: false, allConverged: false })
       const byId = Object.fromEntries(result.results.map((r: any) => [r.nodeId, r]))
       expect(byId['node-a'].convergence).toBe('merged_to_main')
@@ -311,9 +347,9 @@ describe('batch_refine_mesh_nodes', () => {
       const mesh = meshWith(repo, [a.node, equiv.node])
       const router = createRouter()
 
-      const result: any = await router.execute('batch_refine_mesh_nodes', {
-        meshId: mesh.id, execute: true, nodeIds: ['node-a', 'node-equiv'], inlineMesh: mesh,
-      })
+      const { result } = await executeBatchAndAwait(router, mesh.id, {
+        nodeIds: ['node-a', 'node-equiv'], inlineMesh: mesh,
+      }, ['node-a', 'node-equiv'])
       expect(result.success).toBe(true)
       const byId = Object.fromEntries(result.results.map((r: any) => [r.nodeId, r]))
       expect(byId['node-a'].convergence).toBe('merged_to_main')
@@ -322,6 +358,109 @@ describe('batch_refine_mesh_nodes', () => {
       expect(result.summary.skipped).toBe(1)
       expect(result.allConverged).toBe(true)
       expect(readFileSync(join(repo, 'shared.txt'), 'utf-8')).toBe('shared-change\n')
+    } finally {
+      if (prev === undefined) delete process.env.ADHDEV_CONFIG_DIR; else process.env.ADHDEV_CONFIG_DIR = prev
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('execute returns an accepted async batch handle immediately and delivers the aggregate as a terminal refine event', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-batch-async-event-'))
+    const prev = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      const repo = join(root, 'repo')
+      initRepo(repo)
+      const a = addWorktreeNode(root, repo, 'node-a', 'feat/a', wt => {
+        writeFileSync(join(wt, 'a.txt'), 'a-change\n', 'utf-8'); git(wt, 'add', '.'); git(wt, 'commit', '-q', '-m', 'a change')
+      })
+      const b = addWorktreeNode(root, repo, 'node-b', 'feat/b', wt => {
+        writeFileSync(join(wt, 'b.txt'), 'b-change\n', 'utf-8'); git(wt, 'add', '.'); git(wt, 'commit', '-q', '-m', 'b change')
+      })
+      const mesh = meshWith(repo, [a.node, b.node])
+      const router = createRouter()
+
+      const accepted: any = await router.execute('batch_refine_mesh_nodes', { meshId: mesh.id, execute: true, inlineMesh: mesh })
+      // Immediate accepted handle — no per-node results inline yet.
+      expectAcceptedBatch(accepted, ['node-a', 'node-b'])
+      expect(accepted.results).toBeUndefined()
+      expect(accepted.order.sort()).toEqual(['node-a', 'node-b'])
+      // A provisional refine:accepted event is queued for the coordinator. The batch
+      // identity rides in the refine_batch_ jobId prefix (intrinsic to the handle and
+      // preserved through the forward path).
+      const acceptedEvents = drainPendingMeshCoordinatorEvents(mesh.id)
+      expect(acceptedEvents.some(e => e.event === 'refine:accepted' && /^refine_batch_/.test((e.metadataEvent as any)?.jobId ?? ''))).toBe(true)
+
+      // Background convergence finishes and writes a terminal ledger entry + event.
+      const terminal = await waitForBatchLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = terminal.payload.result
+      expect(result).toMatchObject({ batch: true, allConverged: true })
+      expect(result.summary).toMatchObject({ merged: 2, blocked: 0, notMergeable: 0 })
+      const completedEvents = drainPendingMeshCoordinatorEvents(mesh.id)
+      expect(completedEvents.some(e => e.event === 'refine:completed' && /^refine_batch_/.test((e.metadataEvent as any)?.jobId ?? ''))).toBe(true)
+      // Both changes are present on base.
+      expect(readFileSync(join(repo, 'a.txt'), 'utf-8')).toBe('a-change\n')
+      expect(readFileSync(join(repo, 'b.txt'), 'utf-8')).toBe('b-change\n')
+    } finally {
+      if (prev === undefined) delete process.env.ADHDEV_CONFIG_DIR; else process.env.ADHDEV_CONFIG_DIR = prev
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reuses the in-flight batch job for a duplicate execute trigger instead of spawning a second convergence', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-batch-async-dup-'))
+    const prev = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      const repo = join(root, 'repo')
+      initRepo(repo)
+      // Slow validation so the first batch job is still in flight when the
+      // duplicate trigger arrives.
+      writeFileSync(join(repo, 'typecheck.js'), 'setTimeout(() => process.exit(0), 600)\n', 'utf-8')
+      git(repo, 'add', '.'); git(repo, 'commit', '-q', '-m', 'slow typecheck')
+      const a = addWorktreeNode(root, repo, 'node-a', 'feat/a', wt => {
+        writeFileSync(join(wt, 'a.txt'), 'a-change\n', 'utf-8'); git(wt, 'add', '.'); git(wt, 'commit', '-q', '-m', 'a change')
+      })
+      const mesh = meshWith(repo, [a.node])
+      const router = createRouter()
+
+      const first: any = await router.execute('batch_refine_mesh_nodes', { meshId: mesh.id, execute: true, inlineMesh: mesh })
+      expectAcceptedBatch(first, ['node-a'])
+      const second: any = await router.execute('batch_refine_mesh_nodes', { meshId: mesh.id, execute: true, inlineMesh: mesh })
+      // Same job, flagged duplicate — no second background convergence.
+      expect(second).toMatchObject({ success: true, async: true, batch: true, duplicate: true, jobId: first.jobId })
+
+      const terminal = await waitForBatchLedger(mesh.id, first.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      // Exactly one dispatched + one terminal ledger entry for this batch job.
+      const entries = readLedgerEntries(mesh.id).filter(e => (e.payload as any)?.refineJob?.batch === true)
+      const dispatched = entries.filter(e => e.kind === 'task_dispatched' && (e.payload as any)?.refineJob?.jobId === first.jobId)
+      const terminals = entries.filter(e => (e.kind === 'task_completed' || e.kind === 'task_failed') && (e.payload as any)?.refineJob?.jobId === first.jobId)
+      expect(dispatched).toHaveLength(1)
+      expect(terminals).toHaveLength(1)
+    } finally {
+      if (prev === undefined) delete process.env.ADHDEV_CONFIG_DIR; else process.env.ADHDEV_CONFIG_DIR = prev
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('dry-run stays synchronous (no async handle) even though execute is async', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-batch-dryrun-sync-'))
+    const prev = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      const repo = join(root, 'repo')
+      initRepo(repo)
+      const a = addWorktreeNode(root, repo, 'node-a', 'feat/a', wt => {
+        writeFileSync(join(wt, 'a.txt'), 'a\n', 'utf-8'); git(wt, 'add', '.'); git(wt, 'commit', '-q', '-m', 'a')
+      })
+      const mesh = meshWith(repo, [a.node])
+      const router = createRouter()
+      const result: any = await router.execute('batch_refine_mesh_nodes', { meshId: mesh.id, dry_run: true, inlineMesh: mesh })
+      expect(result).toMatchObject({ success: true, batch: true, dryRun: true })
+      expect(result.async).toBeUndefined()
+      expect(result.jobId).toBeUndefined()
     } finally {
       if (prev === undefined) delete process.env.ADHDEV_CONFIG_DIR; else process.env.ADHDEV_CONFIG_DIR = prev
       rmSync(root, { recursive: true, force: true })

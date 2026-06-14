@@ -1521,6 +1521,44 @@ type MeshRefineJobHandle = {
 
 type MeshRefineTerminalJob = MeshRefineJobHandle & { result?: Record<string, unknown> };
 
+type MeshRefineBatchJobStatus = 'accepted' | 'completed' | 'failed';
+
+/**
+ * Async handle returned by the batch Refinery the instant a convergence run is
+ * accepted. Mirrors {@link MeshRefineJobHandle} (async:true / status:'accepted' +
+ * terminal pending-event + ledger delivery) but scopes a whole batch of sibling
+ * nodes rather than a single node. The synthetic `batchLabel` is used as the
+ * `nodeLabel` for the shared refine event/message renderer.
+ */
+type MeshRefineBatchJobHandle = {
+    success: true;
+    async: true;
+    batch: true;
+    status: MeshRefineBatchJobStatus;
+    jobId: string;
+    interactionId: string;
+    meshId: string;
+    batchLabel: string;
+    nodeIds: string[];
+    nodeCount: number;
+    order: string[];
+    startedAt: string;
+    completedAt?: string;
+    duplicate?: boolean;
+    targetCoordinatorDaemonId?: string;
+    eventDelivery: {
+        pendingEvents: true;
+        ledger: true;
+    };
+    evidence: {
+        pendingEventsCommand: 'get_pending_mesh_events';
+        ledgerCommand: 'get_mesh_ledger_slice';
+        taskHistoryKind: 'task_dispatched' | 'task_completed' | 'task_failed';
+    };
+};
+
+type MeshRefineBatchTerminalJob = MeshRefineBatchJobHandle & { result?: Record<string, unknown> };
+
 const REFINE_VALIDATION_CATEGORIES = ['typecheck', 'test', 'lint', 'build'] as const;
 const REFINE_VALIDATION_TIMEOUT_MS = 120_000;
 const REFINE_VALIDATION_OUTPUT_LIMIT_BYTES = 128 * 1024;
@@ -2904,6 +2942,10 @@ export class DaemonCommandRouter {
     private runningRefineJobs = new Map<string, MeshRefineJobHandle>();
     /** Terminal async Refinery jobs preserve a clear answer after the worktree node has been removed. */
     private terminalRefineJobs = new Map<string, MeshRefineTerminalJob>();
+    /** In-memory async batch Refinery jobs keyed by meshId (one batch convergence per mesh at a time). */
+    private runningRefineBatchJobs = new Map<string, MeshRefineBatchJobHandle>();
+    /** Terminal async batch Refinery jobs preserve the last batch outcome for late readers. */
+    private terminalRefineBatchJobs = new Map<string, MeshRefineBatchTerminalJob>();
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
@@ -4725,10 +4767,24 @@ export class DaemonCommandRouter {
             };
         }
 
-        // Execute: refine each node in order. The per-node refine pipeline fetches
-        // origin/<base> fresh, so each merged sibling advances the base before the
-        // next node's auto-rebase + patch-equivalence re-check. A blocked/failed node
-        // is isolated; the batch continues with the remaining nodes.
+        // Execute: refine each node in order via the shared convergence core.
+        return this.runMeshRefineBatchConvergence(meshId, orderedNodes, ordering, args);
+    }
+
+    /**
+     * Convergence core shared by the synchronous batch entry and the async batch job.
+     * Refines each node in order: the per-node refine pipeline fetches origin/<base>
+     * fresh, so each merged sibling advances the base before the next node's auto-rebase
+     * + patch-equivalence re-check. A blocked/failed node is isolated; the batch
+     * continues with the remaining nodes. Does NOT touch the per-node merge logic — it
+     * only sequences calls to executeMeshRefineNodeSynchronously and aggregates outcomes.
+     */
+    private async runMeshRefineBatchConvergence(
+        meshId: string,
+        orderedNodes: any[],
+        ordering: { order: string[]; rationale?: unknown },
+        args: any,
+    ): Promise<CommandRouterResult> {
         type BatchNodeOutcome = {
             nodeId: string;
             workspace: string;
@@ -4800,6 +4856,261 @@ export class DaemonCommandRouter {
             ...(allConverged ? {} : {
                 nextStep: 'Resolve blocked_review / not_mergeable nodes manually (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.',
             }),
+        };
+    }
+
+    private buildRefineBatchJobKey(meshId: string): string {
+        return `${meshId}::batch`;
+    }
+
+    private buildRefineBatchJobHandle(args: {
+        meshId: string;
+        nodeIds: string[];
+        order: string[];
+        status?: MeshRefineBatchJobStatus;
+        startedAt?: string;
+        completedAt?: string;
+        jobId?: string;
+        interactionId?: string;
+        coordinatorDaemonId?: string;
+    }): MeshRefineBatchJobHandle {
+        return {
+            success: true,
+            async: true,
+            batch: true,
+            status: args.status || 'accepted',
+            jobId: args.jobId || `refine_batch_${createInteractionId()}`,
+            interactionId: args.interactionId || createInteractionId(),
+            meshId: args.meshId,
+            batchLabel: `batch:${args.nodeIds.length} node${args.nodeIds.length === 1 ? '' : 's'}`,
+            nodeIds: args.nodeIds,
+            nodeCount: args.nodeIds.length,
+            order: args.order,
+            startedAt: args.startedAt || new Date().toISOString(),
+            ...(args.completedAt ? { completedAt: args.completedAt } : {}),
+            ...(args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {}),
+            eventDelivery: { pendingEvents: true, ledger: true },
+            evidence: {
+                pendingEventsCommand: 'get_pending_mesh_events',
+                ledgerCommand: 'get_mesh_ledger_slice',
+                taskHistoryKind: args.status === 'completed' ? 'task_completed' : args.status === 'failed' ? 'task_failed' : 'task_dispatched',
+            },
+        };
+    }
+
+    /**
+     * Emit a batch Refinery terminal/accepted event through the SAME pending-event +
+     * forward mechanism single-node refine uses (queueRefineJobEvent), so the
+     * coordinator's existing refine:accepted/completed/failed handling and message
+     * renderer apply unchanged. The aggregate per-node results ride along in `result`.
+     */
+    private queueRefineBatchJobEvent(
+        event: 'refine:accepted' | 'refine:completed' | 'refine:failed',
+        handle: MeshRefineBatchJobHandle,
+        result?: Record<string, unknown>,
+    ): void {
+        const metadataEvent = {
+            source: 'refine_mesh_node_async_job',
+            batch: true,
+            jobId: handle.jobId,
+            interactionId: handle.interactionId,
+            meshId: handle.meshId,
+            nodeId: handle.batchLabel,
+            nodeIds: handle.nodeIds,
+            workspace: undefined,
+            status: handle.status,
+            startedAt: handle.startedAt,
+            completedAt: handle.completedAt,
+            order: handle.order,
+            ...(result ? { result } : {}),
+        };
+        const eventPayload = {
+            event,
+            meshId: handle.meshId,
+            nodeLabel: handle.batchLabel,
+            nodeId: handle.batchLabel,
+            metadataEvent,
+            queuedAt: Date.now(),
+            ...(handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {}),
+        };
+        if (typeof this.deps.instanceManager?.getByCategory === 'function') {
+            const forwarded = handleMeshForwardEvent(
+                { instanceManager: this.deps.instanceManager } as any,
+                {
+                    event,
+                    meshId: handle.meshId,
+                    nodeId: handle.batchLabel,
+                    jobId: handle.jobId,
+                    interactionId: handle.interactionId,
+                    status: handle.status,
+                    startedAt: handle.startedAt,
+                    completedAt: handle.completedAt,
+                    ...(result ? { result } : {}),
+                },
+            );
+            if (forwarded?.success === true) return;
+            LOG.warn('Mesh', `[Refinery] Failed to forward async refine batch event ${event}: ${forwarded?.error || 'unknown error'}`);
+        }
+        queuePendingMeshCoordinatorEvent(eventPayload);
+    }
+
+    private async appendRefineBatchJobLedger(
+        kind: 'task_dispatched' | 'task_completed' | 'task_failed',
+        handle: MeshRefineBatchJobHandle,
+        result?: Record<string, unknown>,
+    ): Promise<void> {
+        try {
+            const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+            appendLedgerEntry(handle.meshId, {
+                kind,
+                nodeId: handle.batchLabel,
+                payload: {
+                    source: 'refine_mesh_node_async_job',
+                    refineJob: {
+                        batch: true,
+                        jobId: handle.jobId,
+                        interactionId: handle.interactionId,
+                        status: handle.status,
+                        meshId: handle.meshId,
+                        nodeIds: handle.nodeIds,
+                        order: handle.order,
+                        targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId,
+                        startedAt: handle.startedAt,
+                        completedAt: handle.completedAt,
+                    },
+                    async: true,
+                    batch: true,
+                    ...(result ? {
+                        success: result.success === true,
+                        result,
+                    } : {}),
+                },
+            });
+        } catch (e: any) {
+            LOG.warn('Mesh', `[Refinery] Failed to append async refine batch ledger entry: ${e?.message || e}`);
+        }
+    }
+
+    private async finishMeshRefineBatchJob(
+        handle: MeshRefineBatchJobHandle,
+        orderedNodes: any[],
+        ordering: { order: string[]; rationale?: unknown },
+        args: any,
+    ): Promise<void> {
+        const key = this.buildRefineBatchJobKey(handle.meshId);
+        let result: Record<string, unknown>;
+        try {
+            result = await this.runMeshRefineBatchConvergence(handle.meshId, orderedNodes, ordering, args) as Record<string, unknown>;
+        } catch (e: any) {
+            result = { success: false, error: e?.message || String(e), batch: true };
+        }
+        const completedAt = new Date().toISOString();
+
+        // The batch as a whole "completed" only when every node converged (no blocked /
+        // not_mergeable). A partial batch is reported as a terminal failure so the
+        // coordinator inspects the per-node blockers rather than assuming a clean merge.
+        const summary = (result.summary && typeof result.summary === 'object') ? result.summary as Record<string, number> : undefined;
+        const allConverged = result.allConverged === true;
+        const isTerminalSuccess = result.success === true && allConverged;
+
+        const nextStep = typeof result.nextStep === 'string' && result.nextStep
+            ? result.nextStep
+            : isTerminalSuccess
+                ? 'All batched nodes converged onto base. Continue from the updated mesh state.'
+                : 'Resolve blocked_review / not_mergeable nodes (see per-node code/stage/error in result.results), then re-run mesh_refine_batch for the remaining nodes.';
+        const normalizedResult = {
+            ...result,
+            batch: true,
+            nextStep,
+            ...(summary ? {
+                convergenceStatus: allConverged ? 'all_converged' : 'partial',
+            } : {}),
+        };
+
+        const terminalHandle = this.buildRefineBatchJobHandle({
+            meshId: handle.meshId,
+            nodeIds: handle.nodeIds,
+            order: handle.order,
+            status: isTerminalSuccess ? 'completed' : 'failed',
+            startedAt: handle.startedAt,
+            completedAt,
+            jobId: handle.jobId,
+            interactionId: handle.interactionId,
+            coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+        });
+        const terminal: MeshRefineBatchTerminalJob = { ...terminalHandle, result: normalizedResult };
+        this.terminalRefineBatchJobs.set(key, terminal);
+        this.runningRefineBatchJobs.delete(key);
+        this.invalidateAggregateMeshStatus(handle.meshId);
+        await this.appendRefineBatchJobLedger(isTerminalSuccess ? 'task_completed' : 'task_failed', terminalHandle, normalizedResult);
+        this.queueRefineBatchJobEvent(isTerminalSuccess ? 'refine:completed' : 'refine:failed', terminalHandle, normalizedResult);
+    }
+
+    /**
+     * Async entry for the batch Refinery execute path. Mirrors startMeshRefineJob:
+     * resolves the plan synchronously (so target/ordering errors and the dry-run shape
+     * stay synchronous), then for execute=true registers an in-flight batch job, returns
+     * {async:true, status:'accepted', batch:true, ...plan} immediately, and runs the
+     * convergence loop in the background — emitting the same terminal refine event.
+     * Idempotent: a batch already in flight for this mesh returns the running handle
+     * with duplicate:true rather than spawning a second background job.
+     */
+    private async startMeshRefineBatchJob(meshId: string, requestedNodeIds: string[] | undefined, args: any): Promise<CommandRouterResult> {
+        // Resolve the plan up-front. For dry-run this returns the synchronous plan; for
+        // execute it returns the same plan shape but we hand convergence to the bg job.
+        const plan = await this.batchRefineMeshNodes(meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+        const planRecord = plan as Record<string, unknown>;
+        if (planRecord.success !== true) return plan;
+
+        // If the caller actually asked for a dry-run, return the plan as-is (sync).
+        if (args?.dryRun === true && args?.execute !== true) return plan;
+
+        const order = Array.isArray(planRecord.order) ? (planRecord.order as unknown[]).filter((v): v is string => typeof v === 'string') : [];
+        const nodeIds = order.slice();
+        if (nodeIds.length === 0) {
+            // No convergeable nodes — nothing to dispatch; return the empty plan synchronously.
+            return { ...planRecord, success: true, batch: true, dryRun: false, async: false };
+        }
+
+        const key = this.buildRefineBatchJobKey(meshId);
+        const running = this.runningRefineBatchJobs.get(key);
+        if (running) return { ...running, duplicate: true };
+
+        // Re-resolve the ordered node objects against current membership so the bg job
+        // refines real nodes (the plan only carries ids). preferInline matches refine_mesh_node.
+        const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+        const mesh = meshRecord?.mesh;
+        const allNodes: any[] = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+        const orderedNodes = nodeIds
+            .map(id => allNodes.find(n => n.id === id || n.nodeId === id))
+            .filter((n): n is any => !!n);
+        if (orderedNodes.length === 0) {
+            return { success: false, error: 'Batch nodes no longer resolvable in mesh', batch: true };
+        }
+        const ordering = {
+            order,
+            rationale: planRecord.orderingRationale,
+        };
+
+        const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
+            ? args.coordinatorDaemonId.trim()
+            : (this.deps.statusInstanceId || undefined);
+        const handle = this.buildRefineBatchJobHandle({ meshId, nodeIds, order, coordinatorDaemonId });
+        this.runningRefineBatchJobs.set(key, handle);
+        await this.appendRefineBatchJobLedger('task_dispatched', handle);
+        this.queueRefineBatchJobEvent('refine:accepted', handle);
+
+        setImmediate(() => {
+            void this.finishMeshRefineBatchJob(handle, orderedNodes, ordering, args);
+        });
+
+        // Return the accepted handle plus the plan so the coordinator sees the target set.
+        return {
+            ...handle,
+            order,
+            orderingRationale: planRecord.orderingRationale,
+            plan: planRecord.plan,
+            note: 'Batch convergence accepted and running in the background. Completion/failure (with per-node results) will be delivered as a terminal refine event; do not poll repeatedly.',
         };
     }
 
@@ -6627,7 +6938,14 @@ export class DaemonCommandRouter {
                 const requestedNodeIds = Array.isArray(args?.nodeIds)
                     ? (args.nodeIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
                     : undefined;
-                return this.batchRefineMeshNodes(meshId, requestedNodeIds, args);
+                // Dry-run (plan-only) stays synchronous: it does no validation/merge and
+                // returns instantly. Execute goes through the async batch job — immediate
+                // {async:true, status:'accepted'} + background convergence + terminal event,
+                // matching the single-node refine_mesh_node contract so long validation
+                // suites can't time out the IPC and strand the coordinator.
+                const isDryRun = args?.dryRun !== false && args?.execute !== true;
+                if (isDryRun) return this.batchRefineMeshNodes(meshId, requestedNodeIds, args);
+                return this.startMeshRefineBatchJob(meshId, requestedNodeIds, args);
             }
 
             case 'remove_mesh_node': {
