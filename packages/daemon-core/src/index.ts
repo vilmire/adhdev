@@ -306,6 +306,8 @@ export type {
 export { DaemonStatusReporter } from './status/reporter.js';
 export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected } from './status/builders.js';
 export { buildStatusSnapshot, buildMachineInfo } from './status/snapshot.js';
+export { getDaemonBuildInfo } from './build-info.js';
+export type { DaemonBuildInfo } from './build-info.js';
 export { normalizeManagedStatus, isManagedStatusWorking, isManagedStatusWaiting, normalizeActiveChatData } from './status/normalize.js';
 export type { ManagedStatus } from './status/normalize.js';
 export type { StatusSnapshotOptions, StatusSnapshot } from './status/snapshot.js';

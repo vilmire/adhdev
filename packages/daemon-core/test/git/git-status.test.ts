@@ -235,4 +235,72 @@ describe('git repo status parser', () => {
     expect(refreshed.upstreamStatus).toBe('fresh');
     expect(refreshed.behind).toBe(1);
   });
+
+  describe('daemonBuildBehind (stale live daemon detection)', () => {
+    function buildInfoFor(commit: string) {
+      return { commit, commitShort: commit.slice(0, 7), version: 'test' };
+    }
+
+    it('flags a build commit that is a strict ancestor of HEAD', async () => {
+      const repo = tempRepo('build-behind-ancestor');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'b.txt'), 'two\n');
+      commit(repo, 'c2 (merged fix)');
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit) });
+      expect(status.daemonBuildBehind).toBeDefined();
+      expect(status.daemonBuildBehind?.buildCommit).toBe(oldCommit);
+      expect(status.daemonBuildBehind?.scope).toBe('root');
+      expect(status.daemonBuildBehind?.head).toBe(git(repo, ['rev-parse', 'HEAD']));
+      expect(status.daemonBuildBehind?.warning).toContain('behind');
+    });
+
+    it('does not flag when the build commit equals HEAD (daemon current)', async () => {
+      const repo = tempRepo('build-behind-current');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const head = git(repo, ['rev-parse', 'HEAD']);
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(head) });
+      expect(status.daemonBuildBehind).toBeUndefined();
+    });
+
+    it('does not flag when the build commit is absent from the repo (different repo)', async () => {
+      const repo = tempRepo('build-behind-absent');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor('0'.repeat(40)) });
+      expect(status.daemonBuildBehind).toBeUndefined();
+    });
+
+    it('does not flag a build commit that is ahead of / diverged from HEAD', async () => {
+      const repo = tempRepo('build-behind-ahead');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const head = git(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'b.txt'), 'two\n');
+      commit(repo, 'c2');
+      const aheadCommit = git(repo, ['rev-parse', 'HEAD']);
+      // Reset HEAD back to c1 so the build commit (c2) is a descendant, not an
+      // ancestor, of HEAD.
+      git(repo, ['reset', '--hard', head]);
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(aheadCommit) });
+      expect(status.daemonBuildBehind).toBeUndefined();
+    });
+
+    it('does not flag when the build commit is unknown', async () => {
+      const repo = tempRepo('build-behind-unknown');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const status = await getGitRepoStatus(repo, {
+        daemonBuildInfo: { commit: 'unknown', commitShort: 'unknown', version: 'unknown' },
+      });
+      expect(status.daemonBuildBehind).toBeUndefined();
+    });
+  });
 });

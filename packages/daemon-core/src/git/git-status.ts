@@ -1,5 +1,6 @@
-import type { GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './git-types.js';
+import type { DaemonBuildBehind, GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './git-types.js';
 import { GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
+import { getDaemonBuildInfo, type DaemonBuildInfo } from '../build-info.js';
 
 type ResolvedGitRepo = { workspace: string; repoRoot: string | null; isGitRepo: boolean };
 
@@ -14,6 +15,12 @@ export interface GitStatusOptions {
    * Callers should opt into this only for convergence-critical surfaces.
    */
   refreshUpstream?: boolean;
+  /**
+   * Test/override seam for the daemon build stamp used by the stale-build
+   * detector. Production callers omit this so the real baked-in build commit
+   * (getDaemonBuildInfo) is used.
+   */
+  daemonBuildInfo?: DaemonBuildInfo;
 }
 
 interface GitUpstreamProbe {
@@ -54,6 +61,8 @@ export async function getGitRepoStatus(
       || stashCount > 0
       || submoduleDirty;
 
+    const daemonBuildBehind = await detectDaemonBuildBehind(repo, submodules, options);
+
     return {
       workspace: repo.workspace,
       repoRoot: repo.repoRoot,
@@ -78,6 +87,7 @@ export async function getGitRepoStatus(
       stashCount,
       lastCheckedAt,
       submodules,
+      ...(daemonBuildBehind ? { daemonBuildBehind } : {}),
     };
   } catch (error) {
     if (error instanceof GitCommandError) {
@@ -89,6 +99,68 @@ export async function getGitRepoStatus(
       new GitCommandError('git_command_failed', 'Failed to read Git status', { cause: error }),
     );
   }
+}
+
+/**
+ * Detect whether the running daemon's build commit is a STRICT ancestor of this
+ * workspace's HEAD (root) or any of its submodules' HEAD. This surfaces the
+ * "merged a fix to main but the live daemon still ships the old bundle" gap:
+ * once the fix is committed, the workspace HEAD advances past the daemon's
+ * baked-in build commit, but the daemon keeps the old behavior until it is
+ * rebuilt/redeployed and restarted.
+ *
+ * Conservative by construction — returns undefined unless ancestry is provable:
+ *   - build commit unknown → undefined
+ *   - build commit not an object in this repo/submodule (different repo) → skip
+ *   - build commit === HEAD (daemon is current) → undefined
+ *   - build commit NOT an ancestor of HEAD (daemon ahead / diverged) → undefined
+ * Any git error is swallowed (no warning) so a flaky probe never over-warns.
+ */
+async function detectDaemonBuildBehind(
+  repo: ResolvedGitRepo,
+  submodules: GitSubmoduleStatus[] | undefined,
+  options: GitStatusOptions,
+): Promise<DaemonBuildBehind | undefined> {
+  const build = options.daemonBuildInfo ?? getDaemonBuildInfo();
+  if (!build.commit || build.commit === 'unknown') return undefined;
+
+  // Check the root repo first, then each submodule. The daemon build commit is
+  // baked from the daemon-core (oss submodule) HEAD, so on an adhdev
+  // superproject worktree the match is expected on the `oss` submodule, not the
+  // root — checking both keeps the helper repo-agnostic.
+  const scopes: Array<{ scope: string; repoPath: string }> = [
+    { scope: 'root', repoPath: repo.repoRoot || repo.workspace },
+  ];
+  for (const sub of submodules || []) {
+    if (sub.repoPath && !sub.error) scopes.push({ scope: sub.path, repoPath: sub.repoPath });
+  }
+
+  for (const { scope, repoPath } of scopes) {
+    try {
+      // Build commit must be a real object in THIS repo, else it's a different repo.
+      await runGit(repoPath, ['cat-file', '-e', `${build.commit}^{commit}`], options);
+      const headResult = await runGit(repoPath, ['rev-parse', 'HEAD'], options);
+      const head = headResult.stdout.trim();
+      if (!head || head === build.commit) continue;
+      // Strict ancestor: build commit is reachable from HEAD but is not HEAD.
+      await runGit(repoPath, ['merge-base', '--is-ancestor', build.commit, 'HEAD'], options);
+      // No throw → build commit IS an ancestor of HEAD → daemon is behind.
+      return {
+        buildCommit: build.commit,
+        buildCommitShort: build.commitShort,
+        head,
+        scope,
+        warning:
+          `Live daemon was built from ${build.commitShort} which is behind ${scope === 'root' ? 'workspace' : scope} HEAD ${head.slice(0, 7)}. ` +
+          `Merged code is NOT live until the daemon is rebuilt/redeployed and restarted — a local dist rebuild alone does not update a cloud daemon.`,
+      };
+    } catch {
+      // cat-file / merge-base non-zero exit (commit absent or not an ancestor)
+      // or any git error → not a provable staleness for this scope; try next.
+      continue;
+    }
+  }
+  return undefined;
 }
 
 interface ParsedPorcelainStatus {

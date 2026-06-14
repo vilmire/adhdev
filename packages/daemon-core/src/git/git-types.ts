@@ -68,8 +68,28 @@ export interface GitRepoStatus extends GitRepoIdentity {
   lastCheckedAt: number;
   /** Submodule statuses when auto-discover is enabled */
   submodules?: GitSubmoduleStatus[];
+  /**
+   * Set when the running daemon's build commit is a STRICT ancestor of this
+   * repo's HEAD (or a submodule HEAD) — i.e. the live daemon predates committed
+   * code in this workspace and is awaiting a deploy/restart to catch up.
+   * Omitted entirely when no staleness is provable (unknown build, commit not
+   * present in repo, or build commit == HEAD) to avoid over-warning.
+   */
+  daemonBuildBehind?: DaemonBuildBehind;
   error?: string;
   reason?: GitFailureReason;
+}
+
+export interface DaemonBuildBehind {
+  /** Full build commit baked into the running daemon. */
+  buildCommit: string;
+  /** Short build commit. */
+  buildCommitShort: string;
+  /** HEAD commit the build commit is behind (repo or submodule). */
+  head: string;
+  /** Where the comparison matched: 'root' or the submodule path. */
+  scope: string;
+  warning: string;
 }
 
 export type GitFileChangeStatus =

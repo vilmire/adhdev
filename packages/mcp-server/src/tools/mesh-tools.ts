@@ -1873,6 +1873,42 @@ async function collectLiveStatusSessions(ctx: MeshContext, node: LocalMeshNodeEn
     }
 }
 
+/**
+ * One get_status_metadata probe → both the live session list and the daemon's
+ * build stamp. Used by mesh_status so a single daemon-wide probe yields the
+ * sessions AND the `daemonBuild` field (commit/version of the running daemon).
+ */
+async function collectLiveStatusProbe(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+): Promise<{ sessions: any[]; daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string } }> {
+    try {
+        const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
+        return {
+            sessions: extractStatusMetadataSessions(statusResult),
+            daemonBuild: extractDaemonBuildInfo(statusResult),
+        };
+    } catch {
+        return { sessions: [] };
+    }
+}
+
+function extractDaemonBuildInfo(value: any): { commit: string; commitShort: string; version: string; builtAt?: string } | undefined {
+    const payload = unwrapCommandPayload(value);
+    const build = payload?.daemonBuild && typeof payload.daemonBuild === 'object'
+        ? payload.daemonBuild
+        : (value?.daemonBuild && typeof value.daemonBuild === 'object' ? value.daemonBuild : undefined);
+    if (!build) return undefined;
+    const commit = readString(build.commit);
+    if (!commit) return undefined;
+    return {
+        commit,
+        commitShort: readString(build.commitShort) || commit.slice(0, 7),
+        version: readString(build.version) || 'unknown',
+        ...(readString(build.builtAt) ? { builtAt: readString(build.builtAt) } : {}),
+    };
+}
+
 async function collectMeshViewQueueNodesWithLiveSessions(ctx: MeshContext): Promise<any[]> {
     const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
         const liveSessions = await collectLiveStatusSessions(ctx, node);
@@ -2186,7 +2222,7 @@ function buildRemoveNodeArgs(ctx: MeshContext, nodeId: string, sessionCleanupMod
 
 export const MESH_STATUS_TOOL = {
     name: 'mesh_status',
-    description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
+    description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version}); when a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning — meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -2663,6 +2699,14 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             entry.isDirty = dirty;
             entry.uncommittedChanges = uncommittedChanges;
             entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+            // Stale-daemon-build warning: the live daemon's build commit is a
+            // strict ancestor of this workspace HEAD (or its oss submodule),
+            // meaning merged code is not yet live (awaiting deploy/restart).
+            // Computed git-correctly on the daemon side (git_status →
+            // daemonBuildBehind); surfaced here as a top-level node field.
+            if (status?.daemonBuildBehind && typeof status.daemonBuildBehind === 'object') {
+                entry.staleDaemonBuild = status.daemonBuildBehind;
+            }
             // Submodule out-of-sync warning
             const submodules = extractSubmodules(statusResult, (node.policy as any)?.submoduleIgnorePaths || []);
             if (submodules && submodules.some((s: any) => s?.outOfSync)) {
@@ -2742,7 +2786,13 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
         if (relatedRepos.length) entry.relatedRepos = relatedRepos;
 
-        const liveSessions = await collectLiveStatusSessions(ctx, node);
+        const statusProbe = await collectLiveStatusProbe(ctx, node);
+        const liveSessions = statusProbe.sessions;
+        // Per-node daemon build stamp (commit/version of the running daemon).
+        // Compact mode folds these per-daemonId at the response level, but the
+        // raw field is kept on the node so verbose callers and self-coordinator
+        // shape stay intact.
+        if (statusProbe.daemonBuild) entry.daemonBuild = statusProbe.daemonBuild;
         if (liveSessions.length > 0) {
             // Slim to essential fields only — full session objects are expensive in coordinator context.
             entry.sessions = liveSessions
@@ -2845,6 +2895,41 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             }
         }
     }
+    // Per-daemon build fold: the daemon build stamp is identical for every node
+    // sharing a daemonId (it's a daemon-wide probe), so record it ONCE per
+    // daemonId at the top level. Small field — emitted in both compact and
+    // verbose modes so the coordinator can compare the live daemon's commit with
+    // a just-merged fix without paging through nodes.
+    const daemonBuilds: Record<string, unknown> = {};
+    for (const entry of results as any[]) {
+        const daemonId = typeof entry?.daemonId === 'string' && entry.daemonId ? entry.daemonId : '';
+        if (daemonId && entry?.daemonBuild && !(daemonId in daemonBuilds)) {
+            daemonBuilds[daemonId] = entry.daemonBuild;
+        }
+    }
+    // Stale-build aggregate: any node whose live daemon build is behind its
+    // workspace HEAD. Deduplicated per daemonId+scope so N worktrees on one
+    // stale daemon don't spam N identical warnings.
+    const staleDaemonBuilds: Array<Record<string, unknown>> = [];
+    const seenStale = new Set<string>();
+    for (const entry of results as any[]) {
+        const behind = entry?.staleDaemonBuild;
+        if (!behind || typeof behind !== 'object') continue;
+        const daemonId = typeof entry?.daemonId === 'string' ? entry.daemonId : '';
+        const key = `${daemonId}::${behind.scope ?? ''}::${behind.buildCommit ?? ''}::${behind.head ?? ''}`;
+        if (seenStale.has(key)) continue;
+        seenStale.add(key);
+        staleDaemonBuilds.push({
+            daemonId,
+            nodeId: entry.nodeId,
+            scope: behind.scope,
+            liveBuildCommit: behind.buildCommit,
+            liveBuildCommitShort: behind.buildCommitShort,
+            head: behind.head,
+            warning: behind.warning,
+        });
+    }
+
     const nodesForResponse = compact
         ? results.map((entry: any) => {
             if (!entry || typeof entry !== 'object') return entry;
@@ -2860,6 +2945,10 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 // `daemonSessions` keyed by daemonId.
                 if (!includeSessions) delete next.sessions;
             }
+            // Build stamp is folded per-daemon under top-level `daemonBuilds`;
+            // drop the repetitive per-node copy in compact mode. The stale
+            // warning (rare, actionable) stays on the node.
+            if (next.daemonBuild !== undefined) delete next.daemonBuild;
             return next;
         })
         : results;
@@ -2879,6 +2968,13 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         },
         nodes: nodesForResponse,
         ...(compact && Object.keys(daemonSessions).length > 0 ? { daemonSessions } : {}),
+        ...(Object.keys(daemonBuilds).length > 0 ? { daemonBuilds } : {}),
+        ...(staleDaemonBuilds.length > 0
+            ? {
+                staleDaemonBuilds,
+                staleDaemonBuildWarning: 'One or more live daemons were built from a commit behind the workspace HEAD. Merged refinery/mesh-tool fixes are NOT live on those daemons until they are rebuilt/redeployed and restarted — a local daemon-core dist rebuild does not update a cloud daemon. Do not assume a just-merged fix is active.',
+            }
+            : {}),
         activeWork: activeWorkEvidence.activeWork,
         staleDirectWorkSummary,
         ...(args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {}),

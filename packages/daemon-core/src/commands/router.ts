@@ -64,6 +64,7 @@ import {
     type WorktreeBootstrapState,
 } from '../mesh/worktree-bootstrap-config.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
+import { getDaemonBuildInfo } from '../build-info.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
@@ -5783,7 +5784,11 @@ export class DaemonCommandRouter {
                     version: this.deps.statusVersion || 'unknown',
                     profile: 'metadata',
                 });
-                return { success: true, status: snapshot };
+                // Surface the daemon's build stamp so coordinators (mesh_status)
+                // can detect a running daemon that predates a just-merged fix and
+                // is awaiting deploy/restart. Sibling of `status` to avoid
+                // perturbing the dashboard status snapshot shape.
+                return { success: true, status: snapshot, daemonBuild: getDaemonBuildInfo() };
             }
 
             case 'get_machine_runtime_stats': {
