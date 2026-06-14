@@ -527,6 +527,7 @@ describe('refine_mesh_node validation gate', () => {
         'validation',
         'patch_equivalence',
         'submodule_reachability',
+        'effective_diff',
         'merge',
         'cleanup',
         'ledger',

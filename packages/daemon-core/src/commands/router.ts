@@ -1399,6 +1399,22 @@ type MeshRefinePatchEquivalenceSummary = {
     actionableHint?: MeshRefineSubmoduleConflictHint;
 };
 
+type MeshRefineEffectiveDiffSummary = {
+    status: MeshRefineStageStatus;
+    /** True when there is at least one root-tree change between base and branch (incl. gitlink bumps). */
+    hasEffectiveDiff: boolean;
+    baseHead: string;
+    branchHead: string;
+    /** Root-level paths that differ between base and branch (capped). */
+    changedPaths?: string[];
+    /** Submodule paths with uncommitted/divergent commits but NO committed gitlink bump in the root tree. */
+    submoduleHints?: Array<{ path: string; reason: string }>;
+    durationMs: number;
+    error?: string;
+    stdout?: string;
+    stderr?: string;
+};
+
 type MeshRefineSubmoduleConflictHint = {
     kind: 'submodule_conflict';
     message: string;
@@ -1626,6 +1642,101 @@ async function runMeshRefinePatchEquivalenceGate(
                 branchHead,
                 `${e?.message || ''}\n${e?.stdout || ''}\n${e?.stderr || ''}`,
             ),
+        };
+    }
+}
+
+/**
+ * No-op guard: detect a "silent no-op" merge before the Refinery merge runs.
+ *
+ * A silent no-op occurs when the refine target branch's ROOT tree is byte-identical
+ * to the merge base (origin/main). This is the trap where a submodule (e.g. oss) has
+ * real commits but the root branch never committed the gitlink (oss-pointer) bump, so
+ * the root diff Refinery would merge is empty. Merging that produces a merge commit with
+ * no content change — reported as "success" while the actual work never reaches main.
+ *
+ * A committed gitlink bump (the legitimate oss-pointer bump) DOES show up in the root
+ * tree diff (as a 160000-mode entry), so this guard does NOT block legitimate refines —
+ * it only fires when the root tree diff vs base is COMPLETELY empty.
+ *
+ * Runs after the patch-equivalence gate; the "already merged via other path" case
+ * (branch has real changes already present in base) is handled upstream and never
+ * reaches here, so an empty root diff at this point is genuinely a no-op.
+ */
+export async function runMeshRefineEffectiveDiffGate(
+    repoRoot: string,
+    baseHead: string,
+    branchHead: string,
+): Promise<MeshRefineEffectiveDiffSummary> {
+    const startedAt = Date.now();
+    try {
+        const { execFileSync } = await import('node:child_process');
+        const git = (args: string[], opts?: { cwd?: string }) => execFileSync('git', args, {
+            cwd: opts?.cwd || repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+        });
+        // Root tree diff between base and branch. --raw surfaces gitlink (160000) entries,
+        // so a committed submodule-pointer bump counts as an effective change. An empty
+        // result means the branch's root tree is identical to base → nothing would merge.
+        const rawDiff = git(['diff', '--raw', baseHead, branchHead]).trim();
+        if (rawDiff) {
+            const changedPaths = rawDiff
+                .split('\n')
+                .map(line => line.split('\t').slice(1).join('\t').trim())
+                .filter(Boolean)
+                .slice(0, 50);
+            return {
+                status: 'passed',
+                hasEffectiveDiff: true,
+                baseHead,
+                branchHead,
+                changedPaths,
+                durationMs: Date.now() - startedAt,
+            };
+        }
+
+        // No root diff → silent no-op. Try to surface which submodule(s) have commits that
+        // were never captured by a committed gitlink bump, to make the message actionable.
+        const submoduleHints: Array<{ path: string; reason: string }> = [];
+        try {
+            // `git submodule status` flags submodules whose checked-out commit differs from
+            // the recorded gitlink with a leading '+'. That difference is exactly the
+            // uncommitted-pointer-bump situation this guard exists to catch.
+            const status = git(['submodule', 'status']);
+            for (const line of status.split('\n')) {
+                const trimmed = line.trimEnd();
+                if (!trimmed) continue;
+                if (trimmed.startsWith('+')) {
+                    const parts = trimmed.slice(1).trim().split(/\s+/);
+                    const path = parts[1] || parts[0] || '(unknown)';
+                    submoduleHints.push({
+                        path,
+                        reason: 'submodule checked-out commit differs from the committed gitlink (pointer bump not committed on the root branch)',
+                    });
+                }
+            }
+        } catch { /* submodule status is best-effort */ }
+
+        return {
+            status: 'failed',
+            hasEffectiveDiff: false,
+            baseHead,
+            branchHead,
+            ...(submoduleHints.length ? { submoduleHints } : {}),
+            durationMs: Date.now() - startedAt,
+        };
+    } catch (e: any) {
+        // On error, do NOT block the merge — fail open so a probe failure can't wedge refine.
+        return {
+            status: 'skipped',
+            hasEffectiveDiff: true,
+            baseHead,
+            branchHead,
+            durationMs: Date.now() - startedAt,
+            error: e?.message || String(e),
+            stdout: truncateValidationOutput(e?.stdout),
+            stderr: truncateValidationOutput(e?.stderr),
         };
     }
 }
@@ -3931,6 +4042,53 @@ export class DaemonCommandRouter {
                 status: 'blocked_review',
                 reason: 'submodule_publish_required',
                 nextStep,
+                    },
+                };
+            }
+
+            // No-op guard: block a silent no-op merge where the root tree is identical to base.
+            // This catches the trap where a submodule has commits but the root branch never
+            // committed the gitlink (oss-pointer) bump — merging would report success while the
+            // real change never lands on main. A committed gitlink bump shows up in the root
+            // diff, so legitimate oss-pointer refines pass through untouched.
+            const effectiveDiffStarted = Date.now();
+            const effectiveDiff = await runMeshRefineEffectiveDiffGate(repoRoot, baseHead, branchHead);
+            recordMeshRefineStage(refineStages, 'effective_diff', effectiveDiff.status, effectiveDiffStarted, {
+                hasEffectiveDiff: effectiveDiff.hasEffectiveDiff,
+                changedPaths: effectiveDiff.changedPaths,
+                submoduleHints: effectiveDiff.submoduleHints,
+                ...(effectiveDiff.error ? { error: effectiveDiff.error } : {}),
+            });
+            if (effectiveDiff.status === 'failed' && !effectiveDiff.hasEffectiveDiff) {
+                const hintLines = (effectiveDiff.submoduleHints || []).map(h => `  - ${h.path}: ${h.reason}`);
+                const message = [
+                    `Refinery no-op guard: branch '${branch}' has no effective root-tree diff against '${baseBranch}' (${baseHead.slice(0, 12)}); nothing would merge.`,
+                    'This usually means a submodule (e.g. oss) has commits but the root branch never committed the gitlink (pointer) bump, so the merge would be a silent no-op while the real change never reaches main.',
+                    hintLines.length ? `Submodules with uncommitted pointer bumps:\n${hintLines.join('\n')}` : '',
+                    `Fix: commit the submodule pointer bump on '${branch}' (git add <submodule-path> && git commit), then re-run refine.`,
+                ].filter(Boolean).join('\n');
+                return {
+                    success: false,
+                    code: 'no_effective_diff',
+                    convergenceStatus: 'blocked_review',
+                    error: message,
+                    branch,
+                    into: baseBranch,
+                    validationSummary,
+                    patchEquivalence,
+                    effectiveDiff,
+                    refineStages,
+                    finalBranchConvergenceState: {
+                        branch,
+                        baseBranch,
+                        merged: false,
+                        removed: false,
+                        validation: 'passed',
+                        patchEquivalence: 'passed',
+                        effectiveDiff: 'no_effective_diff',
+                        status: 'blocked_review',
+                        reason: 'no_effective_diff',
+                        ...(effectiveDiff.submoduleHints?.length ? { submoduleHints: effectiveDiff.submoduleHints } : {}),
                     },
                 };
             }
