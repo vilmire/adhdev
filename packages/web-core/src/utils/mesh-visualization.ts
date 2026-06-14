@@ -146,6 +146,7 @@ export interface MeshGraph {
         cleanupCandidateNodes: number
         notMergeableNodes: number
         incompleteSnapshotNodes: number
+        pendingGitSnapshotNodes: number
         missingGitSnapshotNodes: number
         missingSubmoduleSnapshotNodes: number
         staleGitSnapshotNodes: number
@@ -915,6 +916,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             cleanupCandidateNodes,
             notMergeableNodes,
             incompleteSnapshotNodes,
+            pendingGitSnapshotNodes,
             missingGitSnapshotNodes,
             missingSubmoduleSnapshotNodes,
             staleGitSnapshotNodes,
@@ -925,4 +927,31 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         warnings,
         snapshotWarnings,
     }
+}
+
+/**
+ * Pure predicate: is this graph structurally complete enough to render without
+ * flashing a sparse/incomplete view?
+ *
+ * Cloud aggregates over P2P peers, so a freshly-built graph may momentarily be
+ * missing git status / submodule nodes for a peer whose snapshot hasn't arrived
+ * yet. This predicate lets the cloud loader gate on that transient state and keep
+ * showing the last complete graph until the peer snapshot settles.
+ *
+ * Returns false when any NON-submodule node is still waiting for / missing its
+ * peer git snapshot or submodule report. We deliberately EXCLUDE 'stale': a stale
+ * snapshot is a complete-but-old last-good reading, and gating on it would block
+ * forever when a peer is genuinely offline. Synthetic submodule nodes are always
+ * marked 'complete', so they never trip this.
+ *
+ * Standalone never hits this in practice: a single local daemon always returns a
+ * complete snapshot, so the predicate is naturally true there.
+ */
+export function isMeshGraphStructurallyComplete(graph: MeshGraph): boolean {
+    return !graph.nodes.some(
+        node =>
+            node.snapshotCompleteness === 'pending_git'
+            || node.snapshotCompleteness === 'missing_git'
+            || node.snapshotCompleteness === 'missing_submodule_report',
+    )
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshGraph } from '../../src/utils/mesh-visualization'
+import { buildMeshGraph, isMeshGraphStructurallyComplete } from '../../src/utils/mesh-visualization'
 
 function baseGit(branch: string) {
     return {
@@ -982,4 +982,197 @@ describe('buildMeshGraph', () => {
         expect(graph.stats.activeRefineNodes).toBe(0)
     })
 
+    it('counts pendingGitSnapshotNodes on the aggregate stats', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_pending_stat',
+            meshName: 'Pending Stat',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-06-15T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_ready',
+                    machineLabel: 'Ready',
+                    workspace: '/repo/ready',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: baseGit('main'),
+                },
+                {
+                    nodeId: 'node_pending',
+                    machineLabel: 'Pending',
+                    workspace: '/repo/pending',
+                    health: 'unknown',
+                    machineStatus: 'online',
+                    gitProbePending: true,
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'connecting', source: 'reported', transport: 'relay', reported: true },
+                },
+            ],
+        } as any)
+
+        expect(graph.stats.pendingGitSnapshotNodes).toBe(1)
+    })
+})
+
+describe('isMeshGraphStructurallyComplete', () => {
+    function singleNodeGraph(nodeOverrides: Record<string, unknown>) {
+        return buildMeshGraph({
+            meshId: 'mesh_complete',
+            meshName: 'Complete Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-06-15T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_complete',
+                    machineLabel: 'Complete',
+                    workspace: '/repo/complete',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: baseGit('main'),
+                },
+                {
+                    nodeId: 'node_under_test',
+                    machineLabel: 'UnderTest',
+                    workspace: '/repo/under-test',
+                    health: 'online',
+                    machineStatus: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'connected', source: 'reported', transport: 'relay', reported: true },
+                    ...nodeOverrides,
+                },
+            ],
+        } as any)
+    }
+
+    it('returns true when every non-submodule node has a complete snapshot', () => {
+        const graph = singleNodeGraph({ git: baseGit('feat/work') })
+        expect(graph.nodes.find(n => n.id === 'node_under_test')?.snapshotCompleteness).toBe('complete')
+        expect(isMeshGraphStructurallyComplete(graph)).toBe(true)
+    })
+
+    it('returns false when a node is pending_git', () => {
+        const graph = singleNodeGraph({
+            health: 'unknown',
+            gitProbePending: true,
+            connection: { state: 'connecting', source: 'reported', transport: 'relay', reported: true },
+            git: undefined,
+        })
+        expect(graph.nodes.find(n => n.id === 'node_under_test')?.snapshotCompleteness).toBe('pending_git')
+        expect(isMeshGraphStructurallyComplete(graph)).toBe(false)
+    })
+
+    it('returns false when a node is missing_git', () => {
+        const graph = singleNodeGraph({ git: undefined })
+        expect(graph.nodes.find(n => n.id === 'node_under_test')?.snapshotCompleteness).toBe('missing_git')
+        expect(isMeshGraphStructurallyComplete(graph)).toBe(false)
+    })
+
+    it('returns false when a node is missing_submodule_report', () => {
+        // Peer node reports no submodules, but another peer reported the `oss` submodule,
+        // so this node's snapshot is missing the expected submodule visibility.
+        const graph = buildMeshGraph({
+            meshId: 'mesh_missing_submodule',
+            meshName: 'Missing Submodule',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-06-15T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_has_submodule',
+                    machineLabel: 'HasSubmodule',
+                    workspace: '/repo/a',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: {
+                        ...baseGit('main'),
+                        lastCheckedAt: Date.parse('2026-06-15T00:00:00.000Z'),
+                        submodules: [
+                            { path: 'oss', commit: '1111111', repoPath: '/repo/a/oss', dirty: false, outOfSync: false },
+                        ],
+                    },
+                },
+                {
+                    nodeId: 'node_missing_submodule',
+                    machineLabel: 'MissingSubmodule',
+                    workspace: '/repo/b',
+                    health: 'online',
+                    machineStatus: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'connected', source: 'reported', transport: 'relay', reported: true },
+                    git: {
+                        ...baseGit('main'),
+                        lastCheckedAt: Date.parse('2026-06-15T00:00:00.000Z'),
+                        submodules: [],
+                    },
+                },
+            ],
+        } as any)
+        expect(graph.nodes.find(n => n.id === 'node_missing_submodule')?.snapshotCompleteness)
+            .toBe('missing_submodule_report')
+        expect(isMeshGraphStructurallyComplete(graph)).toBe(false)
+    })
+
+    it('returns true when the only incompleteness is a stale snapshot', () => {
+        // Stale = complete-but-old last-good reading; gating on it would block forever
+        // when a peer is genuinely offline, so it must NOT trip the predicate.
+        const graph = buildMeshGraph({
+            meshId: 'mesh_stale',
+            meshName: 'Stale Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-06-15T00:10:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_stale',
+                    machineLabel: 'Stale',
+                    workspace: '/repo/stale',
+                    health: 'online',
+                    machineStatus: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'connected', source: 'reported', transport: 'relay', reported: true },
+                    git: {
+                        ...baseGit('main'),
+                        lastCheckedAt: Date.parse('2026-06-15T00:00:00.000Z'),
+                        submodules: [],
+                    },
+                },
+            ],
+        } as any)
+        expect(graph.nodes.find(n => n.id === 'node_stale')?.snapshotCompleteness).toBe('stale')
+        expect(isMeshGraphStructurallyComplete(graph)).toBe(true)
+    })
+
+    it('is not tripped by synthetic submodule child nodes (always complete)', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_submodule_complete',
+            meshName: 'Submodule Complete',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-06-15T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_main',
+                    machineLabel: 'Main',
+                    workspace: '/repo/main',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: {
+                        ...baseGit('main'),
+                        lastCheckedAt: Date.parse('2026-06-15T00:00:00.000Z'),
+                        submodules: [
+                            { path: 'oss', commit: '1111111', repoPath: '/repo/main/oss', dirty: false, outOfSync: false },
+                        ],
+                    },
+                },
+            ],
+        } as any)
+        const submoduleNode = graph.nodes.find(n => n.type === 'submoduleNode')
+        expect(submoduleNode?.snapshotCompleteness).toBe('complete')
+        expect(isMeshGraphStructurallyComplete(graph)).toBe(true)
+    })
 })

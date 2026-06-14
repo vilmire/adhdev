@@ -317,7 +317,7 @@ export function MeshDetailView({
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <div className="text-[12px] text-text-muted max-w-2xl">
                         {features.meshHostDaemonSection
-                            ? <>Direct aggregate mesh_status from the selected Mesh Host is preferred. Refresh asks the host for the latest peer git provenance.{graphProvenance === 'settling' && <span className="ml-1 text-amber-300">Refreshing peer provenance...</span>}</>
+                            ? <>Direct aggregate mesh_status from the selected Mesh Host is preferred. Refresh asks the host for the latest peer git provenance.{graphProvenance === 'settling' && <span className="ml-1 text-amber-300">Refreshing peer data...</span>}</>
                             : <div className="flex items-center gap-3">
                                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" />healthy</span>
                                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />dirty</span>
