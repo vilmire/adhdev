@@ -148,6 +148,101 @@ describe('SpecCliAdapter — FSM state is authoritative for status', () => {
   });
 });
 
+describe('SpecCliAdapter — interactive prompt resolved in terminal', () => {
+  // Regression (choice-resolve-stuck): when the user answers an AskUserQuestion
+  // choice picker directly in the terminal (not via setInteractivePromptResponse),
+  // the picker leaves the screen but activeInteractivePrompt was never cleared,
+  // so getStatus() re-emitted the same choice modal forever. The adapter must
+  // clear the held prompt once its "Enter to select" footer has been absent for
+  // the hysteresis window.
+  const RESOLVED_SCREEN = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '⏺ 좋아요, 바위를 냈어요!',
+    '',
+  ].join('\n');
+
+  function holdPrompt(adapter: any): void {
+    adapter.activeInteractivePrompt = { promptId: 'ask-user-session-1-1', origin: 'cli', providerType: 'claude-cli', createdAt: 0, questions: [] };
+    adapter.interactivePromptTransport = 'tui';
+    adapter.interactivePromptLostAt = null;
+  }
+
+  it('clears a held prompt once the picker footer is gone past the grace window', () => {
+    vi.useFakeTimers();
+    try {
+      let screen = SINGLE_QUESTION_SCREEN;
+      const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+      adapter.driver = { snapshot: () => screen };
+      holdPrompt(adapter);
+
+      // Footer still on screen → first observation arms the timer but holds.
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+      expect(adapter.activeInteractivePrompt).not.toBeNull();
+
+      // User answers in the terminal → picker leaves the screen.
+      screen = RESOLVED_SCREEN;
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+      // Within the grace window the prompt is still held (repaint protection).
+      expect(adapter.activeInteractivePrompt).not.toBeNull();
+
+      vi.advanceTimersByTime(1600);
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+      expect(adapter.activeInteractivePrompt).toBeNull();
+      expect(adapter.interactivePromptTransport).toBeNull();
+      expect(adapter.statusCallback).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not clear a held prompt while the footer is still on screen', () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+      holdPrompt(adapter);
+
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+      vi.advanceTimersByTime(5000);
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+
+      expect(adapter.activeInteractivePrompt).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-arms the grace timer if the picker reappears after a transient repaint gap', () => {
+    vi.useFakeTimers();
+    try {
+      let screen = SINGLE_QUESTION_SCREEN;
+      const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+      adapter.driver = { snapshot: () => screen };
+      holdPrompt(adapter);
+
+      // Transient frame with no footer (mid-repaint), short of the grace window.
+      screen = RESOLVED_SCREEN;
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+      vi.advanceTimersByTime(500);
+
+      // Footer repaints → timer resets, prompt held.
+      screen = SINGLE_QUESTION_SCREEN;
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+      expect(adapter.interactivePromptLostAt).toBeNull();
+
+      // Now a full grace window with the footer gone clears it.
+      screen = RESOLVED_SCREEN;
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+      vi.advanceTimersByTime(1600);
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+      expect(adapter.activeInteractivePrompt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('SpecCliAdapter — codex-cli footer identity', () => {
   it('extracts providerSessionId from ANSI-colored Codex footer', () => {
     const adapter = makeCodexAdapter([

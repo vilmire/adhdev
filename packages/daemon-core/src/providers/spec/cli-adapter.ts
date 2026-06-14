@@ -76,6 +76,23 @@ export class SpecCliAdapter implements CliAdapter {
     private activeInteractivePrompt: InteractivePrompt | null = null;
     private interactivePromptTransport: 'stream-json' | 'tui' | null = null;
     private claudeTuiPromptCaptureInFlight = false;
+    /**
+     * Wall clock of the first frame on which a held interactive prompt was
+     * observed to have left the screen. Mirrors the approval FSM's
+     * `modalLostAt` hysteresis (see cli-state-engine.ts): claude-cli's TUI
+     * repaints the choice picker as several PTY chunks, so a single frame
+     * with no "Enter to select" footer is not proof the prompt is gone — it
+     * may just be mid-repaint. We only clear the held prompt once it has
+     * been absent across a short grace window. Reset to null the moment the
+     * prompt footer reappears.
+     *
+     * Without this, a choice prompt resolved *directly in the terminal* (the
+     * user picked an option without going through ADHDev's
+     * setInteractivePromptResponse) was never cleared from
+     * `activeInteractivePrompt`, so getStatus() re-emitted the same prompt
+     * forever — the choice-resolve-stuck bug.
+     */
+    private interactivePromptLostAt: number | null = null;
     private jsonLineTail = '';
     private exited = false;
     private spawned = false;
@@ -421,11 +438,13 @@ export class SpecCliAdapter implements CliAdapter {
                 if (ev.state.title) {
                     LOG.debug('SpecAdapter', `[${this.cliType}] state.title=${JSON.stringify(ev.state.title)}`);
                 }
+                this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
                 this.statusCallback?.();
                 return;
             case 'pty_data':
                 this.detectInteractivePromptFromPtyChunk(ev.chunk);
+                this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
                 try { this.ptyDataCallback?.(ev.chunk); } catch { /* ignore */ }
                 return;
@@ -456,6 +475,7 @@ export class SpecCliAdapter implements CliAdapter {
                 if (!prompt) continue;
                 this.activeInteractivePrompt = prompt;
                 this.interactivePromptTransport = 'stream-json';
+                this.interactivePromptLostAt = null;
                 this.statusCallback?.();
             } catch {
                 // PTY output is not guaranteed to be machine JSON.
@@ -514,6 +534,56 @@ export class SpecCliAdapter implements CliAdapter {
         return messages;
     }
 
+    /**
+     * Grace window a held interactive prompt must be absent from the screen
+     * before we treat it as resolved-in-terminal and clear it. claude-cli
+     * repaints the picker across multiple PTY chunks, so a single
+     * footer-less frame is not proof the prompt is gone. Sized in the same
+     * spirit as the approval FSM's `approvalCooldown` modal-lost hysteresis.
+     */
+    private static readonly INTERACTIVE_PROMPT_LOST_GRACE_MS = 1500;
+
+    /**
+     * Clear a held interactive prompt once the user has resolved it directly
+     * in the terminal (the choice picker leaves the screen without going
+     * through setInteractivePromptResponse). The approval path already does
+     * this via the FSM's modal-lost hysteresis; the interactive-prompt path
+     * had no equivalent, so a terminal-side answer left activeInteractivePrompt
+     * set and getStatus() re-emitted the same choice modal forever.
+     *
+     * Detection mirrors capture: the claude TUI picker is on-screen exactly
+     * while its "Enter to select" footer is rendered. When the footer is gone
+     * for INTERACTIVE_PROMPT_LOST_GRACE_MS the prompt is genuinely resolved.
+     */
+    private maybeClearResolvedClaudeTuiPrompt(): void {
+        if (this.cliType !== 'claude-cli' || !this.activeInteractivePrompt) return;
+        // stream-json prompts are tracked by their tool-call lifecycle, not by
+        // screen footer, but claude renders the same TUI picker for both
+        // transports while awaiting an answer — so screen presence is a valid
+        // resolved-signal for either. (If the screen read fails, keep holding.)
+        let screenText = '';
+        try {
+            screenText = this.driver.snapshot();
+        } catch {
+            return;
+        }
+        const stillOnScreen = screenText.includes('Enter to select');
+        if (stillOnScreen) {
+            // Prompt reappeared / never left — reset the hysteresis timer.
+            this.interactivePromptLostAt = null;
+            return;
+        }
+        const lostAt = this.interactivePromptLostAt ?? Date.now();
+        if (this.interactivePromptLostAt === null) this.interactivePromptLostAt = lostAt;
+        if (Date.now() - lostAt < SpecCliAdapter.INTERACTIVE_PROMPT_LOST_GRACE_MS) return;
+        // Resolved in the terminal — drop the held prompt so getStatus() stops
+        // re-emitting it.
+        this.activeInteractivePrompt = null;
+        this.interactivePromptTransport = null;
+        this.interactivePromptLostAt = null;
+        this.statusCallback?.();
+    }
+
     private maybeCaptureClaudeTuiPrompt(): void {
         if (this.cliType !== 'claude-cli'
             || this.activeInteractivePrompt
@@ -529,6 +599,7 @@ export class SpecCliAdapter implements CliAdapter {
             if (!prompt) return;
             this.activeInteractivePrompt = prompt;
             this.interactivePromptTransport = 'tui';
+            this.interactivePromptLostAt = null;
             this.statusCallback?.();
             return;
         }
@@ -568,6 +639,7 @@ export class SpecCliAdapter implements CliAdapter {
         if (!prompt) return;
         this.activeInteractivePrompt = prompt;
         this.interactivePromptTransport = 'tui';
+        this.interactivePromptLostAt = null;
         this.statusCallback?.();
     }
 
