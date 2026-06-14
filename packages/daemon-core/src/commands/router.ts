@@ -4527,10 +4527,46 @@ export class DaemonCommandRouter {
             }
 
             const cleanupStarted = Date.now();
+            // Honor the mesh policy for delegated-session cleanup on the auto-removed
+            // worktree node (previously hardcoded to 'preserve', which orphaned the
+            // delegate session as an idle record on the coordinator daemon). Fall back
+            // to 'preserve' when no policy is set.
+            const refineSessionCleanupMode = this.normalizeMeshSessionCleanupMode(
+                mesh?.policy?.sessionCleanupOnNodeRemove,
+            );
+            // The delegate session launched for a clone worktree is frequently matched
+            // by workspace ONLY (no meta.meshNodeId binding), which remove_mesh_node's
+            // shared-daemon guard skips. Since refine knows exactly which workspace it
+            // just merged, collect that workspace's live session ids explicitly and pass
+            // them through — explicit sessionIds bypass the workspace-only-match guard so
+            // the policy-driven stop/delete actually runs.
+            let refineSessionIds: string[] | undefined;
+            if (refineSessionCleanupMode !== 'preserve' && this.deps.sessionHostControl) {
+                try {
+                    const liveSessions = await this.deps.sessionHostControl.listSessions();
+                    const workspace = typeof node.workspace === 'string' ? node.workspace : '';
+                    refineSessionIds = liveSessions
+                        .filter((record: any) => {
+                            const sid = typeof record?.sessionId === 'string' ? record.sessionId : '';
+                            if (!sid) return false;
+                            // Never sweep the coordinator's own session for this mesh.
+                            if (readStringValue(record?.meta?.meshCoordinatorFor) === meshId) return false;
+                            const boundToNode = readStringValue(record?.meta?.meshNodeId) === nodeId;
+                            const matchedByWorkspace = !!workspace && record?.workspace === workspace;
+                            return boundToNode || matchedByWorkspace;
+                        })
+                        .map((record: any) => String(record.sessionId));
+                } catch {
+                    // listSessions failure is non-fatal — fall back to the policy-mode
+                    // cleanup without explicit ids (still better than hardcoded preserve).
+                    refineSessionIds = undefined;
+                }
+            }
             const removeResult = await this.execute('remove_mesh_node', {
                 meshId,
                 nodeId,
-                sessionCleanupMode: 'preserve',
+                sessionCleanupMode: refineSessionCleanupMode,
+                ...(refineSessionIds && refineSessionIds.length > 0 ? { sessionIds: refineSessionIds } : {}),
                 inlineMesh: args?.inlineMesh,
             });
             recordMeshRefineStage(refineStages, 'cleanup', removeResult?.success === false ? 'failed' : 'passed', cleanupStarted, {
@@ -6976,6 +7012,29 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+                // Dry-run (plan-only) is the default and stays synchronous: it does no
+                // validation/merge/push and returns the plan instantly. Only execute=true
+                // (and not dry_run) goes through the async refine job that actually
+                // validates → merges → pushes → cleans up. Mirrors the
+                // batch_refine_mesh_nodes / fast_forward_mesh_node dry_run/execute contract.
+                const isDryRun = args?.dryRun !== false && args?.execute !== true;
+                if (isDryRun) {
+                    // preferInline: plan is the dry-run sibling of refine — clone nodes must resolve.
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                    const mesh = meshRecord?.mesh;
+                    const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
+                    return {
+                        success: true,
+                        dryRun: true,
+                        nodeId,
+                        workspace: node.workspace,
+                        validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
+                        mergeWillRun: false,
+                        cleanupWillRun: false,
+                        hint: 'Dry-run only — no merge/push/cleanup performed. Re-invoke with execute:true to converge this node.',
+                    };
+                }
                 return this.startMeshRefineJob(meshId, nodeId, args);
             }
 
@@ -7008,9 +7067,22 @@ export class DaemonCommandRouter {
                     const sessionCleanupMode = this.normalizeMeshSessionCleanupMode(
                         args?.sessionCleanupMode ?? args?.session_cleanup_mode ?? mesh?.policy?.sessionCleanupOnNodeRemove,
                     );
+                    // Explicit sessionIds (e.g. supplied by refine auto-cleanup) bypass the
+                    // workspace-only-match guard so a delegate session that lacks a
+                    // meta.meshNodeId binding can still be stopped/deleted.
+                    const explicitSessionIds = Array.isArray(args?.sessionIds)
+                        ? (args.sessionIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
+                        : undefined;
                     let sessionCleanup: Record<string, unknown> | undefined;
                     if (node && sessionCleanupMode !== 'preserve') {
-                        sessionCleanup = await this.cleanupMeshSessions({ meshId, nodeId, node, mode: sessionCleanupMode, source: 'mesh_remove_node' });
+                        sessionCleanup = await this.cleanupMeshSessions({
+                            meshId,
+                            nodeId,
+                            node,
+                            mode: sessionCleanupMode,
+                            ...(explicitSessionIds && explicitSessionIds.length > 0 ? { sessionIds: explicitSessionIds } : {}),
+                            source: 'mesh_remove_node',
+                        });
                         if (sessionCleanup.success === false) return { success: false, removed: false, sessionCleanup };
                     }
 

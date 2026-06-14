@@ -1709,6 +1709,34 @@ function isGitStatusDirty(status: any): boolean {
     return countUncommittedChanges(status) > 0;
 }
 
+// Large structured fields that bloat refine/batch ledger entries (each can carry a
+// full per-node validation plan + suggested config). In compact mode these are
+// summarized rather than dropped — full detail stays available via verbose=true /
+// mesh_reconcile_ledger.
+const LARGE_LEDGER_FIELD_KEYS = new Set(['plan', 'validationPlan', 'suggestedConfig', 'payload']);
+const LARGE_LEDGER_OBJECT_THRESHOLD = 800;
+
+function summarizeLargeLedgerField(key: string, value: unknown): unknown {
+    if (typeof value === 'string') {
+        return value.length > 500 ? value.slice(0, 500) + '…' : value;
+    }
+    if (Array.isArray(value)) {
+        const serialized = JSON.stringify(value);
+        if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
+            return `[${key} summarized: ${value.length} items — use verbose=true or mesh_reconcile_ledger]`;
+        }
+        return value;
+    }
+    if (value && typeof value === 'object') {
+        const serialized = JSON.stringify(value);
+        if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
+            return `[${key} summarized: ${Object.keys(value as Record<string, unknown>).length} keys — use verbose=true or mesh_reconcile_ledger]`;
+        }
+        return value;
+    }
+    return value;
+}
+
 function slimLedgerPayload(payload: Record<string, unknown>): Record<string, unknown> {
     const slim: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(payload)) {
@@ -1718,6 +1746,10 @@ function slimLedgerPayload(payload: Record<string, unknown>): Record<string, unk
             // Skip large nested evidence objects — accessible via mesh_reconcile_ledger if needed.
         } else if (k === 'finalSummary') {
             slim[k] = typeof v === 'string' && v.length > 300 ? v.slice(0, 300) + '…' : v;
+        } else if (LARGE_LEDGER_FIELD_KEYS.has(k)) {
+            // plan / validationPlan / suggestedConfig / nested payload — these are the
+            // refine_batch task_dispatched offenders that blow past the token limit.
+            slim[k] = summarizeLargeLedgerField(k, v);
         } else {
             slim[k] = v;
         }
@@ -2559,11 +2591,16 @@ export const MESH_PRUNE_STALE_DIRECT_TOOL = {
 
 export const MESH_REFINE_NODE_TOOL = {
     name: 'mesh_refine_node',
-    description: 'The Refinery: Accept an async validation/merge/cleanup job for a completed worktree node. The immediate response includes async:true, status:\'accepted\', jobId, interactionId, target node, and startedAt; completion/failure evidence is delivered through pending mesh events and the mesh task ledger.',
+    description: 'The Refinery: validate → merge → push → clean up a completed worktree node onto the base branch. '
+        + 'Defaults to dry-run (plan only): returns the validation plan with mergeWillRun:false/cleanupWillRun:false and performs NO merge/push/cleanup. '
+        + 'Pass execute=true to actually converge the node. execute=true is async: the immediate response includes async:true, status:\'accepted\', jobId, interactionId, target node, and startedAt; completion/failure evidence is delivered through pending mesh events and the mesh task ledger. '
+        + 'dry_run=true overrides execute. Matches the mesh_refine_batch / mesh_fast_forward_node dry_run/execute contract.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Node ID of the completed worktree node to refine and merge.' },
+            execute: { type: 'boolean', description: 'When true, run validation/merge/push/cleanup for this node. Defaults false/dry-run.' },
+            dry_run: { type: 'boolean', description: 'Preview the validation plan without merging. Defaults true unless execute=true; dry_run=true overrides execute.' },
         },
         required: ['node_id'],
     },
@@ -2935,6 +2972,10 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         const key = `${daemonId}::${behind.scope ?? ''}::${behind.buildCommit ?? ''}::${behind.head ?? ''}`;
         if (seenStale.has(key)) continue;
         seenStale.add(key);
+        // web-only stale builds are informational, not "fix not live". Only daemon-
+        // affecting stale builds (or ones where the classification is unknown →
+        // defaulted true) mean a merged daemon/refinery fix is not yet live.
+        const isDaemonAffecting = behind.isDaemonAffecting !== false;
         staleDaemonBuilds.push({
             daemonId,
             nodeId: entry.nodeId,
@@ -2942,9 +2983,15 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             liveBuildCommit: behind.buildCommit,
             liveBuildCommitShort: behind.buildCommitShort,
             head: behind.head,
+            isDaemonAffecting,
+            ...(Array.isArray(behind.affectedPackages) && behind.affectedPackages.length > 0
+                ? { affectedPackages: behind.affectedPackages }
+                : {}),
             warning: behind.warning,
         });
     }
+    const daemonAffectingStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting !== false);
+    const webOnlyStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting === false);
 
     const nodesForResponse = compact
         ? results.map((entry: any) => {
@@ -2985,10 +3032,15 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         nodes: nodesForResponse,
         ...(compact && Object.keys(daemonSessions).length > 0 ? { daemonSessions } : {}),
         ...(Object.keys(daemonBuilds).length > 0 ? { daemonBuilds } : {}),
-        ...(staleDaemonBuilds.length > 0
+        ...(staleDaemonBuilds.length > 0 ? { staleDaemonBuilds } : {}),
+        ...(daemonAffectingStaleBuilds.length > 0
             ? {
-                staleDaemonBuilds,
-                staleDaemonBuildWarning: 'One or more live daemons were built from a commit behind the workspace HEAD. Merged refinery/mesh-tool fixes are NOT live on those daemons until they are rebuilt/redeployed and restarted — a local daemon-core dist rebuild does not update a cloud daemon. Do not assume a just-merged fix is active.',
+                staleDaemonBuildWarning: 'One or more live daemons were built from a commit behind the workspace HEAD with daemon-runtime package changes. Merged refinery/mesh-tool fixes are NOT live on those daemons until they are rebuilt/redeployed and restarted — a local daemon-core dist rebuild does not update a cloud daemon. Do not assume a just-merged fix is active.',
+            }
+            : {}),
+        ...(webOnlyStaleBuilds.length > 0
+            ? {
+                webOnlyStaleBuildNote: 'One or more live daemons are behind workspace HEAD, but only web packages changed in that range. The daemon does NOT need a rebuild/restart — redeploy the web app to reflect those changes. This is informational, not a "fix not live" condition.',
             }
             : {}),
         activeWork: activeWorkEvidence.activeWork,
@@ -3082,7 +3134,12 @@ export async function meshTaskHistory(
     // Clamp tail so a large default/explicit value can't blow up the payload in
     // compact mode. Full (verbose) callers may request a deeper window.
     const requestedTail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 20;
-    const tail = compact ? Math.min(requestedTail, 40) : Math.min(requestedTail, 200);
+    // Compact: cap conservatively so even large refine-batch entries can't blow the
+    // token limit. slimLedgerPayload is the primary defense (it summarizes large
+    // plan/validationPlan/suggestedConfig fields); this clamp is the backstop. A deep
+    // explicit request (tail > 50) is clamped harder (20) than a modest one (30).
+    const compactCap = requestedTail > 50 ? 20 : 30;
+    const tail = compact ? Math.min(requestedTail, compactCap) : Math.min(requestedTail, 200);
     const kind = typeof args.kind === 'string' && args.kind.trim() ? [args.kind.trim() as any] : undefined;
     const rawEntries = readLedgerEntries(mesh.id, { tail, kind });
     // Slim large payload fields so coordinator context stays lean. Verbose
@@ -4594,13 +4651,15 @@ export async function meshRefinePlan(
 
 export async function meshRefineNode(
     ctx: MeshContext,
-    args: { node_id: string },
+    args: { node_id: string; execute?: boolean; dry_run?: boolean },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
     const result = await commandForNode(ctx, node, 'refine_mesh_node', {
         meshId: ctx.mesh.id,
         nodeId: args.node_id,
+        ...(args.execute !== undefined ? { execute: args.execute } : {}),
+        ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
         inlineMesh: ctx.mesh,
     });
     if (result?.success && result.async !== true && result.removeResult?.removed !== false) {

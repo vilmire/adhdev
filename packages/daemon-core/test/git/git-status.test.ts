@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -255,6 +255,55 @@ describe('git repo status parser', () => {
       expect(status.daemonBuildBehind?.scope).toBe('root');
       expect(status.daemonBuildBehind?.head).toBe(git(repo, ['rev-parse', 'HEAD']));
       expect(status.daemonBuildBehind?.warning).toContain('behind');
+      // Root-level (non-package) changes are daemon-affecting by the conservative default.
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(true);
+    });
+
+    it('marks isDaemonAffecting:true when a daemon-runtime package changed', async () => {
+      const repo = tempRepo('build-behind-daemon-pkg');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      mkdirSync(join(repo, 'packages', 'daemon-core', 'src'), { recursive: true });
+      writeFileSync(join(repo, 'packages', 'daemon-core', 'src', 'x.ts'), 'export const x = 1;\n');
+      commit(repo, 'c2 (daemon-core change)');
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit) });
+      expect(status.daemonBuildBehind).toBeDefined();
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(true);
+      expect(status.daemonBuildBehind?.affectedPackages).toContain('daemon-core');
+      expect(status.daemonBuildBehind?.warning).toContain('rebuilt/redeployed and restarted');
+    });
+
+    it('marks isDaemonAffecting:false when only web packages changed', async () => {
+      const repo = tempRepo('build-behind-web-only');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      mkdirSync(join(repo, 'packages', 'web-core', 'src'), { recursive: true });
+      writeFileSync(join(repo, 'packages', 'web-core', 'src', 'ui.ts'), 'export const ui = 1;\n');
+      commit(repo, 'c2 (web-core change)');
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit) });
+      expect(status.daemonBuildBehind).toBeDefined();
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(false);
+      expect(status.daemonBuildBehind?.affectedPackages).toEqual(['web-core']);
+      expect(status.daemonBuildBehind?.warning).toContain('Daemon restart NOT required');
+    });
+
+    it('stays daemon-affecting when web and daemon packages both changed', async () => {
+      const repo = tempRepo('build-behind-mixed-pkg');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      mkdirSync(join(repo, 'packages', 'web-core', 'src'), { recursive: true });
+      mkdirSync(join(repo, 'packages', 'daemon-standalone', 'src'), { recursive: true });
+      writeFileSync(join(repo, 'packages', 'web-core', 'src', 'ui.ts'), 'export const ui = 1;\n');
+      writeFileSync(join(repo, 'packages', 'daemon-standalone', 'src', 'y.ts'), 'export const y = 1;\n');
+      commit(repo, 'c2 (mixed change)');
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit) });
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(true);
     });
 
     it('does not flag when the build commit equals HEAD (daemon current)', async () => {

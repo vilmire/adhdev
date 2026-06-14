@@ -260,6 +260,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const result: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-fail',
         inlineMesh: mesh,
@@ -297,6 +298,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-missing-deps',
         inlineMesh: mesh,
@@ -349,6 +351,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-bootstrap-deps',
         inlineMesh: mesh,
@@ -388,9 +391,9 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const started = Date.now()
-      const first: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-slow', inlineMesh: mesh })
+      const first: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-slow', inlineMesh: mesh, execute: true })
       const elapsedMs = Date.now() - started
-      const second: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-slow', inlineMesh: mesh })
+      const second: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-slow', inlineMesh: mesh, execute: true })
 
       expectAccepted(first, 'node-slow')
       expect(elapsedMs).toBeLessThan(250)
@@ -426,12 +429,12 @@ describe('refine_mesh_node validation gate', () => {
       })
       const router = createRouter()
 
-      const first: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-failed', inlineMesh: mesh })
+      const first: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-failed', inlineMesh: mesh, execute: true })
       expectAccepted(first, 'node-retry-failed')
       const firstTerminal = await waitForRefineLedger(mesh.id, first.jobId)
       expect(firstTerminal.kind).toBe('task_failed')
 
-      const retry: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-failed', inlineMesh: mesh })
+      const retry: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-failed', inlineMesh: mesh, execute: true })
       expectAccepted(retry, 'node-retry-failed')
       expect(retry.jobId).not.toBe(first.jobId)
       expect(retry.duplicate).not.toBe(true)
@@ -465,7 +468,7 @@ describe('refine_mesh_node validation gate', () => {
       const originalNode = { ...mesh.nodes[1] }
       const router = createRouter()
 
-      const first: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-completed', inlineMesh: mesh })
+      const first: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-completed', inlineMesh: mesh, execute: true })
       expectAccepted(first, 'node-retry-completed')
       const firstTerminal = await waitForRefineLedger(mesh.id, first.jobId)
       expect(firstTerminal.kind).toBe('task_completed')
@@ -476,7 +479,7 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['commit', '-q', '-m', 'retry change'], { cwd: worktree })
       mesh.nodes.push(originalNode)
 
-      const retry: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-completed', inlineMesh: mesh })
+      const retry: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-retry-completed', inlineMesh: mesh, execute: true })
       expectAccepted(retry, 'node-retry-completed')
       expect(retry.jobId).not.toBe(first.jobId)
       expect(retry.duplicate).not.toBe(true)
@@ -507,6 +510,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter(mesh.id, messages)
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-worktree',
         inlineMesh: mesh,
@@ -578,6 +582,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter(mesh.id, messages)
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-missing-submodule',
         inlineMesh: mesh,
@@ -689,6 +694,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-local-only-submodule',
         inlineMesh: mesh,
@@ -805,6 +811,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-auto-publish-submodule',
         inlineMesh: mesh,
@@ -887,6 +894,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-submodule-main-ancestor',
         inlineMesh: mesh,
@@ -942,6 +950,7 @@ describe('refine_mesh_node validation gate', () => {
       const mesh = createMesh(repo, worktree, 'node-submodule-align')
       const router = createRouter()
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-submodule-align',
         inlineMesh: mesh,
@@ -1002,6 +1011,7 @@ describe('refine_mesh_node validation gate', () => {
       const mesh = createMesh(repo, worktree, 'node-submodule-conflict-hint')
       const router = createRouter()
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-submodule-conflict-hint',
         inlineMesh: mesh,
@@ -1064,6 +1074,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-feature-only-submodule',
         inlineMesh: mesh,
@@ -1112,6 +1123,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-cleanup-fail',
         inlineMesh: mesh,
@@ -1149,6 +1161,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-injection',
         inlineMesh: mesh,
@@ -1188,6 +1201,7 @@ describe('refine_mesh_node validation gate', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true,
         meshId: mesh.id,
         nodeId: 'node-no-config',
         inlineMesh: mesh,
@@ -1236,6 +1250,51 @@ describe('refine_mesh_node validation gate', () => {
     }
   })
 
+  it('refine_mesh_node defaults to a synchronous dry-run plan (no merge) unless execute=true', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-dryrun-'))
+    const repo = join(root, 'repo')
+    try {
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-dryrun')
+      const router = createRouter()
+
+      // No execute / no dry_run → dry-run by default: plan only, NOT async, no merge.
+      const planned: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-dryrun',
+        inlineMesh: mesh,
+      })
+      expect(planned).toMatchObject({ success: true, dryRun: true, mergeWillRun: false, cleanupWillRun: false })
+      expect(planned.async).not.toBe(true)
+      expect(planned.validationPlan).toBeDefined()
+      // The worktree node must NOT have been merged/removed by a dry-run.
+      expect(mesh.nodes.some((node: any) => node.id === 'node-dryrun')).toBe(true)
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
+
+      // Explicit dry_run:true (without execute) is also a plan-only response.
+      const explicitDry: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-dryrun',
+        dryRun: true,
+        inlineMesh: mesh,
+      })
+      expect(explicitDry).toMatchObject({ success: true, dryRun: true, mergeWillRun: false })
+      expect(explicitDry.async).not.toBe(true)
+
+      // execute:true opts into the async refine job (mirrors batch_refine_mesh_nodes).
+      const executed: any = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: 'node-dryrun',
+        execute: true,
+        inlineMesh: mesh,
+      })
+      expect(executed).toMatchObject({ success: true, async: true, status: 'accepted' })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('M2-2: refine skips bootstrap when worktree_bootstrap is ready with unchanged staleInputs', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-m2-cached-'))
     const repo = join(root, 'repo')
@@ -1260,7 +1319,7 @@ describe('refine_mesh_node validation gate', () => {
       }
       const router = createRouter()
 
-      const accepted: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-m2-cached', inlineMesh: mesh })
+      const accepted: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-m2-cached', inlineMesh: mesh, execute: true })
       expectAccepted(accepted, 'node-m2-cached')
       const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
       expect(terminal.kind).toBe('task_completed')
@@ -1300,7 +1359,7 @@ describe('refine_mesh_node validation gate', () => {
       }
       const router = createRouter()
 
-      const accepted: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-m2-stale', inlineMesh: mesh })
+      const accepted: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-m2-stale', inlineMesh: mesh, execute: true })
       expectAccepted(accepted, 'node-m2-stale')
       const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
       expect(terminal.kind).toBe('task_completed')
@@ -1334,7 +1393,7 @@ describe('refine_mesh_node validation gate', () => {
       ]
       const router = createRouter()
 
-      const accepted: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-m2-legacy', inlineMesh: mesh })
+      const accepted: any = await router.execute('refine_mesh_node', { meshId: mesh.id, nodeId: 'node-m2-legacy', inlineMesh: mesh, execute: true })
       expectAccepted(accepted, 'node-m2-legacy')
       const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
       expect(terminal.kind).toBe('task_completed')

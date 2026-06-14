@@ -89,6 +89,16 @@ export interface DaemonBuildBehind {
   head: string;
   /** Where the comparison matched: 'root' or the submodule path. */
   scope: string;
+  /**
+   * Whether any package changed between buildCommit..HEAD affects the daemon
+   * runtime (daemon-core, standalone, session-host, terminal-mux, ghostty,
+   * mcp-server). When false, only web/render packages changed — the daemon does
+   * NOT need a rebuild/restart; only the web deploy is pending. Conservative:
+   * when the changed-package set can't be determined it defaults to true.
+   */
+  isDaemonAffecting: boolean;
+  /** Distinct package names changed between buildCommit..HEAD (best-effort). */
+  affectedPackages?: string[];
   warning: string;
 }
 

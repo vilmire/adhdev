@@ -116,6 +116,80 @@ export async function getGitRepoStatus(
  *   - build commit NOT an ancestor of HEAD (daemon ahead / diverged) → undefined
  * Any git error is swallowed (no warning) so a flaky probe never over-warns.
  */
+/**
+ * Package names that, when changed, mean the daemon runtime is stale and must be
+ * rebuilt/redeployed + restarted. Everything NOT in this set (web-core,
+ * web-standalone, web-devconsole, terminal-render-web) is web-only — a daemon
+ * restart is not required for those, only a web redeploy. mcp-server runs in the
+ * same process surface as the daemon tooling, so it is classified as
+ * daemon-affecting (conservative). Unknown package → daemon-affecting.
+ */
+const DAEMON_RUNTIME_PACKAGES = new Set([
+  'daemon-core',
+  'daemon-standalone',
+  'session-host-core',
+  'session-host-daemon',
+  'terminal-mux-core',
+  'terminal-mux-control',
+  'terminal-mux-cli',
+  'ghostty-vt-node',
+  'mcp-server',
+]);
+
+const WEB_ONLY_PACKAGES = new Set([
+  'web-core',
+  'web-standalone',
+  'web-devconsole',
+  'terminal-render-web',
+]);
+
+/**
+ * Determine whether the changes between buildCommit..HEAD touch any daemon-runtime
+ * package. Returns isDaemonAffecting:true conservatively when the changed-file set
+ * can't be obtained or any changed path is outside the known web-only package set
+ * (including root-level / non-package files).
+ */
+async function classifyDaemonBuildChange(
+  repoPath: string,
+  buildCommit: string,
+  options: GitStatusOptions,
+): Promise<{ isDaemonAffecting: boolean; affectedPackages: string[] }> {
+  try {
+    const diff = await runGit(repoPath, ['diff', '--name-only', `${buildCommit}..HEAD`], options);
+    const files = diff.stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (files.length === 0) {
+      // No file diff (e.g. only merge metadata) — nothing actionable, but stay
+      // conservative and treat as daemon-affecting so we don't suppress a real warning.
+      return { isDaemonAffecting: true, affectedPackages: [] };
+    }
+    const pkgs = new Set<string>();
+    let sawNonPackageOrUnknown = false;
+    for (const file of files) {
+      const match = file.match(/(?:^|\/)packages\/([^/]+)\//);
+      if (!match) {
+        sawNonPackageOrUnknown = true;
+        continue;
+      }
+      pkgs.add(match[1]);
+    }
+    const affectedPackages = [...pkgs].sort();
+    // Daemon-affecting if: any non-package/root file changed, any unknown package
+    // changed, or any explicit daemon-runtime package changed. Only when EVERY
+    // changed file maps to a known web-only package is the daemon unaffected.
+    const allWebOnly =
+      !sawNonPackageOrUnknown &&
+      affectedPackages.length > 0 &&
+      affectedPackages.every((p) => WEB_ONLY_PACKAGES.has(p) && !DAEMON_RUNTIME_PACKAGES.has(p));
+    return { isDaemonAffecting: !allWebOnly, affectedPackages };
+  } catch {
+    // diff probe failed → can't prove web-only; stay conservative.
+    return { isDaemonAffecting: true, affectedPackages: [] };
+  }
+}
+
 async function detectDaemonBuildBehind(
   repo: ResolvedGitRepo,
   submodules: GitSubmoduleStatus[] | undefined,
@@ -145,14 +219,30 @@ async function detectDaemonBuildBehind(
       // Strict ancestor: build commit is reachable from HEAD but is not HEAD.
       await runGit(repoPath, ['merge-base', '--is-ancestor', build.commit, 'HEAD'], options);
       // No throw → build commit IS an ancestor of HEAD → daemon is behind.
+      // Inspect WHICH packages changed in buildCommit..HEAD. A daemon rebuild/restart
+      // is only actually required when a daemon-runtime package changed; if only web /
+      // render packages changed, the daemon is unaffected and just the web deploy is
+      // pending. Conservative: any probe failure → treat as daemon-affecting.
+      const { isDaemonAffecting, affectedPackages } = await classifyDaemonBuildChange(
+        repoPath,
+        build.commit,
+        options,
+      );
+      const scopeLabel = scope === 'root' ? 'workspace' : scope;
+      const warning = isDaemonAffecting
+        ? `Live daemon was built from ${build.commitShort} which is behind ${scopeLabel} HEAD ${head.slice(0, 7)}. ` +
+          `Merged code is NOT live until the daemon is rebuilt/redeployed and restarted — a local dist rebuild alone does not update a cloud daemon.`
+        : `Live daemon was built from ${build.commitShort} which is behind ${scopeLabel} HEAD ${head.slice(0, 7)}, ` +
+          `but only web packages changed (${(affectedPackages || []).join(', ') || 'web'}). ` +
+          `Daemon restart NOT required — redeploy the web app to reflect the change.`;
       return {
         buildCommit: build.commit,
         buildCommitShort: build.commitShort,
         head,
         scope,
-        warning:
-          `Live daemon was built from ${build.commitShort} which is behind ${scope === 'root' ? 'workspace' : scope} HEAD ${head.slice(0, 7)}. ` +
-          `Merged code is NOT live until the daemon is rebuilt/redeployed and restarted — a local dist rebuild alone does not update a cloud daemon.`,
+        isDaemonAffecting,
+        ...(affectedPackages && affectedPackages.length > 0 ? { affectedPackages } : {}),
+        warning,
       };
     } catch {
       // cat-file / merge-base non-zero exit (commit absent or not an ancestor)
