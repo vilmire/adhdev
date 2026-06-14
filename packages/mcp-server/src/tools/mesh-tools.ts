@@ -28,6 +28,7 @@ import {
     buildCompactStaleDirectWorkSummary,
     buildMeshActiveWork,
     buildMeshAsyncRefineJobs,
+    summarizeMeshAsyncRefineJobs,
     buildMeshLedgerReconciliationEvidence,
     buildMeshLedgerReplicaEvidence,
     buildMeshNodeCapabilityTags,
@@ -2854,16 +2855,18 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 // dominate the payload. Keep active (non-terminal) job objects so the
                 // coordinator can still track in-flight refines, and replace the rest with
                 // a status-count summary.
-                const TERMINAL_REFINE_STATUSES = new Set(['failed', 'completed', 'succeeded', 'cancelled', 'aborted']);
-                const byStatus: Record<string, number> = {};
-                const activeJobs: any[] = [];
-                for (const job of asyncRefineJobs as any[]) {
-                    const status = String(job?.status ?? 'unknown');
-                    byStatus[status] = (byStatus[status] ?? 0) + 1;
-                    if (!TERMINAL_REFINE_STATUSES.has(status)) activeJobs.push(job);
-                }
-                if (activeJobs.length > 0) response.asyncRefineJobs = activeJobs;
-                response.asyncRefineJobsSummary = { total: asyncRefineJobs.length, byStatus };
+                //
+                // Stale terminal jobs (resolved refinery rejections/successes from earlier
+                // in the ledger window — often multi-day-old) are folded out of the counts
+                // so byStatus.failed reflects *current* breakage, not historical residue.
+                // The folded count is surfaced as `staleTerminal` for transparency.
+                const summary = summarizeMeshAsyncRefineJobs(asyncRefineJobs);
+                if (summary.activeJobs.length > 0) response.asyncRefineJobs = summary.activeJobs;
+                response.asyncRefineJobsSummary = {
+                    total: summary.total,
+                    byStatus: summary.byStatus,
+                    ...(summary.staleTerminal > 0 ? { staleTerminal: summary.staleTerminal } : {}),
+                };
             } else {
                 response.asyncRefineJobs = asyncRefineJobs;
             }

@@ -142,3 +142,90 @@ export function buildMeshAsyncRefineJobs(args: {
         return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
     });
 }
+
+const TERMINAL_REFINE_STATUSES = new Set<MeshAsyncRefineJobStatus>(['completed', 'failed']);
+
+/** Terminal refine jobs older than this (relative to the newest job in the set) are
+ * "stale" — already-resolved historical refinery rejections/successes that should not
+ * keep inflating the status counts in mesh_status. 6h covers a long working session
+ * while still folding multi-day-old residue. */
+export const STALE_TERMINAL_REFINE_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+/** Cap on how many recent terminal jobs are counted even if all fall inside the freshness
+ * window — prevents a burst of refines from dominating the summary. */
+export const RECENT_TERMINAL_REFINE_CAP = 8;
+
+export interface MeshAsyncRefineJobsSummary {
+    /** Count of jobs reflected in `byStatus` (active jobs + recent terminal jobs). */
+    total: number;
+    byStatus: Record<string, number>;
+    /** Terminal jobs dropped from the counts because they are stale residue. */
+    staleTerminal: number;
+    /** Non-terminal (accepted/running) jobs still in flight. */
+    activeJobs: MeshAsyncRefineJobSummary[];
+}
+
+function jobActivityTime(job: MeshAsyncRefineJobSummary): number {
+    const raw = job.lastUpdatedAt || job.completedAt || job.startedAt || '';
+    const t = new Date(raw).getTime();
+    return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * Build a compact summary of refine jobs that folds stale terminal jobs.
+ *
+ * The full job list (from `buildMeshAsyncRefineJobs`) is derived from a recent ledger
+ * window and deduped by jobId, but it still includes every terminal (completed/failed)
+ * job that happens to fall in that window — including multi-day-old refinery rejections
+ * that have long since been resolved. Those stale terminals inflate `byStatus.failed`
+ * and read as "current breakage" when they are historical noise.
+ *
+ * Active (accepted/running) jobs are always counted. Terminal jobs are counted only when
+ * they are recent: within `STALE_TERMINAL_REFINE_WINDOW_MS` of the newest job's activity
+ * time AND among the `RECENT_TERMINAL_REFINE_CAP` most-recent terminals. Everything else
+ * is folded into `staleTerminal` and excluded from `byStatus`.
+ *
+ * Freshness is measured relative to the newest job in the set (not wall-clock), so the
+ * result is deterministic for a given input — important for tests and for stale-clock
+ * environments.
+ */
+export function summarizeMeshAsyncRefineJobs(
+    jobs: MeshAsyncRefineJobSummary[],
+): MeshAsyncRefineJobsSummary {
+    const activeJobs: MeshAsyncRefineJobSummary[] = [];
+    const terminalJobs: MeshAsyncRefineJobSummary[] = [];
+    for (const job of jobs) {
+        if (TERMINAL_REFINE_STATUSES.has(job.status)) terminalJobs.push(job);
+        else activeJobs.push(job);
+    }
+
+    // Newest activity across ALL jobs anchors the freshness window.
+    let newest = 0;
+    for (const job of jobs) newest = Math.max(newest, jobActivityTime(job));
+    const cutoff = newest - STALE_TERMINAL_REFINE_WINDOW_MS;
+
+    const terminalByRecency = [...terminalJobs].sort(
+        (a, b) => jobActivityTime(b) - jobActivityTime(a),
+    );
+    const freshTerminal = terminalByRecency
+        .filter(job => jobActivityTime(job) >= cutoff)
+        .slice(0, RECENT_TERMINAL_REFINE_CAP);
+    const freshTerminalIds = new Set(freshTerminal.map(job => job.jobId));
+
+    const byStatus: Record<string, number> = {};
+    for (const job of activeJobs) {
+        byStatus[job.status] = (byStatus[job.status] ?? 0) + 1;
+    }
+    for (const job of freshTerminal) {
+        byStatus[job.status] = (byStatus[job.status] ?? 0) + 1;
+    }
+
+    const staleTerminal = terminalJobs.length - freshTerminalIds.size;
+
+    return {
+        total: activeJobs.length + freshTerminal.length,
+        byStatus,
+        staleTerminal,
+        activeJobs,
+    };
+}

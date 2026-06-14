@@ -32,12 +32,14 @@ function OptionButton({
   label,
   description,
   selected,
+  multiSelect,
   disabled,
   onClick,
 }: {
   label: string
   description?: string
   selected: boolean
+  multiSelect?: boolean
   disabled?: boolean
   onClick: () => void
 }) {
@@ -45,6 +47,8 @@ function OptionButton({
     <button
       type="button"
       disabled={disabled}
+      role={multiSelect ? 'checkbox' : 'radio'}
+      aria-checked={selected}
       onClick={onClick}
       className={`w-full text-left rounded-md border px-3 py-2 transition ${
         selected
@@ -53,7 +57,10 @@ function OptionButton({
       } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
     >
       <span className="flex items-start gap-2">
-        <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+        {/* Multi-select renders a square checkbox indicator; single-select a round radio. */}
+        <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border ${
+          multiSelect ? 'rounded-sm' : 'rounded-full'
+        } ${
           selected ? 'border-accent-primary bg-accent-primary text-accent-on-primary' : 'border-border-secondary'
         }`}>
           {selected ? <IconCheckCircle size={12} /> : null}
@@ -203,15 +210,23 @@ export default function InteractivePromptModal({
                 <div className="text-sm font-semibold text-text-primary">
                   {!isSingleQuestion ? `${currentStep + 1}. ` : ''}{currentQuestion.question}
                 </div>
+                {currentQuestion.multiSelect && currentQuestion.options.length > 0 && (
+                  <div className="mt-0.5 text-xs text-text-muted">Select all that apply</div>
+                )}
               </div>
 
-              <div className="grid gap-2">
+              <div
+                className="grid gap-2"
+                role={currentQuestion.multiSelect ? 'group' : 'radiogroup'}
+                aria-label={currentQuestion.question}
+              >
                 {currentQuestion.options.map(option => (
                   <OptionButton
                     key={option.label}
                     label={option.label}
                     description={option.description || option.preview}
                     selected={(answerPreview.answers[currentQuestion.questionId]?.selectedLabels || []).includes(option.label)}
+                    multiSelect={currentQuestion.multiSelect}
                     disabled={isSubmitting}
                     onClick={() => toggleOption(currentQuestion, option.label)}
                   />
