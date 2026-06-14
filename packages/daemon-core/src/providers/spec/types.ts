@@ -104,19 +104,35 @@ export interface NativeHistoryMessageMap {
 // Section definition
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface AnchorContext {
+    prev?: string;
+    next?: string;
+    prev_flags?: string;
+    next_flags?: string;
+}
+
 export interface SectionDef {
     from_top?: Size;
     from_bottom?: Size;
     until?: string;             // section id OR regex (starts with ^)
-    anchor?: string;
+    /**
+     * Anchor regex(es). A single string anchors on the first/last matching line
+     * (per `anchor_last`). An array is an OR-set: every candidate line is one
+     * that matches ANY entry; with `anchor_last` the LAST such line across all
+     * patterns wins, otherwise the FIRST. This lets one section capture two
+     * different shapes — e.g. a box-divider modal AND a divider-less modal whose
+     * only stable landmark is the question line above its numbered choices.
+     */
+    anchor?: string | string[];
     anchor_flags?: string;
     anchor_last?: boolean;
-    anchor_context?: {
-        prev?: string;
-        next?: string;
-        prev_flags?: string;
-        next_flags?: string;
-    };
+    /**
+     * Context guard(s) for the anchor. A single object applies to every anchor
+     * pattern. An array is matched positionally against an `anchor` array (entry
+     * i guards anchor i); a positional `undefined`/null entry means "no guard"
+     * for that anchor. A scalar `anchor` ignores array form beyond index 0.
+     */
+    anchor_context?: AnchorContext | (AnchorContext | null)[];
     lines?: number;
     until_regex?: string;
     until_regex_flags?: string;

@@ -8,7 +8,7 @@
 'use strict';
 
 import type {
-    SectionDef, Condition, RegexCondition,
+    SectionDef, AnchorContext, Condition, RegexCondition,
     ChangedCondition, AllCondition, AnyCondition,
     ExtractTitle, ExtractButtons,
 } from './types.js';
@@ -52,20 +52,44 @@ export function resolveSections(
 
         if (sec.anchor !== undefined) {
             try {
-                const re = new RegExp(sec.anchor, sec.anchor_flags ?? '');
-                const prevRe = sec.anchor_context?.prev !== undefined
-                    ? new RegExp(sec.anchor_context.prev, sec.anchor_context.prev_flags ?? '') : null;
-                const nextRe = sec.anchor_context?.next !== undefined
-                    ? new RegExp(sec.anchor_context.next, sec.anchor_context.next_flags ?? '') : null;
-                const matches = (i: number) =>
-                    re.test(lines[i])
-                    && (prevRe === null || (i > 0 && prevRe.test(lines[i - 1])))
-                    && (nextRe === null || (i < total - 1 && nextRe.test(lines[i + 1])));
+                // Normalize anchor + context into parallel candidate lists. A
+                // scalar anchor becomes a single-entry array; a single context
+                // object applies to every entry; an array context is positional.
+                // Candidates are tried IN ORDER as independent passes: the first
+                // pattern that finds any line wins. This keeps a scalar anchor's
+                // behavior identical, and lets an array express a preferred shape
+                // (e.g. a box divider) with later entries as fallbacks (e.g. a
+                // divider-less modal anchored on its question line) — the
+                // fallback only takes over when the preferred pattern is absent.
+                const anchorPatterns = Array.isArray(sec.anchor) ? sec.anchor : [sec.anchor];
+                const sharedCtx: AnchorContext | null = Array.isArray(sec.anchor_context)
+                    ? null
+                    : (sec.anchor_context ?? null);
+                const ctxList: (AnchorContext | null)[] = Array.isArray(sec.anchor_context)
+                    ? sec.anchor_context
+                    : anchorPatterns.map(() => sharedCtx);
+                const candidates = anchorPatterns.map((pattern, k) => {
+                    const ctx = ctxList[k] ?? null;
+                    return {
+                        re: new RegExp(pattern, sec.anchor_flags ?? ''),
+                        prevRe: ctx?.prev !== undefined
+                            ? new RegExp(ctx.prev, ctx.prev_flags ?? '') : null,
+                        nextRe: ctx?.next !== undefined
+                            ? new RegExp(ctx.next, ctx.next_flags ?? '') : null,
+                    };
+                });
+                const matchesCandidate = (c: typeof candidates[number], i: number) =>
+                    c.re.test(lines[i])
+                    && (c.prevRe === null || (i > 0 && c.prevRe.test(lines[i - 1])))
+                    && (c.nextRe === null || (i < total - 1 && c.nextRe.test(lines[i + 1])));
                 let idx = -1;
-                if (sec.anchor_last) {
-                    for (let i = total - 1; i >= 0; i--) { if (matches(i)) { idx = i; break; } }
-                } else {
-                    for (let i = 0; i < total; i++) { if (matches(i)) { idx = i; break; } }
+                for (const c of candidates) {
+                    if (sec.anchor_last) {
+                        for (let i = total - 1; i >= 0; i--) { if (matchesCandidate(c, i)) { idx = i; break; } }
+                    } else {
+                        for (let i = 0; i < total; i++) { if (matchesCandidate(c, i)) { idx = i; break; } }
+                    }
+                    if (idx !== -1) break;
                 }
                 if (idx !== -1) {
                     from = idx;
