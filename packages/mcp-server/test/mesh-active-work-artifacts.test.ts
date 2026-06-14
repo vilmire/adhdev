@@ -351,7 +351,7 @@ test('mesh_view_queue reconciles transcript-backed idle direct dispatch before s
   try {
     seedDirectTranscriptDispatch(meshId, taskId);
 
-    const activeView = JSON.parse(await meshViewQueue(ctx as any, { view: 'active' }));
+    const activeView = JSON.parse(await meshViewQueue(ctx as any, { view: 'active', verbose: true }));
     assert.equal(activeView.staleDirectWork.some((entry: any) => entry.taskId === taskId), false);
     assert.equal(activeView.activeWork.some((entry: any) => entry.taskId === taskId), false);
     assert.equal(activeView.activeWorkSummary.staleDirectUnacknowledgedCount, undefined);
@@ -396,7 +396,7 @@ test('mesh_view_queue refreshes live mesh sessions before classifying direct wor
       },
     });
 
-    const activeView = JSON.parse(await meshViewQueue(staleCtx as any, { view: 'active' }));
+    const activeView = JSON.parse(await meshViewQueue(staleCtx as any, { view: 'active', verbose: true }));
     assert.ok(calls.some(call => call.command === 'get_mesh'), 'mesh_view_queue should refresh mesh state before active/stale classification');
     assert.ok(activeView.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === 'direct-refresh-task'));
     assert.equal(activeView.staleDirectWork.some((entry: any) => entry.taskId === 'direct-refresh-task'), false);
@@ -499,6 +499,8 @@ test('stale direct ledger tasks are separated from active work when queue is emp
       payload: { taskId: 'direct-removed-node', message: 'removed worktree direct task', source: 'direct', via: 'p2p_direct' },
     });
 
+    // Default compact mode: the full staleDirectWork array is dropped (it is a
+    // major payload-bloat source) in favor of staleDirectWorkSummary counts.
     const activeView = JSON.parse(await meshViewQueue(ctx as any, { view: 'active' }));
     assert.equal(activeView.activeCount, 0);
     assert.deepEqual(activeView.queue, []);
@@ -506,13 +508,22 @@ test('stale direct ledger tasks are separated from active work when queue is emp
     assert.equal(activeView.activeWorkSummary.directActiveCount, 0);
     assert.equal(activeView.activeWorkSummary.staleDirectCount, 2);
     assert.equal(activeView.pollingGuidance, undefined);
-    assert.deepEqual(activeView.staleDirectWork.map((entry: any) => entry.taskId).sort(), [
+    assert.equal(activeView.staleDirectWork, undefined, 'compact mode must not serialize the full staleDirectWork array');
+    assert.equal(activeView.staleDirectWorkSummary.count, 2);
+    assert.deepEqual(activeView.staleDirectWorkSummary.sample.map((entry: any) => entry.taskId).sort(), [
       'direct-missing-session',
       'direct-removed-node',
     ]);
-    assert.equal(activeView.staleDirectWork.find((entry: any) => entry.taskId === 'direct-missing-session')?.status, 'awaiting_approval');
-    assert.match(activeView.staleDirectWork.find((entry: any) => entry.taskId === 'direct-missing-session')?.staleReason, /not present in live session/);
-    assert.match(activeView.staleDirectWork.find((entry: any) => entry.taskId === 'direct-removed-node')?.staleReason, /no longer in the live mesh/);
+
+    // verbose=true restores the full staleDirectWork array for callers that need detail.
+    const verboseView = JSON.parse(await meshViewQueue(ctx as any, { view: 'active', verbose: true }));
+    assert.deepEqual(verboseView.staleDirectWork.map((entry: any) => entry.taskId).sort(), [
+      'direct-missing-session',
+      'direct-removed-node',
+    ]);
+    assert.equal(verboseView.staleDirectWork.find((entry: any) => entry.taskId === 'direct-missing-session')?.status, 'awaiting_approval');
+    assert.match(verboseView.staleDirectWork.find((entry: any) => entry.taskId === 'direct-missing-session')?.staleReason, /not present in live session/);
+    assert.match(verboseView.staleDirectWork.find((entry: any) => entry.taskId === 'direct-removed-node')?.staleReason, /no longer in the live mesh/);
 
     const cancel = JSON.parse(await meshQueueCancel(ctx as any, { task_id: 'direct-missing-session' }));
     assert.equal(cancel.success, false);
@@ -535,6 +546,91 @@ test('stale direct ledger tasks are separated from active work when queue is emp
       'direct-missing-session',
       'direct-removed-node',
     ]);
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('mesh_view_queue compact mode drops historical queue rows, staleDirectWork array, and cleanup candidate rows', async () => {
+  const meshId = 'mesh-view-queue-compact-payload-test';
+  cleanupMesh(meshId);
+  const mesh = {
+    id: meshId,
+    name: 'Compact Payload',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [{
+      id: 'node-gone',
+      workspace: '/tmp/gone-repo',
+      repoRoot: '/tmp/gone-repo',
+      daemonId: 'daemon-gone',
+      machineLabel: 'Gone workspace',
+      userOverrides: {},
+      policy: { providerPriority: ['hermes-cli'] },
+      sessions: [],
+    }],
+  };
+  const transport = new IpcTransport() as any;
+  transport.command = async (command: string) => {
+    if (command === 'get_mesh') return { success: true, mesh };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    return { success: false };
+  };
+  transport.meshCommand = async (_daemonId: string, command: string) => {
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
+    if (command === 'git_status') return { success: false, error: 'not live' };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    return { success: false };
+  };
+  const ctx = { mesh, transport, localDaemonId: 'daemon-coordinator', localMachineId: 'machine-coordinator' };
+
+  try {
+    // Seed 1 pending (active) + 40 completed/failed (historical) queue rows so the
+    // historical row arrays dominate the full payload.
+    const pending = enqueueTask(meshId, 'the only active pending task');
+    for (let i = 0; i < 40; i++) {
+      const t = enqueueTask(meshId, `historical task ${i} with a reasonably long descriptive title to add payload weight`);
+      updateTaskStatus(meshId, t.id, i % 2 === 0 ? 'completed' : 'failed');
+    }
+    // Seed 20 orphaned direct dispatches (node has no live sessions) -> staleDirectWork.
+    for (let i = 0; i < 20; i++) {
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node-gone',
+        sessionId: `sess-gone-${i}`,
+        providerType: 'hermes-cli',
+        payload: { taskId: `stale-direct-${i}`, message: `orphaned direct task ${i}`, source: 'direct', via: 'p2p_direct' },
+      });
+    }
+
+    const compact = await meshViewQueue(ctx as any, { view: 'active' });
+    const compactObj = JSON.parse(compact);
+    const full = await meshViewQueue(ctx as any, { view: 'active', verbose: true });
+
+    // Active counts still source-of-truth correct.
+    assert.equal(compactObj.activeWorkSummary.staleDirectCount, 20);
+    assert.deepEqual(compactObj.queue.map((task: any) => task.id), [pending.id]);
+
+    // Compact response drops the bulky historical/orphan arrays.
+    assert.equal(compactObj.staleDirectWork, undefined);
+    assert.equal(compactObj.staleDirectWorkSummary.count, 20);
+    assert.equal(compactObj.historicalRowsOmitted, true);
+    assert.equal(compactObj.queueMaintenance.cleanupCandidates, undefined);
+    assert.equal(compactObj.queueMaintenance.cleanupCandidatesOmitted, true);
+    assert.equal(compactObj.cleanupDryRun.cleanupCandidates, undefined);
+    assert.equal(compactObj.historicalRecordCount === undefined || compactObj.queueMaintenance.historicalRecordCount === 40, true);
+
+    // Verbose response retains the full detail arrays.
+    const fullObj = JSON.parse(full);
+    assert.equal(fullObj.staleDirectWork.length, 20);
+    assert.equal(Array.isArray(fullObj.queueMaintenance.cleanupCandidates), true);
+
+    // The whole point: compact is substantially smaller than verbose (the dropped
+    // historical/orphan/cleanup row arrays are the dominant payload weight).
+    assert.ok(compact.length * 1.4 < full.length, `expected compact (${compact.length}) substantially smaller than verbose (${full.length})`);
   } finally {
     cleanupMesh(meshId);
   }

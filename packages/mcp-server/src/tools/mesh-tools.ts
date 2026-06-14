@@ -614,6 +614,36 @@ function buildQueueMaintenanceReport(queue: any[]): Record<string, unknown> {
     };
 }
 
+// Compact maintenance report: drop the per-row arrays (staleAssignedTasks,
+// cleanupCandidates) that scale with old historical record count and instead
+// surface the counts. staleAssignedTasks rows are still active work, so keep a
+// small sample for coordinator visibility; cleanupCandidates are dominated by
+// old historical rows and are dropped entirely in favor of the count + a hint.
+function buildCompactQueueMaintenanceReport(maintenance: Record<string, unknown>): Record<string, unknown> {
+    const staleAssignedTasks = Array.isArray((maintenance as any).staleAssignedTasks)
+        ? (maintenance as any).staleAssignedTasks
+        : [];
+    const cleanupCandidateCount = (maintenance as any).cleanupCandidateCount ?? 0;
+    return {
+        readOnly: true,
+        mutationPerformed: false,
+        sourceOfTruth: 'mesh_work_queue_file',
+        payloadMode: 'compact',
+        staleAssignedDefinition: (maintenance as any).staleAssignedDefinition,
+        historicalDefinition: (maintenance as any).historicalDefinition,
+        // staleAssignedTasks are active assigned rows (not historical) — retain a
+        // bounded sample so coordinators can still see drift without the full array.
+        staleAssignedTasks: staleAssignedTasks.slice(0, 5),
+        staleAssignedSampleLimit: 5,
+        staleAssignedCount: (maintenance as any).staleAssignedCount ?? staleAssignedTasks.length,
+        historicalRecordCount: (maintenance as any).historicalRecordCount ?? 0,
+        oldHistoricalRecordCount: (maintenance as any).oldHistoricalRecordCount ?? 0,
+        cleanupCandidateCount,
+        cleanupCandidatesOmitted: true,
+        cleanupCandidatesHint: 'Per-row cleanup candidates are omitted in compact mode; call mesh_view_queue with verbose=true for the full maintenance/cleanupDryRun rows.',
+    };
+}
+
 function annotateQueueStaleness(queue: any[], mesh?: LocalMeshEntry): any[] {
     const liveness = buildQueueLivenessIndex(mesh);
     const now = Date.now();
@@ -2186,7 +2216,7 @@ export const MESH_VIEW_QUEUE_TOOL = {
                 enum: ['all', 'active', 'historical'],
                 description: 'Optional row view. active returns pending/assigned rows, historical returns completed/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility.',
             },
-            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Drops large historical (completed/failed/cancelled) row arrays in favor of status counts; pending/assigned active rows are retained. Set false (or verbose=true) for the full dashboard-grade payload.' },
+            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Drops large historical (completed/failed/cancelled) queue row arrays, the full staleDirectWork orphan array (kept as staleDirectWorkSummary counts), and per-row maintenance cleanupCandidates in favor of counts; pending/assigned active rows are retained. Set false (or verbose=true) for the full dashboard-grade payload.' },
             verbose: { type: 'boolean', description: 'Force the full payload; overrides compact.' },
         },
     },
@@ -3208,6 +3238,19 @@ export async function meshViewQueue(
         const wantActiveQueueArray = view === 'active' || statusFilter?.some(status => ACTIVE_QUEUE_STATUSES.has(status));
         const wantHistoricalQueueArray = !compact && (view === 'historical' || requestedHistoricalRows);
 
+        // staleDirectWork is a full MeshActiveWorkRecord[] of orphaned/historical
+        // direct dispatches — it is the second major payload-bloat source (the first
+        // being historical queue rows). In compact mode, collapse it to the same
+        // bounded summary mesh_status uses and only emit the full array in verbose mode.
+        const staleDirectWorkSummary = buildCompactStaleDirectWorkSummary(activeWorkEvidence.staleDirectWork, {
+            note: activeWorkEvidence.staleDirectWorkNote,
+            detailHint: 'Full stale direct entries are omitted from mesh_view_queue in compact mode. Call mesh_view_queue with verbose=true, or inspect mesh_task_history for ledger detail.',
+        });
+        // queueMaintenance/cleanupDryRun serialize the same maintenance object whose
+        // cleanupCandidates array scales with old historical record count. In compact
+        // mode drop the per-row arrays in favor of counts.
+        const maintenanceForResponse = compact ? buildCompactQueueMaintenanceReport(maintenance) : maintenance;
+
         return JSON.stringify({
             success: true,
             payloadMode: compact ? 'compact' : 'full',
@@ -3225,7 +3268,8 @@ export async function meshViewQueue(
             queue: visibleQueue,
             ...(compact ? { historicalRowsOmitted: true, historicalRowsHint: 'Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows.' } : {}),
             activeWork: activeWorkEvidence.activeWork,
-            staleDirectWork: activeWorkEvidence.staleDirectWork,
+            staleDirectWorkSummary,
+            ...(compact ? {} : { staleDirectWork: activeWorkEvidence.staleDirectWork }),
             activeWorkSummary: activeWorkEvidence.summary,
             ...(pollingGuidance ? { pollingGuidance } : {}),
             ...(rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: 'rate_limit_exceeded', tool: 'mesh_view_queue', callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {}),
@@ -3241,8 +3285,8 @@ export async function meshViewQueue(
             visibleHistoricalCount: visibleSummary.historicalCount,
             staleAssignedTasks,
             staleAssignedCount: (maintenance as any).staleAssignedCount,
-            queueMaintenance: maintenance,
-            cleanupDryRun: maintenance,
+            queueMaintenance: maintenanceForResponse,
+            cleanupDryRun: maintenanceForResponse,
             ...(recentDispatchFailures.length > 0 ? {
                 recentDispatchFailures,
                 dispatchFailureCount: recentDispatchFailures.length,
