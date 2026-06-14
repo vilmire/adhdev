@@ -397,6 +397,11 @@ export class SpecCliAdapter implements CliAdapter {
             // transition from the current state with its per-condition match
             // result + countdown — the canonical "why isn't it moving" answer.
             fsm: this.driver.getFsmDebug?.() ?? null,
+            // v4 FSM transition snapshot history (null for v3 specs). The full
+            // pre-transition evaluation table captured at each transition —
+            // answers "why did this rule fire" after the fact, unlike the live
+            // `fsm` field which only reflects the current instant.
+            fsmHistory: this.driver.getFsmSnapshotHistory?.() ?? null,
             // Extended fields
             name: this.cliName,
             status: this.getStatus().status,
@@ -698,6 +703,9 @@ export class SpecCliAdapter implements CliAdapter {
             // and countdown. This is the canonical "why isn't it transitioning"
             // answer — no screenshots needed.
             fsm: this.driver.getFsmDebug?.() ?? null,
+            // v4 FSM transition snapshot history — the captured pre-transition
+            // evaluation table at each transition (null for v3 specs).
+            fsmHistory: this.driver.getFsmSnapshotHistory?.() ?? null,
             messages,
             committedMessages: messages,
         };

@@ -28,7 +28,7 @@ import {
     resolveSections, sectionText, extractTitle, extractButtonsFromRule,
     type ResolvedSection, type TraceEntry,
 } from './evaluator.js';
-import { evaluateFsm, type FsmClock, type TransitionEval } from './fsm-evaluator.js';
+import { evaluateFsm, type FsmClock, type TransitionEval, type FsmEvaluation } from './fsm-evaluator.js';
 import {
     type CliSpecV4, type FsmState, type FsmTransition,
     initialState, stateById, statusForState, outgoingTransitions,
@@ -74,6 +74,37 @@ export interface DriverHistoryEntry {
     via?: string;
 }
 
+/**
+ * A frozen snapshot of the FULL FSM evaluation captured at the instant a
+ * transition fired — the rich `transitions[]` table (per-transition eligible /
+ * hold countdown / per-condition CondResult + remainingMs) that `getFsmDebug()`
+ * otherwise only computes live for the current instant. Kept in a separate ring
+ * buffer from `stateHistory` (which stays intentionally lightweight) so the
+ * "why did this rule fire just before the transition" question is answerable
+ * after the fact. before-only: this is the evaluation that PRODUCED the
+ * transition, not the post-transition state.
+ */
+export interface FsmSnapshotEntry {
+    /** State we transitioned out of. */
+    stateFrom: string;
+    /** State we transitioned into (the fired transition's destination). */
+    stateTo: string;
+    /** Wall-clock time the transition committed (ms). */
+    at: number;
+    /** The fired transition's destination state id (== stateTo; kept explicit
+     *  to mirror the rule that fired). */
+    firedTo: string;
+    /** Human label of the fired transition (e.g. "approval→busy"). */
+    firedLabel: string;
+    /** Why-it-fired summary, same shape produced for stateHistory.matchedRules. */
+    reason: string[];
+    /** Every outgoing transition from `stateFrom` as evaluated at `at`, each
+     *  with its eligible / hold / per-condition CondResult + remainingMs. This
+     *  is the full pre-transition evaluation table — the whole point of the
+     *  snapshot. */
+    transitions: TransitionEval[];
+}
+
 export interface ISpecDriver {
     subscribe(listener: (ev: DashboardEvent) => void): () => void;
     start(): void;
@@ -89,6 +120,7 @@ export interface ISpecDriver {
     hasIdleHoldPending(): boolean;
     getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null;
     getFsmDebug?(): unknown;
+    getFsmSnapshotHistory?(): ReadonlyArray<FsmSnapshotEntry>;
 }
 
 export interface SpecDriverOpts {
@@ -182,6 +214,10 @@ export class FsmDriver implements ISpecDriver {
     private specWatcher: fs.FSWatcher | null = null;
     /** Last full FSM evaluation, kept for the debugger. */
     private lastFsmEval: ReturnType<typeof evaluateFsm> | null = null;
+    /** Ring buffer (max 20) of the full FSM evaluation captured at each
+     *  transition — the rich pre-transition table that lastFsmEval only keeps
+     *  for the single most recent evaluation. Separate from stateHistory. */
+    private fsmSnapshotHistory: FsmSnapshotEntry[] = [];
 
     constructor(private readonly opts: SpecDriverOpts) {
         this.loadSpecOrThrow();
@@ -272,6 +308,7 @@ export class FsmDriver implements ISpecDriver {
     }
 
     getStateHistory(): ReadonlyArray<HistoryEntry> { return this.stateHistory; }
+    getFsmSnapshotHistory(): ReadonlyArray<FsmSnapshotEntry> { return this.fsmSnapshotHistory; }
     getSections(): Array<{ id: string; text: string }> | null {
         try {
             const screen = this.adapter.snapshot();
@@ -385,7 +422,7 @@ export class FsmDriver implements ISpecDriver {
         this.prevScreenLines = currentLines;
 
         if (ev.fired) {
-            this.commitTransition(ev.fired, now);
+            this.commitTransition(ev.fired, now, ev);
             // After a transition, immediately re-derive controls/modal for the
             // new state and emit. Re-run once so a chain like approval→busy
             // that's already satisfied doesn't wait for the next PTY frame.
@@ -403,8 +440,11 @@ export class FsmDriver implements ISpecDriver {
         this.maybeMarkReady();
     }
 
-    private commitTransition(fired: TransitionEval, now: number): void {
+    private commitTransition(fired: TransitionEval, now: number, ev: FsmEvaluation): void {
         const from = this.currentStateId;
+        // Capture the full pre-transition evaluation BEFORE we mutate state, so
+        // the snapshot records why this transition fired from `from`.
+        this.pushFsmSnapshot(from, fired, now, ev);
         this.currentStateId = fired.to;
         this.stateEnteredAt = now;
         // Region change timestamps are relative to the previous state's
@@ -416,6 +456,23 @@ export class FsmDriver implements ISpecDriver {
             matchedRules: summarizeTransition(fired),
         });
         LOG.info('FsmDriver', `[${this.specTag()}] ${from} → ${fired.to} (${fired.label})`);
+    }
+
+    /** Snapshot the full FSM evaluation that produced a transition into the
+     *  separate fsmSnapshotHistory ring buffer (max 20). The transitions[]
+     *  table is captured by reference — it is freshly built per evaluation in
+     *  evaluateFsm and never mutated after, so no clone is needed. */
+    private pushFsmSnapshot(from: string, fired: TransitionEval, now: number, ev: FsmEvaluation): void {
+        this.fsmSnapshotHistory.push({
+            stateFrom: from,
+            stateTo: fired.to,
+            at: now,
+            firedTo: fired.to,
+            firedLabel: fired.label,
+            reason: summarizeTransition(fired),
+            transitions: ev.transitions,
+        });
+        if (this.fsmSnapshotHistory.length > 20) this.fsmSnapshotHistory.shift();
     }
 
     /** Re-derive the visible modal + controls for the current state and emit a

@@ -62,9 +62,16 @@ export class TerminalAdapter {
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         // Import NodePtyTransportFactory lazily to avoid loading node-pty in
-        // environments that don't need it (tests, fixture runners).
-        const { NodePtyTransportFactory } = require('../../cli-adapters/pty-transport.js');
-        this.factory = opts.transportFactory ?? new NodePtyTransportFactory();
+        // environments that don't need it (tests, fixture runners) — only when
+        // no transport factory was injected. Doing it unconditionally pulled in
+        // the node-pty module (and broke source-level test runs) even when a
+        // fake factory was supplied.
+        if (opts.transportFactory) {
+            this.factory = opts.transportFactory;
+        } else {
+            const { NodePtyTransportFactory } = require('../../cli-adapters/pty-transport.js');
+            this.factory = new NodePtyTransportFactory();
+        }
         this.screen = new TerminalScreen(this.rows, this.cols);
     }
 
