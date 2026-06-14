@@ -179,6 +179,7 @@ export const CLOUD_FEATURES: RepoMeshFeatures = {
     coordinatorPrompt: true,
     nodeInstruction: true,
     hermesMcpConfig: true,
+    reviewInbox: true,
 }
 
 // ─── Context ─────────────────────────────────────────────────────
