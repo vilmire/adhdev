@@ -3514,7 +3514,8 @@ export class DaemonCommandRouter {
     private async executeMeshRefineNodeSynchronously(meshId: string, nodeId: string, args: any): Promise<CommandRouterResult> {
         const refineStages: Array<Record<string, unknown>> = [];
         try {
-            const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+            // preferInline: same as startMeshRefineJob — inline-cache-only clone nodes must resolve.
+            const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
             const mesh = meshRecord?.mesh;
             const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
             if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh`, refineStages };
@@ -4247,7 +4248,10 @@ export class DaemonCommandRouter {
         if (running) return { ...running, duplicate: true };
         const terminal = this.terminalRefineJobs.get(key);
 
-        const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+        // preferInline so inline-cache-only clone worktree nodes resolve — same
+        // membership authority as clone_mesh_node / get_mesh. Without it refine reads
+        // config-first and misses nodes that only live in the inline cache.
+        const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
         const mesh = meshRecord?.mesh;
         const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
         if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
@@ -5803,7 +5807,8 @@ export class DaemonCommandRouter {
                 const ownerFailure = await this.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node removal');
                 if (ownerFailure) return ownerFailure;
                 try {
-                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    // preferInline so inline-cache-only clone nodes resolve (matches owner check above).
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
                     const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
@@ -5869,7 +5874,8 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
-                const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                // preferInline: plan is the dry-run sibling of refine — clone nodes must resolve.
+                const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                 const mesh = meshRecord?.mesh;
                 const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
                 if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
@@ -5893,7 +5899,8 @@ export class DaemonCommandRouter {
                     : undefined;
                 let nodeDaemonId: string | undefined;
                 if (meshId && nodeId) {
-                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    // preferInline so fast-forward can resolve inline-cache-only clone worktree nodes.
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
                     const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
                     if (!workspace) {
@@ -5942,7 +5949,8 @@ export class DaemonCommandRouter {
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
                 try {
-                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    // preferInline so removal can resolve inline-cache-only clone worktree nodes.
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
                     const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
 
@@ -6327,7 +6335,8 @@ export class DaemonCommandRouter {
                 if (ownerFailure) return ownerFailure;
 
                 try {
-                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    // preferInline so bootstrap-retry can resolve inline-cache-only clone worktree nodes.
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
 

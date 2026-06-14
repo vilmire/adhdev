@@ -151,3 +151,105 @@ describe('clone_mesh_node registration <-> membership consistency', () => {
     }
   })
 })
+
+/**
+ * Regression: mesh_refine_node "Node '<id>' not found in mesh" for clone nodes.
+ *
+ * Same membership-divergence class as the clone-registration fix above, but on
+ * the REFINE read path. clone_mesh_node / get_mesh / requireMeshHostMutationOwner
+ * all resolve membership with preferInline: true (authoritative inline cache).
+ * startMeshRefineJob / executeMeshRefineNodeSynchronously / plan_mesh_refine_node
+ * previously resolved WITHOUT preferInline, took the config-first branch, and so
+ * never saw the cloned worktree node — which lives ONLY in the inline cache, not
+ * meshes.json. Net effect: mesh_list_nodes showed the clone, but mesh_refine_node
+ * hard-failed with "Node '<id>' not found in mesh".
+ *
+ * Fix: refine/plan resolve with preferInline so the same membership authority as
+ * clone/get_mesh is used.
+ */
+describe('mesh_refine_node membership <-> inline-cache-only clone node', () => {
+  it('resolves an inline-cache-only clone node for refine/plan instead of "not found in mesh"', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-refine-lookup-config-'))
+    const { dir, repoRoot } = await createTempGitRepo('mesh-refine-lookup-repo-')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
+
+      // Config-backed mesh + source node persisted to meshes.json.
+      const mesh = createMesh({ name: 'Refine Mesh', repoIdentity: 'github.com/acme/refine-mesh', defaultBranch: 'main' })
+      const sourceNode = addNode(mesh.id, { workspace: repoRoot, repoRoot, daemonId: 'daemon-local' })
+      expect(sourceNode?.id).toBeTruthy()
+
+      const { router } = createRouter()
+
+      // Coordinator inline snapshot carrying transient node truth → authoritative inline cache.
+      const inlineMesh = {
+        id: mesh.id,
+        name: mesh.name,
+        repoIdentity: mesh.repoIdentity,
+        defaultBranch: 'main',
+        policy: {},
+        nodes: [
+          { id: sourceNode!.id, daemonId: 'daemon-local', workspace: repoRoot, repoRoot, policy: {}, cachedStatus: { health: 'online' } },
+        ],
+      }
+
+      // Clone a worktree node — registered into the inline cache only.
+      const clone = await router.execute('clone_mesh_node', {
+        meshId: mesh.id,
+        sourceNodeId: sourceNode!.id,
+        branch: 'feature/refine-lookup',
+        inlineMesh,
+        setupWaitMs: 14000,
+      }) as any
+      expect(clone.success).toBe(true)
+      const clonedNodeId = clone.node?.id as string
+      expect(clonedNodeId).toBeTruthy()
+
+      // Sanity: the cloned node is NOT in config (meshes.json) — it exists only in
+      // the inline cache. This is the precondition that broke the config-first read.
+      const configMesh = getMesh(mesh.id)
+      expect(configMesh?.nodes?.some((n: any) => n.id === clonedNodeId)).toBe(false)
+
+      // It IS visible through the inline-cache read path (mesh_list_nodes parity).
+      const cacheRead = await router.execute('get_mesh', { meshId: mesh.id }) as any
+      expect(cacheRead.mesh.nodes.map((n: any) => n.id)).toContain(clonedNodeId)
+
+      // plan_mesh_refine_node (synchronous dry-run sibling of refine) must resolve
+      // the clone node, NOT return "workspace not found"/"not found in mesh".
+      const plan = await router.execute('plan_mesh_refine_node', {
+        meshId: mesh.id,
+        nodeId: clonedNodeId,
+        inlineMesh,
+      }) as any
+      expect(plan.success).toBe(true)
+      expect(plan.dryRun).toBe(true)
+      expect(plan.workspace).toBeTruthy()
+
+      // refine_mesh_node must get PAST the membership lookup — it returns a job
+      // handle (refine:accepted), never the "not found in mesh" failure.
+      const refine = await router.execute('refine_mesh_node', {
+        meshId: mesh.id,
+        nodeId: clonedNodeId,
+        inlineMesh,
+      }) as any
+      expect(refine.error).not.toBe(`Node '${clonedNodeId}' not found in mesh`)
+      expect(refine.success).not.toBe(false)
+
+      // Clean up the in-flight refine job so the async tail does not leak.
+      await router.execute('remove_mesh_node', {
+        meshId: mesh.id,
+        nodeId: clonedNodeId,
+        inlineMesh,
+        force: true,
+      }).catch(() => {})
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await rm(configDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
