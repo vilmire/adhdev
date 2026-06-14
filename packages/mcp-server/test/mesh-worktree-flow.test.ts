@@ -820,7 +820,10 @@ test('mesh_status preserves full git snapshot fields from the aggregate node sta
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
-  const status = JSON.parse(await meshStatus(ctx));
+  // Full git snapshot is the verbose payload; compact (the default for LLM callers)
+  // slims node.git to coordinator scalars + submodules.
+  const status = JSON.parse(await meshStatus(ctx, { verbose: true } as any));
+  assert.equal(status.payloadMode, 'full');
   const nodeStatus = status.nodes.find((node: any) => node.nodeId === 'node-full-git');
 
   assert.equal(nodeStatus.branch, 'main');
@@ -2400,9 +2403,11 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
       }],
     },
     transport: {} as any,
-  } as any, {}));
+    // Historical row arrays are the verbose payload; compact (default) drops them.
+  } as any, { verbose: true }));
 
   assert.equal(payload.success, true);
+  assert.equal(payload.payloadMode, 'full');
   assert.deepEqual(payload.sourceOfTruth.activeStatuses, ['pending', 'assigned']);
   assert.deepEqual(payload.sourceOfTruth.historicalStatuses, ['completed', 'failed', 'cancelled']);
   assert.equal(payload.summary.totalCount, 3);
@@ -2448,7 +2453,7 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
       }],
     } : undefined,
     transport: {} as any,
-  } as any, { status: ['failed', 'completed'] }));
+  } as any, { status: ['failed', 'completed'], verbose: true }));
   assert.equal(filteredPayload.success, true);
   assert.deepEqual(filteredPayload.activeCounts, { pending: 0, assigned: 1 });
   assert.deepEqual(filteredPayload.visibleActiveCounts, { pending: 0, assigned: 0 });

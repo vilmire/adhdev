@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ALL_MESH_TOOLS, MESH_CLEANUP_SESSIONS_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL } from '../src/tools/mesh-tools.js';
+import { ALL_MESH_TOOLS, MESH_CLEANUP_SESSIONS_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL } from '../src/tools/mesh-tools.js';
 
 test('mesh_fast_forward_node schema registers the safe direct fast-forward surface', () => {
   assert.equal(MESH_FAST_FORWARD_NODE_TOOL.name, 'mesh_fast_forward_node');
@@ -33,6 +33,16 @@ test('mesh_read_chat schema exposes provider_session_id and compact mode for com
   assert.equal(MESH_READ_CHAT_TOOL.inputSchema.properties.provider_session_id.type, 'string');
   assert.equal(MESH_READ_CHAT_TOOL.inputSchema.properties.compact.type, 'boolean');
   assert.match(MESH_READ_CHAT_TOOL.description, /compact=true/);
+});
+
+test('mesh_status and mesh_view_queue schemas expose compact/verbose payload controls', () => {
+  assert.equal((MESH_STATUS_TOOL.inputSchema.properties as any).compact.type, 'boolean');
+  assert.equal((MESH_STATUS_TOOL.inputSchema.properties as any).verbose.type, 'boolean');
+  assert.match((MESH_STATUS_TOOL.inputSchema.properties as any).compact.description, /Default true/);
+
+  assert.equal((MESH_VIEW_QUEUE_TOOL.inputSchema.properties as any).compact.type, 'boolean');
+  assert.equal((MESH_VIEW_QUEUE_TOOL.inputSchema.properties as any).verbose.type, 'boolean');
+  assert.match((MESH_VIEW_QUEUE_TOOL.inputSchema.properties as any).compact.description, /Default true/);
 });
 
 test('mesh session cleanup tools expose explicit manual cleanup and remove-node policy override', () => {

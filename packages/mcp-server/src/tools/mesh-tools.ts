@@ -986,6 +986,32 @@ function assignFullGitSnapshot(entry: Record<string, unknown>, status: any): voi
     entry.git = status;
 }
 
+// Compact-mode git snapshot for LLM callers: keep the coordinator-relevant scalar
+// signals (branch/upstream/ahead/behind/dirty/headCommit) and the submodules array
+// (its out-of-sync state drives convergence decisions) while dropping the large
+// duplicated blobs (full changed-file lists, diffs, raw porcelain) that the full
+// dashboard payload carries. The full status object remains available via verbose.
+function buildCompactGitSnapshot(status: any): Record<string, unknown> | undefined {
+    if (!status || typeof status !== 'object' || Array.isArray(status)) return undefined;
+    const slim: Record<string, unknown> = {};
+    const carry = [
+        'isGitRepo',
+        'branch',
+        'headCommit',
+        'upstream',
+        'upstreamStatus',
+        'ahead',
+        'behind',
+        'dirty',
+        'detached',
+        'submodules',
+    ];
+    for (const key of carry) {
+        if (status[key] !== undefined) slim[key] = status[key];
+    }
+    return slim;
+}
+
 function extractLaunchPayload(value: any): any {
     return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
 }
@@ -2106,6 +2132,8 @@ export const MESH_STATUS_TOOL = {
         properties: {
             _gemini_compat: { type: 'string', description: 'Dummy property for Gemini compatibility. Ignore this.' },
             includeStaleDirectWorkDetails: { type: 'boolean', description: 'Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only.' },
+            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Set false (or verbose=true) for the full dashboard-grade payload.' },
+            verbose: { type: 'boolean', description: 'Force the full payload; overrides compact.' },
         },
     },
 };
@@ -2157,6 +2185,8 @@ export const MESH_VIEW_QUEUE_TOOL = {
                 enum: ['all', 'active', 'historical'],
                 description: 'Optional row view. active returns pending/assigned rows, historical returns completed/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility.',
             },
+            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Drops large historical (completed/failed/cancelled) row arrays in favor of status counts; pending/assigned active rows are retained. Set false (or verbose=true) for the full dashboard-grade payload.' },
+            verbose: { type: 'boolean', description: 'Force the full payload; overrides compact.' },
         },
     },
 };
@@ -2501,8 +2531,10 @@ export const ALL_MESH_TOOLS = [
 
 // ─── Tool Implementations ───────────────────────
 
-export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean } = {}): Promise<string> {
+export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; compact?: boolean; verbose?: boolean } = {}): Promise<string> {
     const rateResult = recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_status' });
+    // Default to the slim payload for LLM callers; verbose forces the full payload.
+    const compact = args.verbose === true ? false : (args.compact ?? true);
 
     await refreshMeshFromDaemon(ctx);
     const { mesh, transport } = ctx;
@@ -2687,11 +2719,24 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         }
     }
 
+    // Compact mode: slim each node's large duplicated `git` blob down to the
+    // coordinator-relevant scalars + submodules. branch/health/headCommit/ahead/
+    // behind/dirty/upstreamStatus/sessions/branchConvergence live as top-level node
+    // fields (or inside the slim git snapshot) and are always preserved.
+    const nodesForResponse = compact
+        ? results.map((entry: any) => {
+            if (!entry || typeof entry !== 'object' || entry.git === undefined) return entry;
+            const slimGit = buildCompactGitSnapshot(entry.git);
+            return slimGit ? { ...entry, git: slimGit } : entry;
+        })
+        : results;
+
     const response: Record<string, unknown> = {
         meshId: mesh.id,
         meshName: mesh.name,
         repoIdentity: mesh.repoIdentity,
         policy: mesh.policy,
+        payloadMode: compact ? 'compact' : 'full',
         refreshedAt: new Date().toISOString(),
         sourceOfTruth: {
             membership: 'coordinator_daemon_live_mesh',
@@ -2699,7 +2744,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             activeWork: 'mesh_queue_file_and_local_ledger',
             historicalEvidenceOnly: ['recoveryHints', 'ledgerSummary'],
         },
-        nodes: results,
+        nodes: nodesForResponse,
         activeWork: activeWorkEvidence.activeWork,
         staleDirectWorkSummary,
         ...(args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {}),
@@ -2749,7 +2794,24 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             pendingEvents,
         });
         if (asyncRefineJobs.length > 0) {
-            response.asyncRefineJobs = asyncRefineJobs;
+            if (compact) {
+                // Drop terminal (completed/failed) refine jobs — they are historical and
+                // dominate the payload. Keep active (non-terminal) job objects so the
+                // coordinator can still track in-flight refines, and replace the rest with
+                // a status-count summary.
+                const TERMINAL_REFINE_STATUSES = new Set(['failed', 'completed', 'succeeded', 'cancelled', 'aborted']);
+                const byStatus: Record<string, number> = {};
+                const activeJobs: any[] = [];
+                for (const job of asyncRefineJobs as any[]) {
+                    const status = String(job?.status ?? 'unknown');
+                    byStatus[status] = (byStatus[status] ?? 0) + 1;
+                    if (!TERMINAL_REFINE_STATUSES.has(status)) activeJobs.push(job);
+                }
+                if (activeJobs.length > 0) response.asyncRefineJobs = activeJobs;
+                response.asyncRefineJobsSummary = { total: asyncRefineJobs.length, byStatus };
+            } else {
+                response.asyncRefineJobs = asyncRefineJobs;
+            }
         }
         if (pendingEvents.length > 0) {
             response.pendingCoordinatorEvents = pendingEvents;
@@ -3054,9 +3116,11 @@ export async function meshEnqueueTask(
 
 export async function meshViewQueue(
     ctx: MeshContext,
-    args: { status?: string[]; view?: QueueViewMode },
+    args: { status?: string[]; view?: QueueViewMode; compact?: boolean; verbose?: boolean },
 ): Promise<string> {
     const rateResult = recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_view_queue' });
+    // Default to the slim payload for LLM callers; verbose forces the full payload.
+    const compact = args.verbose === true ? false : (args.compact ?? true);
     try {
         await refreshMeshFromDaemon(ctx);
         const statusFilter = sanitizeQueueStatusFilter(args.status);
@@ -3107,8 +3171,21 @@ export async function meshViewQueue(
         const staleAssignedTasks = (maintenance as any).staleAssignedTasks || [];
         const requestedHistoricalRows = queue.some((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
         const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
+
+        // Compact mode: completed/failed/cancelled historical row arrays are the main
+        // payload bloat (mesh_view_queue has overflowed 250k chars on busy meshes).
+        // Drop them in favor of the status counts that summary/visibleSummary already
+        // carry, but keep pending/assigned active rows — those drive coordinator
+        // dispatch decisions. verbose=true returns every row as before.
+        const visibleQueue = compact
+            ? queue.filter((task: any) => !HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')))
+            : queue;
+        const wantActiveQueueArray = view === 'active' || statusFilter?.some(status => ACTIVE_QUEUE_STATUSES.has(status));
+        const wantHistoricalQueueArray = !compact && (view === 'historical' || requestedHistoricalRows);
+
         return JSON.stringify({
             success: true,
+            payloadMode: compact ? 'compact' : 'full',
             sourceOfTruth: {
                 kind: 'mesh_work_queue_file',
                 activeStatuses: ['pending', 'assigned'],
@@ -3120,7 +3197,8 @@ export async function meshViewQueue(
                 statuses: statusFilter,
                 filtered: Boolean(statusFilter?.length) || view !== 'all',
             },
-            queue,
+            queue: visibleQueue,
+            ...(compact ? { historicalRowsOmitted: true, historicalRowsHint: 'Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows.' } : {}),
             activeWork: activeWorkEvidence.activeWork,
             staleDirectWork: activeWorkEvidence.staleDirectWork,
             activeWorkSummary: activeWorkEvidence.summary,
@@ -3145,10 +3223,10 @@ export async function meshViewQueue(
                 dispatchFailureCount: recentDispatchFailures.length,
                 dispatchFailureNote: 'Remote P2P dispatch attempts that failed. Affected tasks remain pending and may require mesh_queue_requeue if no idle session picks them up.',
             } : {}),
-            ...(view === 'active' || statusFilter?.some(status => ACTIVE_QUEUE_STATUSES.has(status)) ? {
+            ...(wantActiveQueueArray ? {
                 activeQueue: queue.filter((task: any) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || ''))),
             } : {}),
-            ...(view === 'historical' || requestedHistoricalRows ? {
+            ...(wantHistoricalQueueArray ? {
                 historicalQueue: queue.filter((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || ''))),
             } : {}),
             // Back-compat alias for callers already reading the first hardening payload.
