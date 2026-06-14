@@ -494,6 +494,57 @@ describe('extractRepoMeshStatus', () => {
     expect(graph.snapshotWarnings).toEqual([])
   })
 
+  it('keeps submodule graph nodes when cloud transit omits repoPath and repoRoot is not derivable', () => {
+    const response = {
+      success: true,
+      result: {
+        meshId: 'mesh_no_repopath',
+        meshName: 'No RepoPath Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        refreshedAt: '2026-06-15T00:00:00Z',
+        nodes: [
+          {
+            id: 'node_no_repopath',
+            machineLabel: 'remote',
+            // No workspace/repoRoot here and none in the git object below, so
+            // parentRepoRoot is undefined and joinRepoPath cannot synthesize a repoPath.
+            machineStatus: 'online',
+            lastGit: {
+              status: {
+                isGitRepo: true,
+                branch: 'main',
+                upstream: 'origin/main',
+                upstreamStatus: 'fresh',
+                headCommit: '710e11de',
+                ahead: 0,
+                behind: 0,
+                submodules: [
+                  { path: 'oss', commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a', dirty: false, outOfSync: false },
+                  { path: 'adhdev-providers', commit: '1c29790fc14ad87f75fc6aed958fda8f36dbab0d', dirty: false, outOfSync: false },
+                ],
+              },
+            },
+          },
+        ],
+        queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+        ledger: { entries: [], summary: { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 } },
+      },
+    }
+
+    const normalized = extractRepoMeshStatus(response as any)
+    const submodules = normalized?.nodes[0]?.git?.submodules
+    expect(submodules).toHaveLength(2)
+    expect(submodules?.map(s => s.path).sort()).toEqual(['adhdev-providers', 'oss'])
+    // repoPath stays undefined rather than being forced to a bogus value.
+    expect(submodules?.every(s => s.repoPath === undefined)).toBe(true)
+    expect(submodules?.map(s => s.commit)).toContain('c3c722f858bd0a01652ed7d9d5de25b27d233b8a')
+
+    const graph = buildMeshGraph(normalized as any)
+    expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(2)
+    expect(graph.edges.filter(e => e.type === 'submoduleLink')).toHaveLength(2)
+  })
+
   it('clears pending git and derives health when direct mesh peer status coexists with live git fields', () => {
     const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({

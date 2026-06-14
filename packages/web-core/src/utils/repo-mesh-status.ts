@@ -76,11 +76,16 @@ function readGitSubmodules(value: unknown, parentRepoRoot?: string): GitRepoStat
             const commit = readString(submodule.commit)
             const repoPath = readString(submodule.repoPath, submodule.repo_root)
                 ?? joinRepoPath(parentRepoRoot, path)
-            if (!path || !commit || !repoPath) return null
+            // repoPath is only used for the submodule node's display workspace, which is
+            // allowed to be empty. The cloud P2P transit path can deliver submodule entries
+            // without repoPath (and a per-node git object without a derivable repoRoot), so
+            // dropping on missing repoPath would silently strip every submodule graph node.
+            // Keep any submodule that carries both path and commit.
+            if (!path || !commit) return null
             return {
                 path,
                 commit,
-                repoPath,
+                ...(repoPath ? { repoPath } : {}),
                 dirty: readBoolean(submodule.dirty) ?? false,
                 outOfSync: readBoolean(submodule.outOfSync, submodule.out_of_sync) ?? false,
                 lastCheckedAt: readNumber(submodule.lastCheckedAt, submodule.last_checked_at) ?? Date.now(),

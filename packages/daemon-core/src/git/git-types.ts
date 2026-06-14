@@ -28,8 +28,10 @@ export interface GitSubmoduleStatus {
   path: string;
   /** Current commit SHA the submodule is at */
   commit: string;
-  /** Path to the submodule repo (absolute) */
-  repoPath: string;
+  /** Path to the submodule repo (absolute). Optional: cloud P2P transit can deliver
+   *  submodule entries without a derivable repo path, and graph rendering only uses
+   *  this for a display field that is allowed to be empty. */
+  repoPath?: string;
   /** Whether the submodule has uncommitted changes */
   dirty: boolean;
   /** Whether the submodule commit differs from what the parent repo expects */

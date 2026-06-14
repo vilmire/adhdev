@@ -232,11 +232,14 @@ function readGitSubmodules(value: unknown, parentRepoRoot?: string): GitSubmodul
             const commit = readStringValue(submodule.commit);
             const repoPath = readStringValue(submodule.repoPath, submodule.repo_root)
                 ?? joinRepoPath(parentRepoRoot, path);
-            if (!path || !commit || !repoPath) return null;
+            // repoPath is only used as a display path; cloud transit can omit it (and a
+            // derivable parentRepoRoot), so keep any submodule with both path and commit
+            // rather than silently dropping every submodule node. repoPath stays optional.
+            if (!path || !commit) return null;
             return {
                 path,
                 commit,
-                repoPath,
+                ...(repoPath ? { repoPath } : {}),
                 dirty: readBooleanValue(submodule.dirty) ?? false,
                 outOfSync: readBooleanValue(submodule.outOfSync, submodule.out_of_sync) ?? false,
                 lastCheckedAt: readNumberValue(submodule.lastCheckedAt, submodule.last_checked_at) ?? Date.now(),
