@@ -784,6 +784,42 @@ function buildCompactQueueMaintenanceReport(maintenance) {
     cleanupCandidatesHint: "Per-row cleanup candidates are omitted in compact mode; call mesh_view_queue with verbose=true for the full maintenance/cleanupDryRun rows."
   };
 }
+var COMPACT_MAX_ACTIVE_QUEUE_ROWS = 15;
+var COMPACT_QUEUE_MESSAGE_CAP = 140;
+var COMPACT_MAX_ACTIVE_WORK_ROWS = 12;
+function truncateForCompact(value, cap) {
+  if (typeof value !== "string") return value;
+  return value.length > cap ? value.slice(0, cap) + "\u2026" : value;
+}
+function compactQueueRow(task) {
+  if (!task || typeof task !== "object") return task;
+  const slim = {};
+  for (const [k, v] of Object.entries(task)) {
+    if (k === "message") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+    else slim[k] = elideLargeNestedValue(k, v);
+  }
+  return slim;
+}
+function compactQueueRows(rows) {
+  const capped = rows.slice(0, COMPACT_MAX_ACTIVE_QUEUE_ROWS).map(compactQueueRow);
+  return { rows: capped, omitted: Math.max(0, rows.length - capped.length) };
+}
+function compactActiveWorkRecord(record) {
+  if (!record || typeof record !== "object") return record;
+  const slim = {};
+  for (const [k, v] of Object.entries(record)) {
+    if (k === "message") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+    else if (k === "taskSummary") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+    else if (k === "taskTitle") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+    else slim[k] = elideLargeNestedValue(k, v);
+  }
+  return slim;
+}
+function compactActiveWorkRecords(records) {
+  if (!Array.isArray(records)) return { records, omitted: 0 };
+  const capped = records.slice(0, COMPACT_MAX_ACTIVE_WORK_ROWS).map(compactActiveWorkRecord);
+  return { records: capped, omitted: Math.max(0, records.length - capped.length) };
+}
 function annotateQueueStaleness(queue, mesh) {
   const liveness = buildQueueLivenessIndex(mesh);
   const now = Date.now();
@@ -1118,6 +1154,105 @@ function buildCompactGitSnapshot(status) {
     if (status[key] !== void 0) slim[key] = status[key];
   }
   return slim;
+}
+function summarizeCompactSubmodules(submodules) {
+  if (!Array.isArray(submodules) || submodules.length === 0) return void 0;
+  const outOfSync = submodules.filter((s) => s?.outOfSync).map((s) => s?.path).filter(Boolean);
+  return {
+    count: submodules.length,
+    ...outOfSync.length > 0 ? { outOfSyncPaths: outOfSync } : {}
+  };
+}
+function compactMeshStatusNode(entry) {
+  if (!entry || typeof entry !== "object") return entry;
+  const next = { ...entry };
+  if (next.git !== void 0) {
+    const slimGit = buildCompactGitSnapshot(next.git);
+    if (slimGit) {
+      if (slimGit.submodules !== void 0) {
+        const subSummary = summarizeCompactSubmodules(slimGit.submodules);
+        if (subSummary) slimGit.submodules = subSummary;
+        else delete slimGit.submodules;
+      }
+      next.git = slimGit;
+    }
+  }
+  if (next.machine && typeof next.machine === "object") {
+    const m = next.machine;
+    next.machine = {
+      daemonId: m.daemonId,
+      machineId: m.machineId,
+      hostname: m.hostname,
+      displayName: m.displayName,
+      sameMachine: m.sameMachine,
+      locality: m.locality
+    };
+  }
+  if (typeof next.submoduleWarning === "string") {
+    next.submodulesOutOfSync = true;
+    delete next.submoduleWarning;
+  }
+  if (next.staleDaemonBuild && typeof next.staleDaemonBuild === "object") {
+    const b = next.staleDaemonBuild;
+    next.staleDaemonBuild = {
+      scope: b.scope,
+      isDaemonAffecting: b.isDaemonAffecting !== false,
+      seeStaleDaemonBuilds: true
+    };
+  }
+  for (const k of Object.keys(next)) {
+    if (k === "git" || k === "machine" || k === "branchConvergence" || k === "staleDaemonBuild" || k === "sessions") continue;
+    next[k] = elideLargeNestedValue(k, next[k]);
+  }
+  return next;
+}
+var COMPACT_DETAILED_NODES_BYTE_BUDGET = 9e3;
+var COMPACT_NODES_TOTAL_BYTE_BUDGET = 13e3;
+function compactNodeSeverity(entry) {
+  if (!entry || typeof entry !== "object") return 0;
+  if (entry.error || entry.health && entry.health !== "online" && entry.health !== "dirty") return 5;
+  if (entry.launchReady === false) return 4;
+  if (entry.isDirty === true || entry.health === "dirty") return 3;
+  if (entry.branchConvergence?.needsConvergence === true) return 2;
+  if (entry.staleDaemonBuild || entry.submodulesOutOfSync || entry.recoveryHints) return 1;
+  return 0;
+}
+function isNoteworthyCompactNode(entry) {
+  if (!entry || typeof entry !== "object") return true;
+  if (entry.health && entry.health !== "online") return true;
+  if (entry.isDirty === true) return true;
+  if (entry.error) return true;
+  if (entry.launchReady === false) return true;
+  if (entry.staleDaemonBuild) return true;
+  if (entry.submoduleWarning || entry.submodulesOutOfSync) return true;
+  if (entry.recoveryHints) return true;
+  if (Array.isArray(entry.nextStepHints) && entry.nextStepHints.length > 0) return true;
+  if (entry.branchConvergence?.needsConvergence === true) return true;
+  const sessionCount = Array.isArray(entry.sessions) ? entry.sessions.length : entry.sessionSummary?.total ?? 0;
+  if (sessionCount > 0) return true;
+  return false;
+}
+function minimalCompactNode(entry) {
+  if (!entry || typeof entry !== "object") return entry;
+  const bc = entry.branchConvergence && typeof entry.branchConvergence === "object" ? {
+    status: entry.branchConvergence.status,
+    needsConvergence: entry.branchConvergence.needsConvergence,
+    reason: entry.branchConvergence.reason,
+    branch: entry.branchConvergence.branch
+  } : void 0;
+  return {
+    nodeId: entry.nodeId,
+    workspace: entry.workspace,
+    daemonId: entry.daemonId,
+    health: entry.health,
+    branch: entry.branch,
+    launchReady: entry.launchReady,
+    ...entry.providerPriority !== void 0 ? { providerPriority: entry.providerPriority } : {},
+    ...entry.launchBlockedReason !== void 0 ? { launchBlockedReason: entry.launchBlockedReason } : {},
+    ...bc ? { branchConvergence: bc } : {},
+    ...entry.sessionSummary ? { sessionSummary: entry.sessionSummary } : {},
+    folded: true
+  };
 }
 function summarizeNodeSessions(sessions) {
   const list = Array.isArray(sessions) ? sessions : [];
@@ -1910,20 +2045,36 @@ function buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges) {
     nextStep: `Review and merge branch '${branch}' into ${defaultBranch}; do not report the task as fully complete while it remains off main.`
   };
 }
-function summarizeBranchConvergence(nodes) {
-  const followUps = nodes.filter((node) => node?.branchConvergence?.needsConvergence === true).map((node) => ({
+var COMPACT_MAX_CONVERGENCE_FOLLOWUPS = 12;
+function summarizeBranchConvergence(nodes, compact = false) {
+  const allFollowUps = nodes.filter((node) => node?.branchConvergence?.needsConvergence === true).map((node) => ({
     nodeId: node.nodeId,
-    workspace: node.workspace,
+    // workspace is a long absolute path redundant with nodeId — drop it in
+    // compact mode to keep this summary bounded.
+    ...compact ? {} : { workspace: node.workspace },
     branch: node.branchConvergence.branch,
     status: node.branchConvergence.status,
     reason: node.branchConvergence.reason,
-    nextStep: node.branchConvergence.nextStep
+    // The per-node nextStep is long prose that repeats node ids/branch names.
+    // In compact mode drop it (the status+reason carry the actionable signal;
+    // verbose still surfaces the full nextStep) so this summary stays bounded
+    // as node count grows.
+    ...compact ? {} : { nextStep: node.branchConvergence.nextStep }
   }));
+  const byStatus = {};
+  for (const f of allFollowUps) {
+    const s = typeof f.status === "string" ? f.status : "unknown";
+    byStatus[s] = (byStatus[s] ?? 0) + 1;
+  }
+  const followUps = compact ? allFollowUps.slice(0, COMPACT_MAX_CONVERGENCE_FOLLOWUPS) : allFollowUps;
+  const omitted = allFollowUps.length - followUps.length;
   return {
-    needsFollowUp: followUps.length > 0,
-    unresolvedCount: followUps.length,
+    needsFollowUp: allFollowUps.length > 0,
+    unresolvedCount: allFollowUps.length,
+    byStatus,
     requiredFinalStates: ["merged_to_main", "pushed_feature_branch_needs_merge", "blocked_review", "cleanup_candidate", "not_mergeable"],
-    followUps
+    followUps,
+    ...omitted > 0 ? { followUpsOmitted: omitted, followUpsHint: "Per-node followUp rows are capped in compact mode; counts above are complete. Use verbose=true for the full list." } : {}
   };
 }
 async function commandForNode(ctx, node, command, args = {}) {
@@ -2652,25 +2803,83 @@ async function meshStatus(ctx, args = {}) {
       head: behind.head,
       isDaemonAffecting,
       ...Array.isArray(behind.affectedPackages) && behind.affectedPackages.length > 0 ? { affectedPackages: behind.affectedPackages } : {},
-      warning: behind.warning
+      // The full ~300-char warning prose is identical for every entry and is
+      // already emitted ONCE at the top level as `staleDaemonBuildWarning`.
+      // Keep it per-entry only in verbose to avoid N× duplication in compact.
+      ...compact ? {} : { warning: behind.warning }
     });
   }
   const daemonAffectingStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting !== false);
   const webOnlyStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting === false);
-  const nodesForResponse = compact ? results.map((entry) => {
-    if (!entry || typeof entry !== "object") return entry;
-    const next = { ...entry };
-    if (next.git !== void 0) {
-      const slimGit = buildCompactGitSnapshot(next.git);
-      if (slimGit) next.git = slimGit;
+  let stubbedNodeCount = 0;
+  let foldedNodesSummary;
+  const nodesForResponse = compact ? (() => {
+    const compacted = results.map((entry) => {
+      const next = compactMeshStatusNode(entry);
+      if (!next || typeof next !== "object") return next;
+      if (Array.isArray(next.sessions)) {
+        next.sessionSummary = summarizeNodeSessions(next.sessions);
+        if (!includeSessions) delete next.sessions;
+      }
+      if (next.daemonBuild !== void 0) delete next.daemonBuild;
+      return next;
+    });
+    const noteworthy = compacted.filter((n) => n && typeof n === "object" && isNoteworthyCompactNode(n));
+    const ranked = [...noteworthy].sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+    const detailedIds = /* @__PURE__ */ new Set();
+    let detailSpent = 0;
+    for (const n of ranked) {
+      const cost = JSON.stringify(n).length + 1;
+      if (detailedIds.size === 0 || detailSpent + cost <= COMPACT_DETAILED_NODES_BYTE_BUDGET) {
+        detailedIds.add(String(n.nodeId));
+        detailSpent += cost;
+      }
     }
-    if (Array.isArray(next.sessions)) {
-      next.sessionSummary = summarizeNodeSessions(next.sessions);
-      if (!includeSessions) delete next.sessions;
+    const stubOrder = [...compacted].filter((n) => n && typeof n === "object").sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+    const keptIds = new Set(detailedIds);
+    let totalSpent = detailSpent;
+    for (const n of stubOrder) {
+      const id = String(n.nodeId);
+      if (keptIds.has(id)) continue;
+      const stubCost = JSON.stringify(minimalCompactNode(n)).length + 1;
+      if (totalSpent + stubCost <= COMPACT_NODES_TOTAL_BYTE_BUDGET) {
+        keptIds.add(id);
+        totalSpent += stubCost;
+      }
     }
-    if (next.daemonBuild !== void 0) delete next.daemonBuild;
-    return next;
-  }) : results;
+    const fullyFolded = [];
+    const out = compacted.map((n) => {
+      if (!n || typeof n !== "object") return n;
+      const id = String(n.nodeId);
+      if (detailedIds.has(id)) return n;
+      if (keptIds.has(id)) {
+        stubbedNodeCount += 1;
+        return minimalCompactNode(n);
+      }
+      fullyFolded.push(n);
+      return null;
+    }).filter((n) => n !== null);
+    if (fullyFolded.length > 0) {
+      const byBranchConvergence = {};
+      const byHealth = {};
+      const nodeIds = [];
+      for (const n of fullyFolded) {
+        const bc = typeof n?.branchConvergence?.status === "string" ? n.branchConvergence.status : "unknown";
+        byBranchConvergence[bc] = (byBranchConvergence[bc] ?? 0) + 1;
+        const h = typeof n?.health === "string" ? n.health : "unknown";
+        byHealth[h] = (byHealth[h] ?? 0) + 1;
+        if (n?.nodeId) nodeIds.push(String(n.nodeId));
+      }
+      foldedNodesSummary = {
+        count: fullyFolded.length,
+        note: "Node-array byte budget reached: these nodes are listed by id only. Query a specific node_id or use verbose=true for their detail.",
+        byHealth,
+        byBranchConvergence,
+        nodeIds
+      };
+    }
+    return out;
+  })() : results;
   const response = {
     meshId: mesh.id,
     meshName: mesh.name,
@@ -2685,6 +2894,10 @@ async function meshStatus(ctx, args = {}) {
       historicalEvidenceOnly: ["recoveryHints", "ledgerSummary"]
     },
     nodes: nodesForResponse,
+    ...compact && stubbedNodeCount > 0 ? {
+      stubbedNodesNote: `${stubbedNodeCount} node(s) in the array above are reduced to a minimal stub (marked folded:true) in compact mode \u2014 healthy/clean nodes plus any beyond the detail byte-budget. They remain addressable by node_id; use verbose=true for their full detail.`
+    } : {},
+    ...compact && foldedNodesSummary ? { foldedNodes: foldedNodesSummary } : {},
     ...compact && Object.keys(daemonSessions).length > 0 ? { daemonSessions } : {},
     ...Object.keys(daemonBuilds).length > 0 ? { daemonBuilds } : {},
     ...staleDaemonBuilds.length > 0 ? { staleDaemonBuilds } : {},
@@ -2702,7 +2915,7 @@ async function meshStatus(ctx, args = {}) {
     activeWorkSummary: activeWorkEvidence.summary,
     ...pollingGuidance ? { pollingGuidance } : {},
     ...rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: "rate_limit_exceeded", tool: "mesh_status", callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {},
-    branchConvergenceSummary: summarizeBranchConvergence(results),
+    branchConvergenceSummary: summarizeBranchConvergence(results, compact),
     ...coordinatorSessions.length > 0 ? {
       coordinatorSessions,
       selfIdentification: {
@@ -3132,9 +3345,12 @@ async function meshViewQueue(ctx, args) {
     const staleAssignedTasks = maintenance.staleAssignedTasks || [];
     const requestedHistoricalRows = queue.some((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
-    const visibleQueue = compact ? queue.filter((task) => !HISTORICAL_QUEUE_STATUSES.has(String(task?.status || ""))) : queue;
+    const activeOnlyQueue = queue.filter((task) => !HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
+    const compactQueueResult = compact ? compactQueueRows(activeOnlyQueue) : { rows: activeOnlyQueue, omitted: 0 };
+    const visibleQueue = compact ? compactQueueResult.rows : queue;
     const wantActiveQueueArray = view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status));
     const wantHistoricalQueueArray = !compact && (view === "historical" || requestedHistoricalRows);
+    const activeWorkResult = compact ? compactActiveWorkRecords(activeWorkEvidence.activeWork) : { records: activeWorkEvidence.activeWork, omitted: 0 };
     const staleDirectWorkSummary = (0, import_daemon_core.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
       note: activeWorkEvidence.staleDirectWorkNote,
       detailHint: "Full stale direct entries are omitted from mesh_view_queue in compact mode. Call mesh_view_queue with verbose=true, or inspect mesh_task_history for ledger detail."
@@ -3156,7 +3372,15 @@ async function meshViewQueue(ctx, args) {
       },
       queue: visibleQueue,
       ...compact ? { historicalRowsOmitted: true, historicalRowsHint: "Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows." } : {},
-      activeWork: activeWorkEvidence.activeWork,
+      ...compact && compactQueueResult.omitted > 0 ? {
+        activeRowsOmitted: compactQueueResult.omitted,
+        activeRowsHint: `Showing the first ${COMPACT_MAX_ACTIVE_QUEUE_ROWS} active rows (per-row messages truncated). ${compactQueueResult.omitted} more active row(s) omitted \u2014 see activeCount/activeCounts for the complete total or use verbose=true.`
+      } : {},
+      activeWork: activeWorkResult.records,
+      ...compact && activeWorkResult.omitted > 0 ? {
+        activeWorkOmitted: activeWorkResult.omitted,
+        activeWorkHint: `Showing the first ${COMPACT_MAX_ACTIVE_WORK_ROWS} active-work records (messages truncated). ${activeWorkResult.omitted} more omitted \u2014 see activeWorkSummary for complete counts or use verbose=true.`
+      } : {},
       staleDirectWorkSummary,
       ...compact ? {} : { staleDirectWork: activeWorkEvidence.staleDirectWork },
       activeWorkSummary: activeWorkEvidence.summary,
@@ -3172,7 +3396,7 @@ async function meshViewQueue(ctx, args) {
       historicalCount: summary.historicalCount,
       visibleActiveCount: visibleSummary.activeCount,
       visibleHistoricalCount: visibleSummary.historicalCount,
-      staleAssignedTasks,
+      staleAssignedTasks: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks,
       staleAssignedCount: maintenance.staleAssignedCount,
       queueMaintenance: maintenanceForResponse,
       cleanupDryRun: maintenanceForResponse,
@@ -3181,14 +3405,18 @@ async function meshViewQueue(ctx, args) {
         dispatchFailureCount: recentDispatchFailures.length,
         dispatchFailureNote: "Remote P2P dispatch attempts that failed. Affected tasks remain pending and may require mesh_queue_requeue if no idle session picks them up."
       } : {},
-      ...wantActiveQueueArray ? {
+      ...wantActiveQueueArray && !compact ? {
         activeQueue: queue.filter((task) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || "")))
       } : {},
+      // In compact mode the `queue` field already holds exactly the slimmed+
+      // capped active rows, so the separate activeQueue array would be a verbatim
+      // duplicate (it doubled the payload). Point callers at `queue` instead.
+      ...wantActiveQueueArray && compact ? { activeQueueHint: "In compact mode the active rows are in `queue` (already filtered to pending/assigned). Use verbose=true for the separate full activeQueue array." } : {},
       ...wantHistoricalQueueArray ? {
         historicalQueue: queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")))
       } : {},
       // Back-compat alias for callers already reading the first hardening payload.
-      staleAssignments: staleAssignedTasks
+      staleAssignments: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks
     }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e.message });
