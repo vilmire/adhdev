@@ -45,6 +45,7 @@ import { buildSessionEntries } from '../status/builders.js';
 import { registerMeshCoordinator, getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, type PendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { getRecentUnroutableDeliveries } from '../mesh/mesh-routing.js';
+import { buildMeshWorkerRelayStamp } from '../mesh/mesh-events-utils.js';
 import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
@@ -5307,6 +5308,34 @@ export class DaemonCommandRouter {
                 return this.deps.cliManager.handleCliCommand(cmd, args);
             }
             case 'agent_command': {
+                // Relay-safety stamp: a dispatch carrying meshContext.coordinatorDaemonId
+                // (mesh_send_task / queue assignment over P2P) is the worker daemon's chance
+                // to persist the coordinator routing anchor onto the target session BEFORE the
+                // turn runs. Without meshCoordinatorDaemonId on the session, the core forwarder
+                // (injectMeshSystemMessage) cannot resolve a remote coordinator target, so the
+                // completion event sits in the pending queue until a read_chat reconcile drains
+                // it. Stamping here makes a reused/relaunched remote session relay-safe at
+                // dispatch time even when it was not launched via mesh_launch_session.
+                {
+                    const dispatchSessionId = readStringValue(args?.targetSessionId, (args as any)?.sessionId, (args as any)?.instanceId);
+                    const dispatchMeshContext = args?.meshContext as Record<string, unknown> | undefined;
+                    if (dispatchSessionId && dispatchMeshContext) {
+                        try {
+                            const inst = this.deps.instanceManager.getInstance(dispatchSessionId);
+                            if (inst && typeof inst.updateSettings === 'function') {
+                                const stamp = buildMeshWorkerRelayStamp(
+                                    inst.getState?.()?.settings as Record<string, unknown> | undefined,
+                                    {
+                                        meshId: dispatchMeshContext.meshId,
+                                        nodeId: dispatchMeshContext.nodeId,
+                                        coordinatorDaemonId: dispatchMeshContext.coordinatorDaemonId,
+                                    },
+                                );
+                                if (stamp) inst.updateSettings(stamp);
+                            }
+                        } catch { /* best-effort — dispatch still proceeds without the stamp */ }
+                    }
+                }
                 const agentResult = await this.deps.cliManager.handleCliCommand(cmd, args);
                 // Bug C fix (part 2): when dispatching a task to a mesh node session, override
                 // the dispatch acknowledgement risk reason to 'bootstrap_still_running' when

@@ -308,11 +308,18 @@ export function tryAssignQueueTask(
             // without autoApprove still auto-approves once the coordinator dispatches a task
             // to it (the "approval notification fires only for certain delegated sessions"
             // case). updateSettings preserves runtime mesh keys; passing autoApprove keeps it.
+            //
+            // This local-dispatch branch also runs on the coordinator daemon for a co-located
+            // session, so the coordinator daemon id IS this daemon's id. Stamp it alongside
+            // the node identity so the session is fully relay-safe (meshCoordinatorDaemonId is
+            // the anchor the forwarder keys on), matching what mesh_launch_session stamps.
+            const localDaemonId = readNonEmptyString(loadConfig().machineId);
             inst.updateSettings({
                 meshNodeFor: meshId,
                 meshNodeId: nodeId,
                 launchedByCoordinator: true,
                 autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
+                ...(localDaemonId ? { meshCoordinatorDaemonId: localDaemonId } : {}),
             });
         }
     } catch { /* best-effort — dispatch still proceeds */ }

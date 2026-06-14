@@ -30,6 +30,65 @@ export function sameDaemonId(a: unknown, b: unknown): boolean {
     return ca !== '' && ca === cb;
 }
 
+/**
+ * The relay-safety metadata a worker session must carry so that its completion /
+ * generating events route back to the coordinator proactively (without waiting for
+ * a mesh_read_chat reconcile). meshCoordinatorDaemonId is the routing anchor the
+ * core forwarder (injectMeshSystemMessage) keys on to pick a remote coordinator
+ * target; meshNodeFor/meshNodeId identify the worker, and launchedByCoordinator is
+ * the delegation proof. See resolveWorkerDelegateRouting().
+ */
+export interface MeshWorkerRelayStamp {
+    meshNodeFor?: string;
+    meshNodeId?: string;
+    meshCoordinatorDaemonId?: string;
+    launchedByCoordinator?: boolean;
+}
+
+/**
+ * Build the relay-safety stamp from a dispatch's meshContext, only including fields
+ * the session does not already carry. Returns undefined when there is nothing new to
+ * stamp, so callers can skip a no-op updateSettings() write.
+ *
+ * This closes the remote-session relay gap: a worker session reached by a dispatch
+ * that carries coordinatorDaemonId (mesh_send_task / queue assignment over P2P) gets
+ * the coordinator anchor persisted onto its settings at dispatch time, even if it was
+ * not launched via mesh_launch_session. Without the stamp the forwarder cannot resolve
+ * a remote coordinator and the completion event sits in the pending queue until a
+ * read_chat-triggered reconcile drains it.
+ */
+export function buildMeshWorkerRelayStamp(
+    currentSettings: Record<string, unknown> | undefined,
+    meshContext: {
+        meshId?: unknown;
+        nodeId?: unknown;
+        coordinatorDaemonId?: unknown;
+    } | undefined,
+): MeshWorkerRelayStamp | undefined {
+    if (!meshContext) return undefined;
+    const settings = currentSettings && typeof currentSettings === 'object' ? currentSettings : {};
+    const stamp: MeshWorkerRelayStamp = {};
+
+    const meshId = readNonEmptyString(meshContext.meshId);
+    if (meshId && !readNonEmptyString(settings.meshNodeFor)) stamp.meshNodeFor = meshId;
+
+    const nodeId = readNonEmptyString(meshContext.nodeId);
+    if (nodeId && !readNonEmptyString(settings.meshNodeId)) stamp.meshNodeId = nodeId;
+
+    const coordinatorDaemonId = readNonEmptyString(meshContext.coordinatorDaemonId);
+    if (coordinatorDaemonId && !readNonEmptyString(settings.meshCoordinatorDaemonId)) {
+        stamp.meshCoordinatorDaemonId = coordinatorDaemonId;
+    }
+
+    // A dispatch from a coordinator is itself proof of delegation; stamp it when the
+    // session is being given any mesh routing context but has no marker yet.
+    if ((meshId || nodeId || coordinatorDaemonId) && settings.launchedByCoordinator !== true) {
+        stamp.launchedByCoordinator = true;
+    }
+
+    return Object.keys(stamp).length > 0 ? stamp : undefined;
+}
+
 export function resolveEventSessionId(event: Record<string, unknown>, fallback?: unknown): string {
     return readNonEmptyString(event.targetSessionId)
         || readNonEmptyString(event.sessionId)
