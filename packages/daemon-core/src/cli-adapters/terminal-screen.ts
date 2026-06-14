@@ -47,6 +47,11 @@ export class TerminalScreen {
         return this.terminal.getText();
     }
 
+    /** Full buffer including scrollback history (see backend doc). */
+    getTextWithScrollback(): string {
+        return this.terminal.getTextWithScrollback();
+    }
+
     getCursorPosition(): { col: number; row: number } {
         return this.terminal.getCursorPosition();
     }

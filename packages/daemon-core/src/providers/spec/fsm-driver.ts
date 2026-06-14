@@ -267,6 +267,18 @@ export class FsmDriver implements ISpecDriver {
     snapshot(): string { return this.adapter.snapshot(); }
     getCursorPosition(): { row: number; col: number } { return this.adapter.getCursorPosition(); }
     getScreen(): string { return this.adapter.snapshot(); }
+
+    /** Scrollback-inclusive screen as line array — used only for modal/button
+     *  content extraction so a tall prompt's off-screen anchors stay matchable.
+     *  Falls back to the viewport snapshot if scrollback read is unavailable. */
+    private scrollbackLines(): string[] {
+        let screen = '';
+        try {
+            screen = this.adapter.snapshotWithScrollback();
+        } catch { /* fall through to viewport */ }
+        if (!screen) screen = this.adapter.snapshot();
+        return screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
+    }
     getSpecPath(): string { return this.opts.specPath; }
 
     shutdown(): void {
@@ -484,9 +496,26 @@ export class FsmDriver implements ISpecDriver {
         const lines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
         const sections = resolveSections(this.spec.sections ?? {}, lines);
 
-        const modal = this.deriveModal(state, sections, lines.join('\n'));
+        // Modal states (approval / picker) extract their buttons + title from a
+        // SCROLLBACK-INCLUSIVE buffer: claude-cli renders an approval as a box,
+        // and when the prompt body (a big diff / long explanation) is tall the
+        // top of the box — including the `─────` separator that anchors the
+        // `modal` section — scrolls above the viewport. Matching only the
+        // viewport then yields < min_count buttons, deriveModal returns null,
+        // and auto-approve never fires (the "long prompts never auto-approve"
+        // bug). The viewport stays authoritative for transitions / cursor
+        // conditions; only this content-pattern extraction reads scrollback.
+        const modalLines = state.modal
+            ? this.scrollbackLines()
+            : lines;
+        const modalSections = state.modal
+            ? resolveSections(this.spec.sections ?? {}, modalLines)
+            : sections;
+        const modalFullScreen = modalLines.join('\n');
+
+        const modal = this.deriveModal(state, modalSections, modalFullScreen);
         const controls = this.deriveControls(state.id);
-        const title = modal?.title ?? this.deriveTitle(state, sections, lines.join('\n'));
+        const title = modal?.title ?? this.deriveTitle(state, modalSections, modalFullScreen);
 
         const next: CurrentEval = {
             // status is derived from the FSM state itself (statusForState), NOT from

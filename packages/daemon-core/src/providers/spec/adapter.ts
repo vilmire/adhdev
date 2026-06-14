@@ -104,6 +104,16 @@ export class TerminalAdapter {
         return this.lastScreen || this.computeScreen();
     }
 
+    /**
+     * Full-buffer snapshot including scrollback history. Unlike snapshot()
+     * (visible viewport only), this survives a tall prompt whose top has
+     * scrolled off-screen — used for content-pattern extraction (modal
+     * buttons / approval anchors), NOT for cursor-relative conditions.
+     */
+    snapshotWithScrollback(): string {
+        return this.screen.getTextWithScrollback();
+    }
+
     getCursorPosition(): { row: number; col: number } {
         const pos = this.screen.getCursorPosition();
         return { row: pos.row, col: pos.col };

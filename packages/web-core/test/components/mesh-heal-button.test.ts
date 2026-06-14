@@ -14,6 +14,10 @@ describe('MeshObservabilitySurface heal action', () => {
     expect(source).toContain("dryRun.code !== 'fast_forward_available'")
     expect(source).toContain('window.confirm')
     expect(source).toContain('execute: true')
+    // Heal must run the submodule-aware ff (same as the coordinator
+    // mesh_fast_forward_node path) so the superproject ff doesn't leave
+    // submodules drifted out-of-sync.
+    expect(source).toContain('updateSubmodules: true')
     expect(source).toContain('selectedGraphNode.behind > 0')
     expect(source).toContain('selectedGraphNode.dirtyFiles === 0')
   })

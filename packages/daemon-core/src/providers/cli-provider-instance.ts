@@ -350,6 +350,19 @@ export class CliProviderInstance implements ProviderInstance {
     readonly type: string;
     readonly category = 'cli' as const;
 
+    /**
+     * Quiet period an approval modal's signature must be stable before
+     * auto-approve sends the approve key. Guards against firing on a prompt
+     * that is still streaming into the PTY (the "resolves too fast" symptom):
+     * while the modal text/buttons are still changing, every frame yields a
+     * new signature and the settle clock restarts. Once the prompt finishes
+     * rendering the signature holds and the key is sent after this window.
+     * Bounded + small so genuine approvals stay timely. The FSM is already
+     * authoritative over the `waiting_approval` state; this only delays the
+     * keystroke until the modal *content* has settled.
+     */
+    private static readonly AUTO_APPROVE_SETTLE_MS = 600;
+
     private adapter: ProviderCliAdapter;
     private context: InstanceContext | null = null;
     private events: ProviderEvent[] = [];
@@ -363,6 +376,14 @@ export class CliProviderInstance implements ProviderInstance {
     private autoApproveBusy = false;
     private autoApproveBusyTimer: NodeJS.Timeout | null = null;
     private lastAutoApprovalSignature = '';
+    // Settle gate: the approval modal's signature + the wall-clock when this
+    // exact signature was first observed. Auto-approve only fires once the
+    // SAME signature has been stable for AUTO_APPROVE_SETTLE_MS, so a prompt
+    // still streaming into the PTY (its buttons/message changing frame to
+    // frame) keeps resetting the timer and is never approved half-rendered.
+    private pendingAutoApprovalSignature = '';
+    private pendingAutoApprovalSince = 0;
+    private autoApproveSettleTimer: NodeJS.Timeout | null = null;
     private controlValues: Record<string, string | number | boolean> = {};
     private summaryMetadata: unknown = undefined;
     private appliedEffectKeys = new Set<string>();
@@ -951,6 +972,10 @@ export class CliProviderInstance implements ProviderInstance {
     dispose(): void {
         this.adapter.shutdown();
         this.monitor.reset();
+        // Cancel any armed auto-approve timers so a pending settle re-check
+        // can't fire resolveModal/detectStatusTransition against a dead adapter.
+        if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
+        if (this.autoApproveBusyTimer) { clearTimeout(this.autoApproveBusyTimer); this.autoApproveBusyTimer = null; }
         this.appliedEffectKeys.clear();
         try { this.cachedSqliteDb?.close(); } catch { /* noop */ }
         this.cachedSqliteDb = null;
@@ -1373,6 +1398,11 @@ export class CliProviderInstance implements ProviderInstance {
         // still inside the short busy window.
         if (!autoApproveActive) {
             this.lastAutoApprovalSignature = '';
+            // Clear the settle gate so the next approval starts its own quiet
+            // window from scratch (a stale timestamp would let it fire instantly).
+            this.pendingAutoApprovalSignature = '';
+            this.pendingAutoApprovalSince = 0;
+            if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
             return autoApproveActive;
         }
         const modal = adapterStatus.activeModal;
@@ -1410,21 +1440,65 @@ export class CliProviderInstance implements ProviderInstance {
             buttons.join('|'),
             buttonIndex,
         ].join('::');
-        if (!this.autoApproveBusy || signature !== this.lastAutoApprovalSignature) {
-            this.autoApproveBusy = true;
-            this.lastAutoApprovalSignature = signature;
-            if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
-            this.autoApproveBusyTimer = setTimeout(() => {
-                this.autoApproveBusy = false;
-                this.autoApproveBusyTimer = null;
-                this.lastAutoApprovalSignature = '';
-            }, 5000);
-            this.recordAutoApproval(modal?.message, buttonLabel, now);
-            setTimeout(() => {
-                this.adapter.resolveModal(buttonIndex);
-            }, 0);
+        // Already fired for this exact modal and still inside the busy window —
+        // nothing to do (re-entry guard for repeated snapshots of one modal).
+        if (this.autoApproveBusy && signature === this.lastAutoApprovalSignature) {
+            return autoApproveActive;
         }
+
+        // Settle gate: only fire once this exact signature has been stable for
+        // AUTO_APPROVE_SETTLE_MS. A still-streaming prompt mutates its
+        // message/buttons each frame → new signature → clock restarts, so we
+        // never approve a half-rendered prompt (the "resolves too fast" bug).
+        if (signature !== this.pendingAutoApprovalSignature) {
+            this.pendingAutoApprovalSignature = signature;
+            this.pendingAutoApprovalSince = now;
+        }
+        const settledForMs = now - this.pendingAutoApprovalSince;
+        if (settledForMs < CliProviderInstance.AUTO_APPROVE_SETTLE_MS) {
+            // Not yet settled. Arm a timer to re-check after the remaining quiet
+            // window — the PTY may go silent once the prompt finishes painting,
+            // so there is no guaranteed status-change frame to re-drive us.
+            if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
+            this.autoApproveSettleTimer = setTimeout(() => {
+                this.autoApproveSettleTimer = null;
+                this.recheckAutoApproveSettled();
+            }, CliProviderInstance.AUTO_APPROVE_SETTLE_MS - settledForMs + 20);
+            return autoApproveActive;
+        }
+
+        // Settled — fire the approve key.
+        if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
+        this.autoApproveBusy = true;
+        this.lastAutoApprovalSignature = signature;
+        this.pendingAutoApprovalSignature = '';
+        this.pendingAutoApprovalSince = 0;
+        if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
+        this.autoApproveBusyTimer = setTimeout(() => {
+            this.autoApproveBusy = false;
+            this.autoApproveBusyTimer = null;
+            this.lastAutoApprovalSignature = '';
+        }, 5000);
+        this.recordAutoApproval(modal?.message, buttonLabel, now);
+        setTimeout(() => {
+            this.adapter.resolveModal(buttonIndex);
+        }, 0);
         return autoApproveActive;
+    }
+
+    /**
+     * Re-drive the auto-approve check after the settle quiet window elapses.
+     * The PTY may have gone silent once the approval prompt finished painting,
+     * so no status-change frame is guaranteed to re-enter maybeAutoApproveStatus
+     * — this timer-driven re-check picks up the now-settled modal and fires.
+     * Deliberately lighter than detectStatusTransition(): it only re-evaluates
+     * the approval decision; the next real PTY frame refreshes visible status.
+     */
+    private recheckAutoApproveSettled(): void {
+        try {
+            const adapterStatus = this.adapter.getStatus({ allowParse: false });
+            this.maybeAutoApproveStatus(adapterStatus, Date.now());
+        } catch { /* adapter gone / transient — next frame retries */ }
     }
 
     private detectStatusTransition(): void {

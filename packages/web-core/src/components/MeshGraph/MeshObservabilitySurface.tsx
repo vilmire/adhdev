@@ -766,6 +766,11 @@ export default function MeshObservabilitySurface({
                 meshId: canonicalStatus.meshId,
                 nodeId: selectedGraphNode.id,
                 workspace: healWorkspace,
+                // Match the coordinator mesh_fast_forward_node path: after a clean superproject
+                // ff that changes gitlinks, run `git submodule update --init --recursive` so the
+                // worktree doesn't drift. Without this the Heal button ff's the superproject but
+                // leaves submodules out-of-sync.
+                updateSubmodules: true,
                 dryRun: true,
                 execute: false,
             })
@@ -784,6 +789,7 @@ export default function MeshObservabilitySurface({
                 meshId: canonicalStatus.meshId,
                 nodeId: selectedGraphNode.id,
                 workspace: healWorkspace,
+                updateSubmodules: true,
                 dryRun: false,
                 execute: true,
             })

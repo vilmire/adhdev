@@ -106,25 +106,43 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
         this.terminal.write(data);
     }
 
-    getText(): string {
-        if (this.disposed) return '';
+    private formatLines(): string[] {
         // ghostty's `trim:true` collapses CUF-advanced cells — many TUIs including
         // Claude Code render spaces via cursor-forward rather than literal spaces,
         // which would break downstream regex matching. Keep per-row padding and
         // trim trailing whitespace ourselves.
         //
         // formatPlainText uses a .screen pin which includes scrollback history.
-        // Slice to the last `rows` lines to get only the visible viewport.
         const raw = this.terminal.formatPlainText({ trim: false }) || '';
-        if (!raw) return '';
-        const lines = raw.split('\n').map((row) => row.replace(/\s+$/, ''));
+        if (!raw) return [];
+        return raw.split('\n').map((row) => row.replace(/\s+$/, ''));
+    }
+
+    private static trimBlankEnds(lines: string[]): string {
+        let first = 0;
+        let last = lines.length;
+        while (first < last && !lines[first]) first += 1;
+        while (last > first && !lines[last - 1]) last -= 1;
+        return lines.slice(first, last).join('\n');
+    }
+
+    getText(): string {
+        if (this.disposed) return '';
+        const lines = this.formatLines();
+        if (lines.length === 0) return '';
         // Take only the viewport (last `rows` lines) to exclude scrollback history.
         const viewport = lines.length > this.rows ? lines.slice(-this.rows) : lines;
-        let first = 0;
-        let last = viewport.length;
-        while (first < last && !viewport[first]) first += 1;
-        while (last > first && !viewport[last - 1]) last -= 1;
-        return viewport.slice(first, last).join('\n');
+        return GhosttyVtTerminalBackend.trimBlankEnds(viewport);
+    }
+
+    getTextWithScrollback(): string {
+        if (this.disposed) return '';
+        const lines = this.formatLines();
+        if (lines.length === 0) return '';
+        // Full buffer including scrollback — does NOT slice to the viewport, so a
+        // tall prompt whose top has scrolled above the visible rows is still
+        // matchable by content patterns.
+        return GhosttyVtTerminalBackend.trimBlankEnds(lines);
     }
 
     getCursorPosition(): { col: number; row: number } {

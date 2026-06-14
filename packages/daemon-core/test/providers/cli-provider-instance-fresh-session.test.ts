@@ -245,23 +245,76 @@ describe('CliProviderInstance provider session recovery', () => {
       } as any, '/tmp/project') as any
       const resolveModal = vi.fn()
       instance.settings = { autoApprove: true }
-      instance.adapter = { resolveModal }
+      // The settle gate re-checks via adapter.getStatus() once the quiet window
+      // elapses, so the mock must surface the currently-active modal.
+      let currentStatus: any = {
+        status: 'waiting_approval',
+        activeModal: { message: 'Run first command?', buttons: ['Yes', 'No'] },
+      }
+      instance.adapter = { resolveModal, getStatus: () => currentStatus }
 
-      expect(instance.maybeAutoApproveStatus({
-        status: 'waiting_approval',
-        activeModal: { message: 'Run first command?', buttons: ['Yes', 'No'] },
-      })).toBe(true)
-      expect(instance.maybeAutoApproveStatus({
-        status: 'waiting_approval',
-        activeModal: { message: 'Run first command?', buttons: ['Yes', 'No'] },
-      })).toBe(true)
-      expect(instance.maybeAutoApproveStatus({
+      // Auto-approve is now gated on the modal signature being stable for a
+      // short quiet window (so half-rendered prompts aren't approved). The
+      // first observation only arms the settle timer — nothing fires yet.
+      expect(instance.maybeAutoApproveStatus(currentStatus)).toBe(true)
+      expect(resolveModal).toHaveBeenCalledTimes(0)
+      // Same modal stays stable across the window → first approval fires.
+      vi.advanceTimersByTime(700)
+      expect(resolveModal).toHaveBeenCalledTimes(1)
+
+      // A different modal arrives inside the prior busy window. It must settle
+      // on its own quiet window, then fire — even though the previous busy
+      // timer is still pending.
+      currentStatus = {
         status: 'waiting_approval',
         activeModal: { message: 'Run second command?', buttons: ['Yes', 'No'] },
-      })).toBe(true)
-
-      vi.runOnlyPendingTimers()
+      }
+      expect(instance.maybeAutoApproveStatus(currentStatus)).toBe(true)
+      vi.advanceTimersByTime(700)
       expect(resolveModal).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not auto-approve a still-streaming approval prompt until its modal settles', () => {
+    vi.useFakeTimers()
+    try {
+      const instance = new CliProviderInstance({
+        type: 'claude-cli',
+        name: 'Claude Code',
+        category: 'cli',
+        spawn: { command: 'claude', args: [] },
+      } as any, '/tmp/project') as any
+      const resolveModal = vi.fn()
+      instance.settings = { autoApprove: true }
+      let currentStatus: any = {
+        status: 'waiting_approval',
+        activeModal: { message: 'Reading the diff…', buttons: ['Yes', 'No'] },
+      }
+      instance.adapter = { resolveModal, getStatus: () => currentStatus }
+
+      // Prompt is still streaming — its message changes each frame, so the
+      // settle clock keeps restarting and nothing fires.
+      expect(instance.maybeAutoApproveStatus(currentStatus)).toBe(true)
+      vi.advanceTimersByTime(300)
+      currentStatus = {
+        status: 'waiting_approval',
+        activeModal: { message: 'Reading the diff… more lines', buttons: ['Yes', 'No'] },
+      }
+      expect(instance.maybeAutoApproveStatus(currentStatus)).toBe(true)
+      vi.advanceTimersByTime(300)
+      expect(resolveModal).toHaveBeenCalledTimes(0)
+
+      // Prompt finishes rendering; signature now holds across the window.
+      currentStatus = {
+        status: 'waiting_approval',
+        activeModal: { message: 'Run the command?', buttons: ['Yes', 'No'] },
+      }
+      expect(instance.maybeAutoApproveStatus(currentStatus)).toBe(true)
+      vi.advanceTimersByTime(700)
+      expect(resolveModal).toHaveBeenCalledTimes(1)
+      expect(resolveModal).toHaveBeenCalledWith(0)
     } finally {
       vi.useRealTimers()
     }
@@ -469,7 +522,9 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.historyWriter = { appendNewMessages: vi.fn() }
 
       const state = instance.getState()
-      vi.runOnlyPendingTimers()
+      // Auto-approve is settle-gated: the first observation arms a quiet-window
+      // timer; advancing past it lets the re-check fire the approve key.
+      vi.advanceTimersByTime(700)
 
       expect(state.status).toBe('generating')
       expect(state.activeModal ?? null).toBeNull()
