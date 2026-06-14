@@ -132,7 +132,7 @@ export type {
   RepoMeshLedgerStatus,
   MeshAsyncJobLifecycle,
 } from './repo-mesh-types.js';
-export { DEFAULT_MESH_POLICY } from './repo-mesh-types.js';
+export { DEFAULT_MESH_POLICY, resolveDelegatedWorkerAutoApprove } from './repo-mesh-types.js';
 
 // ── Git Surface ──
 export * from './git/index.js';

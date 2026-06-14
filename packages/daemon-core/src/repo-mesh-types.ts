@@ -121,6 +121,17 @@ export interface RepoMeshPolicy {
      */
     spawnedSessionVisibility?: RepoMeshSpawnedSessionVisibility;
     /**
+     * Whether worker sessions the coordinator dispatches should auto-approve agent
+     * approval modals (tool/command prompts) without firing a user-facing approval
+     * notification. Delegated workers are coordinator-driven, so a human should not
+     * have to approve each one; defaults to true. Set to false to make delegated
+     * worker sessions stop at approval modals like an interactive session.
+     * Stamped into the worker launch settings envelope as `autoApprove`, which wins
+     * over the global per-provider-type autoApprove config via the settings merge.
+     * A node policy may override this per-node (RepoMeshNodePolicy.delegatedWorkerAutoApprove).
+     */
+    delegatedWorkerAutoApprove?: boolean;
+    /**
      * What to do with delegated session-host records for a node when it is removed.
      * Defaults to 'preserve' so completed work can be reviewed later and live
      * runtimes are never stopped/deleted unless the mesh owner opts in.
@@ -153,6 +164,11 @@ export interface RepoMeshNodePolicy {
     /** Ordered provider preference used when mesh_launch_session omits an explicit type. */
     providerPriority?: string[];
     /**
+     * Per-node override for RepoMeshPolicy.delegatedWorkerAutoApprove. When set, takes
+     * precedence over the mesh-level policy for worker sessions launched onto this node.
+     */
+    delegatedWorkerAutoApprove?: boolean;
+    /**
      * Optional associated/external repos that must be checked alongside this node.
      * These are explicit policy/config entries only; Repo Mesh does not auto-discover
      * sibling paths so freshness checks stay fail-closed and non-surprising.
@@ -184,10 +200,31 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     dirtyWorkspaceBehavior: 'warn',
     maxParallelTasks: 2,
     spawnedSessionVisibility: 'visible',
+    delegatedWorkerAutoApprove: true,
     sessionCleanupOnNodeRemove: 'preserve',
     autoFastForward: { enabled: true },
     maxTaskRetries: 1,
 };
+
+/**
+ * Resolve whether a delegated worker session launched onto `nodePolicy` (within a mesh
+ * governed by `meshPolicy`) should auto-approve. Precedence: node override → mesh policy
+ * → default true. The result is stamped into the worker launch settings envelope as
+ * `autoApprove`; it wins over the global per-provider-type autoApprove config because the
+ * launch path merges the envelope as a settingsOverride on top of the provider defaults.
+ */
+export function resolveDelegatedWorkerAutoApprove(
+    meshPolicy?: Pick<RepoMeshPolicy, 'delegatedWorkerAutoApprove'> | null,
+    nodePolicy?: Pick<RepoMeshNodePolicy, 'delegatedWorkerAutoApprove'> | null,
+): boolean {
+    if (typeof nodePolicy?.delegatedWorkerAutoApprove === 'boolean') {
+        return nodePolicy.delegatedWorkerAutoApprove;
+    }
+    if (typeof meshPolicy?.delegatedWorkerAutoApprove === 'boolean') {
+        return meshPolicy.delegatedWorkerAutoApprove;
+    }
+    return true;
+}
 
 // ─── Capabilities ───────────────────────────────
 

@@ -100,6 +100,10 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
     meshNodeFor: 'mesh-worktree-flow',
     meshNodeId: 'node-worktree',
     spawnedSessionVisibility: 'visible',
+    // Delegated worker sessions auto-approve by default (no policy opt-out here),
+    // so the launch envelope stamps autoApprove=true; it wins over the global
+    // per-provider-type autoApprove config via the settingsOverride merge.
+    autoApprove: true,
     meshCoordinatorDaemonId: 'daemon-coordinator',
     launchedByCoordinator: true,
   });

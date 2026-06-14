@@ -13,6 +13,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, markMeshCoordinatorEventDirectDelivered } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent } from './mesh-routing.js';
+import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -302,7 +303,17 @@ export function tryAssignQueueTask(
     try {
         const inst = components.instanceManager.getInstance(sessionId);
         if (inst && typeof inst.updateSettings === 'function') {
-            inst.updateSettings({ meshNodeFor: meshId, meshNodeId: nodeId, launchedByCoordinator: true });
+            // Adopting a (possibly manually-opened) local session as a worker: apply the
+            // delegated-worker auto-approve policy here too, so a session that was launched
+            // without autoApprove still auto-approves once the coordinator dispatches a task
+            // to it (the "approval notification fires only for certain delegated sessions"
+            // case). updateSettings preserves runtime mesh keys; passing autoApprove keeps it.
+            inst.updateSettings({
+                meshNodeFor: meshId,
+                meshNodeId: nodeId,
+                launchedByCoordinator: true,
+                autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
+            });
         }
     } catch { /* best-effort — dispatch still proceeds */ }
 
@@ -666,6 +677,10 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         meshNodeFor: meshId,
                         meshNodeId: nodeId,
                         spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
+                        // Coordinator-dispatched worker: auto-approve unless mesh/node policy
+                        // opts out (default true). Lands in settingsOverride and beats the
+                        // global per-provider-type autoApprove config (see shouldAutoApprove).
+                        autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
                         launchedByCoordinator: true,
                         autoLaunchedForQueueTaskId: task.id,
                     },
@@ -1343,6 +1358,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                     meshNodeFor: args.meshId,
                                     meshNodeId: node.id,
                                     spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
+                                    // Coordinator-dispatched recovery relaunch: same auto-approve
+                                    // policy as the primary worker launch path.
+                                    autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
                                     launchedByCoordinator: true,
                                 }
                             }).catch((e: any) => LOG.error('MeshRecovery', `Failed to auto-relaunch session for ${node.id}: ${e?.message}`));

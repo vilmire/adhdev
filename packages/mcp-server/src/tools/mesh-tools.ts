@@ -60,6 +60,7 @@ import {
     reconcileDirectDispatchCompletionFromTranscript,
     recordMeshToolCall,
     requeueTask,
+    resolveDelegatedWorkerAutoApprove,
     validateMeshTaskModeRequest,
 } from '@adhdev/daemon-core';
 
@@ -4673,6 +4674,11 @@ export async function meshLaunchSession(
         const coordinatorNode = resolveCoordinatorNode(ctx);
         const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
         const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
+        // Worker sessions are coordinator-dispatched; a human shouldn't have to approve
+        // each one. Resolve the auto-approve policy (node override → mesh policy → default
+        // true) and stamp it into the launch settings envelope so it wins over the global
+        // per-provider-type autoApprove config via the settingsOverride merge.
+        const delegatedWorkerAutoApprove = resolveDelegatedWorkerAutoApprove(ctx.mesh.policy, node.policy);
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
             return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
@@ -4689,6 +4695,9 @@ export async function meshLaunchSession(
                     meshNodeFor: ctx.mesh.id,
                     meshNodeId: args.node_id,
                     spawnedSessionVisibility,
+                    // Delegated worker auto-approval (see resolveDelegatedWorkerAutoApprove).
+                    // Lands in settingsOverride and beats the global per-provider autoApprove.
+                    autoApprove: delegatedWorkerAutoApprove,
                     ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
                     ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
                     launchedByCoordinator: true,
