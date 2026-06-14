@@ -676,6 +676,25 @@ export class MeshRuntimeStore {
         this.db.prepare(`DELETE FROM mesh_direct_dispatches WHERE mesh_id = ?`).run(meshId);
     }
 
+    /**
+     * Delete specific direct dispatch rows by taskId for a mesh. Used by the staleDirect prune
+     * path to remove orphaned/terminal dispatch records whose node/session is no longer in the
+     * live mesh. Returns the number of rows actually deleted. No-op for an empty taskId list.
+     */
+    deleteDirectDispatchesByTaskId(meshId: string, taskIds: string[]): number {
+        const ids = (taskIds || []).map(id => typeof id === 'string' ? id.trim() : '').filter(Boolean);
+        if (!ids.length) return 0;
+        const stmt = this.db.prepare(`DELETE FROM mesh_direct_dispatches WHERE mesh_id = ? AND task_id = ?`);
+        let deleted = 0;
+        const run = this.db.transaction((rows: string[]) => {
+            for (const taskId of rows) {
+                deleted += stmt.run(meshId, taskId).changes;
+            }
+        });
+        run(ids);
+        return deleted;
+    }
+
     markStaleDirectDispatches(meshId: string, olderThanMs: number): void {
         const cutoff = new Date(Date.now() - olderThanMs).toISOString();
         const now = new Date().toISOString();

@@ -3522,6 +3522,8 @@ export class DaemonCommandRouter {
         const skippedSessionIds: string[] = [];
         const skippedLiveSessionIds: string[] = [];
         const skippedCoordinatorSessionIds: string[] = [];
+        const skippedLiveSessionReasons: Array<{ sessionId: string; reason: string }> = [];
+        const actedLiveDelegateSessionIds: string[] = [];
         const deleteUnsupportedSessionIds: string[] = [];
         const recordsRemainSessionIds: string[] = [];
         const errors: Array<{ sessionId: string; error: string }> = [];
@@ -3557,15 +3559,48 @@ export class DaemonCommandRouter {
             const surfaceKind = getSessionHostSurfaceKind(record);
             const liveRuntime = surfaceKind === 'live_runtime';
             const coordinatorSession = readStringValue(record?.meta?.meshCoordinatorFor) === args.meshId;
+            // A delegate session was launched by the coordinator specifically FOR this node
+            // (meta.meshNodeId === this node). It is 1:1 bound to the node, even when the node
+            // shares its daemon runtime with the main/other nodes. Removing the node should be
+            // able to stop its own delegate session — the shared-daemon concern only applies to
+            // sessions we matched by workspace alone (which could belong to the coordinator or to
+            // a sibling node that is still active).
+            const recordNodeId = readStringValue(record?.meta?.meshNodeId);
+            const recordMeshNodeFor = readStringValue(record?.meta?.meshNodeFor);
+            const delegateBoundToThisNode = !!recordNodeId
+                && recordNodeId === args.nodeId
+                && (!recordMeshNodeFor || recordMeshNodeFor === args.meshId);
             if (!hasExplicitSessionIds && coordinatorSession) {
                 skippedSessionIds.push(sessionId);
                 skippedCoordinatorSessionIds.push(sessionId);
                 continue;
             }
-            if (!hasExplicitSessionIds && liveRuntime) {
+            // Only the conservative shared-daemon guard for live sessions that are NOT a delegate
+            // explicitly bound to this node. Delegate-bound live sessions fall through and are
+            // stopped/deleted by the mode handlers below (which already record an intentional stop).
+            if (!hasExplicitSessionIds && liveRuntime && !delegateBoundToThisNode) {
                 skippedSessionIds.push(sessionId);
                 skippedLiveSessionIds.push(sessionId);
+                const matchedByWorkspaceOnly = !recordNodeId;
+                const reason = recordNodeId && recordNodeId !== args.nodeId
+                    ? `live_delegate_bound_to_other_node:${recordNodeId}`
+                    : matchedByWorkspaceOnly
+                        ? 'live_session_matched_by_workspace_only_no_node_binding'
+                        : 'live_session_not_bound_to_this_node';
+                skippedLiveSessionReasons.push({ sessionId, reason });
                 continue;
+            }
+            if (!hasExplicitSessionIds && liveRuntime && delegateBoundToThisNode && args.mode === 'delete_stopped') {
+                // delete_stopped never stops live runtimes by contract — even bound delegates.
+                // Surface a clear reason instead of an unexplained skip so callers know to use
+                // stop / stop_and_delete to release a still-running bound delegate.
+                skippedSessionIds.push(sessionId);
+                skippedLiveSessionIds.push(sessionId);
+                skippedLiveSessionReasons.push({ sessionId, reason: 'live_delegate_preserved_by_delete_stopped_mode_use_stop_or_stop_and_delete' });
+                continue;
+            }
+            if (!hasExplicitSessionIds && liveRuntime && delegateBoundToThisNode) {
+                actedLiveDelegateSessionIds.push(sessionId);
             }
             try {
                 if (args.mode === 'stop') {
@@ -3632,6 +3667,8 @@ export class DaemonCommandRouter {
             skippedSessionIds,
             skippedLiveSessionIds,
             skippedCoordinatorSessionIds,
+            ...(actedLiveDelegateSessionIds.length ? { actedLiveDelegateSessionIds } : {}),
+            ...(skippedLiveSessionReasons.length ? { skippedLiveSessionReasons } : {}),
             ...(deleteUnsupported ? {
                 deleteUnsupported: true,
                 effectiveCleanup: args.mode === 'stop_and_delete'

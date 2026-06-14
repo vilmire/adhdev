@@ -408,6 +408,37 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
     return { activeWork: records, staleDirectWork, staleDirectWorkNote, terminalDirectWork, summary };
 }
 
+/**
+ * staleReason strings (produced by sessionStatusFromNodes above) that indicate the original
+ * node/session is GONE from the live mesh — i.e. the staleDirect record is an orphaned ledger
+ * artifact, not active or recoverable work. These are the only reasons safe to prune from the
+ * active staleDirect surface. The "no provider acknowledgement" reason is deliberately excluded:
+ * those entries have a still-live node/session (staleDispatchUnacknowledged) and represent
+ * recoverable dispatch failures, never orphans.
+ */
+export const PRUNABLE_ORPHAN_STALE_REASONS: ReadonlySet<string> = new Set([
+    'direct task node is no longer in the live mesh',
+    'direct task session is not present in live session records',
+    'direct task has no node id',
+]);
+
+export type StaleDirectPruneClassification = 'prunable_orphan' | 'prunable_terminal' | 'preserve_unacknowledged' | 'preserve_active';
+
+/**
+ * Classify a direct-work record for the staleDirect prune path. Pure function — the prune tool
+ * uses this so the safety rules (never touch active work or recoverable unacknowledged dispatches)
+ * live next to the staleReason producers and are independently testable.
+ */
+export function classifyStaleDirectForPrune(
+    record: Pick<MeshActiveWorkRecord, 'staleReason' | 'staleDispatchUnacknowledged' | 'terminal'>,
+    opts: { includeTerminal?: boolean } = {},
+): StaleDirectPruneClassification {
+    if (record.staleDispatchUnacknowledged === true) return 'preserve_unacknowledged';
+    if (record.terminal === true) return opts.includeTerminal ? 'prunable_terminal' : 'preserve_active';
+    if (record.staleReason && PRUNABLE_ORPHAN_STALE_REASONS.has(record.staleReason)) return 'prunable_orphan';
+    return 'preserve_active';
+}
+
 export function buildCompactStaleDirectWorkSummary(
     staleDirectWork: MeshActiveWorkRecord[],
     opts: { sampleLimit?: number; detailHint?: string; note?: string } = {},

@@ -24,6 +24,7 @@ import {
     updateDirectDispatchStatus,
     markStaleDirectDispatches,
     cleanupTerminalDirectDispatches,
+    deleteDirectDispatchesByTaskId,
     __resetMeshRuntimeStoreForTests,
     enqueueTask,
     claimNextTask,
@@ -250,6 +251,47 @@ describe('mesh-runtime-store', () => {
             const db = MeshRuntimeStore.getInstance();
             const all = db.getActiveDirectDispatches(meshId);
             expect(all).toHaveLength(0);
+        });
+    });
+
+    describe('deleteDirectDispatchesByTaskId', () => {
+        it('deletes only the named taskIds and leaves the rest, returning the deleted count', () => {
+            const meshId = `mesh-prune-${randomUUID().slice(0, 8)}`;
+            const t1 = randomUUID();
+            const t2 = randomUUID();
+            const t3 = randomUUID();
+            insertDirectDispatch(meshId, { taskId: t1, sessionId: `s-${t1}`, message: 'orphan-1', via: 'p2p', dispatchedAt: new Date().toISOString() });
+            insertDirectDispatch(meshId, { taskId: t2, sessionId: `s-${t2}`, message: 'orphan-2', via: 'p2p', dispatchedAt: new Date().toISOString() });
+            insertDirectDispatch(meshId, { taskId: t3, sessionId: `s-${t3}`, message: 'keep-me', via: 'p2p', dispatchedAt: new Date().toISOString() });
+
+            const deleted = deleteDirectDispatchesByTaskId(meshId, [t1, t2]);
+            expect(deleted).toBe(2);
+
+            const active = getActiveDirectDispatches(meshId);
+            const remaining = active.map(d => d.taskId);
+            expect(remaining).toEqual([t3]);
+        });
+
+        it('is a no-op for an empty taskId list', () => {
+            const meshId = `mesh-prune-empty-${randomUUID().slice(0, 8)}`;
+            const t1 = randomUUID();
+            insertDirectDispatch(meshId, { taskId: t1, sessionId: `s-${t1}`, message: 'keep', via: 'p2p', dispatchedAt: new Date().toISOString() });
+
+            expect(deleteDirectDispatchesByTaskId(meshId, [])).toBe(0);
+            expect(getActiveDirectDispatches(meshId)).toHaveLength(1);
+        });
+
+        it('does not delete rows belonging to a different mesh', () => {
+            const meshA = `mesh-a-${randomUUID().slice(0, 8)}`;
+            const meshB = `mesh-b-${randomUUID().slice(0, 8)}`;
+            const shared = randomUUID();
+            insertDirectDispatch(meshA, { taskId: shared, sessionId: `s-${shared}`, message: 'a', via: 'p2p', dispatchedAt: new Date().toISOString() });
+            insertDirectDispatch(meshB, { taskId: randomUUID(), sessionId: `s-${randomUUID()}`, message: 'b', via: 'p2p', dispatchedAt: new Date().toISOString() });
+
+            // Deleting meshA's taskId scoped to meshB must affect nothing.
+            expect(deleteDirectDispatchesByTaskId(meshB, [shared])).toBe(0);
+            expect(getActiveDirectDispatches(meshA)).toHaveLength(1);
+            expect(getActiveDirectDispatches(meshB)).toHaveLength(1);
         });
     });
 

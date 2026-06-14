@@ -198,6 +198,90 @@ describe('mesh session cleanup', () => {
     expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
   })
 
+  it('stops a live delegate session explicitly bound to the node being removed even on a shared daemon', async () => {
+    const meshId = `mesh-delegate-stop-${Date.now()}`
+    try {
+      const { router, sessionHostControl } = createRouter({
+        listSessions: vi.fn(async () => [
+          // delegate launched FOR node-a on the shared daemon — must be stopped+deleted
+          { sessionId: 'delegate-a', workspace: '/repo/worktree-a', lifecycle: 'running', meta: { meshNodeId: 'node-a', meshNodeFor: meshId, launchedByCoordinator: true } },
+          // coordinator session in the same workspace — must be protected
+          { sessionId: 'coordinator-live', workspace: '/repo/worktree-a', lifecycle: 'running', meta: { meshCoordinatorFor: meshId } },
+          // a live session bound to a different node — must be skipped with a reason
+          { sessionId: 'delegate-b', workspace: '/repo/worktree-a', lifecycle: 'running', meta: { meshNodeId: 'node-b', meshNodeFor: meshId } },
+          // a live session matched only by workspace (no node binding) — conservative skip with reason
+          { sessionId: 'ambient-live', workspace: '/repo/worktree-a', lifecycle: 'running' },
+        ]),
+      })
+
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-a',
+        sessionCleanupMode: 'stop_and_delete',
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          nodes: [{ id: 'node-a', workspace: '/repo/worktree-a' }],
+        },
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        removed: true,
+        sessionCleanup: {
+          deletedSessionIds: ['delegate-a'],
+          actedLiveDelegateSessionIds: ['delegate-a'],
+          skippedCoordinatorSessionIds: ['coordinator-live'],
+        },
+      })
+      // delegate-a stopped+deleted; coordinator + other-node + ambient all skipped
+      expect(result.sessionCleanup.skippedSessionIds).toEqual(
+        expect.arrayContaining(['coordinator-live', 'delegate-b', 'ambient-live']),
+      )
+      expect(result.sessionCleanup.skippedSessionIds).not.toContain('delegate-a')
+      expect(result.sessionCleanup.skippedLiveSessionIds).toEqual(
+        expect.arrayContaining(['delegate-b', 'ambient-live']),
+      )
+      // clear, machine-readable skip reasons instead of an unexplained skip
+      const reasons = result.sessionCleanup.skippedLiveSessionReasons as Array<{ sessionId: string; reason: string }>
+      expect(reasons.find(r => r.sessionId === 'delegate-b')?.reason).toBe('live_delegate_bound_to_other_node:node-b')
+      expect(reasons.find(r => r.sessionId === 'ambient-live')?.reason).toBe('live_session_matched_by_workspace_only_no_node_binding')
+      // delegate-a actually force-deleted; coordinator/other never touched
+      expect(sessionHostControl.deleteSession).toHaveBeenCalledTimes(1)
+      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('delegate-a', { force: true })
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
+  })
+
+  it('preserves a live bound delegate under delete_stopped mode with a clear reason (stop/stop_and_delete required)', async () => {
+    const { router, sessionHostControl } = createRouter({
+      listSessions: vi.fn(async () => [
+        { sessionId: 'delegate-a', workspace: '/repo/worktree-a', lifecycle: 'running', meta: { meshNodeId: 'node-a', meshNodeFor: 'mesh-1' } },
+      ]),
+    })
+
+    const result: any = await router.execute('cleanup_mesh_sessions', {
+      meshId: 'mesh-1',
+      nodeId: 'node-a',
+      mode: 'delete_stopped',
+      inlineMesh: {
+        id: 'mesh-1',
+        name: 'Mesh',
+        policy: {},
+        nodes: [{ id: 'node-a', workspace: '/repo/worktree-a' }],
+      },
+    })
+
+    expect(result.skippedLiveSessionIds).toContain('delegate-a')
+    expect((result.skippedLiveSessionReasons as Array<{ sessionId: string; reason: string }>)
+      .find(r => r.sessionId === 'delegate-a')?.reason)
+      .toBe('live_delegate_preserved_by_delete_stopped_mode_use_stop_or_stop_and_delete')
+    expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
+    expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
+  })
+
   it('protects coordinator sessions from broad remove-node cleanup even when they are no longer live runtimes', async () => {
     const { router, sessionHostControl } = createRouter({
       listSessions: vi.fn(async () => [

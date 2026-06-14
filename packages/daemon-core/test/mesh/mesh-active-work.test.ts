@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMeshActiveWork, buildMeshActiveWorkSummary } from '../../src/mesh/mesh-active-work.js';
+import { buildMeshActiveWork, buildMeshActiveWorkSummary, classifyStaleDirectForPrune, PRUNABLE_ORPHAN_STALE_REASONS } from '../../src/mesh/mesh-active-work.js';
 import type { MeshLedgerEntry } from '../../src/mesh/mesh-ledger.js';
 
 function dispatch(overrides: Partial<MeshLedgerEntry> = {}): MeshLedgerEntry {
@@ -431,5 +431,43 @@ describe('buildMeshActiveWork — direct dispatch acknowledgement gap (Bug: dire
         expect(result.staleDirectWork[0].staleReason).toContain('no provider acknowledgement');
         expect(result.summary.staleDirectCount).toBe(1);
         expect(result.summary.staleDirectUnacknowledgedCount).toBe(1);
+    });
+});
+
+describe('classifyStaleDirectForPrune — staleDirect prune safety', () => {
+    it('classifies orphaned node/session reasons as prunable_orphan', () => {
+        for (const reason of PRUNABLE_ORPHAN_STALE_REASONS) {
+            expect(classifyStaleDirectForPrune({ staleReason: reason })).toBe('prunable_orphan');
+        }
+    });
+
+    it('always preserves fresh unacknowledged dispatches even if they carry an orphan-looking reason', () => {
+        expect(classifyStaleDirectForPrune({
+            staleReason: 'direct task session is not present in live session records',
+            staleDispatchUnacknowledged: true,
+        })).toBe('preserve_unacknowledged');
+    });
+
+    it('preserves the "no provider acknowledgement" reason (recoverable, not an orphan)', () => {
+        expect(classifyStaleDirectForPrune({
+            staleReason: 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition',
+        })).toBe('preserve_active');
+    });
+
+    it('preserves active records with no staleReason', () => {
+        expect(classifyStaleDirectForPrune({})).toBe('preserve_active');
+        expect(classifyStaleDirectForPrune({ staleReason: undefined })).toBe('preserve_active');
+    });
+
+    it('only prunes terminal records when includeTerminal is set', () => {
+        expect(classifyStaleDirectForPrune({ terminal: true })).toBe('preserve_active');
+        expect(classifyStaleDirectForPrune({ terminal: true }, { includeTerminal: true })).toBe('prunable_terminal');
+    });
+
+    it('unacknowledged takes precedence over terminal', () => {
+        expect(classifyStaleDirectForPrune(
+            { terminal: true, staleDispatchUnacknowledged: true },
+            { includeTerminal: true },
+        )).toBe('preserve_unacknowledged');
     });
 });

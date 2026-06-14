@@ -750,6 +750,19 @@ export function markStaleDirectDispatches(meshId: string, olderThanMs = 60 * 60_
     } catch { /* best-effort */ }
 }
 
+/**
+ * Delete specific direct dispatch rows by taskId. Returns the number of rows deleted.
+ * Used by the staleDirect prune path to evict orphaned/terminal dispatch records from the
+ * active staleDirect surface while leaving the append-only mesh ledger (audit history) intact.
+ */
+export function deleteDirectDispatchesByTaskId(meshId: string, taskIds: string[]): number {
+    try {
+        return MeshRuntimeStore.getInstance().deleteDirectDispatchesByTaskId(meshId, taskIds);
+    } catch {
+        return 0;
+    }
+}
+
 export type MeshToolCallRateResult = { rateLimitExceeded: boolean; callsInWindow: number; advisory: string | null };
 
 /**

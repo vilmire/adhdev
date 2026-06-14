@@ -35,6 +35,8 @@ import {
     buildP2pRelayFailurePayload,
     cancelTask,
     classifyP2pRelayFailure,
+    classifyStaleDirectForPrune,
+    deleteDirectDispatchesByTaskId,
     describeTaskDependencyState,
     drainPendingMeshCoordinatorEvents,
     enqueueTask,
@@ -2542,6 +2544,19 @@ export const MESH_RECONCILE_LEDGER_TOOL = {
     },
 };
 
+export const MESH_PRUNE_STALE_DIRECT_TOOL = {
+    name: 'mesh_prune_stale_direct',
+    description: 'Prune orphaned staleDirect dispatch records — direct task dispatches whose original node/session is no longer present in the live mesh. dry_run (default) reports exactly which records would be pruned without mutating anything; pass execute=true to delete them. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved. The append-only mesh ledger audit history is left intact.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            execute: { type: 'boolean', description: 'When true, actually delete the orphaned records. Defaults false (dry run). Ignored when dry_run=true.' },
+            dry_run: { type: 'boolean', description: 'Force a preview without mutation even if execute=true. Defaults to dry-run behavior when execute is not set.' },
+            include_terminal: { type: 'boolean', description: 'Also prune terminal (completed/failed) direct dispatch store rows in addition to orphans. Defaults false.' },
+        },
+    },
+};
+
 export const MESH_REFINE_NODE_TOOL = {
     name: 'mesh_refine_node',
     description: 'The Refinery: Accept an async validation/merge/cleanup job for a completed worktree node. The immediate response includes async:true, status:\'accepted\', jobId, interactionId, target node, and startedAt; completion/failure evidence is delivered through pending mesh events and the mesh task ledger.',
@@ -2653,6 +2668,7 @@ export const ALL_MESH_TOOLS = [
     MESH_SUGGEST_REFINE_CONFIG_TOOL,
     MESH_REFINE_PLAN_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
+    MESH_PRUNE_STALE_DIRECT_TOOL,
     MESH_TASK_HISTORY_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_MISSION_UPSERT_TOOL,
@@ -3190,6 +3206,121 @@ export async function meshReconcileLedger(
         },
     });
     return JSON.stringify({ success: true, evidence }, null, 2);
+}
+
+/**
+ * Prune orphaned staleDirect dispatch records — direct dispatches whose original node/session is
+ * no longer present in the live mesh (or terminal). dry_run (default) reports exactly which
+ * taskIds would be pruned without mutating anything; pass execute=true to actually remove them.
+ *
+ * Safety:
+ *  - Only records classified as staleDirectWork by buildMeshActiveWork against the CURRENT live
+ *    mesh are eligible — active/pending/assigned/generating work is never in that set.
+ *  - Of those, only orphans (node/session gone) are pruned. Fresh unacknowledged dispatch
+ *    failures (staleDispatchUnacknowledged: node/session still live) are explicitly preserved and
+ *    reported under preservedUnacknowledged so the caller can recover them.
+ *  - Pruning deletes only the mesh_direct_dispatches store rows; the append-only mesh ledger
+ *    (audit history) is left intact, and a direct_dispatch_pruned ledger entry is appended on
+ *    execute so the prune itself is auditable.
+ */
+export async function meshPruneStaleDirect(
+    ctx: MeshContext,
+    args: { execute?: boolean; dry_run?: boolean; include_terminal?: boolean } = {},
+): Promise<string> {
+    await refreshMeshFromDaemon(ctx);
+    // execute must be explicit; dry_run is the default unless execute===true.
+    const execute = args.execute === true && args.dry_run !== true;
+    const includeTerminal = args.include_terminal === true;
+
+    const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+    const ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 500 });
+    const directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+    const activeWorkEvidence = buildMeshActiveWork({
+        meshId: ctx.mesh.id,
+        queue: getQueue(ctx.mesh.id),
+        ledgerEntries,
+        directDispatches,
+        nodes: liveNodes,
+        includeTerminalDirect: includeTerminal,
+    });
+
+    const candidates = [
+        ...activeWorkEvidence.staleDirectWork,
+        ...(includeTerminal ? activeWorkEvidence.terminalDirectWork : []),
+    ];
+    // Only prune store-backed dispatch rows (taskIds present in MeshRuntimeStore). Ledger-only
+    // remote entries have no store row to delete and are pure audit history — leave them alone.
+    const storeTaskIds = new Set(directDispatches.map(d => d.taskId));
+
+    const prunable: typeof candidates = [];
+    const preservedUnacknowledged: typeof candidates = [];
+    const preservedLedgerOnly: typeof candidates = [];
+    const preservedNotOrphan: typeof candidates = [];
+    for (const record of candidates) {
+        const classification = classifyStaleDirectForPrune(record, { includeTerminal });
+        if (classification === 'preserve_unacknowledged') {
+            preservedUnacknowledged.push(record);
+            continue;
+        }
+        if (classification === 'preserve_active') {
+            preservedNotOrphan.push(record);
+            continue;
+        }
+        // prunable_orphan | prunable_terminal — only delete store-backed rows; ledger-only remote
+        // entries have no store row to delete and are pure audit history.
+        if (!storeTaskIds.has(record.taskId)) {
+            preservedLedgerOnly.push(record);
+            continue;
+        }
+        prunable.push(record);
+    }
+
+    const summarize = (records: typeof candidates) => records.map(r => ({
+        taskId: r.taskId,
+        nodeId: r.nodeId,
+        sessionId: r.sessionId,
+        status: r.status,
+        terminal: r.terminal === true,
+        staleReason: r.staleReason,
+        taskTitle: r.taskTitle,
+        createdAt: r.createdAt,
+    }));
+
+    let prunedCount = 0;
+    if (execute && prunable.length) {
+        prunedCount = deleteDirectDispatchesByTaskId(ctx.mesh.id, prunable.map(r => r.taskId));
+        appendLedgerEntry(ctx.mesh.id, {
+            kind: 'direct_dispatch_pruned',
+            payload: {
+                source: 'mesh_prune_stale_direct',
+                prunedCount,
+                taskIds: prunable.map(r => r.taskId),
+                reasons: Array.from(new Set(prunable.map(r => r.staleReason || (r.terminal ? 'terminal' : 'unknown')))),
+            },
+        });
+    }
+
+    return JSON.stringify({
+        success: true,
+        mode: execute ? 'execute' : 'dry_run',
+        meshId: ctx.mesh.id,
+        includeTerminal,
+        candidateCount: candidates.length,
+        prunableCount: prunable.length,
+        prunedCount,
+        prunable: summarize(prunable),
+        preserved: {
+            unacknowledgedCount: preservedUnacknowledged.length,
+            ledgerOnlyCount: preservedLedgerOnly.length,
+            notOrphanCount: preservedNotOrphan.length,
+            unacknowledged: summarize(preservedUnacknowledged),
+            ledgerOnly: summarize(preservedLedgerOnly),
+            notOrphan: summarize(preservedNotOrphan),
+        },
+        note: execute
+            ? `Pruned ${prunedCount} orphaned direct dispatch record(s) from the active staleDirect surface. The append-only mesh ledger audit history is preserved; a direct_dispatch_pruned entry records this prune.`
+            : 'Dry run — nothing was deleted. Re-run with execute=true to prune the listed orphaned records. Fresh unacknowledged dispatch failures (node/session still live) and ledger-only audit entries are always preserved.',
+    }, null, 2);
 }
 
 export async function meshListNodes(ctx: MeshContext): Promise<string> {
