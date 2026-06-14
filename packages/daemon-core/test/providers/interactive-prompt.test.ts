@@ -333,6 +333,104 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     )).toEqual(['1', '3', '\r']);
   });
 
+  it('builds multi-select answer steps by jumping to each option and pressing Space to toggle', () => {
+    const prompt = {
+      promptId: 'multi-select',
+      origin: 'cli' as const,
+      providerType: 'claude-cli',
+      createdAt: 0,
+      questions: [
+        {
+          questionId: 'q1',
+          question: 'Pick all the languages you use',
+          header: 'Languages',
+          multiSelect: true,
+          options: [
+            { label: 'TypeScript' },
+            { label: 'Python' },
+            { label: 'Rust' },
+            { label: 'Go' },
+          ],
+          allowFreeform: false,
+        },
+      ],
+    };
+
+    // Check TypeScript(idx0)→'1'+Space, Rust(idx2)→'3'+Space, then Enter to
+    // leave the question, then Enter to submit the confirm screen.
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt, {
+      promptId: 'multi-select',
+      answers: { q1: { selectedLabels: ['TypeScript', 'Rust'] } },
+    })).toEqual(['1', ' ', '3', ' ', '\r', '\r']);
+
+    // Order of selected labels is preserved as emitted; a single checked box
+    // still gets its toggle + advance, distinguishing it from single-select.
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt, {
+      promptId: 'multi-select',
+      answers: { q1: { selectedLabels: ['Go'] } },
+    })).toEqual(['4', ' ', '\r', '\r']);
+  });
+
+  it('handles a multi-select question mixed with a single-select question', () => {
+    const prompt = {
+      promptId: 'mixed',
+      origin: 'cli' as const,
+      providerType: 'claude-cli',
+      createdAt: 0,
+      questions: [
+        {
+          questionId: 'q1',
+          question: 'Pick features',
+          header: 'Features',
+          multiSelect: true,
+          options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }],
+          allowFreeform: false,
+        },
+        {
+          questionId: 'q2',
+          question: 'Pick one tier',
+          header: 'Tier',
+          multiSelect: false,
+          options: [{ label: 'Free' }, { label: 'Pro' }],
+          allowFreeform: false,
+        },
+      ],
+    };
+
+    // q1 multi: A(0)→'1'+Space, C(2)→'3'+Space, Enter advance.
+    // q2 single: Pro(1)→'2' (auto-advances). Final Enter submits.
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt, {
+      promptId: 'mixed',
+      answers: {
+        q1: { selectedLabels: ['A', 'C'] },
+        q2: { selectedLabels: ['Pro'] },
+      },
+    })).toEqual(['1', ' ', '3', ' ', '\r', '2', '\r']);
+  });
+
+  it('throws when a multi-select question has no selected labels', () => {
+    const prompt = {
+      promptId: 'empty-multi',
+      origin: 'cli' as const,
+      providerType: 'claude-cli',
+      createdAt: 0,
+      questions: [
+        {
+          questionId: 'q1',
+          question: 'Pick any',
+          header: 'Any',
+          multiSelect: true,
+          options: [{ label: 'X' }, { label: 'Y' }],
+          allowFreeform: false,
+        },
+      ],
+    };
+    expect(() => buildClaudeInteractiveTuiAnswerSteps(prompt, {
+      promptId: 'empty-multi',
+      answers: { q1: { selectedLabels: [] } },
+    })).toThrow(/at least one selected label/);
+  });
+
   it('captures the headerless picker variant where ☐ marker prefixes the question line', () => {
     // claude-cli >=2.1 ships a compact variant where the section header and
     // the question share one line (e.g. "☐ RPS R1 1라운드 — 가위바위보!").

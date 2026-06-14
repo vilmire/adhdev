@@ -81,6 +81,29 @@ describe('interactive prompt utilities', () => {
     expect(findInteractivePromptSession(entries, 'missing-session')).toBeNull()
   })
 
+  it('collects every checked box for a multi-select question into the answer array', () => {
+    // Regression guard for the multi-select submit bug: checking 2+ boxes must
+    // send ALL of them, not just one. The selection state accumulates labels,
+    // and the response must carry the full array through to the daemon.
+    const multi = {
+      ...prompt,
+      promptId: 'multi-only',
+      questions: [
+        {
+          questionId: 'q1',
+          question: 'Pick all that apply',
+          multiSelect: true,
+          options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }],
+        },
+      ],
+    }
+    const response = buildInteractivePromptResponse(multi, {
+      q1: { selectedLabels: ['A', 'C'] },
+    })
+    expect(response.answers.q1.selectedLabels).toEqual(['A', 'C'])
+    expect(response.answers.q1.selectedLabels).toHaveLength(2)
+  })
+
   it('builds daemon-compatible responses from selected labels and freeform text', () => {
     expect(buildInteractivePromptResponse(prompt, {
       q1: { selectedLabels: ['Approve'] },

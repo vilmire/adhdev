@@ -346,11 +346,32 @@ export function buildClaudeInteractiveTuiAnswerSteps(
   if (response.promptId !== prompt.promptId) throw new Error('Interactive prompt response does not match active prompt');
   const steps: string[] = [];
   for (const question of prompt.questions) {
-    if (question.multiSelect) throw new Error('Claude TUI multi-select prompts are not supported yet');
     const answer = response.answers[question.questionId];
     if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
     const freeformText = answer.freeformText?.trim() ?? '';
-    if (freeformText) {
+
+    if (question.multiSelect) {
+      // Multi-select: Claude TUI renders each option as a checkbox and the
+      // footer reads "Space to select". A numeric digit jumps the cursor to
+      // that option; Space toggles its checkbox. So for every selected label
+      // emit `[digit, ' ']` to land on it and toggle it on. After toggling all
+      // boxes for this question, Enter advances to the next question (or to the
+      // final confirm screen for the last question).
+      const labels = answer.selectedLabels;
+      if (labels.length === 0) {
+        throw new Error(`Expected at least one selected label for ${question.questionId}`);
+      }
+      for (const label of labels) {
+        const selectedIndex = question.options.findIndex(option => option.label === label);
+        if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label}`);
+        steps.push(String(selectedIndex + 1));
+        steps.push(' ');
+      }
+      // Confirm this question's checked set and move on. Unlike single-select
+      // (where the digit auto-advances), multi-select stays on the page until an
+      // explicit Enter so the user can toggle multiple boxes.
+      steps.push('\r');
+    } else if (freeformText) {
       // Freeform: select the "Type something." option (always the last visible
       // option before "Chat about this"), then type the text and confirm.
       const typeOptionIndex = question.options.findIndex(o => /^Type something\.?$/i.test(o.label));

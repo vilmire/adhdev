@@ -243,6 +243,83 @@ describe('SpecCliAdapter — interactive prompt resolved in terminal', () => {
   });
 });
 
+describe('SpecCliAdapter — setInteractivePromptResponse submit path', () => {
+  // End-to-end of the actual daemon submit entry point: when the dashboard
+  // submits an interactive prompt answer, cli-provider-instance forwards it to
+  // adapter.setInteractivePromptResponse(), which (for the TUI transport) builds
+  // key steps and writes them to the PTY. This test drives that real method with
+  // a mock dispatch driver and asserts the exact bytes written.
+  //
+  // The multi-select case is the regression under fix: setInteractivePromptResponse
+  // previously threw "Claude TUI multi-select prompts are not supported yet", so a
+  // checked-box submit never reached the PTY — the selection was silently dropped.
+  function makeSubmitAdapter(prompt: any): { adapter: any; writes: string[] } {
+    const writes: string[] = [];
+    const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+    adapter.driver = {
+      snapshot: () => SINGLE_QUESTION_SCREEN,
+      dispatch: (event: any) => {
+        if (event?.kind === 'pty_write') writes.push(event.data);
+      },
+    };
+    adapter.activeInteractivePrompt = prompt;
+    adapter.interactivePromptTransport = 'tui';
+    return { adapter, writes };
+  }
+
+  const MULTI_PROMPT = {
+    promptId: 'ask-multi-1',
+    origin: 'cli' as const,
+    providerType: 'claude-cli',
+    createdAt: 0,
+    questions: [
+      {
+        questionId: 'q1',
+        question: 'Pick all languages',
+        header: 'Languages',
+        multiSelect: true,
+        options: [{ label: 'TypeScript' }, { label: 'Python' }, { label: 'Rust' }],
+        allowFreeform: false,
+      },
+    ],
+  };
+
+  it('writes Space-toggle key steps for every checked box on a multi-select submit', async () => {
+    const { adapter, writes } = makeSubmitAdapter(MULTI_PROMPT);
+
+    await adapter.setInteractivePromptResponse({
+      promptId: 'ask-multi-1',
+      answers: { q1: { selectedLabels: ['TypeScript', 'Rust'] } },
+    });
+
+    // TypeScript(idx0) → '1' + Space, Rust(idx2) → '3' + Space, Enter to leave
+    // the question, then a final Enter to submit the confirm screen.
+    expect(writes).toEqual(['1', ' ', '3', ' ', '\r', '\r']);
+    // The held prompt is cleared after a successful submit.
+    expect(adapter.activeInteractivePrompt).toBeNull();
+    expect(adapter.interactivePromptTransport).toBeNull();
+    expect(adapter.statusCallback).toHaveBeenCalled();
+  });
+
+  it('still writes a single numeric key for a single-select submit (no regression)', async () => {
+    const single = {
+      ...MULTI_PROMPT,
+      promptId: 'ask-single-1',
+      questions: [{ ...MULTI_PROMPT.questions[0], questionId: 'q1', multiSelect: false }],
+    };
+    const { adapter, writes } = makeSubmitAdapter(single);
+
+    await adapter.setInteractivePromptResponse({
+      promptId: 'ask-single-1',
+      answers: { q1: { selectedLabels: ['Python'] } },
+    });
+
+    // Python(idx1) → '2', then final Enter to submit. No Space toggles.
+    expect(writes).toEqual(['2', '\r']);
+    expect(writes).not.toContain(' ');
+  });
+});
+
 describe('SpecCliAdapter — codex-cli footer identity', () => {
   it('extracts providerSessionId from ANSI-colored Codex footer', () => {
     const adapter = makeCodexAdapter([
