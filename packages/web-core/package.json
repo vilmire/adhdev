@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@adhdev/daemon-core": "*",
+    "@adhdev/mesh-shared": "*",
     "@adhdev/terminal-render-web": "*",
     "@xyflow/react": "^12.10.2",
     "clsx": "^2.1.1",

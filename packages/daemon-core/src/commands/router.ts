@@ -27,7 +27,11 @@ import { listProviderHistorySessions } from '../config/chat-history.js';
 import { detectIDEs } from '../detection/ide-detector.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { getGitRepoStatus } from '../git/git-status.js';
-import type { GitSubmoduleStatus } from '../git/git-types.js';
+import {
+    normalizeGitStatus as sharedNormalizeGitStatus,
+    pickBestTransitGitStatus as sharedPickBestTransitGitStatus,
+    summarizeGitShape as sharedSummarizeGitShape,
+} from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
@@ -143,39 +147,8 @@ function readBooleanValue(...values: unknown[]): boolean | undefined {
     return undefined;
 }
 
-function summarizeRepoMeshDebugGit(git: unknown): Record<string, unknown> | null {
-    const record = readObjectRecord(git);
-    if (!Object.keys(record).length) return null;
-    const submodules = Array.isArray(record.submodules)
-        ? record.submodules.map((entry: any) => ({
-            path: readStringValue(entry?.path) ?? null,
-            commit: readStringValue(entry?.commit)?.slice(0, 12) ?? null,
-            dirty: readBooleanValue(entry?.dirty) ?? false,
-            outOfSync: readBooleanValue(entry?.outOfSync, entry?.out_of_sync) ?? false,
-        }))
-        : [];
-    return {
-        isGitRepo: readBooleanValue(record.isGitRepo),
-        workspace: readStringValue(record.workspace) ?? null,
-        repoRoot: readStringValue(record.repoRoot, record.repo_root) ?? null,
-        branch: readStringValue(record.branch) ?? null,
-        upstream: readStringValue(record.upstream) ?? null,
-        upstreamStatus: readStringValue(record.upstreamStatus, record.upstream_status) ?? null,
-        headCommit: readStringValue(record.headCommit, record.head_commit)?.slice(0, 12) ?? null,
-        ahead: readNumberValue(record.ahead) ?? null,
-        behind: readNumberValue(record.behind) ?? null,
-        dirtyCounts: {
-            staged: readNumberValue(record.staged) ?? 0,
-            modified: readNumberValue(record.modified) ?? 0,
-            untracked: readNumberValue(record.untracked) ?? 0,
-            deleted: readNumberValue(record.deleted) ?? 0,
-            renamed: readNumberValue(record.renamed) ?? 0,
-        },
-        lastCheckedAt: readNumberValue(record.lastCheckedAt, record.last_checked_at) ?? null,
-        submoduleCount: submodules.length,
-        submodules,
-    };
-}
+// summarizeRepoMeshDebugGit was a hand-synced copy of the cloud git-shape
+// summarizer; both now call shared summarizeGitShape (@adhdev/mesh-shared).
 
 function summarizeRepoMeshStatusDebug(status: any): Record<string, unknown> {
     const nodes = Array.isArray(status?.nodes) ? status.nodes : [];
@@ -200,7 +173,7 @@ function summarizeRepoMeshStatusDebug(status: any): Record<string, unknown> {
             } : null,
             gitProbePending: node?.gitProbePending === true,
             launchReady: node?.launchReady === true,
-            git: summarizeRepoMeshDebugGit(node?.git),
+            git: sharedSummarizeGitShape(node?.git),
             branchConvergence: node?.branchConvergence ?? node?.branch_convergence ?? null,
         })),
     };
@@ -214,41 +187,8 @@ function logRepoMeshStatusDebug(event: string, fields: Record<string, unknown>):
     }
 }
 
-function joinRepoPath(root: string | undefined, relativePath: string | undefined): string | undefined {
-    const normalizedRoot = typeof root === 'string' ? root.trim().replace(/[\\/]+$/, '') : '';
-    const normalizedPath = typeof relativePath === 'string' ? relativePath.trim() : '';
-    if (!normalizedPath) return undefined;
-    if (/^(?:[A-Za-z]:[\\/]|\/)/.test(normalizedPath)) return normalizedPath;
-    if (!normalizedRoot) return undefined;
-    return `${normalizedRoot}/${normalizedPath.replace(/^[\\/]+/, '')}`;
-}
-
-function readGitSubmodules(value: unknown, parentRepoRoot?: string): GitSubmoduleStatus[] | undefined {
-    if (!Array.isArray(value)) return undefined;
-    const submodules = value
-        .map(entry => {
-            const submodule = readObjectRecord(entry);
-            const path = readStringValue(submodule.path);
-            const commit = readStringValue(submodule.commit);
-            const repoPath = readStringValue(submodule.repoPath, submodule.repo_root)
-                ?? joinRepoPath(parentRepoRoot, path);
-            // repoPath is only used as a display path; cloud transit can omit it (and a
-            // derivable parentRepoRoot), so keep any submodule with both path and commit
-            // rather than silently dropping every submodule node. repoPath stays optional.
-            if (!path || !commit) return null;
-            return {
-                path,
-                commit,
-                ...(repoPath ? { repoPath } : {}),
-                dirty: readBooleanValue(submodule.dirty) ?? false,
-                outOfSync: readBooleanValue(submodule.outOfSync, submodule.out_of_sync) ?? false,
-                lastCheckedAt: readNumberValue(submodule.lastCheckedAt, submodule.last_checked_at) ?? Date.now(),
-                ...(readStringValue(submodule.error) ? { error: readStringValue(submodule.error) } : {}),
-            };
-        })
-        .filter((entry): entry is GitSubmoduleStatus => entry !== null);
-    return submodules.length > 0 ? submodules : undefined;
-}
+// joinRepoPath + readGitSubmodules moved to @adhdev/mesh-shared (readGitSubmodules)
+// — used via sharedNormalizeGitStatus / sharedPickBestTransitGitStatus below.
 
 function buildMeshNodeDisplayLabel(node: Record<string, unknown>, nodeId: string, providerPriority: string[]): string {
     const explicit = readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias);
@@ -385,82 +325,21 @@ function buildMeshNodeMachineIdentity(node: Record<string, unknown>, opts: {
     };
 }
 
+// normalizeInlineMeshGitStatus / scoreInlineMeshGitStatus /
+// buildInlineMeshTransitGitStatus were the standalone-side copies of the cloud
+// transit git normalizers. They now delegate to @adhdev/mesh-shared so the two
+// transports can no longer drift (e.g. on the submodule drop / evidence rules).
+
 function normalizeInlineMeshGitStatus(
     status: Record<string, unknown>,
     node: any,
     options?: { lastCheckedAt?: number },
 ): Record<string, unknown> | undefined {
-    const isGitRepo = readBooleanValue(status.isGitRepo);
-    if (!Object.keys(status).length || isGitRepo === undefined) return undefined;
-    const conflictFiles = Array.isArray(status.conflictFiles)
-        ? status.conflictFiles.filter((value: unknown): value is string => typeof value === 'string')
-        : [];
-    const conflictCount = readNumberValue(status.conflicts) ?? conflictFiles.length;
-    const hasConflicts = readBooleanValue(status.hasConflicts) ?? conflictCount > 0;
-    const repoRoot = readStringValue(status.repoRoot, status.repo_root, node?.repoRoot, node?.repo_root, status.workspace, node?.workspace) || undefined;
-    const submodules = readGitSubmodules(status.submodules, repoRoot);
-    return {
-        workspace: readStringValue(status.workspace, node?.workspace) || '',
-        repoRoot: repoRoot ?? null,
-        isGitRepo,
-        branch: readStringValue(status.branch) ?? null,
-        headCommit: readStringValue(status.headCommit) ?? null,
-        headMessage: readStringValue(status.headMessage) ?? null,
-        upstream: readStringValue(status.upstream) ?? null,
-        upstreamStatus: readStringValue(status.upstreamStatus, status.upstream_status)
-            ?? (readStringValue(status.upstream) ? 'unchecked' : 'no_upstream'),
-        upstreamFetchedAt: readNumberValue(status.upstreamFetchedAt, status.upstream_fetched_at),
-        upstreamFetchError: readStringValue(status.upstreamFetchError, status.upstream_fetch_error),
-        ahead: readNumberValue(status.ahead) ?? 0,
-        behind: readNumberValue(status.behind) ?? 0,
-        staged: readNumberValue(status.staged) ?? 0,
-        modified: readNumberValue(status.modified) ?? 0,
-        untracked: readNumberValue(status.untracked) ?? 0,
-        deleted: readNumberValue(status.deleted) ?? 0,
-        renamed: readNumberValue(status.renamed) ?? 0,
-        hasConflicts,
-        conflictFiles,
-        stashCount: readNumberValue(status.stashCount) ?? 0,
-        lastCheckedAt: options?.lastCheckedAt ?? readNumberValue(status.lastCheckedAt) ?? Date.now(),
-        ...(submodules ? { submodules } : {}),
-    };
-}
-
-function scoreInlineMeshGitStatus(git: Record<string, unknown> | undefined): number {
-    if (!git) return Number.NEGATIVE_INFINITY;
-    let score = 0;
-    if (readBooleanValue(git.isGitRepo) === true) score += 50;
-    if (readBooleanValue(git.isGitRepo) === false) score -= 10;
-    if (readStringValue(git.branch)) score += 20;
-    if (readStringValue(git.headCommit)) score += 20;
-    if (readStringValue(git.upstream)) score += 10;
-    if (readStringValue(git.upstreamStatus)) score += 5;
-    if (readNumberValue(git.ahead) !== undefined) score += 2;
-    if (readNumberValue(git.behind) !== undefined) score += 2;
-    if (Array.isArray(git.submodules) && git.submodules.length > 0) score += 4 + git.submodules.length;
-    if (readStringValue(git.error)) score -= 20;
-    return score;
+    return sharedNormalizeGitStatus(status, readObjectRecord(node), options) as Record<string, unknown> | undefined;
 }
 
 function buildInlineMeshTransitGitStatus(node: any): Record<string, unknown> | undefined {
-    const rawGit = readObjectRecord(node?.lastGit ?? node?.last_git);
-    const gitResult = readObjectRecord(rawGit.result);
-    const directStatus = readObjectRecord(rawGit.status);
-    const nestedStatus = readObjectRecord(gitResult.status);
-    const rawProbe = readObjectRecord(node?.lastProbe ?? node?.last_probe);
-    const probeGit = readObjectRecord(rawProbe.git);
-    const probeGitResult = readObjectRecord(probeGit.result);
-    const probeDirectStatus = readObjectRecord(probeGit.status);
-    const probeNestedStatus = readObjectRecord(probeGitResult.status);
-    const candidates = [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus];
-    let best: { git: Record<string, unknown>; score: number } | null = null;
-    for (const status of candidates) {
-        const normalized = normalizeInlineMeshGitStatus(status, node, { lastCheckedAt: Date.now() });
-        if (!normalized) continue;
-        const score = scoreInlineMeshGitStatus(normalized);
-        if (!best || score > best.score) best = { git: normalized, score };
-    }
-    return best?.git;
+    return sharedPickBestTransitGitStatus(readObjectRecord(node), { lastCheckedAt: Date.now() }) as Record<string, unknown> | undefined;
 }
 
 function shouldRefreshStalePendingAggregate(snapshot: any, options?: { requireDirectPeerTruth?: boolean }): boolean {

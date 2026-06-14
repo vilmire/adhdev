@@ -545,6 +545,59 @@ describe('extractRepoMeshStatus', () => {
     expect(graph.edges.filter(e => e.type === 'submoduleLink')).toHaveLength(2)
   })
 
+  it('round-trip regression: a transit-stripped node keeps its submodule AND its session (shared normalizers)', () => {
+    // Cloud transit reshaped this node: the git object carries only repoRoot +
+    // a repoPath-less submodule, and the session record lost its explicit id.
+    // Both must survive normalization (evidence + submodule + synthetic-session
+    // fixes from @adhdev/mesh-shared), not get silently dropped.
+    const repoRoot = '/Users/x/adhdev'
+    const normalized = extractRepoMeshStatus({
+      success: true,
+      result: {
+        meshId: 'mesh_transit_roundtrip',
+        meshName: 'Transit Round-Trip Mesh',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        refreshedAt: '2026-06-15T00:00:00Z',
+        nodes: [
+          {
+            id: 'node_transit',
+            machineLabel: 'remote',
+            workspace: repoRoot,
+            machineStatus: 'online',
+            lastGit: {
+              status: {
+                // Branch/upstream/counters stripped in transit — only repoRoot + submodule remain.
+                repoRoot,
+                submodules: [
+                  { path: 'oss', commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a', dirty: false, outOfSync: false },
+                ],
+              },
+            },
+            // Session record with NO explicit id field (stripped in transit).
+            sessions: [
+              { workspace: repoRoot, providerType: 'claude-code', state: 'generating', role: 'coordinator' },
+            ],
+          },
+        ],
+        queue: { tasks: [], summary: { active: 0, historical: 0, counts: {}, activeCounts: {}, historicalCounts: {} } },
+        ledger: { entries: [], summary: { recentFailures: 0, taskCompleted: 0, taskFailed: 0, sessionLaunched: 0 } },
+      },
+    } as any)
+
+    const node = normalized?.nodes[0]
+    // git evidence survived on repoRoot alone, and the submodule was kept.
+    expect(node?.git?.submodules).toHaveLength(1)
+    expect(node?.git?.submodules?.[0].path).toBe('oss')
+    // session survived via a deterministic synthetic id.
+    expect(node?.activeSessionDetails).toHaveLength(1)
+    expect(node?.activeSessionDetails?.[0].sessionId.startsWith('synthetic:')).toBe(true)
+    expect(node?.activeSessionDetails?.[0].providerType).toBe('claude-code')
+
+    const graph = buildMeshGraph(normalized as any)
+    expect(graph.nodes.filter(n => n.type === 'submoduleNode')).toHaveLength(1)
+  })
+
   it('clears pending git and derives health when direct mesh peer status coexists with live git fields', () => {
     const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({

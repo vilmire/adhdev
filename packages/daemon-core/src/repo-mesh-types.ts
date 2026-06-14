@@ -370,24 +370,12 @@ export interface RepoMeshStatus {
     ledger?: RepoMeshLedgerStatus;
 }
 
-export interface RepoMeshSessionStatus {
-    sessionId: string;
-    providerType?: string;
-    state?: string;
-    chatStatus?: string;
-    lifecycle?: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed' | 'interrupted';
-    surfaceKind?: 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
-    recoveryState?: string | null;
-    workspace?: string | null;
-    title?: string | null;
-    role?: string | null;
-    isSelfCoordinator?: boolean;
-    statusNote?: string | null;
-    createdAt?: string | null;
-    startedAt?: string | null;
-    lastActivityAt?: string | null;
-    isCached?: boolean;
-}
+// RepoMeshSessionStatus shape now lives in @adhdev/mesh-shared (shared with
+// web-core's session normalizer). Re-exported so local RepoMeshNodeStatus/
+// RepoMeshStatus and external `@adhdev/daemon-core/repo-mesh-types` consumers
+// keep resolving it unchanged.
+export type { RepoMeshSessionStatus } from '@adhdev/mesh-shared';
+import type { RepoMeshSessionStatus } from '@adhdev/mesh-shared';
 
 export type RepoMeshPeerConnectionState = 'self' | 'connected' | 'connecting' | 'disconnected' | 'failed' | 'closed' | 'unknown';
 export type RepoMeshPeerConnectionTransport = 'local' | 'direct' | 'relay' | 'unknown';

@@ -14,7 +14,10 @@ export default defineConfig({
   sourcemap: true,
   // Keep native modules external so their bindings resolve from their package roots.
   external: ['ws', 'chalk', 'conf', 'node-pty', 'better-sqlite3'],
-  noExternal: [],
+  // Bundle the pure mesh-shared leaf inline so this dist — which daemon-standalone
+  // ships verbatim — is self-contained and doesn't need mesh-shared resolvable at
+  // the consumer's node_modules root.
+  noExternal: ['@adhdev/mesh-shared'],
   // Bake the git commit/version into __DAEMON_BUILD_* (read by src/build-info.ts)
   // so this dist — which daemon-standalone ships verbatim — reports its build.
   define: daemonBuildDefine({ version: pkg.version }),

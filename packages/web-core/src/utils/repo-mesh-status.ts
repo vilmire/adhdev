@@ -4,201 +4,28 @@ import type {
     RepoMeshSessionStatus,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
+import {
+    normalizeGitStatus,
+    normalizeMeshSessionRecord,
+    pickBestTransitGitStatus,
+    readBoolean,
+    readRecord,
+    readString,
+    readStringArray,
+    scoreGitUpstreamFreshness,
+    type JsonRecord,
+} from '@adhdev/mesh-shared'
 
-type JsonRecord = Record<string, unknown>
-
-function readRecord(value: unknown): JsonRecord {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}
-}
-
-function readString(...values: unknown[]): string | undefined {
-    for (const value of values) {
-        if (typeof value !== 'string') continue
-        const trimmed = value.trim()
-        if (trimmed) return trimmed
-    }
-    return undefined
-}
-
-function readNumber(...values: unknown[]): number | undefined {
-    for (const value of values) {
-        if (typeof value === 'number' && Number.isFinite(value)) return value
-    }
-    return undefined
-}
-
-function readBoolean(...values: unknown[]): boolean | undefined {
-    for (const value of values) {
-        if (typeof value === 'boolean') return value
-    }
-    return undefined
-}
-
-function readStringArray(value: unknown): string[] {
-    return Array.isArray(value)
-        ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-        : []
-}
-
-function scoreGitUpstreamFreshness(status: GitRepoStatus['upstreamStatus'] | undefined): number {
-    switch (status) {
-        case 'fresh':
-            return 30
-        case 'no_upstream':
-            return 4
-        case 'unchecked':
-        case undefined:
-            return 0
-        case 'stale':
-            return -10
-        case 'unavailable':
-            return -15
-        default:
-            return 0
-    }
-}
-
-function joinRepoPath(root: string | undefined, relativePath: string | undefined): string | undefined {
-    const normalizedRoot = typeof root === 'string' ? root.trim().replace(/[\\/]+$/, '') : ''
-    const normalizedPath = typeof relativePath === 'string' ? relativePath.trim() : ''
-    if (!normalizedPath) return undefined
-    if (/^(?:[A-Za-z]:[\\/]|\/)/.test(normalizedPath)) return normalizedPath
-    if (!normalizedRoot) return undefined
-    return `${normalizedRoot}/${normalizedPath.replace(/^[\\/]+/, '')}`
-}
-
-function readGitSubmodules(value: unknown, parentRepoRoot?: string): GitRepoStatus['submodules'] {
-    if (!Array.isArray(value)) return undefined
-    const submodules = value
-        .map(entry => {
-            const submodule = readRecord(entry)
-            const path = readString(submodule.path)
-            const commit = readString(submodule.commit)
-            const repoPath = readString(submodule.repoPath, submodule.repo_root)
-                ?? joinRepoPath(parentRepoRoot, path)
-            // repoPath is only used for the submodule node's display workspace, which is
-            // allowed to be empty. The cloud P2P transit path can deliver submodule entries
-            // without repoPath (and a per-node git object without a derivable repoRoot), so
-            // dropping on missing repoPath would silently strip every submodule graph node.
-            // Keep any submodule that carries both path and commit.
-            if (!path || !commit) return null
-            return {
-                path,
-                commit,
-                ...(repoPath ? { repoPath } : {}),
-                dirty: readBoolean(submodule.dirty) ?? false,
-                outOfSync: readBoolean(submodule.outOfSync, submodule.out_of_sync) ?? false,
-                lastCheckedAt: readNumber(submodule.lastCheckedAt, submodule.last_checked_at) ?? Date.now(),
-                ...(readString(submodule.error) ? { error: readString(submodule.error) } : {}),
-            }
-        })
-        .filter((entry): entry is NonNullable<GitRepoStatus['submodules']>[number] => entry !== null)
-    return submodules.length > 0 ? submodules : undefined
-}
-
-function hasGitStatusEvidence(status: JsonRecord): boolean {
-    return readBoolean(status.isGitRepo) !== undefined
-        || Boolean(readString(status.branch, status.upstream, status.upstreamStatus, status.upstream_status, status.headCommit))
-        || readNumber(
-            status.ahead,
-            status.behind,
-            status.staged,
-            status.modified,
-            status.untracked,
-            status.deleted,
-            status.renamed,
-            status.lastCheckedAt,
-            status.last_checked_at,
-        ) !== undefined
-        || (Array.isArray(status.submodules) && status.submodules.length > 0)
-}
-
-function normalizeGitStatus(
-    status: JsonRecord,
-    node: JsonRecord,
-    options?: { lastCheckedAt?: number },
-): GitRepoStatus | undefined {
-    const explicitIsGitRepo = readBoolean(status.isGitRepo)
-    if (!Object.keys(status).length || !hasGitStatusEvidence(status)) return undefined
-    const isGitRepo = explicitIsGitRepo ?? true
-    const conflictFiles = Array.isArray(status.conflictFiles)
-        ? status.conflictFiles.filter((entry): entry is string => typeof entry === 'string')
-        : []
-    const conflictCount = readNumber(status.conflicts) ?? conflictFiles.length
-    const hasConflicts = readBoolean(status.hasConflicts) ?? conflictCount > 0
-    const repoRoot = readString(status.repoRoot, status.repo_root, node.repoRoot, node.repo_root, status.workspace, node.workspace) || undefined
-    const submodules = readGitSubmodules(status.submodules, repoRoot)
-    const upstreamStatus = readString(status.upstreamStatus, status.upstream_status)
-    const upstreamFetchedAt = readNumber(status.upstreamFetchedAt, status.upstream_fetched_at)
-    const upstreamFetchError = readString(status.upstreamFetchError, status.upstream_fetch_error)
-    const error = readString(status.error)
-    const staged = readNumber(status.staged) ?? 0
-    const modified = readNumber(status.modified) ?? 0
-    const untracked = readNumber(status.untracked) ?? 0
-    const deleted = readNumber(status.deleted) ?? 0
-    const renamed = readNumber(status.renamed) ?? 0
-    return {
-        workspace: readString(status.workspace, node.workspace) || '',
-        repoRoot: repoRoot ?? null,
-        isGitRepo,
-        branch: readString(status.branch) ?? null,
-        headCommit: readString(status.headCommit) ?? null,
-        headMessage: readString(status.headMessage) ?? null,
-        upstream: readString(status.upstream) ?? null,
-        upstreamStatus: (upstreamStatus as GitRepoStatus['upstreamStatus']) ?? 'unchecked',
-        ...(upstreamFetchedAt !== undefined ? { upstreamFetchedAt } : {}),
-        ...(upstreamFetchError ? { upstreamFetchError } : {}),
-        ahead: readNumber(status.ahead) ?? 0,
-        behind: readNumber(status.behind) ?? 0,
-        staged,
-        modified,
-        untracked,
-        deleted,
-        renamed,
-        dirty: readBoolean(status.dirty, status.isDirty, status.is_dirty) ?? (staged + modified + untracked + deleted + renamed > 0 || hasConflicts),
-        hasConflicts,
-        conflictFiles,
-        stashCount: readNumber(status.stashCount, status.stash_count) ?? 0,
-        lastCheckedAt: options?.lastCheckedAt ?? readNumber(status.lastCheckedAt, status.last_checked_at) ?? Date.now(),
-        ...(submodules ? { submodules } : {}),
-        ...(error ? { error } : {}),
-    }
-}
-
-function scoreGitStatusCandidate(git: GitRepoStatus | undefined): number {
-    if (!git) return Number.NEGATIVE_INFINITY
-    let score = 0
-    if (git.isGitRepo === true) score += 50
-    if (git.isGitRepo === false) score -= 10
-    if (git.branch) score += 20
-    if (git.headCommit) score += 20
-    if (git.upstream) score += 10
-    score += scoreGitUpstreamFreshness(git.upstreamStatus)
-    if (typeof git.ahead === 'number') score += 2
-    if (typeof git.behind === 'number') score += 2
-    if (Array.isArray(git.submodules) && git.submodules.length > 0) score += 4 + git.submodules.length
-    if (git.error) score -= 20
-    return score
-}
+// JSON primitives, git-status normalizers (normalizeGitStatus / readGitSubmodules /
+// hasGitStatusEvidence / scoreGitStatusCandidate / pickBestTransitGitStatus), the
+// upstream-freshness score, and the session normalizer all moved to
+// @adhdev/mesh-shared so the cloud (this file) and standalone (daemon-core router)
+// paths share ONE implementation that can no longer drift.
 
 function readTransitGitStatus(node: JsonRecord): GitRepoStatus | undefined {
-    const rawGit = readRecord(node.lastGit ?? node.last_git)
-    const gitResult = readRecord(rawGit.result)
-    const directStatus = readRecord(rawGit.status)
-    const nestedStatus = readRecord(gitResult.status)
-    const rawProbe = readRecord(node.lastProbe ?? node.last_probe)
-    const probeGit = readRecord(rawProbe.git)
-    const probeGitResult = readRecord(probeGit.result)
-    const probeDirectStatus = readRecord(probeGit.status)
-    const probeNestedStatus = readRecord(probeGitResult.status)
-    let best: { git: GitRepoStatus; score: number } | null = null
-    for (const status of [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus]) {
-        const normalized = normalizeGitStatus(status, node, { lastCheckedAt: Date.now() })
-        if (!normalized) continue
-        const score = scoreGitStatusCandidate(normalized)
-        if (!best || score > best.score) best = { git: normalized, score }
-    }
-    return best?.git
+    // Shared with the standalone path: picks the best of the four transit envelope
+    // slots (lastGit/lastProbe × status/result.status).
+    return pickBestTransitGitStatus(node, { lastCheckedAt: Date.now() })
 }
 
 function getGitSubmoduleDriftState(git: GitRepoStatus | null | undefined): { dirty: boolean; outOfSync: boolean } {
@@ -237,29 +64,9 @@ function preferGitDerivedHealth(rawHealth: string | undefined, git: GitRepoStatu
     return rawHealth as RepoMeshNodeStatus['health']
 }
 
-function normalizeMeshSessionRecord(entry: unknown): RepoMeshSessionStatus | null {
-    const record = readRecord(entry)
-    const sessionId = readString(record.sessionId, record.session_id, record.id)
-    if (!sessionId) return null
-    return {
-        sessionId,
-        ...(readString(record.providerType, record.provider) ? { providerType: readString(record.providerType, record.provider) } : {}),
-        ...(readString(record.state, record.status) ? { state: readString(record.state, record.status) } : {}),
-        ...(readString(record.chatStatus, record.chat_status) ? { chatStatus: readString(record.chatStatus, record.chat_status) } : {}),
-        ...(readString(record.lifecycle) ? { lifecycle: readString(record.lifecycle) as RepoMeshSessionStatus['lifecycle'] } : {}),
-        ...(readString(record.surfaceKind, record.surface_kind) ? { surfaceKind: readString(record.surfaceKind, record.surface_kind) as RepoMeshSessionStatus['surfaceKind'] } : {}),
-        ...(readString(record.recoveryState, record.recovery_state) ? { recoveryState: readString(record.recoveryState, record.recovery_state) } : {}),
-        ...(readString(record.workspace) ? { workspace: readString(record.workspace) } : {}),
-        ...(readString(record.title) ? { title: readString(record.title) } : {}),
-        ...(readString(record.role) ? { role: readString(record.role) } : {}),
-        ...(readBoolean(record.isSelfCoordinator, record.is_self_coordinator) !== undefined ? { isSelfCoordinator: readBoolean(record.isSelfCoordinator, record.is_self_coordinator) } : {}),
-        ...(readString(record.statusNote, record.status_note) ? { statusNote: readString(record.statusNote, record.status_note) } : {}),
-        ...(readString(record.createdAt, record.created_at) ? { createdAt: readString(record.createdAt, record.created_at) } : {}),
-        ...(readString(record.startedAt, record.started_at) ? { startedAt: readString(record.startedAt, record.started_at) } : {}),
-        ...(readString(record.lastActivityAt, record.last_activity_at) ? { lastActivityAt: readString(record.lastActivityAt, record.last_activity_at) } : {}),
-        ...(readBoolean(record.isCached, record.is_cached) !== undefined ? { isCached: readBoolean(record.isCached, record.is_cached) } : {}),
-    }
-}
+// normalizeMeshSessionRecord moved to @adhdev/mesh-shared (with the sessionId
+// fallback → deterministic-synthetic-id bug fix). Both the details list and the
+// single activeSession fallback below route through it for uniform behavior.
 
 function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | undefined {
     const details = Array.isArray(node.activeSessionDetails)
@@ -276,26 +83,24 @@ function readActiveSessionDetails(node: JsonRecord): RepoMeshSessionStatus[] | u
         if (normalized.length > 0) return normalized
     }
 
+    // Single-session fallback: fold the node-level id hints onto the activeSession
+    // record and run it through the SAME shared normalizer so the sessionId
+    // fallback (incl. deterministic synthetic id) is uniform with the list path.
     const fallback = readRecord(node.activeSession ?? node.active_session)
-    const sessionId = readString(
-        fallback.id,
-        fallback.sessionId,
-        fallback.session_id,
-        node.activeSessionId,
-        node.active_session_id,
-        node.sessionId,
-        node.session_id,
-    )
-    if (!sessionId) return undefined
-    return [{
-        sessionId,
-        ...(readString(fallback.providerType, fallback.provider) ? { providerType: readString(fallback.providerType, fallback.provider) } : {}),
-        ...(readString(fallback.state, fallback.status) ? { state: readString(fallback.state, fallback.status) } : {}),
-        ...(readString(fallback.chatStatus, fallback.chat_status) ? { chatStatus: readString(fallback.chatStatus, fallback.chat_status) } : {}),
-        ...(readString(fallback.statusNote, fallback.status_note) ? { statusNote: readString(fallback.statusNote, fallback.status_note) } : {}),
-        ...(readString(fallback.createdAt, fallback.created_at) ? { createdAt: readString(fallback.createdAt, fallback.created_at) } : {}),
-        ...(readString(fallback.startedAt, fallback.started_at) ? { startedAt: readString(fallback.startedAt, fallback.started_at) } : {}),
-    }]
+    const fallbackWithNodeHints = {
+        ...fallback,
+        sessionId: readString(
+            fallback.sessionId,
+            fallback.id,
+            fallback.session_id,
+            node.activeSessionId,
+            node.active_session_id,
+            node.sessionId,
+            node.session_id,
+        ),
+    }
+    const normalized = normalizeMeshSessionRecord(fallbackWithNodeHints)
+    return normalized ? [normalized] : undefined
 }
 
 function readConnectionStatus(node: JsonRecord): RepoMeshNodeStatus['connection'] {
