@@ -3456,22 +3456,22 @@ test('mesh_status marks coordinator sessions for this mesh as self so the callin
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
+  // Default compact: per-node session arrays are folded to a summary, but the
+  // self-coordinator marker must survive in the top-level coordinatorSessions /
+  // selfIdentification and in the per-node sessionSummary.selfCoordinatorSessionIds.
   const status = JSON.parse(await meshStatus(ctx as any));
 
   const nodeStatus = status.nodes.find((n: any) => n.nodeId === 'node-local');
   assert.ok(nodeStatus, 'expected node-local in status');
-  const selfSession = nodeStatus.sessions.find((s: any) => s.id === 'session-coordinator-self');
-  assert.ok(selfSession, 'expected self coordinator session');
-  assert.equal(selfSession.isSelfCoordinator, true, 'coordinator session for this mesh must be marked self');
-  assert.equal(selfSession.role, 'coordinator');
+  assert.equal(nodeStatus.sessions, undefined, 'compact mode folds the per-node sessions array');
+  assert.ok(nodeStatus.sessionSummary, 'compact mode keeps a per-node sessionSummary');
+  assert.equal(nodeStatus.sessionSummary.total, 3);
+  assert.deepEqual(nodeStatus.sessionSummary.selfCoordinatorSessionIds, ['session-coordinator-self']);
 
-  const otherMeshSession = nodeStatus.sessions.find((s: any) => s.id === 'session-other-mesh-coordinator');
-  assert.ok(otherMeshSession, 'expected other-mesh coordinator session');
-  assert.equal(otherMeshSession.isSelfCoordinator, undefined, 'coordinator for a different mesh must not be marked self');
-
-  const workerSession = nodeStatus.sessions.find((s: any) => s.id === 'session-worker');
-  assert.ok(workerSession, 'expected worker session');
-  assert.equal(workerSession.isSelfCoordinator, undefined, 'plain worker must not be marked self');
+  // N×M dedup: the daemon-wide session list appears once under daemonSessions.
+  assert.ok(status.daemonSessions, 'expected top-level daemonSessions map');
+  assert.ok(status.daemonSessions['daemon-coordinator'], 'expected daemon-coordinator entry');
+  assert.equal(status.daemonSessions['daemon-coordinator'].total, 3, 'daemonSessions folds to a summary by default');
 
   assert.ok(Array.isArray(status.coordinatorSessions), 'expected top-level coordinatorSessions array');
   assert.equal(status.coordinatorSessions.length, 1, 'only sessions matching this mesh should appear');
@@ -3479,6 +3479,27 @@ test('mesh_status marks coordinator sessions for this mesh as self so the callin
   assert.equal(status.coordinatorSessions[0].nodeId, 'node-local');
   assert.equal(status.coordinatorSessions[0].providerType, 'claude-cli');
   assert.equal(status.selfIdentification?.meshId, meshId);
+
+  // includeSessions=true restores the full per-node session array with markers.
+  const detailed = JSON.parse(await meshStatus(ctx as any, { includeSessions: true }));
+  const detailedNode = detailed.nodes.find((n: any) => n.nodeId === 'node-local');
+  assert.ok(Array.isArray(detailedNode.sessions), 'includeSessions=true restores the per-node sessions array');
+  const selfSession = detailedNode.sessions.find((s: any) => s.id === 'session-coordinator-self');
+  assert.ok(selfSession, 'expected self coordinator session');
+  assert.equal(selfSession.isSelfCoordinator, true, 'coordinator session for this mesh must be marked self');
+  assert.equal(selfSession.role, 'coordinator');
+
+  const otherMeshSession = detailedNode.sessions.find((s: any) => s.id === 'session-other-mesh-coordinator');
+  assert.ok(otherMeshSession, 'expected other-mesh coordinator session');
+  assert.equal(otherMeshSession.isSelfCoordinator, undefined, 'coordinator for a different mesh must not be marked self');
+
+  const workerSession = detailedNode.sessions.find((s: any) => s.id === 'session-worker');
+  assert.ok(workerSession, 'expected worker session');
+  assert.equal(workerSession.isSelfCoordinator, undefined, 'plain worker must not be marked self');
+
+  // includeSessions=true also emits the full session arrays under daemonSessions.
+  assert.ok(Array.isArray(detailed.daemonSessions['daemon-coordinator']), 'includeSessions=true emits full daemonSessions arrays');
+  assert.equal(detailed.daemonSessions['daemon-coordinator'].length, 3);
 });
 
 test('mesh_status omits coordinatorSessions when no self coordinator session is present', async () => {
@@ -3536,4 +3557,98 @@ test('mesh_status omits coordinatorSessions when no self coordinator session is 
   const status = JSON.parse(await meshStatus(ctx as any));
   assert.equal(status.coordinatorSessions, undefined, 'coordinatorSessions should be absent when no self coordinator');
   assert.equal(status.selfIdentification, undefined, 'selfIdentification should be absent when no self coordinator');
+});
+
+test('mesh_status compact payload does not grow O(nodes × sessions) when nodes share a daemon', async () => {
+  const meshId = `mesh-nxm-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  // Five daemon-wide sessions reported by the shared coordinator daemon.
+  const sharedSessions = Array.from({ length: 5 }, (_, i) => ({
+    id: `session-${i}`,
+    providerType: i % 2 === 0 ? 'claude-cli' : 'hermes-cli',
+    status: i === 0 ? 'generating' : i === 4 ? 'awaiting_approval' : 'idle',
+  }));
+
+  const makeCtx = (nodeCount: number) => {
+    const transport = new IpcTransport() as IpcTransport & {
+      command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+      meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    };
+    transport.command = async (command) => {
+      if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+      if (command === 'get_pending_mesh_events') return { events: [] };
+      if (command === 'git_status') {
+        return { success: true, status: { workspace: '/repo', repoRoot: '/repo', isGitRepo: true, branch: 'main' } };
+      }
+      // Daemon-wide probe: every node sharing this daemon gets the SAME list.
+      if (command === 'get_status_metadata') {
+        return { success: true, result: { success: true, status: { sessions: sharedSessions } } };
+      }
+      throw new Error(`unexpected direct command: ${command}`);
+    };
+    transport.meshCommand = async (_daemonId, command) => {
+      throw new Error(`unexpected mesh command: ${command}`);
+    };
+    const ctx: any = {
+      localDaemonId: 'daemon-shared',
+      mesh: {
+        id: meshId,
+        name: 'NxM Mesh',
+        repoIdentity: 'example/repo',
+        policy: {},
+        coordinator: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        nodes: Array.from({ length: nodeCount }, (_, i) => ({
+          id: `node-${i}`,
+          workspace: `/wt-${i}`,
+          repoRoot: `/wt-${i}`,
+          daemonId: 'daemon-shared',
+          userOverrides: {},
+          policy: {},
+        })),
+      },
+      transport,
+    };
+    return ctx;
+  };
+
+  const fourNodes = JSON.parse(await meshStatus(makeCtx(4) as any));
+
+  // Sessions are emitted exactly once per daemon, not once per node.
+  assert.equal(Object.keys(fourNodes.daemonSessions).length, 1, 'one shared daemon → one daemonSessions key');
+  assert.equal(fourNodes.daemonSessions['daemon-shared'].total, 5);
+  assert.deepEqual(fourNodes.daemonSessions['daemon-shared'].byStatus, {
+    generating: 1, idle: 3, awaiting_approval: 1,
+  });
+
+  // Each node carries only a compact summary, never the full 5-session array.
+  for (const node of fourNodes.nodes) {
+    assert.equal(node.sessions, undefined, 'compact node must not carry the full sessions array');
+    assert.equal(node.sessionSummary.total, 5);
+  }
+
+  // Direct dedup proof: the full session arrays must appear exactly once across
+  // the whole compact payload, not once per node. Count literal session ids.
+  const compactText = JSON.stringify(fourNodes);
+  const fullText = JSON.stringify(JSON.parse(await meshStatus(makeCtx(4) as any, { includeSessions: true })));
+  const occurrences = (haystack: string, needle: string) => haystack.split(needle).length - 1;
+  // "session-0".."session-4" each repeated for all 4 nodes in the un-folded shape.
+  for (let i = 0; i < 5; i++) {
+    assert.equal(
+      occurrences(compactText, `"id":"session-${i}"`), 0,
+      `compact must not emit per-node session objects (session-${i})`,
+    );
+  }
+  // With includeSessions=true the per-node arrays return AND duplicate across the
+  // 4 nodes, so the un-folded payload is strictly larger despite identical data.
+  // The saving scales with session size; here the small fixture still shrinks.
+  assert.ok(
+    compactText.length < fullText.length,
+    `dedup did not shrink payload: compact=${compactText.length} full=${fullText.length}`,
+  );
+  // The full shape duplicates each session id once per node (4×) plus once in
+  // daemonSessions (=5); the compact shape emits each id zero times. This is the
+  // core N×M guarantee.
+  const fullSession0 = occurrences(fullText, '"id":"session-0"');
+  assert.ok(fullSession0 >= 4, `un-folded shape duplicates the session per node (got ${fullSession0}, proves the N×M source)`);
 });

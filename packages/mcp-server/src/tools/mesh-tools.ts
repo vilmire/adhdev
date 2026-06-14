@@ -1044,6 +1044,34 @@ function buildCompactGitSnapshot(status: any): Record<string, unknown> | undefin
     return slim;
 }
 
+// Fold a node's slim session list into status/provider counts. Compact mode
+// returns this instead of the full per-session array so the payload does not
+// grow O(nodes × sessions). The self-coordinator marker is preserved as a
+// dedicated count + id list so the coordinator never mis-reads its own
+// generating CLI session as a foreign delegated task.
+function summarizeNodeSessions(sessions: any[]): Record<string, unknown> {
+    const list = Array.isArray(sessions) ? sessions : [];
+    const byStatus: Record<string, number> = {};
+    const providerCounts: Record<string, number> = {};
+    const selfCoordinatorSessionIds: string[] = [];
+    for (const s of list) {
+        const status = typeof s?.status === 'string' && s.status ? s.status : 'unknown';
+        byStatus[status] = (byStatus[status] ?? 0) + 1;
+        const provider = typeof s?.providerType === 'string' && s.providerType ? s.providerType : 'unknown';
+        providerCounts[provider] = (providerCounts[provider] ?? 0) + 1;
+        if (s?.isSelfCoordinator === true && s.id) selfCoordinatorSessionIds.push(String(s.id));
+    }
+    const summary: Record<string, unknown> = {
+        total: list.length,
+        byStatus,
+        providerCounts,
+    };
+    if (selfCoordinatorSessionIds.length > 0) {
+        summary.selfCoordinatorSessionIds = selfCoordinatorSessionIds;
+    }
+    return summary;
+}
+
 function extractLaunchPayload(value: any): any {
     return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
 }
@@ -2164,7 +2192,8 @@ export const MESH_STATUS_TOOL = {
         properties: {
             _gemini_compat: { type: 'string', description: 'Dummy property for Gemini compatibility. Ignore this.' },
             includeStaleDirectWorkDetails: { type: 'boolean', description: 'Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only.' },
-            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Set false (or verbose=true) for the full dashboard-grade payload.' },
+            includeSessions: { type: 'boolean', description: 'Opt in to per-node live session arrays. Default false: compact mode returns a per-node sessionSummary (counts) and de-duplicated full session lists under top-level daemonSessions keyed by daemonId (sessions are not repeated for every node that shares a daemon). Set true to also include the full session array on each node.' },
+            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Folds per-node session arrays to sessionSummary and de-duplicates daemon-shared sessions into daemonSessions. Set false (or verbose=true) for the full dashboard-grade payload.' },
             verbose: { type: 'boolean', description: 'Force the full payload; overrides compact.' },
         },
     },
@@ -2448,8 +2477,10 @@ export const MESH_TASK_HISTORY_TOOL = {
     inputSchema: {
         type: 'object' as const,
         properties: {
-            tail: { type: 'number', description: 'Number of recent entries to return (default: 20).' },
+            tail: { type: 'number', description: 'Number of recent entries to return (default: 20; clamped to 40 in compact mode, 200 in verbose).' },
             kind: { type: 'string', description: 'Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed, direct_fast_forward.' },
+            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Truncates long payload strings (message/taskSummary ≤200, finalSummary ≤300) and drops large nested evidence blobs (accessible via mesh_reconcile_ledger). Set false (or verbose=true) for full untruncated payloads.' },
+            verbose: { type: 'boolean', description: 'Force the full untruncated payload; overrides compact.' },
         },
     },
 };
@@ -2588,7 +2619,7 @@ export const ALL_MESH_TOOLS = [
 
 // ─── Tool Implementations ───────────────────────
 
-export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; compact?: boolean; verbose?: boolean } = {}): Promise<string> {
+export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; compact?: boolean; verbose?: boolean } = {}): Promise<string> {
     const rateResult = recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_status' });
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
@@ -2778,13 +2809,52 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
 
     // Compact mode: slim each node's large duplicated `git` blob down to the
     // coordinator-relevant scalars + submodules. branch/health/headCommit/ahead/
-    // behind/dirty/upstreamStatus/sessions/branchConvergence live as top-level node
+    // behind/dirty/upstreamStatus/branchConvergence live as top-level node
     // fields (or inside the slim git snapshot) and are always preserved.
+    //
+    // Session N×M de-duplication: the per-node session list comes from a
+    // daemon-wide `get_status_metadata` probe, so every node that shares a
+    // daemonId reports the SAME sessions. Emitting the full array on every node
+    // makes the payload grow O(nodes × sessions). In compact mode we therefore
+    // (a) fold each node's `sessions` array to a `sessionSummary` (counts only),
+    // and (b) emit the full slim session arrays exactly once per daemon under
+    // top-level `daemonSessions`. The self-coordinator marker survives in both
+    // the per-node summary (`selfCoordinatorSessionIds`) and the top-level
+    // `coordinatorSessions`/`selfIdentification`. Individual per-node session
+    // detail can be opted back in with `includeSessions=true`.
+    const includeSessions = args.includeSessions === true;
+    // Top-level per-daemon session map (compact). Sessions are recorded ONCE per
+    // daemonId regardless of how many mesh nodes share that daemon, eliminating
+    // the N×M duplication. With includeSessions=true the full slim session arrays
+    // are emitted; otherwise each daemon is folded to a counts summary.
+    const daemonSessions: Record<string, unknown> = {};
+    if (compact) {
+        const seenDaemons = new Set<string>();
+        for (const entry of results as any[]) {
+            const daemonId = typeof entry?.daemonId === 'string' && entry.daemonId ? entry.daemonId : '';
+            const sessions = Array.isArray(entry?.sessions) ? entry.sessions : [];
+            if (daemonId && sessions.length > 0 && !seenDaemons.has(daemonId)) {
+                seenDaemons.add(daemonId);
+                daemonSessions[daemonId] = includeSessions ? sessions : summarizeNodeSessions(sessions);
+            }
+        }
+    }
     const nodesForResponse = compact
         ? results.map((entry: any) => {
-            if (!entry || typeof entry !== 'object' || entry.git === undefined) return entry;
-            const slimGit = buildCompactGitSnapshot(entry.git);
-            return slimGit ? { ...entry, git: slimGit } : entry;
+            if (!entry || typeof entry !== 'object') return entry;
+            const next: any = { ...entry };
+            if (next.git !== undefined) {
+                const slimGit = buildCompactGitSnapshot(next.git);
+                if (slimGit) next.git = slimGit;
+            }
+            if (Array.isArray(next.sessions)) {
+                next.sessionSummary = summarizeNodeSessions(next.sessions);
+                // Drop the full per-node array unless explicitly opted in. The
+                // de-duplicated full lists are available under top-level
+                // `daemonSessions` keyed by daemonId.
+                if (!includeSessions) delete next.sessions;
+            }
+            return next;
         })
         : results;
 
@@ -2802,6 +2872,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             historicalEvidenceOnly: ['recoveryHints', 'ledgerSummary'],
         },
         nodes: nodesForResponse,
+        ...(compact && Object.keys(daemonSessions).length > 0 ? { daemonSessions } : {}),
         activeWork: activeWorkEvidence.activeWork,
         staleDirectWorkSummary,
         ...(args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {}),
@@ -2884,18 +2955,26 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
 
 export async function meshTaskHistory(
     ctx: MeshContext,
-    args: { tail?: number; kind?: string },
+    args: { tail?: number; kind?: string; compact?: boolean; verbose?: boolean },
 ): Promise<string> {
     const { mesh } = ctx;
+    // Default to the slim payload for LLM callers; verbose forces full payloads.
+    const compact = args.verbose === true ? false : (args.compact ?? true);
     const pendingEvents = await drainCoordinatorPendingEvents(ctx);
-    const tail = typeof args.tail === 'number' && args.tail > 0 ? args.tail : 20;
+    // Clamp tail so a large default/explicit value can't blow up the payload in
+    // compact mode. Full (verbose) callers may request a deeper window.
+    const requestedTail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 20;
+    const tail = compact ? Math.min(requestedTail, 40) : Math.min(requestedTail, 200);
     const kind = typeof args.kind === 'string' && args.kind.trim() ? [args.kind.trim() as any] : undefined;
     const rawEntries = readLedgerEntries(mesh.id, { tail, kind });
-    // Slim large payload fields so coordinator context stays lean.
-    const entries = rawEntries.map(e => ({
-        ...e,
-        payload: e.payload ? slimLedgerPayload(e.payload) : e.payload,
-    }));
+    // Slim large payload fields so coordinator context stays lean. Verbose
+    // returns the raw payloads untouched for full audit detail.
+    const entries = compact
+        ? rawEntries.map(e => ({
+            ...e,
+            payload: e.payload ? slimLedgerPayload(e.payload) : e.payload,
+        }))
+        : rawEntries;
     const summary = getLedgerSummary(mesh.id);
     // M7: per-task time/attempt stats for tasks visible in the returned window.
     // Derived from ledger truth at query time; incomplete evidence is flagged,
@@ -2912,6 +2991,7 @@ export async function meshTaskHistory(
     } catch { /* stats are best-effort */ }
     return JSON.stringify({
         meshId: mesh.id,
+        payloadMode: compact ? 'compact' : 'full',
         entries,
         summary,
         ...(taskStats ? { taskStats } : {}),
