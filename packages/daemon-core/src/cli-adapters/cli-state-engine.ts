@@ -108,6 +108,26 @@ export class CliStateEngine {
     lastApprovalResolvedAt = 0;
     lastResolvedModalMessage = '';
     /**
+     * Monotonic counter bumped every time the FSM *enters* waiting_approval
+     * with a freshly captured modal (see `applyWaitingApproval`). It is the
+     * single discriminator between "the same approval re-observed across TUI
+     * paint flaps" and "a genuinely new, distinct approval".
+     *
+     * The message-equality cooldown below (`lastResolvedModalMessage`) cannot
+     * tell these apart on its own: claude-cli routinely presents consecutive
+     * approvals whose modal message text is identical (e.g. two back-to-back
+     * Bash-command prompts). When that second approval arrived inside
+     * `approvalCooldown`, the message-equality guard silently swallowed the
+     * key write and the approval stuck forever — fatal under auto-approval.
+     *
+     * `approvalEntrySeq` increments on every fresh entry; `lastResolvedEntrySeq`
+     * records which entry the cooldown belongs to. We only short-circuit the
+     * write when we are still resolving *that same* entry — a new entry (new
+     * seq) is always a real, distinct approval and must be written.
+     */
+    approvalEntrySeq = 0;
+    private lastResolvedEntrySeq = -1;
+    /**
      * When the engine previously held a modal but the latest parse failed
      * to extract one, we record the timestamp here and only drop the modal
      * after the configured `approvalCooldown` to avoid flapping between
@@ -239,7 +259,10 @@ export class CliStateEngine {
                     ? parsed.activeModal : null;
                 if (parsed?.status === 'waiting_approval' && parsedModal) {
                     modal = parsedModal;
+                    // No modal was held (`this.activeModal` was null above), so a
+                    // freshly parsed approval here is a new entry by definition.
                     this.activeModal = parsedModal;
+                    this.approvalEntrySeq++;
                     if (this.currentStatus !== 'waiting_approval') {
                         this.setStatus('waiting_approval', 'resolve_modal_parse');
                         this.callbacks.onStatusChange();
@@ -263,13 +286,26 @@ export class CliStateEngine {
         const currentModalMessage = typeof modal?.message === 'string' ? modal.message.trim() : '';
         const inCooldown = !!this.lastApprovalResolvedAt
             && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown;
-        if (inCooldown && currentModalMessage === this.lastResolvedModalMessage) return;
+        // (fix) Suppress the duplicate key-write ONLY when this is the *same*
+        // approval entry re-observed across TUI paint flaps — i.e. the FSM has
+        // not entered waiting_approval afresh since the last resolve
+        // (approvalEntrySeq unchanged). A new entry (bumped seq) is always a
+        // distinct approval and must be written, even within the cooldown
+        // window and even when its message text matches the previous one.
+        //
+        // Previously this gated on message equality alone, so consecutive
+        // claude-cli approvals that share message text (very common) had the
+        // second write swallowed — the approval stuck unresolved despite
+        // auto-approval being on.
+        const sameEntryReResolve = this.approvalEntrySeq === this.lastResolvedEntrySeq;
+        if (inCooldown && sameEntryReResolve && currentModalMessage === this.lastResolvedModalMessage) return;
 
         this.clearIdleFinishCandidate('resolve_modal');
-        this.recordTrace('resolve_modal', { buttonIndex, activeModal: modal });
+        this.recordTrace('resolve_modal', { buttonIndex, activeModal: modal, approvalEntrySeq: this.approvalEntrySeq });
         this.activeModal = null;
         this.lastApprovalResolvedAt = Date.now();
         this.lastResolvedModalMessage = currentModalMessage;
+        this.lastResolvedEntrySeq = this.approvalEntrySeq;
         this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
         this.setStatus('generating', 'approval_resolved');
@@ -666,7 +702,19 @@ export class CliStateEngine {
             this.callbacks.onStatusChange();
             return;
         }
-        if (!inCooldown) {
+        // (fix) A *real* modal with valid buttons surfacing during the cooldown
+        // window is a genuinely new approval, not a trailing repaint of the one
+        // we just resolved — resolveModal cleared activeModal and flipped status
+        // to generating, so detectStatus only re-reports waiting_approval with a
+        // concrete modal when the CLI actually presents the next prompt.
+        // Previously this case fell through BOTH the `inCooldown && !modal`
+        // branch above and the `!inCooldown` branch below, so the FSM silently
+        // ignored the second approval — leaving it stuck unresolved under
+        // auto-approval. Capture it like any fresh entry (the modal-message
+        // cooldown still de-dupes the same approval inside resolveModal, now
+        // keyed on approvalEntrySeq). The `!modal` flap case stays gated by
+        // cooldown above; only an actionable new modal breaks through here.
+        if (!inCooldown || modal) {
             if (!modal) {
                 LOG.warn('CLI', `[${this.provider.type}] detectStatus=waiting_approval but parseApproval returned null; ignoring`);
                 // (fix) If we previously surfaced waiting_approval but the
@@ -710,6 +758,11 @@ export class CliStateEngine {
             const nextBtnCount = Array.isArray(modal.buttons) ? modal.buttons.length : 0;
             if (!prev || prevBtnCount !== nextBtnCount) {
                 this.activeModal = modal;
+                // A fresh modal was captured (none held, or the button shape
+                // changed). This is a distinct approval entry — bump the seq so
+                // resolveModal's message-equality cooldown does not mistake it
+                // for a flap-repaint of the previously resolved approval.
+                this.approvalEntrySeq++;
                 this.callbacks.onStatusChange();
             }
             if (this.idleTimeout) clearTimeout(this.idleTimeout);

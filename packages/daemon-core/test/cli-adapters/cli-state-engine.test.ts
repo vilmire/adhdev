@@ -316,6 +316,82 @@ describe('CliStateEngine', () => {
             vi.advanceTimersByTime(DEFAULT_TIMEOUTS.approvalCooldown + 1)
             expect(engine.isApprovalRecentlyResolved()).toBe(false)
         })
+
+        it('suppresses a duplicate write for the SAME approval entry re-observed within cooldown', () => {
+            // Same approval re-detected across TUI paint flaps (no fresh FSM
+            // entry, so approvalEntrySeq is unchanged) must NOT write twice.
+            const { engine, transport } = buildEngine()
+            transport.getApprovalKeyForIndex = () => '\r'
+            engine.approvalEntrySeq = 1
+            engine.activeModal = { message: 'Run command?', buttons: ['Yes'] }
+
+            engine.resolveModal(0)
+            expect(transport.written.filter((w) => w === '\r')).toHaveLength(1)
+
+            // Re-observe the identical approval well within the cooldown window.
+            // resolveModal would re-parse the same modal; emulate by restoring it.
+            engine.activeModal = { message: 'Run command?', buttons: ['Yes'] }
+            vi.advanceTimersByTime(200)
+            engine.resolveModal(0)
+            // Still only one write — the flap-repaint was correctly swallowed.
+            expect(transport.written.filter((w) => w === '\r')).toHaveLength(1)
+        })
+
+        // ── Regression: consecutive approvals stuck under auto-approval ──────
+        it('writes the key for consecutive distinct approvals that share message text within cooldown', () => {
+            // Repro of the stuck-auto-approval bug: claude-cli presents two
+            // back-to-back approvals whose modal message is identical. The old
+            // message-equality cooldown swallowed the SECOND key write, leaving
+            // that approval stuck unresolved despite auto-approval being on.
+            const { engine, transport } = buildEngine()
+            transport.getApprovalKeyForIndex = () => '\r'
+
+            // ── Approval #1 (fresh FSM entry → seq 1) ──
+            engine.approvalEntrySeq = 1
+            engine.activeModal = { message: 'Allow Bash command?', buttons: ['Yes'] }
+            engine.resolveModal(0)
+            expect(engine.activeModal).toBe(null)
+            expect(transport.written.filter((w) => w === '\r')).toHaveLength(1)
+
+            // ── Approval #2 arrives immediately (well within approvalCooldown),
+            //    SAME message text, but it is a genuinely new approval so the
+            //    FSM bumped approvalEntrySeq on its fresh waiting_approval entry. ──
+            vi.advanceTimersByTime(150)
+            expect(150).toBeLessThan(DEFAULT_TIMEOUTS.approvalCooldown)
+            engine.approvalEntrySeq = 2
+            engine.activeModal = { message: 'Allow Bash command?', buttons: ['Yes'] }
+            engine.setStatus('waiting_approval', 'script_detect')
+
+            engine.resolveModal(0)
+
+            // The second approval must be resolved too — NOT stuck.
+            expect(engine.activeModal).toBe(null)
+            expect(engine.currentStatus).toBe('generating')
+            expect(transport.written.filter((w) => w === '\r')).toHaveLength(2)
+        })
+
+        it('applyWaitingApproval bumps approvalEntrySeq for each fresh distinct approval', () => {
+            // The seq must actually advance through the real FSM entry path so
+            // the signature/cooldown discriminator has a value to key off of.
+            const { engine, transport } = buildEngine()
+            transport.getApprovalKeyForIndex = () => '\r'
+            transport.runParseApproval = () => null
+            engine.isWaitingForResponse = true
+
+            const evalApproval = (message: string) => {
+                // Drive the settled-eval approval branch directly.
+                ;(engine as any).applyWaitingApproval({ modal: { message, buttons: ['Yes'] } })
+            }
+
+            evalApproval('Allow Bash command?')
+            const seqAfterFirst = engine.approvalEntrySeq
+            expect(seqAfterFirst).toBeGreaterThan(0)
+
+            // Resolve #1, then a brand new approval (same text) enters the FSM.
+            engine.resolveModal(0)
+            evalApproval('Allow Bash command?')
+            expect(engine.approvalEntrySeq).toBeGreaterThan(seqAfterFirst)
+        })
     })
 
     // ── Stale idle guard ────────────────────────────────────────────────────

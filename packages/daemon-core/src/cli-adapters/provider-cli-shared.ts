@@ -29,6 +29,15 @@ export interface CliSessionStatus {
     messages: CliChatMessage[];
     workingDir: string;
     activeModal: { message: string; buttons: string[] } | null;
+    /**
+     * Monotonic counter identifying which approval *entry* the current modal
+     * belongs to. Bumped by the FSM on every fresh waiting_approval entry.
+     * Consumers (e.g. auto-approval) use it to distinguish a genuinely new
+     * approval from the same approval re-observed across TUI paint flaps —
+     * two distinct approvals can carry identical message/button text, so the
+     * seq is the only reliable discriminator.
+     */
+    approvalEntrySeq?: number;
     activeInteractivePrompt?: InteractivePrompt | null;
     pendingOutboundCount?: number;
     pendingOutboundMessages?: Array<{

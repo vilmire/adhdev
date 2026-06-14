@@ -1394,7 +1394,18 @@ export class CliProviderInstance implements ProviderInstance {
             // surface the modal so the user can decide.
             return autoApproveActive;
         }
+        // Include the FSM's approval entry seq: two distinct back-to-back
+        // approvals can carry identical message/buttons (common with
+        // claude-cli). Without the seq their signatures collide and the 5s
+        // busy-window re-entry guard below swallows the second auto-approve,
+        // leaving it stuck. The seq is bumped by the FSM on every fresh
+        // waiting_approval entry, so a new approval always yields a new
+        // signature and fires through.
+        const approvalEntrySeq = typeof adapterStatus?.approvalEntrySeq === 'number'
+            ? adapterStatus.approvalEntrySeq
+            : 0;
         const signature = [
+            approvalEntrySeq,
             typeof modal?.message === 'string' ? modal.message.trim() : '',
             buttons.join('|'),
             buttonIndex,

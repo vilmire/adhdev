@@ -940,6 +940,7 @@ export class ProviderCliAdapter implements CliAdapter {
             messages: [],
             workingDir: this.workingDir,
             activeModal: effectiveModal,
+            approvalEntrySeq: this.engine.approvalEntrySeq,
             pendingOutboundCount: this.pendingOutboundQueue.length,
             pendingOutboundMessages: this.pendingOutboundQueue.map((message) => ({
                 id: message.id,
