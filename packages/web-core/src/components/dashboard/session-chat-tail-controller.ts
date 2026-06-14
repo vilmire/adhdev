@@ -59,6 +59,18 @@ export interface WarmSessionChatTailDescriptor {
 
 const DEFAULT_TAIL_LIMIT = 60
 const CHAT_TAIL_SUBSCRIBE_RETRY_MS = 1_000
+/**
+ * Upper bound on retained history messages from "Load older" paging.
+ *
+ * Each "Load older" page prepends into `historyMessages` with no prior cap, so a
+ * user repeatedly paging back grows the rendered (non-virtualized) set without
+ * bound and the chat slows down. We keep the most-recent N retained history
+ * messages (the ones nearest the live window, i.e. the tail of the array) and
+ * drop the oldest beyond that. Paging still works: `historyOffset` keeps
+ * advancing by the full fetched page size, so the next request asks the daemon
+ * for the correct next page even though we don't keep every row in memory.
+ */
+const DEFAULT_MAX_RETAINED_HISTORY_MESSAGES = 500
 const DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS = 120_000
 const WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES = new Set([
   'generating',
@@ -354,9 +366,18 @@ export class SessionChatTailController {
           && nextMessages.length === 0
           && result.hasMore !== true
           && this.fallbackRecentCount > 0
+        // Cap retained history so unbounded "Load older" paging can't grow the
+        // rendered set without limit. History is oldest-first, so the most-recent
+        // (nearest the live window) rows are the array tail — keep those.
+        const mergedHistory = [...nextMessages, ...this.snapshot.historyMessages]
+        const cappedHistory = mergedHistory.length > DEFAULT_MAX_RETAINED_HISTORY_MESSAGES
+          ? mergedHistory.slice(mergedHistory.length - DEFAULT_MAX_RETAINED_HISTORY_MESSAGES)
+          : mergedHistory
         this.snapshot = {
           ...this.snapshot,
-          historyMessages: [...nextMessages, ...this.snapshot.historyMessages],
+          historyMessages: cappedHistory,
+          // historyOffset advances by the full fetched page size (not the capped
+          // retained length) so the next page request stays correctly aligned.
           historyOffset: this.snapshot.historyOffset + nextMessages.length,
           hasMoreHistory: shouldKeepHistoryOpen ? true : result.hasMore === true,
           historyError: null,
@@ -578,6 +599,8 @@ export function useSessionChatTailController(
   const subscriptionKey = `daemon:${daemonId}:session:${sessionId}`
   const tailLimit = Math.max(0, options?.tailLimit ?? DEFAULT_TAIL_LIMIT)
 
+  const fallbackRecentCount = activeConv.messages.length
+
   const controller = useMemo(() => {
     if (!enabled || !daemonId || !sessionId) return null
     return getOrCreateSessionChatTailController({
@@ -587,9 +610,23 @@ export function useSessionChatTailController(
       subscriptionKey,
       sendData,
       tailLimit,
-      fallbackRecentCount: activeConv.messages.length,
+      fallbackRecentCount,
     })
-  }, [activeConv.messages.length, daemonId, enabled, historySessionId, sendData, sessionId, subscriptionKey, tailLimit])
+    // `fallbackRecentCount` (activeConv.messages.length) is intentionally NOT a
+    // dep: it changes on every meta append, and including it tore down and
+    // recreated the controller (and its subscription) on every tick — pure
+    // resubscribe churn. The controller is keyed by stable ids; we push the
+    // fresh fallback count via updateOptions() in the effect below instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [daemonId, enabled, historySessionId, sendData, sessionId, subscriptionKey, tailLimit])
+
+  // Keep the (already-stable) controller's fallback count current without
+  // recreating it. updateOptions only resubscribes when an identity field
+  // (sendData/daemonId/sessionId) actually changes, so a plain count bump is a
+  // cheap in-place update.
+  useEffect(() => {
+    controller?.updateOptions({ fallbackRecentCount })
+  }, [controller, fallbackRecentCount])
 
   const [snapshot, setSnapshot] = useState<SessionChatTailSnapshot>(() => (
     controller?.getSnapshot() || buildEmptySnapshot(tailLimit)

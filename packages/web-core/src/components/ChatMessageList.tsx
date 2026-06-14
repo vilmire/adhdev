@@ -310,6 +310,42 @@ function renderTextLikeContent(content: string, renderAsPreformatted: boolean): 
     return <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>;
 }
 
+/**
+ * Standalone, content-keyed markdown body for standard chat bubbles.
+ *
+ * ReactMarkdown re-parses its input string on every render. The chat list
+ * re-renders on every tail/status tick, so without this memo each visible row
+ * would re-parse Markdown even when its text is identical to the previous tick.
+ * Keying the memo on the raw `content` string (plus the render mode flags that
+ * change the output) lets unchanged rows skip the parse entirely; the actively
+ * streaming last message still re-parses because its content keeps growing.
+ */
+const ChatMarkdownBody = memo(function ChatMarkdownBody({
+    content,
+    renderAsPreformatted,
+    renderAsMarkdown,
+}: {
+    content: string;
+    renderAsPreformatted: boolean;
+    renderAsMarkdown: boolean;
+}) {
+    if (renderAsPreformatted) {
+        return <pre className="chat-preformatted">{content}</pre>;
+    }
+    if (renderAsMarkdown) {
+        return (
+            <ReactMarkdown remarkPlugins={chatRemarkPlugins}>
+                {content}
+            </ReactMarkdown>
+        );
+    }
+    return (
+        <div style={{ whiteSpace: 'pre-wrap' }}>
+            {content}
+        </div>
+    );
+});
+
 function MessagePartsRenderer({ parts, renderAsPreformatted }: { parts: StructuredMessagePart[]; renderAsPreformatted: boolean }): React.ReactNode {
     return (
         <div className="flex flex-col gap-2">
@@ -440,6 +476,48 @@ interface ChatMessageRowProps {
     isCliMode: boolean;
     isTextExpanded: boolean;
     onToggleTextExpanded: () => void;
+}
+
+/**
+ * Stable render-signature for a chat message row.
+ *
+ * The tail controller hands the list a brand-new message array (with new object
+ * identities) on every status/tail tick, so a `prev.message === next.message`
+ * reference check never short-circuits and every visible row re-renders (and
+ * re-parses Markdown) each tick. This signature instead captures exactly the
+ * fields the row render reads, so an unchanged message produces an identical
+ * signature across ticks while the actively-streaming last message — whose
+ * content keeps growing — produces a changing one and keeps updating.
+ *
+ * `buildChatMessageSignature` already folds in id/index/role/receivedAt/content;
+ * we append the remaining render-driving fields (kind, sender, and the meta /
+ * visibility flags consumed by the activity/thought/terminal/markdown branches).
+ */
+export function buildChatMessageRowSignature(message: ChatMessage): string {
+    const meta = message.meta as (Record<string, unknown> | undefined);
+    return [
+        buildChatMessageSignature(message),
+        message.kind || '',
+        message.senderName || '',
+        message.bubbleId || '',
+        message.bubbleState || '',
+        // Classification inputs (see classifyChatMessageForDisplay): a message can
+        // flip between chat-visible and activity-facing without its content
+        // changing, which changes the rendered branch.
+        message.visibility || '',
+        message.transcriptVisibility || '',
+        message.audience || '',
+        message.source || '',
+        message.userFacing === undefined ? '' : String(message.userFacing),
+        message.internal === undefined ? '' : String(message.internal),
+        message.isInternal === undefined ? '' : String(message.isInternal),
+        message.debug === undefined ? '' : String(message.debug),
+        // Meta flags read directly in render (thought/terminal labels, run state,
+        // preformatted render mode).
+        meta ? String(meta.label ?? '') : '',
+        meta ? String(meta.isRunning ?? '') : '',
+        meta ? String(meta.renderMode ?? '') : '',
+    ].join('');
 }
 
 const ChatMessageRow = memo(function ChatMessageRow({
@@ -577,16 +655,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
                         <div className="chat-markdown">
                             {hasStructuredRenderer && structuredParts ? (
                                 <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={renderAsPreformatted} />
-                            ) : renderAsPreformatted ? (
-                                <pre className="chat-preformatted">{visibleContent}</pre>
-                            ) : renderAsMarkdown ? (
-                                <ReactMarkdown remarkPlugins={chatRemarkPlugins}>
-                                    {visibleContent}
-                                </ReactMarkdown>
                             ) : (
-                                <div style={{ whiteSpace: 'pre-wrap' }}>
-                                    {visibleContent}
-                                </div>
+                                <ChatMarkdownBody
+                                    content={visibleContent}
+                                    renderAsPreformatted={renderAsPreformatted}
+                                    renderAsMarkdown={renderAsMarkdown}
+                                />
                             )}
                         </div>
                     )}
@@ -604,7 +678,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
         </div>
     );
 }, (prev, next) => (
-    prev.message === next.message
+    // Field-aware equality: a fresh message object with identical render-driving
+    // fields must NOT re-render (and re-parse Markdown). Reference identity is
+    // checked first as a cheap fast-path; otherwise fall back to the signature.
+    (prev.message === next.message
+        || buildChatMessageRowSignature(prev.message) === buildChatMessageRowSignature(next.message))
     && prev.receivedAt === next.receivedAt
     && prev.agentName === next.agentName
     && prev.userName === next.userName
@@ -1030,6 +1108,26 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 )
             )}
 
+            {/*
+              * TODO(perf, deferred): virtualize this list (windowed rendering) so
+              * only on-screen rows mount. Fix #1 (field-aware row memo + content-keyed
+              * markdown) already removes the per-tick CPU storm; virtualization would
+              * additionally remove DOM-size scaling for very long transcripts.
+              *
+              * Integration points that MUST be honored to avoid breaking behavior:
+              *  - The scroll container (`containerRef` / `.chat-container`) and content
+              *    wrapper (`contentRef`) drive ALL of: auto-follow-to-bottom
+              *    (scrollToBottom / scheduleScrollToBottom), scroll-restore snapshots
+              *    (saveScrollSnapshot / restoreChatScrollSnapshot, which read
+              *    `el.scrollHeight - el.scrollTop - el.clientHeight`), the "Load older"
+              *    prepend offset restore (prevScrollHeight vs el.scrollHeight, ~line
+              *    912-921), the ResizeObserver auto-scroll, and the jump-button state
+              *    (getChatScrollJumpButtonStateForElement). A virtualizer must expose a
+              *    measured TOTAL size and feed it everywhere those reads assume the full
+              *    content height — partial integration WILL corrupt scroll position.
+              *  - Prefer @tanstack/react-virtual (compatible with React 18). Add it to
+              *    oss/packages/web-core/package.json when implementing.
+              */}
             {items.map((item) => {
                 if (item.type === 'action') {
                     const log = item.data as ActionLog;
