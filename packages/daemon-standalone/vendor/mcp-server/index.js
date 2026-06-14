@@ -762,6 +762,28 @@ function buildQueueMaintenanceReport(queue) {
     cleanupCandidateCount: cleanupCandidates.length
   };
 }
+function buildCompactQueueMaintenanceReport(maintenance) {
+  const staleAssignedTasks = Array.isArray(maintenance.staleAssignedTasks) ? maintenance.staleAssignedTasks : [];
+  const cleanupCandidateCount = maintenance.cleanupCandidateCount ?? 0;
+  return {
+    readOnly: true,
+    mutationPerformed: false,
+    sourceOfTruth: "mesh_work_queue_file",
+    payloadMode: "compact",
+    staleAssignedDefinition: maintenance.staleAssignedDefinition,
+    historicalDefinition: maintenance.historicalDefinition,
+    // staleAssignedTasks are active assigned rows (not historical) — retain a
+    // bounded sample so coordinators can still see drift without the full array.
+    staleAssignedTasks: staleAssignedTasks.slice(0, 5),
+    staleAssignedSampleLimit: 5,
+    staleAssignedCount: maintenance.staleAssignedCount ?? staleAssignedTasks.length,
+    historicalRecordCount: maintenance.historicalRecordCount ?? 0,
+    oldHistoricalRecordCount: maintenance.oldHistoricalRecordCount ?? 0,
+    cleanupCandidateCount,
+    cleanupCandidatesOmitted: true,
+    cleanupCandidatesHint: "Per-row cleanup candidates are omitted in compact mode; call mesh_view_queue with verbose=true for the full maintenance/cleanupDryRun rows."
+  };
+}
 function annotateQueueStaleness(queue, mesh) {
   const liveness = buildQueueLivenessIndex(mesh);
   const now = Date.now();
@@ -1076,6 +1098,48 @@ function extractSubmodules(value, ignorePaths) {
 function assignFullGitSnapshot(entry, status) {
   if (!status || typeof status !== "object" || Array.isArray(status)) return;
   entry.git = status;
+}
+function buildCompactGitSnapshot(status) {
+  if (!status || typeof status !== "object" || Array.isArray(status)) return void 0;
+  const slim = {};
+  const carry = [
+    "isGitRepo",
+    "branch",
+    "headCommit",
+    "upstream",
+    "upstreamStatus",
+    "ahead",
+    "behind",
+    "dirty",
+    "detached",
+    "submodules"
+  ];
+  for (const key of carry) {
+    if (status[key] !== void 0) slim[key] = status[key];
+  }
+  return slim;
+}
+function summarizeNodeSessions(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const byStatus = {};
+  const providerCounts = {};
+  const selfCoordinatorSessionIds = [];
+  for (const s of list) {
+    const status = typeof s?.status === "string" && s.status ? s.status : "unknown";
+    byStatus[status] = (byStatus[status] ?? 0) + 1;
+    const provider = typeof s?.providerType === "string" && s.providerType ? s.providerType : "unknown";
+    providerCounts[provider] = (providerCounts[provider] ?? 0) + 1;
+    if (s?.isSelfCoordinator === true && s.id) selfCoordinatorSessionIds.push(String(s.id));
+  }
+  const summary = {
+    total: list.length,
+    byStatus,
+    providerCounts
+  };
+  if (selfCoordinatorSessionIds.length > 0) {
+    summary.selfCoordinatorSessionIds = selfCoordinatorSessionIds;
+  }
+  return summary;
 }
 function extractLaunchPayload(value) {
   return findNestedPayload(value, (payload) => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
@@ -1535,6 +1599,45 @@ function isGitStatusDirty(status) {
   if (Array.isArray(status?.submodules) && status.submodules.some((submodule) => submodule?.dirty || submodule?.outOfSync || submodule?.error)) return true;
   return countUncommittedChanges(status) > 0;
 }
+var LARGE_LEDGER_FIELD_KEYS = /* @__PURE__ */ new Set(["plan", "validationPlan", "suggestedConfig", "payload"]);
+var LARGE_LEDGER_OBJECT_THRESHOLD = 800;
+var LARGE_LEDGER_NESTED_BYTES_THRESHOLD = 2e3;
+function summarizeLargeLedgerField(key, value) {
+  if (typeof value === "string") {
+    return value.length > 500 ? value.slice(0, 500) + "\u2026" : value;
+  }
+  if (Array.isArray(value)) {
+    const serialized = JSON.stringify(value);
+    if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
+      return `[${key} summarized: ${value.length} items \u2014 use verbose=true or mesh_reconcile_ledger]`;
+    }
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const serialized = JSON.stringify(value);
+    if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
+      return `[${key} summarized: ${Object.keys(value).length} keys \u2014 use verbose=true or mesh_reconcile_ledger]`;
+    }
+    return value;
+  }
+  return value;
+}
+function elideLargeNestedValue(key, value) {
+  if (value === null || value === void 0) return value;
+  if (typeof value === "string") {
+    return value.length > 1e3 ? value.slice(0, 1e3) + "\u2026" : value;
+  }
+  if (typeof value !== "object") return value;
+  const serialized = JSON.stringify(value);
+  const bytes = serialized ? serialized.length : 0;
+  if (bytes <= LARGE_LEDGER_NESTED_BYTES_THRESHOLD) return value;
+  return {
+    _elided: true,
+    _kind: key,
+    _bytes: bytes,
+    _hint: "full evidence via mesh_reconcile_ledger"
+  };
+}
 function slimLedgerPayload(payload) {
   const slim = {};
   for (const [k, v] of Object.entries(payload)) {
@@ -1543,8 +1646,10 @@ function slimLedgerPayload(payload) {
     } else if (k === "evidence" || k === "workerResult" || k === "gitStatus" || k === "validationResults") {
     } else if (k === "finalSummary") {
       slim[k] = typeof v === "string" && v.length > 300 ? v.slice(0, 300) + "\u2026" : v;
+    } else if (LARGE_LEDGER_FIELD_KEYS.has(k)) {
+      slim[k] = summarizeLargeLedgerField(k, v);
     } else {
-      slim[k] = v;
+      slim[k] = elideLargeNestedValue(k, v);
     }
   }
   return slim;
@@ -1662,6 +1767,30 @@ async function collectLiveStatusSessions(ctx, node) {
   } catch {
     return [];
   }
+}
+async function collectLiveStatusProbe(ctx, node) {
+  try {
+    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+    return {
+      sessions: extractStatusMetadataSessions(statusResult),
+      daemonBuild: extractDaemonBuildInfo(statusResult)
+    };
+  } catch {
+    return { sessions: [] };
+  }
+}
+function extractDaemonBuildInfo(value) {
+  const payload = unwrapCommandPayload(value);
+  const build = payload?.daemonBuild && typeof payload.daemonBuild === "object" ? payload.daemonBuild : value?.daemonBuild && typeof value.daemonBuild === "object" ? value.daemonBuild : void 0;
+  if (!build) return void 0;
+  const commit = readString(build.commit);
+  if (!commit) return void 0;
+  return {
+    commit,
+    commitShort: readString(build.commitShort) || commit.slice(0, 7),
+    version: readString(build.version) || "unknown",
+    ...readString(build.builtAt) ? { builtAt: readString(build.builtAt) } : {}
+  };
 }
 async function collectMeshViewQueueNodesWithLiveSessions(ctx) {
   const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
@@ -1915,12 +2044,15 @@ function buildRemoveNodeArgs(ctx, nodeId, sessionCleanupMode) {
 }
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
-  description: "Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.",
+  description: "Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version}); when a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.",
   inputSchema: {
     type: "object",
     properties: {
       _gemini_compat: { type: "string", description: "Dummy property for Gemini compatibility. Ignore this." },
-      includeStaleDirectWorkDetails: { type: "boolean", description: "Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only." }
+      includeStaleDirectWorkDetails: { type: "boolean", description: "Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only." },
+      includeSessions: { type: "boolean", description: "Opt in to per-node live session arrays. Default false: compact mode returns a per-node sessionSummary (counts) and de-duplicated full session lists under top-level daemonSessions keyed by daemonId (sessions are not repeated for every node that shares a daemon). Set true to also include the full session array on each node." },
+      compact: { type: "boolean", description: "Slim payload for LLM callers. Default true. Folds per-node session arrays to sessionSummary and de-duplicates daemon-shared sessions into daemonSessions. Set false (or verbose=true) for the full dashboard-grade payload." },
+      verbose: { type: "boolean", description: "Force the full payload; overrides compact." }
     }
   }
 };
@@ -1968,7 +2100,9 @@ var MESH_VIEW_QUEUE_TOOL = {
         type: "string",
         enum: ["all", "active", "historical"],
         description: "Optional row view. active returns pending/assigned rows, historical returns completed/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility."
-      }
+      },
+      compact: { type: "boolean", description: "Slim payload for LLM callers. Default true. Drops large historical (completed/failed/cancelled) queue row arrays, the full staleDirectWork orphan array (kept as staleDirectWorkSummary counts), and per-row maintenance cleanupCandidates in favor of counts; pending/assigned active rows are retained. Set false (or verbose=true) for the full dashboard-grade payload." },
+      verbose: { type: "boolean", description: "Force the full payload; overrides compact." }
     }
   }
 };
@@ -2011,7 +2145,9 @@ var MESH_SEND_TASK_TOOL = {
       session_id: { type: "string", description: "Agent session ID on the target node." },
       message: { type: "string", description: "Natural-language task to send to the agent." },
       task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch." },
-      taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." }
+      taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
+      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch." },
+      missionId: { type: "string", description: "CamelCase alias for mission_id." }
     },
     required: ["node_id", "session_id", "message"]
   }
@@ -2071,15 +2207,17 @@ var MESH_GIT_STATUS_TOOL = {
 };
 var MESH_FAST_FORWARD_NODE_TOOL = {
   name: "mesh_fast_forward_node",
-  description: "Safely dry-run or execute an obvious direct fast-forward for a mesh node without launching an agent session. Defaults to dry-run; execution requires execute=true. Never pushes, rebases, resets, cleans, or checks out arbitrary revisions.",
+  description: 'Safely dry-run or execute an obvious direct fast-forward for a mesh node without launching an agent session. mode="merge" (default) absorbs upstream commits into the local branch via git merge --ff-only (ahead=0, behind>0). mode="push" publishes local commits to origin via a strict ff-only push (HEAD must be a descendant of origin/<branch>). Defaults to dry-run; execution requires execute=true. Never force-pushes, rebases, resets, cleans, or checks out arbitrary revisions. When the merge path finds the branch ahead with nothing to merge, it returns code "ahead_needs_push" pointing at mode="push".',
   inputSchema: {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Target node ID." },
+      mode: { type: "string", enum: ["merge", "push"], description: "merge (default): git merge --ff-only to absorb upstream. push: strict ff-only push of local commits to origin/<branch>; refuses any non-fast-forward." },
       branch: { type: "string", description: "Optional guard: require the node's current branch to match this branch before planning/executing." },
-      execute: { type: "boolean", description: "When true, apply the fast-forward if all safety gates pass. Defaults false/dry-run." },
+      execute: { type: "boolean", description: "When true, apply the fast-forward/push if all safety gates pass. Defaults false/dry-run." },
       dry_run: { type: "boolean", description: "Preview only. Defaults true unless execute=true; dry_run=true overrides execute." },
-      update_submodules: { type: "boolean", description: "When true, if the root fast-forward changes gitlinks, run only git submodule update --init --recursive and verify submodules clean." }
+      update_submodules: { type: "boolean", description: 'mode="merge" only: when true, if the root fast-forward changes gitlinks, run only git submodule update --init --recursive and verify submodules clean.' },
+      push_submodules: { type: "boolean", description: 'mode="push" only: also ff-only push submodule HEADs to their origin main. Gated by mesh policy allowAutoPublishSubmoduleMainCommits \u2014 skipped unless that policy is enabled. Defaults false (root push only).' }
     },
     required: ["node_id"]
   }
@@ -2180,8 +2318,10 @@ var MESH_TASK_HISTORY_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
-      tail: { type: "number", description: "Number of recent entries to return (default: 20)." },
-      kind: { type: "string", description: "Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed, direct_fast_forward." }
+      tail: { type: "number", description: "Number of recent entries to return (default: 20; clamped to 40 in compact mode, 200 in verbose)." },
+      kind: { type: "string", description: "Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed, direct_fast_forward." },
+      compact: { type: "boolean", description: "Slim payload for LLM callers. Default true. Truncates long payload strings (message/taskSummary \u2264200, finalSummary \u2264300) and elides any large nested evidence blob (>2KB serialized \u2014 e.g. validationSummary/result/patchEquivalence/submoduleReachability) to a {_elided,_kind,_bytes,_hint} placeholder; full evidence stays accessible via mesh_reconcile_ledger. Set false (or verbose=true) for full untruncated payloads." },
+      verbose: { type: "boolean", description: "Force the full untruncated payload; overrides compact." }
     }
   }
 };
@@ -2199,15 +2339,46 @@ var MESH_RECONCILE_LEDGER_TOOL = {
     }
   }
 };
-var MESH_REFINE_NODE_TOOL = {
-  name: "mesh_refine_node",
-  description: "The Refinery: Accept an async validation/merge/cleanup job for a completed worktree node. The immediate response includes async:true, status:'accepted', jobId, interactionId, target node, and startedAt; completion/failure evidence is delivered through pending mesh events and the mesh task ledger.",
+var MESH_PRUNE_STALE_DIRECT_TOOL = {
+  name: "mesh_prune_stale_direct",
+  description: "Prune orphaned staleDirect dispatch records \u2014 direct task dispatches whose original node/session is no longer present in the live mesh. dry_run (default) reports exactly which records would be pruned without mutating anything; pass execute=true to delete them. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved. The append-only mesh ledger audit history is left intact.",
   inputSchema: {
     type: "object",
     properties: {
-      node_id: { type: "string", description: "Node ID of the completed worktree node to refine and merge." }
+      execute: { type: "boolean", description: "When true, actually delete the orphaned records. Defaults false (dry run). Ignored when dry_run=true." },
+      dry_run: { type: "boolean", description: "Force a preview without mutation even if execute=true. Defaults to dry-run behavior when execute is not set." },
+      include_terminal: { type: "boolean", description: "Also prune terminal (completed/failed) direct dispatch store rows in addition to orphans. Defaults false." }
+    }
+  }
+};
+var MESH_REFINE_NODE_TOOL = {
+  name: "mesh_refine_node",
+  description: "The Refinery: validate \u2192 merge \u2192 push \u2192 clean up a completed worktree node onto the base branch. Defaults to dry-run (plan only): returns the validation plan with mergeWillRun:false/cleanupWillRun:false and performs NO merge/push/cleanup. Pass execute=true to actually converge the node. execute=true is async: the immediate response includes async:true, status:'accepted', jobId, interactionId, target node, and startedAt; completion/failure evidence is delivered through pending mesh events and the mesh task ledger. dry_run=true overrides execute. Matches the mesh_refine_batch / mesh_fast_forward_node dry_run/execute contract.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Node ID of the completed worktree node to refine and merge." },
+      execute: { type: "boolean", description: "When true, run validation/merge/push/cleanup for this node. Defaults false/dry-run." },
+      dry_run: { type: "boolean", description: "Preview the validation plan without merging. Defaults true unless execute=true; dry_run=true overrides execute." }
     },
     required: ["node_id"]
+  }
+};
+var MESH_REFINE_BATCH_TOOL = {
+  name: "mesh_refine_batch",
+  description: "Batch Refinery: converge multiple sibling worktree nodes onto the base branch in one conflict-aware sequential pipeline. Orders nodes by change-area (non-submodule nodes first, submodule-touching nodes serialized last) so each merged sibling advances the base and the next node auto-rebases + re-checks patch-equivalence before its own merge. Each node runs the same validation/patch-equivalence/submodule-reachability/merge/cleanup gates as mesh_refine_node. Conflicting or blocked nodes are isolated as blocked_review while the rest of the batch proceeds. Defaults to dry-run (plan only); set execute=true to converge. Never force-pushes or resets. execute=true is async: the immediate response is async:true / status:'accepted' with the batch jobId and ordered target node list; per-node convergence runs in the background and the aggregate completion/failure (with per-node merged / blocked_review / not_mergeable results) is delivered as a terminal refine event via pending mesh events and the ledger \u2014 do not re-invoke while a batch is in flight. dry_run returns the plan synchronously.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_ids: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional explicit node IDs to converge, in any order (the tool computes the safe merge order). When omitted, all local worktree nodes that need convergence are auto-collected."
+      },
+      execute: { type: "boolean", description: "When true, run validation/rebase/merge for each node in order. Defaults false/dry-run." },
+      dry_run: { type: "boolean", description: "Preview the ordering + per-node validation plan without executing. Defaults true unless execute=true; dry_run=true overrides execute." }
+    },
+    required: []
   }
 };
 var MESH_REFINE_CONFIG_SCHEMA_TOOL = {
@@ -2276,11 +2447,13 @@ var ALL_MESH_TOOLS = [
   MESH_CLONE_NODE_TOOL,
   MESH_REMOVE_NODE_TOOL,
   MESH_REFINE_NODE_TOOL,
+  MESH_REFINE_BATCH_TOOL,
   MESH_REFINE_CONFIG_SCHEMA_TOOL,
   MESH_VALIDATE_REFINE_CONFIG_TOOL,
   MESH_SUGGEST_REFINE_CONFIG_TOOL,
   MESH_REFINE_PLAN_TOOL,
   MESH_CLEANUP_SESSIONS_TOOL,
+  MESH_PRUNE_STALE_DIRECT_TOOL,
   MESH_TASK_HISTORY_TOOL,
   MESH_RECONCILE_LEDGER_TOOL,
   MESH_MISSION_UPSERT_TOOL,
@@ -2288,6 +2461,7 @@ var ALL_MESH_TOOLS = [
 ];
 async function meshStatus(ctx, args = {}) {
   const rateResult = (0, import_daemon_core.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_status" });
+  const compact = args.verbose === true ? false : args.compact ?? true;
   await refreshMeshFromDaemon(ctx);
   const { mesh, transport } = ctx;
   let ledgerSummary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
@@ -2317,6 +2491,9 @@ async function meshStatus(ctx, args = {}) {
       entry.isDirty = dirty;
       entry.uncommittedChanges = uncommittedChanges;
       entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+      if (status?.daemonBuildBehind && typeof status.daemonBuildBehind === "object") {
+        entry.staleDaemonBuild = status.daemonBuildBehind;
+      }
       const submodules = extractSubmodules(statusResult, node.policy?.submoduleIgnorePaths || []);
       if (submodules && submodules.some((s) => s?.outOfSync)) {
         entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
@@ -2384,7 +2561,9 @@ async function meshStatus(ctx, args = {}) {
     }
     const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
     if (relatedRepos.length) entry.relatedRepos = relatedRepos;
-    const liveSessions = await collectLiveStatusSessions(ctx, node);
+    const statusProbe = await collectLiveStatusProbe(ctx, node);
+    const liveSessions = statusProbe.sessions;
+    if (statusProbe.daemonBuild) entry.daemonBuild = statusProbe.daemonBuild;
     if (liveSessions.length > 0) {
       entry.sessions = liveSessions.map((s) => {
         const coordinatorMeshId = typeof s.coordinator?.meshId === "string" ? s.coordinator.meshId : void 0;
@@ -2434,11 +2613,70 @@ async function meshStatus(ctx, args = {}) {
       }
     }
   }
+  const includeSessions = args.includeSessions === true;
+  const daemonSessions = {};
+  if (compact) {
+    const seenDaemons = /* @__PURE__ */ new Set();
+    for (const entry of results) {
+      const daemonId = typeof entry?.daemonId === "string" && entry.daemonId ? entry.daemonId : "";
+      const sessions = Array.isArray(entry?.sessions) ? entry.sessions : [];
+      if (daemonId && sessions.length > 0 && !seenDaemons.has(daemonId)) {
+        seenDaemons.add(daemonId);
+        daemonSessions[daemonId] = includeSessions ? sessions : summarizeNodeSessions(sessions);
+      }
+    }
+  }
+  const daemonBuilds = {};
+  for (const entry of results) {
+    const daemonId = typeof entry?.daemonId === "string" && entry.daemonId ? entry.daemonId : "";
+    if (daemonId && entry?.daemonBuild && !(daemonId in daemonBuilds)) {
+      daemonBuilds[daemonId] = entry.daemonBuild;
+    }
+  }
+  const staleDaemonBuilds = [];
+  const seenStale = /* @__PURE__ */ new Set();
+  for (const entry of results) {
+    const behind = entry?.staleDaemonBuild;
+    if (!behind || typeof behind !== "object") continue;
+    const daemonId = typeof entry?.daemonId === "string" ? entry.daemonId : "";
+    const key = `${daemonId}::${behind.scope ?? ""}::${behind.buildCommit ?? ""}::${behind.head ?? ""}`;
+    if (seenStale.has(key)) continue;
+    seenStale.add(key);
+    const isDaemonAffecting = behind.isDaemonAffecting !== false;
+    staleDaemonBuilds.push({
+      daemonId,
+      nodeId: entry.nodeId,
+      scope: behind.scope,
+      liveBuildCommit: behind.buildCommit,
+      liveBuildCommitShort: behind.buildCommitShort,
+      head: behind.head,
+      isDaemonAffecting,
+      ...Array.isArray(behind.affectedPackages) && behind.affectedPackages.length > 0 ? { affectedPackages: behind.affectedPackages } : {},
+      warning: behind.warning
+    });
+  }
+  const daemonAffectingStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting !== false);
+  const webOnlyStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting === false);
+  const nodesForResponse = compact ? results.map((entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const next = { ...entry };
+    if (next.git !== void 0) {
+      const slimGit = buildCompactGitSnapshot(next.git);
+      if (slimGit) next.git = slimGit;
+    }
+    if (Array.isArray(next.sessions)) {
+      next.sessionSummary = summarizeNodeSessions(next.sessions);
+      if (!includeSessions) delete next.sessions;
+    }
+    if (next.daemonBuild !== void 0) delete next.daemonBuild;
+    return next;
+  }) : results;
   const response = {
     meshId: mesh.id,
     meshName: mesh.name,
     repoIdentity: mesh.repoIdentity,
     policy: mesh.policy,
+    payloadMode: compact ? "compact" : "full",
     refreshedAt: (/* @__PURE__ */ new Date()).toISOString(),
     sourceOfTruth: {
       membership: "coordinator_daemon_live_mesh",
@@ -2446,7 +2684,16 @@ async function meshStatus(ctx, args = {}) {
       activeWork: "mesh_queue_file_and_local_ledger",
       historicalEvidenceOnly: ["recoveryHints", "ledgerSummary"]
     },
-    nodes: results,
+    nodes: nodesForResponse,
+    ...compact && Object.keys(daemonSessions).length > 0 ? { daemonSessions } : {},
+    ...Object.keys(daemonBuilds).length > 0 ? { daemonBuilds } : {},
+    ...staleDaemonBuilds.length > 0 ? { staleDaemonBuilds } : {},
+    ...daemonAffectingStaleBuilds.length > 0 ? {
+      staleDaemonBuildWarning: "One or more live daemons were built from a commit behind the workspace HEAD with daemon-runtime package changes. Merged refinery/mesh-tool fixes are NOT live on those daemons until they are rebuilt/redeployed and restarted \u2014 a local daemon-core dist rebuild does not update a cloud daemon. Do not assume a just-merged fix is active."
+    } : {},
+    ...webOnlyStaleBuilds.length > 0 ? {
+      webOnlyStaleBuildNote: 'One or more live daemons are behind workspace HEAD, but only web packages changed in that range. The daemon does NOT need a rebuild/restart \u2014 redeploy the web app to reflect those changes. This is informational, not a "fix not live" condition.'
+    } : {},
     activeWork: activeWorkEvidence.activeWork,
     staleDirectWorkSummary,
     ...args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {},
@@ -2490,7 +2737,17 @@ async function meshStatus(ctx, args = {}) {
       pendingEvents
     });
     if (asyncRefineJobs.length > 0) {
-      response.asyncRefineJobs = asyncRefineJobs;
+      if (compact) {
+        const summary = (0, import_daemon_core.summarizeMeshAsyncRefineJobs)(asyncRefineJobs);
+        if (summary.activeJobs.length > 0) response.asyncRefineJobs = summary.activeJobs;
+        response.asyncRefineJobsSummary = {
+          total: summary.total,
+          byStatus: summary.byStatus,
+          ...summary.staleTerminal > 0 ? { staleTerminal: summary.staleTerminal } : {}
+        };
+      } else {
+        response.asyncRefineJobs = asyncRefineJobs;
+      }
     }
     if (pendingEvents.length > 0) {
       response.pendingCoordinatorEvents = pendingEvents;
@@ -2501,14 +2758,17 @@ async function meshStatus(ctx, args = {}) {
 }
 async function meshTaskHistory(ctx, args) {
   const { mesh } = ctx;
+  const compact = args.verbose === true ? false : args.compact ?? true;
   const pendingEvents = await drainCoordinatorPendingEvents(ctx);
-  const tail = typeof args.tail === "number" && args.tail > 0 ? args.tail : 20;
+  const requestedTail = typeof args.tail === "number" && args.tail > 0 ? Math.floor(args.tail) : 20;
+  const compactCap = requestedTail > 50 ? 20 : 30;
+  const tail = compact ? Math.min(requestedTail, compactCap) : Math.min(requestedTail, 200);
   const kind = typeof args.kind === "string" && args.kind.trim() ? [args.kind.trim()] : void 0;
   const rawEntries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail, kind });
-  const entries = rawEntries.map((e) => ({
+  const entries = compact ? rawEntries.map((e) => ({
     ...e,
     payload: e.payload ? slimLedgerPayload(e.payload) : e.payload
-  }));
+  })) : rawEntries;
   const summary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
   let taskStats;
   try {
@@ -2521,6 +2781,7 @@ async function meshTaskHistory(ctx, args) {
   }
   return JSON.stringify({
     meshId: mesh.id,
+    payloadMode: compact ? "compact" : "full",
     entries,
     summary,
     ...taskStats ? { taskStats } : {},
@@ -2604,6 +2865,89 @@ async function meshReconcileLedger(ctx, args) {
     }
   });
   return JSON.stringify({ success: true, evidence }, null, 2);
+}
+async function meshPruneStaleDirect(ctx, args = {}) {
+  await refreshMeshFromDaemon(ctx);
+  const execute = args.execute === true && args.dry_run !== true;
+  const includeTerminal = args.include_terminal === true;
+  const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+  const ledgerEntries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
+  const directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(ctx.mesh.id);
+  const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
+    meshId: ctx.mesh.id,
+    queue: (0, import_daemon_core.getQueue)(ctx.mesh.id),
+    ledgerEntries,
+    directDispatches,
+    nodes: liveNodes,
+    includeTerminalDirect: includeTerminal
+  });
+  const candidates = [
+    ...activeWorkEvidence.staleDirectWork,
+    ...includeTerminal ? activeWorkEvidence.terminalDirectWork : []
+  ];
+  const storeTaskIds = new Set(directDispatches.map((d) => d.taskId));
+  const prunable = [];
+  const preservedUnacknowledged = [];
+  const preservedLedgerOnly = [];
+  const preservedNotOrphan = [];
+  for (const record of candidates) {
+    const classification = (0, import_daemon_core.classifyStaleDirectForPrune)(record, { includeTerminal });
+    if (classification === "preserve_unacknowledged") {
+      preservedUnacknowledged.push(record);
+      continue;
+    }
+    if (classification === "preserve_active") {
+      preservedNotOrphan.push(record);
+      continue;
+    }
+    if (!storeTaskIds.has(record.taskId)) {
+      preservedLedgerOnly.push(record);
+      continue;
+    }
+    prunable.push(record);
+  }
+  const summarize = (records) => records.map((r) => ({
+    taskId: r.taskId,
+    nodeId: r.nodeId,
+    sessionId: r.sessionId,
+    status: r.status,
+    terminal: r.terminal === true,
+    staleReason: r.staleReason,
+    taskTitle: r.taskTitle,
+    createdAt: r.createdAt
+  }));
+  let prunedCount = 0;
+  if (execute && prunable.length) {
+    prunedCount = (0, import_daemon_core.deleteDirectDispatchesByTaskId)(ctx.mesh.id, prunable.map((r) => r.taskId));
+    (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+      kind: "direct_dispatch_pruned",
+      payload: {
+        source: "mesh_prune_stale_direct",
+        prunedCount,
+        taskIds: prunable.map((r) => r.taskId),
+        reasons: Array.from(new Set(prunable.map((r) => r.staleReason || (r.terminal ? "terminal" : "unknown"))))
+      }
+    });
+  }
+  return JSON.stringify({
+    success: true,
+    mode: execute ? "execute" : "dry_run",
+    meshId: ctx.mesh.id,
+    includeTerminal,
+    candidateCount: candidates.length,
+    prunableCount: prunable.length,
+    prunedCount,
+    prunable: summarize(prunable),
+    preserved: {
+      unacknowledgedCount: preservedUnacknowledged.length,
+      ledgerOnlyCount: preservedLedgerOnly.length,
+      notOrphanCount: preservedNotOrphan.length,
+      unacknowledged: summarize(preservedUnacknowledged),
+      ledgerOnly: summarize(preservedLedgerOnly),
+      notOrphan: summarize(preservedNotOrphan)
+    },
+    note: execute ? `Pruned ${prunedCount} orphaned direct dispatch record(s) from the active staleDirect surface. The append-only mesh ledger audit history is preserved; a direct_dispatch_pruned entry records this prune.` : "Dry run \u2014 nothing was deleted. Re-run with execute=true to prune the listed orphaned records. Fresh unacknowledged dispatch failures (node/session still live) and ledger-only audit entries are always preserved."
+  }, null, 2);
 }
 async function meshListNodes(ctx) {
   await refreshMeshFromDaemon(ctx);
@@ -2742,6 +3086,7 @@ async function meshEnqueueTask(ctx, args) {
 }
 async function meshViewQueue(ctx, args) {
   const rateResult = (0, import_daemon_core.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_view_queue" });
+  const compact = args.verbose === true ? false : args.compact ?? true;
   try {
     await refreshMeshFromDaemon(ctx);
     const statusFilter = sanitizeQueueStatusFilter(args.status);
@@ -2787,8 +3132,17 @@ async function meshViewQueue(ctx, args) {
     const staleAssignedTasks = maintenance.staleAssignedTasks || [];
     const requestedHistoricalRows = queue.some((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
+    const visibleQueue = compact ? queue.filter((task) => !HISTORICAL_QUEUE_STATUSES.has(String(task?.status || ""))) : queue;
+    const wantActiveQueueArray = view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status));
+    const wantHistoricalQueueArray = !compact && (view === "historical" || requestedHistoricalRows);
+    const staleDirectWorkSummary = (0, import_daemon_core.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
+      note: activeWorkEvidence.staleDirectWorkNote,
+      detailHint: "Full stale direct entries are omitted from mesh_view_queue in compact mode. Call mesh_view_queue with verbose=true, or inspect mesh_task_history for ledger detail."
+    });
+    const maintenanceForResponse = compact ? buildCompactQueueMaintenanceReport(maintenance) : maintenance;
     return JSON.stringify({
       success: true,
+      payloadMode: compact ? "compact" : "full",
       sourceOfTruth: {
         kind: "mesh_work_queue_file",
         activeStatuses: ["pending", "assigned"],
@@ -2800,9 +3154,11 @@ async function meshViewQueue(ctx, args) {
         statuses: statusFilter,
         filtered: Boolean(statusFilter?.length) || view !== "all"
       },
-      queue,
+      queue: visibleQueue,
+      ...compact ? { historicalRowsOmitted: true, historicalRowsHint: "Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows." } : {},
       activeWork: activeWorkEvidence.activeWork,
-      staleDirectWork: activeWorkEvidence.staleDirectWork,
+      staleDirectWorkSummary,
+      ...compact ? {} : { staleDirectWork: activeWorkEvidence.staleDirectWork },
       activeWorkSummary: activeWorkEvidence.summary,
       ...pollingGuidance ? { pollingGuidance } : {},
       ...rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: "rate_limit_exceeded", tool: "mesh_view_queue", callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {},
@@ -2818,17 +3174,17 @@ async function meshViewQueue(ctx, args) {
       visibleHistoricalCount: visibleSummary.historicalCount,
       staleAssignedTasks,
       staleAssignedCount: maintenance.staleAssignedCount,
-      queueMaintenance: maintenance,
-      cleanupDryRun: maintenance,
+      queueMaintenance: maintenanceForResponse,
+      cleanupDryRun: maintenanceForResponse,
       ...recentDispatchFailures.length > 0 ? {
         recentDispatchFailures,
         dispatchFailureCount: recentDispatchFailures.length,
         dispatchFailureNote: "Remote P2P dispatch attempts that failed. Affected tasks remain pending and may require mesh_queue_requeue if no idle session picks them up."
       } : {},
-      ...view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status)) ? {
+      ...wantActiveQueueArray ? {
         activeQueue: queue.filter((task) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || "")))
       } : {},
-      ...view === "historical" || requestedHistoricalRows ? {
+      ...wantHistoricalQueueArray ? {
         historicalQueue: queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")))
       } : {},
       // Back-compat alias for callers already reading the first hardening payload.
@@ -2885,6 +3241,7 @@ async function meshQueueRequeue(ctx, args) {
 }
 async function meshSendTask(ctx, args) {
   const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
+  const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
   const modeValidation = (0, import_daemon_core.validateMeshTaskModeRequest)(requestedTaskMode, args.message);
   if (!modeValidation.valid) {
     return JSON.stringify({
@@ -3001,6 +3358,16 @@ async function meshSendTask(ctx, args) {
             via: "p2p_direct",
             dispatchedAt
           });
+          if (missionId) {
+            (0, import_daemon_core.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
+              id: taskId,
+              missionId,
+              assignedNodeId: args.node_id,
+              assignedSessionId: dispatchedSessionId,
+              taskMode,
+              dispatchedAt
+            });
+          }
         } catch {
         }
       }
@@ -3174,6 +3541,19 @@ async function meshSendTask(ctx, args) {
         dispatchedToIdleSession: sessionWasIdle,
         dispatchedAt
       });
+      if (missionId) {
+        try {
+          (0, import_daemon_core.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
+            id: taskId,
+            missionId,
+            assignedNodeId: args.node_id,
+            assignedSessionId: args.session_id,
+            taskMode,
+            dispatchedAt
+          });
+        } catch {
+        }
+      }
       let deliveryId;
       try {
         const { createSessionDelivery: createDelivery } = await import("@adhdev/daemon-core");
@@ -3211,7 +3591,8 @@ async function meshSendTask(ctx, args) {
     const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, {
       targetNodeId: args.node_id,
       targetSessionId: args.session_id,
-      taskMode
+      taskMode,
+      ...missionId ? { missionId } : {}
     });
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
     const pendingEvents = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId);
@@ -3434,10 +3815,12 @@ async function meshFastForwardNode(ctx, args) {
       meshId: ctx.mesh.id,
       nodeId: node.id,
       workspace: node.workspace,
+      mode: args.mode === "push" ? "push" : "merge",
       branch: typeof args.branch === "string" ? args.branch : void 0,
       execute: args.execute === true && args.dry_run !== true,
       dryRun,
       updateSubmodules: args.update_submodules === true,
+      pushSubmodules: args.push_submodules === true,
       submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : void 0
     });
     return JSON.stringify(unwrapCommandPayload(result), null, 2);
@@ -3603,6 +3986,8 @@ async function meshRefineNode(ctx, args) {
   const result = await commandForNode(ctx, node, "refine_mesh_node", {
     meshId: ctx.mesh.id,
     nodeId: args.node_id,
+    ...args.execute !== void 0 ? { execute: args.execute } : {},
+    ...args.dry_run !== void 0 ? { dryRun: args.dry_run } : {},
     inlineMesh: ctx.mesh
   });
   if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
@@ -3611,6 +3996,28 @@ async function meshRefineNode(ctx, args) {
       ctx.mesh.nodes.splice(idx, 1);
       ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     }
+  }
+  return JSON.stringify(result, null, 2);
+}
+async function meshRefineBatch(ctx, args = {}) {
+  await refreshMeshFromDaemon(ctx);
+  const nodeIds = Array.isArray(args.node_ids) ? args.node_ids.filter((v) => typeof v === "string" && v.trim().length > 0).map((v) => v.trim()) : void 0;
+  const result = await ctx.transport.command("batch_refine_mesh_nodes", {
+    meshId: ctx.mesh.id,
+    ...nodeIds ? { nodeIds } : {},
+    ...args.execute !== void 0 ? { execute: args.execute } : {},
+    ...args.dry_run !== void 0 ? { dryRun: args.dry_run } : {},
+    inlineMesh: ctx.mesh
+  });
+  const payload = unwrapCommandPayload(result) ?? result;
+  if (payload?.batch && payload?.dryRun === false && payload?.async !== true && Array.isArray(payload?.results)) {
+    for (const outcome of payload.results) {
+      if (outcome?.convergence === "merged_to_main" || outcome?.convergence === "skipped_patch_equivalent") {
+        const idx = ctx.mesh.nodes.findIndex((n) => n.id === outcome.nodeId);
+        if (idx >= 0) ctx.mesh.nodes.splice(idx, 1);
+      }
+    }
+    ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
   }
   return JSON.stringify(result, null, 2);
 }
@@ -4803,6 +5210,9 @@ async function startMcpServer(opts) {
           case "mesh_refine_node":
             text = await meshRefineNode(meshCtx, a);
             break;
+          case "mesh_refine_batch":
+            text = await meshRefineBatch(meshCtx, a);
+            break;
           case "mesh_refine_config_schema":
             text = await meshRefineConfigSchema(meshCtx);
             break;
@@ -4817,6 +5227,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_cleanup_sessions":
             text = await meshCleanupSessions(meshCtx, a);
+            break;
+          case "mesh_prune_stale_direct":
+            text = await meshPruneStaleDirect(meshCtx, a);
             break;
           case "mesh_task_history":
             text = await meshTaskHistory(meshCtx, a);
