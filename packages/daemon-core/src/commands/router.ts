@@ -6886,6 +6886,7 @@ export class DaemonCommandRouter {
                     ? args.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string')
                     : undefined;
                 let nodeDaemonId: string | undefined;
+                let allowAutoPublishSubmoduleMainCommits = false;
                 if (meshId && nodeId) {
                     // preferInline so fast-forward can resolve inline-cache-only clone worktree nodes.
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
@@ -6897,6 +6898,7 @@ export class DaemonCommandRouter {
                     if (!submoduleIgnorePaths && Array.isArray(node?.policy?.submoduleIgnorePaths)) {
                         submoduleIgnorePaths = node.policy.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string');
                     }
+                    allowAutoPublishSubmoduleMainCommits = mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true;
                     nodeDaemonId = typeof node?.daemonId === 'string' ? node.daemonId.trim() : undefined;
                 }
                 // If the target node belongs to a remote daemon, forward the command there.
@@ -6921,6 +6923,9 @@ export class DaemonCommandRouter {
                     dryRun: args?.dryRun === true,
                     updateSubmodules: args?.updateSubmodules === true,
                     submoduleIgnorePaths,
+                    mode: args?.mode === 'push' ? 'push' : 'merge',
+                    pushSubmodules: args?.pushSubmodules === true,
+                    allowAutoPublishSubmoduleMainCommits,
                 }) as Promise<unknown>);
                 return result as CommandRouterResult;
             }

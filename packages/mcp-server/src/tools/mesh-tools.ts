@@ -2360,15 +2360,21 @@ export const MESH_GIT_STATUS_TOOL = {
 
 export const MESH_FAST_FORWARD_NODE_TOOL = {
     name: 'mesh_fast_forward_node',
-    description: 'Safely dry-run or execute an obvious direct fast-forward for a mesh node without launching an agent session. Defaults to dry-run; execution requires execute=true. Never pushes, rebases, resets, cleans, or checks out arbitrary revisions.',
+    description: 'Safely dry-run or execute an obvious direct fast-forward for a mesh node without launching an agent session. '
+        + 'mode="merge" (default) absorbs upstream commits into the local branch via git merge --ff-only (ahead=0, behind>0). '
+        + 'mode="push" publishes local commits to origin via a strict ff-only push (HEAD must be a descendant of origin/<branch>). '
+        + 'Defaults to dry-run; execution requires execute=true. Never force-pushes, rebases, resets, cleans, or checks out arbitrary revisions. '
+        + 'When the merge path finds the branch ahead with nothing to merge, it returns code "ahead_needs_push" pointing at mode="push".',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID.' },
+            mode: { type: 'string', enum: ['merge', 'push'], description: 'merge (default): git merge --ff-only to absorb upstream. push: strict ff-only push of local commits to origin/<branch>; refuses any non-fast-forward.' },
             branch: { type: 'string', description: 'Optional guard: require the node\'s current branch to match this branch before planning/executing.' },
-            execute: { type: 'boolean', description: 'When true, apply the fast-forward if all safety gates pass. Defaults false/dry-run.' },
+            execute: { type: 'boolean', description: 'When true, apply the fast-forward/push if all safety gates pass. Defaults false/dry-run.' },
             dry_run: { type: 'boolean', description: 'Preview only. Defaults true unless execute=true; dry_run=true overrides execute.' },
-            update_submodules: { type: 'boolean', description: 'When true, if the root fast-forward changes gitlinks, run only git submodule update --init --recursive and verify submodules clean.' },
+            update_submodules: { type: 'boolean', description: 'mode="merge" only: when true, if the root fast-forward changes gitlinks, run only git submodule update --init --recursive and verify submodules clean.' },
+            push_submodules: { type: 'boolean', description: 'mode="push" only: also ff-only push submodule HEADs to their origin main. Gated by mesh policy allowAutoPublishSubmoduleMainCommits — skipped unless that policy is enabled. Defaults false (root push only).' },
         },
         required: ['node_id'],
     },
@@ -4122,7 +4128,7 @@ export async function meshGitStatus(
 
 export async function meshFastForwardNode(
     ctx: MeshContext,
-    args: { node_id: string; branch?: string; execute?: boolean; dry_run?: boolean; update_submodules?: boolean },
+    args: { node_id: string; mode?: 'merge' | 'push'; branch?: string; execute?: boolean; dry_run?: boolean; update_submodules?: boolean; push_submodules?: boolean },
 ): Promise<string> {
     await refreshMeshFromDaemon(ctx);
     const node = await findNodeWithRefresh(ctx, args.node_id);
@@ -4147,10 +4153,12 @@ export async function meshFastForwardNode(
             meshId: ctx.mesh.id,
             nodeId: node.id,
             workspace: node.workspace,
+            mode: args.mode === 'push' ? 'push' : 'merge',
             branch: typeof args.branch === 'string' ? args.branch : undefined,
             execute: args.execute === true && args.dry_run !== true,
             dryRun,
             updateSubmodules: args.update_submodules === true,
+            pushSubmodules: args.push_submodules === true,
             submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : undefined,
         });
         return JSON.stringify(unwrapCommandPayload(result), null, 2);

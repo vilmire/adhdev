@@ -13,13 +13,45 @@ export interface MeshFastForwardNodeArgs {
   submoduleIgnorePaths?: string[];
   timeoutMs?: number;
   trigger?: 'manual' | 'idle_auto' | string;
+  /**
+   * Operation mode. 'merge' (default) absorbs upstream commits into the local
+   * branch via git merge --ff-only (requires ahead=0, behind>0). 'push' publishes
+   * local commits to origin via a strict ff-only push (requires HEAD to be a
+   * descendant of origin/<branch>); it never force-pushes, resets, or rebases.
+   */
+  mode?: 'merge' | 'push';
+  /**
+   * When mode='push', also fast-forward push submodule (e.g. oss) HEADs to their
+   * origin main branch. Gated by allowAutoPublishSubmoduleMainCommits — skipped
+   * unless that policy is true. Each submodule must still pass the descendant gate.
+   * Defaults false (root push only).
+   */
+  pushSubmodules?: boolean;
+  /**
+   * Mesh policy flag mirrored from RepoMeshPolicy.allowAutoPublishSubmoduleMainCommits.
+   * Submodule pushes are refused unless this is true.
+   */
+  allowAutoPublishSubmoduleMainCommits?: boolean;
 }
 
 export interface MeshFastForwardPlannedStep {
-  operation: 'refresh_upstream' | 'verify_clean_worktree' | 'verify_fast_forward' | 'merge_ff_only' | 'submodule_update' | 'verify_post_status';
+  operation: 'refresh_upstream' | 'verify_clean_worktree' | 'verify_fast_forward' | 'merge_ff_only'
+    | 'submodule_update' | 'verify_post_status' | 'verify_push_descendant' | 'push_ff_only' | 'push_submodules_ff_only';
   description: string;
   safe: true;
   willMutateWorktree: boolean;
+}
+
+export interface MeshFastForwardSubmodulePushResult {
+  path: string;
+  commit?: string;
+  remote: string;
+  remoteBranch: string;
+  pushed: boolean;
+  skipped: boolean;
+  code: string;
+  refspec?: string;
+  error?: string;
 }
 
 export interface MeshFastForwardResult {
@@ -28,6 +60,7 @@ export interface MeshFastForwardResult {
   nodeId?: string;
   meshId?: string;
   workspace: string;
+  mode: 'merge' | 'push';
   allowed: boolean;
   dryRun: boolean;
   willRun: boolean;
@@ -38,15 +71,20 @@ export interface MeshFastForwardResult {
   current?: GitRepoStatus;
   preStatus?: GitRepoStatus;
   postStatus?: GitRepoStatus;
+  /** Push target derived from the tracked upstream (mode='push'). */
+  pushTarget?: { remote: string; remoteBranch: string; refspec: string };
+  /** Submodule ff-only push outcomes (mode='push' with pushSubmodules). */
+  submodulePushes?: MeshFastForwardSubmodulePushResult[];
   finalBranchConvergenceState?: Record<string, unknown>;
   operationError?: string;
   ledgerError?: string;
+  nextStep?: string;
   trigger?: string;
 }
 
 type MeshFastForwardBase = Pick<
   MeshFastForwardResult,
-  'workspace' | 'dryRun' | 'updateSubmodules' | 'plannedSteps' | 'trigger'
+  'workspace' | 'mode' | 'dryRun' | 'updateSubmodules' | 'plannedSteps' | 'trigger'
 > & Pick<Partial<MeshFastForwardResult>, 'nodeId' | 'meshId'>;
 
 const STATUS_OPTIONS = { refreshUpstream: true, includeSubmodules: true, timeoutMs: 15_000 } as const;
@@ -59,11 +97,14 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
   const trigger = normalizeOptionalString(args.trigger) || 'manual';
   const updateSubmodules = args.updateSubmodules === true;
   const dryRun = args.dryRun === true || args.execute !== true;
-  const plannedSteps = buildPlannedSteps(updateSubmodules);
+  const mode: 'merge' | 'push' = args.mode === 'push' ? 'push' : 'merge';
+  const pushSubmodules = mode === 'push' && args.pushSubmodules === true;
+  const plannedSteps = buildPlannedSteps(mode, updateSubmodules, pushSubmodules);
   const base: MeshFastForwardBase = {
     ...(nodeId ? { nodeId } : {}),
     ...(meshId ? { meshId } : {}),
     workspace,
+    mode,
     dryRun,
     updateSubmodules,
     plannedSteps,
@@ -80,13 +121,28 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
     timeoutMs: args.timeoutMs ?? STATUS_OPTIONS.timeoutMs,
   });
 
+  if (mode === 'push') {
+    return pushMeshNode(base, args, current, {
+      pushSubmodules,
+      allowAutoPublishSubmoduleMainCommits: args.allowAutoPublishSubmoduleMainCommits === true,
+    });
+  }
+
   const earlyBlockers = collectPreflightBlockers(current, requestedBranch);
   if (earlyBlockers.length > 0) {
+    const blockCode = chooseBlockCode(current, earlyBlockers);
     const result: MeshFastForwardResult = {
-      ...block(base, chooseBlockCode(current, earlyBlockers), earlyBlockers),
+      ...block(base, blockCode, earlyBlockers),
       current,
-      finalBranchConvergenceState: buildConvergenceState(current, codeToConvergenceStatus(chooseBlockCode(current, earlyBlockers))),
+      finalBranchConvergenceState: buildConvergenceState(current, codeToConvergenceStatus(blockCode)),
     };
+    // Pure ahead (local commits not yet on origin, nothing to merge in) is not a
+    // hard failure — it's a push-needed case. Reclassify so the coordinator can
+    // route to push mode without launching an agent session.
+    if (blockCode === 'branch_ahead' && current.ahead > 0 && current.behind === 0 && otherBlockersAreOnlyAhead(earlyBlockers)) {
+      result.code = 'ahead_needs_push';
+      result.nextStep = 'Local branch is ahead of origin with nothing to merge. Re-run mesh_fast_forward_node with mode="push" (execute=true) to ff-only push the local commits to origin.';
+    }
     await appendFastForwardLedger(result, 'blocked');
     return result;
   }
@@ -210,7 +266,300 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
   return result;
 }
 
-function buildPlannedSteps(updateSubmodules: boolean): MeshFastForwardPlannedStep[] {
+interface PushOptions {
+  pushSubmodules: boolean;
+  allowAutoPublishSubmoduleMainCommits: boolean;
+}
+
+/**
+ * Strict ff-only push of a node's local commits to origin/<branch>. Only proceeds
+ * when HEAD is a descendant of origin/<branch> (origin/<branch> is an ancestor of
+ * HEAD). Never force-pushes, resets, rebases, cleans, or checks out. Optionally
+ * ff-only pushes submodule HEADs to their origin main when policy allows.
+ */
+async function pushMeshNode(
+  base: MeshFastForwardBase,
+  args: MeshFastForwardNodeArgs,
+  current: GitRepoStatus,
+  options: PushOptions,
+): Promise<MeshFastForwardResult> {
+  const workspace = base.workspace;
+  const requestedBranch = normalizeOptionalString(args.branch);
+  const dryRun = base.dryRun;
+
+  const blockers = collectPushPreflightBlockers(current, requestedBranch);
+  if (blockers.length > 0) {
+    const code = choosePushBlockCode(current, blockers);
+    const result: MeshFastForwardResult = {
+      ...block(base, code, blockers),
+      current,
+      preStatus: current,
+      finalBranchConvergenceState: buildConvergenceState(current, codeToConvergenceStatus(code)),
+    };
+    await appendFastForwardLedger(result, 'blocked');
+    return result;
+  }
+
+  const target = parseUpstreamTarget(current.upstream || '');
+  if (!target) {
+    const result: MeshFastForwardResult = {
+      ...block(base, 'upstream_unparseable', ['upstream_unparseable']),
+      current,
+      preStatus: current,
+      finalBranchConvergenceState: buildConvergenceState(current, 'blocked'),
+    };
+    await appendFastForwardLedger(result, 'blocked');
+    return result;
+  }
+  const refspec = `HEAD:refs/heads/${target.remoteBranch}`;
+  const pushTarget = { remote: target.remote, remoteBranch: target.remoteBranch, refspec };
+
+  if (current.ahead <= 0) {
+    // Nothing local to publish.
+    const result: MeshFastForwardResult = {
+      ...base,
+      success: true,
+      code: 'nothing_to_push',
+      allowed: true,
+      willRun: false,
+      executed: false,
+      blockingReasons: [],
+      current,
+      preStatus: current,
+      postStatus: current,
+      pushTarget,
+      finalBranchConvergenceState: buildConvergenceState(current, 'up_to_date'),
+    };
+    await appendFastForwardLedger(result, 'noop');
+    return result;
+  }
+
+  // Strict ff-only gate: origin/<branch> must be an ancestor of HEAD.
+  const descendant = await verifyUpstreamIsAncestorOfHead(workspace, current.upstream || '', args.timeoutMs);
+  if (!descendant.ok) {
+    const result: MeshFastForwardResult = {
+      ...block(base, 'non_fast_forward_push', ['head_is_not_descendant_of_upstream']),
+      current,
+      preStatus: current,
+      pushTarget,
+      operationError: descendant.error,
+      nextStep: 'origin/<branch> has commits not in local HEAD; a ff-only push would lose them. Converge by rebasing onto origin first, then re-run. This operation never force-pushes.',
+      finalBranchConvergenceState: buildConvergenceState(current, 'not_mergeable'),
+    };
+    await appendFastForwardLedger(result, 'blocked');
+    return result;
+  }
+
+  if (dryRun) {
+    const result: MeshFastForwardResult = {
+      ...base,
+      success: true,
+      code: 'push_available',
+      allowed: true,
+      willRun: false,
+      executed: false,
+      blockingReasons: [],
+      current,
+      preStatus: current,
+      pushTarget,
+      ...(options.pushSubmodules ? { submodulePushes: await planSubmodulePushes(current, options, args.timeoutMs) } : {}),
+      finalBranchConvergenceState: buildConvergenceState(current, 'push_available'),
+    };
+    await appendFastForwardLedger(result, 'dry_run');
+    return result;
+  }
+
+  // Execute the root ff-only push.
+  try {
+    await runGit(workspace, ['push', target.remote, refspec], { timeoutMs: args.timeoutMs ?? 30_000 });
+  } catch (error) {
+    const result: MeshFastForwardResult = {
+      ...block(base, 'push_ff_only_failed', ['push_ff_only_failed']),
+      current,
+      preStatus: current,
+      pushTarget,
+      operationError: formatGitError(error),
+      finalBranchConvergenceState: buildConvergenceState(current, 'not_mergeable'),
+    };
+    await appendFastForwardLedger(result, 'failed');
+    return result;
+  }
+
+  let submodulePushes: MeshFastForwardSubmodulePushResult[] | undefined;
+  if (options.pushSubmodules) {
+    submodulePushes = await executeSubmodulePushes(current, options, args.timeoutMs);
+  }
+
+  const postStatus = await getGitRepoStatus(workspace, {
+    ...STATUS_OPTIONS,
+    submoduleIgnorePaths: args.submoduleIgnorePaths,
+    timeoutMs: args.timeoutMs ?? STATUS_OPTIONS.timeoutMs,
+  });
+
+  const submodulePushFailed = (submodulePushes || []).some((entry) => !entry.pushed && !entry.skipped);
+  const blockingReasons: string[] = [];
+  if (postStatus.ahead !== 0) blockingReasons.push('post_branch_ahead');
+  if (submodulePushFailed) blockingReasons.push('submodule_push_failed');
+
+  const success = blockingReasons.length === 0;
+  const code = success
+    ? 'push_applied'
+    : submodulePushFailed && postStatus.ahead === 0
+      ? 'push_applied_submodule_push_failed'
+      : 'post_push_verify_failed';
+  const result: MeshFastForwardResult = {
+    ...base,
+    success,
+    code,
+    allowed: true,
+    willRun: true,
+    executed: true,
+    blockingReasons,
+    current,
+    preStatus: current,
+    postStatus,
+    pushTarget,
+    ...(submodulePushes ? { submodulePushes } : {}),
+    finalBranchConvergenceState: buildConvergenceState(postStatus, success ? 'pushed' : 'post_verify_failed'),
+  };
+  await appendFastForwardLedger(result, success ? 'executed' : 'failed');
+  return result;
+}
+
+function collectPushPreflightBlockers(status: GitRepoStatus, requestedBranch?: string): string[] {
+  const blockers: string[] = [];
+  if (!status.isGitRepo) blockers.push('not_git_repo');
+  if (!status.branch) blockers.push('detached_head_or_unknown_branch');
+  if (requestedBranch && status.branch !== requestedBranch) blockers.push('branch_mismatch');
+  if (!status.upstream) blockers.push('upstream_missing');
+  if (status.upstreamStatus !== 'fresh') blockers.push('upstream_not_fresh');
+  if (status.hasConflicts) blockers.push('conflicts_present');
+  if (status.staged > 0) blockers.push('staged_changes_present');
+  if (status.modified > 0) blockers.push('modified_changes_present');
+  if (status.untracked > 0) blockers.push('untracked_changes_present');
+  if (status.deleted > 0) blockers.push('deleted_changes_present');
+  if (status.renamed > 0) blockers.push('renamed_changes_present');
+  if (status.stashCount > 0) blockers.push('stash_entries_present');
+  // A diverged branch (ahead>0 AND behind>0) cannot ff-only push: origin has
+  // commits not in HEAD. The descendant gate also catches this, but flagging it
+  // in preflight gives a clearer code.
+  if (status.ahead > 0 && status.behind > 0) blockers.push('branch_diverged_from_upstream');
+  else if (status.behind > 0) blockers.push('branch_behind_upstream');
+  return blockers;
+}
+
+function choosePushBlockCode(status: GitRepoStatus, blockers: string[]): string {
+  if (blockers.includes('not_git_repo')) return 'not_git_repo';
+  if (blockers.includes('branch_mismatch')) return 'branch_mismatch';
+  if (blockers.includes('upstream_missing')) return 'upstream_missing';
+  if (blockers.includes('upstream_not_fresh')) return 'upstream_not_fresh';
+  if (blockers.includes('branch_diverged_from_upstream')) return 'branch_diverged';
+  if (blockers.includes('branch_behind_upstream')) return 'non_fast_forward_push';
+  if (blockers.some((reason) => reason.includes('changes') || reason.includes('conflicts') || reason.includes('stash'))) return 'dirty_worktree';
+  return 'preflight_blocked';
+}
+
+/** Parse an upstream ref like "origin/main" into { remote, remoteBranch }. */
+function parseUpstreamTarget(upstream: string): { remote: string; remoteBranch: string } | null {
+  const trimmed = upstream.trim();
+  const slash = trimmed.indexOf('/');
+  if (slash <= 0 || slash >= trimmed.length - 1) return null;
+  return { remote: trimmed.slice(0, slash), remoteBranch: trimmed.slice(slash + 1) };
+}
+
+async function verifyUpstreamIsAncestorOfHead(workspace: string, upstream: string, timeoutMs?: number): Promise<{ ok: boolean; error?: string }> {
+  if (!upstream) return { ok: false, error: 'missing upstream' };
+  try {
+    await runGit(workspace, ['merge-base', '--is-ancestor', upstream, 'HEAD'], { timeoutMs: timeoutMs ?? 15_000 });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: formatGitError(error) };
+  }
+}
+
+/** Dry-run plan for submodule pushes: classify each as would-push / skipped / blocked. */
+async function planSubmodulePushes(status: GitRepoStatus, options: PushOptions, timeoutMs?: number): Promise<MeshFastForwardSubmodulePushResult[]> {
+  return resolveSubmodulePushes(status, options, false, timeoutMs);
+}
+
+async function executeSubmodulePushes(status: GitRepoStatus, options: PushOptions, timeoutMs?: number): Promise<MeshFastForwardSubmodulePushResult[]> {
+  return resolveSubmodulePushes(status, options, true, timeoutMs);
+}
+
+async function resolveSubmodulePushes(
+  status: GitRepoStatus,
+  options: PushOptions,
+  execute: boolean,
+  timeoutMs?: number,
+): Promise<MeshFastForwardSubmodulePushResult[]> {
+  const submodules = Array.isArray(status.submodules) ? status.submodules : [];
+  const results: MeshFastForwardSubmodulePushResult[] = [];
+  for (const submodule of submodules) {
+    const base: MeshFastForwardSubmodulePushResult = {
+      path: submodule.path,
+      commit: submodule.commit,
+      remote: 'origin',
+      remoteBranch: 'main',
+      pushed: false,
+      skipped: true,
+      code: 'submodule_push_skipped',
+    };
+    if (!options.allowAutoPublishSubmoduleMainCommits) {
+      results.push({ ...base, code: 'submodule_push_policy_disabled', error: 'allowAutoPublishSubmoduleMainCommits is not enabled' });
+      continue;
+    }
+    if (submodule.error || submodule.dirty) {
+      results.push({ ...base, code: 'submodule_not_clean', error: submodule.error || 'submodule worktree is dirty' });
+      continue;
+    }
+    const repoPath = submodule.repoPath;
+    if (!repoPath || !submodule.commit) {
+      results.push({ ...base, code: 'submodule_status_incomplete' });
+      continue;
+    }
+    // Refresh the submodule's origin/main, then require it to be an ancestor of
+    // the gitlink commit (strict ff-only).
+    try {
+      await runGit(repoPath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', 'refs/heads/main:refs/remotes/origin/main'], { timeoutMs: timeoutMs ?? 30_000 });
+    } catch (error) {
+      results.push({ ...base, code: 'submodule_fetch_failed', error: formatGitError(error) });
+      continue;
+    }
+    let alreadyReachable = false;
+    try {
+      await runGit(repoPath, ['merge-base', '--is-ancestor', submodule.commit, 'refs/remotes/origin/main'], { timeoutMs: timeoutMs ?? 15_000 });
+      alreadyReachable = true;
+    } catch { /* not yet on origin/main — candidate for push */ }
+    if (alreadyReachable) {
+      results.push({ ...base, pushed: false, skipped: true, code: 'submodule_already_reachable' });
+      continue;
+    }
+    // Strict ff-only: origin/main must be an ancestor of the commit we publish.
+    try {
+      await runGit(repoPath, ['merge-base', '--is-ancestor', 'refs/remotes/origin/main', submodule.commit], { timeoutMs: timeoutMs ?? 15_000 });
+    } catch (error) {
+      results.push({ ...base, pushed: false, skipped: false, code: 'submodule_non_fast_forward', error: formatGitError(error) });
+      continue;
+    }
+    const refspec = `${submodule.commit}:refs/heads/main`;
+    if (!execute) {
+      results.push({ ...base, pushed: false, skipped: false, code: 'submodule_push_available', refspec });
+      continue;
+    }
+    try {
+      await runGit(repoPath, ['push', 'origin', refspec], { timeoutMs: timeoutMs ?? 30_000 });
+      // Verify reachability after the push.
+      await runGit(repoPath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', 'refs/heads/main:refs/remotes/origin/main'], { timeoutMs: timeoutMs ?? 30_000 });
+      await runGit(repoPath, ['merge-base', '--is-ancestor', submodule.commit, 'refs/remotes/origin/main'], { timeoutMs: timeoutMs ?? 15_000 });
+      results.push({ ...base, pushed: true, skipped: false, code: 'submodule_pushed', refspec });
+    } catch (error) {
+      results.push({ ...base, pushed: false, skipped: false, code: 'submodule_push_failed', refspec, error: formatGitError(error) });
+    }
+  }
+  return results;
+}
+
+function buildPlannedSteps(mode: 'merge' | 'push', updateSubmodules: boolean, pushSubmodules: boolean): MeshFastForwardPlannedStep[] {
   const steps: MeshFastForwardPlannedStep[] = [
     {
       operation: 'refresh_upstream',
@@ -224,19 +573,48 @@ function buildPlannedSteps(updateSubmodules: boolean): MeshFastForwardPlannedSte
       safe: true,
       willMutateWorktree: false,
     },
-    {
-      operation: 'verify_fast_forward',
-      description: 'Require ahead=0, behind>0, and HEAD to be an ancestor of the upstream ref.',
+  ];
+  if (mode === 'push') {
+    steps.push({
+      operation: 'verify_push_descendant',
+      description: 'Require HEAD to be a descendant of origin/<branch> (origin/<branch> is an ancestor of HEAD); refuse any non-fast-forward push.',
       safe: true,
       willMutateWorktree: false,
-    },
-    {
-      operation: 'merge_ff_only',
-      description: 'Apply git merge --ff-only against the tracked upstream; no force, reset, rebase, push, or deploy.',
+    });
+    steps.push({
+      operation: 'push_ff_only',
+      description: 'Run git push origin HEAD:<branch> as a strict ff-only push; never --force, --force-with-lease, reset, or rebase. Does not mutate the worktree.',
       safe: true,
-      willMutateWorktree: true,
-    },
-  ];
+      willMutateWorktree: false,
+    });
+    if (pushSubmodules) {
+      steps.push({
+        operation: 'push_submodules_ff_only',
+        description: 'For each submodule, if allowAutoPublishSubmoduleMainCommits is enabled and the submodule HEAD is a descendant of its origin main, ff-only push it to submodule origin main; otherwise skip.',
+        safe: true,
+        willMutateWorktree: false,
+      });
+    }
+    steps.push({
+      operation: 'verify_post_status',
+      description: 'Re-read daemon-owned git status and report final branch convergence state.',
+      safe: true,
+      willMutateWorktree: false,
+    });
+    return steps;
+  }
+  steps.push({
+    operation: 'verify_fast_forward',
+    description: 'Require ahead=0, behind>0, and HEAD to be an ancestor of the upstream ref.',
+    safe: true,
+    willMutateWorktree: false,
+  });
+  steps.push({
+    operation: 'merge_ff_only',
+    description: 'Apply git merge --ff-only against the tracked upstream; no force, reset, rebase, push, or deploy.',
+    safe: true,
+    willMutateWorktree: true,
+  });
   if (updateSubmodules) {
     steps.push({
       operation: 'submodule_update',
@@ -252,6 +630,16 @@ function buildPlannedSteps(updateSubmodules: boolean): MeshFastForwardPlannedSte
     willMutateWorktree: false,
   });
   return steps;
+}
+
+/**
+ * True when every preflight blocker is attributable purely to the branch being
+ * ahead of its upstream (local commits not yet pushed) — i.e. nothing dirty,
+ * diverged, or submodule-broken. Used to reclassify branch_ahead → ahead_needs_push.
+ */
+function otherBlockersAreOnlyAhead(blockers: string[]): boolean {
+  const aheadOnly = new Set(['branch_has_local_commits']);
+  return blockers.every((reason) => aheadOnly.has(reason));
 }
 
 function collectPreflightBlockers(status: GitRepoStatus, requestedBranch?: string): string[] {
@@ -314,7 +702,8 @@ function chooseBlockCode(status: GitRepoStatus, blockers: string[]): string {
 }
 
 function codeToConvergenceStatus(code: string): string {
-  if (code === 'branch_diverged' || code === 'branch_ahead' || code === 'non_fast_forward') return 'not_mergeable';
+  if (code === 'branch_diverged' || code === 'branch_ahead' || code === 'non_fast_forward'
+    || code === 'non_fast_forward_push' || code === 'upstream_unparseable') return 'not_mergeable';
   if (code === 'dirty_worktree' || code === 'submodule_not_clean') return 'blocked_review';
   return 'blocked';
 }
@@ -409,6 +798,7 @@ async function appendFastForwardLedger(result: MeshFastForwardResult, outcome: '
       ...(result.nodeId ? { nodeId: result.nodeId } : {}),
       payload: {
         operation: 'mesh_fast_forward_node',
+        mode: result.mode,
         trigger: result.trigger || 'manual',
         outcome,
         code: result.code,
@@ -419,6 +809,7 @@ async function appendFastForwardLedger(result: MeshFastForwardResult, outcome: '
         executed: result.executed,
         branch: result.postStatus?.branch ?? result.current?.branch,
         upstream: result.postStatus?.upstream ?? result.current?.upstream,
+        ...(result.pushTarget ? { pushTarget: result.pushTarget } : {}),
         before: result.current ? {
           headCommit: result.current.headCommit,
           ahead: result.current.ahead,
@@ -429,6 +820,16 @@ async function appendFastForwardLedger(result: MeshFastForwardResult, outcome: '
           ahead: result.postStatus.ahead,
           behind: result.postStatus.behind,
         } : undefined,
+        ...(result.submodulePushes ? {
+          submodulePushes: result.submodulePushes.map((entry) => ({
+            path: entry.path,
+            commit: entry.commit,
+            pushed: entry.pushed,
+            skipped: entry.skipped,
+            code: entry.code,
+            ...(entry.refspec ? { refspec: entry.refspec } : {}),
+          })),
+        } : {}),
         blockingReasons: result.blockingReasons,
       },
     });

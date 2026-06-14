@@ -102,7 +102,7 @@ describe('fast_forward_mesh_node', () => {
     }
   }, 60000)
 
-  it('blocks branches that are ahead of upstream', async () => {
+  it('reclassifies pure-ahead merge as ahead_needs_push (push mode hint)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-ahead-'))
     try {
       const { work } = createRemoteBackedRepo(root)
@@ -114,8 +114,101 @@ describe('fast_forward_mesh_node', () => {
         nodeId: 'node-ahead',
       })
 
-      expect(result).toMatchObject({ success: false, allowed: false, willRun: false, executed: false, code: 'branch_ahead' })
+      // ahead>0, behind=0 in merge mode is a push-needed case, not a hard block.
+      expect(result).toMatchObject({ success: false, allowed: false, willRun: false, executed: false, code: 'ahead_needs_push' })
+      expect(result.nextStep).toMatch(/mode="push"/)
       expect(result.current).toMatchObject({ ahead: 1, behind: 0 })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('push mode dry-runs an ff-only push of pure-ahead commits without pushing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-push-dry-'))
+    try {
+      const { origin, work } = createRemoteBackedRepo(root)
+      commitFile(work, 'LOCAL.md', 'local\n', 'local commit')
+      const localHead = git(work, ['rev-parse', 'HEAD'])
+      const remoteHeadBefore = git(origin, ['rev-parse', 'main'])
+
+      const result: any = await fastForwardMeshNode({
+        workspace: work,
+        mode: 'push',
+        nodeId: 'node-push',
+      })
+
+      expect(result).toMatchObject({ success: true, allowed: true, willRun: false, executed: false, dryRun: true, code: 'push_available', mode: 'push' })
+      expect(result.pushTarget).toMatchObject({ remote: 'origin', remoteBranch: 'main', refspec: 'HEAD:refs/heads/main' })
+      expect(result.plannedSteps.map((step: any) => step.operation)).toEqual(expect.arrayContaining(['verify_push_descendant', 'push_ff_only']))
+      // Nothing was pushed.
+      expect(git(origin, ['rev-parse', 'main'])).toBe(remoteHeadBefore)
+      expect(git(work, ['rev-parse', 'HEAD'])).toBe(localHead)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('push mode executes a strict ff-only push to origin', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-push-exec-'))
+    try {
+      const { origin, work } = createRemoteBackedRepo(root)
+      commitFile(work, 'LOCAL.md', 'local\n', 'local commit')
+      const localHead = git(work, ['rev-parse', 'HEAD'])
+
+      const result: any = await fastForwardMeshNode({
+        workspace: work,
+        mode: 'push',
+        execute: true,
+        nodeId: 'node-push',
+      })
+
+      expect(result).toMatchObject({ success: true, allowed: true, willRun: true, executed: true, code: 'push_applied', mode: 'push' })
+      expect(git(origin, ['rev-parse', 'main'])).toBe(localHead)
+      expect(result.postStatus).toMatchObject({ ahead: 0, behind: 0 })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('push mode refuses a non-fast-forward push when origin has diverged', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-push-nonff-'))
+    try {
+      const { seed, origin, work } = createRemoteBackedRepo(root)
+      // origin advances with a commit the local work does not have.
+      pushRemoteCommit(seed)
+      const remoteHeadBefore = git(origin, ['rev-parse', 'main'])
+      // local also commits, so it is both ahead and behind (diverged).
+      commitFile(work, 'LOCAL.md', 'local\n', 'local commit')
+
+      const result: any = await fastForwardMeshNode({
+        workspace: work,
+        mode: 'push',
+        execute: true,
+        nodeId: 'node-push',
+      })
+
+      expect(result).toMatchObject({ success: false, allowed: false, executed: false, mode: 'push' })
+      expect(['branch_diverged', 'non_fast_forward_push']).toContain(result.code)
+      // Origin untouched — no force push.
+      expect(git(origin, ['rev-parse', 'main'])).toBe(remoteHeadBefore)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('push mode reports nothing_to_push when fully in sync', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-push-noop-'))
+    try {
+      const { work } = createRemoteBackedRepo(root)
+
+      const result: any = await fastForwardMeshNode({
+        workspace: work,
+        mode: 'push',
+        execute: true,
+        nodeId: 'node-push',
+      })
+
+      expect(result).toMatchObject({ success: true, executed: false, code: 'nothing_to_push', mode: 'push' })
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

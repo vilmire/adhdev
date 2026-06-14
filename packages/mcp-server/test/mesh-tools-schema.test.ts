@@ -10,7 +10,11 @@ test('mesh_fast_forward_node schema registers the safe direct fast-forward surfa
   assert.equal(MESH_FAST_FORWARD_NODE_TOOL.inputSchema.properties.execute.type, 'boolean');
   assert.equal(MESH_FAST_FORWARD_NODE_TOOL.inputSchema.properties.dry_run.type, 'boolean');
   assert.equal(MESH_FAST_FORWARD_NODE_TOOL.inputSchema.properties.update_submodules.type, 'boolean');
-  assert.match(MESH_FAST_FORWARD_NODE_TOOL.description, /Never pushes, rebases, resets, cleans/);
+  assert.equal(MESH_FAST_FORWARD_NODE_TOOL.inputSchema.properties.mode.type, 'string');
+  assert.deepEqual(MESH_FAST_FORWARD_NODE_TOOL.inputSchema.properties.mode.enum, ['merge', 'push']);
+  assert.equal(MESH_FAST_FORWARD_NODE_TOOL.inputSchema.properties.push_submodules.type, 'boolean');
+  // push mode is strict ff-only: force-push/rebase/reset/clean remain forbidden.
+  assert.match(MESH_FAST_FORWARD_NODE_TOOL.description, /Never force-pushes, rebases, resets, cleans/);
 });
 
 test('mesh_enqueue_task schema exposes optional capability tag requirements', () => {
