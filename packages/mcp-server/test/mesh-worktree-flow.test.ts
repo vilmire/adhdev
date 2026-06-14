@@ -989,6 +989,99 @@ test('mesh_task_history backfills remote pending completion events into the coor
   }
 });
 
+test('mesh_task_history compact mode elides large nested payload evidence blobs but keeps them in verbose', async () => {
+  clearPendingMeshCoordinatorEvents();
+  const meshId = `mesh-task-history-payload-cap-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  // Reproduce the reported offenders: a task_completed entry carrying a multi-KB
+  // `result` evidence blob, and a node_removed entry carrying a multi-KB
+  // `validationSummary` — neither was string-capped nor allowlisted, so compact
+  // mode passed them through verbatim and blew the MCP token limit.
+  const bigResult = {
+    refineOutput: 'x'.repeat(8000),
+    steps: Array.from({ length: 50 }, (_, i) => ({ step: i, detail: 'converged '.repeat(20) })),
+  };
+  const bigValidationSummary = {
+    patchEquivalence: { ok: true, log: 'y'.repeat(6000) },
+    submoduleReachability: { ok: true, refs: Array.from({ length: 40 }, (_, i) => `ref-${i}-${'z'.repeat(50)}`) },
+  };
+
+  appendLedgerEntry(meshId, {
+    kind: 'task_completed',
+    nodeId: 'node-worker',
+    sessionId: 'session-worker',
+    providerType: 'hermes-cli',
+    payload: {
+      taskId: 'task-1',
+      source: 'direct',
+      success: true,
+      mergedBranch: 'feat/x',
+      finalSummary: 'all done '.repeat(60), // long string → capped to 300
+      result: bigResult, // large nested → elided
+    },
+  });
+  appendLedgerEntry(meshId, {
+    kind: 'node_removed',
+    nodeId: 'node-worker',
+    payload: {
+      into: 'main',
+      async: false,
+      validationSummary: bigValidationSummary, // large nested → elided
+      smallNote: 'kept', // short scalar → preserved
+    },
+  });
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: { id: meshId, name: 'Payload Cap Mesh', repoIdentity: 'example/repo', policy: {}, coordinator: {}, nodes: [] },
+  };
+
+  try {
+    // --- compact (default) ---
+    const compact = JSON.parse(await meshTaskHistory(ctx as any, { tail: 12 }));
+    assert.equal(compact.payloadMode, 'compact');
+
+    const completed = compact.entries.find((e: any) => e.kind === 'task_completed' && e.sessionId === 'session-worker');
+    assert.ok(completed, 'expected task_completed entry');
+    // Large nested evidence is elided to a placeholder...
+    assert.equal(completed.payload.result?._elided, true, 'large result blob must be elided in compact mode');
+    assert.equal(completed.payload.result?._kind, 'result');
+    assert.equal(typeof completed.payload.result?._bytes, 'number');
+    assert.ok(completed.payload.result._bytes > 2000, 'elided placeholder records original byte size');
+    assert.match(completed.payload.result._hint, /mesh_reconcile_ledger/);
+    // ...while small scalars/short fields survive.
+    assert.equal(completed.payload.source, 'direct');
+    assert.equal(completed.payload.success, true);
+    assert.equal(completed.payload.mergedBranch, 'feat/x');
+    assert.ok(completed.payload.finalSummary.length <= 301, 'finalSummary still capped to 300 in compact');
+
+    const removed = compact.entries.find((e: any) => e.kind === 'node_removed' && e.nodeId === 'node-worker');
+    assert.ok(removed, 'expected node_removed entry');
+    assert.equal(removed.payload.validationSummary?._elided, true, 'large validationSummary must be elided in compact mode');
+    assert.equal(removed.payload.validationSummary?._kind, 'validationSummary');
+    assert.equal(removed.payload.into, 'main');
+    assert.equal(removed.payload.async, false);
+    assert.equal(removed.payload.smallNote, 'kept');
+
+    // The whole compact response must not carry the multi-KB blobs.
+    const compactSerialized = JSON.stringify(compact);
+    assert.ok(!compactSerialized.includes('x'.repeat(8000)), 'compact response must not contain the raw result blob');
+    assert.ok(!compactSerialized.includes('y'.repeat(6000)), 'compact response must not contain the raw validationSummary blob');
+
+    // --- verbose: full payloads must be untouched (no regression) ---
+    const verbose = JSON.parse(await meshTaskHistory(ctx as any, { tail: 12, verbose: true }));
+    assert.equal(verbose.payloadMode, 'full');
+    const vCompleted = verbose.entries.find((e: any) => e.kind === 'task_completed' && e.sessionId === 'session-worker');
+    assert.ok(vCompleted, 'expected task_completed entry in verbose');
+    assert.deepEqual(vCompleted.payload.result, bigResult, 'verbose must return the full result blob untouched');
+    assert.equal(vCompleted.payload.finalSummary, 'all done '.repeat(60), 'verbose must not truncate finalSummary');
+    const vRemoved = verbose.entries.find((e: any) => e.kind === 'node_removed' && e.nodeId === 'node-worker');
+    assert.deepEqual(vRemoved.payload.validationSummary, bigValidationSummary, 'verbose must return the full validationSummary blob untouched');
+  } finally {
+    clearPendingMeshCoordinatorEvents();
+  }
+});
+
 test('mesh_send_task preserves P2P relay recovery payload for coordinator feedback', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;

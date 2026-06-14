@@ -1715,6 +1715,12 @@ function isGitStatusDirty(status: any): boolean {
 // mesh_reconcile_ledger.
 const LARGE_LEDGER_FIELD_KEYS = new Set(['plan', 'validationPlan', 'suggestedConfig', 'payload']);
 const LARGE_LEDGER_OBJECT_THRESHOLD = 800;
+// Any nested object/array in a compact payload whose serialized size exceeds this
+// is replaced with an elided placeholder. This is the PRIMARY defense: it covers
+// arbitrary evidence keys (validationSummary, result, patchEquivalence,
+// submoduleReachability, plus any future key) without a hardcoded allowlist. The
+// specific per-key rules below are just tuning on top of this general guard.
+const LARGE_LEDGER_NESTED_BYTES_THRESHOLD = 2000;
 
 function summarizeLargeLedgerField(key: string, value: unknown): unknown {
     if (typeof value === 'string') {
@@ -1737,6 +1743,30 @@ function summarizeLargeLedgerField(key: string, value: unknown): unknown {
     return value;
 }
 
+// Generic nested-value guard. Replaces any object/array (or oversized string) whose
+// serialized size exceeds LARGE_LEDGER_NESTED_BYTES_THRESHOLD with a compact
+// placeholder that records the original key, byte size, and a recovery hint. Small
+// scalars and short fields (source, success, async, into, mergedBranch, …) pass
+// through untouched.
+function elideLargeNestedValue(key: string, value: unknown): unknown {
+    if (value === null || value === undefined) return value;
+    if (typeof value === 'string') {
+        // Long bare strings (not one of the explicitly-capped fields) get a hard cap
+        // so a single multi-KB string blob can't blow the payload either.
+        return value.length > 1000 ? value.slice(0, 1000) + '…' : value;
+    }
+    if (typeof value !== 'object') return value; // number / boolean
+    const serialized = JSON.stringify(value);
+    const bytes = serialized ? serialized.length : 0;
+    if (bytes <= LARGE_LEDGER_NESTED_BYTES_THRESHOLD) return value;
+    return {
+        _elided: true,
+        _kind: key,
+        _bytes: bytes,
+        _hint: 'full evidence via mesh_reconcile_ledger',
+    };
+}
+
 function slimLedgerPayload(payload: Record<string, unknown>): Record<string, unknown> {
     const slim: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(payload)) {
@@ -1751,7 +1781,11 @@ function slimLedgerPayload(payload: Record<string, unknown>): Record<string, unk
             // refine_batch task_dispatched offenders that blow past the token limit.
             slim[k] = summarizeLargeLedgerField(k, v);
         } else {
-            slim[k] = v;
+            // Primary, key-agnostic defense: elide any oversized nested evidence blob
+            // (validationSummary, result, patchEquivalence, submoduleReachability, and
+            // any future large key) by serialized byte size. Small scalars/short fields
+            // are returned as-is.
+            slim[k] = elideLargeNestedValue(k, v);
         }
     }
     return slim;
@@ -2555,7 +2589,7 @@ export const MESH_TASK_HISTORY_TOOL = {
         properties: {
             tail: { type: 'number', description: 'Number of recent entries to return (default: 20; clamped to 40 in compact mode, 200 in verbose).' },
             kind: { type: 'string', description: 'Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed, direct_fast_forward.' },
-            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Truncates long payload strings (message/taskSummary ≤200, finalSummary ≤300) and drops large nested evidence blobs (accessible via mesh_reconcile_ledger). Set false (or verbose=true) for full untruncated payloads.' },
+            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Truncates long payload strings (message/taskSummary ≤200, finalSummary ≤300) and elides any large nested evidence blob (>2KB serialized — e.g. validationSummary/result/patchEquivalence/submoduleReachability) to a {_elided,_kind,_bytes,_hint} placeholder; full evidence stays accessible via mesh_reconcile_ledger. Set false (or verbose=true) for full untruncated payloads.' },
             verbose: { type: 'boolean', description: 'Force the full untruncated payload; overrides compact.' },
         },
     },
