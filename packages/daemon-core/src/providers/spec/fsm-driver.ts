@@ -456,6 +456,18 @@ export class FsmDriver implements ISpecDriver {
             // that's already satisfied doesn't wait for the next PTY frame.
             this.emitStateChanged(forceEmit);
             this.scheduleWakeForState();
+            // Drain queued sends on the SAME frame the machine reaches "ready".
+            // The first delegated message is queued in pendingSends until the
+            // FSM first enters a non-initial idle state (the prompt is drawn).
+            // That readiness is normally reached BY a transition (e.g.
+            // signing_in→idle / starting→idle) — and an idle state has no
+            // pending time-condition, so scheduleWakeForState() arms no timer
+            // and, agy being quiet at the prompt, no further PTY frame arrives.
+            // Without this call the queued first message would strand here
+            // forever (the "first input never processed" bug). maybeMarkReady is
+            // idempotent (guarded by readySeenOnce) so calling it on both
+            // branches is safe.
+            this.maybeMarkReady();
             return;
         }
 
