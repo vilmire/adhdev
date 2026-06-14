@@ -3929,6 +3929,7 @@ async function meshLaunchSession(ctx, args) {
     const coordinatorNode = resolveCoordinatorNode(ctx);
     const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
     const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
+    const delegatedWorkerAutoApprove = (0, import_daemon_core.resolveDelegatedWorkerAutoApprove)(ctx.mesh.policy, node.policy);
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
       return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
@@ -3945,6 +3946,9 @@ async function meshLaunchSession(ctx, args) {
           meshNodeFor: ctx.mesh.id,
           meshNodeId: args.node_id,
           spawnedSessionVisibility,
+          // Delegated worker auto-approval (see resolveDelegatedWorkerAutoApprove).
+          // Lands in settingsOverride and beats the global per-provider autoApprove.
+          autoApprove: delegatedWorkerAutoApprove,
           ...coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {},
           ...coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {},
           launchedByCoordinator: true
