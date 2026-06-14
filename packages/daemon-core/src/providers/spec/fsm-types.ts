@@ -130,6 +130,21 @@ export interface CliSpecV4 {
     spawn_args?: string[];
     env?: Record<string, string>;
     cli_version_range?: string;
+    /**
+     * Optional raw byte sequences written to the PTY once, shortly after spawn,
+     * to prime a TUI that gates its input handling on a terminal event the
+     * daemon would otherwise never emit. The canonical case is a focus-event
+     * TUI (Ink `useStdin`/`useFocus`, e.g. antigravity's `agy`) that enables
+     * focus reporting (`CSI ?1004h`) and treats its input box as unfocused —
+     * silently dropping the first programmatic write — until it receives a
+     * focus-in event (`ESC [ I`). Declaring `["[I"]` here wakes the input
+     * stream on spawn so the first delegated message lands without a manual
+     * keystroke. CLIs that do not focus-gate input simply omit this field; the
+     * engine writes nothing extra for them, so it stays CLI-agnostic.
+     */
+    send_on_spawn?: string[];
+    /** Delay (ms) after spawn before writing `send_on_spawn`. Default 250. */
+    send_on_spawn_delay_ms?: number;
     send_message: {
         submit_key: string;
         delay_ms_before_submit?: number;

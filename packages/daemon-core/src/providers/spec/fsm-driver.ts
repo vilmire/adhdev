@@ -246,9 +246,25 @@ export class FsmDriver implements ISpecDriver {
         this.stateEnteredAt = now;
         this.prevStateAt = now;
         this.adapter.start();
+        // Prime focus-gated TUIs (see CliSpecV4.send_on_spawn). Written once,
+        // shortly after spawn, so the input stream is awake before the first
+        // delegated message — without this, a focus-event CLI like antigravity
+        // drops the first programmatic write until a manual keystroke.
+        this.scheduleSpawnPrime();
         // The initial state may have a purely time-based exit (elapsed_ms);
         // schedule a wake so we leave it even if the PTY goes quiet.
         this.scheduleWakeForState();
+    }
+
+    private scheduleSpawnPrime(): void {
+        const seqs = this.spec.send_on_spawn;
+        if (!Array.isArray(seqs) || seqs.length === 0) return;
+        const delay = Math.max(0, this.spec.send_on_spawn_delay_ms ?? 250);
+        setTimeout(() => {
+            for (const seq of seqs) {
+                if (typeof seq === 'string' && seq.length > 0) this.adapter.send_keys(seq);
+            }
+        }, delay);
     }
 
     dispatch(cmd: DashboardCommand): void {
