@@ -37,6 +37,27 @@ export interface PendingMeshCoordinatorEvent {
 
 const REFINE_TERMINAL_EVENTS = new Set(['refine:completed', 'refine:failed']);
 
+/** Normalise a coordinator-daemon-id argument (single id, list, or undefined) into a
+ *  de-duplicated list of non-empty strings. The first entry is treated as primary for
+ *  per-daemon JSONL file naming; all entries are accepted by drain/peek targeting. */
+function normalizeCoordinatorDaemonIds(
+    coordinatorDaemonId?: string | null | ReadonlyArray<string>,
+): string[] {
+    const raw = Array.isArray(coordinatorDaemonId)
+        ? coordinatorDaemonId
+        : coordinatorDaemonId != null ? [coordinatorDaemonId] : [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const id of raw) {
+        if (typeof id !== 'string') continue;
+        const trimmed = id.trim();
+        if (!trimmed || seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        out.push(trimmed);
+    }
+    return out;
+}
+
 export function readRefineJobId(event: { metadataEvent?: Record<string, unknown> } | Record<string, unknown>): string {
     const metadata = readRecord((event as any).metadataEvent) || event as Record<string, unknown>;
     const result = readRecord(metadata.result);
@@ -108,11 +129,13 @@ function getPendingEventsPath(meshId: string, coordinatorDaemonId?: string): str
     return join(getLedgerDir(), `${safe}.pending-events.jsonl`);
 }
 
-function readPendingMeshCoordinatorEventsFromDisk(meshId?: string, coordinatorDaemonId?: string): PendingMeshCoordinatorEvent[] {
+function readPendingMeshCoordinatorEventsFromDisk(meshId?: string, coordinatorDaemonId?: string | ReadonlyArray<string>): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
+    const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
+    const primaryDaemonId = daemonIds[0];
     // Read coordinator-scoped file first; fall back to legacy shared file.
-    const paths = coordinatorDaemonId
-        ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
+    const paths = primaryDaemonId
+        ? [getPendingEventsPath(meshId, primaryDaemonId), getPendingEventsPath(meshId)]
         : [getPendingEventsPath(meshId)];
     const events: PendingMeshCoordinatorEvent[] = [];
     for (const path of paths) {
@@ -123,8 +146,8 @@ function readPendingMeshCoordinatorEventsFromDisk(meshId?: string, coordinatorDa
                 try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
             });
             // If reading the shared file, filter to events that target this coordinator or are unscoped.
-            const filtered = (coordinatorDaemonId && path === getPendingEventsPath(meshId))
-                ? parsed.filter(e => !e.targetCoordinatorDaemonId || e.targetCoordinatorDaemonId === coordinatorDaemonId)
+            const filtered = (primaryDaemonId && path === getPendingEventsPath(meshId))
+                ? parsed.filter(e => !e.targetCoordinatorDaemonId || daemonIds.includes(e.targetCoordinatorDaemonId))
                 : parsed;
             events.push(...filtered);
         } catch { /* skip unreadable files */ }
@@ -342,10 +365,17 @@ function selectiveDrainFile(
  */
 export function drainPendingMeshCoordinatorEvents(
     meshId?: string,
-    coordinatorDaemonId?: string,
+    coordinatorDaemonId?: string | ReadonlyArray<string>,
     opts?: { onlyEvents?: ReadonlySet<string> },
 ): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
+
+    // A daemon may answer to more than one coordinator-id form (its canonical
+    // status id like `standalone_<machineId>` AND the bare machineId). Normalise
+    // to a list so both the SQLite IN-filter and the JSONL targeting predicate
+    // accept any of them.
+    const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
+    const primaryDaemonId = daemonIds[0];
 
     const onlyEvents = opts?.onlyEvents;
     const matchesFilter = (eventName: string): boolean => !onlyEvents || onlyEvents.has(eventName);
@@ -368,7 +398,7 @@ export function drainPendingMeshCoordinatorEvents(
     try {
         const store = MeshRuntimeStore.getInstance();
         if (store.pendingEventCount(meshId) > 0) {
-            for (const row of store.drainPendingEvents(meshId, coordinatorDaemonId, onlyEvents ? { onlyEvents } : undefined)) {
+            for (const row of store.drainPendingEvents(meshId, daemonIds.length > 0 ? daemonIds : undefined, onlyEvents ? { onlyEvents } : undefined)) {
                 const event = row.payload as PendingMeshCoordinatorEvent;
                 if (event) pushUnique(event);
             }
@@ -377,16 +407,18 @@ export function drainPendingMeshCoordinatorEvents(
         // SQLite drain failed — JSONL below still drains
     }
 
-    // JSONL (legacy / migration path) — always drained alongside SQLite
-    const paths = coordinatorDaemonId
-        ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
+    // JSONL (legacy / migration path) — always drained alongside SQLite.
+    // The scoped per-daemon file is keyed by a single id; use the primary. The
+    // shared (unscoped) file's targeting predicate accepts ANY of this daemon's ids.
+    const paths = primaryDaemonId
+        ? [getPendingEventsPath(meshId, primaryDaemonId), getPendingEventsPath(meshId)]
         : [getPendingEventsPath(meshId)];
     for (const path of paths) {
-        const isSharedFile = coordinatorDaemonId && path === getPendingEventsPath(meshId);
+        const isSharedFile = !!primaryDaemonId && path === getPendingEventsPath(meshId);
         // Targeting predicate for the shared (unscoped) file: only this coordinator's
         // events (or legacy untargeted ones) are eligible.
         const targets = (e: PendingMeshCoordinatorEvent): boolean =>
-            !isSharedFile || !e.targetCoordinatorDaemonId || e.targetCoordinatorDaemonId === coordinatorDaemonId;
+            !isSharedFile || !e.targetCoordinatorDaemonId || daemonIds.includes(e.targetCoordinatorDaemonId);
 
         if (onlyEvents) {
             // Selective JSONL drain: consume only matching events, rewrite the rest back.
@@ -413,8 +445,9 @@ export function drainPendingMeshCoordinatorEvents(
 }
 
 /** Peek at pending coordinator events without draining (non-destructive). */
-export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): readonly PendingMeshCoordinatorEvent[] {
+export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string | ReadonlyArray<string>): readonly PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
+    const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
 
     // Merge SQLite (primary) + JSONL (legacy) with fingerprint dedup.
     const merged: PendingMeshCoordinatorEvent[] = [];
@@ -432,7 +465,7 @@ export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaem
     try {
         const store = MeshRuntimeStore.getInstance();
         if (store.pendingEventCount(meshId) > 0) {
-            for (const row of store.peekPendingEvents(meshId, coordinatorDaemonId)) {
+            for (const row of store.peekPendingEvents(meshId, daemonIds.length > 0 ? daemonIds : undefined)) {
                 const event = row.payload as PendingMeshCoordinatorEvent;
                 if (event) pushUnique(event);
             }
@@ -440,7 +473,7 @@ export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaem
     } catch { /* SQLite unavailable — JSONL fallback below */ }
 
     // JSONL (legacy)
-    for (const event of readPendingMeshCoordinatorEventsFromDisk(meshId, coordinatorDaemonId)) {
+    for (const event of readPendingMeshCoordinatorEventsFromDisk(meshId, daemonIds)) {
         pushUnique(event);
     }
 

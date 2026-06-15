@@ -49,13 +49,31 @@ function makeCoordinator(meshId: string, status: 'idle' | 'generating', sink: an
   }
 }
 
-function makeComponents(coordinators: any[], dispatchMeshCommand?: any) {
+function makeComponents(coordinators: any[], dispatchMeshCommand?: any, statusInstanceId?: string) {
   return {
     instanceManager: {
       getByCategory: (category: string) => (category === 'cli' ? coordinators : []),
     },
     ...(dispatchMeshCommand ? { dispatchMeshCommand } : {}),
+    ...(statusInstanceId ? { statusInstanceId } : {}),
   } as any
+}
+
+// A completion event stamped with a specific targetCoordinatorDaemonId — mirrors the
+// real producer: the MCP layer (mesh_send_task) stamps the worker's
+// meshCoordinatorDaemonId from ctx.localDaemonId, which under IPC is the daemon's
+// canonical status id (`standalone_<machineId>` / `daemon_<machineId>`), NOT bare machineId.
+function queueCompletionForCoordinator(meshId: string, jobSuffix: string, targetCoordinatorDaemonId: string) {
+  return queuePendingMeshCoordinatorEvent({
+    event: 'agent:generating_completed',
+    meshId,
+    nodeLabel: "Node 'node_child_1'",
+    nodeId: 'node_child_1',
+    metadataEvent: { sessionId: `sess-${jobSuffix}`, timestamp: Date.now() },
+    coordinatorMessage: `Node 'node_child_1' has completed its task (${jobSuffix}).`,
+    queuedAt: Date.now(),
+    targetCoordinatorDaemonId,
+  })
 }
 
 function queueCompletion(meshId: string, jobSuffix: string) {
@@ -213,6 +231,55 @@ describe('runMeshReconcileTick', () => {
       // Simulate the coordinator's own pull (MCP drain) racing afterwards — the
       // force-drained completion was atomically consumed, so it must not reappear.
       expect(drainPendingMeshCoordinatorEvents(meshId, 'test-machine')).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('force-drains a completion stamped with the daemon STATUS id (standalone_<machineId>) into a generating coordinator', async () => {
+    // Regression for the self-inject bug: the MCP layer stamps the worker's
+    // meshCoordinatorDaemonId with the prefixed status id, but the reconcile loop
+    // used to drain with bare loadConfig().machineId — so a unicast completion
+    // stamped `standalone_test-machine` never matched and the generating coordinator
+    // never self-received it (only a manual get_pending_mesh_events pull worked).
+    const meshId = `mesh_reconcile_status_id_${Date.now()}`
+    const statusInstanceId = 'standalone_test-machine'
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const components = makeComponents([coordinator], undefined, statusInstanceId)
+      queueCompletionForCoordinator(meshId, 'statusid', statusInstanceId)
+
+      await runMeshReconcileTick(components)
+
+      // The generating coordinator must self-receive the completion (force-injected),
+      // with no manual pull, even though it was stamped with the prefixed status id.
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [, payload] = coordinator.onEvent.mock.calls[0]
+      expect(payload.input.textFallback).toContain('has completed its task')
+      expect(payload.force).toBe(true)
+
+      // Consumed atomically — a follow-up pull (with the status id) returns nothing.
+      expect(drainPendingMeshCoordinatorEvents(meshId, statusInstanceId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('still drains a completion stamped with bare machineId (local queue-assignment path)', async () => {
+    // The local queue-assignment path stamps bare loadConfig().machineId. The
+    // reconcile loop accepts BOTH the status id and machineId, so this still works.
+    const meshId = `mesh_reconcile_bare_machine_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const components = makeComponents([coordinator], undefined, 'standalone_test-machine')
+      queueCompletionForCoordinator(meshId, 'bare', 'test-machine')
+
+      await runMeshReconcileTick(components)
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
     } finally {
       cleanup(meshId)
     }

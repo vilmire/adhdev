@@ -29,6 +29,19 @@ import {
     readWorkerResultMetadata,
 } from './mesh-events-utils.js';
 
+// The set of coordinator-daemon ids this daemon answers to when draining the
+// pending-events queue (canonical status id + bare machineId). Mirrors
+// resolveCoordinatorDaemonIds in mesh-reconcile-loop — a unicast event may be
+// stamped with either id depending on which dispatch path created the worker.
+function resolveCoordinatorDrainDaemonIds(components: DaemonComponents): string[] {
+    const ids = new Set<string>();
+    const statusInstanceId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
+    if (statusInstanceId) ids.add(statusInstanceId);
+    const machineId = readNonEmptyString(loadConfig().machineId);
+    if (machineId) ids.add(machineId);
+    return [...ids];
+}
+
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
 // ---------------------------------------------------------------------------
@@ -1506,8 +1519,13 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                         const status = readNonEmptyString(flushState.status).toLowerCase();
                         if (status === 'idle') {
                             try {
-                                const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
-                                const pendingEvents = drainPendingMeshCoordinatorEvents(coordinatorMeshId, localDaemonId);
+                                // Drain with the daemon's full coordinator-id set (status id + machineId).
+                                // The MCP layer stamps the prefixed status id (`standalone_<machineId>` /
+                                // `daemon_<machineId>`) as the worker's meshCoordinatorDaemonId; draining
+                                // with bare machineId alone would miss those unicast events. Mirrors
+                                // resolveCoordinatorDaemonIds in mesh-reconcile-loop.
+                                const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
+                                const pendingEvents = drainPendingMeshCoordinatorEvents(coordinatorMeshId, drainDaemonIds.length > 0 ? drainDaemonIds : undefined);
                                 if (pendingEvents.length > 0) {
                                     LOG.info('MeshEvents', `Auto-flushing ${pendingEvents.length} pending coordinator event(s) for mesh ${coordinatorMeshId} on coordinator idle`);
                                     for (const pending of pendingEvents) {

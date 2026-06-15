@@ -1253,7 +1253,7 @@ export class MeshRuntimeStore {
      */
     drainPendingEvents(
         meshId: string,
-        coordinatorDaemonId?: string | null,
+        coordinatorDaemonId?: string | null | ReadonlyArray<string>,
         opts?: { onlyEvents?: ReadonlySet<string> },
     ): Array<{ id: string; event: string; payload: unknown }> {
         return this.transaction(() => {
@@ -1261,14 +1261,23 @@ export class MeshRuntimeStore {
             // An explicit-but-empty filter means "drain nothing" (no event name can match).
             if (onlyEvents && onlyEvents.size === 0) return [];
             const eventList = onlyEvents ? [...onlyEvents] : [];
+            // A coordinator daemon can answer to more than one id form: its canonical
+            // status id (e.g. `standalone_<machineId>` / `daemon_<machineId>`, which the
+            // MCP layer stamps via ctx.localDaemonId) AND the bare machineId (stamped by
+            // the local queue-assignment path). Accept ANY of them so a unicast event
+            // stamped with either id is drained here. Unscoped (NULL) rows always match.
+            const daemonIds = (Array.isArray(coordinatorDaemonId)
+                ? coordinatorDaemonId
+                : coordinatorDaemonId ? [coordinatorDaemonId] : [])
+                .filter((id): id is string => typeof id === 'string' && id.length > 0);
             // Filter by event name IN-SQL when onlyEvents is set so the LIMIT applies to
             // matching rows — a long run of non-force events ahead in the queue must not
             // crowd a force event out of the 100-row window.
             const clauses = ['mesh_id = ?', 'drained = 0'];
             const params: unknown[] = [meshId];
-            if (coordinatorDaemonId) {
-                clauses.push('(coordinator_daemon_id IS NULL OR coordinator_daemon_id = ?)');
-                params.push(coordinatorDaemonId);
+            if (daemonIds.length > 0) {
+                clauses.push(`(coordinator_daemon_id IS NULL OR coordinator_daemon_id IN (${daemonIds.map(() => '?').join(',')}))`);
+                params.push(...daemonIds);
             }
             if (eventList.length > 0) {
                 clauses.push(`event IN (${eventList.map(() => '?').join(',')})`);
@@ -1292,11 +1301,15 @@ export class MeshRuntimeStore {
     }
 
     /** Non-destructive peek — returns undrained events without marking them drained. */
-    peekPendingEvents(meshId: string, coordinatorDaemonId?: string | null): Array<{ id: string; event: string; payload: unknown }> {
-        const whereClause = coordinatorDaemonId
-            ? `WHERE mesh_id = ? AND drained = 0 AND (coordinator_daemon_id IS NULL OR coordinator_daemon_id = ?)`
+    peekPendingEvents(meshId: string, coordinatorDaemonId?: string | null | ReadonlyArray<string>): Array<{ id: string; event: string; payload: unknown }> {
+        const daemonIds = (Array.isArray(coordinatorDaemonId)
+            ? coordinatorDaemonId
+            : coordinatorDaemonId ? [coordinatorDaemonId] : [])
+            .filter((id): id is string => typeof id === 'string' && id.length > 0);
+        const whereClause = daemonIds.length > 0
+            ? `WHERE mesh_id = ? AND drained = 0 AND (coordinator_daemon_id IS NULL OR coordinator_daemon_id IN (${daemonIds.map(() => '?').join(',')}))`
             : `WHERE mesh_id = ? AND drained = 0`;
-        const params: unknown[] = coordinatorDaemonId ? [meshId, coordinatorDaemonId] : [meshId];
+        const params: unknown[] = daemonIds.length > 0 ? [meshId, ...daemonIds] : [meshId];
         const rows = this.db.prepare(
             `SELECT id, event, payload FROM mesh_pending_events ${whereClause} ORDER BY queued_at ASC LIMIT 100`
         ).all(...params) as Array<{ id: string; event: string; payload: string }>;

@@ -50,7 +50,7 @@ import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTas
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
 
-function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>) {
+function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>, opts?: { coordinatorStatus?: 'idle' | 'generating'; statusInstanceId?: string }) {
   let listener: ((event: any) => void) | undefined
   const sourceState = {
     instanceId: 'runtime-session-1',
@@ -65,7 +65,7 @@ function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<stri
     workspace: '/repo/main',
     // The reconcile loop only injects into an idle coordinator. The old direct-inject
     // path didn't check status; queue+tick delivery does, so default to idle.
-    status: 'idle',
+    status: opts?.coordinatorStatus ?? 'idle',
     settings: {
       meshCoordinatorFor: meshId,
     },
@@ -86,7 +86,7 @@ function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<stri
   }
 
   return {
-    components: { instanceManager } as any,
+    components: { instanceManager, ...(opts?.statusInstanceId ? { statusInstanceId: opts.statusInstanceId } : {}) } as any,
     emit: (event: any) => {
       if (!listener) throw new Error('listener was not registered')
       listener(event)
@@ -174,6 +174,64 @@ describe('setupMeshEventForwarding', () => {
       expect(text).toContain('status event path')
       expect(text).toContain('mesh_read_chat once')
       expect(text).toContain('do not poll repeatedly')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('standalone end-to-end: a GENERATING coordinator self-receives a local worker completion stamped with the standalone status id (no manual pull)', async () => {
+    // Full reproduction of the reported bug, exercising the REAL production path:
+    //   worker completes → setupMeshEventForwarding → injectMeshSystemMessage queues a
+    //   unicast pending event stamped targetCoordinatorDaemonId = the worker's
+    //   meshCoordinatorDaemonId → runMeshReconcileTick must drain + force-inject it into
+    //   the generating coordinator.
+    // On standalone the MCP layer stamps meshCoordinatorDaemonId = `standalone_<machineId>`
+    // (= getStatus().status.instanceId), NOT bare machineId. Before the fix the reconcile
+    // loop drained with bare loadConfig().machineId, so the unicast event never matched and
+    // the generating coordinator never self-received the completion — only a manual
+    // get_pending_mesh_events pull (which uses the same prefixed id) worked.
+    const meshId = `mesh_standalone_e2e_${Date.now()}`
+    const statusInstanceId = 'standalone_test-machine'
+    try {
+      const mesh = { id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }] }
+      meshConfigMocks.getMesh.mockReturnValue(mesh)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(mesh)
+      // Worker stamped exactly as the standalone MCP dispatch path stamps it.
+      const { components, emit, coordinator } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+        meshCoordinatorDaemonId: statusInstanceId,
+        launchedByCoordinator: true,
+      }, { coordinatorStatus: 'generating', statusInstanceId })
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-1',
+        finalSummary: 'done',
+        timestamp: 456,
+      })
+
+      // The coordinator is GENERATING — it must NOT have been injected at emit time
+      // (queue-only delivery); the completion sits in the queue stamped with the status id.
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+
+      // One reconcile tick: the loop drains the status-id-stamped unicast event and
+      // force-injects it into the generating coordinator. This is the self-inject that
+      // was broken.
+      await runMeshReconcileTick(components)
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [eventName, payload] = coordinator.onEvent.mock.calls[0]
+      expect(eventName).toBe('send_message')
+      expect(payload.force).toBe(true) // bypasses the busy send-guard while generating
+      expect(payload.input.textFallback).toContain("Node 'node_child_1'")
+
+      // Consumed atomically: a subsequent pull (with the status id) returns nothing.
+      expect(drainPendingMeshCoordinatorEvents(meshId, statusInstanceId)).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }

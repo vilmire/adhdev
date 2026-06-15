@@ -69,6 +69,24 @@ interface LiveCoordinator {
     idle: boolean;
 }
 
+// The set of coordinator-daemon ids THIS daemon answers to when draining the
+// pending-events queue. A unicast completion event is stamped with the worker's
+// meshCoordinatorDaemonId, which can be either:
+//   - the daemon's canonical status id (`standalone_<machineId>` / `daemon_<machineId>`),
+//     stamped by the MCP layer via ctx.localDaemonId (= getStatus().status.instanceId), or
+//   - the bare machineId, stamped by the local queue-assignment path (loadConfig().machineId).
+// Draining with only one of these silently misses events stamped with the other —
+// the exact reason a generating coordinator never self-received local completions.
+// We accept BOTH so the drain matches regardless of which path stamped the event.
+function resolveCoordinatorDaemonIds(components: DaemonComponents): string[] {
+    const ids = new Set<string>();
+    const statusInstanceId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
+    if (statusInstanceId) ids.add(statusInstanceId);
+    const machineId = readNonEmptyString(loadConfig().machineId);
+    if (machineId) ids.add(machineId);
+    return [...ids];
+}
+
 // Find live CLI coordinator instances on THIS daemon, keyed by mesh.
 function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
     const out: LiveCoordinator[] = [];
@@ -119,6 +137,10 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     }
 
     const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
+    // The id-set used to scope the local queue drain (status id + machineId). See
+    // resolveCoordinatorDaemonIds — the status id is what the MCP layer stamps and
+    // is mandatory here for a generating CLI coordinator to self-receive completions.
+    const drainDaemonIds = resolveCoordinatorDaemonIds(components);
     const dispatchMeshCommand = components.dispatchMeshCommand;
     const store = (() => {
         try { return MeshRuntimeStore.getInstance(); } catch { return undefined; }
@@ -163,7 +185,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         try {
             pendingEvents = drainPendingMeshCoordinatorEvents(
                 meshId,
-                localDaemonId,
+                drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
                 forceOnly ? { onlyEvents: MESH_FORCE_INJECT_EVENTS } : undefined,
             );
         } catch (e: any) {

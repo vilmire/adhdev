@@ -123,6 +123,14 @@ export interface DaemonComponents {
     // single-model (queue + polling) delivery: drains the pending-events queue
     // on a fixed interval and injects into live CLI coordinators when idle.
     meshReconcileLoop?: { stop(): void };
+    // Canonical status/daemon identity (e.g. `standalone_<machineId>` /
+    // `daemon_<machineId>`). This is the SAME id the MCP layer stamps as a
+    // worker's meshCoordinatorDaemonId (ctx.localDaemonId, sourced from
+    // getStatus().status.instanceId), so the reconcile loop MUST drain with it —
+    // draining with bare loadConfig().machineId never matches a unicast event
+    // stamped with the prefixed status id. Absent → reconcile falls back to
+    // machineId only.
+    statusInstanceId?: string;
 }
 
 export interface DaemonDevSupportOptions {
@@ -362,6 +370,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         refreshProviderAvailability,
         dispatchMeshCommand: config.dispatchMeshCommand,
         onMeshCoordinatorEventForwarded: config.onMeshCoordinatorEventForwarded,
+        statusInstanceId: config.statusInstanceId,
     };
 
     // 11. Setup Mesh Event Forwarding (queue persistence) + periodic reconcile loop.
