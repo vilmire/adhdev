@@ -148,6 +148,9 @@ describe('mesh graph view interaction boundaries', () => {
         expect(themeSource).not.toContain("'min-h-0 flex-1 overflow-y-auto")
 
         // MeshObservabilitySurface outer div must be flex-1 to fill the flex dialog body.
-        expect(surfaceSource).toContain('"flex min-h-0 flex-1 flex-col gap-4"')
+        expect(surfaceSource).toContain('"flex min-h-0 flex-1 flex-col gap-3"')
+        // The Graph tab wrapper must also be flex-1 so the lazily-mounted graph canvas
+        // still receives the full dialog body height (and thus hover events reach all nodes).
+        expect(surfaceSource).toContain("'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-4")
     })
 })

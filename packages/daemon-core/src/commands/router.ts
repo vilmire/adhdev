@@ -8428,6 +8428,8 @@ export class DaemonCommandRouter {
                         nodes: mesh.nodes || [],
                         liveSessionRecords: liveMeshSessions,
                     });
+                    const { getMeshStatusMissionSummaries } = await import('../mesh/mesh-missions.js');
+                    const missions = getMeshStatusMissionSummaries(meshId);
                     const statusResult = {
                         success: true,
                         meshId: mesh.id,
@@ -8470,6 +8472,7 @@ export class DaemonCommandRouter {
                         nodes: nodeStatuses,
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
+                        ...(missions.length > 0 ? { missions } : {}),
                         ...(asyncRefineJobs.length > 0 ? { asyncRefineJobs } : {}),
                         ...(historicalSessions ? { historicalSessions } : {}),
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),

@@ -9,6 +9,7 @@ import type {
 } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import MeshGraphView from './MeshGraphView'
+import MeshOverviewCards from './MeshOverviewCards'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import { buildMeshGraph, type MeshGraphSessionDetail } from '../../utils/mesh-visualization'
@@ -648,6 +649,10 @@ export default function MeshObservabilitySurface({
     const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
     const statusGraphFingerprint = useMemo(() => getRepoMeshStatusGraphFingerprint(canonicalStatus), [canonicalStatus])
     const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [statusGraphFingerprint]) as MeshGraphData
+    const [activeTab, setActiveTab] = useState<'overview' | 'graph'>('overview')
+    // Lazy-mount the graph: only build/render React Flow once the graph tab has
+    // been opened, so the default overview tab stays cheap.
+    const [graphMounted, setGraphMounted] = useState(false)
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
     const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
@@ -887,9 +892,34 @@ export default function MeshObservabilitySurface({
                 ? 'rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-slate-400 hover:text-slate-200'
                 : 'rounded-md border border-slate-300 bg-white/80 px-2 py-0.5 text-slate-500 hover:text-slate-800'
 
+    const tabButtonClass = (active: boolean) => active
+        ? (meshTheme.isDark
+            ? 'rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-100 bg-white/[0.08] border border-white/12'
+            : 'rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-white border border-slate-300 shadow-sm')
+        : `rounded-lg px-3.5 py-1.5 text-xs font-medium ${meshTheme.textSecondary} border border-transparent hover:bg-white/[0.04]`
+
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
-        <div className="flex min-h-0 flex-1 flex-col gap-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
+            {/* ── Tab bar: Overview (cards) ↔ Graph ── */}
+            <div className={`shrink-0 inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
+                <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => setActiveTab('overview')}>Overview</button>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'graph'}
+                    className={tabButtonClass(activeTab === 'graph')}
+                    onClick={() => { setGraphMounted(true); setActiveTab('graph') }}
+                >
+                    Graph
+                </button>
+            </div>
+
+            {/* ── Overview tab: text/card surface ── */}
+            {activeTab === 'overview' && <MeshOverviewCards status={status} />}
+
+            {/* ── Graph tab: existing topology card (lazily mounted) ── */}
+            <div className={`${activeTab === 'graph' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-4`}>
             {/* ── Card: header + graph + detail panel ── */}
             <div className={`${meshTheme.cardClass} relative flex min-h-0 flex-1 flex-col rounded-[28px]`} style={{ minHeight: 480 }}>
 
@@ -1021,7 +1051,9 @@ export default function MeshObservabilitySurface({
                 <div className="relative flex flex-1 min-w-0" style={{ minHeight: 360 }}>
                     {/* Graph */}
                     <div className="flex-1 min-w-0">
-                        {canonicalGraph.nodes.length > 0 ? (
+                        {!graphMounted ? (
+                            <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">Loading graph…</div>
+                        ) : canonicalGraph.nodes.length > 0 ? (
                             <MeshGraphView
                                 data={canonicalGraph}
                                 selectedNodeId={selectedNodeId}
@@ -1284,6 +1316,7 @@ export default function MeshObservabilitySurface({
                         </div>
                     )}
                 </div>
+            </div>
             </div>
 
         </div>

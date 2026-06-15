@@ -126,6 +126,27 @@ export function getActiveMeshMissionSummaries(meshId: string): MeshMissionSummar
 }
 
 /**
+ * Mission summaries for the mesh_status dashboard surface: every active/paused
+ * mission plus a capped, newest-first slice of completed/abandoned history so
+ * the dashboard can render a collapsible "history" section without unbounded
+ * payload growth. Returned newest-first within each group (active/paused first,
+ * then history), so the frontend can split on `status` directly.
+ */
+export function getMeshStatusMissionSummaries(
+    meshId: string,
+    options?: { historyLimit?: number },
+): MeshMissionSummary[] {
+    const historyLimit = Math.max(0, options?.historyLimit ?? 10);
+    const all = getMeshMissions(meshId);
+    const live = all.filter(m => m.status === 'active' || m.status === 'paused');
+    const history = all
+        .filter(m => m.status === 'completed' || m.status === 'abandoned')
+        .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+        .slice(0, historyLimit);
+    return [...live, ...history].map(mission => summarizeMeshMission(meshId, mission));
+}
+
+/**
  * M3-3: render active missions as a prompt section for {{mission}}.
  * Empty string when no active mission — the prompt stays byte-identical to
  * the pre-M3 output in that case (regression guarantee).

@@ -312,22 +312,17 @@ export function MeshDetailView({
                 />
             )}
 
-            {/* ── Graph / Visualization ── */}
-            <Section title="Visualization" description="Live mesh topology: branches, worktrees, sessions, and orphan detection.">
+            {/* ── Mesh overview + graph (tabbed inside the surface) ── */}
+            <Section title="Mesh" description="Overview cards (missions, ledger, queue, nodes, sessions) with the live topology graph behind the Graph tab.">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <div className="text-[12px] text-text-muted max-w-2xl">
                         {features.meshHostDaemonSection
                             ? <>Direct aggregate mesh_status from the selected Mesh Host is preferred. Refresh asks the host for the latest peer git provenance.{graphProvenance === 'settling' && <span className="ml-1 text-amber-300">Refreshing peer data...</span>}</>
-                            : <div className="flex items-center gap-3">
-                                <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" />healthy</span>
-                                <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />dirty</span>
-                                <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />error</span>
-                                <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-500" />offline</span>
-                            </div>
+                            : <>Overview shows live mesh state as cards; switch to the Graph tab for the topology view.</>
                         }
                     </div>
                     <button type="button" className="btn btn-secondary btn-sm inline-flex items-center gap-1.5" onClick={() => onRefreshGraph(true)} disabled={graphLoading || (features.meshHostDaemonSection && !activeDaemonId)}>
-                        <IconRefresh size={13} />{graphLoading ? 'Loading...' : 'Refresh Graph'}
+                        <IconRefresh size={13} />{graphLoading ? 'Loading...' : 'Refresh'}
                     </button>
                 </div>
                 {graphBootstrapFallback && (

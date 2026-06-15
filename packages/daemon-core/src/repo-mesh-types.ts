@@ -12,6 +12,7 @@
  */
 
 import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
+import type { MeshMissionSummary } from './mesh/mesh-missions.js';
 
 // ─── Core Mesh Types ────────────────────────────
 
@@ -405,6 +406,13 @@ export interface RepoMeshStatus {
     nodes: RepoMeshNodeStatus[];
     queue?: RepoMeshQueueStatus;
     ledger?: RepoMeshLedgerStatus;
+    /**
+     * Mission summaries for the dashboard overview. Active/paused missions plus a
+     * capped, newest-first slice of completed/abandoned history. Omitted by older
+     * daemons — the dashboard must treat this as optional and render an empty
+     * state when absent. Split on each entry's `status` for live vs. history.
+     */
+    missions?: MeshMissionSummary[];
 }
 
 // RepoMeshSessionStatus shape now lives in @adhdev/mesh-shared (shared with
