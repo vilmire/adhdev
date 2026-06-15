@@ -45,7 +45,7 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
   fastForwardMeshNode: fastForwardMocks.fastForwardMeshNode,
 }))
 
-import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
@@ -63,6 +63,9 @@ function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<stri
   const coordinatorState = {
     instanceId: 'coordinator-session-1',
     workspace: '/repo/main',
+    // The reconcile loop only injects into an idle coordinator. The old direct-inject
+    // path didn't check status; queue+tick delivery does, so default to idle.
+    status: 'idle',
     settings: {
       meshCoordinatorFor: meshId,
     },
@@ -139,7 +142,7 @@ function createQueueAutoLaunchComponents(args?: {
 }
 
 describe('setupMeshEventForwarding', () => {
-  it('forwards delegated completion to the matching coordinator using runtime mesh settings without local mesh config', () => {
+  it('forwards delegated completion to the matching coordinator using runtime mesh settings without local mesh config', async () => {
     const meshId = `mesh_inline_forward_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -157,6 +160,9 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 123,
       })
 
+      // Queue-only delivery now: the periodic reconcile tick drains the queue and
+      // injects into the idle coordinator.
+      await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       const [eventName, payload] = coordinator.onEvent.mock.calls[0]
       expect(eventName).toBe('send_message')
@@ -173,7 +179,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('forwards completion when the worker carries only meshCoordinatorDaemonId (meshNodeFor stamp missing)', () => {
+  it('forwards completion when the worker carries only meshCoordinatorDaemonId (meshNodeFor stamp missing)', async () => {
     // Regression: a cloud worker can arrive with meshCoordinatorDaemonId set but meshNodeFor
     // undefined (envelope stamp dropped on a relaunch / direct dispatch). Gating delegate
     // routing on meshNodeFor alone made setupMeshEventForwarding return early, so the
@@ -206,7 +212,8 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 99,
       })
 
-      // Coordinator must be injected, not just queued.
+      // Coordinator must be injected (via the reconcile tick), not just queued.
+      await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       const [eventName, payload] = coordinator.onEvent.mock.calls[0]
       expect(eventName).toBe('send_message')
@@ -259,7 +266,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('injects agent:generating_completed directly to CLI coordinator AND queues for MCP coordinator', () => {
+  it('queues agent:generating_completed and the reconcile tick injects it into the live CLI coordinator', async () => {
     const meshId = `mesh_completion_pending_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -277,7 +284,12 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 12345,
       })
 
-      // CLI coordinator receives direct inject
+      // Queue-only delivery: the event is persisted to the pending queue first and
+      // is visible to any consumer that peeks before the tick drains it.
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+
+      // The reconcile tick drains the queue (scoped to this daemon) and injects.
+      await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       const [eventName, payload] = coordinator.onEvent.mock.calls[0]
       expect(eventName).toBe('send_message')
@@ -286,29 +298,24 @@ describe('setupMeshEventForwarding', () => {
       // so it must be force-injected to bypass the busy send-guard / pendingOutboundQueue.
       expect(payload.force).toBe(true)
 
-      // Terminal events are still queued so that OTHER consumers (idle / MCP-only / remote
-      // coordinators) that did not receive the direct inject can backfill via the queue. An
-      // unscoped drain (no coordinatorDaemonId — a consumer that did not get the direct inject)
-      // still sees the event.
+      // The tick's scoped drain (scoped to 'test-machine') already consumed the
+      // unscoped queued event, so a subsequent unscoped drain sees nothing.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0].event).toBe('agent:generating_completed')
+      expect(pending).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('R3: the same live coordinator that got the direct inject does not re-drain the queued copy (exactly-once)', () => {
-    // The dual-delivery bug: a live CLI coordinator receives a terminal event twice — once via
-    // the direct PTY inject (coord.onEvent), once by draining the queued copy through its own
-    // get_pending_mesh_events poll (which passes coordinatorDaemonId = ctx.localDaemonId). The
-    // coordinator daemon here is 'test-machine' (loadConfig().machineId mock). The event is
-    // direct-injected, so a drain SCOPED to that daemon must skip the queued copy.
+  it('queues a completion exactly-once via the atomic queue drain (a second drain returns nothing)', () => {
+    // Queue-only delivery: the terminal event is persisted to the pending queue exactly once.
+    // A single drain consumes it; the SQLite drained=1 marking guarantees a second drain
+    // (e.g. the reconcile tick and an MCP poll racing) sees nothing — exactly-once consumption.
     const meshId = `mesh_r3_exactly_once_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
-      const { components, emit, coordinator } = createComponents(meshId)
+      const { components, emit } = createComponents(meshId)
 
       setupMeshEventForwarding(components)
       emit({
@@ -321,24 +328,24 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 99001,
       })
 
-      // Coordinator got it once in its PTY.
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      // First drain (scoped to this coordinator daemon) returns the event once.
+      const firstDrain = drainPendingMeshCoordinatorEvents(meshId, 'test-machine')
+      expect(firstDrain).toHaveLength(1)
+      expect(firstDrain[0].event).toBe('agent:generating_completed')
 
-      // Its own poll (scoped to its daemon) must NOT re-deliver the same event.
-      const scopedDrain = drainPendingMeshCoordinatorEvents(meshId, 'test-machine')
-      expect(scopedDrain).toHaveLength(0)
+      // Second drain must return nothing — the event was already consumed.
+      const secondDrain = drainPendingMeshCoordinatorEvents(meshId, 'test-machine')
+      expect(secondDrain).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('R3 standalone: prefixed worker stamp (standalone_<machineId>) still injects AND dedupes the prefixed drain', () => {
+  it('standalone: prefixed worker stamp (standalone_<machineId>) queues exactly-once for the prefixed drain', () => {
     // Standalone divergence: the MCP coordinator reports ctx.localDaemonId as the runtime
-    // instanceId `standalone_<machineId>` and (a) stamps that prefixed id onto workers as
-    // meshCoordinatorDaemonId, (b) drains get_pending_mesh_events with it. The core forwarder
-    // uses the RAW machineId (loadConfig().machineId) as localDaemonId. A literal !== would
-    // (1) exclude the live local coordinator from direct inject (R2 break) and (2) miss the R3
-    // dedup (marker keyed raw, drain keyed prefixed). canonicalDaemonId reconciles both.
+    // instanceId `standalone_<machineId>` and stamps that prefixed id onto workers as
+    // meshCoordinatorDaemonId, then drains with it. The queued event is scoped to that
+    // prefixed daemon and a single scoped drain consumes it exactly once.
     const meshId = `mesh_r3_standalone_prefix_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue({
@@ -350,7 +357,7 @@ describe('setupMeshEventForwarding', () => {
         nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
       })
       // Worker carries the PREFIXED coordinator daemon id, as standalone stamps it.
-      const { components, emit, coordinator } = createComponents(meshId, {
+      const { components, emit } = createComponents(meshId, {
         meshNodeFor: meshId,
         meshNodeId: 'node_child_1',
         meshCoordinatorDaemonId: 'standalone_test-machine',
@@ -367,12 +374,14 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 99003,
       })
 
-      // R2: the local coordinator must still receive the direct inject despite the prefix.
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      // The coordinator drains with its prefixed instanceId — gets the event once.
+      const firstDrain = drainPendingMeshCoordinatorEvents(meshId, 'standalone_test-machine')
+      expect(firstDrain).toHaveLength(1)
+      expect(firstDrain[0].event).toBe('agent:generating_completed')
 
-      // R3: the coordinator drains with its prefixed instanceId — must NOT re-deliver.
-      const scopedDrain = drainPendingMeshCoordinatorEvents(meshId, 'standalone_test-machine')
-      expect(scopedDrain).toHaveLength(0)
+      // A second drain with the same prefixed id must return nothing (exactly-once).
+      const secondDrain = drainPendingMeshCoordinatorEvents(meshId, 'standalone_test-machine')
+      expect(secondDrain).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -407,7 +416,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('force-injects terminal events so a generating coordinator is not deadlocked, but not non-terminal status events', () => {
+  it('force-injects terminal events so a generating coordinator is not deadlocked, but not non-terminal status events', async () => {
     // Regression for the long-standing "recorded but never injected into coordinator chat"
     // deadlock: a coordinator CLI session that dispatched a task stays in `generating`
     // while awaiting the result. A generating coordinator queues incoming send_message
@@ -433,6 +442,7 @@ describe('setupMeshEventForwarding', () => {
         finalSummary: 'done',
         timestamp: 22221,
       })
+      await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
 
@@ -441,7 +451,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('does not force-inject non-terminal long-generating alerts into the coordinator', () => {
+  it('does not force-inject non-terminal long-generating alerts into the coordinator', async () => {
     // long_generating is informational — the coordinator should receive it through the
     // normal (queueable) path, not force-written into a generating PTY as noise.
     const meshId = `mesh_no_force_long_gen_${Date.now()}`
@@ -459,6 +469,7 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 33331,
       })
 
+      await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       expect(coordinator.onEvent.mock.calls[0][0]).toBe('send_message')
       expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('still reported as generating')
@@ -468,7 +479,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('dedupes the same approval event before ledger and coordinator delivery', () => {
+  it('dedupes the same approval event before ledger and coordinator delivery', async () => {
     const meshId = `mesh_approval_dedupe_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -488,9 +499,13 @@ describe('setupMeshEventForwarding', () => {
       emit(approvalEvent)
       emit(approvalEvent)
 
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      // The duplicate is deduped before queuing: exactly one ledger entry and one queued event.
       expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_approval_needed')).toHaveLength(1)
-      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+
+      // The reconcile tick injects the single deduped approval exactly once.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -805,7 +820,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('does not suppress a direct-dispatch completion against prior terminal ledger evidence, so the coordinator still observes task_completed', () => {
+  it('does not suppress a direct-dispatch completion against prior terminal ledger evidence, so the coordinator still observes task_completed', async () => {
     // Regression for the "task_completed silently idle" bug: a session direct-dispatched via
     // mesh_send_task (tracked in mesh_direct_dispatches, NOT the work queue) completes. A prior
     // terminal ledger entry exists for the same session with a matching finalSummary — e.g. a
@@ -866,15 +881,16 @@ describe('setupMeshEventForwarding', () => {
         timestamp: Date.now(),
       })
 
-      // The completion must NOT be suppressed. The MCP/polling coordinator drains exactly one
-      // task_completed event from the shared pending queue.
-      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      // The completion must NOT be suppressed. The MCP/polling coordinator can peek exactly
+      // one task_completed event from the shared pending queue.
+      const pending = getPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0].event).toBe('agent:generating_completed')
       expect(pending[0].metadataEvent.targetSessionId).toBe('runtime-session-1')
 
-      // A live CLI coordinator (if present) is force-injected so a generating coordinator
-      // awaiting this very completion is not deadlocked.
+      // The reconcile tick injects into the live CLI coordinator, force-injected so a
+      // generating coordinator awaiting this very completion is not deadlocked.
+      await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       expect(coordinator.onEvent.mock.calls[0][0]).toBe('send_message')
       expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
@@ -884,7 +900,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('records a second task_completed for same-session continuations after an earlier completion', () => {
+  it('records a second task_completed for same-session continuations after an earlier completion', async () => {
     const meshId = `mesh_same_session_continuation_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue({
@@ -940,6 +956,9 @@ describe('setupMeshEventForwarding', () => {
         parsedStatus: 'idle',
         finalAssistantPresent: false,
       })
+      // The reconcile tick drains both queued completions and injects them in order.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(2)
       const secondCoordinatorMessage = coordinator.onEvent.mock.calls[1][1].input.textFallback
       expect(secondCoordinatorMessage).toContain('completion_diagnostic=missing_final_assistant')
       expect(secondCoordinatorMessage).toContain('final_assistant=false')
@@ -1248,7 +1267,7 @@ describe('setupMeshEventForwarding', () => {
     expect(coordinator.onEvent).not.toHaveBeenCalled()
   })
 
-  it('injects forwarded stopped and long-generating coordinator hints from remote worker daemons', () => {
+  it('injects forwarded stopped and long-generating coordinator hints from remote worker daemons', async () => {
     const meshId = `mesh_long_gen_plain_${Date.now()}`
     const { components, coordinator } = createComponents(meshId)
 
@@ -1267,8 +1286,11 @@ describe('setupMeshEventForwarding', () => {
       providerType: 'hermes-cli',
     })
 
-    expect(stopped).toEqual({ success: true, forwarded: 1 })
-    expect(longGenerating).toEqual({ success: true, forwarded: 1 })
+    // Queue-only: handleMeshForwardEvent persists to the queue (forwarded: 0); the
+    // reconcile tick injects into the live coordinator.
+    expect(stopped).toEqual({ success: true, forwarded: 0 })
+    expect(longGenerating).toEqual({ success: true, forwarded: 0 })
+    await runMeshReconcileTick(components)
     expect(coordinator.onEvent).toHaveBeenCalledTimes(2)
     expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('has stopped')
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('still reported as generating')
@@ -1277,7 +1299,7 @@ describe('setupMeshEventForwarding', () => {
     cleanupMeshFiles(meshId)
   })
 
-  it('handleMeshForwardEvent forwards modalMessage and modalButtons from relay payload into metadataEvent for approval dedup and coordinator message', () => {
+  it('handleMeshForwardEvent forwards modalMessage and modalButtons from relay payload into metadataEvent for approval dedup and coordinator message', async () => {
     const meshId = `mesh_approval_relay_${Date.now()}`
     try {
       const { components, coordinator } = createComponents(meshId)
@@ -1293,10 +1315,10 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 1710000005000,
       })
 
-      expect(result).toEqual({ success: true, forwarded: 1 })
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(result).toEqual({ success: true, forwarded: 0 })
 
-      // Verify a second identical event is deduped (requires modalMessage+modalButtons for fingerprinting)
+      // Verify a second identical event is deduped (requires modalMessage+modalButtons for fingerprinting).
+      // Dedup happens at queue time, before the reconcile tick drains.
       const duplicate = handleMeshForwardEvent(components, {
         event: 'agent:waiting_approval',
         meshId,
@@ -1308,14 +1330,16 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 1710000005000,
       })
       expect(duplicate).toMatchObject({ success: true, suppressed: true, duplicateApproval: true })
-      // No second coordinator message injected for the duplicate
+
+      // The reconcile tick injects the single deduped approval exactly once.
+      await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('reconciles a long-generating monitor to completion when final summary evidence exists', () => {
+  it('reconciles a long-generating monitor to completion when final summary evidence exists', async () => {
     const meshId = `mesh_long_gen_reconcile_${Date.now()}`
     try {
       const { components, coordinator } = createComponents(meshId)
@@ -1333,7 +1357,8 @@ describe('setupMeshEventForwarding', () => {
         timestamp: Date.now(),
       })
 
-      expect(result).toEqual({ success: true, forwarded: 1 })
+      expect(result).toEqual({ success: true, forwarded: 0 })
+      await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       const text = coordinator.onEvent.mock.calls[0][1].input.textFallback
       expect(text).toContain('already has completion evidence')
@@ -1507,7 +1532,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('suppresses duplicate completion replays from relay/backfill paths for the same logical event', () => {
+  it('suppresses duplicate completion replays from relay/backfill paths for the same logical event', async () => {
     const meshId = `mesh_completion_dedupe_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue({
@@ -1547,8 +1572,10 @@ describe('setupMeshEventForwarding', () => {
       const completedEntries = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')
       expect(completedEntries).toHaveLength(1)
       expect(completedEntries[0].payload.taskId).toBe(queued.id)
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       expect(duplicate).toMatchObject({ success: true, forwarded: 0, suppressed: true, duplicateCompletion: true })
+      // Only the first (non-duplicate) completion was queued; the tick injects it once.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1961,7 +1988,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     return { components: { instanceManager } as any, coordinator }
   }
 
-  it('forwards refine:completed directly to CLI coordinator even when generating', () => {
+  it('queues refine:completed for a generating CLI coordinator without injecting (idle-only inject)', async () => {
     const meshId = `mesh_codex_refine_completed_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -1976,11 +2003,14 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         result: { success: true, merged: true, branch: 'fix/branch', into: 'main' },
       })
 
-      // Always forward directly — generating coordinators receive events immediately.
-      expect(result).toMatchObject({ success: true, forwarded: 1 })
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      // Queue-only: the event is persisted, not pushed.
+      expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // Terminal events are also queued for MCP coordinator dual delivery.
+      // The reconcile tick must NOT inject into a generating coordinator — the event
+      // stays queued and is retried next tick when the coordinator goes idle.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0].event).toBe('refine:completed')
@@ -1989,7 +2019,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
-  it('forwards refine:failed directly to CLI coordinator even when generating', () => {
+  it('queues refine:failed for a generating CLI coordinator without injecting (idle-only inject)', async () => {
     const meshId = `mesh_codex_refine_failed_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2004,11 +2034,13 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         result: { success: false, code: 'validation_failed', error: 'Tests failed' },
       })
 
-      // Always forward directly — generating coordinators receive events immediately.
-      expect(result).toMatchObject({ success: true, forwarded: 1 })
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      // Queue-only: the event is persisted, not pushed.
+      expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // Terminal events are also queued for MCP coordinator dual delivery.
+      // The reconcile tick must NOT inject into a generating coordinator.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0].event).toBe('refine:failed')
@@ -2017,7 +2049,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
-  it('buffers refine:completed to pending events for MCP coordinator even when CLI coordinator is idle', () => {
+  it('queues refine:completed and the reconcile tick injects it into an idle CLI coordinator', async () => {
     const meshId = `mesh_codex_refine_idle_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2032,19 +2064,22 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         result: { success: true, merged: true },
       })
 
-      expect(result).toMatchObject({ success: true, forwarded: 1 })
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // Terminal events are queued for MCP coordinator dual delivery regardless of CLI coordinator state.
-      const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0].event).toBe('refine:completed')
+      // The event is queued and visible to any peeking consumer (MCP coordinator) before drain.
+      const peeked = getPendingMeshCoordinatorEvents(meshId)
+      expect(peeked).toHaveLength(1)
+      expect(peeked[0].event).toBe('refine:completed')
+
+      // The reconcile tick drains the queue and injects into the idle coordinator.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('forwards refine:accepted directly and also buffers for MCP dual delivery (non-terminal event)', () => {
+  it('queues refine:accepted for MCP dual delivery and does not inject into a generating coordinator', async () => {
     const meshId = `mesh_codex_refine_accepted_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2058,8 +2093,11 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         status: 'accepted',
       })
 
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-      // Non-terminal events buffer for MCP dual delivery regardless of coordinator state
+      // The reconcile tick must not inject into a generating coordinator.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+
+      // Non-terminal events still buffer for MCP dual delivery regardless of coordinator state.
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0].event).toBe('refine:accepted')
@@ -2068,7 +2106,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
-  it('forwards agent:generating_completed directly to CLI coordinator even when generating', () => {
+  it('queues agent:generating_completed for a generating CLI coordinator without injecting (idle-only inject)', async () => {
     const meshId = `mesh_codex_gen_completed_generating_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2086,11 +2124,14 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         timestamp: 99999,
       })
 
-      // Always forward directly — generating coordinators receive events immediately.
-      expect(result).toMatchObject({ success: true, forwarded: 1 })
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      // Queue-only: the event is persisted, not pushed.
+      expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // Terminal events are also queued for MCP coordinator dual delivery.
+      // The reconcile tick must NOT inject into a generating coordinator — the event
+      // stays queued for the next idle tick / an MCP poll.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
       expect(pending[0].event).toBe('agent:generating_completed')
@@ -2099,7 +2140,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
-  it('buffers agent:generating_completed for MCP coordinator even when CLI coordinator is idle', () => {
+  it('queues agent:generating_completed and the reconcile tick injects it into an idle CLI coordinator', async () => {
     const meshId = `mesh_codex_gen_completed_idle_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2117,13 +2158,16 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         timestamp: 88888,
       })
 
-      expect(result).toMatchObject({ success: true, forwarded: 1 })
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // Terminal events queued for MCP coordinator dual delivery regardless of CLI coordinator state.
-      const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0].event).toBe('agent:generating_completed')
+      // The event is visible to a peeking MCP coordinator before the tick drains it.
+      const peeked = getPendingMeshCoordinatorEvents(meshId)
+      expect(peeked).toHaveLength(1)
+      expect(peeked[0].event).toBe('agent:generating_completed')
+
+      // The reconcile tick drains the queue and injects into the idle coordinator.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -2370,7 +2414,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
-  it('routes worker completion events to a claude-cli coordinator session (not just codex/hermes)', () => {
+  it('routes worker completion events to a claude-cli coordinator session (not just codex/hermes)', async () => {
     const meshId = `mesh_claude_coord_recv_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2390,6 +2434,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         instanceId: 'claude-coordinator-session',
         workspace: '/repo/main',
         type: 'claude-cli',
+        status: 'idle',
         settings: { meshCoordinatorFor: meshId },
       }
       const worker = {
@@ -2419,6 +2464,8 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         timestamp: 1710000001000,
       })
 
+      // Queue-only delivery: the reconcile tick drains and injects into the idle coordinator.
+      await runMeshReconcileTick(components)
       expect(claudeCoordinator.onEvent).toHaveBeenCalledTimes(1)
       const [eventName, payload] = claudeCoordinator.onEvent.mock.calls[0]
       expect(eventName).toBe('send_message')
@@ -2465,7 +2512,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     expect(claudeCoordinator.onEvent).not.toHaveBeenCalled()
   })
 
-  it('routes pending buffered coordinator events to a claude-cli coordinator via handleMeshForwardEvent', () => {
+  it('routes pending buffered coordinator events to a claude-cli coordinator via handleMeshForwardEvent', async () => {
     const meshId = `mesh_claude_forward_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2475,6 +2522,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         instanceId: 'claude-coordinator-fwd',
         workspace: '/repo/main',
         type: 'claude-cli',
+        status: 'idle',
         settings: { meshCoordinatorFor: meshId },
       }
       const claudeCoordinator = {
@@ -2497,7 +2545,9 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         providerType: 'hermes-cli',
       })
 
-      expect(result).toEqual({ success: true, forwarded: 1 })
+      expect(result).toEqual({ success: true, forwarded: 0 })
+      // The reconcile tick drains and injects into the idle coordinator.
+      await runMeshReconcileTick(components)
       expect(claudeCoordinator.onEvent).toHaveBeenCalledTimes(1)
       const [eventName, payload] = claudeCoordinator.onEvent.mock.calls[0]
       expect(eventName).toBe('send_message')

@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { getLedgerDir, readLedgerEntries } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { buildMeshSystemMessage, canonicalDaemonId, readNonEmptyString, readRecord, resolveEventSessionId } from './mesh-events-utils.js';
+import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId } from './mesh-events-utils.js';
 
 // ---------------------------------------------------------------------------
 // MCP coordinator pending-event queue — FILE-BASED PERSISTENCE
@@ -83,46 +83,11 @@ export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent)
     ].join('::');
 }
 
-// R3: TTL for the direct-delivered marker. A coordinator polls get_pending_mesh_events
-// well within this window after a terminal event; after it expires the marker is swept and
-// a late/duplicate drain would (harmlessly) re-surface — but by then the event is long gone
-// from the queue too. 10 minutes mirrors the completion-fingerprint TTL.
-const DIRECT_DELIVERED_TTL_MS = 10 * 60 * 1000;
-
-/**
- * R3: record that an event was direct-injected into a live coordinator on `coordinatorDaemonId`.
- * That coordinator's own drain (get_pending_mesh_events with the same coordinatorDaemonId) will
- * skip the queued copy, so it receives the event exactly once instead of twice (PTY + poll).
- * Other consumers (unscoped drainers, other daemons) are unaffected — they did not get the inject.
- */
-export function markMeshCoordinatorEventDirectDelivered(
-    coordinatorDaemonId: string,
-    event: PendingMeshCoordinatorEvent,
-): void {
-    // Canonicalize so the raw machineId used at inject time and the prefixed instanceId the
-    // coordinator drains with resolve to the same key.
-    const canonical = canonicalDaemonId(coordinatorDaemonId);
-    if (!canonical) return;
-    const fingerprint = buildPendingEventFingerprint(event);
-    if (!fingerprint.trim()) return;
-    try {
-        const store = MeshRuntimeStore.getInstance();
-        store.recordDirectDelivered(canonical, fingerprint, DIRECT_DELIVERED_TTL_MS);
-        store.sweepExpiredDirectDelivered();
-    } catch { /* best-effort — a duplicate is preferable to a crash */ }
-}
-
-function wasDirectDeliveredToCoordinator(coordinatorDaemonId: string, event: PendingMeshCoordinatorEvent): boolean {
-    const canonical = canonicalDaemonId(coordinatorDaemonId);
-    if (!canonical) return false;
-    const fingerprint = buildPendingEventFingerprint(event);
-    if (!fingerprint.trim()) return false;
-    try {
-        return MeshRuntimeStore.getInstance().wasDirectDelivered(canonical, fingerprint);
-    } catch {
-        return false;
-    }
-}
+// NOTE: the former R3 "direct-delivered" marker (markMeshCoordinatorEventDirectDelivered /
+// wasDirectDeliveredToCoordinator) was removed when spontaneous PTY direct-inject was retired.
+// Delivery is now queue-drain-only: an event is consumed by exactly one drainer via the atomic
+// SQLite drained=1 marking, so there is no PTY-vs-poll double-delivery left to dedup against.
+// The dormant mesh_direct_delivered_events table / store helpers remain (harmless) but unused.
 
 export function hasPendingCoordinatorEventDuplicate(event: PendingMeshCoordinatorEvent): boolean {
     const fingerprint = buildPendingEventFingerprint(event);
@@ -362,14 +327,11 @@ export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDa
         for (const event of filtered) pushUnique(event);
     }
     if (merged.length === 0) return [];
-    // R3: when this drain is scoped to a coordinator daemon, exclude events that were already
-    // direct-injected into that coordinator's live CLI session. Unscoped drains (no daemon id)
-    // keep everything — they belong to consumers that never received the direct inject.
-    const deliverable = coordinatorDaemonId
-        ? merged.filter(event => !wasDirectDeliveredToCoordinator(coordinatorDaemonId, event))
-        : merged;
-    if (deliverable.length === 0) return [];
-    return reconcilePendingMeshCoordinatorEvents(meshId, deliverable);
+    // (Former R3 direct-delivered dedup removed.) Spontaneous PTY direct-inject no
+    // longer exists — delivery is now queue-drain-only (reconcile loop or MCP pull),
+    // so an event is consumed by exactly one drainer via the atomic SQLite drained=1
+    // marking. There is no PTY-vs-poll double path left to dedup against.
+    return reconcilePendingMeshCoordinatorEvents(meshId, merged);
 }
 
 /** Peek at pending coordinator events without draining (non-destructive). */
@@ -404,13 +366,9 @@ export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaem
         pushUnique(event);
     }
 
-    // R3: hide events already direct-delivered to this coordinator from its status peek, so
-    // mesh_status doesn't report a "pending" event the coordinator has in fact already received.
-    const deliverable = coordinatorDaemonId
-        ? merged.filter(event => !wasDirectDeliveredToCoordinator(coordinatorDaemonId, event))
-        : merged;
-
-    return reconcilePendingMeshCoordinatorEvents(meshId, deliverable);
+    // (Former R3 direct-delivered filter removed — no PTY direct-inject path exists
+    // anymore, so a peeked pending event has genuinely not yet been consumed.)
+    return reconcilePendingMeshCoordinatorEvents(meshId, merged);
 }
 
 /**

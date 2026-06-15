@@ -10,7 +10,7 @@ import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, 
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, markMeshCoordinatorEventDirectDelivered } from './mesh-events-pending.js';
+import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent } from './mesh-routing.js';
 import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
@@ -27,7 +27,6 @@ import {
     resolveEventSessionId,
     readRefineJobId,
     readWorkerResultMetadata,
-    sameDaemonId,
 } from './mesh-events-utils.js';
 
 // ---------------------------------------------------------------------------
@@ -986,7 +985,7 @@ const MESH_FORCE_INJECT_EVENTS = new Set([
     'worktree_bootstrap_failed',
 ]);
 
-function shouldForceInjectMeshEvent(eventName: unknown): boolean {
+export function shouldForceInjectMeshEvent(eventName: unknown): boolean {
     return typeof eventName === 'string' && MESH_FORCE_INJECT_EVENTS.has(eventName);
 }
 
@@ -1007,7 +1006,6 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     const workerCoordinatorDaemonId = readNonEmptyString(
         (sourceSession?.getState()?.settings as Record<string, unknown>)?.meshCoordinatorDaemonId,
     );
-    const localDaemonId = readNonEmptyString(loadConfig().machineId);
 
     // R2: cloud P2P dashboard metadata sync. The cloud daemon used to do this from its own
     // relay listener; now the single core forwarder invokes the injected hook (no-op on
@@ -1392,82 +1390,24 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     });
     if (!messageText) return { success: false, error: 'unsupported mesh event' };
 
-    const coordinatorInstances = components.instanceManager.getByCategory('cli').filter((inst) => {
-        const instState = inst.getState();
-        if (instState.settings?.meshCoordinatorFor !== args.meshId) return false;
-        if (args.sourceInstanceId && instState.instanceId === args.sourceInstanceId) return false;
-        // canonicalize: the worker stamps the prefixed daemon id (standalone_/daemon_) while
-        // localDaemonId is the raw machineId — a literal !== wrongly excludes the local coordinator.
-        if (workerCoordinatorDaemonId && localDaemonId && !sameDaemonId(workerCoordinatorDaemonId, localDaemonId)) return false;
-        return true;
-    });
-
-    if (coordinatorInstances.length === 0) {
-        // R2: the coordinator is not a live instance on THIS daemon. If it lives on a remote
-        // daemon, forward over the injected transport (dispatchMeshCommand, supplied by cloud as
-        // P2P; absent/no-op on standalone). This replaces cloud's separate
-        // relayRemoteMeshCoordinatorEvent listener — remote delivery is now part of the single
-        // core forwarder path, so local-vs-remote is one code path and standalone == cloud for
-        // the local case. The pending queue remains the fallback when there is no remote target
-        // or the transport send fails (e.g. P2P down), so MCP coordinators can still backfill.
-        const remoteCoordinatorDaemonId = workerCoordinatorDaemonId && localDaemonId && !sameDaemonId(workerCoordinatorDaemonId, localDaemonId)
-            ? workerCoordinatorDaemonId
-            : '';
-        if (remoteCoordinatorDaemonId && components.dispatchMeshCommand) {
-            const forwardPayload: Record<string, unknown> = {
-                event: args.event,
-                meshId: args.meshId,
-                nodeId: args.nodeId || undefined,
-                workspace: readNonEmptyString(args.metadataEvent.workspace),
-                ...args.metadataEvent,
-                ...(recoveryContext ? { recoveryContext } : {}),
-            };
-            components.dispatchMeshCommand(remoteCoordinatorDaemonId, 'mesh_forward_event', forwardPayload)
-                .then(() => {
-                    LOG.info('MeshEvents', `Forwarded ${args.event} for mesh ${args.meshId} to remote coordinator daemon ${remoteCoordinatorDaemonId.slice(0, 12)}…`);
-                })
-                .catch((error: any) => {
-                    LOG.warn('MeshEvents', `Remote forward of ${args.event} failed (${error?.message || error}); queuing for backfill`);
-                    queuePendingMeshCoordinatorEvent({
-                        event: args.event,
-                        meshId: args.meshId,
-                        nodeLabel: args.nodeLabel,
-                        nodeId: args.nodeId || undefined,
-                        workspace: readNonEmptyString(args.metadataEvent.workspace),
-                        metadataEvent: { ...args.metadataEvent, ...(recoveryContext ? { recoveryContext } : {}) },
-                        coordinatorMessage: messageText,
-                        queuedAt: Date.now(),
-                        targetCoordinatorDaemonId: remoteCoordinatorDaemonId,
-                    });
-                });
-            return { success: true, forwarded: 0, remoteForwarded: true };
-        }
-        if (queuePendingMeshCoordinatorEvent({
-                event: args.event,
-                meshId: args.meshId,
-                nodeLabel: args.nodeLabel,
-                nodeId: args.nodeId || undefined,
-                workspace: readNonEmptyString(args.metadataEvent.workspace),
-                metadataEvent: {
-                    ...args.metadataEvent,
-                    ...(recoveryContext ? { recoveryContext } : {}),
-                },
-                coordinatorMessage: messageText,
-                queuedAt: Date.now(),
-                ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
-            })) {
-            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId}${workerCoordinatorDaemonId ? `, coordinator daemon ${workerCoordinatorDaemonId}` : ''})`);
-        }
-        return { success: true, forwarded: 0 };
-    }
-
-    // All events — terminal and non-terminal — are queued for MCP coordinator
-    // delivery via the pending-events file/SQLite path. This ensures that MCP
-    // coordinators (which poll via get_pending_mesh_events / mesh_status) always
-    // receive terminal events even when a live CLI coordinator session is present.
-    // Previously, terminal events skipped the queue and were only direct-injected
-    // into live CLI coordinators via send_message, which silently dropped them
-    // when the coordinator was in a generating state.
+    // ── Queue-only delivery (single-model: queue + periodic poll) ──────────────
+    // Every mesh coordinator event — terminal or not, local-coordinator or
+    // remote — is persisted to the pending-events queue (SQLite + JSONL) and
+    // NOTHING is pushed here. The old spontaneous-forward paths were removed:
+    //   - F1 remote P2P `mesh_forward_event` dispatch (network/stamp-dependent,
+    //     silently dropped on P2P failure or missing meshCoordinatorDaemonId)
+    //   - F3 live-CLI PTY `send_message` fire-and-forget inject (silently
+    //     dropped when the coordinator was generating)
+    // Delivery to a live CLI coordinator now happens via setupMeshReconcileLoop,
+    // which drains this queue on a fixed interval and injects into the coordinator
+    // only when it is idle. A pure stdio MCP (LLM) coordinator — which has no live
+    // CLI session to inject into — drains the queue itself when it calls a mesh
+    // tool (mesh_status / mesh_read_chat). Either way the queue is the single
+    // source of truth and the only thing this function writes to.
+    //
+    // targetCoordinatorDaemonId scopes the event to a specific coordinator daemon
+    // (unicast) when the worker carries one, so the reconcile loop on the right
+    // daemon drains it and other daemons skip it. Absent → broadcast/backfill.
     const pendingEvent = {
         event: args.event,
         meshId: args.meshId,
@@ -1483,30 +1423,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
     };
     if (queuePendingMeshCoordinatorEvent(pendingEvent)) {
-        LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+        LOG.info('MeshEvents', `Queued ${args.event} for coordinator (mesh ${args.meshId}${workerCoordinatorDaemonId ? `, coordinator daemon ${workerCoordinatorDaemonId}` : ''})`);
     }
-
-    // R3: the live coordinators below receive this event directly in their PTY. They (or their
-    // MCP client) also poll get_pending_mesh_events with coordinatorDaemonId = this daemon, which
-    // would re-deliver the queued copy → the user saw the same completion twice. Mark the event
-    // direct-delivered to THIS daemon so that coordinator's own drain skips it. The queue entry
-    // stays for every OTHER consumer (idle / MCP-only / remote) that did not get the direct inject.
-    // markMeshCoordinatorEventDirectDelivered canonicalizes the id internally so the raw
-    // machineId here matches the prefixed instanceId (standalone_mach_X) the coordinator drains with.
-    if (localDaemonId) {
-        markMeshCoordinatorEventDirectDelivered(localDaemonId, pendingEvent);
-    }
-
-    const forceInject = shouldForceInjectMeshEvent(args.event);
-    for (const coord of coordinatorInstances) {
-        const coordState = coord.getState();
-        LOG.info('MeshEvents', `Forwarding mesh event to coordinator ${coordState.instanceId}${forceInject ? ' (force)' : ''}`);
-        coord.onEvent('send_message', {
-            input: { text: messageText, textFallback: messageText },
-            ...(forceInject ? { force: true } : {}),
-        });
-    }
-    return { success: true, forwarded: coordinatorInstances.length };
+    return { success: true, forwarded: 0 };
 }
 
 export function handleMeshForwardEvent(components: DaemonComponents, payload: Record<string, unknown>) {
@@ -1563,10 +1482,15 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
 
 export function setupMeshEventForwarding(components: DaemonComponents) {
     components.instanceManager.onEvent((event) => {
-        // --- Coordinator idle auto-flush ---
-        // When a coordinator session becomes idle, flush any pending coordinator events
-        // that accumulated while it was generating. This runs before the delegate routing
-        // below so that coordinator-own idle transitions are handled first.
+        // --- Coordinator idle auto-flush (fast path) ---
+        // When a coordinator session becomes idle, immediately flush any pending
+        // coordinator events that accumulated while it was generating, rather than
+        // waiting up to one reconcile interval for setupMeshReconcileLoop to do it.
+        // Both paths drain the SAME queue via drainPendingMeshCoordinatorEvents,
+        // whose SQLite drained=1 marking is atomic — whichever fires first consumes
+        // the events and the other gets nothing, so there is no double-delivery.
+        // This runs before the delegate routing below so that coordinator-own idle
+        // transitions are handled first.
         // Exception: a coordinator that is itself a direct-dispatch target still needs
         // to go through delegate routing so that the dispatching coordinator receives a
         // pendingCoordinatorEvents entry for the completion.

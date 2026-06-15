@@ -37,6 +37,7 @@ import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
+import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 import { applyProcessHardening } from './process-hardening.js';
 import { installProviderProcessShim } from '../providers/sdk/v1/sandbox/require-whitelist.js';
@@ -117,6 +118,11 @@ export interface DaemonComponents {
     // subscriptions). Injected by daemon-cloud; absent/no-op on standalone. Replaces cloud's
     // former separate instanceManager.onEvent listener so the event path stays single-listener.
     onMeshCoordinatorEventForwarded?: (payload: Record<string, unknown>) => void;
+    // Periodic queue → live-coordinator reconcile loop handle. Set during
+    // initDaemonComponents, stopped during shutdownDaemonComponents. Drives the
+    // single-model (queue + polling) delivery: drains the pending-events queue
+    // on a fixed interval and injects into live CLI coordinators when idle.
+    meshReconcileLoop?: { stop(): void };
 }
 
 export interface DaemonDevSupportOptions {
@@ -341,7 +347,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 10. Start instance ticking
     instanceManager.startTicking(config.tickIntervalMs ?? 5_000);
 
-    const components = {
+    const components: DaemonComponents = {
         providerLoader,
         instanceManager,
         cliManager,
@@ -358,8 +364,14 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         onMeshCoordinatorEventForwarded: config.onMeshCoordinatorEventForwarded,
     };
 
-    // 11. Setup Mesh Event Forwarding
+    // 11. Setup Mesh Event Forwarding (queue persistence) + periodic reconcile loop.
+    // injectMeshSystemMessage now ONLY persists events to the pending-events queue;
+    // the reconcile loop drains that queue on a fixed interval and injects into live
+    // CLI coordinators when idle (and, in cloud mode, pulls remote worker daemons'
+    // queues over P2P). This is the single-model (queue + polling) replacement for the
+    // old spontaneous-forward push paths.
     setupMeshEventForwarding(components);
+    components.meshReconcileLoop = setupMeshReconcileLoop(components);
 
     // 12. Resume any refine jobs that were interrupted by a previous daemon restart.
     setImmediate(() => void router.resumePendingRefineJobsOnStartup());
@@ -404,11 +416,13 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     const {
         poller, cdpInitializer, agentStreamManager,
         cliManager, instanceManager, cdpManagers,
+        meshReconcileLoop,
     } = components;
 
     // 1. Stop timers
     poller.stop();
     cdpInitializer.stop();
+    try { meshReconcileLoop?.stop(); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {

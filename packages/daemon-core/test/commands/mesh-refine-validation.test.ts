@@ -6,13 +6,15 @@ import { tmpdir } from 'node:os'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
-import { drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../src/mesh/mesh-events'
+import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, runMeshReconcileTick } from '../../src/mesh/mesh-events'
 import { computeStaleInputsDigest } from '../../src/mesh/worktree-bootstrap-config'
 
 function createRouter(meshId?: string, messages?: string[]) {
   const coordinator = meshId && messages
     ? {
-        getState: () => ({ instanceId: 'coord-refine-test', settings: { meshCoordinatorFor: meshId } }),
+        // status: 'idle' so the reconcile loop will drain + inject queued events
+        // (queue-only delivery: injectMeshSystemMessage no longer pushes directly).
+        getState: () => ({ instanceId: 'coord-refine-test', status: 'idle', settings: { meshCoordinatorFor: meshId } }),
         onEvent: (_event: string, payload: any) => messages.push(payload?.input?.text || ''),
       }
     : null
@@ -128,7 +130,9 @@ function expectAccepted(result: any, nodeId: string) {
 
 function createMeshEventComponents(meshId: string, messages: string[], coordinatorCount = 1) {
   const coordinators = Array.from({ length: coordinatorCount }, (_, idx) => ({
-    getState: () => ({ instanceId: `coord-${idx}`, settings: { meshCoordinatorFor: meshId } }),
+    // status: 'idle' so the reconcile loop drains + injects queued events into them
+    // (queue-only delivery — injectMeshSystemMessage no longer pushes directly).
+    getState: () => ({ instanceId: `coord-${idx}`, status: 'idle', settings: { meshCoordinatorFor: meshId } }),
     onEvent: (_event: string, payload: any) => messages.push(payload?.input?.text || ''),
   }))
   return {
@@ -156,11 +160,14 @@ describe('refine_mesh_node validation gate', () => {
     vi.setConfig({ testTimeout: 90000 })
   })
 
-  it('delivers async refine completion and failure as coordinator-visible system messages with duplicate suppression', () => {
+  it('delivers async refine completion and failure as coordinator-visible system messages with duplicate suppression', async () => {
     const meshId = `mesh-refine-delivery-${Date.now()}`
     const messages: string[] = []
     const components = createMeshEventComponents(meshId, messages)
 
+    // Queue-only delivery: handleMeshForwardEvent now ONLY persists to the pending
+    // queue (forwarded: 0). The reconcile tick drains + injects into the idle
+    // coordinator, which is what actually lands the system message in `messages`.
     const completed = handleMeshForwardEvent(components, {
       event: 'refine:completed',
       meshId,
@@ -176,11 +183,13 @@ describe('refine_mesh_node validation gate', () => {
         validationSummary: { status: 'passed' },
       },
     })
-    expect(completed).toMatchObject({ success: true, forwarded: 1 })
+    expect(completed).toMatchObject({ success: true, forwarded: 0 })
+    await runMeshReconcileTick(components)
     expect(messages[0]).toContain('completed successfully')
     expect(messages[0]).toContain('job_id=refine_job_delivery_completed')
     expect(messages[0]).toContain('validation=passed')
 
+    // Duplicate is suppressed at queue time → never queued → tick injects nothing new.
     const duplicate = handleMeshForwardEvent(components, {
       event: 'refine:completed',
       meshId,
@@ -189,6 +198,7 @@ describe('refine_mesh_node validation gate', () => {
       status: 'completed',
     })
     expect(duplicate).toMatchObject({ success: true, suppressed: true, duplicateRefineTerminalEvent: true })
+    await runMeshReconcileTick(components)
     expect(messages).toHaveLength(1)
 
     const failed = handleMeshForwardEvent(components, {
@@ -199,7 +209,8 @@ describe('refine_mesh_node validation gate', () => {
       status: 'failed',
       result: { success: false, code: 'validation_failed', error: 'validation failed' },
     })
-    expect(failed).toMatchObject({ success: true, forwarded: 1 })
+    expect(failed).toMatchObject({ success: true, forwarded: 0 })
+    await runMeshReconcileTick(components)
     expect(messages[1]).toContain('failed')
     expect(messages[1]).toContain('job_id=refine_job_delivery_failed')
     expect(messages[1]).toContain('code=validation_failed')
@@ -541,15 +552,10 @@ describe('refine_mesh_node validation gate', () => {
       expect(readFileSync(join(repo, 'SOURCE_ONLY.md'), 'utf-8')).toBe('source change\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-worktree')).toBe(false)
       expect(result.finalBranchConvergenceState).toMatchObject({ branch: 'main', merged: true, validation: 'passed' })
-      expect(messages.some(message =>
-        message.includes(`job_id=${accepted.jobId}`)
-        && message.includes('validation=passed')
-        && message.includes('patch_equivalence=passed')
-        && message.includes('merge=merged')
-        && message.includes('final_convergence=merged')
-        && message.includes('Next step: Continue from the updated mesh state.')
-      )).toBe(true)
-      const pendingEvents = drainPendingMeshCoordinatorEvents(mesh.id)
+      // Queue-only delivery: refine completion is persisted to the pending queue
+      // (not pushed). Peek (non-destructive) to assert the queue carries the
+      // completion and NOT the intermediate accepted event...
+      const pendingEvents = getPendingMeshCoordinatorEvents(mesh.id)
       expect(pendingEvents.some(event =>
         event.event === 'refine:completed'
         && (event.metadataEvent as any).jobId === accepted.jobId
@@ -558,6 +564,19 @@ describe('refine_mesh_node validation gate', () => {
         event.event === 'refine:accepted'
         && (event.metadataEvent as any).jobId === accepted.jobId
       )).toBe(false)
+      // ...then the reconcile tick drains + injects it into the idle coordinator,
+      // landing the coordinator-visible system message. (createMeshEventComponents
+      // builds the same idle-coordinator-on-this-daemon shape the loop expects,
+      // pushing injected text into the shared `messages` sink.)
+      await runMeshReconcileTick(createMeshEventComponents(mesh.id, messages))
+      expect(messages.some(message =>
+        message.includes(`job_id=${accepted.jobId}`)
+        && message.includes('validation=passed')
+        && message.includes('patch_equivalence=passed')
+        && message.includes('merge=merged')
+        && message.includes('final_convergence=merged')
+        && message.includes('Next step: Continue from the updated mesh state.')
+      )).toBe(true)
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
@@ -642,6 +661,19 @@ describe('refine_mesh_node validation gate', () => {
       expect(result.refineStages.some((entry: any) => entry.stage === 'cleanup')).toBe(false)
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-missing-submodule')).toBe(true)
+      // Queue-only delivery: peek (non-destructive) the queue for the terminal
+      // refine:failed (and absence of the intermediate accepted)...
+      const pendingEvents = getPendingMeshCoordinatorEvents(mesh.id)
+      expect(pendingEvents.some(event =>
+        event.event === 'refine:failed'
+        && (event.metadataEvent as any).jobId === accepted.jobId
+      )).toBe(true)
+      expect(pendingEvents.some(event =>
+        event.event === 'refine:accepted'
+        && (event.metadataEvent as any).jobId === accepted.jobId
+      )).toBe(false)
+      // ...then the reconcile tick drains + injects it into the idle coordinator.
+      await runMeshReconcileTick(createMeshEventComponents(mesh.id, messages))
       expect(messages.some(message =>
         message.includes(`job_id=${accepted.jobId}`)
         && message.includes('code=submodule_reachability_failed')
@@ -653,15 +685,6 @@ describe('refine_mesh_node validation gate', () => {
         && message.includes('Next step:')
         && message.includes(`oss@${missingCommit}`)
       )).toBe(true)
-      const pendingEvents = drainPendingMeshCoordinatorEvents(mesh.id)
-      expect(pendingEvents.some(event =>
-        event.event === 'refine:failed'
-        && (event.metadataEvent as any).jobId === accepted.jobId
-      )).toBe(true)
-      expect(pendingEvents.some(event =>
-        event.event === 'refine:accepted'
-        && (event.metadataEvent as any).jobId === accepted.jobId
-      )).toBe(false)
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir

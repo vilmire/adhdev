@@ -11,12 +11,16 @@ export {
     drainPendingMeshCoordinatorEvents,
     getPendingMeshCoordinatorEvents,
     clearPendingMeshCoordinatorEvents,
-    markMeshCoordinatorEventDirectDelivered,
 } from './mesh-events-pending.js';
 
 export {
     reconcileDirectDispatchCompletionFromTranscript,
 } from './mesh-events-stale.js';
+
+export {
+    setupMeshReconcileLoop,
+    runMeshReconcileTick,
+} from './mesh-reconcile-loop.js';
 
 export type { MeshQueueTriggerResult } from './mesh-events-coordinator.js';
 export {
