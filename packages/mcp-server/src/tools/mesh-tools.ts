@@ -1616,6 +1616,26 @@ function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefine
     return undefined;
 }
 
+/**
+ * Resolve the coordinator anchor id stamped into a worker dispatch's meshContext
+ * (`coordinatorDaemonId`), which the remote router turns into the worker
+ * session's `meshCoordinatorDaemonId` relay anchor (router.ts buildMeshWorkerRelayStamp).
+ * Without a non-empty value the forwarder gate treats the worker as relay-unsafe
+ * and the completion event sits in the pending queue until a later read_chat
+ * forces a reconcile.
+ *
+ * Order: the coordinator mesh node's daemonId → the IPC daemon instanceId
+ * (ctx.localDaemonId) → the local machine registry id (ctx.localMachineId). The
+ * final fallback mirrors the queue-assignment dispatch path, which stamps
+ * `loadConfig().machineId` (== ctx.localMachineId; see server.ts) — so the
+ * direct-dispatch path now resolves an anchor whenever the queue path would.
+ */
+export function resolveCoordinatorDaemonId(ctx: MeshContext): string | undefined {
+    return readString(resolveCoordinatorNode(ctx)?.daemonId)
+        || readString(ctx.localDaemonId)
+        || readString(ctx.localMachineId);
+}
+
 function readNodeMachineId(node: LocalMeshNodeEntry): string | undefined {
     return readString((node as any).machineId)
         || readString((node as any).machine_id)
@@ -4237,7 +4257,7 @@ export async function meshSendTask(
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
             const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ''));
             const taskId = randomUUID();
-            const coordinatorDaemonId = resolveCoordinatorNode(ctx)?.daemonId || ctx.localDaemonId;
+            const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
             const result = await ipcDispatchToRemoteAgent(ctx, node, {
                 session_id: args.session_id,
                 message: args.message,
@@ -4424,7 +4444,7 @@ export async function meshSendTask(
                 : false;
             const taskId = randomUUID();
             const dispatchedAt = new Date().toISOString();
-            const coordinatorDaemonId = resolveCoordinatorNode(ctx)?.daemonId || ctx.localDaemonId;
+            const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
             // Stamp the mesh assignment via meshContext so the daemon can
             // attach it to the target instance BEFORE prompt injection.
             // setupMeshEventForwarding reads state.settings.meshNodeFor +
@@ -4672,7 +4692,7 @@ export async function meshLaunchSession(
         }
 
         const coordinatorNode = resolveCoordinatorNode(ctx);
-        const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
+        const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
         const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
         // Worker sessions are coordinator-dispatched; a human shouldn't have to approve
         // each one. Resolve the auto-approve policy (node override → mesh policy → default
