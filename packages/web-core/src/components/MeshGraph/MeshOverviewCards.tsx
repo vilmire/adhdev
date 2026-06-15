@@ -135,7 +135,11 @@ export default function MeshOverviewCards({ status }: { status: RepoMeshStatus }
     }, [canonicalStatus.nodes])
 
     return (
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
+        // Plain flow content — the scroll container lives one level up in
+        // MeshObservabilitySurface (the Overview tab wrapper). Keeping this a
+        // non-scrolling, non-flex-1 column lets the wrapper's overflow-y-auto own
+        // scrolling so all cards remain reachable in the dashboard full view.
+        <div className="flex flex-col gap-3 pb-2">
             <MissionsCard
                 meshTheme={meshTheme}
                 liveMissions={liveMissions}

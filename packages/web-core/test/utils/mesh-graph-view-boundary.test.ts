@@ -152,5 +152,16 @@ describe('mesh graph view interaction boundaries', () => {
         // The Graph tab wrapper must also be flex-1 so the lazily-mounted graph canvas
         // still receives the full dialog body height (and thus hover events reach all nodes).
         expect(surfaceSource).toContain("'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-4")
+
+        // The Overview tab wrapper must be its own bounded scroll region
+        // (min-h-0 + flex-1 + overflow-y-auto), otherwise the card list is clipped by
+        // the dialog shell's overflow-hidden and the dashboard full view cannot scroll
+        // down to the lower cards (missions/ledger/nodes/sessions).
+        expect(surfaceSource).toContain("'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto")
+        // MeshOverviewCards itself must NOT be a second scroll container / flex-1 item,
+        // so the wrapper above owns scrolling and grows with the card content.
+        const overviewSource = readSource('components/MeshGraph/MeshOverviewCards.tsx')
+        expect(overviewSource).toContain('"flex flex-col gap-3 pb-2"')
+        expect(overviewSource).not.toContain('flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2')
     })
 })

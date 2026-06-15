@@ -915,8 +915,14 @@ export default function MeshObservabilitySurface({
                 </button>
             </div>
 
-            {/* ── Overview tab: text/card surface ── */}
-            {activeTab === 'overview' && <MeshOverviewCards status={status} />}
+            {/* ── Overview tab: text/card surface (own scroll region) ──
+                 The cards can exceed the dialog body height, so this wrapper is the
+                 bounded scroll container (min-h-0 + flex-1 + overflow-y-auto). Without
+                 it the cards get clipped by the dialog shell's overflow-hidden and the
+                 dashboard "full view" cannot scroll down to the lower cards. */}
+            <div className={`${activeTab === 'overview' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto`}>
+                {activeTab === 'overview' && <MeshOverviewCards status={status} />}
+            </div>
 
             {/* ── Graph tab: existing topology card (lazily mounted) ── */}
             <div className={`${activeTab === 'graph' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-4`}>
