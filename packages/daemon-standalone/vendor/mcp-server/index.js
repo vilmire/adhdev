@@ -1529,6 +1529,9 @@ function resolveCoordinatorNode(ctx) {
   }
   return void 0;
 }
+function resolveCoordinatorDaemonId(ctx) {
+  return readString(resolveCoordinatorNode(ctx)?.daemonId) || readString(ctx.localDaemonId) || readString(ctx.localMachineId);
+}
 function readNodeMachineId(node) {
   return readString(node.machineId) || readString(node.machine_id) || readString(node.machine?.id) || readString(node.machine?.machineId) || readString(node.lastProbe?.machineId) || readString(node.last_probe?.machine_id) || readString(node.lastProbe?.machine?.id) || readString(node.lastProbe?.machine?.machineId) || readString(node.last_probe?.machine?.id) || readString(node.last_probe?.machine?.machine_id);
 }
@@ -3546,7 +3549,7 @@ async function meshSendTask(ctx, args) {
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
       const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ""));
       const taskId = (0, import_node_crypto.randomUUID)();
-      const coordinatorDaemonId = resolveCoordinatorNode(ctx)?.daemonId || ctx.localDaemonId;
+      const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
       const result2 = await ipcDispatchToRemoteAgent(ctx, node, {
         session_id: args.session_id,
         message: args.message,
@@ -3716,7 +3719,7 @@ async function meshSendTask(ctx, args) {
       const sessionWasIdle = explicitTargetSession ? isIdleSessionRecord(explicitTargetSession) : false;
       const taskId = (0, import_node_crypto.randomUUID)();
       const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
-      const coordinatorDaemonId = resolveCoordinatorNode(ctx)?.daemonId || ctx.localDaemonId;
+      const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
       const dispatchResult = await commandForNode(ctx, node, "agent_command", {
         targetSessionId: args.session_id,
         agentType: resolvedProviderType,
@@ -3927,7 +3930,7 @@ async function meshLaunchSession(ctx, args) {
       }
     }
     const coordinatorNode = resolveCoordinatorNode(ctx);
-    const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
+    const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
     const delegatedWorkerAutoApprove = (0, import_daemon_core.resolveDelegatedWorkerAutoApprove)(ctx.mesh.policy, node.policy);
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
