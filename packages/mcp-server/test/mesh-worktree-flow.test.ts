@@ -1227,7 +1227,12 @@ test('mesh_send_task does not reuse a remote live session that lacks mesh delega
   assert.equal(relayCalls[1].args.message, 'do work');
 });
 
-test('mesh_send_task fails closed when explicitly targeting a remote live session that lacks relay metadata', async () => {
+test('mesh_send_task self-heals a mesh-owned remote session missing the relay anchor when a coordinatorDaemonId is resolvable', async () => {
+  // Parity with the local direct-dispatch path: a session that is mesh-owned for
+  // THIS mesh (meshNodeFor matches) but was never launch-stamped with
+  // meshCoordinatorDaemonId must NOT be hard-blocked. Instead it should dispatch
+  // with meshContext.coordinatorDaemonId so the remote router can stamp the relay
+  // anchor at dispatch time (router.ts buildMeshWorkerRelayStamp).
   const meshId = `mesh-remote-explicit-session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -1235,6 +1240,8 @@ test('mesh_send_task fails closed when explicitly targeting a remote live sessio
   };
   const relayCalls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
   const ctx = {
+    // localDaemonId lets resolveCoordinatorDaemonId produce an anchor to delegate.
+    localDaemonId: 'daemon-coordinator',
     mesh: {
       id: meshId,
       name: 'Remote Explicit Session Mesh',
@@ -1271,9 +1278,8 @@ test('mesh_send_task fails closed when explicitly targeting a remote live sessio
               id: 'session-legacy-live',
               providerType: 'hermes-cli',
               status: 'idle',
-              // Has meshNodeFor so it passes unmanaged check, but missing
-              // meshCoordinatorDaemonId so isMeshOwnedDelegateSession returns false
-              // → mesh_delegate_session_missing_relay_metadata
+              // Mesh-owned for THIS mesh (meshNodeFor matches) but missing the
+              // meshCoordinatorDaemonId relay anchor → self-heal at dispatch time.
               settings: { meshNodeFor: meshId },
             }],
           },
@@ -1281,7 +1287,85 @@ test('mesh_send_task fails closed when explicitly targeting a remote live sessio
       };
     }
     if (command === 'agent_command') {
-      throw new Error('agent_command must not be sent to a non-relay-safe explicit session');
+      return { success: true };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const send = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-remote-worker',
+    session_id: 'session-legacy-live',
+    message: 'do work',
+  }));
+
+  assert.equal(send.success, true);
+  assert.equal(send.dispatched, true);
+  assert.equal(relayCalls[0].command, 'get_status_metadata');
+  const dispatch = relayCalls.find(call => call.command === 'agent_command');
+  assert.ok(dispatch, 'agent_command should have been dispatched after self-heal');
+  assert.equal(dispatch!.args.targetSessionId, 'session-legacy-live');
+  // The coordinator anchor must ride along so the remote router can stamp it.
+  assert.equal((dispatch!.args.meshContext as any)?.coordinatorDaemonId, 'daemon-coordinator');
+  assert.equal((dispatch!.args.meshContext as any)?.meshId, meshId);
+});
+
+test('mesh_send_task blocks a mesh-owned remote session missing the relay anchor when no coordinatorDaemonId is resolvable', async () => {
+  // When the session is mesh-owned but lacks the anchor AND no coordinatorDaemonId
+  // can be resolved, the remote router has nothing to stamp, so completion events
+  // would still be undeliverable. Fail closed rather than dispatch blind.
+  const meshId = `mesh-remote-no-anchor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const relayCalls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  const ctx = {
+    // No localDaemonId / localMachineId and no coordinator node daemonId →
+    // resolveCoordinatorDaemonId returns undefined.
+    mesh: {
+      id: meshId,
+      name: 'Remote No Anchor Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-worker',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    relayCalls.push({ daemonId, command, args });
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{
+              id: 'session-legacy-live',
+              providerType: 'hermes-cli',
+              status: 'idle',
+              settings: { meshNodeFor: meshId },
+            }],
+          },
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      throw new Error('agent_command must not be dispatched without a stampable coordinator anchor');
     }
     throw new Error(`unexpected mesh command: ${command}`);
   };
@@ -1293,9 +1377,84 @@ test('mesh_send_task fails closed when explicitly targeting a remote live sessio
   }));
 
   assert.equal(send.success, false);
-  assert.equal(send.code, 'mesh_delegate_session_missing_relay_metadata');
+  assert.equal(send.code, 'mesh_coordinator_daemon_unknown');
   assert.equal(send.nodeId, 'node-remote-worker');
-  assert.equal(send.sessionId, 'session-legacy-live');
+  assert.equal(relayCalls.length, 1);
+  assert.equal(relayCalls[0].command, 'get_status_metadata');
+});
+
+test('mesh_send_task fails closed when explicitly targeting a remote session owned by a different mesh (unsafe alias)', async () => {
+  // A session whose meshNodeFor points at a DIFFERENT mesh is not mesh-owned here.
+  // Dispatching would alias an unrelated transcript and orphan completion events,
+  // so this must stay hard-blocked even though a coordinatorDaemonId is resolvable.
+  const meshId = `mesh-remote-alias-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const relayCalls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: meshId,
+      name: 'Remote Alias Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-worker',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    relayCalls.push({ daemonId, command, args });
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{
+              id: 'session-other-mesh',
+              providerType: 'hermes-cli',
+              status: 'idle',
+              // Owned by a DIFFERENT mesh → unsafe alias for this mesh.
+              settings: { meshNodeFor: `${meshId}-OTHER` },
+            }],
+          },
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      throw new Error('agent_command must not be sent to a foreign-mesh session');
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const send = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-remote-worker',
+    session_id: 'session-other-mesh',
+    message: 'do work',
+  }));
+
+  assert.equal(send.success, false);
+  assert.equal(send.code, 'mesh_delegate_session_missing_relay_metadata');
+  assert.equal(send.unsafeTranscriptAlias, true);
+  assert.equal(send.nodeId, 'node-remote-worker');
+  assert.equal(send.sessionId, 'session-other-mesh');
   assert.equal(relayCalls.length, 1);
   assert.equal(relayCalls[0].command, 'get_status_metadata');
 });

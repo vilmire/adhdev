@@ -970,12 +970,52 @@ function isRelaySafeRemoteDelegateSession(session: any, meshId: string, nodeId: 
     return isMeshOwnedDelegateSession(session, meshId, nodeId) && hasRemoteRelayMetadata(session);
 }
 
-function chooseDispatchableSession(sessions: any[], providerType: string, meshId: string, nodeId: string): any | undefined {
+/**
+ * Pre-dispatch relay-safety classification for an explicit remote delegate
+ * session. The local direct-dispatch path (commandForNode → agent_command) has
+ * no such gate: it always dispatches with meshContext.coordinatorDaemonId, and
+ * the remote router self-heals the session's meshCoordinatorDaemonId at dispatch
+ * time (router.ts buildMeshWorkerRelayStamp). The remote path used to hard-block
+ * any session lacking meshCoordinatorDaemonId, which prevented that dispatch-time
+ * stamp from ever running — leaving launch-stamp-less but otherwise mesh-owned
+ * sessions permanently relay-unsafe.
+ *
+ * Mirror the local path: a session that is mesh-owned for THIS mesh self-heals
+ * as long as we can hand the remote router a coordinator anchor to stamp.
+ *
+ *   - 'safe'         — already carries meshCoordinatorDaemonId; dispatch as-is.
+ *   - 'self_heal'    — mesh-owned for this mesh, missing the anchor, but a
+ *                      coordinatorDaemonId is resolvable → dispatch and let the
+ *                      remote router stamp the anchor (parity with local path).
+ *   - 'missing_anchor' — mesh-owned for this mesh, missing the anchor, AND no
+ *                      coordinatorDaemonId resolvable → cannot delegate the stamp,
+ *                      so completion events would still be undeliverable → block.
+ *   - 'unsafe_alias' — not mesh-owned for this mesh (different mesh / unrelated
+ *                      session). Dispatching risks aliasing an unrelated transcript
+ *                      and orphaning completion events → block.
+ */
+function classifyRemoteDelegateRelaySafety(
+    session: any,
+    meshId: string,
+    nodeId: string,
+    coordinatorDaemonId: string,
+): 'safe' | 'self_heal' | 'missing_anchor' | 'unsafe_alias' {
+    if (!isMeshOwnedDelegateSession(session, meshId, nodeId)) return 'unsafe_alias';
+    if (hasRemoteRelayMetadata(session)) return 'safe';
+    return coordinatorDaemonId ? 'self_heal' : 'missing_anchor';
+}
+
+function chooseDispatchableSession(sessions: any[], providerType: string, meshId: string, nodeId: string, coordinatorDaemonId: string): any | undefined {
     const live = sessions.filter(session => !isTerminalSessionRecord(session));
     const matchingProvider = (session: any) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
-    const meshSessions = live.filter((session: any) =>
-        isRelaySafeRemoteDelegateSession(session, meshId, nodeId)
-    );
+    // Accept mesh-owned sessions whose relay anchor is either already present or
+    // self-healable at dispatch time (coordinatorDaemonId resolvable). Mirrors the
+    // explicit-session relay-safety classification so auto-pick and explicit
+    // dispatch converge on the same set of safe delegates.
+    const meshSessions = live.filter((session: any) => {
+        const safety = classifyRemoteDelegateRelaySafety(session, meshId, nodeId, coordinatorDaemonId);
+        return safety === 'safe' || safety === 'self_heal';
+    });
     return meshSessions.find(session => isIdleSessionRecord(session) && matchingProvider(session))
         || meshSessions.find(matchingProvider)
         || undefined;
@@ -1459,10 +1499,16 @@ function buildCoordinatorP2pRelayFailure(
 async function ipcDispatchToRemoteAgent(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
-    args: { session_id?: string; message: string; providerType?: string; verifiedSession?: any; meshContext?: { meshId: string; nodeId?: string; taskId?: string } },
+    args: { session_id?: string; message: string; providerType?: string; verifiedSession?: any; meshContext?: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string } },
 ): Promise<RemoteAgentDispatchResult> {
     const transport = ctx.transport as IpcTransport;
     const daemonId = node.daemonId!;
+
+    // The coordinator anchor the remote router will stamp onto the worker session
+    // at dispatch time (router.ts buildMeshWorkerRelayStamp). When present, a
+    // mesh-owned session that was never launch-stamped can still self-heal to
+    // relay-safe — exactly like the local direct-dispatch path.
+    const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || '';
 
     let sessionId = args.session_id?.trim() || '';
     // Resolve provider type: caller arg > node policy providerPriority > empty (fuzzy fallback)
@@ -1476,7 +1522,8 @@ async function ipcDispatchToRemoteAgent(
     // relay-safe mesh-owned worker before we dispatch into it.
     if (sessionId && args.verifiedSession) {
         const explicitSession = args.verifiedSession;
-        if (!isRelaySafeRemoteDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
+        const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+        if (relaySafety === 'unsafe_alias') {
             return buildRelayUnsafeRemoteSessionFailure(
                 ctx,
                 node,
@@ -1484,6 +1531,15 @@ async function ipcDispatchToRemoteAgent(
                 resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
             );
         }
+        if (relaySafety === 'missing_anchor') {
+            return buildMissingCoordinatorDaemonIdFailure(
+                ctx,
+                node,
+                resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
+            );
+        }
+        // 'safe' or 'self_heal' → dispatch; the remote router stamps the relay
+        // anchor from meshContext.coordinatorDaemonId when self-healing.
         if (!resolvedProviderType) {
             resolvedProviderType = resolveSessionProviderType(explicitSession);
         }
@@ -1512,7 +1568,8 @@ async function ipcDispatchToRemoteAgent(
                         nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ''}) or retry without session_id so Repo Mesh can target a live delegate session.`,
                     };
                 }
-                if (!isRelaySafeRemoteDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
+                const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+                if (relaySafety === 'unsafe_alias') {
                     return buildRelayUnsafeRemoteSessionFailure(
                         ctx,
                         node,
@@ -1520,6 +1577,15 @@ async function ipcDispatchToRemoteAgent(
                         resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
                     );
                 }
+                if (relaySafety === 'missing_anchor') {
+                    return buildMissingCoordinatorDaemonIdFailure(
+                        ctx,
+                        node,
+                        resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
+                    );
+                }
+                // 'safe' or 'self_heal' → dispatch; the remote router stamps the
+                // relay anchor from meshContext.coordinatorDaemonId when self-healing.
                 if (!resolvedProviderType) {
                     resolvedProviderType = resolveSessionProviderType(explicitSession);
                 }
@@ -1527,7 +1593,7 @@ async function ipcDispatchToRemoteAgent(
                 // Prefer live idle sessions launched for this mesh node. Never route
                 // a new task into restored/stopped session records; that produces the
                 // coordinator-visible "pending only, chat never received it" failure.
-                const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id);
+                const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
 
                 if (targetSession?.id || targetSession?.sessionId) {
                     sessionId = targetSession.id || targetSession.sessionId;

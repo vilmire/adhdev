@@ -1049,15 +1049,18 @@ function hasRemoteRelayMetadata(session) {
     readString(session?.settings?.meshCoordinatorDaemonId) || readString(session?.meta?.meshCoordinatorDaemonId) || readString(session?.metadata?.meshCoordinatorDaemonId) || readString(session?.meshCoordinatorDaemonId)
   );
 }
-function isRelaySafeRemoteDelegateSession(session, meshId, nodeId) {
-  return isMeshOwnedDelegateSession(session, meshId, nodeId) && hasRemoteRelayMetadata(session);
+function classifyRemoteDelegateRelaySafety(session, meshId, nodeId, coordinatorDaemonId) {
+  if (!isMeshOwnedDelegateSession(session, meshId, nodeId)) return "unsafe_alias";
+  if (hasRemoteRelayMetadata(session)) return "safe";
+  return coordinatorDaemonId ? "self_heal" : "missing_anchor";
 }
-function chooseDispatchableSession(sessions, providerType, meshId, nodeId) {
+function chooseDispatchableSession(sessions, providerType, meshId, nodeId, coordinatorDaemonId) {
   const live = sessions.filter((session) => !isTerminalSessionRecord(session));
   const matchingProvider = (session) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
-  const meshSessions = live.filter(
-    (session) => isRelaySafeRemoteDelegateSession(session, meshId, nodeId)
-  );
+  const meshSessions = live.filter((session) => {
+    const safety = classifyRemoteDelegateRelaySafety(session, meshId, nodeId, coordinatorDaemonId);
+    return safety === "safe" || safety === "self_heal";
+  });
   return meshSessions.find((session) => isIdleSessionRecord(session) && matchingProvider(session)) || meshSessions.find(matchingProvider) || void 0;
 }
 function buildRelayUnsafeRemoteSessionFailure(ctx, node, sessionId, providerType) {
@@ -1397,16 +1400,25 @@ function buildCoordinatorP2pRelayFailure(error, context) {
 async function ipcDispatchToRemoteAgent(ctx, node, args) {
   const transport = ctx.transport;
   const daemonId = node.daemonId;
+  const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || "";
   let sessionId = args.session_id?.trim() || "";
   const providerPriorityList = Array.isArray(node.policy?.providerPriority) ? node.policy.providerPriority : [];
   let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || "";
   if (sessionId && args.verifiedSession) {
     const explicitSession = args.verifiedSession;
-    if (!isRelaySafeRemoteDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
+    const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+    if (relaySafety === "unsafe_alias") {
       return buildRelayUnsafeRemoteSessionFailure(
         ctx,
         node,
         sessionId,
+        resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
+      );
+    }
+    if (relaySafety === "missing_anchor") {
+      return buildMissingCoordinatorDaemonIdFailure(
+        ctx,
+        node,
         resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
       );
     }
@@ -1437,7 +1449,8 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
             nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ""}) or retry without session_id so Repo Mesh can target a live delegate session.`
           };
         }
-        if (!isRelaySafeRemoteDelegateSession(explicitSession, ctx.mesh.id, node.id)) {
+        const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+        if (relaySafety === "unsafe_alias") {
           return buildRelayUnsafeRemoteSessionFailure(
             ctx,
             node,
@@ -1445,11 +1458,18 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
             resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
           );
         }
+        if (relaySafety === "missing_anchor") {
+          return buildMissingCoordinatorDaemonIdFailure(
+            ctx,
+            node,
+            resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
+          );
+        }
         if (!resolvedProviderType) {
           resolvedProviderType = resolveSessionProviderType(explicitSession);
         }
       } else {
-        const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id);
+        const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
         if (targetSession?.id || targetSession?.sessionId) {
           sessionId = targetSession.id || targetSession.sessionId;
           if (!resolvedProviderType) {
