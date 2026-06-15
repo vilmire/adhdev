@@ -975,7 +975,7 @@ export function isMeshCoordinatorEvent(eventName: unknown): eventName is string 
 // only flushed on the coordinator's OWN idle transition. That transition can't
 // happen until it receives this very event → deadlock. We force-inject these so
 // they bypass the busy send-guard and land in the PTY while generating.
-const MESH_FORCE_INJECT_EVENTS = new Set([
+export const MESH_FORCE_INJECT_EVENTS: ReadonlySet<string> = new Set([
     'agent:generating_completed',
     'agent:stopped',
     'agent:waiting_approval',

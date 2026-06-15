@@ -279,9 +279,76 @@ function atomicDrainFile(path: string): string | null {
     }
 }
 
-/** Drain and return all pending coordinator events for meshId, removing them from disk. */
-export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): PendingMeshCoordinatorEvent[] {
+// Selectively drain a JSONL pending-events file: atomically claim it (rename), then
+// consume only the lines whose parsed event matches `predicate` and rewrite the
+// remaining (kept) lines back to the original path. Unparseable lines are kept
+// untouched. Returns the consumed events. The rename makes claiming exclusive —
+// only one concurrent caller wins, so there is no double-consume of the same lines.
+function selectiveDrainFile(
+    path: string,
+    predicate: (event: PendingMeshCoordinatorEvent) => boolean,
+): PendingMeshCoordinatorEvent[] {
+    const tmpPath = `${path}.draining`;
+    try {
+        renameSync(path, tmpPath);
+    } catch {
+        return []; // another drain claimed it, or the file doesn't exist
+    }
+    let content: string;
+    try {
+        content = readFileSync(tmpPath, 'utf-8');
+    } catch {
+        try { unlinkSync(tmpPath); } catch { /* best-effort */ }
+        return [];
+    }
+
+    const consumed: PendingMeshCoordinatorEvent[] = [];
+    const keptLines: string[] = [];
+    for (const line of content.split('\n')) {
+        if (!line) continue;
+        let parsed: PendingMeshCoordinatorEvent | undefined;
+        try { parsed = JSON.parse(line) as PendingMeshCoordinatorEvent; } catch { parsed = undefined; }
+        if (parsed && predicate(parsed)) {
+            consumed.push(parsed);
+        } else {
+            keptLines.push(line); // non-matching or unparseable → leave queued
+        }
+    }
+
+    try {
+        if (keptLines.length > 0) {
+            writeFileSync(path, keptLines.join('\n') + '\n', 'utf-8');
+        }
+        unlinkSync(tmpPath);
+    } catch {
+        // If the rewrite/cleanup fails, restore the claimed file so no events are
+        // lost — the next drain retries the whole file.
+        try { if (existsSync(tmpPath) && !existsSync(path)) renameSync(tmpPath, path); } catch { /* best-effort */ }
+        return [];
+    }
+    return consumed;
+}
+
+/**
+ * Drain and return pending coordinator events for meshId, removing the drained
+ * ones from both the SQLite inbox and the JSONL legacy file.
+ *
+ * When `opts.onlyEvents` is supplied, ONLY events whose name is in that set are
+ * drained; every other event stays queued (undrained in SQLite, rewritten back to
+ * the JSONL file). The reconcile loop uses this to force-drain terminal/force-inject
+ * events into a *generating* coordinator while leaving non-force progress events for
+ * the coordinator's next idle transition. The atomic SQLite drained=1 marking and the
+ * atomic JSONL rename keep force-drain and a concurrent full drain from double-consuming.
+ */
+export function drainPendingMeshCoordinatorEvents(
+    meshId?: string,
+    coordinatorDaemonId?: string,
+    opts?: { onlyEvents?: ReadonlySet<string> },
+): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
+
+    const onlyEvents = opts?.onlyEvents;
+    const matchesFilter = (eventName: string): boolean => !onlyEvents || onlyEvents.has(eventName);
 
     // Dual-write means SQLite and JSONL hold the same events. Both stores must be
     // emptied in one drain call — draining only one leaves the other to re-deliver
@@ -301,7 +368,7 @@ export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDa
     try {
         const store = MeshRuntimeStore.getInstance();
         if (store.pendingEventCount(meshId) > 0) {
-            for (const row of store.drainPendingEvents(meshId, coordinatorDaemonId)) {
+            for (const row of store.drainPendingEvents(meshId, coordinatorDaemonId, onlyEvents ? { onlyEvents } : undefined)) {
                 const event = row.payload as PendingMeshCoordinatorEvent;
                 if (event) pushUnique(event);
             }
@@ -315,15 +382,26 @@ export function drainPendingMeshCoordinatorEvents(meshId?: string, coordinatorDa
         ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
         : [getPendingEventsPath(meshId)];
     for (const path of paths) {
+        const isSharedFile = coordinatorDaemonId && path === getPendingEventsPath(meshId);
+        // Targeting predicate for the shared (unscoped) file: only this coordinator's
+        // events (or legacy untargeted ones) are eligible.
+        const targets = (e: PendingMeshCoordinatorEvent): boolean =>
+            !isSharedFile || !e.targetCoordinatorDaemonId || e.targetCoordinatorDaemonId === coordinatorDaemonId;
+
+        if (onlyEvents) {
+            // Selective JSONL drain: consume only matching events, rewrite the rest back.
+            for (const event of selectiveDrainFile(path, e => targets(e) && matchesFilter(e.event))) {
+                pushUnique(event);
+            }
+            continue;
+        }
         const content = atomicDrainFile(path);
         if (!content) continue;
         const parsed = content.split('\n').filter(Boolean).flatMap(line => {
             try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
         });
         // If reading the shared file, filter to events that target this coordinator or are unscoped.
-        const filtered = (coordinatorDaemonId && path === getPendingEventsPath(meshId))
-            ? parsed.filter(e => !e.targetCoordinatorDaemonId || e.targetCoordinatorDaemonId === coordinatorDaemonId)
-            : parsed;
+        const filtered = isSharedFile ? parsed.filter(targets) : parsed;
         for (const event of filtered) pushUnique(event);
     }
     if (merged.length === 0) return [];

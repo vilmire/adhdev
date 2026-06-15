@@ -1988,7 +1988,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     return { components: { instanceManager } as any, coordinator }
   }
 
-  it('queues refine:completed for a generating CLI coordinator without injecting (idle-only inject)', async () => {
+  it('force-injects refine:completed into a generating CLI coordinator (force-drain)', async () => {
     const meshId = `mesh_codex_refine_completed_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2003,23 +2003,23 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         result: { success: true, merged: true, branch: 'fix/branch', into: 'main' },
       })
 
-      // Queue-only: the event is persisted, not pushed.
+      // Queue-only at forward time: the event is persisted, not pushed.
       expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // The reconcile tick must NOT inject into a generating coordinator — the event
-      // stays queued and is retried next tick when the coordinator goes idle.
+      // refine:completed is a force-inject event — the reconcile tick force-drains it
+      // into the generating coordinator (force:true) rather than leaving it deadlocked.
       await runMeshReconcileTick(components)
-      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
 
-      const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0].event).toBe('refine:completed')
+      // Consumed — nothing left to re-deliver.
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('queues refine:failed for a generating CLI coordinator without injecting (idle-only inject)', async () => {
+  it('force-injects refine:failed into a generating CLI coordinator (force-drain)', async () => {
     const meshId = `mesh_codex_refine_failed_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2034,16 +2034,15 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         result: { success: false, code: 'validation_failed', error: 'Tests failed' },
       })
 
-      // Queue-only: the event is persisted, not pushed.
+      // Queue-only at forward time: the event is persisted, not pushed.
       expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // The reconcile tick must NOT inject into a generating coordinator.
+      // refine:failed is a force-inject event — force-drained into the generating coordinator.
       await runMeshReconcileTick(components)
-      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
 
-      const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0].event).toBe('refine:failed')
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -2106,7 +2105,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
-  it('queues agent:generating_completed for a generating CLI coordinator without injecting (idle-only inject)', async () => {
+  it('force-injects agent:generating_completed into a generating CLI coordinator (force-drain)', async () => {
     const meshId = `mesh_codex_gen_completed_generating_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2124,17 +2123,17 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         timestamp: 99999,
       })
 
-      // Queue-only: the event is persisted, not pushed.
+      // Queue-only at forward time: the event is persisted, not pushed.
       expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // The reconcile tick must NOT inject into a generating coordinator — the event
-      // stays queued for the next idle tick / an MCP poll.
+      // agent:generating_completed is a force-inject event — the reconcile tick
+      // force-drains it into the generating coordinator (the bug this fix closes:
+      // a coordinator awaiting a worker result is generating, not idle).
       await runMeshReconcileTick(components)
-      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
 
-      const pending = drainPendingMeshCoordinatorEvents(meshId)
-      expect(pending).toHaveLength(1)
-      expect(pending[0].event).toBe('agent:generating_completed')
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }

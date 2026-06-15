@@ -70,6 +70,20 @@ function queueCompletion(meshId: string, jobSuffix: string) {
   })
 }
 
+// A non-force, intermediate/progress event — must NOT be injected into a generating
+// coordinator (only force-inject terminal events bypass the busy send-guard).
+function queueProgress(meshId: string, jobSuffix: string) {
+  return queuePendingMeshCoordinatorEvent({
+    event: 'monitor:long_generating',
+    meshId,
+    nodeLabel: "Node 'node_child_1'",
+    nodeId: 'node_child_1',
+    metadataEvent: { sessionId: `sess-progress-${jobSuffix}`, timestamp: Date.now() },
+    coordinatorMessage: `Node 'node_child_1' is still generating (${jobSuffix}).`,
+    queuedAt: Date.now(),
+  })
+}
+
 describe('runMeshReconcileTick', () => {
   it('drains the queue and injects into an idle coordinator', async () => {
     const meshId = `mesh_reconcile_idle_${Date.now()}`
@@ -95,7 +109,7 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
-  it('does NOT inject into a generating coordinator — the event stays queued for a later tick', async () => {
+  it('force-drains a force-inject event into a GENERATING coordinator (force:true PTY write)', async () => {
     const meshId = `mesh_reconcile_generating_${Date.now()}`
     try {
       const sink: any[] = []
@@ -105,9 +119,100 @@ describe('runMeshReconcileTick', () => {
 
       await runMeshReconcileTick(components)
 
+      // A generating coordinator awaiting a worker result must still receive the
+      // completion — force-injected so it bypasses the busy send-guard.
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [eventName, payload] = coordinator.onEvent.mock.calls[0]
+      expect(eventName).toBe('send_message')
+      expect(payload.input.textFallback).toContain('has completed its task')
+      expect(payload.force).toBe(true)
+
+      // The event was consumed (atomic drain) — nothing left to re-deliver.
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('does NOT inject a non-force progress event into a generating coordinator — it stays queued', async () => {
+    const meshId = `mesh_reconcile_progress_generating_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const components = makeComponents([coordinator])
+      queueProgress(meshId, 'gen')
+
+      await runMeshReconcileTick(components)
+
+      // Non-force progress events are noise mid-generation; leave them queued for idle.
       expect(coordinator.onEvent).not.toHaveBeenCalled()
-      // Event must still be in the queue, undrained, for the next idle tick / MCP poll.
       expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('generating coordinator: force-drains the force event but leaves a mixed queue\'s non-force event', async () => {
+    const meshId = `mesh_reconcile_mixed_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const components = makeComponents([coordinator])
+      queueProgress(meshId, 'mixed')      // non-force — must stay queued
+      queueCompletion(meshId, 'mixed')    // force — must be drained + injected
+
+      await runMeshReconcileTick(components)
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [, payload] = coordinator.onEvent.mock.calls[0]
+      expect(payload.input.textFallback).toContain('has completed its task')
+      expect(payload.force).toBe(true)
+
+      // Only the non-force progress event remains queued.
+      const remaining = getPendingMeshCoordinatorEvents(meshId)
+      expect(remaining).toHaveLength(1)
+      expect(remaining[0].event).toBe('monitor:long_generating')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('idle coordinator receives BOTH force and non-force events', async () => {
+    const meshId = `mesh_reconcile_idle_both_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'idle', sink)
+      const components = makeComponents([coordinator])
+      queueProgress(meshId, 'both')
+      queueCompletion(meshId, 'both')
+
+      await runMeshReconcileTick(components)
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(2)
+      const texts = coordinator.onEvent.mock.calls.map((c: any[]) => c[1]?.input?.textFallback).join('\n')
+      expect(texts).toContain('has completed its task')
+      expect(texts).toContain('is still generating')
+      // Both consumed.
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('no double-delivery: after a generating force-drain, a follow-up pull-drain returns nothing for that event', async () => {
+    const meshId = `mesh_reconcile_no_dupe_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const components = makeComponents([coordinator])
+      queueCompletion(meshId, 'dupe')
+
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+
+      // Simulate the coordinator's own pull (MCP drain) racing afterwards — the
+      // force-drained completion was atomically consumed, so it must not reappear.
+      expect(drainPendingMeshCoordinatorEvents(meshId, 'test-machine')).toHaveLength(0)
     } finally {
       cleanup(meshId)
     }

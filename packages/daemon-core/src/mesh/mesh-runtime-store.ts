@@ -1241,16 +1241,41 @@ export class MeshRuntimeStore {
         return result.changes > 0;
     }
 
-    drainPendingEvents(meshId: string, coordinatorDaemonId?: string | null): Array<{ id: string; event: string; payload: unknown }> {
+    /**
+     * Drain undrained pending events for a mesh, atomically marking them drained.
+     * When `opts.onlyEvents` is supplied, ONLY rows whose `event` is in that set are
+     * drained — the rest stay queued (drained=0) for a later drain. This is how the
+     * reconcile loop force-drains terminal/force-inject events into a *generating*
+     * coordinator while leaving non-force progress events for the coordinator's next
+     * idle transition. Filtering happens inside the same transaction as the
+     * drained=1 marking, so force-drain + a concurrent full drain can never both
+     * consume the same row.
+     */
+    drainPendingEvents(
+        meshId: string,
+        coordinatorDaemonId?: string | null,
+        opts?: { onlyEvents?: ReadonlySet<string> },
+    ): Array<{ id: string; event: string; payload: unknown }> {
         return this.transaction(() => {
-            const whereClause = coordinatorDaemonId
-                ? `WHERE mesh_id = ? AND drained = 0 AND (coordinator_daemon_id IS NULL OR coordinator_daemon_id = ?)`
-                : `WHERE mesh_id = ? AND drained = 0`;
-            const params: unknown[] = coordinatorDaemonId
-                ? [meshId, coordinatorDaemonId]
-                : [meshId];
+            const onlyEvents = opts?.onlyEvents;
+            // An explicit-but-empty filter means "drain nothing" (no event name can match).
+            if (onlyEvents && onlyEvents.size === 0) return [];
+            const eventList = onlyEvents ? [...onlyEvents] : [];
+            // Filter by event name IN-SQL when onlyEvents is set so the LIMIT applies to
+            // matching rows — a long run of non-force events ahead in the queue must not
+            // crowd a force event out of the 100-row window.
+            const clauses = ['mesh_id = ?', 'drained = 0'];
+            const params: unknown[] = [meshId];
+            if (coordinatorDaemonId) {
+                clauses.push('(coordinator_daemon_id IS NULL OR coordinator_daemon_id = ?)');
+                params.push(coordinatorDaemonId);
+            }
+            if (eventList.length > 0) {
+                clauses.push(`event IN (${eventList.map(() => '?').join(',')})`);
+                params.push(...eventList);
+            }
             const rows = this.db.prepare(
-                `SELECT id, event, payload FROM mesh_pending_events ${whereClause} ORDER BY queued_at ASC LIMIT 100`
+                `SELECT id, event, payload FROM mesh_pending_events WHERE ${clauses.join(' AND ')} ORDER BY queued_at ASC LIMIT 100`
             ).all(...params) as Array<{ id: string; event: string; payload: string }>;
             if (rows.length === 0) return [];
             const ids = rows.map(r => r.id);

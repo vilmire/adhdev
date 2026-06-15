@@ -14,10 +14,16 @@
 //
 // This loop is that drainer. On a fixed interval it:
 //   1. Finds live CLI coordinator sessions on THIS daemon (meshCoordinatorFor
-//      stamp). For each, drains the local queue scoped to this daemon and
-//      injects pending events into the coordinator when it is idle. (idle-only:
-//      a generating coordinator's PTY ignores send_message, so we leave events
-//      queued and retry next tick.)
+//      stamp). For each mesh, drains the local queue scoped to this daemon and
+//      injects pending events into the coordinator. When a coordinator is idle it
+//      receives every queued event. When ONLY generating coordinators exist (the
+//      common case while the coordinator is blocked awaiting a worker result), the
+//      loop force-drains ONLY the force-inject events (completion / approval / stop /
+//      refine·bootstrap terminal) and force-writes them into the generating PTY —
+//      the same busy-bypass send-guard escape the live-CLI inject used to use.
+//      Non-force progress events stay queued for the next idle tick (injecting them
+//      mid-generation would be noise). This is what makes a coordinator parked in
+//      `generating` while awaiting a worker's completion actually receive it.
 //   2. In cloud mode (dispatchMeshCommand present), pulls each remote worker
 //      node daemon's queue over P2P (get_pending_mesh_events) and re-injects via
 //      handleMeshForwardEvent — the same pull the MCP drainCoordinatorPendingEvents
@@ -41,7 +47,7 @@ import { LOG } from '../logging/logger.js';
 import { drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { handleMeshForwardEvent, shouldForceInjectMeshEvent } from './mesh-events-coordinator.js';
+import { handleMeshForwardEvent, shouldForceInjectMeshEvent, MESH_FORCE_INJECT_EVENTS } from './mesh-events-coordinator.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 
 // Default reconcile cadence. approval/completion notifications to a live CLI
@@ -79,7 +85,9 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
     return out;
 }
 
-// Inject a drained pending event into a live, idle coordinator session.
+// Inject a drained pending event into a live coordinator session. Force-inject
+// events carry force:true so they bypass the busy send-guard and land in the PTY
+// even while the coordinator is generating (see shouldForceInjectMeshEvent).
 function injectPendingIntoCoordinator(
     coordinator: LiveCoordinator['instance'],
     pending: PendingMeshCoordinatorEvent,
@@ -130,12 +138,19 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             }
         }
 
-        // (b) Drain the local queue scoped to this coordinator daemon and inject
-        //     into idle coordinators. A generating coordinator is skipped — its
-        //     events stay queued (drained=1 only happens inside the drain call,
-        //     so we must NOT drain when there is no idle coordinator to receive).
+        // (b) Drain the local queue scoped to this coordinator daemon and inject.
+        //     - If an idle coordinator exists, FULL-drain and deliver every event to it
+        //       (it can receive non-force progress events without deadlocking).
+        //     - If only GENERATING coordinators exist, force-drain ONLY the force-inject
+        //       events (completion/approval/stop/refine·bootstrap terminal) and force-inject
+        //       them so a coordinator parked in `generating` while awaiting that very event
+        //       is not deadlocked. Non-force progress events stay queued for the next idle
+        //       tick — injecting them would be noise mid-generation. Both drains mark the
+        //       consumed rows drained=1 atomically, so the pull path can't re-deliver.
         const idleCoordinators = meshCoordinators.filter(c => c.idle);
-        if (idleCoordinators.length === 0) continue;
+        const generatingCoordinators = meshCoordinators.filter(c => !c.idle);
+        const targetCoordinators = idleCoordinators.length > 0 ? idleCoordinators : generatingCoordinators;
+        const forceOnly = idleCoordinators.length === 0;
 
         // O(1) guard: skip the drain entirely when the queue is empty.
         if (store) {
@@ -146,16 +161,21 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
 
         let pendingEvents: PendingMeshCoordinatorEvent[] = [];
         try {
-            pendingEvents = drainPendingMeshCoordinatorEvents(meshId, localDaemonId);
+            pendingEvents = drainPendingMeshCoordinatorEvents(
+                meshId,
+                localDaemonId,
+                forceOnly ? { onlyEvents: MESH_FORCE_INJECT_EVENTS } : undefined,
+            );
         } catch (e: any) {
             LOG.warn('MeshReconcile', `Drain failed for mesh ${meshId}: ${e?.message || e}`);
             continue;
         }
         if (pendingEvents.length === 0) continue;
 
-        LOG.info('MeshReconcile', `Reconcile inject: ${pendingEvents.length} pending event(s) → ${idleCoordinators.length} idle coordinator(s) for mesh ${meshId}`);
+        const mode = forceOnly ? 'force-drain → generating' : 'inject → idle';
+        LOG.info('MeshReconcile', `Reconcile ${mode}: ${pendingEvents.length} pending event(s) → ${targetCoordinators.length} coordinator(s) for mesh ${meshId}`);
         for (const pending of pendingEvents) {
-            for (const c of idleCoordinators) {
+            for (const c of targetCoordinators) {
                 injectPendingIntoCoordinator(c.instance, pending);
             }
         }
