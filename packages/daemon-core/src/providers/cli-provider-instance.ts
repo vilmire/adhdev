@@ -1578,9 +1578,23 @@ export class CliProviderInstance implements ProviderInstance {
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
                 const modal = adapterStatus.activeModal;
                 LOG.info('CLI', `[${this.type}] approval modal: "${modal?.message?.slice(0, 80) ?? 'none'}"`);
+                // Include the FSM's approval entry seq, mirroring the auto-approve
+                // path (maybeAutoApproveStatus) and resolveModal's sameEntryReResolve
+                // guard. Two distinct back-to-back approvals can carry identical
+                // message/buttons (very common with claude-cli's "Allow Bash
+                // command?"). Without the seq their fingerprints collide and the dedup
+                // below silently drops the second waiting_approval event — it is never
+                // emitted, so it cannot even land in the pending inbox for a later
+                // read_chat reconcile to recover. The seq is bumped by the FSM on every
+                // fresh waiting_approval entry, so a new approval always yields a new
+                // fingerprint and emits.
+                const approvalEntrySeq = typeof adapterStatus?.approvalEntrySeq === 'number'
+                    ? adapterStatus.approvalEntrySeq
+                    : 0;
                 const approvalFingerprint = JSON.stringify({
                     message: typeof modal?.message === 'string' ? modal.message.trim() : '',
                     buttons: Array.isArray(modal?.buttons) ? modal.buttons.map((button: unknown) => String(button).trim()) : [],
+                    seq: approvalEntrySeq,
                 });
                 // PTY redraws repeat the same modal content; fingerprint dedup prevents duplicate events.
                 // Do NOT also gate on lastStatus: consecutive approvals can arrive waiting_approval→waiting_approval
@@ -1598,6 +1612,15 @@ export class CliProviderInstance implements ProviderInstance {
                         modalButtons: modal?.buttons,
                     });
                 }
+            } else if (newStatus === 'generating' && this.lastStatus === 'waiting_approval') {
+                // Approval resolved and the agent resumed work. Defense-in-depth:
+                // clear the approval emit fingerprint here too (not only on
+                // completion at scheduleCompletedDebounceFlush). A subsequent
+                // waiting_approval with the same modal content as the one just
+                // resolved would otherwise collide with the stale fingerprint and be
+                // dropped. The seq in the fingerprint already separates entries; this
+                // reset is a belt-and-suspenders guard for the re-entry case.
+                this.lastApprovalEventFingerprint = '';
             } else if (newStatus === 'idle' && (this.lastStatus === 'generating' || this.lastStatus === 'waiting_approval')) {
                 const duration = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : 0;
                 // Guard: if generatingStartedAt===0 and no debounce pending, the generating phase
