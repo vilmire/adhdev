@@ -886,18 +886,19 @@ async function reconcileDirectDispatchesFromTranscriptEvidence(
     return { attempted, reconciled, skipped };
 }
 
-async function triggerMeshQueueAndReport(
+export async function triggerMeshQueueAndReport(
     ctx: MeshContext,
-    node?: LocalMeshNodeEntry,
-    opts?: { localNode?: boolean },
 ): Promise<Record<string, unknown> | undefined> {
     try {
-        let raw: any;
-        if (ctx.transport instanceof IpcTransport && node?.daemonId && opts?.localNode === false) {
-            raw = await ctx.transport.meshCommand(node.daemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id });
-        } else {
-            raw = await ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id });
-        }
+        // trigger_mesh_queue is a coordinator-only operation: triggerMeshQueue
+        // reads the mesh object, the coordinator's local CLI instances, and the
+        // queue ledger (stored on THIS machine), then dispatches assignments to
+        // remote idle sessions over P2P itself. Relaying trigger_mesh_queue to a
+        // remote worker daemon would hit requireMeshHostMutationOwner →
+        // getMeshForCommand → null ('Mesh not found'), because only the
+        // coordinator daemon hosts the mesh. Always run it on the coordinator's
+        // local IPC, regardless of which node prompted the trigger.
+        const raw = await ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id });
         const payload = unwrapCommandPayload(raw);
         const trigger = payload?.trigger && typeof payload.trigger === 'object' ? payload.trigger : payload;
         return trigger && typeof trigger === 'object' ? trigger : { success: true };
@@ -4828,7 +4829,7 @@ export async function meshLaunchSession(
         // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks.
         // Surface the trigger result so coordinators can distinguish "session launched"
         // from "queued work actually claimed by that session".
-        const queueTrigger = await triggerMeshQueueAndReport(ctx, node, { localNode: isLocalNode });
+        const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
         return JSON.stringify({
             ...launchPayload,

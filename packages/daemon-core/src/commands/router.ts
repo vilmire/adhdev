@@ -5259,27 +5259,17 @@ export class DaemonCommandRouter {
             }
 
             case 'launch_cli': {
-                // Worker launch envelope hardening: a mesh worker session must carry
-                // meshCoordinatorDaemonId so completion events route back to the
-                // coordinator (the cloud relay and the daemon-core forwarder both key on
-                // it). mesh_launch_session resolves coordinatorNode.daemonId || ctx.localDaemonId
-                // upstream, but for a freshly-cloned local worktree both can be empty. When the
-                // launch is a coordinator-driven worker on this machine and the id is missing,
-                // stamp this daemon's own id — worker and coordinator are co-located here.
-                {
-                    const launchSettings = (args?.settings && typeof args.settings === 'object')
-                        ? args.settings as Record<string, unknown>
-                        : undefined;
-                    const isMeshWorkerLaunch = !!launchSettings
-                        && (readStringValue(launchSettings.meshNodeFor) || launchSettings.launchedByCoordinator === true);
-                    const hasCoordinatorDaemonId = !!launchSettings && !!readStringValue(launchSettings.meshCoordinatorDaemonId);
-                    if (launchSettings && isMeshWorkerLaunch && !hasCoordinatorDaemonId) {
-                        try {
-                            const localDaemonId = readStringValue(loadConfig().machineId);
-                            if (localDaemonId) launchSettings.meshCoordinatorDaemonId = localDaemonId;
-                        } catch { /* best-effort — launch proceeds without the stamp */ }
-                    }
-                }
+                // The coordinator routing anchor (meshCoordinatorDaemonId) is stamped
+                // upstream by mesh_launch_session, which resolves
+                // coordinatorNode.daemonId || ctx.localDaemonId || ctx.localMachineId and
+                // fail-closes for a remote node when none resolve. We deliberately do NOT
+                // self-stamp this daemon's own id when the field is missing: for a
+                // P2P-relayed remote worker launch, stamping the worker's own id would make
+                // the self-forward gate (mesh-events-coordinator: sameDaemonId) treat the
+                // worker as its own coordinator, suppressing the spontaneous completion-event
+                // forward and leaving the event in the pending inbox until a read_chat
+                // reconcile drains it. If the anchor is genuinely absent here, leave it
+                // absent rather than poison the routing.
                 const launchResult = await this.deps.cliManager.handleCliCommand(cmd, args);
                 // Bug C fix (part 1): when launching a mesh node worker session, surface
                 // bootstrapPending:true if the node's worktree bootstrap is still running.

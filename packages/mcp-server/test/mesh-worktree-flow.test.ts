@@ -14,7 +14,13 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  const localCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    // trigger_mesh_queue (fired by the launch below) runs coordinator-local.
+    if (command === 'trigger_mesh_queue') {
+      localCalls.push({ command, args });
+      return { success: true, trigger: { success: true, claimed: true } };
+    }
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -111,8 +117,11 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   const removeText = await meshRemoveNode(ctx, { node_id: 'node-worktree' });
   assert.equal(JSON.parse(removeText).success, true);
   assert.ok(!ctx.mesh.nodes.some(node => node.id === 'node-worktree'));
-  assert.equal(calls[3].daemonId, 'daemon-source');
-  assert.equal(calls[3].command, 'remove_mesh_node');
+  // launch fired trigger_mesh_queue coordinator-local (not via meshCommand),
+  // so remove_mesh_node is the third meshCommand, not the fourth.
+  assert.deepEqual(localCalls.map(c => c.command), ['trigger_mesh_queue']);
+  assert.equal(calls[2].daemonId, 'daemon-source');
+  assert.equal(calls[2].command, 'remove_mesh_node');
 });
 
 test('mesh_launch_session includes queue trigger claim state in the response', async () => {
@@ -1846,7 +1855,14 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  const localCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    // trigger_mesh_queue is coordinator-only and must run on the coordinator's
+    // local IPC (transport.command), never relayed to the remote worker daemon.
+    if (command === 'trigger_mesh_queue') {
+      localCalls.push({ command, args });
+      return { success: true, trigger: { success: true, claimed: true } };
+    }
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -1901,17 +1917,21 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
   assert.equal(launch.sessionId, 'runtime-explicit');
   assert.equal(launch.resolvedProviderType, 'codex-cli');
   assert.equal(launch.providerSessionId, 'provider-explicit');
-  assert.equal(calls.length, 2);
+  // Only launch_cli is relayed to the remote worker daemon. trigger_mesh_queue
+  // runs on the coordinator-local IPC (localCalls), not via meshCommand.
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].command, 'launch_cli');
   assert.equal(calls[0].args.cliType, 'codex-cli');
+  assert.deepEqual(localCalls.map(c => c.command), ['trigger_mesh_queue']);
+  assert.deepEqual(localCalls[0].args, { meshId: 'mesh-provider-explicit' });
 
   const debugText = await meshReadDebug(ctx as any, { node_id: 'node-provider', session_id: 'runtime-explicit', tail: 12 });
   const debug = JSON.parse(debugText);
   assert.equal(debug.delivery, 'daemon_file');
   assert.equal(debug.savedPath, '/tmp/adhdev-chat-debug-runtime-explicit.json');
-  assert.equal(calls[2].daemonId, 'daemon-source');
-  assert.equal(calls[2].command, 'get_chat_debug_bundle');
-  assert.deepEqual(calls[2].args, {
+  assert.equal(calls[1].daemonId, 'daemon-source');
+  assert.equal(calls[1].command, 'get_chat_debug_bundle');
+  assert.deepEqual(calls[1].args, {
     sessionId: 'runtime-explicit',
     targetSessionId: 'runtime-explicit',
     workspace: '/repo',
@@ -1925,9 +1945,9 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
   const approveText = await meshApprove(ctx as any, { node_id: 'node-provider', session_id: 'runtime-explicit', action: 'approve' });
   const approve = JSON.parse(approveText);
   assert.equal(approve.success, true);
-  assert.equal(calls[3].daemonId, 'daemon-source');
-  assert.equal(calls[3].command, 'resolve_action');
-  assert.deepEqual(calls[3].args, {
+  assert.equal(calls[2].daemonId, 'daemon-source');
+  assert.equal(calls[2].command, 'resolve_action');
+  assert.deepEqual(calls[2].args, {
     sessionId: 'runtime-explicit',
     targetSessionId: 'runtime-explicit',
     workspace: '/repo',
@@ -1944,7 +1964,13 @@ test('mesh_launch_session omitted type uses providerPriority detection and fails
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  const localCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    // trigger_mesh_queue runs on the coordinator-local IPC, not relayed to the worker.
+    if (command === 'trigger_mesh_queue') {
+      localCalls.push({ command, args });
+      return { success: true, trigger: { success: true, claimed: true } };
+    }
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -1985,7 +2011,9 @@ test('mesh_launch_session omitted type uses providerPriority detection and fails
   const launch = JSON.parse(launchText);
   assert.equal(launch.sessionId, 'runtime-auto');
   assert.equal(launch.resolvedProviderType, 'hermes-cli');
-  assert.deepEqual(calls.map(call => call.command), ['detect_provider', 'detect_provider', 'launch_cli', 'trigger_mesh_queue']);
+  // trigger_mesh_queue is no longer relayed to the worker — it runs coordinator-local.
+  assert.deepEqual(calls.map(call => call.command), ['detect_provider', 'detect_provider', 'launch_cli']);
+  assert.deepEqual(localCalls.map(call => call.command), ['trigger_mesh_queue']);
   assert.equal(calls[0].args.providerType, 'codex-cli');
   assert.equal(calls[1].args.providerType, 'hermes-cli');
   assert.equal(calls[2].args.cliType, 'hermes-cli');

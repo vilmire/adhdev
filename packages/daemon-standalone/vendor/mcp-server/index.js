@@ -985,14 +985,9 @@ async function reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, d
   }
   return { attempted, reconciled, skipped };
 }
-async function triggerMeshQueueAndReport(ctx, node, opts) {
+async function triggerMeshQueueAndReport(ctx) {
   try {
-    let raw;
-    if (ctx.transport instanceof IpcTransport && node?.daemonId && opts?.localNode === false) {
-      raw = await ctx.transport.meshCommand(node.daemonId, "trigger_mesh_queue", { meshId: ctx.mesh.id });
-    } else {
-      raw = await ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id });
-    }
+    const raw = await ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id });
     const payload = unwrapCommandPayload(raw);
     const trigger = payload?.trigger && typeof payload.trigger === "object" ? payload.trigger : payload;
     return trigger && typeof trigger === "object" ? trigger : { success: true };
@@ -4004,7 +3999,7 @@ async function meshLaunchSession(ctx, args) {
       });
     } catch {
     }
-    const queueTrigger = await triggerMeshQueueAndReport(ctx, node, { localNode: isLocalNode });
+    const queueTrigger = await triggerMeshQueueAndReport(ctx);
     return JSON.stringify({
       ...launchPayload,
       resolvedProviderType,
