@@ -2280,7 +2280,9 @@ test('mesh_read_chat forwards cached provider metadata after launch', async () =
   assert.equal(firstReadCall.args.tailLimit, 5);
   assert.equal(readPayload.success, true);
   assert.equal(readPayload.status, 'idle');
-  assert.deepEqual(readPayload.messages, [{ role: 'assistant', content: 'delegated result' }]);
+  // Default compact: the lone assistant bubble === summary, deduped to a stub (leak #1).
+  assert.deepEqual(readPayload.messages, [{ role: 'assistant', content: '', _sameAsSummary: true }]);
+  assert.equal(readPayload.summary, 'delegated result');
   assert.equal(readPayload.providerSessionId, 'provider-cached');
 
   await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', provider_session_id: 'provider-explicit-read' });
@@ -2446,11 +2448,16 @@ test('mesh_read_chat compact mode filters tool/internal chatter and returns the 
   assert.equal(payload.compact, true);
   assert.equal(payload.totalMessages, 5);
   assert.equal(payload.messages.length, 2);
+  // Leak #1: the final assistant bubble === summary, so its body is deduped to a
+  // content-free stub; the report text lives once in `summary`.
   assert.deepEqual(payload.messages.map((m: any) => m.content), [
     'do the task',
-    'Final summary: implemented V1 and tests pass',
+    '',
   ]);
+  assert.equal(payload.messages[payload.messages.length - 1]._sameAsSummary, true);
   assert.equal(payload.summary, 'Final summary: implemented V1 and tests pass');
+  // The summary body appears exactly once across the whole payload.
+  assert.equal(readText.split('Final summary: implemented V1 and tests pass').length - 1, 1);
 });
 
 test('mesh_read_chat compact removed-node recovery returns ledger summary without duplicating it in messages', async () => {
@@ -2498,7 +2505,12 @@ test('mesh_read_chat compact removed-node recovery returns ledger summary withou
   assert.equal(payload.recoveredFromLedger, true);
   assert.equal(payload.summary, longSummary);
   assert.equal(payload.messages.length, 1);
-  assert.equal(payload.messages[0].content, longSummary);
+  // The recovered summary must NOT be duplicated in the message bubble (leak #1):
+  // the bubble is a content-free stub flagged _sameAsSummary; body lives in summary.
+  assert.equal(payload.messages[0].content, '');
+  assert.equal(payload.messages[0]._sameAsSummary, true);
+  // The 900-char summary appears exactly once in the serialized payload.
+  assert.equal(text.split(longSummary).length - 1, 1);
   assert.equal(payload.providerSessionId, 'provider-finished');
 });
 

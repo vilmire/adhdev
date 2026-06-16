@@ -655,6 +655,9 @@ function buildCompactQueueMaintenanceReport(maintenance: Record<string, unknown>
 const COMPACT_MAX_ACTIVE_QUEUE_ROWS = 15;
 const COMPACT_QUEUE_MESSAGE_CAP = 140;
 const COMPACT_MAX_ACTIVE_WORK_ROWS = 12;
+// In compact mode an activeWork row keeps a single short title only; the original
+// delegation prompt is NOT echoed (leak #2). 80 chars is enough to recognize the task.
+const COMPACT_ACTIVE_WORK_TITLE_CAP = 80;
 
 function truncateForCompact(value: unknown, cap: number): unknown {
     if (typeof value !== 'string') return value;
@@ -679,16 +682,19 @@ function compactQueueRows(rows: any[]): { rows: any[]; omitted: number } {
     return { rows: capped, omitted: Math.max(0, rows.length - capped.length) };
 }
 
-// Slim an activeWork record for compact mode: the full per-record `message` /
-// `taskSummary` / `taskTitle` blobs are the dominant payload weight on a busy mesh.
-// Truncate them and cap the array.
+// Slim an activeWork record for compact mode. Leak #2: the original delegation
+// prompt was echoed THREE times per row — `taskTitle` (truncated) + `taskSummary`
+// (mid-length) + `message` (full). In compact we keep only a single short
+// `taskTitle`; `taskSummary` and `message` are dropped entirely (the full text is
+// available via mesh_task_history or with verbose=true). All dispatch-relevant
+// scalars (taskId/status/nodeId/sessionId/timestamps/terminal+stale flags) are
+// preserved so the row stays actionable.
 function compactActiveWorkRecord(record: any): any {
     if (!record || typeof record !== 'object') return record;
     const slim: any = {};
     for (const [k, v] of Object.entries(record)) {
-        if (k === 'message') slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
-        else if (k === 'taskSummary') slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
-        else if (k === 'taskTitle') slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+        if (k === 'message' || k === 'taskSummary') continue; // redundant full-text echoes
+        else if (k === 'taskTitle') slim[k] = truncateForCompact(v, COMPACT_ACTIVE_WORK_TITLE_CAP);
         else slim[k] = elideLargeNestedValue(k, v);
     }
     return slim;
@@ -3288,6 +3294,12 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         note: activeWorkEvidence.staleDirectWorkNote,
         detailHint: 'Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail.',
     });
+    // Leak #2: in compact mode each activeWork row drops the duplicated
+    // taskSummary/message echoes (keeps a short taskTitle + dispatch scalars).
+    // Verbose keeps the full per-record text for debugging.
+    const activeWorkForResponse = compact
+        ? compactActiveWorkRecords(activeWorkEvidence.activeWork)
+        : { records: activeWorkEvidence.activeWork, omitted: 0 };
 
     // Surface coordinator session identity at the top level so the caller (which
     // is itself a coordinator for this mesh) can immediately recognize which
@@ -3515,7 +3527,13 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 webOnlyStaleBuildNote: 'One or more live daemons are behind workspace HEAD, but only web packages changed in that range. The daemon does NOT need a rebuild/restart — redeploy the web app to reflect those changes. This is informational, not a "fix not live" condition.',
             }
             : {}),
-        activeWork: activeWorkEvidence.activeWork,
+        activeWork: activeWorkForResponse.records,
+        ...(compact && activeWorkForResponse.omitted > 0
+            ? { activeWorkRowsOmitted: activeWorkForResponse.omitted }
+            : {}),
+        ...(compact
+            ? { activeWorkHint: `Compact activeWork rows carry a short taskTitle + dispatch scalars only; full task prompt/summary text is omitted — use mesh_task_history or mesh_status verbose=true. First ${COMPACT_MAX_ACTIVE_WORK_ROWS} rows serialized.` }
+            : {}),
         staleDirectWorkSummary,
         ...(args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {}),
         // terminalDirectWork is historical (completed/failed direct dispatches) — opt-in only.

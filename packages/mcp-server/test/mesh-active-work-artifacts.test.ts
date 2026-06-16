@@ -279,6 +279,52 @@ test('direct mesh_send_task is visible as source=direct active work in status an
   }
 });
 
+test('leak #2: compact activeWork drops the triple-echoed task prompt; verbose keeps it', async () => {
+  const meshId = 'mesh-active-work-slim-test';
+  cleanupMesh(meshId);
+  const { ctx } = createRemoteCtx(meshId);
+  const longPrompt = 'DELEGATED TASK: ' + 'do the thing carefully and report back. '.repeat(120); // ~5KB
+
+  try {
+    const send = JSON.parse(await meshSendTask(ctx as any, {
+      node_id: 'node-remote',
+      session_id: 'sess-direct',
+      message: longPrompt,
+    } as any));
+    assert.equal(send.success, true);
+
+    const compactStr = await meshStatus(ctx as any);
+    const compact = JSON.parse(compactStr);
+    const row = compact.activeWork.find((e: any) => e.taskId === send.taskId);
+    assert.ok(row, 'expected the direct task in compact activeWork');
+    // The redundant full-text echoes are gone in compact.
+    assert.equal(row.message, undefined, 'compact activeWork must not echo the full message');
+    assert.equal(row.taskSummary, undefined, 'compact activeWork must not echo taskSummary');
+    // A short title survives for recognition, capped at 80 chars.
+    assert.equal(typeof row.taskTitle, 'string');
+    assert.ok(row.taskTitle.length <= 81, `taskTitle must be capped (<=80+ellipsis); got ${row.taskTitle.length}`);
+    // Dispatch scalars preserved.
+    assert.equal(row.nodeId, 'node-remote');
+    assert.equal(row.sessionId, 'sess-direct');
+    assert.equal(row.status, 'generating');
+    assert.equal(typeof compact.activeWorkHint, 'string');
+    // The 5KB prompt must NOT appear anywhere in the compact payload.
+    assert.equal(compactStr.includes(longPrompt), false, 'compact must not carry the full delegation prompt');
+
+    // Verbose keeps the full per-record text (debug path preserved).
+    const verboseStr = await meshStatus(ctx as any, { verbose: true } as any);
+    const verbose = JSON.parse(verboseStr);
+    const vrow = verbose.activeWork.find((e: any) => e.taskId === send.taskId);
+    assert.ok(vrow, 'expected the task in verbose activeWork');
+    assert.equal(typeof vrow.message, 'string');
+    assert.ok(vrow.message.length > 1000, 'verbose retains the full message');
+    // Byte win: compact substantially smaller than verbose for this row-heavy case.
+    assert.ok(compactStr.length < verboseStr.length, `compact (${compactStr.length}) must be < verbose (${verboseStr.length})`);
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
 test('mesh_status reconciles idle direct dispatch completion from final transcript JSON exactly once', async () => {
   const meshId = 'mesh-direct-transcript-status-completion-test';
   cleanupMesh(meshId);

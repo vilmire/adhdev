@@ -67,6 +67,8 @@ function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'js
           kind: m.kind ?? null,
           content: messageContent(m),
           timestamp: m.timestamp ?? null,
+          // Preserve the dedup flag so consumers know the body lives in `summary`.
+          ...(m._sameAsSummary === true ? { _sameAsSummary: true } : {}),
         })),
       }, null, 2);
     }

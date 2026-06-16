@@ -68,6 +68,41 @@ export function buildCompactMessageTail(
   return tail;
 }
 
+/**
+ * Normalize message text for an equality check between the compact `summary`
+ * field and a message bubble's content. Trims and collapses interior whitespace
+ * so trivially-different copies of the same report compare equal.
+ */
+function normalizeForSummaryEquality(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * When compact mode lifts the final assistant bubble into the `summary` field,
+ * the same report text would otherwise be serialized a SECOND time inside the
+ * returned `messages[]` tail — exactly doubling the payload for long reports.
+ * This rewrites any tail bubble whose content is substantively identical to the
+ * summary into a content-free stub carrying `_sameAsSummary: true`, so the body
+ * lives exactly once (in `summary`). Bubble position/role/timestamp are preserved
+ * for callers that walk the tail; the body is recoverable from `summary`.
+ */
+export function dedupeSummaryFromTail(
+  messages: CompactChatMessage[],
+  summary: string | undefined,
+): CompactChatMessage[] {
+  const normalizedSummary = summary ? normalizeForSummaryEquality(summary) : '';
+  if (!normalizedSummary) return messages;
+  return messages.map((message) => {
+    const role = String(message?.role ?? '').toLowerCase();
+    if (role !== 'assistant' && role !== 'agent') return message;
+    const content = messageContent(message);
+    if (!content.trim()) return message;
+    if (normalizeForSummaryEquality(content) !== normalizedSummary) return message;
+    const { content: _omitted, ...rest } = message;
+    return { ...rest, content: '', _sameAsSummary: true };
+  });
+}
+
 export function compactChatPayload(
   payload: any,
   opts: { sessionId?: string | null; nodeId?: string; limit?: number } = {},
@@ -82,7 +117,12 @@ export function compactChatPayload(
   const summary = typeof payload?.summary === 'string' && payload.summary.trim()
     ? payload.summary.trim()
     : messageContent(finalAssistant).trim();
-  const messages = buildCompactMessageTail(visible, { summary, finalAssistant, limit });
+  // The final assistant bubble is now lifted into `summary`; strip its duplicate
+  // body from the tail so a long report isn't serialized twice (leak #1).
+  const messages = dedupeSummaryFromTail(
+    buildCompactMessageTail(visible, { summary, finalAssistant, limit }),
+    summary,
+  );
 
   // Collect one-line summaries for filtered-out tool/bash messages so the coordinator
   // can see what actions were taken without reading the full transcript.
