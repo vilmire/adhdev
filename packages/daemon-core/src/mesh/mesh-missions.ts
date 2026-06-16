@@ -185,6 +185,28 @@ export function getMeshStatusMissionSummaries(
 }
 
 /**
+ * Read-only mission listing for the mesh_mission_list tool. Returns summaries
+ * (record + live task aggregate) for missions matching `statuses` — or every
+ * mission when `statuses` is omitted/empty — newest-first by updatedAt. Unlike
+ * getMeshStatusMissionSummaries this does NOT cap or group by lifecycle, so a
+ * coordinator can deliberately surface paused/abandoned/completed missions that
+ * the live status view would hide or truncate.
+ *
+ * Compact (the default) elides each goal to a capped preview + goalTruncated
+ * flag; verbose returns the full goal text. The stored goal is never mutated.
+ */
+export function listMeshMissionSummaries(
+    meshId: string,
+    options?: { statuses?: MeshMissionStatus[]; verbose?: boolean },
+): MeshMissionSummary[] | MeshMissionSlimSummary[] {
+    const statuses = options?.statuses && options.statuses.length > 0 ? options.statuses : undefined;
+    const missions = getMeshMissions(meshId, statuses)
+        .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    const full = missions.map(mission => summarizeMeshMission(meshId, mission));
+    return options?.verbose ? full : full.map(slimMissionSummary);
+}
+
+/**
  * M3-3: render active missions as a prompt section for {{mission}}.
  * Empty string when no active mission — the prompt stays byte-identical to
  * the pre-M3 output in that case (regression guarantee).

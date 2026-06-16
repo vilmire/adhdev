@@ -7,6 +7,7 @@ import {
     summarizeMissionTasks,
     getActiveMeshMissionSummaries,
     getMeshStatusMissionSummaries,
+    listMeshMissionSummaries,
     buildMissionPromptSection,
     GOAL_PREVIEW_MAX,
 } from '../../src/mesh/mesh-missions.js';
@@ -238,5 +239,57 @@ describe('getMeshStatusMissionSummaries — compact (default) elides full goal t
         // Read the compact projection, then confirm storage is untouched.
         getMeshStatusMissionSummaries(meshId);
         expect(getMeshMission(meshId, created.id)?.goal).toBe(longGoal);
+    });
+});
+
+describe('mission visibility — paused missions are surfaced (not active-only)', () => {
+    const meshId = `mission-visible-${randomUUID().slice(0, 8)}`;
+
+    afterEach(() => {
+        __clearMeshQueueForTests(meshId);
+        try { MeshRuntimeStore.getInstance().clearMissionsForMesh(meshId); } catch { /* fresh store */ }
+        MeshRuntimeStore.resetForTests();
+    });
+
+    it('getMeshStatusMissionSummaries surfaces paused missions, getActiveMeshMissionSummaries hides them (the bug)', () => {
+        upsertMeshMission(meshId, { title: 'Active one' });
+        const paused = upsertMeshMission(meshId, { title: 'Paused one' });
+        upsertMeshMission(meshId, { id: paused.id, title: 'Paused one', status: 'paused' });
+
+        // Active-only view hides the paused mission — the original bug.
+        const activeOnly = getActiveMeshMissionSummaries(meshId);
+        expect(activeOnly.map(m => m.status)).toEqual(['active']);
+
+        // Status view includes both active and paused.
+        const live = getMeshStatusMissionSummaries(meshId) as any[];
+        const statuses = live.map(m => m.status).sort();
+        expect(statuses).toEqual(['active', 'paused']);
+        const pausedSummary = live.find(m => m.status === 'paused');
+        // Minimal identity + aggregates retained even in compact mode.
+        expect(pausedSummary.id).toBe(paused.id);
+        expect(pausedSummary.title).toBe('Paused one');
+        expect(pausedSummary.tasks).toBeDefined();
+    });
+
+    it('listMeshMissionSummaries returns every status by default and filters when asked', () => {
+        upsertMeshMission(meshId, { title: 'A', status: 'active' });
+        const p = upsertMeshMission(meshId, { title: 'P' });
+        upsertMeshMission(meshId, { id: p.id, title: 'P', status: 'paused' });
+        const done = upsertMeshMission(meshId, { title: 'D' });
+        upsertMeshMission(meshId, { id: done.id, title: 'D', status: 'completed' });
+
+        const all = listMeshMissionSummaries(meshId) as any[];
+        expect(all.map(m => m.status).sort()).toEqual(['active', 'completed', 'paused']);
+
+        const onlyPaused = listMeshMissionSummaries(meshId, { statuses: ['paused'] }) as any[];
+        expect(onlyPaused).toHaveLength(1);
+        expect(onlyPaused[0].title).toBe('P');
+        // compact by default — goal elided to preview fields.
+        expect(onlyPaused[0]).not.toHaveProperty('goal');
+        expect(onlyPaused[0]).toHaveProperty('goalPreview');
+
+        const verbose = listMeshMissionSummaries(meshId, { statuses: ['paused'], verbose: true }) as any[];
+        expect(verbose[0]).toHaveProperty('goal');
+        expect(verbose[0]).not.toHaveProperty('goalPreview');
     });
 });

@@ -5,7 +5,7 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 26 tools: mesh_status, mesh_mission_upsert, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
+ * 29 tools: mesh_status, mesh_mission_upsert, mesh_mission_list, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *           mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
  *           mesh_read_debug, mesh_launch_session, mesh_git_status,
  *           mesh_fast_forward_node, mesh_checkpoint, mesh_approve,
@@ -43,6 +43,9 @@ import {
     computeMeshMissionStats,
     computeMeshTaskStats,
     getActiveMeshMissionSummaries,
+    getMeshStatusMissionSummaries,
+    listMeshMissionSummaries,
+    MESH_MISSION_STATUSES,
     upsertMeshMission,
     getActiveDirectDispatches,
     getQueue,
@@ -2875,6 +2878,25 @@ export const MESH_MISSION_UPSERT_TOOL = {
     },
 };
 
+export const MESH_MISSION_LIST_TOOL = {
+    name: 'mesh_mission_list',
+    description: 'List missions with their goal, status, and live task progress (total/pending/assigned/completed/failed). '
+        + 'Unlike mesh_status (which surfaces live + recent missions), this returns every mission regardless of status by default, '
+        + 'so paused/abandoned/completed missions are never hidden. Filter with `status` to scope (e.g. ["paused"] to find paused missions). '
+        + 'Compact (default) elides the full goal to a capped preview; pass verbose=true for full goal text. Read-only.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            status: {
+                type: 'array',
+                items: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'] },
+                description: 'Optional status filter. Omit to return missions of every status.',
+            },
+            verbose: { type: 'boolean', description: 'Return full goal text instead of a capped preview. Defaults to false (compact).' },
+        },
+    },
+};
+
 export const MESH_APPROVE_TOOL = {
     name: 'mesh_approve',
     description: 'Approve or reject a pending action on a delegated agent session.',
@@ -3107,6 +3129,7 @@ export const ALL_MESH_TOOLS = [
     MESH_TASK_HISTORY_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_MISSION_UPSERT_TOOL,
+    MESH_MISSION_LIST_TOOL,
     MESH_REVIEW_INBOX_TOOL,
 ];
 
@@ -3559,10 +3582,17 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         response.ledgerSummary = ledgerSummary;
     } catch { /* ledger read is best-effort */ }
 
-    // M3-2: active mission summaries — goal + live task aggregates (derived, not stored).
+    // M3-2: mission summaries — goal + live task aggregates (derived, not stored).
     // M7: each mission also carries time/attempt stats derived from the ledger.
+    //
+    // Visibility: surface ALL live missions (active AND paused) plus a capped slice
+    // of completed/abandoned history — getActiveMeshMissionSummaries (active-only)
+    // hid paused missions from the coordinator entirely. Compact mode (the default)
+    // elides each mission's full goal to a capped goalPreview + goalTruncated flag;
+    // verbose returns the full goal text. Identity/status/task aggregates are kept
+    // in both modes so a coordinator can always answer "what missions exist".
     try {
-        const missions = getActiveMeshMissionSummaries(mesh.id);
+        const missions = getMeshStatusMissionSummaries(mesh.id, { verbose: !compact });
         if (missions.length > 0) {
             response.missions = missions.map(mission => {
                 try {
@@ -3914,6 +3944,46 @@ export async function meshMissionUpsert(
             : message.includes('invalid_mission_status') ? 'invalid_mission_status'
             : undefined;
         return JSON.stringify({ success: false, ...(code ? { code } : {}), error: message });
+    }
+}
+
+export async function meshMissionList(
+    ctx: MeshContext,
+    args: { status?: string | string[]; verbose?: boolean } = {},
+): Promise<string> {
+    try {
+        const rawStatuses = Array.isArray(args.status)
+            ? args.status
+            : typeof args.status === 'string' && args.status.trim()
+                ? [args.status]
+                : [];
+        const invalid = rawStatuses.filter(s => !MESH_MISSION_STATUSES.includes(s as any));
+        if (invalid.length > 0) {
+            return JSON.stringify({
+                success: false,
+                code: 'invalid_mission_status',
+                error: `invalid status filter: ${invalid.join(', ')} (valid: ${MESH_MISSION_STATUSES.join(', ')})`,
+            });
+        }
+        const statuses = rawStatuses.length > 0 ? (rawStatuses as any[]) : undefined;
+        const missions = listMeshMissionSummaries(ctx.mesh.id, {
+            statuses,
+            verbose: args.verbose === true,
+        }).map(mission => {
+            try {
+                return { ...mission, stats: computeMeshMissionStats(ctx.mesh.id, mission.id) };
+            } catch {
+                return mission;
+            }
+        });
+        return JSON.stringify({
+            success: true,
+            count: missions.length,
+            ...(statuses ? { statusFilter: statuses } : {}),
+            missions,
+        }, null, 2);
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: e?.message || String(e) });
     }
 }
 
