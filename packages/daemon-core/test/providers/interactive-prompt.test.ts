@@ -408,6 +408,60 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     })).toEqual(['1', ' ', '3', ' ', '\r', '2', '\r']);
   });
 
+  it('treats a 2+ label answer as multi-select even when the question was captured single-select (page 2+ capture-race guard)', () => {
+    // Repro of the multi-question loss: a 3-question multi-select prompt where
+    // pages 2 and 3 froze as multiSelect:false at capture time (their glyph
+    // column had not redrawn). The web modal still forwards the user's full
+    // checkbox sets. Without the guard, q2 (2 boxes) would throw and q3 (1 box)
+    // would emit a bare digit (no toggle/Enter) — both lose the selection.
+    const prompt = {
+      promptId: 'meals',
+      origin: 'cli' as const,
+      providerType: 'claude-cli',
+      createdAt: 0,
+      questions: [
+        {
+          questionId: 'q1',
+          question: '아침',
+          header: '아침',
+          multiSelect: true,
+          options: [{ label: '계란말이' }, { label: '김구이' }, { label: '콩자반' }],
+          allowFreeform: false,
+        },
+        {
+          questionId: 'q2',
+          question: '점심',
+          header: '점심',
+          multiSelect: false, // frozen by the capture race
+          options: [{ label: '제육볶음' }, { label: '시금치나물' }, { label: '감자조림' }],
+          allowFreeform: false,
+        },
+        {
+          questionId: 'q3',
+          question: '저녁',
+          header: '저녁',
+          multiSelect: false, // frozen by the capture race
+          options: [{ label: '고등어구이' }, { label: '두부조림' }, { label: '오이무침' }],
+          allowFreeform: false,
+        },
+      ],
+    };
+
+    // q1 (true): 계란말이(0)+콩자반(2) → '1' ' ' '3' ' ' Enter.
+    // q2 (frozen false, 2 boxes): guard kicks in → toggle protocol, NOT a throw.
+    //   제육볶음(0)+감자조림(2) → '1' ' ' '3' ' ' Enter.
+    // q3 (frozen false, 1 box): guard treats >1? no — single box stays single.
+    //   고등어구이(0) → '1' (auto-advance). Final Enter submits.
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt, {
+      promptId: 'meals',
+      answers: {
+        q1: { selectedLabels: ['계란말이', '콩자반'] },
+        q2: { selectedLabels: ['제육볶음', '감자조림'] },
+        q3: { selectedLabels: ['고등어구이'] },
+      },
+    })).toEqual(['1', ' ', '3', ' ', '\r', '1', ' ', '3', ' ', '\r', '1', '\r']);
+  });
+
   it('throws when a multi-select question has no selected labels', () => {
     const prompt = {
       promptId: 'empty-multi',

@@ -421,7 +421,18 @@ export function buildClaudeInteractiveTuiAnswerSteps(
     if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
     const freeformText = answer.freeformText?.trim() ?? '';
 
-    if (question.multiSelect) {
+    // Defensive multi-select fallback: a checkbox picker is the ONLY way an
+    // answer can carry more than one selected label, so treat any such answer
+    // as multi-select even when `question.multiSelect` was captured as false.
+    // This guards the multi-question capture race: pages 2..N can freeze as
+    // single-select (their glyph column hadn't redrawn at Tab-snapshot time),
+    // and the old single-select branch would then either throw on 2+ checked
+    // boxes or emit a bare digit (cursor move, no toggle) for 1 box — silently
+    // dropping that page's selection. Keying off the answer's label count makes
+    // the keystroke protocol correct regardless of the captured flag.
+    const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
+
+    if (treatAsMultiSelect) {
       // Multi-select: Claude TUI renders each option as a checkbox and the
       // footer reads "Space to select". A numeric digit jumps the cursor to
       // that option; Space toggles its checkbox. So for every selected label

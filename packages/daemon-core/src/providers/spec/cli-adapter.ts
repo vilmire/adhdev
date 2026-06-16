@@ -553,6 +553,16 @@ export class SpecCliAdapter implements CliAdapter {
     private static readonly INTERACTIVE_PROMPT_LOST_GRACE_MS = 1500;
 
     /**
+     * Multi-question TUI capture: after Tabbing to a page, re-snapshot at this
+     * interval until its checkbox glyph column has settled, up to the timeout.
+     * The interval matches the legacy single fixed wait (120ms); the timeout
+     * bounds total capture time so a single-select page (which never shows
+     * glyphs) doesn't stall the capture indefinitely.
+     */
+    private static readonly CLAUDE_TUI_PAGE_POLL_INTERVAL_MS = 120;
+    private static readonly CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS = 600;
+
+    /**
      * Clear a held interactive prompt once the user has resolved it directly
      * in the terminal (the choice picker leaves the screen without going
      * through setInteractivePromptResponse). The approval path already does
@@ -686,16 +696,53 @@ export class SpecCliAdapter implements CliAdapter {
         return headers;
     }
 
+    /**
+     * Snapshot the currently-focused claude TUI page, polling until its
+     * option-row checkbox glyph column has settled (or a bounded timeout).
+     *
+     * Why poll: right after a Tab keypress the newly-focused page's glyph
+     * column has not redrawn yet, so an immediate snapshot shows the question +
+     * option labels but NO per-option checkbox markers — freezing that page as
+     * single-select. A fixed delay either races (too short) or is wasteful (too
+     * long). Instead we re-snapshot at a fixed interval and stop as soon as the
+     * frame shows multi-select glyphs, falling back to the last frame at the
+     * timeout. Single-select pages never show glyphs, so they always poll to the
+     * timeout — bounded small to keep capture snappy.
+     */
+    private async snapshotSettledClaudeTuiPage(): Promise<string> {
+        let screenText = this.driver.snapshot();
+        const deadline = Date.now() + SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
+        while (!detectClaudeTuiMultiSelect(screenText) && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+            screenText = this.driver.snapshot();
+        }
+        return screenText;
+    }
+
     private async captureClaudeTuiPrompt(firstScreen: string, headers: string[]): Promise<void> {
         const pages: ClaudeInteractiveTuiPage[] = [{ screenText: firstScreen, header: headers[0] }];
+        // Forward pass: Tab to each page 2..N and snapshot once its glyph column
+        // has settled, so pages 2+ capture their checkbox markers (not a racy
+        // pre-redraw frame).
         for (let index = 1; index < headers.length; index += 1) {
             this.driver.dispatch({ kind: 'pty_write', data: '\t' });
-            await new Promise(resolve => setTimeout(resolve, 120));
-            pages.push({ screenText: this.driver.snapshot(), header: headers[index] });
+            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+            pages.push({ screenText: await this.snapshotSettledClaudeTuiPage(), header: headers[index] });
         }
+        // Return pass: Shift-Tab back through pages N..2. As we land on each page
+        // again re-read it and OR-in any now-visible multi-select glyphs — a
+        // second chance to repair a page whose forward-pass frame was still racy.
         for (let index = headers.length - 1; index > 0; index -= 1) {
             this.driver.dispatch({ kind: 'pty_write', data: '\x1b[Z' });
-            await new Promise(resolve => setTimeout(resolve, 80));
+            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+            const reread = await this.snapshotSettledClaudeTuiPage();
+            // The page we just Shift-Tab'd ONTO is index-1 (we move backwards).
+            const landed = pages[index - 1];
+            if (landed
+                && !detectClaudeTuiMultiSelect(landed.screenText)
+                && detectClaudeTuiMultiSelect(reread)) {
+                landed.screenText = reread;
+            }
         }
 
         const prompt = detectClaudeAskUserQuestionPromptFromTuiPages(pages, {

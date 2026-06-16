@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   detectClaudeAskUserQuestionPromptFromTuiPages,
+  detectClaudeTuiMultiSelect,
   readFocusedClaudeTuiQuestion,
 } from '../../src/providers/types/interactive-prompt';
 
@@ -111,5 +112,58 @@ describe('multi-question multi-select capture (repro)', () => {
     }
 
     expect(questions.map(q => q.multiSelect)).toEqual([true, true, true]);
+  });
+
+  it('settle-poll picks the redrawn frame, so capture sees [true,true,true] (the fix)', () => {
+    // Model snapshotSettledClaudeTuiPage: after Tabbing to a page the driver
+    // first returns the racy (pre-redraw) frame, then the settled frame on a
+    // later poll. The poll stops as soon as detectClaudeTuiMultiSelect is true.
+    const settleFromFrames = (frames: string[]): string => {
+      let chosen = frames[0];
+      for (const frame of frames) {
+        chosen = frame;
+        if (detectClaudeTuiMultiSelect(frame)) break; // settled — stop polling
+      }
+      return chosen;
+    };
+
+    // Page 1 is already settled at capture time; pages 2/3 redraw on a later poll.
+    const capturedPages = [
+      { screenText: settleFromFrames([page1]) },
+      { screenText: settleFromFrames([page2, page2Settled]) },
+      { screenText: settleFromFrames([page3, page3Settled]) },
+    ];
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages(capturedPages, {
+      promptId: 'meals',
+      createdAt: 1,
+    });
+    expect(prompt).not.toBeNull();
+    // With the settle-poll choosing the redrawn frame, every page is captured
+    // as multi-select — no page 2+ freeze, so no later upgrade is needed.
+    expect(prompt!.questions.map(q => q.multiSelect)).toEqual([true, true, true]);
+  });
+
+  it('settle-poll bounded: a genuine single-select page polls to timeout and stays single-select', () => {
+    // A single-select page never shows checkbox glyphs, so the poll exhausts
+    // every frame and falls back to the last one — still single-select. This
+    // guards against the fix over-promoting single-select questions.
+    const singlePage = [
+      '←  ☐ 모드  ✔ Submit  →',
+      '',
+      '실행 모드를 고르세요',
+      '',
+      '❯ 1. 빠르게',
+      '  2. 안전하게',
+      '────────────────────────────────────────────────',
+      footer,
+    ].join('\n');
+    // Even re-polling the same frame N times never flips detection.
+    let chosen = singlePage;
+    for (let i = 0; i < 5; i += 1) {
+      chosen = singlePage;
+      if (detectClaudeTuiMultiSelect(chosen)) break;
+    }
+    expect(detectClaudeTuiMultiSelect(chosen)).toBe(false);
   });
 });
