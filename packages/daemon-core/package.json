@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/daemon-core",
-  "version": "0.9.82-rc.222",
+  "version": "0.9.82-rc.276",
   "description": "ADHDev daemon core — CDP, IDE detection, providers, command execution",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -46,7 +46,7 @@
   "author": "vilmire",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
-    "@adhdev/mesh-shared": "*",
+    "@adhdev/mesh-shared": "0.9.82-rc.276",
     "@adhdev/session-host-core": "*",
     "@agentclientprotocol/sdk": "^0.16.1",
     "ajv": "^8.20.0",

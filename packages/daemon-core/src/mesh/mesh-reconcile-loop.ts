@@ -41,6 +41,7 @@
 // ---------------------------------------------------------------------------
 
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { loadConfig } from '../config/config.js';
 import { listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
@@ -87,6 +88,30 @@ function resolveCoordinatorDaemonIds(components: DaemonComponents): string[] {
     return [...ids];
 }
 
+// Whether THIS daemon is the coordinator/host for a mesh — i.e. the daemon that
+// owns coordinator ownership and must collect every worker node's completion
+// events into its local queue. This is true regardless of whether a *live CLI*
+// coordinator session currently exists: the coordinator is frequently a pure
+// stdio MCP LLM (no live CLI session to inject into), and that LLM only sees the
+// queue when it next calls a mesh tool. For it to see remote worker completions
+// at all, the daemon must have already pulled them into the local queue on the
+// timer — which is exactly what this predicate gates.
+//
+// Rule: this daemon hosts the mesh when meshHost.role is 'host' (the default for
+// standalone-compat meshes with no host metadata) AND, when a hostDaemonId is
+// pinned, it resolves to one of this daemon's ids. Member-only daemons return
+// false — their own queue is pulled BY the host, not the other way around.
+function daemonHostsMesh(mesh: LocalMeshEntry, daemonIds: string[]): boolean {
+    const host = mesh.meshHost;
+    // No metadata → default host (standalone compatibility, see createDefaultMeshHostMetadata).
+    if (!host) return true;
+    if (host.role && host.role !== 'host') return false;
+    const hostDaemonId = readNonEmptyString(host.hostDaemonId);
+    // Host role but no pinned hostDaemonId → treat as host (single-daemon / legacy).
+    if (!hostDaemonId) return true;
+    return daemonIds.includes(hostDaemonId);
+}
+
 // Find live CLI coordinator instances on THIS daemon, keyed by mesh.
 function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
     const out: LiveCoordinator[] = [];
@@ -118,12 +143,57 @@ function injectPendingIntoCoordinator(
     });
 }
 
-// One reconcile tick across every mesh that has a live CLI coordinator here.
+// One reconcile tick. Two independent phases:
+//
+//   PHASE 1 — Remote queue pull (the fix for remote worktree completions never
+//     reaching an MCP/LLM coordinator). For EVERY mesh this daemon hosts/
+//     coordinates, pull each remote worker node's pending-events queue over P2P
+//     into THIS daemon's local queue. This runs *regardless of whether a live CLI
+//     coordinator exists* — the coordinator is usually a pure stdio MCP LLM with
+//     no live CLI session, and it can only observe a remote worker's completion
+//     once that event has been pulled into the local queue (which it then drains
+//     on its next mesh tool call). Previously this pull was gated behind a live
+//     CLI coordinator and so never ran for MCP/LLM coordinators — remote
+//     completions sat on the remote node's queue until the LLM happened to call
+//     mesh_read_chat, which triggered the MCP-side pull. The daemon now does it
+//     autonomously on the timer. Standalone (no dispatchMeshCommand) skips this
+//     phase entirely — there are no remote nodes to pull from.
+//
+//   PHASE 2 — Live CLI inject. For each mesh that has a live CLI coordinator on
+//     THIS daemon, drain the local queue and inject pending events into the PTY.
+//     Unchanged from before.
 export async function runMeshReconcileTick(components: DaemonComponents): Promise<void> {
+    const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
+    // The id-set used to scope the local queue drain (status id + machineId). See
+    // resolveCoordinatorDaemonIds — the status id is what the MCP layer stamps and
+    // is mandatory here for a generating CLI coordinator to self-receive completions.
+    const drainDaemonIds = resolveCoordinatorDaemonIds(components);
+    const dispatchMeshCommand = components.dispatchMeshCommand;
+    const store = (() => {
+        try { return MeshRuntimeStore.getInstance(); } catch { return undefined; }
+    })();
+
+    // ── PHASE 1: pull remote node queues for every mesh this daemon hosts ──────
+    // Cloud-only (dispatchMeshCommand present). Runs whether or not a live CLI
+    // coordinator exists — this is what lets an MCP/LLM coordinator ever see a
+    // remote worker's completion.
+    if (dispatchMeshCommand) {
+        for (const mesh of listMeshes()) {
+            if (!daemonHostsMesh(mesh, drainDaemonIds)) continue;
+            try {
+                await pullRemoteNodeQueues(components, mesh, localDaemonId, drainDaemonIds);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Remote node pull failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+        }
+    }
+
+    // ── PHASE 2: inject into live CLI coordinators on this daemon ──────────────
     const coordinators = findLiveCoordinators(components);
     if (coordinators.length === 0) {
         // No live CLI coordinator on this daemon — nothing to inject into.
-        // (MCP-only LLM coordinators drain the queue via their own tool calls.)
+        // (MCP-only LLM coordinators drain the local queue via their own tool
+        //  calls; PHASE 1 above has already populated it from remote nodes.)
         return;
     }
 
@@ -136,31 +206,8 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         else byMesh.set(c.meshId, [c]);
     }
 
-    const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
-    // The id-set used to scope the local queue drain (status id + machineId). See
-    // resolveCoordinatorDaemonIds — the status id is what the MCP layer stamps and
-    // is mandatory here for a generating CLI coordinator to self-receive completions.
-    const drainDaemonIds = resolveCoordinatorDaemonIds(components);
-    const dispatchMeshCommand = components.dispatchMeshCommand;
-    const store = (() => {
-        try { return MeshRuntimeStore.getInstance(); } catch { return undefined; }
-    })();
-
     for (const [meshId, meshCoordinators] of byMesh) {
-        // (a) Cloud-only: pull remote worker node daemons' queues over P2P and
-        //     re-inject locally. This is the same cross-daemon pull the MCP
-        //     drainCoordinatorPendingEvents performs, lifted to the daemon timer.
-        //     On standalone (no dispatchMeshCommand) this whole block is skipped,
-        //     keeping cloud/standalone identical for the local case.
-        if (dispatchMeshCommand) {
-            try {
-                await pullRemoteNodeQueues(components, meshId, localDaemonId);
-            } catch (e: any) {
-                LOG.warn('MeshReconcile', `Remote node pull failed for mesh ${meshId}: ${e?.message || e}`);
-            }
-        }
-
-        // (b) Drain the local queue scoped to this coordinator daemon and inject.
+        // Drain the local queue scoped to this coordinator daemon and inject.
         //     - If an idle coordinator exists, FULL-drain and deliver every event to it
         //       (it can receive non-force progress events without deadlocking).
         //     - If only GENERATING coordinators exist, force-drain ONLY the force-inject
@@ -207,42 +254,56 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
 // Cloud-only: poll each remote worker node daemon for pending coordinator events
 // and re-inject them locally via handleMeshForwardEvent (which re-queues +
 // surfaces to the live coordinator on the next tick / immediately if idle).
+//
+// Scoping: the remote handler (get_pending_mesh_events) drains its queue filtered
+// by coordinatorDaemonId — returning events targeted at that id OR unscoped, and
+// leaving events targeted at a *different* coordinator. A remote worker stamps the
+// coordinator id in one of two forms (the canonical status id `standalone_`/
+// `daemon_<machineId>` stamped by the MCP layer, or the bare machineId stamped by
+// the local queue path). We therefore pull ONCE PER candidate coordinator id
+// (drainDaemonIds = both forms) so a completion stamped with either form is
+// recovered. The remote drain is atomic (drained=1), so issuing both pulls cannot
+// double-deliver — the first pull that matches consumes the event; the second sees
+// nothing. When no ids resolve we fall back to a single unscoped pull.
 async function pullRemoteNodeQueues(
     components: DaemonComponents,
-    meshId: string,
+    mesh: LocalMeshEntry,
     localDaemonId: string | undefined,
+    drainDaemonIds: string[],
 ): Promise<void> {
     const dispatchMeshCommand = components.dispatchMeshCommand;
     if (!dispatchMeshCommand) return;
-    const mesh = listMeshes().find(m => m.id === meshId);
-    if (!mesh) return;
+    const meshId = mesh.id;
 
-    const pendingEventArgs: Record<string, unknown> = {
-        meshId,
-        ...(localDaemonId ? { coordinatorDaemonId: localDaemonId } : {}),
-    };
+    // One args object per coordinator-id form (status id + bare machineId), or a
+    // single unscoped pull when neither resolves.
+    const pulls: Array<Record<string, unknown>> = drainDaemonIds.length > 0
+        ? drainDaemonIds.map(id => ({ meshId, coordinatorDaemonId: id }))
+        : [{ meshId }];
 
     for (const node of mesh.nodes) {
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         // Skip nodes without a daemon, and nodes on THIS daemon (their events are
-        // already in the local queue drained in step (b)).
+        // already in the local queue drained in PHASE 2).
         if (!nodeDaemonId) continue;
         if (localDaemonId && nodeDaemonId === localDaemonId) continue;
 
-        let events: unknown;
-        try {
-            events = await dispatchMeshCommand(nodeDaemonId, 'get_pending_mesh_events', pendingEventArgs);
-        } catch {
-            // Remote pull is best-effort; the node may be offline. Retry next tick.
-            continue;
-        }
-        const list = extractPendingEvents(events).filter(e => readNonEmptyString(e?.meshId) === meshId);
-        for (const event of list) {
-            const payload = buildForwardPayloadFromPending(event);
-            if (!payload.event || !payload.meshId) continue;
+        for (const pendingEventArgs of pulls) {
+            let events: unknown;
             try {
-                handleMeshForwardEvent(components, payload);
-            } catch { /* best-effort re-inject */ }
+                events = await dispatchMeshCommand(nodeDaemonId, 'get_pending_mesh_events', pendingEventArgs);
+            } catch {
+                // Remote pull is best-effort; the node may be offline. Retry next tick.
+                break; // node unreachable — don't bother with the other id form this tick.
+            }
+            const list = extractPendingEvents(events).filter(e => readNonEmptyString(e?.meshId) === meshId);
+            for (const event of list) {
+                const payload = buildForwardPayloadFromPending(event);
+                if (!payload.event || !payload.meshId) continue;
+                try {
+                    handleMeshForwardEvent(components, payload);
+                } catch { /* best-effort re-inject */ }
+            }
         }
     }
 }

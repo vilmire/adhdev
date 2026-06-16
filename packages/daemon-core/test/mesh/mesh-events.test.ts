@@ -22,6 +22,7 @@ vi.mock('../../src/config/config.js', () => ({
 const meshConfigMocks = vi.hoisted(() => ({
   getMesh: vi.fn(),
   getMeshByRepo: vi.fn(),
+  listMeshes: vi.fn(() => [] as any[]),
 }))
 
 const detectCliMocks = vi.hoisted(() => ({
@@ -35,6 +36,7 @@ const fastForwardMocks = vi.hoisted(() => ({
 vi.mock('../../src/config/mesh-config.js', () => ({
   getMesh: meshConfigMocks.getMesh,
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
+  listMeshes: meshConfigMocks.listMeshes,
 }))
 
 vi.mock('../../src/detection/cli-detector.js', () => ({
@@ -103,6 +105,8 @@ function cleanupMeshFiles(meshId: string) {
   __resetMeshRuntimeStoreForTests()
   __resetIdleAutoFastForwardForTests()
   __resetMeshWorkspaceCacheForTests()
+  meshConfigMocks.listMeshes.mockReset()
+  meshConfigMocks.listMeshes.mockReturnValue([])
   fastForwardMocks.fastForwardMeshNode.mockReset()
   if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
   if (fs.existsSync(ledgerPath)) fs.unlinkSync(ledgerPath)
@@ -2962,6 +2966,165 @@ describe('M1-3 — dependent wake on completion (event-based, no polling)', () =
       cleanupMeshFiles(meshId)
       meshConfigMocks.getMesh.mockReset()
       meshConfigMocks.getMeshByRepo.mockReset()
+    }
+  })
+})
+
+describe('reconcile tick — autonomous remote queue pull (no live CLI coordinator)', () => {
+  // Regression for the core remote-worktree-completion failure: the coordinator is
+  // frequently a pure stdio MCP/LLM (no live CLI coordinator session on this daemon).
+  // Previously runMeshReconcileTick early-returned when findLiveCoordinators() was
+  // empty, so it never pulled remote worker nodes' queues — remote completions sat
+  // on the remote node until the LLM happened to call mesh_read_chat (the MCP-side
+  // pull). The daemon must now pull remote node queues on the timer for every mesh
+  // it hosts, regardless of whether a live CLI coordinator exists.
+
+  function hostComponents(opts: { dispatchMeshCommand?: any; statusInstanceId?: string }) {
+    // No CLI instances at all → findLiveCoordinators() returns []. This is the
+    // MCP/LLM-coordinator case the fix targets.
+    return {
+      instanceManager: {
+        onEvent: vi.fn(),
+        getInstance: vi.fn(() => undefined),
+        getByCategory: vi.fn(() => []),
+      },
+      ...(opts.dispatchMeshCommand ? { dispatchMeshCommand: opts.dispatchMeshCommand } : {}),
+      ...(opts.statusInstanceId ? { statusInstanceId: opts.statusInstanceId } : {}),
+    } as any
+  }
+
+  it('pulls a remote worker node queue into the local queue even with no live CLI coordinator', async () => {
+    const meshId = `mesh_remote_pull_${randomUUID().slice(0, 8)}`
+    const remoteDaemon = `remote_daemon_${randomUUID().slice(0, 8)}`
+    try {
+      // This daemon (test-machine) hosts the mesh; the worker lives on remoteDaemon.
+      const mesh = {
+        id: meshId,
+        nodes: [
+          { id: 'node_coord', workspace: '/repo/main', daemonId: 'test-machine' },
+          { id: 'node_worker', workspace: '/repo/worktree-a', daemonId: remoteDaemon },
+        ],
+        meshHost: { role: 'host', hostDaemonId: 'test-machine' },
+      }
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+
+      // The remote node's daemon answers get_pending_mesh_events with one completion.
+      const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string) => {
+        if (daemonId === remoteDaemon && command === 'get_pending_mesh_events') {
+          return {
+            events: [{
+              event: 'agent:generating_completed',
+              meshId,
+              nodeId: 'node_worker',
+              workspace: '/repo/worktree-a',
+              metadataEvent: {
+                providerType: 'claude-cli',
+                providerSessionId: 'remote-history-1',
+                finalSummary: 'remote worker done',
+                timestamp: 55501,
+              },
+            }],
+          }
+        }
+        return { events: [] }
+      })
+
+      const components = hostComponents({ dispatchMeshCommand })
+
+      await runMeshReconcileTick(components)
+
+      // The remote node was polled — NOT the local coordinator node (its events are
+      // already local), and the tick did not early-return despite zero live CLI coordinators.
+      expect(dispatchMeshCommand).toHaveBeenCalledWith(remoteDaemon, 'get_pending_mesh_events', expect.objectContaining({ meshId }))
+      expect(dispatchMeshCommand).not.toHaveBeenCalledWith('test-machine', 'get_pending_mesh_events', expect.anything())
+
+      // The pulled event was re-queued into THIS daemon's local pending queue, so the
+      // MCP/LLM coordinator will see it on its next mesh tool call.
+      const pending = getPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('agent:generating_completed')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('pulls with BOTH the status id and bare machineId so either coordinator-id stamp is recovered', async () => {
+    // A remote worker stamps the coordinator id as either the canonical status id
+    // (standalone_/daemon_<machineId>, via the MCP layer) or the bare machineId.
+    // The remote drain filters by coordinatorDaemonId, so the reconcile loop must
+    // pull once per candidate id to recover a completion stamped with either form.
+    const meshId = `mesh_dual_id_pull_${randomUUID().slice(0, 8)}`
+    const remoteDaemon = `remote_daemon_${randomUUID().slice(0, 8)}`
+    try {
+      const mesh = {
+        id: meshId,
+        nodes: [
+          { id: 'node_coord', workspace: '/repo/main', daemonId: 'test-machine' },
+          { id: 'node_worker', workspace: '/repo/worktree-a', daemonId: remoteDaemon },
+        ],
+        meshHost: { role: 'host', hostDaemonId: 'standalone_test-machine' },
+      }
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+
+      const dispatchMeshCommand = vi.fn(async () => ({ events: [] }))
+      // statusInstanceId present → drainDaemonIds = ['standalone_test-machine', 'test-machine'].
+      const components = hostComponents({ dispatchMeshCommand, statusInstanceId: 'standalone_test-machine' })
+
+      await runMeshReconcileTick(components)
+
+      const pulledIds = dispatchMeshCommand.mock.calls
+        .filter(c => c[0] === remoteDaemon && c[1] === 'get_pending_mesh_events')
+        .map(c => (c[2] as any).coordinatorDaemonId)
+      expect(pulledIds).toContain('standalone_test-machine')
+      expect(pulledIds).toContain('test-machine')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does NOT pull when this daemon is only a member (another daemon is the host)', async () => {
+    const meshId = `mesh_member_only_${randomUUID().slice(0, 8)}`
+    const remoteDaemon = `remote_daemon_${randomUUID().slice(0, 8)}`
+    try {
+      const mesh = {
+        id: meshId,
+        nodes: [
+          { id: 'node_worker', workspace: '/repo/worktree-a', daemonId: 'test-machine' },
+          { id: 'node_other', workspace: '/repo/worktree-b', daemonId: remoteDaemon },
+        ],
+        // The host is a DIFFERENT daemon — this daemon is a member-only worker and
+        // must not pull (the host pulls our queue, not the other way around).
+        meshHost: { role: 'host', hostDaemonId: 'some-other-host-daemon' },
+      }
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+
+      const dispatchMeshCommand = vi.fn(async () => ({ events: [] }))
+      const components = hostComponents({ dispatchMeshCommand })
+
+      await runMeshReconcileTick(components)
+
+      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('standalone (no dispatchMeshCommand) skips remote pull entirely', async () => {
+    const meshId = `mesh_standalone_skip_${randomUUID().slice(0, 8)}`
+    try {
+      const mesh = {
+        id: meshId,
+        nodes: [{ id: 'node_coord', workspace: '/repo/main', daemonId: 'test-machine' }],
+        meshHost: { role: 'host' },
+      }
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+
+      // No dispatchMeshCommand → standalone. Must not throw and must be a no-op.
+      const components = hostComponents({})
+      await expect(runMeshReconcileTick(components)).resolves.toBeUndefined()
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
     }
   })
 })
