@@ -1092,7 +1092,7 @@ export default function MeshObservabilitySurface({
 
                     {/* Right sidebar — selected node detail */}
                     {selectedGraphNode && detailSelection?.kind === 'node' && (
-                        <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 sm:relative sm:inset-auto sm:w-72 sm:shrink-0 overflow-y-auto border-l p-4 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                        <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 z-20 rounded-2xl border shadow-2xl sm:relative sm:inset-auto sm:z-auto sm:w-72 sm:shrink-0 sm:rounded-none sm:border-0 sm:border-l sm:shadow-none overflow-y-auto p-4 ${meshTheme.isDark ? 'border-white/10 bg-slate-950 sm:bg-transparent' : 'border-slate-200 bg-white sm:bg-transparent'}`}>
                             <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Selected node</div>
                             <div className="mb-3 flex items-start justify-between gap-2">
                                 <div className="min-w-0">
@@ -1261,7 +1261,7 @@ export default function MeshObservabilitySurface({
                     {/* Selected edge detail — pinned by clicking an edge (replaces the
                         old hover preview; click is the primary drill-down path). */}
                     {selectedGraphEdge && detailSelection?.kind === 'edge' && (
-                        <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 sm:relative sm:inset-auto sm:w-72 sm:shrink-0 overflow-y-auto border-l p-4 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                        <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 z-20 rounded-2xl border shadow-2xl sm:relative sm:inset-auto sm:z-auto sm:w-72 sm:shrink-0 sm:rounded-none sm:border-0 sm:border-l sm:shadow-none overflow-y-auto p-4 ${meshTheme.isDark ? 'border-white/10 bg-slate-950 sm:bg-transparent' : 'border-slate-200 bg-white sm:bg-transparent'}`}>
                             <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Selected edge</div>
                             <div className="mb-3 flex items-start justify-between gap-2">
                                 <div className="min-w-0">

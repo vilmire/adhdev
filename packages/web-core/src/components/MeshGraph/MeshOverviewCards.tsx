@@ -452,7 +452,7 @@ function MissionDetail({ meshTheme, mission }: { meshTheme: MeshGraphTheme; miss
             {mission.goal && (
                 <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{mission.goal}</div>
             )}
-            <div className="grid gap-1.5 sm:grid-cols-2">
+            <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
                 <StatTile meshTheme={meshTheme} label="Completed" value={t.completed} tone="emerald" />
                 <StatTile meshTheme={meshTheme} label="Assigned" value={t.assigned} tone={t.assigned > 0 ? 'sky' : undefined} />
                 <StatTile meshTheme={meshTheme} label="Pending" value={t.pending} />
