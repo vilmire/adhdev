@@ -32,6 +32,7 @@ import {
     detectClaudeAskUserQuestionPromptFromJson,
     detectClaudeAskUserQuestionPromptFromTuiPages,
     detectClaudeTuiMultiSelect,
+    readFocusedClaudeTuiQuestion,
     type ClaudeInteractiveTuiPage,
     type InteractivePrompt,
     type InteractivePromptResponse,
@@ -629,19 +630,22 @@ export class SpecCliAdapter implements CliAdapter {
      * question to multi-select and re-emit status. Promotion is one-way
      * (false→true only) — once a question is known multi-select we never demote
      * it, since the glyph column can scroll out of view on later frames.
+     *
+     * For MULTI-question prompts the per-page Tab capture is the actual source
+     * of the bug: pages 2..N are snapshotted ~120ms after the Tab keypress,
+     * before their option-row glyph column has redrawn, so those questions
+     * freeze as single-select while page 1 (already settled) is correct. We
+     * cannot upgrade blindly — the live snapshot shows only ONE focused page —
+     * but we CAN read that page's question text/header and upgrade the matching
+     * question. As the user navigates the picker (or it settles), each page is
+     * eventually re-read and repaired.
      */
     private maybeUpgradeClaudeTuiMultiSelect(): void {
         if (this.cliType !== 'claude-cli'
             || this.interactivePromptTransport !== 'tui'
             || !this.activeInteractivePrompt) return;
         const questions = this.activeInteractivePrompt.questions;
-        // The live snapshot only shows the CURRENTLY focused question's rows, so
-        // we can only attribute the glyphs to a specific question when there is
-        // exactly one. Multi-question prompts are tab-captured per page at
-        // capture time and aren't re-evaluated here to avoid cross-contaminating
-        // a mixed single/multi prompt.
-        if (questions.length !== 1) return;
-        if (questions[0].multiSelect) return;
+        if (questions.every(q => q.multiSelect)) return;
         let screenText = '';
         try {
             screenText = this.driver.snapshot();
@@ -649,8 +653,25 @@ export class SpecCliAdapter implements CliAdapter {
             return;
         }
         if (!screenText.includes('Enter to select')) return;
-        if (!detectClaudeTuiMultiSelect(screenText)) return;
-        questions[0].multiSelect = true;
+
+        if (questions.length === 1) {
+            if (questions[0].multiSelect) return;
+            if (!detectClaudeTuiMultiSelect(screenText)) return;
+            questions[0].multiSelect = true;
+            this.statusCallback?.();
+            return;
+        }
+
+        // Multi-question: attribute the focused page's glyphs to its question by
+        // matching header (preferred) or question text, then upgrade just that
+        // one. Never demote — a settled non-multi page is left as captured.
+        const focused = readFocusedClaudeTuiQuestion(screenText);
+        if (!focused || !focused.multiSelect) return;
+        const match = questions.find(q =>
+            (focused.header && q.header && q.header === focused.header)
+            || q.question === focused.question);
+        if (!match || match.multiSelect) return;
+        match.multiSelect = true;
         this.statusCallback?.();
     }
 

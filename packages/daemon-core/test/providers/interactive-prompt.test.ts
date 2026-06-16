@@ -567,6 +567,37 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     expect(prompt?.questions[0]?.multiSelect).toBe(true);
   });
 
+  it('detects multi-select when the checkbox sits AFTER the number (claude-cli >=2.1 layout, regression)', () => {
+    // Live-captured from claude-cli v2.1.170: the multi-select picker draws the
+    // checkbox glyph after the "N." marker ("❯ 1. [ ] Label"), not before it.
+    // detectClaudeTuiMultiSelect originally only matched the glyph-before-number
+    // form, so EVERY multi-select question (single or multi) was frozen as
+    // single-select and the dashboard rendered radio buttons.
+    const screen = [
+      '←  ☐ 아침  ☐ 점심  ☐ 저녁  ✔ Submit  →',
+      '',
+      '아침 반찬?',
+      '',
+      '❯ 1. [ ] 계란말이',
+      '  부드러운 계란말이',
+      '  2. [ ] 김구이',
+      '  바삭한 김구이',
+      '  3. [ ] 콩자반',
+      '  달콤한 콩자반',
+      '────────────────────────────────────────────────',
+      'Enter to select · Tab/Arrow keys to navigate · Esc to cancel',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'after-number', createdAt: 1234 });
+
+    expect(prompt?.questions[0]?.multiSelect).toBe(true);
+    expect(prompt?.questions[0]?.options.map(o => o.label)).toEqual([
+      '계란말이', '김구이', '콩자반',
+    ]);
+  });
+
   it('keeps single-select numbered screens as multiSelect:false (no false positive)', () => {
     // No per-option checkbox markers and no multi-select footer hint. The ☐ on
     // the `✔ Submit` nav line is per-question answered state, NOT multi-select,

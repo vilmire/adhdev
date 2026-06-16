@@ -184,15 +184,19 @@ export function detectClaudeTuiMultiSelect(screenText: string): boolean {
   if (/Space to (?:select|toggle)|toggle selection|select multiple|select all that apply/i.test(screenText)) {
     return true;
   }
-  // A checkbox glyph sitting in front of a NUMBERED option row only appears in
-  // the multi-select picker (e.g. "❯ [ ] 1. TypeScript" / "☐ 2. Python"). We
-  // require the numbered "N." option marker so we don't false-positive on the
-  // `✔ Submit` nav line (per-question answered-state ☐/☒) or on the headerless
-  // variant where the QUESTION line itself begins with `☐ ` (single-select).
-  const optionCheckbox = /^\s*(?:[❯›>]\s*)?(?:\[[ xX]\]|[☐☒◻◼])\s*\d+\.\s+\S/;
+  // A checkbox glyph on a NUMBERED option row only appears in the multi-select
+  // picker. The glyph sits EITHER before the number ("❯ [ ] 1. TypeScript" /
+  // "☐ 2. Python") OR after it ("❯ 1. [ ] 계란말이" — claude-cli >=2.1's layout).
+  // We require the numbered "N." option marker either way so we don't
+  // false-positive on the `✔ Submit` nav line (per-question answered-state
+  // ☐/☒) or on the headerless variant where the QUESTION line itself begins
+  // with `☐ ` (single-select).
+  const optionCheckbox = `(?:\\[[ xX]\\]|[☐☒◻◼])`;
+  const beforeNumber = new RegExp(`^\\s*(?:[❯›>]\\s*)?${optionCheckbox}\\s*\\d+\\.\\s+\\S`);
+  const afterNumber = new RegExp(`^\\s*(?:[❯›>]\\s*)?\\d+\\.\\s*${optionCheckbox}\\s+\\S`);
   for (const line of screenText.split(/\r?\n/)) {
     if (line.includes('✔ Submit')) continue; // header/nav line
-    if (optionCheckbox.test(line)) return true;
+    if (beforeNumber.test(line) || afterNumber.test(line)) return true;
   }
   return false;
 }
@@ -358,6 +362,31 @@ function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index
     multiSelect: detectClaudeTuiMultiSelect(page.screenText),
     options,
     ...(allowFreeform ? { allowFreeform: true } : {}),
+  };
+}
+
+/**
+ * Read the question the live claude TUI picker is CURRENTLY focused on, plus
+ * whether that focused page renders multi-select checkbox markers.
+ *
+ * Used to repair a multi-question prompt after the fact: when the daemon
+ * Tab-captures pages 2..N it snapshots ~120ms after the Tab keypress, before
+ * the newly-focused page's option-row checkbox column has redrawn — so those
+ * questions get frozen as multiSelect:false even though the picker is
+ * multi-select. Re-reading the focused page on a later status tick (once it has
+ * settled) lets us attribute the now-visible glyphs to the matching question
+ * and upgrade just that one. Returns null when no picker question is on screen.
+ */
+export function readFocusedClaudeTuiQuestion(
+  screenText: string,
+): { question: string; header?: string; multiSelect: boolean } | null {
+  if (!screenText.includes('Enter to select')) return null;
+  const parsed = parseClaudeInteractiveTuiQuestion({ screenText }, 0);
+  if (!parsed) return null;
+  return {
+    question: parsed.question,
+    ...(parsed.header ? { header: parsed.header } : {}),
+    multiSelect: parsed.multiSelect,
   };
 }
 
