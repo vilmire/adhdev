@@ -259,7 +259,12 @@ export class IdeProviderInstance implements ProviderInstance {
     }
 
     updateSettings(newSettings: Record<string, any>): void {
-        this.settings = { ...newSettings };
+        // Merge (not replace): a key omitted from newSettings preserves its existing
+        // value, a key present (even false) overrides. Mirrors cli-provider-instance —
+        // a partial mesh relay-stamp must not wipe launch-time settings such as
+        // autoApprove, while the dashboard toggle's full settings object still applies
+        // an explicit autoApprove:false. See cli-provider-instance.updateSettings.
+        this.settings = { ...this.settings, ...newSettings };
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
             longGeneratingAlert: this.settings.longGeneratingAlert !== false,

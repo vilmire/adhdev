@@ -171,7 +171,11 @@ export class ExtensionProviderInstance implements ProviderInstance {
     }
 
     updateSettings(newSettings: Record<string, any>): void {
-        this.settings = { ...newSettings };
+        // Merge (not replace): a key omitted from newSettings preserves its existing
+        // value, a key present (even false) overrides. Mirrors cli/ide-provider-instance
+        // so partial updates do not wipe launch-time settings (e.g. autoApprove) while a
+        // full settings object still applies explicit values.
+        this.settings = { ...this.settings, ...newSettings };
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
             longGeneratingAlert: this.settings.longGeneratingAlert !== false,

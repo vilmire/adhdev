@@ -829,22 +829,27 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     updateSettings(newSettings: Record<string, any>): void {
-        const runtimeMeshSettings: Record<string, any> = {};
-        for (const key of [
-            'meshNodeFor',
-            'meshNodeId',
-            'meshActiveTaskId',
-            'meshCoordinatorFor',
-            'meshCoordinatorDaemonId',
-            'meshCoordinatorNodeId',
-            'spawnedSessionVisibility',
-            'launchedByCoordinator',
-        ]) {
-            if (this.settings[key] !== undefined && newSettings[key] === undefined) {
-                runtimeMeshSettings[key] = this.settings[key];
-            }
-        }
-        this.settings = { ...newSettings, ...runtimeMeshSettings };
+        // Merge semantics: a key omitted from newSettings preserves its existing
+        // value, a key present in newSettings (even as false) overrides it.
+        //
+        // This is required because updateSettings has two callers with opposite
+        // intent:
+        //   1. Full re-injection — the dashboard toggle path (handleSetProviderSetting
+        //      → getSettings → updateInstanceSettings) sends the COMPLETE settings
+        //      object, so an explicit autoApprove:false must win.
+        //   2. Partial stamp — the mesh relay-safety stamp (router.ts agent_command,
+        //      buildMeshWorkerRelayStamp) sends ONLY {meshNodeFor, meshNodeId,
+        //      meshCoordinatorDaemonId, launchedByCoordinator} on every coordinator
+        //      re-dispatch. It carries no autoApprove, so a full replacement would
+        //      wipe the launch-time autoApprove:true the worker was started with,
+        //      silently dropping every later approval to a manual gate until the
+        //      machine-page toggle re-injected the full settings.
+        //
+        // A plain merge satisfies both: undefined keys fall through to the existing
+        // value (preserving launch-stamp settings like autoApprove + the mesh routing
+        // keys), explicit keys override. This subsumes the previous mesh-key preserve
+        // list, which only protected the routing keys and not autoApprove.
+        this.settings = { ...this.settings, ...newSettings };
         this.adapter.updateRuntimeSettings?.(this.settings);
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
