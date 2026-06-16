@@ -36,6 +36,16 @@ export function validateFsmSpec(raw: unknown): string[] {
     if (!spec.binary) errs.push('binary is required');
     if (!spec.send_message?.submit_key) errs.push('send_message.submit_key is required');
 
+    if (spec.pre_launch_trust !== undefined) {
+        const t = spec.pre_launch_trust as { settings_path?: unknown; key?: unknown };
+        if (!t || typeof t !== 'object' || Array.isArray(t)) {
+            errs.push('pre_launch_trust must be an object');
+        } else {
+            if (typeof t.settings_path !== 'string' || !t.settings_path) errs.push('pre_launch_trust.settings_path is required');
+            if (typeof t.key !== 'string' || !t.key) errs.push('pre_launch_trust.key is required');
+        }
+    }
+
     if (!Array.isArray(spec.states) || spec.states.length === 0) {
         errs.push('states[] must be a non-empty array');
         return errs;

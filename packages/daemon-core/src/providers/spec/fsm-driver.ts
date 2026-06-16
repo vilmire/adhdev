@@ -34,6 +34,7 @@ import {
     initialState, stateById, statusForState, outgoingTransitions,
 } from './fsm-types.js';
 import { loadFsmSpec } from './fsm-loader.js';
+import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import type { Control, DelegateTrigger } from './types.js';
 import { LOG } from '../../logging/logger.js';
 
@@ -245,6 +246,12 @@ export class FsmDriver implements ISpecDriver {
         this.currentStateId = init.id;
         this.stateEnteredAt = now;
         this.prevStateAt = now;
+        // Pre-trust the workspace before spawning so a first-run folder-trust
+        // prompt never appears (best-effort; failures fall back to the FSM's
+        // trust-modal detection). Only runs for specs that declare it.
+        if (this.spec.pre_launch_trust) {
+            applyPreLaunchTrust(this.spec.pre_launch_trust, this.opts.workingDir);
+        }
         this.adapter.start();
         // Prime focus-gated TUIs (see CliSpecV4.send_on_spawn). Written once,
         // shortly after spawn, so the input stream is awake before the first

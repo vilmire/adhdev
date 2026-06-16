@@ -118,6 +118,21 @@ export interface FsmTransition {
     label?: string;
 }
 
+/**
+ * Declarative "trust this folder before spawn" config. Some agent CLIs gate the
+ * first run in a new folder behind an interactive trust prompt and persist the
+ * answer as a string array in a JSON settings file. Declaring this lets the
+ * engine add the workspace path to that array before spawn so the prompt never
+ * appears — the robust alternative to detecting and auto-clicking the modal.
+ * CLIs without such a gate omit this field and the engine does nothing.
+ */
+export interface PreLaunchTrust {
+    /** Path to the CLI's JSON settings file. A leading `~` expands to $HOME. */
+    settings_path: string;
+    /** Key of the string-array of trusted folder paths within that file. */
+    key: string;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CliSpecV4 — the v4 runtime spec
 // ─────────────────────────────────────────────────────────────────────────────
@@ -145,6 +160,14 @@ export interface CliSpecV4 {
     send_on_spawn?: string[];
     /** Delay (ms) after spawn before writing `send_on_spawn`. Default 250. */
     send_on_spawn_delay_ms?: number;
+    /**
+     * Optional pre-spawn folder-trust step. When present, the engine adds the
+     * launch workspace path to the declared trusted-folders array before
+     * spawning, so a CLI that gates first run on a "trust this folder?" prompt
+     * (e.g. antigravity's `agy`) starts trusted and never blocks. Omitted for
+     * CLIs without such a gate. See pre-launch-trust.ts.
+     */
+    pre_launch_trust?: PreLaunchTrust;
     send_message: {
         submit_key: string;
         delay_ms_before_submit?: number;
