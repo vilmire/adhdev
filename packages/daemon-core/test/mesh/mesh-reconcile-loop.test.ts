@@ -364,6 +364,132 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
+  it('cloud: pulls with the coordinator NODE config-form daemonId, not just runtime ids (remote form-mismatch regression)', async () => {
+    // Real-world remote failure: the worker stamps meshCoordinatorDaemonId from the
+    // MCP layer's resolveCoordinatorDaemonId(), which prefers the coordinator MESH
+    // NODE's config-form `daemonId` over the runtime status id. That config form
+    // (here `daemon_test-machine`) is NOT one of this daemon's runtime drain ids
+    // (bare `test-machine` + status `standalone_test-machine`). The remote
+    // get_pending_mesh_events drain filters rows by an exact coordinator_daemon_id
+    // match, so a pull that supplies ONLY the runtime ids returns 0 — the completion
+    // is stranded until a manual read_chat reconcile. The fix unions the self node's
+    // config-form daemonId into the pull candidate set.
+    const meshId = `mesh_reconcile_remote_form_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'idle', sink)
+
+      const coordinatorNodeDaemonId = 'daemon_test-machine' // config form, ≠ runtime ids
+      const remoteEvent = {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: "Node 'node_remote'",
+        nodeId: 'node_remote',
+        metadataEvent: { sessionId: 'sess-remote-form', providerType: 'claude-cli', timestamp: Date.now() },
+        coordinatorMessage: "Node 'node_remote' has completed its task (remote-form).",
+        queuedAt: Date.now(),
+      }
+
+      // Remote drain is form-sensitive: it ONLY returns the event when the pull's
+      // coordinatorDaemonId matches the form the worker stamped (the config-form
+      // node daemonId). Any other id form (the runtime drain ids) returns [].
+      const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string, args: any) => {
+        if (command === 'get_pending_mesh_events' && daemonId === 'remote-daemon'
+            && args?.coordinatorDaemonId === coordinatorNodeDaemonId) {
+          return { success: true, events: [remoteEvent] }
+        }
+        return { success: true, events: [] }
+      })
+
+      // Mesh: a self node carrying the config-form coordinator daemonId + the runtime
+      // bare machineId, plus a remote worker node on a different daemon.
+      meshConfigMocks.listMeshes.mockReturnValue([
+        {
+          id: meshId,
+          nodes: [
+            { id: 'node_coord', workspace: '/repo/coord', daemonId: coordinatorNodeDaemonId, machineId: 'test-machine' },
+            { id: 'node_remote', workspace: '/repo/remote', daemonId: 'remote-daemon' },
+          ],
+        },
+      ])
+
+      const components = makeComponents([coordinator], dispatchMeshCommand, 'standalone_test-machine')
+
+      await runMeshReconcileTick(components)
+
+      // The pull must have been issued with the config-form daemonId so the remote
+      // form-sensitive drain matched.
+      expect(dispatchMeshCommand).toHaveBeenCalledWith(
+        'remote-daemon',
+        'get_pending_mesh_events',
+        expect.objectContaining({ meshId, coordinatorDaemonId: coordinatorNodeDaemonId }),
+      )
+      // ...and the remote completion was re-injected into the local idle coordinator.
+      expect(coordinator.onEvent).toHaveBeenCalled()
+      const injected = coordinator.onEvent.mock.calls.map((c: any[]) => c[1]?.input?.textFallback).join('\n')
+      expect(injected).toContain('has completed its task')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('cloud: pulls with the pinned meshHost.hostDaemonId form when it is provably this daemon (self node proves ownership)', async () => {
+    // The coordinator anchor can resolve to the pinned meshHost.hostDaemonId (a
+    // config-form id) rather than a runtime id. This daemon may legitimately own that
+    // host id when a self node carries it as its daemonId AND a runtime id (machineId)
+    // also resolves to this daemon — proving ownership. The pull must then include the
+    // host-id form so the remote form-sensitive drain matches a worker stamped with it.
+    const meshId = `mesh_reconcile_remote_host_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'idle', sink)
+      const hostDaemonId = 'daemon_test-machine' // config-form host id, ≠ runtime drain ids
+
+      const remoteEvent = {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: "Node 'node_remote'",
+        nodeId: 'node_remote',
+        metadataEvent: { sessionId: 'sess-remote-host', providerType: 'claude-cli', timestamp: Date.now() },
+        coordinatorMessage: "Node 'node_remote' has completed its task (remote-host).",
+        queuedAt: Date.now(),
+      }
+      const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string, args: any) => {
+        if (command === 'get_pending_mesh_events' && daemonId === 'remote-daemon'
+            && args?.coordinatorDaemonId === hostDaemonId) {
+          return { success: true, events: [remoteEvent] }
+        }
+        return { success: true, events: [] }
+      })
+
+      meshConfigMocks.listMeshes.mockReturnValue([
+        {
+          id: meshId,
+          meshHost: { role: 'host', hostDaemonId },
+          nodes: [
+            // Self node: daemonId is the config-form host id; machineId is the runtime
+            // bare id — together they prove this daemon owns the pinned host id.
+            { id: 'node_coord', workspace: '/repo/coord', daemonId: hostDaemonId, machineId: 'test-machine' },
+            { id: 'node_remote', workspace: '/repo/remote', daemonId: 'remote-daemon' },
+          ],
+        },
+      ])
+
+      const components = makeComponents([coordinator], dispatchMeshCommand, 'standalone_test-machine')
+
+      await runMeshReconcileTick(components)
+
+      expect(dispatchMeshCommand).toHaveBeenCalledWith(
+        'remote-daemon',
+        'get_pending_mesh_events',
+        expect.objectContaining({ meshId, coordinatorDaemonId: hostDaemonId }),
+      )
+      expect(coordinator.onEvent).toHaveBeenCalled()
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('cloud: does not poll the local coordinator daemon as if it were a remote node', async () => {
     const meshId = `mesh_reconcile_local_node_${Date.now()}`
     try {

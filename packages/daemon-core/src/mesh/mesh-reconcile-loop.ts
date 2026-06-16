@@ -101,6 +101,13 @@ function resolveCoordinatorDaemonIds(components: DaemonComponents): string[] {
 // standalone-compat meshes with no host metadata) AND, when a hostDaemonId is
 // pinned, it resolves to one of this daemon's ids. Member-only daemons return
 // false — their own queue is pulled BY the host, not the other way around.
+//
+// `daemonIds` here is the EXPANDED self-identity set (runtime drain ids ∪ this
+// daemon's mesh-config node id forms) — see resolveCoordinatorSelfIds. The
+// pinned hostDaemonId is itself a config-form id and frequently does NOT equal a
+// runtime id (bare machineId / status id), so gating on the runtime ids alone
+// would wrongly classify the real host as a non-host and skip the remote pull
+// entirely.
 function daemonHostsMesh(mesh: LocalMeshEntry, daemonIds: string[]): boolean {
     const host = mesh.meshHost;
     // No metadata → default host (standalone compatibility, see createDefaultMeshHostMetadata).
@@ -110,6 +117,39 @@ function daemonHostsMesh(mesh: LocalMeshEntry, daemonIds: string[]): boolean {
     // Host role but no pinned hostDaemonId → treat as host (single-daemon / legacy).
     if (!hostDaemonId) return true;
     return daemonIds.includes(hostDaemonId);
+}
+
+// Resolve EVERY id-form this daemon answers to FOR A GIVEN MESH: the runtime drain
+// ids (status id + bare machineId) unioned with this daemon's mesh-config identity
+// forms — the self node's daemonId/machineId (the node whose daemonId/machineId
+// matches a runtime id) and the pinned meshHost.hostDaemonId WHEN it is provably
+// ours. This is the single source of truth for "is this id me?" across both the
+// host gate and the remote pull filter; the worker's meshCoordinatorDaemonId stamp
+// is guaranteed to be one of these forms (it comes from resolveCoordinatorDaemonId,
+// which prefers the coordinator node's config-form daemonId over the runtime status id).
+function resolveCoordinatorSelfIds(mesh: LocalMeshEntry, drainDaemonIds: string[]): string[] {
+    const ids = new Set<string>(drainDaemonIds);
+    // Expand with the config-form id(s) of the self node — the mesh node whose
+    // daemonId/machineId matches a runtime id. Its config-form daemonId is exactly
+    // what resolveCoordinatorNode()→resolveCoordinatorDaemonId() stamps onto a worker.
+    for (const node of mesh.nodes) {
+        const nodeDaemonId = readNonEmptyString(node.daemonId);
+        const nodeMachineId = readNonEmptyString(node.machineId);
+        const isSelf = (nodeDaemonId && drainDaemonIds.includes(nodeDaemonId))
+            || (nodeMachineId && drainDaemonIds.includes(nodeMachineId));
+        if (!isSelf) continue;
+        if (nodeDaemonId) ids.add(nodeDaemonId);
+        if (nodeMachineId) ids.add(nodeMachineId);
+    }
+    // The pinned host id is included ONLY when it is provably one of THIS daemon's ids
+    // (it already matches a runtime id or a resolved self-node id). A hostDaemonId that
+    // names a DIFFERENT daemon must NOT be claimed — that would make a member-only
+    // daemon believe it is the host and pull queues it does not own. Having a node on
+    // this daemon does not make this daemon the host; daemonHostsMesh still honours a
+    // foreign hostDaemonId and rejects ownership.
+    const hostDaemonId = readNonEmptyString(mesh.meshHost?.hostDaemonId);
+    if (hostDaemonId && ids.has(hostDaemonId)) ids.add(hostDaemonId);
+    return [...ids];
 }
 
 // Find live CLI coordinator instances on THIS daemon, keyed by mesh.
@@ -179,9 +219,13 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // remote worker's completion.
     if (dispatchMeshCommand) {
         for (const mesh of listMeshes()) {
-            if (!daemonHostsMesh(mesh, drainDaemonIds)) continue;
+            // Expand to every id-form this daemon answers to for this mesh (runtime
+            // drain ids ∪ config-form node/host ids) and use it for BOTH the host gate
+            // and the remote pull filter, so a worker stamp in any form is recovered.
+            const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+            if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
-                await pullRemoteNodeQueues(components, mesh, localDaemonId, drainDaemonIds);
+                await pullRemoteNodeQueues(components, mesh, localDaemonId, selfIds);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Remote node pull failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
@@ -258,35 +302,43 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
 // Scoping: the remote handler (get_pending_mesh_events) drains its queue filtered
 // by coordinatorDaemonId — returning events targeted at that id OR unscoped, and
 // leaving events targeted at a *different* coordinator. A remote worker stamps the
-// coordinator id in one of two forms (the canonical status id `standalone_`/
-// `daemon_<machineId>` stamped by the MCP layer, or the bare machineId stamped by
-// the local queue path). We therefore pull ONCE PER candidate coordinator id
-// (drainDaemonIds = both forms) so a completion stamped with either form is
-// recovered. The remote drain is atomic (drained=1), so issuing both pulls cannot
-// double-deliver — the first pull that matches consumes the event; the second sees
-// nothing. When no ids resolve we fall back to a single unscoped pull.
+// coordinator id in one of SEVERAL forms (the canonical status id `standalone_`/
+// `daemon_<machineId>` stamped by the MCP layer, the bare machineId stamped by the
+// local queue path, OR — most commonly for remote launches — the coordinator mesh
+// node's config-form `daemonId`, which resolveCoordinatorDaemonId prefers and which
+// is NOT canonicalised). `candidateDaemonIds` is the already-expanded self-identity
+// set (resolveCoordinatorSelfIds: runtime drain ids ∪ this daemon's mesh-config node/
+// host id forms), so we pull ONCE PER candidate id and a completion stamped with any
+// of them is recovered. The remote drain is atomic (drained=1), so issuing multiple
+// pulls cannot double-deliver — the first pull that matches consumes the event; the
+// rest see nothing. When no ids resolve we fall back to a single unscoped pull.
 async function pullRemoteNodeQueues(
     components: DaemonComponents,
     mesh: LocalMeshEntry,
     localDaemonId: string | undefined,
-    drainDaemonIds: string[],
+    candidateDaemonIds: string[],
 ): Promise<void> {
     const dispatchMeshCommand = components.dispatchMeshCommand;
     if (!dispatchMeshCommand) return;
     const meshId = mesh.id;
 
-    // One args object per coordinator-id form (status id + bare machineId), or a
-    // single unscoped pull when neither resolves.
-    const pulls: Array<Record<string, unknown>> = drainDaemonIds.length > 0
-        ? drainDaemonIds.map(id => ({ meshId, coordinatorDaemonId: id }))
+    // One args object per candidate coordinator-id form, or a single unscoped pull
+    // when none resolve.
+    const pulls: Array<Record<string, unknown>> = candidateDaemonIds.length > 0
+        ? candidateDaemonIds.map(id => ({ meshId, coordinatorDaemonId: id }))
         : [{ meshId }];
 
     for (const node of mesh.nodes) {
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         // Skip nodes without a daemon, and nodes on THIS daemon (their events are
-        // already in the local queue drained in PHASE 2).
+        // already in the local queue drained in PHASE 2). "This daemon" is matched
+        // against the full self-identity set (candidateDaemonIds), not just the bare
+        // localDaemonId — a self node can be registered under the config-form daemonId
+        // (`daemon_<machineId>`) which would NOT equal bare localDaemonId, and pulling
+        // from ourselves over P2P is both wasteful and a self-dispatch hazard.
         if (!nodeDaemonId) continue;
         if (localDaemonId && nodeDaemonId === localDaemonId) continue;
+        if (candidateDaemonIds.includes(nodeDaemonId)) continue;
 
         for (const pendingEventArgs of pulls) {
             let events: unknown;
