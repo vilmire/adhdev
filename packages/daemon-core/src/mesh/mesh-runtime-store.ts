@@ -479,8 +479,38 @@ export class MeshRuntimeStore {
         return row !== undefined;
     }
 
+    /**
+     * Count active (status='assigned') tasks on a (node, provider) combination,
+     * matched by the assignedProviderType stamped on the payload at claim time.
+     * Drives the per-(node, provider) maxParallel cap (RepoMeshNodePolicy
+     * providerRoles). The active-assignment set for a single node is tiny, so
+     * parsing payloads here is cheap and avoids a schema migration. Pre-cap legacy
+     * rows (no provider stamp) and other providers on the same node do not consume
+     * this provider's budget, so the cap is fully backward compatible.
+     */
+    private activeProviderAssignmentCount(meshId: string, nodeId: string, providerType: string): number {
+        const rows = this.db.prepare(`
+            SELECT payload FROM mesh_queue
+            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id = ?
+        `).all(meshId, nodeId) as Array<{ payload: string }>;
+        let count = 0;
+        for (const row of rows) {
+            try {
+                const entry = JSON.parse(row.payload) as MeshWorkQueueEntry;
+                if (entry.assignedProviderType === providerType) count += 1;
+            } catch { /* skip unparsable row */ }
+        }
+        return count;
+    }
+
     // O(1) claim: transaction ensures only one session claims a pending task
-    claimNextQueueTask(meshId: string, nodeId: string, sessionId: string, capabilityTags: string[] = []): MeshWorkQueueEntry | null {
+    claimNextQueueTask(
+        meshId: string,
+        nodeId: string,
+        sessionId: string,
+        capabilityTags: string[] = [],
+        opts?: { providerType?: string; providerMaxParallel?: number },
+    ): MeshWorkQueueEntry | null {
         return this.transaction(() => {
             this.ensureLegacyQueueMigrated(meshId);
             // A session executes one task at a time regardless of mode — block early.
@@ -490,6 +520,24 @@ export class MeshRuntimeStore {
             // one-active-per-node invariant (worktree isolation).
             if (this.hasActiveSessionAssignment(meshId, sessionId)) return null;
             const nodeBusy = this.hasActiveNodeAssignment(meshId, nodeId);
+
+            // Per-(node, provider) maxParallel cap (RepoMeshNodePolicy providerRoles).
+            // Orthogonal to taskMode: this bounds the (node, provider) resource pool
+            // regardless of read-only vs write. When the cap is already met, this
+            // session cannot claim any candidate here — return null. This composes
+            // with the global/taskMode caps enforced in the coordinator (stricter
+            // wins); omitting providerMaxParallel preserves prior behavior exactly.
+            const providerType = typeof opts?.providerType === 'string' ? opts.providerType.trim() : '';
+            const providerMaxParallel = opts?.providerMaxParallel;
+            if (
+                providerType
+                && typeof providerMaxParallel === 'number'
+                && Number.isFinite(providerMaxParallel)
+                && providerMaxParallel >= 0
+                && this.activeProviderAssignmentCount(meshId, nodeId, providerType) >= providerMaxParallel
+            ) {
+                return null;
+            }
 
             // Priority: session-targeted > node-targeted (no session) > unconstrained
             const rows = [
@@ -552,6 +600,7 @@ export class MeshRuntimeStore {
             entry.status = 'assigned';
             entry.assignedNodeId = nodeId;
             entry.assignedSessionId = sessionId;
+            if (providerType) entry.assignedProviderType = providerType;
             entry.dispatchTimestamp = now;
             entry.updatedAt = now;
 

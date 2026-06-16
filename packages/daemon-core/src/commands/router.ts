@@ -123,6 +123,31 @@ function readProviderPriorityFromPolicy(policy: unknown): string[] {
         });
 }
 
+/**
+ * Normalize a providerRoles array (RepoMeshNodePolicy.providerRoles) from raw
+ * tool args. Each entry binds a providerType to an optional free-form `role`
+ * label and an optional `maxParallel` cap. Entries without a usable providerType
+ * are dropped; the last entry wins on duplicate providerType. Returns [] when no
+ * valid entries — callers then omit the field entirely (full backward compat).
+ */
+function normalizeProviderRoles(value: unknown): Array<{ providerType: string; role?: string; maxParallel?: number }> {
+    if (!Array.isArray(value)) return [];
+    const byType = new Map<string, { providerType: string; role?: string; maxParallel?: number }>();
+    for (const raw of value) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+        const rec = raw as Record<string, unknown>;
+        const providerType = typeof rec.providerType === 'string' ? rec.providerType.trim() : '';
+        if (!providerType) continue;
+        const entry: { providerType: string; role?: string; maxParallel?: number } = { providerType };
+        const role = typeof rec.role === 'string' ? rec.role.trim() : '';
+        if (role) entry.role = role;
+        const maxParallel = Number(rec.maxParallel);
+        if (Number.isFinite(maxParallel) && maxParallel >= 0) entry.maxParallel = Math.floor(maxParallel);
+        byType.set(providerType.toLowerCase(), entry);
+    }
+    return [...byType.values()];
+}
+
 function readObjectRecord(value: unknown): Record<string, any> {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, any>
@@ -6900,9 +6925,11 @@ export class DaemonCommandRouter {
                         ? args.providerPriority.map((type: any) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
                         : [];
                     const readOnly = args?.readOnly === true;
+                    const providerRoles = normalizeProviderRoles(args?.providerRoles);
                     const policy = {
                         ...(readOnly ? { readOnly: true } : {}),
                         ...(providerPriority.length ? { providerPriority } : {}),
+                        ...(providerRoles.length ? { providerRoles } : {}),
                     };
                     const role = normalizeMeshDaemonRole(args?.role);
                     const daemonId = typeof args?.daemonId === 'string' && args.daemonId.trim() ? args.daemonId.trim() : undefined;
@@ -6950,6 +6977,18 @@ export class DaemonCommandRouter {
                             (policy as any).providerPriority = providerPriority;
                         } else {
                             delete (policy as any).providerPriority;
+                        }
+                    }
+                    // providerRoles: per-(node, provider) role label + maxParallel cap.
+                    // Passing an explicit (possibly empty) array clears/replaces the
+                    // declarations; omitting the arg leaves any value already on policy
+                    // untouched (a full policy object passed by the caller still carries it).
+                    if (Array.isArray(args?.providerRoles)) {
+                        const providerRoles = normalizeProviderRoles(args.providerRoles);
+                        if (providerRoles.length) {
+                            (policy as any).providerRoles = providerRoles;
+                        } else {
+                            delete (policy as any).providerRoles;
                         }
                     }
                     const patch: Record<string, unknown> = { policy: policy as any };

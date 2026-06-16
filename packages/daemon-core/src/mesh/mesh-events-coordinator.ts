@@ -14,7 +14,7 @@ import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } f
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
-import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
+import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
@@ -262,7 +262,15 @@ export function tryAssignQueueTask(
     const mesh = getMeshWithCache(components, meshId);
     const node = mesh?.nodes.find((n: any) => readMeshNodeId(n) === nodeId);
     const capabilityTags = buildMeshNodeCapabilityTags(node, providerType);
-    const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags);
+    // Per-(node, provider) maxParallel cap (RepoMeshNodePolicy.providerRoles) layers
+    // on top of the global/taskMode caps — stricter wins. Resolved here where the
+    // claiming session's providerType + node policy are both known, then enforced
+    // inside the atomic claim transaction so concurrent claims can't overshoot it.
+    const providerMaxParallel = resolveProviderMaxParallel(node?.policy, providerType);
+    const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags, {
+        providerType,
+        ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
+    });
     if (!task) {
         return false;
     }
@@ -489,6 +497,14 @@ export function activeReadonlyAssignedCount(meshId: string): number {
 
 function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean {
     return getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedNodeId === nodeId);
+}
+
+/** Active assignments on a (node, provider) — pre-launch guard for the per-(node,
+ *  provider) maxParallel cap. The authoritative enforcement is in the claim
+ *  transaction; this only avoids spawning a session that would fail the claim. */
+function activeProviderAssignedCount(meshId: string, nodeId: string, providerType: string): number {
+    return getQueue(meshId, { status: ['assigned'] as any })
+        .filter(task => task.assignedNodeId === nodeId && task.assignedProviderType === providerType).length;
 }
 
 function sessionHasActiveAssignment(meshId: string, sessionId: string): boolean {
@@ -730,6 +746,18 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 const resolved = await resolveUsableProvider(components, nodeId, node, task.requiredTags);
                 if (!resolved.providerType) {
                     markAutoLaunch(meshId, task.id, { status: 'skipped', reason: resolved.reason || 'provider_unusable', nodeId });
+                    continue;
+                }
+
+                // Don't spawn a session for a (node, provider) already at its declared
+                // maxParallel cap — it would launch only to fail the claim. The claim
+                // transaction enforces the cap regardless; this just avoids a doomed launch.
+                const providerCap = resolveProviderMaxParallel(node?.policy, resolved.providerType);
+                if (
+                    providerCap !== undefined
+                    && activeProviderAssignedCount(meshId, nodeId, resolved.providerType) >= providerCap
+                ) {
+                    markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_provider_parallel_reached', nodeId, providerType: resolved.providerType });
                     continue;
                 }
 

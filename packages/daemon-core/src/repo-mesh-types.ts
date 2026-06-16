@@ -158,12 +158,49 @@ export interface RepoMeshRelatedRepo {
     workspace: string;
 }
 
+/**
+ * Per-(node, provider) role + parallelism declaration.
+ *
+ * `role` is a free-form resource-pool label (recommended values:
+ * 'investigation' | 'coding' | 'orchestration') describing what this
+ * (node, provider) combination is *for*. It is a label/hint only — it is
+ * surfaced to the coordinator and dashboards but the daemon does NOT route
+ * tasks by role (task routing stays driven by taskMode + requiredTags +
+ * targetNode/targetSession). role is intentionally orthogonal to taskMode:
+ * taskMode classifies the *work* (code_change vs live_debug_readonly), role
+ * classifies the *resource pool*.
+ *
+ * `maxParallel` is the only enforced field: the queue will not assign a task
+ * to this (node, provider) once it already has `maxParallel` active
+ * (status='assigned') tasks. When the global parallel cap and this per-(node,
+ * provider) cap disagree, the stricter (lower effective) limit wins — a claim
+ * must satisfy both. Omitting `maxParallel` means this provider is bounded only
+ * by the global/taskMode caps (full backward compatibility).
+ */
+export interface RepoMeshProviderRole {
+    /** Provider type this entry governs (e.g. 'claude-cli', 'codex-cli'). */
+    providerType: string;
+    /** Free-form role label; recommended: 'investigation' | 'coding' | 'orchestration'. */
+    role?: string;
+    /** Max concurrent active tasks for this (node, provider). Omit = no per-provider cap. */
+    maxParallel?: number;
+}
+
 export interface RepoMeshNodePolicy {
     readOnly?: boolean;
     canPush?: boolean;
     maxConcurrentSessions?: number;
     /** Ordered provider preference used when mesh_launch_session omits an explicit type. */
     providerPriority?: string[];
+    /**
+     * Per-(node, provider) role + parallelism declarations. Each entry binds a
+     * providerType on THIS node to an optional free-form role label and an
+     * optional maxParallel cap. Only maxParallel is enforced (as an additional,
+     * stricter-wins constraint on top of the global maxParallelTasks/taskMode
+     * caps); role is a label/hint surfaced to the coordinator. Missing/empty:
+     * the node behaves exactly as before (global caps only).
+     */
+    providerRoles?: RepoMeshProviderRole[];
     /**
      * Per-node override for RepoMeshPolicy.delegatedWorkerAutoApprove. When set, takes
      * precedence over the mesh-level policy for worker sessions launched onto this node.
@@ -225,6 +262,44 @@ export function resolveDelegatedWorkerAutoApprove(
         return meshPolicy.delegatedWorkerAutoApprove;
     }
     return true;
+}
+
+/**
+ * Resolve the per-(node, provider) role declaration from a node policy.
+ * Case-insensitive, trimmed match on providerType. Returns undefined when the
+ * node has no providerRoles entry for this provider (caller then applies only
+ * the global caps). Defensive against malformed config — non-object entries and
+ * blank providerTypes are skipped rather than throwing.
+ */
+export function resolveProviderRole(
+    nodePolicy: Pick<RepoMeshNodePolicy, 'providerRoles'> | null | undefined,
+    providerType: string | null | undefined,
+): RepoMeshProviderRole | undefined {
+    const wanted = typeof providerType === 'string' ? providerType.trim().toLowerCase() : '';
+    if (!wanted) return undefined;
+    const roles = nodePolicy?.providerRoles;
+    if (!Array.isArray(roles)) return undefined;
+    for (const entry of roles) {
+        if (!entry || typeof entry !== 'object') continue;
+        const type = typeof entry.providerType === 'string' ? entry.providerType.trim().toLowerCase() : '';
+        if (type && type === wanted) return entry;
+    }
+    return undefined;
+}
+
+/**
+ * Resolve the enforced per-(node, provider) maxParallel cap, or undefined when
+ * no finite, non-negative cap is declared for this provider. Used by the queue
+ * claim path as a stricter-wins constraint layered on top of the global caps.
+ */
+export function resolveProviderMaxParallel(
+    nodePolicy: Pick<RepoMeshNodePolicy, 'providerRoles'> | null | undefined,
+    providerType: string | null | undefined,
+): number | undefined {
+    const role = resolveProviderRole(nodePolicy, providerType);
+    const raw = Number(role?.maxParallel);
+    if (!Number.isFinite(raw) || raw < 0) return undefined;
+    return Math.floor(raw);
 }
 
 // ─── Capabilities ───────────────────────────────

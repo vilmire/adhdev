@@ -148,6 +148,12 @@ export interface MeshWorkQueueEntry {
     assignedNodeId?: string;
     /** The session currently executing the task */
     assignedSessionId?: string;
+    /**
+     * Provider type of the session that claimed the task. Recorded so the queue
+     * can enforce per-(node, provider) maxParallel caps (RepoMeshNodePolicy
+     * providerRoles) by counting active assignments grouped by node + provider.
+     */
+    assignedProviderType?: string;
     /** Human/operator reason for terminal cancellation. */
     cancelReason?: string;
     cancelledAt?: string;
@@ -405,9 +411,21 @@ export function getMeshQueueRevision(meshId: string): string {
 
 /**
  * Find the next pending task that this node is allowed to claim, and mark it as assigned.
+ *
+ * `opts.providerType` is stamped onto the claimed entry (assignedProviderType) so
+ * per-(node, provider) caps can be counted. `opts.providerMaxParallel`, when set,
+ * is the enforced per-(node, provider) cap from RepoMeshNodePolicy.providerRoles:
+ * a task is not assigned to this (node, provider) once it already has that many
+ * active assignments. This composes with the global/taskMode caps (stricter wins).
  */
-export function claimNextTask(meshId: string, nodeId: string, sessionId: string, capabilityTags?: string[]): MeshWorkQueueEntry | null {
-    return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags);
+export function claimNextTask(
+    meshId: string,
+    nodeId: string,
+    sessionId: string,
+    capabilityTags?: string[],
+    opts?: { providerType?: string; providerMaxParallel?: number },
+): MeshWorkQueueEntry | null {
+    return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags, opts);
 }
 
 // ─── M1: Dependency Failure Propagation ─────────

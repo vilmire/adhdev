@@ -507,6 +507,110 @@ describe('mesh-runtime-store', () => {
         });
     });
 
+    // ── Per-(node, provider) maxParallel cap (providerRoles) ─────────────────
+    // The claim transaction bounds the number of active assignments for a given
+    // (node, provider) combination by the providerMaxParallel passed in. The cap
+    // is orthogonal to taskMode (it counts both read-only and write tasks) and is
+    // a stricter-wins layer on top of the global/node-conflict gates. Omitting
+    // providerMaxParallel preserves prior behavior (no per-provider cap).
+    describe('claimNextQueueTask — per-(node, provider) maxParallel cap', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        const insertReadonly = (db: any, meshId: string, id: string, ageMs: number) => {
+            const iso = new Date(Date.now() - ageMs).toISOString();
+            db.insertQueueEntry({ id, meshId, message: 'diagnose', status: 'pending', taskMode: 'live_debug_readonly', createdAt: iso, updatedAt: iso });
+        };
+
+        it('blocks claiming once the (node, provider) active count reaches maxParallel', () => {
+            const meshId = `mesh-prov-cap-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertReadonly(db, meshId, 'ro-1', 3000);
+            insertReadonly(db, meshId, 'ro-2', 2000);
+            insertReadonly(db, meshId, 'ro-3', 1000);
+
+            const opts = { providerType: 'claude-cli', providerMaxParallel: 2 };
+            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], opts);
+            const c2 = db.claimNextQueueTask(meshId, 'node1', 'sess2', [], opts);
+            // Third claim on the same (node, provider) is over the cap → blocked,
+            // even though a pending read-only task exists and the node is not "busy"
+            // under the read-only concurrent rule.
+            const c3 = db.claimNextQueueTask(meshId, 'node1', 'sess3', [], opts);
+
+            expect(c1?.id).toBe('ro-1');
+            expect(c1?.assignedProviderType).toBe('claude-cli');
+            expect(c2?.id).toBe('ro-2');
+            expect(c3).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('counts the cap per provider — a different provider on the same node has its own budget', () => {
+            const meshId = `mesh-prov-cap-split-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertReadonly(db, meshId, 'ro-1', 4000);
+            insertReadonly(db, meshId, 'ro-2', 3000);
+            insertReadonly(db, meshId, 'ro-3', 2000);
+
+            // claude-cli fills its cap of 1.
+            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], { providerType: 'claude-cli', providerMaxParallel: 1 });
+            expect(c1?.id).toBe('ro-1');
+            // A second claude-cli claim is blocked at cap 1.
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2', [], { providerType: 'claude-cli', providerMaxParallel: 1 })).toBeNull();
+            // codex-cli on the SAME node has its own independent budget → claims fine.
+            const c3 = db.claimNextQueueTask(meshId, 'node1', 'sess3', [], { providerType: 'codex-cli', providerMaxParallel: 1 });
+            expect(c3?.id).toBe('ro-2');
+            expect(c3?.assignedProviderType).toBe('codex-cli');
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('backward compatible: omitting providerMaxParallel imposes no per-provider cap', () => {
+            const meshId = `mesh-prov-cap-none-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertReadonly(db, meshId, 'ro-1', 3000);
+            insertReadonly(db, meshId, 'ro-2', 2000);
+            insertReadonly(db, meshId, 'ro-3', 1000);
+
+            // No providerMaxParallel → read-only concurrent claim is unbounded by provider.
+            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], { providerType: 'claude-cli' });
+            const c2 = db.claimNextQueueTask(meshId, 'node1', 'sess2', [], { providerType: 'claude-cli' });
+            const c3 = db.claimNextQueueTask(meshId, 'node1', 'sess3', [], { providerType: 'claude-cli' });
+            expect([c1?.id, c2?.id, c3?.id]).toEqual(['ro-1', 'ro-2', 'ro-3']);
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('maxParallel:0 blocks all claims for that (node, provider)', () => {
+            const meshId = `mesh-prov-cap-zero-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertReadonly(db, meshId, 'ro-1', 1000);
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess1', [], { providerType: 'claude-cli', providerMaxParallel: 0 })).toBeNull();
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('frees budget when an assigned task reaches a terminal status', () => {
+            const meshId = `mesh-prov-cap-free-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertReadonly(db, meshId, 'ro-1', 2000);
+            insertReadonly(db, meshId, 'ro-2', 1000);
+
+            const opts = { providerType: 'claude-cli', providerMaxParallel: 1 };
+            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], opts);
+            expect(c1?.id).toBe('ro-1');
+            // At cap → blocked.
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2', [], opts)).toBeNull();
+
+            // Complete the first task: it is no longer 'assigned', freeing the budget.
+            updateTaskStatus(meshId, 'ro-1', 'completed');
+            const c2 = db.claimNextQueueTask(meshId, 'node1', 'sess2', [], opts);
+            expect(c2?.id).toBe('ro-2');
+
+            __clearMeshQueueForTests(meshId);
+        });
+    });
+
     describe('findQueueEntryById', () => {
         afterEach(() => {
             __resetMeshRuntimeStoreForTests();
