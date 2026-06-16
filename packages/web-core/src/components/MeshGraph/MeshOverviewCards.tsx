@@ -264,8 +264,11 @@ function Card({ meshTheme, title, count, children, action }: {
     action?: React.ReactNode
 }) {
     const dk = meshTheme.isDark
+    // min-w-0 + overflow-hidden so this card can shrink inside a flex/grid parent
+    // on narrow (~360px) viewports instead of forcing its track wider than the
+    // viewport — the root cause of the mobile horizontal scroll.
     return (
-        <div className={`flex flex-col rounded-2xl border p-4 ${dk ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-white/80'}`}>
+        <div className={`flex min-w-0 flex-col overflow-hidden rounded-2xl border p-4 ${dk ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-white/80'}`}>
             <div className="mb-3 flex items-center gap-2">
                 <span className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{title}</span>
                 {count !== undefined && (
@@ -325,7 +328,7 @@ function ListRow({ meshTheme, onClick, children }: {
             type="button"
             onClick={onClick}
             disabled={!onClick}
-            className={`flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs transition ${hover} ${onClick ? 'cursor-pointer' : 'cursor-default'}`}
+            className={`flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-1.5 py-1 text-left text-xs transition ${hover} ${onClick ? 'cursor-pointer' : 'cursor-default'}`}
         >
             {children}
         </button>
@@ -427,7 +430,7 @@ function DetailModal({ meshTheme, detail, onClose }: {
                         ✕
                     </button>
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
                     {detail.kind === 'mission' && <MissionDetail meshTheme={meshTheme} mission={detail.mission} />}
                     {detail.kind === 'ledger' && <LedgerDetail meshTheme={meshTheme} entry={detail.entry} />}
                     {detail.kind === 'queue' && <QueueDetail meshTheme={meshTheme} task={detail.task} />}
@@ -491,7 +494,7 @@ function LedgerDetail({ meshTheme, entry }: { meshTheme: MeshGraphTheme; entry: 
             {payloadJson && payloadJson !== '{}' && (
                 <div>
                     <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Payload</div>
-                    <pre className={`max-h-60 overflow-auto rounded-lg border p-2 text-[10px] leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{payloadJson}</pre>
+                    <pre className={`max-h-60 max-w-full overflow-auto rounded-lg border p-2 text-[10px] leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{payloadJson}</pre>
                 </div>
             )}
         </div>
@@ -740,11 +743,11 @@ function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: Rep
                         const conv = convergenceBadge(node)
                         const branch = node.git?.branch ?? node.worktreeBranch ?? null
                         return (
-                            <div key={node.nodeId} className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-2 ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
+                            <div key={node.nodeId} className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden rounded-xl border px-3 py-2 ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
                                 <StatusBadge meshTheme={meshTheme} label={node.health} tone={healthTone(node.health)} />
                                 <span className={`min-w-0 max-w-full flex-1 truncate text-sm font-medium ${meshTheme.textPrimary}`} title={node.workspace}>{node.machineLabel}</span>
-                                {branch && <span className={`shrink-0 font-mono text-[11px] ${meshTheme.textSecondary}`}>{branch}</span>}
-                                <span className={`shrink-0 font-mono text-[10px] ${meshTheme.textMuted}`}>{nodeDriftSummary(node)}</span>
+                                {branch && <span className={`max-w-full truncate font-mono text-[11px] ${meshTheme.textSecondary}`} title={branch}>{branch}</span>}
+                                <span className={`max-w-full truncate font-mono text-[10px] ${meshTheme.textMuted}`}>{nodeDriftSummary(node)}</span>
                                 {sessionCount > 0 && <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{sessionCount} session{sessionCount > 1 ? 's' : ''}</span>}
                                 {conv && <StatusBadge meshTheme={meshTheme} label={conv.label} tone={conv.tone} />}
                             </div>
