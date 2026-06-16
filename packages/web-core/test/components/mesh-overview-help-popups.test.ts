@@ -1,68 +1,76 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import MeshOverviewCards from '../../src/components/MeshGraph/MeshOverviewCards'
-import type { RepoMeshStatus } from '@adhdev/daemon-core'
+import { MeshHelpPanel, MeshHelpToggle } from '../../src/components/MeshGraph/MeshHelpPanel'
+import { getMeshGraphTheme } from '../../src/components/MeshGraph/meshGraphTheme'
 
-// Minimal status: enough nodes/queue/ledger so every card (and thus every help
-// button) renders. The help buttons live in the card headers, which render
-// regardless of how much data each card has.
-const status = {
-  meshId: 'mesh-test',
-  refreshedAt: new Date(0).toISOString(),
-  nodes: [
-    {
-      nodeId: 'node-1',
-      daemonId: 'daemon-1',
-      machineId: 'machine-1',
-      machineLabel: 'workstation',
-      workspace: '/repo',
-      health: 'online',
-      git: { branch: 'main' },
-    },
-  ],
-  queue: { summary: { pending: 0, assigned: 0, active: 0, completed: 0, failed: 0, cancelled: 0, historical: 0 }, tasks: [] },
-  ledger: { summary: { meshId: 'mesh-test', totalEntries: 0, taskDispatched: 0, taskCompleted: 0, taskFailed: 0, taskStalled: 0, sessionLaunched: 0, checkpointCreated: 0, lastActivityAt: null, recentFailures: 0 }, entries: [] },
-  missions: [],
-} as unknown as RepoMeshStatus
+// The per-card "?" help popovers were consolidated into a single MeshHelpPanel
+// reachable from one "?" toggle in the dialog tab bar (oss 779dd8d3). These tests
+// assert that consolidated help surface: one accessible toggle, and one panel that
+// documents every mesh concept the end user needs to understand.
+const meshTheme = getMeshGraphTheme('dark')
 
-function renderOverview(): string {
-  return renderToStaticMarkup(React.createElement(MeshOverviewCards, { status }))
+function renderToggle(open = false): string {
+  return renderToStaticMarkup(
+    React.createElement(MeshHelpToggle, { meshTheme, open, onToggle: () => {} }),
+  )
 }
 
-describe('MeshOverviewCards concept help popups', () => {
-  it('renders an accessible "?" help button for each documented mesh concept', () => {
-    const html = renderOverview()
+function renderPanel(): string {
+  return renderToStaticMarkup(
+    React.createElement(MeshHelpPanel, { meshTheme, onClose: () => {} }),
+  )
+}
 
-    // One labelled help button per concept the end user needs to understand.
-    expect(html).toContain('aria-label="What is a Mission?"')
-    expect(html).toContain('aria-label="What is a Node?"')
-    expect(html).toContain('aria-label="What is a Ledger?"')
-    expect(html).toContain('aria-label="What is the Refinery?"')
-    // Queue + Task share one button.
-    expect(html).toContain('aria-label="What are the Queue and Tasks?"')
+describe('Mesh consolidated help panel', () => {
+  it('exposes a single accessible "?" help toggle', () => {
+    const html = renderToggle()
 
-    // Buttons are real buttons (keyboard focusable) carrying the help icon.
+    // One labelled, keyboard-focusable toggle carrying the help icon. It reports
+    // its open/closed state for assistive tech.
+    expect(html).toContain('aria-label="Mesh 도움말"')
+    expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('type="button"')
     expect(html).toContain('<svg')
   })
 
+  it('reflects the open state on the toggle', () => {
+    expect(renderToggle(true)).toContain('aria-expanded="true"')
+  })
+
+  it('renders an accessible help region documenting every mesh concept', () => {
+    const html = renderPanel()
+
+    // The panel is a labelled region (replaces the scattered per-card popovers).
+    expect(html).toContain('role="region"')
+    expect(html).toContain('aria-label="Mesh 개념 도움말"')
+
+    // One definition entry per concept the end user needs to understand. The
+    // consolidated panel covers them all in one place instead of one "?" per card.
+    expect(html).toContain('노드 (Node)')
+    expect(html).toContain('세션 (Session)')
+    expect(html).toContain('태스크 (Task)')
+    expect(html).toContain('미션 (Mission)')
+    expect(html).toContain('Refinery (refine)')
+    expect(html).toContain('완료 인지 모델')
+    expect(html).toContain('브랜치 수렴 상태')
+
+    // It is a real definition list so each term/summary pair is semantically paired.
+    expect(html).toContain('<dl')
+    expect(html).toContain('<dt')
+    expect(html).toContain('<dd')
+  })
+
   it('defines a plain-language summary for every mesh concept', () => {
-    // The popover copy is the user-facing payload; assert the key phrasing so a
-    // future edit that drops or muddles a definition is caught. (The popover
-    // only mounts on click, so we assert the catalog from source rather than the
-    // static render.)
-    const source = readFileSync(
-      join(import.meta.dirname, '../../src/components/MeshGraph/MeshOverviewCards.tsx'),
-      'utf-8',
-    )
-    expect(source).toContain('isolated git worktree')          // Node
-    expect(source).toContain('durable record')                 // Mission
-    expect(source).toContain('pending → assigned → completed') // Task
-    expect(source).toContain('idle nodes autonomously pull')   // Queue
-    expect(source).toContain('It is history, not a to-do list')// Ledger
-    expect(source).toContain('validate → merge → push → clean up') // Refinery
+    // The user-facing copy is the payload; assert the key phrasing from the
+    // rendered panel so a future edit that drops or muddles a definition is caught.
+    const html = renderPanel()
+
+    expect(html).toContain('격리된 git 워크트리')              // Node
+    expect(html).toContain('영속 기록')                        // Mission
+    expect(html).toContain('pending → assigned → completed')   // Task
+    expect(html).toContain('idle 노드가 큐에서 자동으로 claim') // Queue/Task
+    expect(html).toContain('영속됨')                           // 완료 인지 모델 (ledger/completion)
+    expect(html).toContain('수렴·병합')                        // Refinery
   })
 })
