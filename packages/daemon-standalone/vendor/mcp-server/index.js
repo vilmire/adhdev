@@ -274,6 +274,22 @@ function buildCompactMessageTail(visibleMessages, opts) {
   }
   return tail;
 }
+function normalizeForSummaryEquality(value) {
+  return value.replace(/\s+/g, " ").trim();
+}
+function dedupeSummaryFromTail(messages, summary) {
+  const normalizedSummary = summary ? normalizeForSummaryEquality(summary) : "";
+  if (!normalizedSummary) return messages;
+  return messages.map((message) => {
+    const role = String(message?.role ?? "").toLowerCase();
+    if (role !== "assistant" && role !== "agent") return message;
+    const content = messageContent(message);
+    if (!content.trim()) return message;
+    if (normalizeForSummaryEquality(content) !== normalizedSummary) return message;
+    const { content: _omitted, ...rest } = message;
+    return { ...rest, content: "", _sameAsSummary: true };
+  });
+}
 function compactChatPayload(payload, opts = {}) {
   const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
   const visible = rawMessages.filter(isCoordinatorVisibleMessage);
@@ -283,7 +299,10 @@ function compactChatPayload(payload, opts = {}) {
     return (role === "assistant" || role === "agent") && messageContent(message).trim();
   });
   const summary = typeof payload?.summary === "string" && payload.summary.trim() ? payload.summary.trim() : messageContent(finalAssistant).trim();
-  const messages = buildCompactMessageTail(visible, { summary, finalAssistant, limit });
+  const messages = dedupeSummaryFromTail(
+    buildCompactMessageTail(visible, { summary, finalAssistant, limit }),
+    summary
+  );
   const toolSummaries = rawMessages.filter((m) => !isCoordinatorVisibleMessage(m)).map(summarizeToolMessage).filter((s) => s !== null);
   const omittedMessages = Math.max(0, rawMessages.length - messages.length);
   const filteredMessages = Math.max(0, rawMessages.length - visible.length);
@@ -787,6 +806,7 @@ function buildCompactQueueMaintenanceReport(maintenance) {
 var COMPACT_MAX_ACTIVE_QUEUE_ROWS = 15;
 var COMPACT_QUEUE_MESSAGE_CAP = 140;
 var COMPACT_MAX_ACTIVE_WORK_ROWS = 12;
+var COMPACT_ACTIVE_WORK_TITLE_CAP = 80;
 function truncateForCompact(value, cap) {
   if (typeof value !== "string") return value;
   return value.length > cap ? value.slice(0, cap) + "\u2026" : value;
@@ -808,9 +828,8 @@ function compactActiveWorkRecord(record) {
   if (!record || typeof record !== "object") return record;
   const slim = {};
   for (const [k, v] of Object.entries(record)) {
-    if (k === "message") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
-    else if (k === "taskSummary") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
-    else if (k === "taskTitle") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+    if (k === "message" || k === "taskSummary") continue;
+    else if (k === "taskTitle") slim[k] = truncateForCompact(v, COMPACT_ACTIVE_WORK_TITLE_CAP);
     else slim[k] = elideLargeNestedValue(k, v);
   }
   return slim;
@@ -2428,6 +2447,21 @@ var MESH_MISSION_UPSERT_TOOL = {
     required: ["title"]
   }
 };
+var MESH_MISSION_LIST_TOOL = {
+  name: "mesh_mission_list",
+  description: 'List missions with their goal, status, and live task progress (total/pending/assigned/completed/failed). Unlike mesh_status (which surfaces live + recent missions), this returns every mission regardless of status by default, so paused/abandoned/completed missions are never hidden. Filter with `status` to scope (e.g. ["paused"] to find paused missions). Compact (default) elides the full goal to a capped preview; pass verbose=true for full goal text. Read-only.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      status: {
+        type: "array",
+        items: { type: "string", enum: ["active", "paused", "completed", "abandoned"] },
+        description: "Optional status filter. Omit to return missions of every status."
+      },
+      verbose: { type: "boolean", description: "Return full goal text instead of a capped preview. Defaults to false (compact)." }
+    }
+  }
+};
 var MESH_APPROVE_TOOL = {
   name: "mesh_approve",
   description: "Approve or reject a pending action on a delegated agent session.",
@@ -2588,6 +2622,18 @@ var MESH_SUGGEST_REFINE_CONFIG_TOOL = {
     }
   }
 };
+var MESH_INIT_TOOL = {
+  name: "mesh_init",
+  description: "One-click mesh onboarding for an existing git project. Detects installed CLI providers, suggests Refinery (.adhdev/refine.json) and worktree bootstrap (.adhdev/worktree_bootstrap.json) configs, optionally writes them to disk, and recommends a node providerPriority from the detected providers. Suggestions are scaffold only and never execute until saved; providerPriority is a recommendation to apply to node policy, not auto-applied. Defaults to dry-run (no files written) and never overwrites an existing config unless overwrite=true.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Optional node/workspace to onboard. Defaults to the first mesh node with a workspace." },
+      write: { type: "boolean", description: "When true, persist the suggested configs to disk. Defaults false (dry-run preview only)." },
+      overwrite: { type: "boolean", description: "When true, overwrite an existing config file. Defaults false (never clobber an existing refine/bootstrap config)." }
+    }
+  }
+};
 var MESH_REFINE_PLAN_TOOL = {
   name: "mesh_refine_plan",
   description: "Dry-run Refinery plan for a worktree node: reports config source, validation commands, suggestions/unavailable reason, and merge/cleanup intent without executing validation or git merge.",
@@ -2632,12 +2678,14 @@ var ALL_MESH_TOOLS = [
   MESH_REFINE_CONFIG_SCHEMA_TOOL,
   MESH_VALIDATE_REFINE_CONFIG_TOOL,
   MESH_SUGGEST_REFINE_CONFIG_TOOL,
+  MESH_INIT_TOOL,
   MESH_REFINE_PLAN_TOOL,
   MESH_CLEANUP_SESSIONS_TOOL,
   MESH_PRUNE_STALE_DIRECT_TOOL,
   MESH_TASK_HISTORY_TOOL,
   MESH_RECONCILE_LEDGER_TOOL,
   MESH_MISSION_UPSERT_TOOL,
+  MESH_MISSION_LIST_TOOL,
   MESH_REVIEW_INBOX_TOOL
 ];
 async function meshStatus(ctx, args = {}) {
@@ -2780,6 +2828,7 @@ async function meshStatus(ctx, args = {}) {
     note: activeWorkEvidence.staleDirectWorkNote,
     detailHint: "Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail."
   });
+  const activeWorkForResponse = compact ? compactActiveWorkRecords(activeWorkEvidence.activeWork) : { records: activeWorkEvidence.activeWork, omitted: 0 };
   const coordinatorSessions = [];
   for (const nodeEntry of results) {
     const sessions = Array.isArray(nodeEntry.sessions) ? nodeEntry.sessions : [];
@@ -2937,7 +2986,9 @@ async function meshStatus(ctx, args = {}) {
     ...webOnlyStaleBuilds.length > 0 ? {
       webOnlyStaleBuildNote: 'One or more live daemons are behind workspace HEAD, but only web packages changed in that range. The daemon does NOT need a rebuild/restart \u2014 redeploy the web app to reflect those changes. This is informational, not a "fix not live" condition.'
     } : {},
-    activeWork: activeWorkEvidence.activeWork,
+    activeWork: activeWorkForResponse.records,
+    ...compact && activeWorkForResponse.omitted > 0 ? { activeWorkRowsOmitted: activeWorkForResponse.omitted } : {},
+    ...compact ? { activeWorkHint: `Compact activeWork rows carry a short taskTitle + dispatch scalars only; full task prompt/summary text is omitted \u2014 use mesh_task_history or mesh_status verbose=true. First ${COMPACT_MAX_ACTIVE_WORK_ROWS} rows serialized.` } : {},
     staleDirectWorkSummary,
     ...args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {},
     // terminalDirectWork is historical (completed/failed direct dispatches) — opt-in only.
@@ -2960,7 +3011,7 @@ async function meshStatus(ctx, args = {}) {
   } catch {
   }
   try {
-    const missions = (0, import_daemon_core.getActiveMeshMissionSummaries)(mesh.id);
+    const missions = (0, import_daemon_core.getMeshStatusMissionSummaries)(mesh.id, { verbose: !compact });
     if (missions.length > 0) {
       response.missions = missions.map((mission) => {
         try {
@@ -3230,6 +3281,38 @@ async function meshMissionUpsert(ctx, args) {
     const message = e?.message || String(e);
     const code = message.includes("mission_title_required") ? "mission_title_required" : message.includes("invalid_mission_status") ? "invalid_mission_status" : void 0;
     return JSON.stringify({ success: false, ...code ? { code } : {}, error: message });
+  }
+}
+async function meshMissionList(ctx, args = {}) {
+  try {
+    const rawStatuses = Array.isArray(args.status) ? args.status : typeof args.status === "string" && args.status.trim() ? [args.status] : [];
+    const invalid = rawStatuses.filter((s) => !import_daemon_core.MESH_MISSION_STATUSES.includes(s));
+    if (invalid.length > 0) {
+      return JSON.stringify({
+        success: false,
+        code: "invalid_mission_status",
+        error: `invalid status filter: ${invalid.join(", ")} (valid: ${import_daemon_core.MESH_MISSION_STATUSES.join(", ")})`
+      });
+    }
+    const statuses = rawStatuses.length > 0 ? rawStatuses : void 0;
+    const missions = (0, import_daemon_core.listMeshMissionSummaries)(ctx.mesh.id, {
+      statuses,
+      verbose: args.verbose === true
+    }).map((mission) => {
+      try {
+        return { ...mission, stats: (0, import_daemon_core.computeMeshMissionStats)(ctx.mesh.id, mission.id) };
+      } catch {
+        return mission;
+      }
+    });
+    return JSON.stringify({
+      success: true,
+      count: missions.length,
+      ...statuses ? { statusFilter: statuses } : {},
+      missions
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ success: false, error: e?.message || String(e) });
   }
 }
 async function meshEnqueueTask(ctx, args) {
@@ -4242,6 +4325,16 @@ async function meshSuggestRefineConfig(ctx, args) {
   });
   return JSON.stringify(result, null, 2);
 }
+async function meshInit(ctx, args) {
+  const node = resolveRefineConfigNode(ctx, args.node_id);
+  const result = await commandForNode(ctx, node, "mesh_init", {
+    workspace: node.workspace,
+    inlineMesh: ctx.mesh,
+    ...args.write !== void 0 ? { write: args.write } : {},
+    ...args.overwrite !== void 0 ? { overwrite: args.overwrite } : {}
+  });
+  return JSON.stringify(result, null, 2);
+}
 async function meshRefinePlan(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   const result = await commandForNode(ctx, node, "plan_mesh_refine_node", {
@@ -4522,7 +4615,9 @@ function formatChatResult(result, sessionId, format, limit = 50, compact = false
           role: m.role,
           kind: m.kind ?? null,
           content: messageContent(m),
-          timestamp: m.timestamp ?? null
+          timestamp: m.timestamp ?? null,
+          // Preserve the dedup flag so consumers know the body lives in `summary`.
+          ...m._sameAsSummary === true ? { _sameAsSummary: true } : {}
         }))
       }, null, 2);
     }
@@ -5492,6 +5587,9 @@ async function startMcpServer(opts) {
           case "mesh_suggest_refine_config":
             text = await meshSuggestRefineConfig(meshCtx, a);
             break;
+          case "mesh_init":
+            text = await meshInit(meshCtx, a);
+            break;
           case "mesh_refine_plan":
             text = await meshRefinePlan(meshCtx, a);
             break;
@@ -5509,6 +5607,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_mission_upsert":
             text = await meshMissionUpsert(meshCtx, a);
+            break;
+          case "mesh_mission_list":
+            text = await meshMissionList(meshCtx, a);
             break;
           case "mesh_review_inbox":
             text = await meshReviewInbox(meshCtx, a);
