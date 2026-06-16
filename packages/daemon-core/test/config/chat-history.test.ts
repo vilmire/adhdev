@@ -561,6 +561,117 @@ describe('chat-history config helpers', () => {
     )
   })
 
+  // Build a single daily file whose JSON content per line is padded so the file
+  // comfortably exceeds the reverse-seek small-file threshold (64KB), forcing the
+  // byte-level reverse tail-seek path rather than a full readFileSync.
+  function writeLargeSingleDaySession(agentType: string, historySessionId: string, count: number, padBytes = 600) {
+    const filePath = buildHistoryFilePath(agentType, historySessionId)
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    const lines = Array.from({ length: count }, (_, index) => JSON.stringify({
+      ts: new Date(1_700_000_000_000 + index * 1000).toISOString(),
+      receivedAt: 1_700_000_000_000 + index * 1000,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `msg-${index + 1}-${'x'.repeat(padBytes)}`,
+      agent: agentType,
+      historySessionId,
+      sessionTitle: 'History Session',
+    }))
+    fs.writeFileSync(filePath, `${lines.join('\n')}\n`, 'utf-8')
+    return filePath
+  }
+
+  it('reverse-seeks the tail of a large single-day file and returns exactly the newest N', async () => {
+    const count = 400
+    const filePath = writeLargeSingleDaySession('hermes-cli', 'history-big', count)
+    expect(fs.statSync(filePath).size).toBeGreaterThan(64 * 1024)
+    const { readChatHistory } = await import('../../src/config/chat-history.js')
+
+    for (const tail of [1, 30, 60]) {
+      const bounded = readChatHistory('hermes-cli', 0, tail, 'history-big')
+      expect(bounded.messages.map(m => m.content)).toEqual(
+        Array.from({ length: tail }, (_, i) => `msg-${count - tail + i + 1}-${'x'.repeat(600)}`),
+      )
+      // Older messages remain inside this same large file, so hasMore is true.
+      expect(bounded.hasMore).toBe(true)
+    }
+  })
+
+  it('refreshes the bounded tail incrementally after an append without losing prior records', async () => {
+    const count = 400
+    const filePath = writeLargeSingleDaySession('hermes-cli', 'history-grow', count)
+    const { readChatHistory } = await import('../../src/config/chat-history.js')
+
+    const first = readChatHistory('hermes-cli', 0, 30, 'history-grow')
+    expect(first.messages[first.messages.length - 1].content).toBe(`msg-${count}-${'x'.repeat(600)}`)
+
+    // Append two new records (append-only growth) and ensure the next tail window
+    // includes the new records while still retaining the prior ones.
+    for (const idx of [count, count + 1]) {
+      fs.appendFileSync(filePath, `${JSON.stringify({
+        ts: new Date(1_700_000_000_000 + idx * 1000).toISOString(),
+        receivedAt: 1_700_000_000_000 + idx * 1000,
+        role: idx % 2 === 0 ? 'user' : 'assistant',
+        content: `msg-${idx + 1}-${'x'.repeat(600)}`,
+        agent: 'hermes-cli',
+        historySessionId: 'history-grow',
+        sessionTitle: 'History Session',
+      })}\n`, 'utf-8')
+    }
+
+    const refreshed = readChatHistory('hermes-cli', 0, 30, 'history-grow')
+    expect(refreshed.messages.map(m => m.content)).toEqual(
+      Array.from({ length: 30 }, (_, i) => `msg-${count - 28 + i + 1}-${'x'.repeat(600)}`),
+    )
+    // The newest two appended records are present.
+    expect(refreshed.messages.map(m => m.content)).toContain(`msg-${count + 1}-${'x'.repeat(600)}`)
+    expect(refreshed.messages.map(m => m.content)).toContain(`msg-${count + 2}-${'x'.repeat(600)}`)
+  })
+
+  it('preserves multibyte UTF-8 content across reverse-seek chunk boundaries', async () => {
+    const filePath = buildHistoryFilePath('hermes-cli', 'history-utf8')
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    // Each line carries multibyte chars and is padded so the file spans multiple
+    // 64KB reverse-read chunks, exercising the chunk-boundary stitching.
+    const count = 300
+    const lines = Array.from({ length: count }, (_, index) => JSON.stringify({
+      ts: new Date(1_700_000_000_000 + index * 1000).toISOString(),
+      receivedAt: 1_700_000_000_000 + index * 1000,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `메시지-${index + 1}-日本語-😀-${'가'.repeat(400)}`,
+      agent: 'hermes-cli',
+      historySessionId: 'history-utf8',
+      sessionTitle: 'History Session',
+    }))
+    fs.writeFileSync(filePath, `${lines.join('\n')}\n`, 'utf-8')
+    expect(fs.statSync(filePath).size).toBeGreaterThan(64 * 1024)
+    const { readChatHistory } = await import('../../src/config/chat-history.js')
+
+    const bounded = readChatHistory('hermes-cli', 0, 30, 'history-utf8')
+    expect(bounded.messages.map(m => m.content)).toEqual(
+      Array.from({ length: 30 }, (_, i) => `메시지-${count - 30 + i + 1}-日本語-😀-${'가'.repeat(400)}`),
+    )
+  })
+
+  it('handles small, empty, and unterminated-final-line files on the bounded path', async () => {
+    const { readChatHistory } = await import('../../src/config/chat-history.js')
+
+    // Empty file.
+    const emptyPath = buildHistoryFilePath('hermes-cli', 'history-empty')
+    fs.mkdirSync(path.dirname(emptyPath), { recursive: true })
+    fs.writeFileSync(emptyPath, '', 'utf-8')
+    expect(readChatHistory('hermes-cli', 0, 30, 'history-empty').messages).toEqual([])
+
+    // Small file (well under the reverse-seek threshold) with a trailing partial
+    // line that has no terminating newline — it must still be parsed.
+    const smallPath = buildHistoryFilePath('hermes-cli', 'history-small')
+    const a = JSON.stringify({ ts: new Date(1_700_000_000_000).toISOString(), receivedAt: 1_700_000_000_000, role: 'user', content: 'small-1', agent: 'hermes-cli', historySessionId: 'history-small', sessionTitle: 'S' })
+    const b = JSON.stringify({ ts: new Date(1_700_000_001_000).toISOString(), receivedAt: 1_700_000_001_000, role: 'assistant', content: 'small-2', agent: 'hermes-cli', historySessionId: 'history-small', sessionTitle: 'S' })
+    fs.writeFileSync(smallPath, `${a}\n${b}`, 'utf-8') // no trailing newline
+    const small = readChatHistory('hermes-cli', 0, 30, 'history-small')
+    expect(small.messages.map(m => m.content)).toEqual(['small-1', 'small-2'])
+    expect(small.hasMore).toBe(false)
+  })
+
   it('lists all non-empty saved-history sessions regardless of provider-specific ID format', async () => {
     writeHistorySession('hermes-cli', '20260417_101010_alpha', 1)
     writeHistorySession('hermes-cli', 'vi', 3)

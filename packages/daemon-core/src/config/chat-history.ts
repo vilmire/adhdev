@@ -1234,6 +1234,241 @@ function isBoundedTailRequest(limit: number, offset: number, excludeRecentCount:
     return true;
 }
 
+// Byte threshold below which a file is small enough that reading the whole
+// thing is cheaper than seeking. Reverse-seek pays off only on large files.
+const REVERSE_TAIL_SMALL_FILE_BYTES = 64 * 1024;
+// Chunk size for backward reads. We read the file tail one chunk at a time
+// (newest bytes first) until we have collected enough complete lines.
+const REVERSE_TAIL_CHUNK_BYTES = 64 * 1024;
+
+// Per-(file path) incremental tail cache. A hot session's daily JSONL file grows
+// append-only while it generates; the size+mtime signature on the bounded-tail
+// read cache therefore invalidates on every append and forces a full re-read.
+// Here we keep the most recently decoded tail LINES for a file plus the byte
+// length we read them from. When the file has only grown (append-only: size
+// increased, the previously-read prefix is unchanged) we read just the new bytes
+// from `size` onward and splice them onto the retained tail — no full re-parse.
+// Truncation/rotation (size shrank, or a fresh inode) drops the entry and falls
+// back to a full reverse-seek.
+interface IncrementalTailCacheEntry {
+    // File length (bytes) we have already consumed into `lines`.
+    size: number;
+    mtimeMs: number;
+    // Decoded complete lines (oldest-first) covering at least the tail window.
+    // Bounded to TAIL_LINES_RETAINED so memory stays flat for huge files.
+    lines: string[];
+    // True when `lines` is the entire file (head reached), so older pages can
+    // trust that nothing precedes the retained window.
+    coversWholeFile: boolean;
+}
+
+// How many trailing lines we retain per file. The bounded-tail caller never
+// asks for more than BOUNDED_TAIL_MAX_LIMIT + slack; keep a generous multiple so
+// repeated reads at the same window are served incrementally.
+const TAIL_LINES_RETAINED = BOUNDED_TAIL_MAX_LIMIT + 2 * BOUNDED_TAIL_SLACK;
+const INCREMENTAL_TAIL_CACHE_MAX_ENTRIES = 64;
+const incrementalTailCache = new Map<string, IncrementalTailCacheEntry>();
+
+function evictIncrementalTailCache(): void {
+    while (incrementalTailCache.size > INCREMENTAL_TAIL_CACHE_MAX_ENTRIES) {
+        const oldest = incrementalTailCache.keys().next().value;
+        if (oldest === undefined) break;
+        incrementalTailCache.delete(oldest);
+    }
+}
+
+// Split a Buffer into complete lines plus a leftover head fragment, partitioning
+// only on the newline byte (0x0A). 0x0A never appears inside a multibyte UTF-8
+// sequence, so decoding each complete byte segment is boundary-safe. The leftover
+// (bytes before the first newline) is returned undecoded so a caller stitching
+// chunks together never splits a multibyte char.
+function splitBufferLines(buf: Buffer): { head: Buffer; lines: string[] } {
+    const lines: string[] = [];
+    let lineEnd = buf.length;
+    let firstNewline = -1;
+    for (let i = buf.length - 1; i >= 0; i--) {
+        if (buf[i] !== 0x0a) continue;
+        if (i + 1 < lineEnd) {
+            lines.push(buf.toString('utf-8', i + 1, lineEnd));
+        }
+        lineEnd = i;
+        firstNewline = i;
+    }
+    // Lines were collected newest-first; restore oldest-first for the segment
+    // that follows the first (lowest-index) newline.
+    lines.reverse();
+    const head = firstNewline >= 0 ? buf.subarray(0, firstNewline) : buf;
+    return { head, lines };
+}
+
+// Read the last bytes of a file, newest-first, until we have at least `needed`
+// complete lines (or reach the start of the file). Returns lines oldest-first and
+// whether the whole file was consumed. Boundary-safe: lines are cut on the
+// newline byte only, so multibyte UTF-8 chars are never split, and a trailing
+// partial line (no terminating newline) is preserved as a complete final line.
+function readReverseTailLines(filePath: string, needed: number): { lines: string[]; coversWholeFile: boolean; size: number; mtimeMs: number } {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        const stat = fs.fstatSync(fd);
+        const size = stat.size;
+        let position = size;
+        // `carry` holds bytes belonging to a line that straddles the current
+        // chunk boundary (its start is in an older, not-yet-read chunk).
+        let carry: Buffer = Buffer.alloc(0);
+        const collected: string[] = [];
+
+        while (position > 0 && collected.length < needed) {
+            const chunkSize = Math.min(REVERSE_TAIL_CHUNK_BYTES, position);
+            position -= chunkSize;
+            const chunk = Buffer.alloc(chunkSize);
+            fs.readSync(fd, chunk, 0, chunkSize, position);
+            const combined = carry.length ? Buffer.concat([chunk, carry]) : chunk;
+            const { head, lines } = splitBufferLines(combined);
+            // `head` is the (possibly partial) line whose start lies further back;
+            // hold it for the next (older) chunk to complete.
+            carry = head;
+            // `lines` are oldest-first within this combined buffer; prepend them
+            // ahead of what we already collected (which is strictly newer).
+            for (let i = lines.length - 1; i >= 0; i--) {
+                collected.push(lines[i]);
+            }
+        }
+
+        const reachedStart = position <= 0;
+        if (reachedStart && carry.length) {
+            // Leftover head at the start of the file is itself a complete line.
+            collected.push(carry.toString('utf-8'));
+        }
+        // `collected` is newest-first; restore oldest-first.
+        collected.reverse();
+        return { lines: collected, coversWholeFile: reachedStart, size, mtimeMs: stat.mtimeMs };
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+// Return the tail lines (oldest-first) for a single history file, reading as
+// little of the file as possible. Strategy:
+//   - Small files: one readFileSync (seeking is not worth the syscalls).
+//   - Large files: reverse byte-seek for the newest `needed` lines.
+//   - Append-only growth since the last read: read only the appended bytes and
+//     splice them onto the retained tail (no full re-parse) — this is what keeps
+//     a hot, still-generating session cheap to poll.
+// `needed` is a soft floor; we may return more (whole small files / retained
+// window). Lines include any trailing partial (unterminated) final line.
+function readFileTailLines(filePath: string, needed: number): { lines: string[]; coversWholeFile: boolean } {
+    let stat: fs.Stats;
+    try {
+        stat = fs.statSync(filePath);
+    } catch {
+        return { lines: [], coversWholeFile: true };
+    }
+    const size = stat.size;
+    const mtimeMs = stat.mtimeMs;
+    if (size === 0) {
+        incrementalTailCache.delete(filePath);
+        return { lines: [], coversWholeFile: true };
+    }
+
+    const cached = incrementalTailCache.get(filePath);
+    if (cached) {
+        if (cached.size === size && cached.mtimeMs === mtimeMs) {
+            // Unchanged since last read — reuse retained tail. Refresh LRU.
+            incrementalTailCache.delete(filePath);
+            incrementalTailCache.set(filePath, cached);
+            if (cached.coversWholeFile || cached.lines.length >= needed) {
+                return { lines: cached.lines, coversWholeFile: cached.coversWholeFile };
+            }
+            // Retained window is smaller than this request needs; fall through
+            // to a fresh reverse-seek for the larger window.
+        } else if (size > cached.size) {
+            // Append-only growth: the prefix [0, cached.size) is assumed
+            // unchanged (JSONL is append-only). Read just the new bytes and
+            // stitch them — but verify the byte at cached.size-1 is still the
+            // newline that terminated our last retained line, so a rewrite that
+            // happens to grow the file (compaction) is detected and rejected.
+            const incremental = tryIncrementalTailGrowth(filePath, cached, size, mtimeMs, needed);
+            if (incremental) return { lines: incremental.lines, coversWholeFile: incremental.coversWholeFile };
+        }
+        // size shrank (truncation/rotation) or incremental failed → drop & reload.
+        incrementalTailCache.delete(filePath);
+    }
+
+    if (size <= REVERSE_TAIL_SMALL_FILE_BYTES) {
+        let content: string;
+        try {
+            content = fs.readFileSync(filePath, 'utf-8');
+        } catch {
+            return { lines: [], coversWholeFile: true };
+        }
+        const lines = content.split('\n');
+        // A trailing newline yields a final empty element; drop only that one so
+        // an unterminated partial last line is still preserved.
+        if (lines.length && lines[lines.length - 1] === '') lines.pop();
+        storeIncrementalTailCache(filePath, size, mtimeMs, lines, true);
+        return { lines, coversWholeFile: true };
+    }
+
+    let result: { lines: string[]; coversWholeFile: boolean; size: number; mtimeMs: number };
+    try {
+        result = readReverseTailLines(filePath, needed);
+    } catch {
+        return { lines: [], coversWholeFile: true };
+    }
+    storeIncrementalTailCache(filePath, result.size, result.mtimeMs, result.lines, result.coversWholeFile);
+    return { lines: result.lines, coversWholeFile: result.coversWholeFile };
+}
+
+// Read appended bytes [cached.size, size) and splice them onto the retained tail.
+// Returns null if the prior byte is not a newline (the retained tail did not end
+// on a record boundary, e.g. the file was rewritten) so the caller can full-reload.
+function tryIncrementalTailGrowth(
+    filePath: string,
+    cached: IncrementalTailCacheEntry,
+    size: number,
+    mtimeMs: number,
+    needed: number,
+): { lines: string[]; coversWholeFile: boolean } | null {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        // Confirm the byte ending the previously-read prefix is still a newline.
+        if (cached.size > 0) {
+            const boundary = Buffer.alloc(1);
+            fs.readSync(fd, boundary, 0, 1, cached.size - 1);
+            if (boundary[0] !== 0x0a) return null;
+        }
+        const appendedLength = size - cached.size;
+        const appended = Buffer.alloc(appendedLength);
+        fs.readSync(fd, appended, 0, appendedLength, cached.size);
+        const newLines = appended.toString('utf-8').split('\n');
+        if (newLines.length && newLines[newLines.length - 1] === '') newLines.pop();
+        const merged = cached.lines.concat(newLines);
+        // Keep memory flat: retain only the trailing window.
+        const trimmed = merged.length > TAIL_LINES_RETAINED
+            ? merged.slice(merged.length - TAIL_LINES_RETAINED)
+            : merged;
+        const coversWholeFile = cached.coversWholeFile && trimmed.length === merged.length;
+        storeIncrementalTailCache(filePath, size, mtimeMs, trimmed, coversWholeFile);
+        if (coversWholeFile || trimmed.length >= needed) {
+            return { lines: trimmed, coversWholeFile };
+        }
+        // Should not happen (we only grew), but be safe.
+        return { lines: trimmed, coversWholeFile };
+    } catch {
+        return null;
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+function storeIncrementalTailCache(filePath: string, size: number, mtimeMs: number, lines: string[], coversWholeFile: boolean): void {
+    const retained = lines.length > TAIL_LINES_RETAINED ? lines.slice(lines.length - TAIL_LINES_RETAINED) : lines;
+    const covers = coversWholeFile && retained.length === lines.length;
+    incrementalTailCache.delete(filePath);
+    incrementalTailCache.set(filePath, { size, mtimeMs, lines: retained, coversWholeFile: covers });
+    evictIncrementalTailCache();
+}
+
 // Read newest-first only as many files as needed to cover the requested window
 // plus slack. listHistoryFiles already returns files reversed (newest-first), so
 // we accumulate (de-duped) candidates from the end and stop once we have enough,
@@ -1250,19 +1485,22 @@ function readBoundedTailRecords(
 
     for (let f = 0; f < files.length; f++) {
         const filePath = path.join(dir, files[f]);
-        let content: string;
-        try {
-            content = fs.readFileSync(filePath, 'utf-8');
-        } catch {
-            continue;
-        }
-        const lines = content.trim().split('\n').filter(Boolean);
-        // Walk this file's lines newest-first so we fill the tail window from the
-        // bottom. seen-dedup keeps the same first-wins-by-newest semantics the
+        // Read only the file tail needed to top up the window — for a large
+        // single-day file this seeks the last `needed` lines instead of parsing
+        // the whole file. We re-derive the per-file floor each iteration from how
+        // many records are still missing (plus slack so dedup at the boundary is
+        // stable), capped at `needed`.
+        const remaining = Math.max(0, needed - collected.length);
+        const perFileNeeded = Math.min(needed, remaining + BOUNDED_TAIL_SLACK);
+        const { lines, coversWholeFile } = readFileTailLines(filePath, perFileNeeded);
+        // Walk this file's tail lines newest-first so we fill the tail window from
+        // the bottom. seen-dedup keeps the same first-wins-by-newest semantics the
         // full read produced (files are processed newest-first there too).
         for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i];
+            if (!line) continue;
             try {
-                const parsed = JSON.parse(lines[i]) as HistoryMessage;
+                const parsed = JSON.parse(line) as HistoryMessage;
                 const sanitizedMessage = sanitizeHistoryMessage(agentType, parsed);
                 if (!sanitizedMessage) continue;
                 const hash = buildHistoryMessageHash(agentType, sanitizedMessage);
@@ -1270,6 +1508,13 @@ function readBoundedTailRecords(
                 seen.add(hash);
                 collected.push(sanitizedMessage);
             } catch { /* skip invalid lines */ }
+        }
+        // If we only read this file's tail (its head was not reached), older
+        // messages remain within this very file — the conversation is NOT fully
+        // represented even if this is the last file, so hasMore must stay true.
+        if (!coversWholeFile) {
+            readAllFiles = false;
+            break;
         }
         // Stop once we have the window AND there is at least one more file (so a
         // potential older boundary message exists). If this is the last file we
