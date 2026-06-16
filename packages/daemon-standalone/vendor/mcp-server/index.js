@@ -1684,6 +1684,12 @@ function findClonedFromNode(ctx, node) {
   if (!clonedFromNodeId) return void 0;
   return ctx.mesh.nodes.find((n) => n.id === clonedFromNodeId || n.nodeId === clonedFromNodeId || n.node_id === clonedFromNodeId);
 }
+function resolvePreferredWorktreeNodeId(ctx) {
+  const worktreeNodes = (ctx.mesh.nodes || []).filter((n) => n.isLocalWorktree === true);
+  if (worktreeNodes.length === 0) return void 0;
+  const chosen = worktreeNodes[worktreeNodes.length - 1];
+  return readString(chosen?.id) || readString(chosen?.nodeId) || readString(chosen?.node_id);
+}
 function isLocalControlPlaneNode(ctx, node) {
   return !!getLocalControlPlaneMatchReason(ctx, node);
 }
@@ -2203,11 +2209,12 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
 function isP2pTransportUnavailableError(error) {
   return (0, import_daemon_core.isP2pRelayTransportFailure)(error);
 }
-function buildRemoveNodeArgs(ctx, nodeId, sessionCleanupMode) {
+function buildRemoveNodeArgs(ctx, nodeId, sessionCleanupMode, force) {
   return {
     meshId: ctx.mesh.id,
     nodeId,
     ...sessionCleanupMode ? { sessionCleanupMode } : {},
+    ...force === true ? { force: true } : {},
     inlineMesh: ctx.mesh
   };
 }
@@ -2246,6 +2253,10 @@ var MESH_ENQUEUE_TASK_TOOL = {
       taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
       requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu." },
       required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." },
+      target_node_id: { type: "string", description: "Optional: only this node may claim the task. Use to route a queued task to a specific (e.g. freshly cloned) worktree node instead of letting the first idle base node claim it. Takes priority over prefer_worktree." },
+      targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
+      prefer_worktree: { type: "boolean", description: "Optional: when true, route this task to the most recently cloned idle worktree node (avoids the main/base workspace preemptively claiming an isolated task). No-op if no worktree node exists; resolves to a target_node_id when one does." },
+      preferWorktree: { type: "boolean", description: "CamelCase alias for prefer_worktree." },
       depends_on: { type: "array", items: { type: "string" }, description: "Task ids that must complete before this task becomes claimable. Cycles are rejected at enqueue." },
       dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
       mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id)." },
@@ -2445,7 +2456,7 @@ var MESH_CLONE_NODE_TOOL = {
 };
 var MESH_REMOVE_NODE_TOOL = {
   name: "mesh_remove_node",
-  description: "Remove a node from the mesh. If the node is a worktree, also cleans up the git worktree and directory. Session cleanup is controlled by mesh policy sessionCleanupOnNodeRemove unless session_cleanup_mode overrides it for this call.",
+  description: "Remove a node from the mesh. If the node is a worktree, also cleans up the git worktree and directory. Session cleanup is controlled by mesh policy sessionCleanupOnNodeRemove unless session_cleanup_mode overrides it for this call. The coordinator's own local base node (same machine, NOT a worktree) is protected \u2014 removing it breaks live mesh membership and is rejected unless force:true is passed.",
   inputSchema: {
     type: "object",
     properties: {
@@ -2454,7 +2465,8 @@ var MESH_REMOVE_NODE_TOOL = {
         type: "string",
         enum: ["preserve", "stop", "delete_stopped", "stop_and_delete"],
         description: "Optional override for cleanup of delegated sessions attached to this node. preserve keeps history/processes; stop stops live runtimes only; delete_stopped removes completed transcripts only; stop_and_delete stops live runtimes and deletes records."
-      }
+      },
+      force: { type: "boolean", description: "Override the coordinator-base-node guard. Only set true to intentionally tear down this mesh; the coordinator must then be re-registered/restarted. Worktree nodes never need force." }
     },
     required: ["node_id"]
   }
@@ -3225,8 +3237,11 @@ async function meshEnqueueTask(ctx, args) {
   const requiredTags = (0, import_daemon_core.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
   const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
+  const explicitTarget = readString(args.targetNodeId) || readString(args.target_node_id) || void 0;
+  const preferWorktree = args.preferWorktree === true || args.prefer_worktree === true;
+  const targetNodeId = explicitTarget || (preferWorktree ? resolvePreferredWorktreeNodeId(ctx) : void 0);
   try {
-    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId });
+    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId });
     if (!(ctx.transport instanceof IpcTransport)) {
       const queueTrigger = await triggerMeshQueueAndReport(ctx);
       return JSON.stringify({
@@ -3236,6 +3251,8 @@ async function meshEnqueueTask(ctx, args) {
         status: task.status,
         taskMode: task.taskMode,
         requiredTags: task.requiredTags,
+        ...targetNodeId ? { targetNodeId } : {},
+        ...preferWorktree && !explicitTarget && !targetNodeId ? { preferWorktreeNoOp: true } : {},
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
@@ -3246,6 +3263,7 @@ async function meshEnqueueTask(ctx, args) {
       for (const node of ctx.mesh.nodes) {
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (isLocalNode || !node.daemonId) continue;
+        if (targetNodeId && node.id !== targetNodeId) continue;
         if (!(0, import_daemon_core.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core.buildMeshNodeCapabilityTags)(node))) continue;
         dispatchPromises.push(
           ipcDispatchToRemoteAgent(ctx, node, { message: args.message }).then((result) => {
@@ -3300,6 +3318,8 @@ async function meshEnqueueTask(ctx, args) {
         status: task.status,
         taskMode: task.taskMode,
         requiredTags: task.requiredTags,
+        ...targetNodeId ? { targetNodeId } : {},
+        ...preferWorktree && !explicitTarget && !targetNodeId ? { preferWorktreeNoOp: true } : {},
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
@@ -4163,7 +4183,7 @@ async function meshCleanupSessions(ctx, args) {
 }
 async function meshRemoveNode(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
-  const removeArgs = buildRemoveNodeArgs(ctx, args.node_id, args.session_cleanup_mode);
+  const removeArgs = buildRemoveNodeArgs(ctx, args.node_id, args.session_cleanup_mode, args.force === true);
   let result;
   let transportFallback;
   try {
