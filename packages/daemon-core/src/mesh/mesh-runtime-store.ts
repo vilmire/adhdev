@@ -1396,4 +1396,34 @@ export class MeshRuntimeStore {
         ).get(meshId) as { cnt: number } | undefined;
         return row?.cnt ?? 0;
     }
+
+    /**
+     * Mark specific pending-event rows drained by id (ack). Used by the
+     * unresolved-delegate durable-forward outbox: an event is peeked (not drained)
+     * while its push to the coordinator is unconfirmed, then marked drained ONLY
+     * after the push is acked. A failed push leaves the row undrained so the next
+     * reconcile tick retries it. Returns the number of rows newly marked drained.
+     */
+    markPendingEventsDrainedById(ids: ReadonlyArray<string>): number {
+        const idList = ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
+        if (idList.length === 0) return 0;
+        const now = Date.now();
+        return this.db.prepare(
+            `UPDATE mesh_pending_events SET drained = 1, drained_at = ? WHERE drained = 0 AND id IN (${idList.map(() => '?').join(',')})`
+        ).run(now, ...idList).changes;
+    }
+
+    /**
+     * Hard-delete pending-event rows by id (including the dedup fingerprint history).
+     * Used to expire an unresolved-delegate outbox entry that has exhausted its retry
+     * budget — fully removing it frees the fingerprint so a genuinely new completion
+     * for the same task could be re-queued later. Returns the number of rows deleted.
+     */
+    deletePendingEventsById(ids: ReadonlyArray<string>): number {
+        const idList = ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
+        if (idList.length === 0) return 0;
+        return this.db.prepare(
+            `DELETE FROM mesh_pending_events WHERE id IN (${idList.map(() => '?').join(',')})`
+        ).run(...idList).changes;
+    }
 }

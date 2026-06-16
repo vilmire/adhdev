@@ -13,6 +13,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
+import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
 import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import {
@@ -1539,8 +1540,16 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
 //  - It fires only when the normal queue path did NOT run (isDelegate=false), so the
 //    event is never both queued locally and forwarded.
 //
-// Returns true when the event was handed off to the coordinator daemon (so the caller
-// skips the delivery_unroutable diagnostic); false when no fallback was possible.
+// Returns true when the event was durably accepted for delivery to the coordinator
+// daemon (so the caller skips the delivery_unroutable diagnostic); false when no
+// fallback was possible (no coordinator anchor / no dispatch transport).
+//
+// Durability: the directed push to the coordinator is the ONLY delivery route for an
+// unresolved-mesh worker (it is in no mesh.node the coordinator can pull). So instead
+// of a fire-and-forget push that drops on one transient P2P failure, the event is
+// persisted to the worker-side outbox FIRST and only acked after a successful push.
+// A best-effort immediate push keeps latency low on the happy path; a failed or
+// un-acked push leaves the durable row for setupMeshReconcileLoop's PHASE 0 to retry.
 function forwardUnresolvedDelegateEvent(
     components: DaemonComponents,
     routing: ReturnType<typeof resolveWorkerDelegateRouting>,
@@ -1564,14 +1573,50 @@ function forwardUnresolvedDelegateEvent(
         workspace: readNonEmptyString(routing.workspace) || readNonEmptyString(event.workspace) || undefined,
     };
 
+    // 1) Persist durably FIRST. Idempotent on fingerprint, so a re-fired completion
+    //    does not duplicate the outbox row. If persistence fails we still attempt the
+    //    push below (degrades to the old at-most-once behaviour rather than dropping
+    //    the chance entirely).
+    const persisted = enqueueUnresolvedDelegateForward(coordinatorDaemonId, eventName, payload);
+
+    // 2) Best-effort immediate push for low latency. On success, ack the outbox row so
+    //    the retry loop won't re-send it. On failure, leave it queued — PHASE 0 retries.
     Promise.resolve(components.dispatchMeshCommand(coordinatorDaemonId, 'mesh_forward_event', payload))
+        .then((result: any) => {
+            if (result && result.success === false) {
+                LOG.warn('MeshEvents', `Immediate forward of ${eventName} to coordinator ${coordinatorDaemonId} rejected (${readNonEmptyString(result.error) || 'no reason'}) — left queued for retry`);
+                return;
+            }
+            // Acked. Mark the durable copy delivered so the retry loop skips it.
+            if (persisted) ackUnresolvedDelegateForwardByFingerprint(coordinatorDaemonId, eventName, payload);
+        })
         .catch((e: any) => {
-            // The coordinator may be momentarily unreachable; the diagnostic was already
-            // skipped, so leave a trace here so an operator can see the relay attempt failed.
-            LOG.warn('MeshEvents', `Fallback forward of ${eventName} to coordinator ${coordinatorDaemonId} failed: ${e?.message || e}`);
+            // Coordinator momentarily unreachable; the durable row stays queued and the
+            // reconcile loop retries it. Trace so the relay attempt is visible.
+            LOG.warn('MeshEvents', `Immediate forward of ${eventName} to coordinator ${coordinatorDaemonId} failed: ${e?.message || e} — left queued for retry`);
         });
-    LOG.info('MeshEvents', `Fallback-forwarded ${eventName} for unresolved-mesh worker at ${routing.workspace || '(no workspace)'} to coordinator daemon ${coordinatorDaemonId}`);
+    LOG.info('MeshEvents', `Durably forwarded ${eventName} for unresolved-mesh worker at ${routing.workspace || '(no workspace)'} to coordinator daemon ${coordinatorDaemonId}`);
     return true;
+}
+
+// Ack a just-pushed outbox entry by re-deriving its row from the same coordinator +
+// event + payload. We don't thread the row id back from enqueue (the immediate push is
+// fire-then-ack), so locate it among the undrained entries by matching coordinator and
+// the flat payload's forward identity. A miss is harmless — the retry loop's own
+// receiver-side dedup suppresses a duplicate delivery.
+function ackUnresolvedDelegateForwardByFingerprint(
+    coordinatorDaemonId: string,
+    eventName: string,
+    payload: Record<string, unknown>,
+): void {
+    const match = peekUnresolvedDelegateForwards().find(entry =>
+        entry.coordinatorDaemonId === coordinatorDaemonId
+        && readNonEmptyString(entry.payload.event) === eventName
+        && readNonEmptyString(entry.payload.targetSessionId || entry.payload.sessionId || entry.payload.instanceId)
+            === readNonEmptyString(payload.targetSessionId || payload.sessionId || payload.instanceId)
+        && readNonEmptyString(entry.payload.workspace) === readNonEmptyString(payload.workspace),
+    );
+    if (match) ackUnresolvedDelegateForward(match.id);
 }
 
 export function setupMeshEventForwarding(components: DaemonComponents) {

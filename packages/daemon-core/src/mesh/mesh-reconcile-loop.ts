@@ -49,6 +49,11 @@ import { drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { handleMeshForwardEvent, shouldForceInjectMeshEvent, MESH_FORCE_INJECT_EVENTS } from './mesh-events-coordinator.js';
+import {
+    peekUnresolvedDelegateForwards,
+    ackUnresolvedDelegateForward,
+    expireStaleUnresolvedDelegateForwards,
+} from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 
 // Default reconcile cadence. approval/completion notifications to a live CLI
@@ -213,6 +218,20 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         try { return MeshRuntimeStore.getInstance(); } catch { return undefined; }
     })();
 
+    // ── PHASE 0: retry the worker-side unresolved-delegate forward outbox ──────
+    // Cloud-only (needs dispatchMeshCommand). A worker that is NOT a member of the
+    // coordinator's mesh cannot be reached by the coordinator's PHASE 1 pull (it is
+    // in no mesh.node), so its completion must be PUSHED to the coordinator. This
+    // drains the durable outbox enqueued by forwardUnresolvedDelegateEvent and retries
+    // any push that has not yet been acked. See mesh-unresolved-forward-outbox.ts.
+    if (dispatchMeshCommand) {
+        try {
+            await retryUnresolvedDelegateForwards(components);
+        } catch (e: any) {
+            LOG.warn('MeshReconcile', `Unresolved-delegate forward retry failed: ${e?.message || e}`);
+        }
+    }
+
     // ── PHASE 1: pull remote node queues for every mesh this daemon hosts ──────
     // Cloud-only (dispatchMeshCommand present). Runs whether or not a live CLI
     // coordinator exists — this is what lets an MCP/LLM coordinator ever see a
@@ -292,6 +311,42 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                 injectPendingIntoCoordinator(c.instance, pending);
             }
         }
+    }
+}
+
+// Cloud-only: retry the worker-side unresolved-delegate forward outbox. For each
+// durably-queued entry, push it to its coordinator daemon over P2P (mesh_forward_event)
+// and ack (mark drained) ONLY on a successful, non-rejected response. A failed or
+// rejected push leaves the entry queued for the next tick — at-least-once delivery.
+// Stale entries (coordinator unreachable past the max age) are expired first so the
+// outbox can't grow without bound. The coordinator dedups duplicate deliveries on its
+// own fingerprint, so a retry that races the original immediate push is harmless.
+async function retryUnresolvedDelegateForwards(components: DaemonComponents): Promise<void> {
+    const dispatchMeshCommand = components.dispatchMeshCommand;
+    if (!dispatchMeshCommand) return;
+
+    // Drop entries that have exhausted their retry budget (fail-loud inside).
+    expireStaleUnresolvedDelegateForwards();
+
+    const entries = peekUnresolvedDelegateForwards();
+    if (entries.length === 0) return;
+
+    for (const entry of entries) {
+        let result: any;
+        try {
+            result = await dispatchMeshCommand(entry.coordinatorDaemonId, 'mesh_forward_event', entry.payload);
+        } catch (e: any) {
+            // Coordinator unreachable — keep the entry queued and try again next tick.
+            LOG.warn('MeshReconcile', `Retry forward to coordinator ${entry.coordinatorDaemonId} failed: ${e?.message || e} — left queued`);
+            continue;
+        }
+        if (result && result.success === false) {
+            LOG.warn('MeshReconcile', `Retry forward to coordinator ${entry.coordinatorDaemonId} rejected (${readNonEmptyString(result.error) || 'no reason'}) — left queued`);
+            continue;
+        }
+        // Acked — mark the durable copy delivered.
+        ackUnresolvedDelegateForward(entry.id);
+        LOG.info('MeshReconcile', `Retried+delivered unresolved-delegate ${readNonEmptyString(entry.payload.event)} to coordinator ${entry.coordinatorDaemonId}`);
     }
 }
 
