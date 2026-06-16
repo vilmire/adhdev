@@ -31,6 +31,8 @@ import {
     normalizeGitStatus as sharedNormalizeGitStatus,
     pickBestTransitGitStatus as sharedPickBestTransitGitStatus,
     summarizeGitShape as sharedSummarizeGitShape,
+    normalizeMeshNodeId,
+    meshNodeIdMatches,
 } from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
@@ -161,7 +163,10 @@ function summarizeRepoMeshStatusDebug(status: any): Record<string, unknown> {
         branchConvergenceSummary: status?.branchConvergenceSummary ?? status?.branch_convergence_summary ?? null,
         nodeCount: nodes.length,
         nodes: nodes.map((node: any) => ({
-            nodeId: readStringValue(node?.nodeId, node?.id) ?? null,
+            // Status emits the id under `nodeId` (3-way input absorbed). The
+            // inline cache keeps `id` and `nodeId` equal, so this serialized form
+            // round-trips back through the cache without flipping shape.
+            nodeId: normalizeMeshNodeId(node) ?? null,
             daemonId: readStringValue(node?.daemonId, node?.daemon_id) ?? null,
             workspace: readStringValue(node?.workspace, node?.git?.workspace) ?? null,
             health: readStringValue(node?.health) ?? null,
@@ -476,7 +481,49 @@ function inlineMeshCarriesTransientNodeTruth(inlineMesh: any): boolean {
 }
 
 function readInlineMeshNodeId(node: any): string {
-    return readStringValue(node?.id, node?.nodeId) || '';
+    // 3-way (id / nodeId / node_id) via the shared normalizer. The old 2-way
+    // `id ?? nodeId` dropped the SQLite `node_id` form, so an inline-cached node
+    // that arrived in that form failed to reconcile against its cached twin.
+    return normalizeMeshNodeId(node) ?? '';
+}
+
+// Boundary normalization: reconcile a node's identity so `id` and `nodeId` both
+// carry the same canonical value (any incoming form — id / nodeId / node_id — is
+// absorbed by normalizeMeshNodeId, and the SQLite `node_id` leak is dropped).
+// See foldMeshNodeIdentityToCanonical for why both fields are kept equal rather
+// than collapsing to one. The rewrite is shallow (other runtime fields are
+// preserved); records that already agree are returned unchanged so
+// identity-equality fast paths hold.
+function foldMeshNodeIdentityToCanonical(node: any): any {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return node;
+    const canonical = normalizeMeshNodeId(node);
+    if (canonical === undefined) return node;
+    // Save-boundary identity folding, applied IN PLACE. We DUAL-WRITE both `id`
+    // and `nodeId` to the single canonical value (and drop the SQLite `node_id`
+    // leak), rather than collapsing to one field. Two halves of the system read
+    // different field names: the mesh_status serializer emits `nodeId`, while the
+    // worktree clone path and get_mesh membership consumers read `node.id`.
+    // Folding to ONE form would break whichever side reads the other. Keeping
+    // both fields equal makes every reader correct AND makes the
+    // snapshot→cache→reconcile→snapshot round-trip form-stable (no field ever
+    // flips, because both always agree). Mutating in place (not returning a new
+    // object) preserves the cached node-object identity that callers warming an
+    // inline mesh from an already-shared snapshot rely on.
+    if (node.id === canonical && node.nodeId === canonical && node.node_id === undefined) return node;
+    node.id = canonical;
+    node.nodeId = canonical;
+    if ('node_id' in node) delete node.node_id;
+    return node;
+}
+
+function normalizeInlineMeshNodeIdentity(inlineMesh: any): any {
+    if (!inlineMesh || typeof inlineMesh !== 'object' || Array.isArray(inlineMesh)) return inlineMesh;
+    if (!Array.isArray(inlineMesh.nodes) || inlineMesh.nodes.length === 0) return inlineMesh;
+    // Fold each node IN PLACE so the mesh object and its nodes array keep their
+    // identity — sanitizeInlineMesh and the cache-sharing callers depend on
+    // unchanged inputs returning the same reference.
+    for (const node of inlineMesh.nodes) foldMeshNodeIdentityToCanonical(node);
+    return inlineMesh;
 }
 
 function sanitizeInlineMesh(inlineMesh: any): any {
@@ -603,7 +650,7 @@ function deriveMeshNodeHealthFromGit(git: Record<string, unknown> | null | undef
 }
 
 function readMeshNodeLabel(status: Record<string, unknown>, node: any): string {
-    return readStringValue(status.nodeId, node?.id, node?.nodeId) ?? 'unknown';
+    return readStringValue(status.nodeId, normalizeMeshNodeId(node)) ?? 'unknown';
 }
 
 function buildInlineMeshBranchConvergence(args: {
@@ -946,7 +993,7 @@ async function hydrateInlineMeshDirectTruth(args: {
     const unavailableNodeIds: string[] = [];
 
     for (const [nodeIndex, node] of nodes.entries()) {
-        const nodeId = readStringValue(node?.id, node?.nodeId) || `node_${nodeIndex}`;
+        const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
         const workspace = readStringValue(node?.workspace);
         const daemonId = readStringValue(node?.daemonId);
         const isSelfNode = Boolean(
@@ -1122,7 +1169,7 @@ function buildHistoricalMeshSessions(args: {
     const liveWorkspaces = new Set<string>();
     const missingLocalWorktreeNodeIds = new Set<string>();
     for (const node of args.nodes || []) {
-        const nodeId = readStringValue(node?.id, node?.nodeId);
+        const nodeId = normalizeMeshNodeId(node);
         const workspace = readStringValue(node?.workspace);
         if (nodeId) liveNodeIds.add(nodeId);
         if (workspace) liveWorkspaces.add(workspace);
@@ -2787,7 +2834,7 @@ function buildMemberJoinNode(mesh: any, args: any, fallbackDaemonId?: string): R
         : null;
     const configured = Array.isArray(mesh?.nodes)
         ? (requestedNodeId
-            ? mesh.nodes.find((node: any) => node?.id === requestedNodeId || node?.nodeId === requestedNodeId)
+            ? mesh.nodes.find((node: any) => meshNodeIdMatches(node, requestedNodeId))
             : mesh.nodes[0])
         : null;
     const source = explicit || configured;
@@ -2859,7 +2906,7 @@ export class DaemonCommandRouter {
         }
 
         const nodes = snapshot.nodes.map((statusNode: any) => {
-            const nodeId = readStringValue(statusNode?.nodeId, statusNode?.id);
+            const nodeId = normalizeMeshNodeId(statusNode);
             const inlineNode = nodeId ? inlineNodesById.get(nodeId) : undefined;
             if (!inlineNode) return statusNode;
             const liveGit = buildInlineMeshTransitGitStatus(inlineNode);
@@ -2987,7 +3034,10 @@ export class DaemonCommandRouter {
 
     private warmInlineMeshCache(meshId: string, inlineMesh?: unknown): any | undefined {
         if (!inlineMesh || typeof inlineMesh !== 'object') return undefined;
-        const sanitizedInlineMesh = sanitizeInlineMesh(inlineMesh as any);
+        // Save-boundary node-id normalization: reconcile each node's identity so
+        // `id` and `nodeId` agree before it enters the cache, so reconcile keys
+        // and the round-trip through the status serializer stay form-stable.
+        const sanitizedInlineMesh = sanitizeInlineMesh(normalizeInlineMeshNodeIdentity(inlineMesh as any));
         const cached = this.inlineMeshCache.get(meshId);
         if (cached) {
             const merged = reconcileInlineMeshCache(cached, sanitizedInlineMesh);
@@ -3009,7 +3059,7 @@ export class DaemonCommandRouter {
             if (cached) {
                 if (inlineMeshCarriesTransientNodeTruth(inlineMesh)) {
                     const merged = reconcileInlineMeshCache(cached, inlineMesh as any);
-                    this.inlineMeshCache.set(meshId, sanitizeInlineMesh(merged));
+                    this.inlineMeshCache.set(meshId, sanitizeInlineMesh(normalizeInlineMeshNodeIdentity(merged)));
                     return { mesh: merged, inline: true, source: 'inline_cache' };
                 }
                 return { mesh: cached, inline: true, source: 'inline_cache' };
@@ -3048,18 +3098,25 @@ export class DaemonCommandRouter {
     }
 
     private updateInlineMeshNode(meshId: string, mesh: any, node: any): void {
-        if (!mesh || !Array.isArray(mesh.nodes) || !node?.id) return;
-        const idx = mesh.nodes.findIndex((entry: any) => entry?.id === node.id || entry?.nodeId === node.id);
+        const incomingId = normalizeMeshNodeId(node);
+        if (!mesh || !Array.isArray(mesh.nodes) || !incomingId) return;
+        const idx = mesh.nodes.findIndex((entry: any) => meshNodeIdMatches(entry, incomingId));
         if (idx >= 0) mesh.nodes[idx] = node;
         else mesh.nodes.push(node);
         mesh.updatedAt = new Date().toISOString();
+        // Canonicalize node identity in place (id and nodeId kept equal): clone
+        // nodes are created with `id` and re-inserted here (bypassing
+        // warmInlineMeshCache), so this is a second save boundary. In-place
+        // folding preserves the caller's `mesh` / nodes-array references, which
+        // persistWorktreeSetupState reuses across subsequent calls.
+        for (const entry of mesh.nodes) foldMeshNodeIdentityToCanonical(entry);
         this.inlineMeshCache.set(meshId, mesh);
         this.invalidateAggregateMeshStatus(meshId);
     }
 
     private removeInlineMeshNode(meshId: string, mesh: any, nodeId: string): boolean {
         if (!mesh || !Array.isArray(mesh.nodes)) return false;
-        const idx = mesh.nodes.findIndex((entry: any) => entry?.id === nodeId || entry?.nodeId === nodeId);
+        const idx = mesh.nodes.findIndex((entry: any) => meshNodeIdMatches(entry, nodeId));
         if (idx === -1) return false;
         mesh.nodes.splice(idx, 1);
         mesh.updatedAt = new Date().toISOString();
@@ -3105,7 +3162,7 @@ export class DaemonCommandRouter {
 
         const worktreeExists = fs.existsSync(workspace);
         const sourceNode = args.node?.clonedFromNodeId
-            ? args.mesh?.nodes?.find((n: any) => n.id === args.node.clonedFromNodeId || n.nodeId === args.node.clonedFromNodeId)
+            ? args.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, args.node.clonedFromNodeId))
             : args.mesh?.nodes?.find((n: any) => !n.isLocalWorktree);
         const repoRoot = typeof sourceNode?.repoRoot === 'string' && sourceNode.repoRoot.trim()
             ? sourceNode.repoRoot.trim()
@@ -3865,7 +3922,7 @@ export class DaemonCommandRouter {
             // preferInline: same as startMeshRefineJob — inline-cache-only clone nodes must resolve.
             const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
             const mesh = meshRecord?.mesh;
-            const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+            const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
             if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh`, refineStages };
 
             if (!node.isLocalWorktree || !node.workspace) {
@@ -3873,7 +3930,7 @@ export class DaemonCommandRouter {
             }
 
             const sourceNode = node.clonedFromNodeId
-                ? mesh?.nodes.find((n: any) => n.id === node.clonedFromNodeId || n.nodeId === node.clonedFromNodeId)
+                ? mesh?.nodes.find((n: any) => meshNodeIdMatches(n, node.clonedFromNodeId))
                 : mesh?.nodes.find((n: any) => !n.isLocalWorktree);
             const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
             if (!repoRoot) return { success: false, error: 'Source node repoRoot not found', refineStages };
@@ -4586,7 +4643,7 @@ export class DaemonCommandRouter {
             const missing: string[] = [];
             const nonWorktree: string[] = [];
             for (const nodeId of requestedNodeIds) {
-                const node = allNodes.find(n => n.id === nodeId || n.nodeId === nodeId);
+                const node = allNodes.find(n => meshNodeIdMatches(n, nodeId));
                 if (!node) { missing.push(nodeId); continue; }
                 if (!isConvergeable(node)) { nonWorktree.push(nodeId); continue; }
                 targetNodes.push(node);
@@ -4615,7 +4672,7 @@ export class DaemonCommandRouter {
         // Resolve the base repo root and a base ref to analyze change areas against.
         const resolveRepoRootFor = (node: any): string | undefined => {
             const sourceNode = node.clonedFromNodeId
-                ? allNodes.find(n => n.id === node.clonedFromNodeId || n.nodeId === node.clonedFromNodeId)
+                ? allNodes.find(n => meshNodeIdMatches(n, node.clonedFromNodeId))
                 : allNodes.find(n => !n.isLocalWorktree);
             return sourceNode?.repoRoot || sourceNode?.workspace;
         };
@@ -4701,7 +4758,7 @@ export class DaemonCommandRouter {
 
         const ordering = orderMeshRefineBatchNodes(changeAreas);
         const orderedNodes = ordering.order
-            .map(nodeId => targetNodes.find(n => n.id === nodeId || n.nodeId === nodeId))
+            .map(nodeId => targetNodes.find(n => meshNodeIdMatches(n, nodeId)))
             .filter((n): n is any => !!n);
 
         const dryRun = args?.dryRun !== false && args?.execute !== true;
@@ -5039,7 +5096,7 @@ export class DaemonCommandRouter {
         const mesh = meshRecord?.mesh;
         const allNodes: any[] = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
         const orderedNodes = nodeIds
-            .map(id => allNodes.find(n => n.id === id || n.nodeId === id))
+            .map(id => allNodes.find(n => meshNodeIdMatches(n, id)))
             .filter((n): n is any => !!n);
         if (orderedNodes.length === 0) {
             return { success: false, error: 'Batch nodes no longer resolvable in mesh', batch: true };
@@ -5198,7 +5255,7 @@ export class DaemonCommandRouter {
         // config-first and misses nodes that only live in the inline cache.
         const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
         const mesh = meshRecord?.mesh;
-        const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+        const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
         if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
         if (!node.isLocalWorktree || !node.workspace) return { success: false, error: `Refinery requires a local worktree node` };
 
@@ -5282,7 +5339,7 @@ export class DaemonCommandRouter {
                         const { getMesh } = await import('../config/mesh-config.js');
                         const meshObj = getMesh(meshId) ?? this.getCachedInlineMesh(meshId);
                         const nodeObj = Array.isArray(meshObj?.nodes)
-                            ? meshObj.nodes.find((n: any) => n.id === meshNodeId || n.nodeId === meshNodeId)
+                            ? meshObj.nodes.find((n: any) => meshNodeIdMatches(n, meshNodeId))
                             : undefined;
                         const bootstrapStatus = readStringValue(nodeObj?.worktreeBootstrap?.status);
                         if (bootstrapStatus === 'running') {
@@ -5339,7 +5396,7 @@ export class DaemonCommandRouter {
                         const { getMesh } = await import('../config/mesh-config.js');
                         const meshObj = getMesh(dispatchMeshId) ?? this.getCachedInlineMesh(dispatchMeshId);
                         const nodeObj = Array.isArray(meshObj?.nodes)
-                            ? meshObj.nodes.find((n: any) => n.id === dispatchNodeId || n.nodeId === dispatchNodeId)
+                            ? meshObj.nodes.find((n: any) => meshNodeIdMatches(n, dispatchNodeId))
                             : undefined;
                         const bootstrapStatus = readStringValue(nodeObj?.worktreeBootstrap?.status);
                         if (bootstrapStatus === 'running') {
@@ -6778,7 +6835,7 @@ export class DaemonCommandRouter {
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
-                    const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
                     if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
                     const mode = this.normalizeMeshSessionCleanupMode(args?.mode ?? mesh?.policy?.sessionCleanupOnNodeRemove);
                     const sessionIds = Array.isArray(args?.sessionIds)
@@ -6844,7 +6901,7 @@ export class DaemonCommandRouter {
                 // preferInline: plan is the dry-run sibling of refine — clone nodes must resolve.
                 const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                 const mesh = meshRecord?.mesh;
-                const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
                 if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
                 return {
                     success: true,
@@ -6870,7 +6927,7 @@ export class DaemonCommandRouter {
                     // preferInline so fast-forward can resolve inline-cache-only clone worktree nodes.
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
-                    const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
                     if (!workspace) {
                         workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
                     }
@@ -6923,7 +6980,7 @@ export class DaemonCommandRouter {
                     // preferInline: plan is the dry-run sibling of refine — clone nodes must resolve.
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
-                    const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
                     if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
                     return {
                         success: true,
@@ -6963,7 +7020,7 @@ export class DaemonCommandRouter {
                     // preferInline so removal can resolve inline-cache-only clone worktree nodes.
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
-                    const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
 
                     // Guard: refuse to remove the coordinator's OWN local base node
                     // (same machine, NOT a worktree). Removing it breaks live mesh
@@ -7115,7 +7172,7 @@ export class DaemonCommandRouter {
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
 
-                    const sourceNode = mesh.nodes?.find((n: any) => n.id === sourceNodeId || n.nodeId === sourceNodeId);
+                    const sourceNode = mesh.nodes?.find((n: any) => meshNodeIdMatches(n, sourceNodeId));
                     if (!sourceNode) return { success: false, error: `Source node '${sourceNodeId}' not found in mesh` };
 
                     // Forward to the source node's daemon if it's on a different machine.
@@ -7390,7 +7447,7 @@ export class DaemonCommandRouter {
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
 
-                    const node = mesh.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    const node = mesh.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
                     if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
                     if (!node.isLocalWorktree) return { success: false, error: 'Node is not a local worktree node' };
 
@@ -7566,14 +7623,14 @@ export class DaemonCommandRouter {
                     const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
                     const workspace = readLiveMeshNodeWorkspace({
                         meshId,
-                        nodeId: String(coordinatorNode.id || coordinatorNode.nodeId || preferredCoordinatorNodeId || ''),
+                        nodeId: String(normalizeMeshNodeId(coordinatorNode) || preferredCoordinatorNodeId || ''),
                         liveSessionRecords: liveMeshSessions,
                         allowCoordinatorSession: true,
                     }) || (typeof coordinatorNode.workspace === 'string' ? coordinatorNode.workspace.trim() : '');
                     if (!workspace) return { success: false, error: 'Coordinator node workspace required', meshId, cliType };
                     if (!cliType) {
                         const resolved = await resolveProviderTypeFromPriority({
-                            nodeId: String(coordinatorNode.id || coordinatorNode.nodeId || preferredCoordinatorNodeId || 'coordinator'),
+                            nodeId: String(normalizeMeshNodeId(coordinatorNode) || preferredCoordinatorNodeId || 'coordinator'),
                             providerPriority: readProviderPriorityFromPolicy(coordinatorNode.policy),
                             providerLoader: this.deps.providerLoader,
                             onStatusChange: this.deps.onStatusChange,
@@ -8133,7 +8190,7 @@ export class DaemonCommandRouter {
                     const unavailableNodesAreOnlyRemovedWorktrees = unavailableDirectTruthNodeIds.size > 0
                         && Array.isArray(mesh.nodes)
                         && mesh.nodes
-                            .filter((node: any) => unavailableDirectTruthNodeIds.has(String(node.id || node.nodeId || '')))
+                            .filter((node: any) => unavailableDirectTruthNodeIds.has(normalizeMeshNodeId(node) ?? ''))
                             .every((node: any) => node?.isLocalWorktree === true);
                     const directTruthSatisfied = !requireDirectPeerTruth
                         || (effectiveDirectTruth.directEvidenceCount > 0 && (effectiveDirectTruth.unavailableNodeIds.length === 0 || unavailableNodesAreOnlyRemovedWorktrees));
@@ -8174,8 +8231,7 @@ export class DaemonCommandRouter {
                     const coordinatorHostname = osHostname();
                     const selectedCoordinatorNodeId = readStringValue(
                         mesh.coordinator?.preferredNodeId,
-                        (mesh.nodes?.[0] as any)?.id,
-                        (mesh.nodes?.[0] as any)?.nodeId,
+                        normalizeMeshNodeId(mesh.nodes?.[0] as any),
                     );
                     const inlineCoordinatorNodeId = meshRecord?.inline && Array.isArray(mesh.nodes)
                         ? selectedCoordinatorNodeId
@@ -8183,7 +8239,7 @@ export class DaemonCommandRouter {
                     const refreshedAt = new Date().toISOString();
                     const nodeStatuses = [];
                     for (const [nodeIndex, node] of (mesh.nodes || []).entries()) {
-                        const nodeId = String(node.id || node.nodeId || '');
+                        const nodeId = normalizeMeshNodeId(node) ?? '';
                         const daemonId = readStringValue(node.daemonId);
                         const nodeMachineId = readMeshNodeMachineId(node as Record<string, unknown>);
                         const nodeHostname = readMeshNodeHostname(node as Record<string, unknown>);

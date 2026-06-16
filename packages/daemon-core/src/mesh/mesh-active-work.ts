@@ -1,5 +1,6 @@
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
+import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
 export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval';
@@ -102,7 +103,7 @@ function elapsedSince(value: string | undefined, now: number): number {
 function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessionId?: string): { status?: MeshActiveWorkStatus; staleReason?: string } {
     if (!Array.isArray(nodes)) return {};
     if (!nodeId) return { staleReason: 'direct task has no node id' };
-    const node = nodes.find(item => readString(item?.id) === nodeId || readString(item?.nodeId) === nodeId || readString(item?.node_id) === nodeId);
+    const node = nodes.find(item => meshNodeIdMatches(item, nodeId));
     if (!node) return { staleReason: 'direct task node is no longer in the live mesh' };
     if (!sessionId) return {};
     const candidates: any[] = [];

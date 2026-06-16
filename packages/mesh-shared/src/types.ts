@@ -106,6 +106,27 @@ export interface GitRepoStatus extends GitRepoIdentity {
     reason?: GitFailureReason
 }
 
+/**
+ * Minimal identity shape for a mesh node record. A node's stable identifier can
+ * arrive under any of THREE field names depending on the serialization path it
+ * travelled, all carrying the same value:
+ *  - `id`      — config canonical form (mesh registry / persisted config)
+ *  - `nodeId`  — runtime/wire camelCase form (inline-cache de-serialization,
+ *                mesh_status output)
+ *  - `node_id` — SQLite DB column form leaked onto the object
+ *
+ * Use {@link normalizeMeshNodeId} to read the id regardless of which form is
+ * present. This interface only declares the identity fields — node records carry
+ * many more runtime fields, intentionally left as an open index so existing
+ * `any`-shaped call sites keep compiling while gaining a typed id reader.
+ */
+export interface MeshNodeIdentified {
+    id?: string
+    nodeId?: string
+    node_id?: string
+    [key: string]: unknown
+}
+
 export interface RepoMeshSessionStatus {
     sessionId: string
     providerType?: string

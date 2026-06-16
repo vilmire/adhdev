@@ -94,6 +94,35 @@ describe('buildMeshActiveWork direct task classification', () => {
         expect(result.summary.staleDirectCount).toBe(0);
     });
 
+    // Regression: a mesh node can arrive with its id under any of three
+    // serialization forms (`id` / `nodeId` / `node_id`). The live-session match
+    // in sessionStatusFromNodes must resolve all three identically — comparing
+    // only `node.id` would drop a node delivered in `nodeId` or `node_id` form,
+    // misclassifying its live direct task as stale (same bug class as the queue
+    // target_node_id routing fix). All three must keep the task in activeWork.
+    for (const idForm of ['id', 'nodeId', 'node_id'] as const) {
+        it(`matches a live session when the node id arrives in '${idForm}' form`, () => {
+            const result = buildMeshActiveWork({
+                meshId: 'mesh-1',
+                ledgerEntries: [dispatch()],
+                nodes: [{
+                    [idForm]: 'node-1',
+                    sessions: [{ id: 'session-1', providerType: 'codex-cli', status: 'generating' }],
+                }],
+            });
+
+            expect(result.activeWork).toHaveLength(1);
+            expect(result.activeWork[0]).toMatchObject({
+                taskId: 'task-1',
+                source: 'direct',
+                status: 'generating',
+                nodeId: 'node-1',
+                sessionId: 'session-1',
+            });
+            expect(result.staleDirectWork).toHaveLength(0);
+        });
+    }
+
     it('does not treat ledger-only direct dispatch to an idle session as active work', () => {
         const result = buildMeshActiveWork({
             meshId: 'mesh-1',

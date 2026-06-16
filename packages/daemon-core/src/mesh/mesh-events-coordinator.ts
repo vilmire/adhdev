@@ -14,6 +14,7 @@ import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } f
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
+import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -610,9 +611,11 @@ async function resolveUsableProvider(
 // target-routed task permanently pending with a misleading
 // `no_node_satisfies_required_tags` skip.
 function readMeshNodeId(node: any): string {
-    return readNonEmptyString(node?.id)
-        || readNonEmptyString(node?.nodeId)
-        || readNonEmptyString(node?.node_id);
+    // Delegate to the shared 3-way (id / nodeId / node_id) normalizer so this
+    // and every other mesh node-id read agree on identity. Coalesce to '' to
+    // preserve the existing string return contract for callers that do
+    // `=== task.targetNodeId` / `if (!nodeId)`.
+    return normalizeMeshNodeId(node) ?? '';
 }
 
 async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
@@ -895,7 +898,7 @@ async function maybeAutoFastForwardIdleNode(components: DaemonComponents, args: 
     providerType?: string;
 }): Promise<void> {
     const mesh = getMeshWithCache(components, args.meshId);
-    const node = mesh?.nodes?.find((candidate: any) => candidate?.id === args.nodeId || candidate?.nodeId === args.nodeId);
+    const node = mesh?.nodes?.find((candidate: any) => meshNodeIdMatches(candidate, args.nodeId));
     const workspace = readNonEmptyString(node?.workspace);
     if (!workspace) return;
     if (!existsSync(workspace)) return;
