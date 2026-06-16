@@ -1926,6 +1926,51 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('auto-launches a target_node_id task with empty requiredTags onto an inline-cached worktree node keyed by nodeId (not id)', async () => {
+    // Regression: a queue task routed with target_node_id (prefer_worktree) and an
+    // EMPTY requiredTags ([]) was left permanently pending with a misleading
+    // session_auto_launch skip { reason: "no_node_satisfies_required_tags" }.
+    // Root cause: the auto-launch candidate filter compared only `node.id ===
+    // task.targetNodeId`, but an inline-cache-form mesh node carries its id under
+    // `nodeId`/`node_id` (see readInlineMeshNodeId in commands/router.ts). The
+    // worktree node was therefore dropped from candidates → empty candidate set →
+    // skip, even though empty requiredTags means every node should pass.
+    const meshId = `mesh_auto_launch_target_nodeid_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        // Inline-cache form: id lives under `nodeId`, NOT `id`.
+        nodes: [{ nodeId: 'node_worktree_1', workspace: '/repo/worktree-a', health: 'online', isLocalWorktree: true, policy: { providerPriority: ['antigravity-cli'] } }],
+        policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
+      })
+      detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/antigravity' })
+      // Exactly the live ledger shape: target_node_id set, requiredTags = [].
+      const queued = enqueueTask(meshId, 'queued worktree task', { targetNodeId: 'node_worktree_1', requiredTags: [] })
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      // Must NOT have skipped with the misleading tag reason.
+      expect(getQueue(meshId)[0].autoLaunch?.reason).not.toBe('no_node_satisfies_required_tags')
+      // Auto-launched onto the worktree node and the task was claimed/assigned.
+      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
+        cliType: 'antigravity-cli',
+        dir: '/repo/worktree-a',
+        settings: expect.objectContaining({
+          meshNodeId: 'node_worktree_1',
+          autoLaunchedForQueueTaskId: queued.id,
+        }),
+      }))
+      const [entry] = getQueue(meshId)
+      expect(entry.status).toBe('assigned')
+      expect(entry.assignedNodeId).toBe('node_worktree_1')
+      expect(entry.assignedSessionId).toBe('auto-session-1')
+      expect(entry.autoLaunch?.status).toBe('completed')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('skips auto spin-up when maxParallelTasks is already reached', async () => {
     const meshId = `mesh_auto_launch_max_${Date.now()}`
     try {

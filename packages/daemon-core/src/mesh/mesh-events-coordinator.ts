@@ -255,7 +255,7 @@ export function tryAssignQueueTask(
     providerType: string
 ): boolean {
     const mesh = getMeshWithCache(components, meshId);
-    const node = mesh?.nodes.find((n: any) => n.id === nodeId);
+    const node = mesh?.nodes.find((n: any) => readMeshNodeId(n) === nodeId);
     const capabilityTags = buildMeshNodeCapabilityTags(node, providerType);
     const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags);
     if (!task) {
@@ -603,6 +603,18 @@ async function resolveUsableProvider(
     return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}` };
 }
 
+// Canonical mesh node-id normalization. A node may arrive from the local config
+// form (`id`) or the inline-cache form (`nodeId`/`node_id`) — see
+// readInlineMeshNodeId in commands/router.ts. Comparing only `node.id` against a
+// task.targetNodeId silently drops inline-cached worktree nodes, leaving a
+// target-routed task permanently pending with a misleading
+// `no_node_satisfies_required_tags` skip.
+function readMeshNodeId(node: any): string {
+    return readNonEmptyString(node?.id)
+        || readNonEmptyString(node?.nodeId)
+        || readNonEmptyString(node?.node_id);
+}
+
 async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
     const queue = getQueue(meshId);
     const pending = queue.filter(task => task.status === 'pending');
@@ -621,7 +633,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
 
         const candidateNodes = Array.isArray(mesh?.nodes)
             ? mesh.nodes.filter((node: any) => {
-                if (task.targetNodeId && node?.id !== task.targetNodeId) return false;
+                if (task.targetNodeId && readMeshNodeId(node) !== task.targetNodeId) return false;
                 // Skip nodes that can never satisfy requiredTags regardless of which provider
                 // from providerPriority is selected. A node satisfies tags if at least one
                 // provider in its priority list would produce matching capability tags.
@@ -641,7 +653,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
         }
 
         for (const node of candidateNodes) {
-            const nodeId = readNonEmptyString(node?.id);
+            const nodeId = readMeshNodeId(node);
             if (!nodeId) continue;
             const launchKey = `${meshId}:${nodeId}`;
             const now = Date.now();
