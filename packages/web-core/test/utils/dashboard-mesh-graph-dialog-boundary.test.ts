@@ -304,7 +304,7 @@ describe('dashboard mesh graph dialog wiring', () => {
         const graphViewSource = readSource('components/MeshGraph/MeshGraphView.tsx')
 
         expect(dialogSource).toContain('meshTheme.dialogBodyClass')
-        expect(surfaceSource).toContain('Hover nodes or edges for a quick preview. Click a node when you want pinned drill-down details.')
+        expect(surfaceSource).toContain('Click a node or edge to pin its drill-down details in the side panel. Click it again to close.')
         expect(graphViewSource).toContain('drag or scroll to pan')
         expect(surfaceSource).toContain('role="dialog"')
         expect(surfaceSource).toContain('onClick={closeGraphDetail}')

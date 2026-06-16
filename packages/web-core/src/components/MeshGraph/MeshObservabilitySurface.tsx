@@ -17,6 +17,7 @@ import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from 
 
 type DetailSelection =
     | { kind: 'node'; nodeId: string }
+    | { kind: 'edge'; edgeId: string }
     | { kind: 'session'; nodeId: string; sessionId: string }
     | { kind: 'queue'; taskId: string }
 
@@ -654,8 +655,7 @@ export default function MeshObservabilitySurface({
     // been opened, so the default overview tab stays cheap.
     const [graphMounted, setGraphMounted] = useState(false)
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
-    const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
-    const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
+    const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
     const [gitHistoryByWorkspace, setGitHistoryByWorkspace] = useState<Record<string, GitHistoryState>>({})
     const [healPreview, setHealPreview] = useState<HealPreviewState | null>(null)
@@ -687,15 +687,14 @@ export default function MeshObservabilitySurface({
 
     const selectedNodeStatus = selectedNodeId ? nodeStatusById.get(selectedNodeId) ?? null : null
     const selectedGraphNode = resolveSelectedGraphNodeForDetail(canonicalGraph, selectedNodeId)
-    const hoveredGraphNode = resolveSelectedGraphNodeForDetail(canonicalGraph, hoveredNodeId)
-    const hoveredGraphEdge = hoveredEdgeId
-        ? canonicalGraph.edges.find(edge => edge.id === hoveredEdgeId) ?? null
+    const selectedGraphEdge = detailSelection?.kind === 'edge' && selectedEdgeId
+        ? canonicalGraph.edges.find(edge => edge.id === selectedEdgeId) ?? null
         : null
-    const hoveredEdgeSource = hoveredGraphEdge
-        ? canonicalGraph.nodes.find(node => node.id === hoveredGraphEdge.source) ?? null
+    const selectedEdgeSource = selectedGraphEdge
+        ? canonicalGraph.nodes.find(node => node.id === selectedGraphEdge.source) ?? null
         : null
-    const hoveredEdgeTarget = hoveredGraphEdge
-        ? canonicalGraph.nodes.find(node => node.id === hoveredGraphEdge.target) ?? null
+    const selectedEdgeTarget = selectedGraphEdge
+        ? canonicalGraph.nodes.find(node => node.id === selectedGraphEdge.target) ?? null
         : null
 
     useEffect(() => {
@@ -753,6 +752,7 @@ export default function MeshObservabilitySurface({
 
     const closeGraphDetail = useCallback(() => {
         setSelectedNodeId(null)
+        setSelectedEdgeId(null)
         setDetailSelection(null)
         setHealPreview(null)
     }, [])
@@ -816,13 +816,13 @@ export default function MeshObservabilitySurface({
     }, [canHealSelectedNode, canonicalStatus.meshId, selectedGraphNode, selectedHealDaemonId, sendDaemonCommand])
 
     useEffect(() => {
-        if (!selectedGraphNode) return
+        if (!selectedGraphNode && !selectedGraphEdge) return
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') closeGraphDetail()
         }
         window.addEventListener('keydown', onKeyDown)
         return () => window.removeEventListener('keydown', onKeyDown)
-    }, [closeGraphDetail, selectedGraphNode])
+    }, [closeGraphDetail, selectedGraphEdge, selectedGraphNode])
 
     useEffect(() => {
         if (!selectedGitRequest || !sendDaemonCommand) return
@@ -1036,7 +1036,7 @@ export default function MeshObservabilitySurface({
                                             </div>
                                         )}
                                         <div className={`text-xs ${meshTheme.textMuted}`}>
-                                            Hover nodes or edges for a quick preview. Click a node when you want pinned drill-down details.
+                                            Click a node or edge to pin its drill-down details in the side panel. Click it again to close.
                                         </div>
                                     </div>
                                 </div>
@@ -1064,23 +1064,25 @@ export default function MeshObservabilitySurface({
                                 data={canonicalGraph}
                                 selectedNodeId={selectedNodeId}
                                 directionPref={directionPref}
-                                onNodeHoverChange={node => {
-                                    setHoveredNodeId(node?.id ?? null)
-                                    if (node) setHoveredEdgeId(null)
-                                }}
-                                onEdgeHoverChange={edge => {
-                                    setHoveredEdgeId(edge?.id ?? null)
-                                    if (edge) setHoveredNodeId(null)
-                                }}
                                 onNodeClick={node => {
                                     const shouldCollapse = detailSelection?.kind === 'node' && selectedNodeId === node.id
                                     if (shouldCollapse) {
-                                        setSelectedNodeId(null)
-                                        setDetailSelection(null)
+                                        closeGraphDetail()
                                         return
                                     }
+                                    setSelectedEdgeId(null)
                                     setSelectedNodeId(node.id)
                                     setDetailSelection({ kind: 'node', nodeId: node.id })
+                                }}
+                                onEdgeClick={edge => {
+                                    const shouldCollapse = detailSelection?.kind === 'edge' && selectedEdgeId === edge.id
+                                    if (shouldCollapse) {
+                                        closeGraphDetail()
+                                        return
+                                    }
+                                    setSelectedNodeId(null)
+                                    setSelectedEdgeId(edge.id)
+                                    setDetailSelection({ kind: 'edge', edgeId: edge.id })
                                 }}
                             />
                         ) : (
@@ -1256,69 +1258,34 @@ export default function MeshObservabilitySurface({
                         </div>
                     )}
 
-                    {/* Hover preview — node (only when no selection) */}
-                    {!selectedGraphNode && hoveredGraphNode && (
-                        <div className="pointer-events-none absolute bottom-3 right-4 z-20">
-                            <section
-                                aria-label="Hovered node preview"
-                                className={meshTheme.isDark
-                                    ? 'w-[22rem] rounded-2xl border border-white/12 bg-slate-950/94 p-4 shadow-2xl shadow-black/35 backdrop-blur-xl'
-                                    : 'w-[22rem] rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/12 backdrop-blur-xl'}
-                            >
-                                <div className="mb-3 flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{hoveredGraphNode.label}</div>
-                                        <div className={`mt-1 font-mono text-[11px] ${meshTheme.textMuted}`}>{hoveredGraphNode.id.slice(0, 16)}</div>
-                                    </div>
-                                    <Badge label="hover preview" tone="info" />
+                    {/* Selected edge detail — pinned by clicking an edge (replaces the
+                        old hover preview; click is the primary drill-down path). */}
+                    {selectedGraphEdge && detailSelection?.kind === 'edge' && (
+                        <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 sm:relative sm:inset-auto sm:w-72 sm:shrink-0 overflow-y-auto border-l p-4 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                            <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>Selected edge</div>
+                            <div className="mb-3 flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                    <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphEdge.label || edgeTypeLabel(selectedGraphEdge)}</div>
+                                    <div className={`mt-0.5 break-all font-mono text-[11px] ${meshTheme.textMuted}`}>{selectedGraphEdge.id}</div>
                                 </div>
-                                <div className="mb-3 flex flex-wrap gap-2">
-                                    {hoveredGraphNode.health === 'unknown'
-                                        ? <Badge label="..." tone="default" />
-                                        : <Badge label={hoveredGraphNode.health} tone={healthTone(hoveredGraphNode.health)} />}
-                                    {hoveredGraphNode.branch && <Badge label={hoveredGraphNode.branch} tone="default" />}
-                                    {hoveredGraphNode.ahead > 0 && <Badge label={`ahead ${hoveredGraphNode.ahead}`} tone="warn" />}
-                                    {hoveredGraphNode.behind > 0 && <Badge label={`behind ${hoveredGraphNode.behind}`} tone="warn" />}
-                                    {hoveredGraphNode.dirtyFiles > 0 && <Badge label={`${hoveredGraphNode.dirtyFiles} dirty`} tone="warn" />}
-                                    {hoveredGraphNode.activeSessionCount > 0 && <Badge label={`${hoveredGraphNode.activeSessionCount} sessions`} tone="info" />}
-                                </div>
-                                <div className="grid gap-1.5 text-xs">
-                                    {hoveredGraphNode.machineLabel && <Row label="Machine" value={hoveredGraphNode.machineLabel} />}
-                                    {hoveredGraphNode.locality && hoveredGraphNode.locality !== 'unknown' && <Row label="Locality" value={hoveredGraphNode.locality} />}
-                                    <Row label="Workspace" value={hoveredGraphNode.workspace} />
-                                    {hoveredGraphNode.upstream && <Row label="Upstream" value={hoveredGraphNode.upstream} />}
-                                    {(() => { const s = describeGraphNodeSource(hoveredGraphNode); return s && s !== 'unknown' ? <Row label="Source" value={s} /> : null })()}
-                                </div>
-                            </section>
-                        </div>
-                    )}
-
-                    {/* Hover preview — edge */}
-                    {!selectedGraphNode && !hoveredGraphNode && hoveredGraphEdge && (
-                        <div className="pointer-events-none absolute bottom-3 right-4 z-20">
-                            <section
-                                aria-label="Hovered edge preview"
-                                className={meshTheme.isDark
-                                    ? 'w-[20rem] rounded-2xl border border-white/12 bg-slate-950/94 p-4 shadow-2xl shadow-black/35 backdrop-blur-xl'
-                                    : 'w-[20rem] rounded-2xl border border-slate-200 bg-white/96 p-4 shadow-2xl shadow-slate-900/12 backdrop-blur-xl'}
-                            >
-                                <div className="mb-3 flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{hoveredGraphEdge.label || edgeTypeLabel(hoveredGraphEdge)}</div>
-                                        <div className={`mt-1 text-[11px] ${meshTheme.textMuted}`}>{hoveredGraphEdge.id}</div>
-                                    </div>
-                                    <Badge label="hover preview" tone="info" />
-                                </div>
-                                <div className="mb-3 flex flex-wrap gap-2">
-                                    <Badge label={edgeTypeLabel(hoveredGraphEdge)} tone="default" />
-                                    <Badge label={edgeDirectionLabel(hoveredGraphEdge)} tone="info" />
-                                </div>
-                                <div className="grid gap-2 text-xs">
-                                    <Row label="From" value={hoveredEdgeSource?.label ?? hoveredGraphEdge.source} />
-                                    <Row label="To" value={hoveredEdgeTarget?.label ?? hoveredGraphEdge.target} />
-                                    <Row label="Label" value={hoveredGraphEdge.label ?? 'none'} />
-                                </div>
-                            </section>
+                                <button
+                                    type="button"
+                                    onClick={closeGraphDetail}
+                                    aria-label="Close detail panel"
+                                    className={meshTheme.isDark ? 'shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-slate-200 transition hover:bg-white/[0.08]' : 'shrink-0 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600 transition hover:bg-slate-50'}
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                            <div className="mb-3 flex flex-wrap gap-1.5">
+                                <Badge label={edgeTypeLabel(selectedGraphEdge)} tone="default" />
+                                <Badge label={edgeDirectionLabel(selectedGraphEdge)} tone="info" />
+                            </div>
+                            <div className="grid gap-1.5 text-xs">
+                                <Row label="From" value={selectedEdgeSource?.label ?? selectedGraphEdge.source} />
+                                <Row label="To" value={selectedEdgeTarget?.label ?? selectedGraphEdge.target} />
+                                <Row label="Label" value={selectedGraphEdge.label ?? 'none'} />
+                            </div>
                         </div>
                     )}
                 </div>

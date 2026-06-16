@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type {
     MeshMissionStatus,
     MeshMissionSummary,
+    RepoMeshLedgerEntryStatus,
     RepoMeshLedgerSummaryStatus,
     RepoMeshNodeStatus,
     RepoMeshQueueSummary,
+    RepoMeshQueueTask,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
@@ -21,6 +23,12 @@ import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
  *   3. The node list (health, branch, drift, sessions, convergence/refine badges).
  *   4. Active sessions + refine jobs as a two-up row of small cards.
  *
+ * Every overview card follows the same shape: a small stat header, a compact
+ * "recent ~5" one-line list, a "+N more" toggle, and a click target on each row
+ * that opens a shared detail modal (the same Row/Badge visual language the graph
+ * surface's right panel uses). Hover is no longer the primary path to detail —
+ * the user found clicking more effective — so rows are buttons that pin a modal.
+ *
  * It is intentionally self-contained (no shared mutable state with the graph
  * surface) so the graph component stays untouched. Mission data is optional —
  * older daemons omit `status.missions`, in which case the mission card renders
@@ -28,6 +36,9 @@ import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
  */
 
 type Tone = 'rose' | 'sky' | 'amber' | 'emerald' | 'muted' | 'default'
+
+/** How many rows each overview card shows before the "+N more" toggle. */
+const RECENT_LIMIT = 5
 
 type AsyncRefineJob = {
     jobId: string
@@ -66,6 +77,14 @@ function sessionStatusLabel(session: MeshGraphSessionDetail): string {
     return normalized.replace(/_/g, ' ')
 }
 
+function sessionStatusTone(label: string): Tone {
+    if (label.includes('approval')) return 'amber'
+    if (label.includes('generating')) return 'sky'
+    if (label.includes('idle')) return 'emerald'
+    if (label.includes('failed') || label.includes('stopped') || label.includes('interrupted')) return 'rose'
+    return 'muted'
+}
+
 function nodeDriftSummary(node: RepoMeshNodeStatus): string {
     const git = node.git
     if (!git) return node.gitProbePending ? 'git probe pending' : 'no git probe'
@@ -98,6 +117,29 @@ function healthTone(health: string): Tone {
     }
 }
 
+function queueTaskTone(status: RepoMeshQueueTask['status']): Tone {
+    switch (status) {
+        case 'completed': return 'emerald'
+        case 'failed': return 'rose'
+        case 'cancelled': return 'muted'
+        case 'assigned': return 'sky'
+        case 'pending': return 'amber'
+        default: return 'muted'
+    }
+}
+
+/** Priority for the "recent queue" list: live work first, then newest history. */
+function queueTaskSortRank(status: RepoMeshQueueTask['status']): number {
+    switch (status) {
+        case 'assigned': return 0
+        case 'pending': return 1
+        case 'failed': return 2
+        case 'completed': return 3
+        case 'cancelled': return 4
+        default: return 5
+    }
+}
+
 function relativeTime(iso: string | null | undefined): string | null {
     if (!iso) return null
     const parsed = Date.parse(iso)
@@ -111,17 +153,50 @@ function relativeTime(iso: string | null | undefined): string | null {
     return `${Math.floor(hours / 24)}d ago`
 }
 
+function ledgerKindLabel(kind: string): string {
+    return kind.replace(/[_-]+/g, ' ')
+}
+
+function ledgerKindTone(kind: string): Tone {
+    const k = kind.toLowerCase()
+    if (k.includes('fail') || k.includes('stall') || k.includes('error')) return 'rose'
+    if (k.includes('complete')) return 'emerald'
+    if (k.includes('dispatch') || k.includes('launch') || k.includes('assign')) return 'sky'
+    if (k.includes('checkpoint')) return 'amber'
+    return 'muted'
+}
+
+function payloadSummary(payload: Record<string, unknown> | undefined): string | null {
+    if (!payload) return null
+    const candidate = payload.message ?? payload.summary ?? payload.reason ?? payload.title
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+    return null
+}
+
+// ── detail modal selection ───────────────────────────────────────────────────
+
+type DetailSelection =
+    | { kind: 'mission'; mission: MeshMissionSummary }
+    | { kind: 'ledger'; entry: RepoMeshLedgerEntryStatus }
+    | { kind: 'queue'; task: RepoMeshQueueTask }
+    | { kind: 'session'; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }
+
 export default function MeshOverviewCards({ status }: { status: RepoMeshStatus }) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
 
     const queueSummary: RepoMeshQueueSummary | null = canonicalStatus.queue?.summary ?? null
+    const queueTasks: RepoMeshQueueTask[] = canonicalStatus.queue?.tasks ?? []
     const ledgerSummary = canonicalStatus.ledger?.summary ?? EMPTY_LEDGER_SUMMARY
+    const ledgerEntries: RepoMeshLedgerEntryStatus[] = canonicalStatus.ledger?.entries ?? []
     const missions = (canonicalStatus as RepoMeshStatus).missions ?? []
     const liveMissions = missions.filter(m => m.status === 'active' || m.status === 'paused')
     const historyMissions = missions.filter(m => m.status === 'completed' || m.status === 'abandoned')
     const asyncRefineJobs = ((canonicalStatus as any).asyncRefineJobs as AsyncRefineJob[] | undefined) ?? []
+
+    const [detail, setDetail] = useState<DetailSelection | null>(null)
+    const closeDetail = useCallback(() => setDetail(null), [])
 
     const sessionEntries = useMemo(() => {
         const entries: { node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }[] = []
@@ -145,19 +220,36 @@ export default function MeshOverviewCards({ status }: { status: RepoMeshStatus }
                 liveMissions={liveMissions}
                 historyMissions={historyMissions}
                 hasMissionField={Array.isArray((canonicalStatus as RepoMeshStatus).missions)}
+                onSelect={mission => setDetail({ kind: 'mission', mission })}
             />
 
             <div className="grid gap-3 sm:grid-cols-2">
-                <LedgerCard meshTheme={meshTheme} ledgerSummary={ledgerSummary} />
-                <QueueCard meshTheme={meshTheme} queueSummary={queueSummary} />
+                <LedgerCard
+                    meshTheme={meshTheme}
+                    ledgerSummary={ledgerSummary}
+                    entries={ledgerEntries}
+                    onSelect={entry => setDetail({ kind: 'ledger', entry })}
+                />
+                <QueueCard
+                    meshTheme={meshTheme}
+                    queueSummary={queueSummary}
+                    tasks={queueTasks}
+                    onSelect={task => setDetail({ kind: 'queue', task })}
+                />
             </div>
 
             <NodesCard meshTheme={meshTheme} nodes={canonicalStatus.nodes} />
 
             <div className="grid gap-3 sm:grid-cols-2">
-                <SessionsCard meshTheme={meshTheme} entries={sessionEntries} />
+                <SessionsCard
+                    meshTheme={meshTheme}
+                    entries={sessionEntries}
+                    onSelect={(node, session) => setDetail({ kind: 'session', node, session })}
+                />
                 <RefineJobsCard meshTheme={meshTheme} jobs={asyncRefineJobs} />
             </div>
+
+            {detail && <DetailModal meshTheme={meshTheme} detail={detail} onClose={closeDetail} />}
         </div>
     )
 }
@@ -216,46 +308,282 @@ function EmptyHint({ meshTheme, children }: { meshTheme: MeshGraphTheme; childre
     return <div className={`text-xs ${meshTheme.textMuted}`}>{children}</div>
 }
 
-// ── missions ──────────────────────────────────────────────────────────────
-
-function MissionRow({ meshTheme, mission }: { meshTheme: MeshGraphTheme; mission: MeshMissionSummary }) {
+/**
+ * Clickable one-line row used by every "recent N" list. The whole row is a
+ * button so the click target opens the shared detail modal — consistent across
+ * Mission / Ledger / Queue / Session cards.
+ */
+function ListRow({ meshTheme, onClick, children }: {
+    meshTheme: MeshGraphTheme
+    onClick?: () => void
+    children: React.ReactNode
+}) {
     const dk = meshTheme.isDark
-    const t = mission.tasks
-    const lastActivity = relativeTime(t.lastActivityAt)
+    const hover = onClick ? (dk ? 'hover:bg-white/[0.05]' : 'hover:bg-slate-100/70') : ''
     return (
-        <div className={`flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
-            <div className="flex items-center gap-2">
-                <span className={`min-w-0 flex-1 truncate text-sm font-semibold ${meshTheme.textPrimary}`} title={mission.title}>{mission.title}</span>
-                <StatusBadge meshTheme={meshTheme} label={mission.status} tone={missionStatusTone(mission.status)} />
-            </div>
-            {mission.goal && (
-                <div className={`line-clamp-2 text-xs ${meshTheme.textSecondary}`} title={mission.goal}>{mission.goal}</div>
-            )}
-            <div className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] ${meshTheme.textMuted}`}>
-                <span className="tabular-nums">{t.total} tasks</span>
-                <span className={`tabular-nums ${t.completed > 0 ? (dk ? 'text-emerald-300' : 'text-emerald-600') : ''}`}>✓{t.completed}</span>
-                <span className={`tabular-nums ${t.assigned > 0 ? (dk ? 'text-sky-300' : 'text-sky-600') : ''}`}>▶{t.assigned}</span>
-                <span className="tabular-nums">⏳{t.pending}{t.blocked > 0 ? ` (${t.blocked} blocked)` : ''}</span>
-                <span className={`tabular-nums ${t.failed > 0 ? (dk ? 'text-rose-300' : 'text-rose-600') : ''}`}>✗{t.failed}</span>
-                {lastActivity && <span className="ml-auto">{lastActivity}</span>}
+        <button
+            type="button"
+            onClick={onClick}
+            disabled={!onClick}
+            className={`flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs transition ${hover} ${onClick ? 'cursor-pointer' : 'cursor-default'}`}
+        >
+            {children}
+        </button>
+    )
+}
+
+/** "+N more" / "show fewer" toggle shared by the recent lists. */
+function MoreToggle({ meshTheme, expanded, hiddenCount, onToggle }: {
+    meshTheme: MeshGraphTheme
+    expanded: boolean
+    hiddenCount: number
+    onToggle: () => void
+}) {
+    if (hiddenCount <= 0) return null
+    return (
+        <button
+            type="button"
+            onClick={onToggle}
+            className={`mt-1 self-start rounded-md px-1.5 py-0.5 text-[11px] font-medium ${meshTheme.textSecondary} hover:underline`}
+        >
+            {expanded ? 'Show fewer' : `+${hiddenCount} more`}
+        </button>
+    )
+}
+
+/** Drives the expand/collapse + "+N more" slice for a recent list. */
+function useRecentList<T>(items: T[], limit = RECENT_LIMIT) {
+    const [expanded, setExpanded] = useState(false)
+    const visible = expanded ? items : items.slice(0, limit)
+    const hiddenCount = Math.max(0, items.length - limit)
+    const toggle = useCallback(() => setExpanded(v => !v), [])
+    return { visible, hiddenCount, expanded, toggle }
+}
+
+// ── shared detail modal ──────────────────────────────────────────────────────
+// Reuses the graph surface's Row/Badge visual language so detail looks identical
+// whether opened from the overview cards or the graph node panel.
+
+function ModalRow({ meshTheme, label, value }: { meshTheme: MeshGraphTheme; label: string; value: ReactNode }) {
+    return (
+        <div className={meshTheme.rowClass}>
+            <span className={meshTheme.rowLabelClass}>{label}</span>
+            <span className={meshTheme.rowValueClass}>{value}</span>
+        </div>
+    )
+}
+
+function detailTitle(detail: DetailSelection): { kicker: string; title: string } {
+    switch (detail.kind) {
+        case 'mission': return { kicker: 'Mission', title: detail.mission.title }
+        case 'ledger': return { kicker: 'Ledger entry', title: ledgerKindLabel(detail.entry.kind) }
+        case 'queue': return { kicker: 'Queue task', title: detail.task.id }
+        case 'session': return { kicker: 'Session', title: shortSessionId(detail.session.sessionId) }
+    }
+}
+
+function DetailModal({ meshTheme, detail, onClose }: {
+    meshTheme: MeshGraphTheme
+    detail: DetailSelection
+    onClose: () => void
+}) {
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') onClose()
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+    }, [onClose])
+
+    const dk = meshTheme.isDark
+    const { kicker, title } = detailTitle(detail)
+    const overlayClass = dk ? 'bg-[#030617]/[0.92]' : 'bg-[rgba(15,23,42,0.82)]'
+    const shellClass = dk
+        ? 'border-white/10 bg-slate-950 md:bg-slate-950/98 shadow-[0_28px_120px_rgba(2,6,23,0.5)]'
+        : 'border-slate-200 bg-white md:bg-white/98 shadow-[0_28px_120px_rgba(148,163,184,0.3)]'
+
+    return (
+        <div
+            className={`fixed inset-0 z-[1300] flex items-stretch justify-center p-0 md:items-center md:p-4 ${overlayClass}`}
+            role="dialog"
+            aria-modal="true"
+            onClick={onClose}
+        >
+            <div
+                className={`flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden border ${shellClass} md:h-auto md:max-h-[88dvh] md:max-w-[min(640px,calc(100vw-32px))] md:rounded-2xl`}
+                onClick={event => event.stopPropagation()}
+            >
+                <div className={`sticky top-0 z-10 flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3 ${dk ? 'border-white/8' : 'border-slate-200'}`}>
+                    <div className="min-w-0">
+                        <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{kicker}</div>
+                        <div className={`mt-0.5 break-all text-sm font-semibold ${meshTheme.textPrimary}`}>{title}</div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label="Close detail"
+                        className={dk ? 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white' : 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}
+                    >
+                        ✕
+                    </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                    {detail.kind === 'mission' && <MissionDetail meshTheme={meshTheme} mission={detail.mission} />}
+                    {detail.kind === 'ledger' && <LedgerDetail meshTheme={meshTheme} entry={detail.entry} />}
+                    {detail.kind === 'queue' && <QueueDetail meshTheme={meshTheme} task={detail.task} />}
+                    {detail.kind === 'session' && <SessionDetail meshTheme={meshTheme} node={detail.node} session={detail.session} />}
+                </div>
             </div>
         </div>
     )
 }
 
-function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionField }: {
+function MissionDetail({ meshTheme, mission }: { meshTheme: MeshGraphTheme; mission: MeshMissionSummary }) {
+    const t = mission.tasks
+    return (
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+                <StatusBadge meshTheme={meshTheme} label={mission.status} tone={missionStatusTone(mission.status)} />
+                <StatusBadge meshTheme={meshTheme} label={`${t.total} tasks`} tone="muted" />
+            </div>
+            {mission.goal && (
+                <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{mission.goal}</div>
+            )}
+            <div className="grid gap-1.5 sm:grid-cols-2">
+                <StatTile meshTheme={meshTheme} label="Completed" value={t.completed} tone="emerald" />
+                <StatTile meshTheme={meshTheme} label="Assigned" value={t.assigned} tone={t.assigned > 0 ? 'sky' : undefined} />
+                <StatTile meshTheme={meshTheme} label="Pending" value={t.pending} />
+                <StatTile meshTheme={meshTheme} label="Failed" value={t.failed} tone={t.failed > 0 ? 'rose' : undefined} />
+                <StatTile meshTheme={meshTheme} label="Blocked" value={t.blocked} tone={t.blocked > 0 ? 'amber' : undefined} />
+                <StatTile meshTheme={meshTheme} label="Cancelled" value={t.cancelled} tone="muted" />
+            </div>
+            <div className="grid gap-1.5 text-xs">
+                <ModalRow meshTheme={meshTheme} label="Mission id" value={mission.id} />
+                <ModalRow meshTheme={meshTheme} label="Created" value={relativeTime(mission.createdAt) ?? mission.createdAt} />
+                <ModalRow meshTheme={meshTheme} label="Updated" value={relativeTime(mission.updatedAt) ?? mission.updatedAt} />
+                {t.lastActivityAt && <ModalRow meshTheme={meshTheme} label="Last task activity" value={relativeTime(t.lastActivityAt) ?? t.lastActivityAt} />}
+            </div>
+        </div>
+    )
+}
+
+function LedgerDetail({ meshTheme, entry }: { meshTheme: MeshGraphTheme; entry: RepoMeshLedgerEntryStatus }) {
+    const summary = payloadSummary(entry.payload)
+    let payloadJson = ''
+    try {
+        payloadJson = JSON.stringify(entry.payload ?? {}, null, 2)
+    } catch {
+        payloadJson = String(entry.payload)
+    }
+    return (
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+                <StatusBadge meshTheme={meshTheme} label={ledgerKindLabel(entry.kind)} tone={ledgerKindTone(entry.kind)} />
+            </div>
+            {summary && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{summary}</div>}
+            <div className="grid gap-1.5 text-xs">
+                <ModalRow meshTheme={meshTheme} label="Entry id" value={entry.id} />
+                <ModalRow meshTheme={meshTheme} label="When" value={relativeTime(entry.timestamp) ?? entry.timestamp} />
+                {entry.nodeId && <ModalRow meshTheme={meshTheme} label="Node" value={entry.nodeId} />}
+                {entry.sessionId && <ModalRow meshTheme={meshTheme} label="Session" value={shortSessionId(entry.sessionId)} />}
+                {entry.providerType && <ModalRow meshTheme={meshTheme} label="Provider" value={entry.providerType} />}
+            </div>
+            {payloadJson && payloadJson !== '{}' && (
+                <div>
+                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Payload</div>
+                    <pre className={`max-h-60 overflow-auto rounded-lg border p-2 text-[10px] leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{payloadJson}</pre>
+                </div>
+            )}
+        </div>
+    )
+}
+
+function QueueDetail({ meshTheme, task }: { meshTheme: MeshGraphTheme; task: RepoMeshQueueTask }) {
+    return (
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+                <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={`requeued ${task.requeueCount}`} tone="amber" />}
+            </div>
+            {task.message && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{task.message}</div>}
+            <div className="grid gap-1.5 text-xs">
+                <ModalRow meshTheme={meshTheme} label="Task id" value={task.id} />
+                <ModalRow meshTheme={meshTheme} label="Created" value={relativeTime(task.createdAt) ?? task.createdAt} />
+                <ModalRow meshTheme={meshTheme} label="Updated" value={relativeTime(task.updatedAt) ?? task.updatedAt} />
+                {(task.assignedNodeId || task.targetNodeId) && (
+                    <ModalRow meshTheme={meshTheme} label="Node" value={task.assignedNodeId || task.targetNodeId!} />
+                )}
+                {(task.assignedSessionId || task.targetSessionId) && (
+                    <ModalRow meshTheme={meshTheme} label="Session" value={shortSessionId(task.assignedSessionId || task.targetSessionId!)} />
+                )}
+                {task.cancelReason && <ModalRow meshTheme={meshTheme} label="Cancel reason" value={task.cancelReason} />}
+                {task.requeueReason && <ModalRow meshTheme={meshTheme} label="Requeue reason" value={task.requeueReason} />}
+                {task.autoLaunch && <ModalRow meshTheme={meshTheme} label="Auto launch" value={`${task.autoLaunch.status}${task.autoLaunch.reason ? ` · ${task.autoLaunch.reason}` : ''}`} />}
+            </div>
+        </div>
+    )
+}
+
+function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }) {
+    const label = sessionStatusLabel(session)
+    return (
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+                <StatusBadge meshTheme={meshTheme} label={label} tone={sessionStatusTone(label)} />
+                <StatusBadge meshTheme={meshTheme} label={session.providerType || 'provider unknown'} tone="muted" />
+            </div>
+            {session.statusNote && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{session.statusNote}</div>}
+            <div className="grid gap-1.5 text-xs">
+                <ModalRow meshTheme={meshTheme} label="Session id" value={session.sessionId} />
+                <ModalRow meshTheme={meshTheme} label="Node" value={node.machineLabel} />
+                <ModalRow meshTheme={meshTheme} label="Workspace" value={session.workspace || node.workspace} />
+                {(node.git?.branch ?? node.worktreeBranch) && (
+                    <ModalRow meshTheme={meshTheme} label="Branch" value={node.git?.branch ?? node.worktreeBranch!} />
+                )}
+                {typeof session.role === 'string' && session.role && <ModalRow meshTheme={meshTheme} label="Role" value={session.role} />}
+                {(session.startedAt || session.createdAt) && (
+                    <ModalRow meshTheme={meshTheme} label="Started" value={relativeTime(session.startedAt || session.createdAt) ?? (session.startedAt || session.createdAt)!} />
+                )}
+            </div>
+        </div>
+    )
+}
+
+// ── missions ──────────────────────────────────────────────────────────────
+
+function MissionRow({ meshTheme, mission, onSelect }: {
+    meshTheme: MeshGraphTheme
+    mission: MeshMissionSummary
+    onSelect: () => void
+}) {
+    const t = mission.tasks
+    const lastActivity = relativeTime(t.lastActivityAt)
+    return (
+        <ListRow meshTheme={meshTheme} onClick={onSelect}>
+            <StatusBadge meshTheme={meshTheme} label={mission.status} tone={missionStatusTone(mission.status)} />
+            <span className={`min-w-0 flex-1 truncate font-medium ${meshTheme.textPrimary}`}>{mission.title}</span>
+            <span className={`shrink-0 tabular-nums text-[11px] ${meshTheme.textMuted}`}>✓{t.completed}/{t.total}</span>
+            {lastActivity && <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{lastActivity}</span>}
+        </ListRow>
+    )
+}
+
+function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionField, onSelect }: {
     meshTheme: MeshGraphTheme
     liveMissions: MeshMissionSummary[]
     historyMissions: MeshMissionSummary[]
     hasMissionField: boolean
+    onSelect: (mission: MeshMissionSummary) => void
 }) {
     const [showHistory, setShowHistory] = useState(false)
     const dk = meshTheme.isDark
+    const live = useRecentList(liveMissions)
     return (
         <Card meshTheme={meshTheme} title="Missions" count={liveMissions.length || undefined}>
             {liveMissions.length > 0 ? (
-                <div className="flex flex-col gap-2">
-                    {liveMissions.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} />)}
+                <div className="flex flex-col gap-0.5">
+                    {live.visible.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} onSelect={() => onSelect(m)} />)}
+                    <MoreToggle meshTheme={meshTheme} expanded={live.expanded} hiddenCount={live.hiddenCount} onToggle={live.toggle} />
                 </div>
             ) : (
                 <EmptyHint meshTheme={meshTheme}>
@@ -277,8 +605,8 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
                         <span className={`tabular-nums ${meshTheme.textMuted}`}>{historyMissions.length}</span>
                     </button>
                     {showHistory && (
-                        <div className="mt-2 flex flex-col gap-2">
-                            {historyMissions.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} />)}
+                        <div className="mt-2 flex flex-col gap-0.5">
+                            {historyMissions.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} onSelect={() => onSelect(m)} />)}
                         </div>
                     )}
                 </div>
@@ -289,8 +617,16 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
 
 // ── ledger / queue ──────────────────────────────────────────────────────────
 
-function LedgerCard({ meshTheme, ledgerSummary }: { meshTheme: MeshGraphTheme; ledgerSummary: RepoMeshLedgerSummaryStatus }) {
+function LedgerCard({ meshTheme, ledgerSummary, entries, onSelect }: {
+    meshTheme: MeshGraphTheme
+    ledgerSummary: RepoMeshLedgerSummaryStatus
+    entries: RepoMeshLedgerEntryStatus[]
+    onSelect: (entry: RepoMeshLedgerEntryStatus) => void
+}) {
     const lastActivity = relativeTime(ledgerSummary.lastActivityAt)
+    // Newest-first; ledger entries arrive oldest→newest from the daemon.
+    const recent = useMemo(() => [...entries].reverse(), [entries])
+    const list = useRecentList(recent)
     return (
         <Card meshTheme={meshTheme} title="Ledger">
             <div className="grid grid-cols-3 gap-1.5">
@@ -301,19 +637,52 @@ function LedgerCard({ meshTheme, ledgerSummary }: { meshTheme: MeshGraphTheme; l
                 <StatTile meshTheme={meshTheme} label="Sessions" value={ledgerSummary.sessionLaunched} />
                 <StatTile meshTheme={meshTheme} label="Checkpoints" value={ledgerSummary.checkpointCreated} />
             </div>
-            {(ledgerSummary.recentFailures > 0 || lastActivity) && (
+            {recent.length > 0 && (
+                <div className={`mt-3 border-t pt-2 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Recent activity</div>
+                    <div className="flex flex-col gap-0.5">
+                        {list.visible.map(entry => {
+                            const summary = payloadSummary(entry.payload)
+                            return (
+                                <ListRow key={entry.id} meshTheme={meshTheme} onClick={() => onSelect(entry)}>
+                                    <StatusBadge meshTheme={meshTheme} label={ledgerKindLabel(entry.kind)} tone={ledgerKindTone(entry.kind)} />
+                                    <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`}>{summary || entry.nodeId || entry.sessionId || '—'}</span>
+                                    <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{relativeTime(entry.timestamp) ?? ''}</span>
+                                </ListRow>
+                            )
+                        })}
+                        <MoreToggle meshTheme={meshTheme} expanded={list.expanded} hiddenCount={list.hiddenCount} onToggle={list.toggle} />
+                    </div>
+                </div>
+            )}
+            {(ledgerSummary.recentFailures > 0 || (lastActivity && recent.length === 0)) && (
                 <div className={`mt-2 flex items-center justify-between text-[11px] ${meshTheme.textMuted}`}>
                     {ledgerSummary.recentFailures > 0
                         ? <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{ledgerSummary.recentFailures} recent failures</span>
                         : <span />}
-                    {lastActivity && <span>{lastActivity}</span>}
+                    {lastActivity && recent.length === 0 && <span>{lastActivity}</span>}
                 </div>
             )}
         </Card>
     )
 }
 
-function QueueCard({ meshTheme, queueSummary }: { meshTheme: MeshGraphTheme; queueSummary: RepoMeshQueueSummary | null }) {
+function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
+    meshTheme: MeshGraphTheme
+    queueSummary: RepoMeshQueueSummary | null
+    tasks: RepoMeshQueueTask[]
+    onSelect: (task: RepoMeshQueueTask) => void
+}) {
+    // Live work (assigned/pending) first, then newest-updated history.
+    const recent = useMemo(() => {
+        return [...tasks].sort((a, b) => {
+            const rank = queueTaskSortRank(a.status) - queueTaskSortRank(b.status)
+            if (rank !== 0) return rank
+            return (b.updatedAt || '').localeCompare(a.updatedAt || '')
+        })
+    }, [tasks])
+    const list = useRecentList(recent)
+
     if (!queueSummary) {
         return (
             <Card meshTheme={meshTheme} title="Queue">
@@ -331,6 +700,21 @@ function QueueCard({ meshTheme, queueSummary }: { meshTheme: MeshGraphTheme; que
                 <StatTile meshTheme={meshTheme} label="Failed" value={queueSummary.failed} tone={queueSummary.failed > 0 ? 'rose' : undefined} />
                 <StatTile meshTheme={meshTheme} label="Cancelled" value={queueSummary.cancelled} tone="muted" />
             </div>
+            {recent.length > 0 && (
+                <div className={`mt-3 border-t pt-2 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Recent tasks</div>
+                    <div className="flex flex-col gap-0.5">
+                        {list.visible.map(task => (
+                            <ListRow key={task.id} meshTheme={meshTheme} onClick={() => onSelect(task)}>
+                                <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                                <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`}>{task.message || task.id}</span>
+                                <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
+                            </ListRow>
+                        ))}
+                        <MoreToggle meshTheme={meshTheme} expanded={list.expanded} hiddenCount={list.hiddenCount} onToggle={list.toggle} />
+                    </div>
+                </div>
+            )}
         </Card>
     )
 }
@@ -374,23 +758,29 @@ function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: Rep
 
 // ── sessions / refine jobs ──────────────────────────────────────────────────
 
-function SessionsCard({ meshTheme, entries }: {
+function SessionsCard({ meshTheme, entries, onSelect }: {
     meshTheme: MeshGraphTheme
     entries: { node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }[]
+    onSelect: (node: RepoMeshNodeStatus, session: MeshGraphSessionDetail) => void
 }) {
+    const list = useRecentList(entries)
     return (
         <Card meshTheme={meshTheme} title="Active sessions" count={entries.length || undefined}>
             {entries.length === 0 ? (
                 <EmptyHint meshTheme={meshTheme}>No active sessions.</EmptyHint>
             ) : (
-                <div className="flex flex-col gap-1">
-                    {entries.map(({ session }) => (
-                        <div key={session.sessionId} className="flex items-center gap-2 text-xs">
-                            <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`} title={session.sessionId}>{shortSessionId(session.sessionId)}</span>
-                            <span className={`shrink-0 ${meshTheme.textMuted}`}>{session.providerType || '?'}</span>
-                            <span className={`shrink-0 text-[10px] font-semibold ${meshTheme.textSecondary}`}>{sessionStatusLabel(session)}</span>
-                        </div>
-                    ))}
+                <div className="flex flex-col gap-0.5">
+                    {list.visible.map(({ node, session }) => {
+                        const label = sessionStatusLabel(session)
+                        return (
+                            <ListRow key={session.sessionId} meshTheme={meshTheme} onClick={() => onSelect(node, session)}>
+                                <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`}>{shortSessionId(session.sessionId)}</span>
+                                <span className={`shrink-0 ${meshTheme.textMuted}`}>{session.providerType || '?'}</span>
+                                <StatusBadge meshTheme={meshTheme} label={label} tone={sessionStatusTone(label)} />
+                            </ListRow>
+                        )
+                    })}
+                    <MoreToggle meshTheme={meshTheme} expanded={list.expanded} hiddenCount={list.hiddenCount} onToggle={list.toggle} />
                 </div>
             )}
         </Card>

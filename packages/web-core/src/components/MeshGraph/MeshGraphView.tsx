@@ -58,6 +58,7 @@ interface MeshGraphViewProps {
     selectedNodeId?: string | null
     directionPref?: 'auto' | 'LR' | 'TB'
     onNodeClick?: (node: MeshGraphNode) => void
+    onEdgeClick?: (edge: MeshGraphEdge) => void
     onNodeHoverChange?: (node: MeshGraphNode | null) => void
     onEdgeHoverChange?: (edge: MeshGraphEdge | null) => void
 }
@@ -1032,6 +1033,7 @@ export default function MeshGraphView({
     selectedNodeId = null,
     directionPref: directionPrefProp,
     onNodeClick,
+    onEdgeClick,
     onNodeHoverChange,
     onEdgeHoverChange,
 }: MeshGraphViewProps) {
@@ -1139,6 +1141,7 @@ export default function MeshGraphView({
                     zoomOnDoubleClick={false}
                     selectionOnDrag={false}
                     onNodeClick={(_, node) => onNodeClick?.(node.data.graphNode)}
+                    onEdgeClick={(_, edge) => { const e = edge.data?.graphEdge; if (e) onEdgeClick?.(e) }}
                     onNodeMouseEnter={(_, node) => onNodeHoverChange?.(node.data.graphNode)}
                     onNodeMouseLeave={() => onNodeHoverChange?.(null)}
                     onEdgeMouseEnter={(_, edge) => onEdgeHoverChange?.(edge.data?.graphEdge ?? null)}
