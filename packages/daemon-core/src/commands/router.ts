@@ -1544,9 +1544,24 @@ function resolveRefineryAutoPublishSubmoduleMainCommits(mesh: any, workspace: st
     return { enabled: false };
 }
 
-async function computeGitPatchId(cwd: string, fromRef: string, toRef: string): Promise<string> {
+async function computeGitPatchId(
+    cwd: string,
+    fromRef: string,
+    toRef: string,
+    excludePaths: string[] = [],
+): Promise<string> {
     const { execFileSync } = await import('node:child_process');
-    const diff = execFileSync('git', ['diff', '--patch', '--full-index', fromRef, toRef], {
+    // When excludePaths is non-empty we drop those paths from the diff via
+    // `:(exclude)` pathspecs. This is used to omit gitlink paths that have
+    // already been proven a safe fast-forward: their patch hunks legitimately
+    // differ between the expected (mergeBase→branch) and actual (base→merged)
+    // diffs because base may have advanced the same gitlink, so comparing them
+    // would spuriously fail patch-equivalence even though the merge is sound.
+    const diffArgs = ['diff', '--patch', '--full-index', fromRef, toRef];
+    if (excludePaths.length > 0) {
+        diffArgs.push('--', '.', ...excludePaths.map(path => `:(exclude)${path}`));
+    }
+    const diff = execFileSync('git', diffArgs, {
         cwd,
         encoding: 'utf8',
         maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -1561,7 +1576,7 @@ async function computeGitPatchId(cwd: string, fromRef: string, toRef: string): P
     return patchId.split(/\s+/)[0] || '';
 }
 
-async function runMeshRefinePatchEquivalenceGate(
+export async function runMeshRefinePatchEquivalenceGate(
     repoRoot: string,
     baseHead: string,
     branchHead: string,
@@ -1629,8 +1644,25 @@ async function runMeshRefinePatchEquivalenceGate(
                 gitlinkTrivialFastForward,
             };
         }
-        const expectedPatchId = await computeGitPatchId(repoRoot, mergeBase, branchHead);
-        const actualPatchId = await computeGitPatchId(repoRoot, baseHead, mergedTree);
+        // Exclude *proven fast-forward* gitlink paths from BOTH patch-ids. When
+        // base has advanced a submodule pointer (a sibling merged into main ahead
+        // of us) the gitlink hunk's old-value differs between the expected diff
+        // (mergeBase→branch, showing the full base→branch advance) and the actual
+        // diff (base→merged, showing only the shorter advanced-base→branch
+        // advance). That mismatch would spuriously fail equivalence even though
+        // advancing the pointer to the branch side is a provably safe
+        // fast-forward — this is the root cause of the diverged-base
+        // patch_equivalence_failed misjudgment.
+        //
+        // We exclude ONLY gitlinks whose base-side commit is an ancestor of the
+        // branch-side commit (a strict ff, both objects available locally). A
+        // non-ff or ambiguous gitlink (a genuine submodule divergence, or objects
+        // not fetched locally) is deliberately left in the diff so its differing
+        // hunk still drives the comparison — this preserves the original behavior
+        // and prevents a false pass on a real divergence.
+        const ffGitlinkExcludePaths = collectFastForwardGitlinkPaths(repoRoot, baseHead, branchHead);
+        const expectedPatchId = await computeGitPatchId(repoRoot, mergeBase, branchHead, ffGitlinkExcludePaths);
+        const actualPatchId = await computeGitPatchId(repoRoot, baseHead, mergedTree, ffGitlinkExcludePaths);
         const equivalent = expectedPatchId === actualPatchId;
         return {
             status: equivalent ? 'passed' : 'failed',
@@ -1919,6 +1951,24 @@ function readChangedPathKinds(repoRoot: string, fromRef: string, toRef: string):
 }
 
 /**
+ * Return the changed gitlink paths between base and branch whose advance is a
+ * strict fast-forward (the base-side commit is an ancestor of the branch-side
+ * commit inside that submodule's repo). These are the paths whose patch-id hunk
+ * may legitimately differ when base has advanced the same submodule, so they
+ * are safe to exclude from the patch-equivalence comparison. A non-ff (genuinely
+ * diverged) gitlink is deliberately excluded from this set so it still fails the
+ * gate.
+ */
+export function collectFastForwardGitlinkPaths(repoRoot: string, baseHead: string, branchHead: string): string[] {
+    return readChangedGitlinkPaths(repoRoot, baseHead, branchHead).filter(path => {
+        const baseCommit = readTreeObject(repoRoot, baseHead, path);
+        const branchCommit = readTreeObject(repoRoot, branchHead, path);
+        if (!baseCommit || !branchCommit) return false;
+        return isSubmoduleFastForward(pathResolve(repoRoot, path), baseCommit, branchCommit);
+    });
+}
+
+/**
  * Decide whether a merge-tree submodule conflict between base and branch is a
  * trivial gitlink fast-forward (and nothing else).
  *
@@ -2002,12 +2052,64 @@ export function evaluateGitlinkTrivialFastForward(
 }
 
 /**
- * Synthesize the merge result for a trivial gitlink fast-forward: take
- * `baseHead`'s tree and overlay each changed gitlink's branch-side commit.
- * This mirrors what `git merge-tree` would have produced had it not bailed on
- * the submodule recursion limitation. Returns the tree SHA, or undefined on
- * failure. Caller must have already proven (via evaluateGitlinkTrivialFastForward)
- * that every changed gitlink fast-forwards and no other path conflicts.
+ * Build a tree identical to `commitish`'s tree except every gitlink in `paths`
+ * is rewritten to `placeholderCommit`. Used to neutralize submodule pointers so
+ * `git merge-tree` stops bailing on the "Recursive merging with submodules"
+ * limitation and can 3-way merge the surrounding regular-file content. Returns
+ * the tree SHA, or undefined on failure.
+ */
+function buildTreeWithGitlinksEqualized(
+    repoRoot: string,
+    commitish: string,
+    paths: string[],
+    placeholderCommit: string,
+): string | undefined {
+    try {
+        const tree = execFileSync('git', ['rev-parse', `${commitish}^{tree}`], {
+            cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
+        }).trim();
+        if (!tree) return undefined;
+        const updates = paths.map(path => `160000 commit ${placeholderCommit}\t${path}`).join('\n');
+        if (!updates) return tree;
+        const tmpIndex = pathJoin(resolveGitDir(repoRoot), `adhdev-refine-eq-${commitish.slice(0, 12)}.index`);
+        const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
+        try {
+            execFileSync('git', ['read-tree', tree], { cwd: repoRoot, env, stdio: 'ignore' });
+            execFileSync('git', ['update-index', '--index-info'], {
+                cwd: repoRoot, env, input: `${updates}\n`, encoding: 'utf8',
+                stdio: ['pipe', 'ignore', 'ignore'],
+            });
+            const newTree = execFileSync('git', ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
+            return newTree || undefined;
+        } finally {
+            try { fs.rmSync(tmpIndex, { force: true }); } catch { /* ignore */ }
+        }
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Synthesize the merge result for a trivial gitlink fast-forward.
+ *
+ * `git merge-tree` bails whenever a gitlink differs across base/branch even
+ * when the advance is a strict fast-forward, so we synthesize the result it
+ * *would* have produced. Crucially, when the merge-base of base and branch is
+ * NOT `baseHead` (i.e. base has diverged — a sibling was merged into main
+ * ahead of us), `baseHead`'s tree does not contain our branch's own
+ * non-gitlink changes. Simply overlaying gitlinks onto `baseHead`'s tree would
+ * therefore drop those changes and break patch-equivalence.
+ *
+ * To handle the diverged case correctly we run a REAL 3-way merge of the
+ * regular-file content (with the conflicting gitlinks temporarily equalized to
+ * a common placeholder so merge-tree won't bail), then overlay each changed
+ * gitlink's branch-side commit onto the merged result. This preserves both
+ * sides' non-gitlink changes.
+ *
+ * Returns the tree SHA, or undefined on failure / genuine non-gitlink
+ * conflict. Caller must have already proven (via
+ * evaluateGitlinkTrivialFastForward) that every changed gitlink fast-forwards
+ * and no other path conflicts.
  */
 function synthesizeTrivialFastForwardMergeTree(
     repoRoot: string,
@@ -2016,21 +2118,67 @@ function synthesizeTrivialFastForwardMergeTree(
     gitlinks: Array<{ path: string; branchCommit?: string }>,
 ): string | undefined {
     try {
-        const baseTree = execFileSync('git', ['rev-parse', `${baseHead}^{tree}`], {
-            cwd: repoRoot,
-            encoding: 'utf8',
-            maxBuffer: 1024 * 1024,
+        const branchGitlinks = gitlinks.filter(entry => entry.branchCommit);
+        const gitlinkPaths = branchGitlinks.map(entry => entry.path);
+
+        // Establish the regular-file content of the merge via a real 3-way merge
+        // with the conflicting gitlinks neutralized. The placeholder is the
+        // merge-base's value for a gitlink (or, failing that, any branch-side
+        // commit) — it only needs to be identical across all three trees.
+        const mergeBase = execFileSync('git', ['merge-base', baseHead, branchHead], {
+            cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
         }).trim();
-        if (!baseTree) return undefined;
-        const updates = gitlinks
-            .filter(entry => entry.branchCommit)
+
+        let mergedContentTree: string | undefined;
+        if (mergeBase && gitlinkPaths.length > 0) {
+            const placeholder = readTreeObject(repoRoot, mergeBase, gitlinkPaths[0])
+                || branchGitlinks[0].branchCommit!;
+            const baseEqTree = buildTreeWithGitlinksEqualized(repoRoot, mergeBase, gitlinkPaths, placeholder);
+            const oursEqTree = buildTreeWithGitlinksEqualized(repoRoot, baseHead, gitlinkPaths, placeholder);
+            const theirsEqTree = buildTreeWithGitlinksEqualized(repoRoot, branchHead, gitlinkPaths, placeholder);
+            if (baseEqTree && oursEqTree && theirsEqTree) {
+                try {
+                    // merge-tree --write-tree needs commits (to derive a merge-base);
+                    // synthesize ours/theirs as children of a common base commit.
+                    const baseEqCommit = execFileSync('git', ['commit-tree', baseEqTree, '-m', 'refine-ff-base'], {
+                        cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
+                    }).trim();
+                    const oursEqCommit = execFileSync('git', ['commit-tree', oursEqTree, '-p', baseEqCommit, '-m', 'refine-ff-ours'], {
+                        cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
+                    }).trim();
+                    const theirsEqCommit = execFileSync('git', ['commit-tree', theirsEqTree, '-p', baseEqCommit, '-m', 'refine-ff-theirs'], {
+                        cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
+                    }).trim();
+                    const mergeOut = execFileSync('git', ['merge-tree', '--write-tree', oursEqCommit, theirsEqCommit], {
+                        cwd: repoRoot, encoding: 'utf8', maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+                    }).trim();
+                    mergedContentTree = mergeOut.split(/\s+/)[0] || undefined;
+                } catch {
+                    // A real conflict in the equalized merge means a genuine
+                    // non-gitlink content conflict the evaluator did not foresee
+                    // (or unavailable objects). Fall through to the simple synth.
+                    mergedContentTree = undefined;
+                }
+            }
+        }
+
+        // Fallback: when there is no diverged base (merge-base === baseHead) the
+        // regular-file content of the merge is exactly baseHead's tree, so just
+        // overlay the gitlinks. Also used when the real merge could not run.
+        const contentTree = mergedContentTree
+            || execFileSync('git', ['rev-parse', `${baseHead}^{tree}`], {
+                cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
+            }).trim();
+        if (!contentTree) return undefined;
+
+        const updates = branchGitlinks
             .map(entry => `160000 commit ${entry.branchCommit}\t${entry.path}`)
             .join('\n');
-        if (!updates) return baseTree;
+        if (!updates) return contentTree;
         const tmpIndex = pathJoin(resolveGitDir(repoRoot), `adhdev-refine-ff-${baseHead.slice(0, 12)}-${branchHead.slice(0, 12)}.index`);
         const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
         try {
-            execFileSync('git', ['read-tree', baseTree], { cwd: repoRoot, env, stdio: 'ignore' });
+            execFileSync('git', ['read-tree', contentTree], { cwd: repoRoot, env, stdio: 'ignore' });
             execFileSync('git', ['update-index', '--index-info'], {
                 cwd: repoRoot,
                 env,
