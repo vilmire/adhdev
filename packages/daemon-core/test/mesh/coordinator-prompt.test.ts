@@ -110,6 +110,12 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('completion/approval/status signal')
     expect(prompt).toContain('Use at most one compact `mesh_read_chat` check')
     expect(prompt).toContain('Never duplicate a session because')
+
+    // The anti-polling/concurrency rules must not bleed into deferring NEW
+    // independent work — the proactive-parallelize rule draws that contrast.
+    expect(prompt).toContain('**Proactively parallelize new work.**')
+    expect(prompt).toContain('do not wait for a current task to finish or for the user to prompt you to parallelize')
+    expect(prompt).toContain('a reason to defer starting a new, independent task')
   })
 
   it('prefers reusing idle sessions and concise delta instructions for same-issue continuations', () => {
