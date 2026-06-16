@@ -1,3 +1,5 @@
+import { useMemo } from 'react'
+
 import { Section } from '../../components/ui/Section'
 import { EmptyState } from '../../components/ui/EmptyState'
 import { FormField, Input } from '../../components/ui/FormField'
@@ -10,6 +12,7 @@ import {
     type AvailableCliProviderOption,
 } from '../../utils/provider-priority'
 import { IconTrash, IconPlus, NodeHealthBadge } from './icons'
+import { buildProvidersByDaemonId, resolveNodeAvailableProviders } from './node-providers'
 import type { MeshNode, MeshQueueEntry, MeshNodeListFeatures, ProviderPriorityDrafts } from './types'
 
 export function getNodeActiveAssignments(node: MeshNode, queue: MeshQueueEntry[]): MeshQueueEntry[] {
@@ -157,6 +160,10 @@ export function MeshNodeList({
     onAddNode,
     onRemoveNode,
 }: Props) {
+    // Per-daemon detected CLI providers, so each existing node's "DEFAULT CLI PROVIDERS"
+    // list reflects its own daemon rather than the mesh's first daemon (daemons[0]).
+    const providersByDaemonId = useMemo(() => buildProvidersByDaemonId(daemons), [daemons])
+
     return (
         <Section
             title={features.addNodeDaemonPicker ? `Attached machine daemons (${nodes.length})` : 'Nodes'}
@@ -380,7 +387,7 @@ export function MeshNodeList({
                                                         : 'Used when launches omit an explicit provider.'}>
                                                 <ProviderPriorityEditor
                                                     value={nodeProviderPriorityDrafts[node.id] ?? readNodeProviderPriority(node)}
-                                                    availableProviders={availableCliProviders}
+                                                    availableProviders={resolveNodeAvailableProviders(node, providersByDaemonId)}
                                                     onChange={next => onNodeProviderPriorityDraftChange(node.id, next)}
                                                     disabled={savingNodePolicyId === node.id}
                                                     saveButton={(
