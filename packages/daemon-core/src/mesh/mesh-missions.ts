@@ -47,6 +47,25 @@ export interface MeshMissionSummary extends MeshMissionRecord {
     tasks: MeshMissionTaskAggregate;
 }
 
+/**
+ * Slim mission summary for the mesh_status compact (default) surface. Drops the
+ * full `goal` text — which can be hundreds of chars per mission and is repeated
+ * for every mission on every status call — keeping only a short preview plus a
+ * `goalTruncated` flag when the original was longer. The stored goal is never
+ * mutated; this is an output-only projection. Coordinators that need the full
+ * goal call mesh_status with verbose=true, or read the mission directly via
+ * mesh_mission_upsert / getMeshMission.
+ */
+export interface MeshMissionSlimSummary extends Omit<MeshMissionSummary, 'goal'> {
+    /** Short preview of the goal (≤ GOAL_PREVIEW_MAX chars), '' when goal empty. */
+    goalPreview: string;
+    /** True when the stored goal was longer than the preview (full text elided). */
+    goalTruncated: boolean;
+}
+
+/** Max chars of goal text retained in the slim (compact) mission summary. */
+export const GOAL_PREVIEW_MAX = 120;
+
 function normalizeMissionStatus(value: unknown): MeshMissionStatus {
     return MESH_MISSION_STATUSES.includes(value as MeshMissionStatus)
         ? value as MeshMissionStatus
@@ -125,17 +144,35 @@ export function getActiveMeshMissionSummaries(meshId: string): MeshMissionSummar
     return getMeshMissions(meshId, ['active']).map(mission => summarizeMeshMission(meshId, mission));
 }
 
+/** Project a full mission summary down to the slim (goal-elided) shape. */
+function slimMissionSummary(summary: MeshMissionSummary): MeshMissionSlimSummary {
+    const goal = typeof summary.goal === 'string' ? summary.goal : '';
+    const goalTruncated = goal.length > GOAL_PREVIEW_MAX;
+    const { goal: _omitGoal, ...rest } = summary;
+    return {
+        ...rest,
+        goalPreview: goalTruncated ? goal.slice(0, GOAL_PREVIEW_MAX) : goal,
+        goalTruncated,
+    };
+}
+
 /**
  * Mission summaries for the mesh_status dashboard surface: every active/paused
  * mission plus a capped, newest-first slice of completed/abandoned history so
  * the dashboard can render a collapsible "history" section without unbounded
  * payload growth. Returned newest-first within each group (active/paused first,
  * then history), so the frontend can split on `status` directly.
+ *
+ * Compact mode (the default) elides each mission's full `goal` text — which is
+ * repeated verbatim on every status poll and dominates the payload when a mesh
+ * has many missions — returning only a short `goalPreview` + `goalTruncated`
+ * flag. Pass `verbose: true` to get the full `goal` text per mission. The stored
+ * goal is untouched in both modes; this is an output-only projection.
  */
 export function getMeshStatusMissionSummaries(
     meshId: string,
-    options?: { historyLimit?: number },
-): MeshMissionSummary[] {
+    options?: { historyLimit?: number; verbose?: boolean },
+): MeshMissionSummary[] | MeshMissionSlimSummary[] {
     const historyLimit = Math.max(0, options?.historyLimit ?? 10);
     const all = getMeshMissions(meshId);
     const live = all.filter(m => m.status === 'active' || m.status === 'paused');
@@ -143,7 +180,8 @@ export function getMeshStatusMissionSummaries(
         .filter(m => m.status === 'completed' || m.status === 'abandoned')
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
         .slice(0, historyLimit);
-    return [...live, ...history].map(mission => summarizeMeshMission(meshId, mission));
+    const full = [...live, ...history].map(mission => summarizeMeshMission(meshId, mission));
+    return options?.verbose ? full : full.map(slimMissionSummary);
 }
 
 /**

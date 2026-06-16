@@ -144,10 +144,38 @@ const WEB_ONLY_PACKAGES = new Set([
 ]);
 
 /**
+ * Root-level (non-package) files that demonstrably cannot change what the daemon
+ * runtime executes: convergence/verify markers, documentation, and license/notice
+ * text. A root commit that moves the oss gitlink while the oss commit only touched
+ * one of these is NOT a reason to rebuild/restart the daemon — flagging it produces
+ * the staleDaemonBuild false-positive this guard exists to suppress.
+ *
+ * Deliberately conservative: anything NOT matched here (root config like
+ * package.json / tsconfig / build scripts, `.txt` fixtures, lockfiles, unknown
+ * dotfiles) stays daemon-affecting, because a false-negative — staying silent when
+ * the daemon really IS stale — is worse than an over-warn. Markers are the common
+ * real-world case (e.g. `.verify-patch-equiv-rc292`), so they are matched broadly;
+ * docs are matched by the `docs/` prefix or a markdown/text-doc extension at a
+ * filename we recognize as documentation (README/CHANGELOG/LICENSE/NOTICE).
+ */
+function isNonRuntimeRootFile(file: string): boolean {
+  const base = file.slice(file.lastIndexOf('/') + 1);
+  // Verify/convergence markers: dotfiles whose name signals a transient marker.
+  if (/^\.(?:verify|marker|converge|ff-verify|patch-equiv|live-verify)\b/i.test(base)) return true;
+  // Documentation living under a docs/ tree (any depth, root or nested).
+  if (/(?:^|\/)docs\//i.test(file)) return true;
+  // Recognized top-level documentation / license files.
+  if (/^(?:README|CHANGELOG|LICENSE|NOTICE|AUTHORS|CONTRIBUTING|CODEOWNERS)(?:\.[A-Za-z0-9]+)?$/i.test(base)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Determine whether the changes between buildCommit..HEAD touch any daemon-runtime
  * package. Returns isDaemonAffecting:true conservatively when the changed-file set
  * can't be obtained or any changed path is outside the known web-only package set
- * (including root-level / non-package files).
+ * AND is not a recognized non-runtime root file (marker/doc/license).
  */
 async function classifyDaemonBuildChange(
   repoPath: string,
@@ -166,24 +194,28 @@ async function classifyDaemonBuildChange(
       return { isDaemonAffecting: true, affectedPackages: [] };
     }
     const pkgs = new Set<string>();
-    let sawNonPackageOrUnknown = false;
+    // A non-package path that is NOT a recognized benign root file (marker/doc).
+    // Only these force daemon-affecting; benign markers/docs are ignored so a
+    // gitlink-moving root commit over a marker-only oss commit no longer over-warns.
+    let sawRuntimeAmbiguousNonPackage = false;
     for (const file of files) {
       const match = file.match(/(?:^|\/)packages\/([^/]+)\//);
       if (!match) {
-        sawNonPackageOrUnknown = true;
+        if (!isNonRuntimeRootFile(file)) sawRuntimeAmbiguousNonPackage = true;
         continue;
       }
       pkgs.add(match[1]);
     }
     const affectedPackages = [...pkgs].sort();
-    // Daemon-affecting if: any non-package/root file changed, any unknown package
-    // changed, or any explicit daemon-runtime package changed. Only when EVERY
-    // changed file maps to a known web-only package is the daemon unaffected.
-    const allWebOnly =
-      !sawNonPackageOrUnknown &&
-      affectedPackages.length > 0 &&
+    // Daemon-affecting if: any runtime-ambiguous non-package file changed, any
+    // unknown package changed, or any explicit daemon-runtime package changed.
+    // The daemon is unaffected only when every changed file is either a known
+    // web-only package or a recognized benign root file (and at least one such
+    // file changed) — i.e. nothing runtime-ambiguous remains.
+    const allBenign =
+      !sawRuntimeAmbiguousNonPackage &&
       affectedPackages.every((p) => WEB_ONLY_PACKAGES.has(p) && !DAEMON_RUNTIME_PACKAGES.has(p));
-    return { isDaemonAffecting: !allWebOnly, affectedPackages };
+    return { isDaemonAffecting: !allBenign, affectedPackages };
   } catch {
     // diff probe failed → can't prove web-only; stay conservative.
     return { isDaemonAffecting: true, affectedPackages: [] };
@@ -229,11 +261,14 @@ async function detectDaemonBuildBehind(
         options,
       );
       const scopeLabel = scope === 'root' ? 'workspace' : scope;
+      const benignDetail = affectedPackages.length > 0
+        ? `only web packages changed (${affectedPackages.join(', ')})`
+        : 'only non-runtime files changed (markers/docs)';
       const warning = isDaemonAffecting
         ? `Live daemon was built from ${build.commitShort} which is behind ${scopeLabel} HEAD ${head.slice(0, 7)}. ` +
           `Merged code is NOT live until the daemon is rebuilt/redeployed and restarted — a local dist rebuild alone does not update a cloud daemon.`
         : `Live daemon was built from ${build.commitShort} which is behind ${scopeLabel} HEAD ${head.slice(0, 7)}, ` +
-          `but only web packages changed (${(affectedPackages || []).join(', ') || 'web'}). ` +
+          `but ${benignDetail}. ` +
           `Daemon restart NOT required — redeploy the web app to reflect the change.`;
       return {
         buildCommit: build.commit,

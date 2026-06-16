@@ -6,7 +6,9 @@ import {
     getMeshMission,
     summarizeMissionTasks,
     getActiveMeshMissionSummaries,
+    getMeshStatusMissionSummaries,
     buildMissionPromptSection,
+    GOAL_PREVIEW_MAX,
 } from '../../src/mesh/mesh-missions.js';
 import { enqueueTask, updateTaskStatus, claimNextTask, recordDirectDispatchTask, updateSessionTaskStatus, getQueue, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js';
 import { computeMeshMissionStats } from '../../src/mesh/mesh-task-stats.js';
@@ -178,5 +180,63 @@ describe('M3 — mission persistence', () => {
         });
         expect(prompt).toContain('CUSTOM PROMPT');
         expect(prompt).toContain('Override mission');
+    });
+});
+
+describe('getMeshStatusMissionSummaries — compact (default) elides full goal text', () => {
+    const meshId = `mission-slim-${randomUUID().slice(0, 8)}`;
+    const longGoal = 'G'.repeat(GOAL_PREVIEW_MAX + 200);
+
+    afterEach(() => {
+        __clearMeshQueueForTests(meshId);
+        try { MeshRuntimeStore.getInstance().clearMissionsForMesh(meshId); } catch { /* fresh store */ }
+        MeshRuntimeStore.resetForTests();
+    });
+
+    it('compact (default) drops the full goal, keeps a capped preview + truncated flag', () => {
+        const created = upsertMeshMission(meshId, { title: 'Slim mission', goal: longGoal });
+
+        const compact = getMeshStatusMissionSummaries(meshId) as any[];
+        expect(compact).toHaveLength(1);
+        const m = compact[0];
+        // Full goal text is NOT in the compact payload.
+        expect(m).not.toHaveProperty('goal');
+        expect(m.goalPreview).toHaveLength(GOAL_PREVIEW_MAX);
+        expect(m.goalTruncated).toBe(true);
+        // Identity/aggregate fields are still present.
+        expect(m.id).toBe(created.id);
+        expect(m.title).toBe('Slim mission');
+        expect(m.status).toBe('active');
+        expect(m.createdAt).toBeTruthy();
+        expect(m.updatedAt).toBeTruthy();
+        expect(m.tasks).toBeDefined();
+    });
+
+    it('verbose=true includes the full goal text and no preview fields', () => {
+        upsertMeshMission(meshId, { title: 'Slim mission', goal: longGoal });
+
+        const verbose = getMeshStatusMissionSummaries(meshId, { verbose: true }) as any[];
+        expect(verbose).toHaveLength(1);
+        const m = verbose[0];
+        expect(m.goal).toBe(longGoal);
+        expect(m).not.toHaveProperty('goalPreview');
+        expect(m).not.toHaveProperty('goalTruncated');
+    });
+
+    it('short goals are returned whole in compact mode with truncated:false', () => {
+        upsertMeshMission(meshId, { title: 'Short goal mission', goal: 'tiny goal' });
+
+        const compact = getMeshStatusMissionSummaries(meshId) as any[];
+        const m = compact[0];
+        expect(m.goalPreview).toBe('tiny goal');
+        expect(m.goalTruncated).toBe(false);
+        expect(m).not.toHaveProperty('goal');
+    });
+
+    it('does not mutate the stored goal — the record keeps the full text', () => {
+        const created = upsertMeshMission(meshId, { title: 'Persist goal', goal: longGoal });
+        // Read the compact projection, then confirm storage is untouched.
+        getMeshStatusMissionSummaries(meshId);
+        expect(getMeshMission(meshId, created.id)?.goal).toBe(longGoal);
     });
 });

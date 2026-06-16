@@ -8267,6 +8267,13 @@ export class DaemonCommandRouter {
                     const meshHost = resolveMeshHostStatus(mesh);
 
                     const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
+                    // Compact (default) elides each mission's full goal text from the
+                    // payload — coordinators polling node health don't need every
+                    // mission's multi-hundred-char goal repeated. verbose=true (or the
+                    // explicit compact=false) restores full goals. Verbose bypasses the
+                    // shared (compact) aggregate cache so a verbose call never poisons
+                    // the compact cache and vice versa.
+                    const verboseMissions = args?.verbose === true || args?.compact === false;
                     // See (B3) below: scope the peek to this daemon when the
                     // caller doesn't tell us, otherwise scoped events look
                     // missing and we falsely return a stale cache.
@@ -8275,7 +8282,7 @@ export class DaemonCommandRouter {
                         : (this.deps.statusInstanceId || undefined);
                     const pendingCoordinatorEventCount = getPendingMeshCoordinatorEvents(meshId, peekScope).length;
                     const hadAggregateCache = this.aggregateMeshStatusCache.has(meshId);
-                    if (!refreshRequested && pendingCoordinatorEventCount === 0) {
+                    if (!refreshRequested && !verboseMissions && pendingCoordinatorEventCount === 0) {
                         const cachedStatus = this.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
                         if (cachedStatus) {
                             logRepoMeshStatusDebug('return_cached', {
@@ -8649,7 +8656,7 @@ export class DaemonCommandRouter {
                         liveSessionRecords: liveMeshSessions,
                     });
                     const { getMeshStatusMissionSummaries } = await import('../mesh/mesh-missions.js');
-                    const missions = getMeshStatusMissionSummaries(meshId);
+                    const missions = getMeshStatusMissionSummaries(meshId, { verbose: verboseMissions });
                     const statusResult = {
                         success: true,
                         meshId: mesh.id,
@@ -8709,7 +8716,12 @@ export class DaemonCommandRouter {
                             })),
                     };
                     const { pendingCoordinatorEvents: _pendingCoordinatorEvents, unroutableDeliveries: _unroutableDeliveries, ...cacheableStatusResult } = statusResult as any;
-                    const rememberedStatus = this.rememberAggregateMeshStatus(meshId, cacheableStatusResult, refreshReason);
+                    // Verbose carries full mission goals; never store it in the shared
+                    // (compact) aggregate cache or a later compact poll would return the
+                    // heavy goals from cache. Return it without caching.
+                    const rememberedStatus = verboseMissions
+                        ? cacheableStatusResult
+                        : this.rememberAggregateMeshStatus(meshId, cacheableStatusResult, refreshReason);
                     const returnedStatus = {
                         ...rememberedStatus,
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),

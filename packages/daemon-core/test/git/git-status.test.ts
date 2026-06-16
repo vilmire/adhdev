@@ -306,6 +306,68 @@ describe('git repo status parser', () => {
       expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(true);
     });
 
+    it('marks isDaemonAffecting:false when only a verify/convergence marker changed', async () => {
+      const repo = tempRepo('build-behind-marker-only');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      // Mirrors the real-world gitlink-only superproject case: the oss commit that
+      // moved HEAD only added a convergence marker, no runtime code.
+      writeFileSync(join(repo, '.verify-patch-equiv-rc292'), 'marker\n');
+      commit(repo, 'c2 (add verify marker)');
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit) });
+      expect(status.daemonBuildBehind).toBeDefined();
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(false);
+      expect(status.daemonBuildBehind?.warning).toContain('non-runtime files changed');
+      expect(status.daemonBuildBehind?.warning).toContain('Daemon restart NOT required');
+    });
+
+    it('marks isDaemonAffecting:false when only docs / a marker changed alongside web-core', async () => {
+      const repo = tempRepo('build-behind-marker-plus-web');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      mkdirSync(join(repo, 'docs'), { recursive: true });
+      writeFileSync(join(repo, 'docs', 'NOTES.md'), '# notes\n');
+      writeFileSync(join(repo, 'README.md'), '# readme\n');
+      mkdirSync(join(repo, 'packages', 'web-core', 'src'), { recursive: true });
+      writeFileSync(join(repo, 'packages', 'web-core', 'src', 'ui.ts'), 'export const ui = 1;\n');
+      commit(repo, 'c2 (docs + web-core)');
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit) });
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(false);
+      expect(status.daemonBuildBehind?.affectedPackages).toEqual(['web-core']);
+    });
+
+    it('stays daemon-affecting when a marker changes alongside daemon-core', async () => {
+      const repo = tempRepo('build-behind-marker-plus-daemon');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, '.verify-marker'), 'm\n');
+      mkdirSync(join(repo, 'packages', 'daemon-core', 'src'), { recursive: true });
+      writeFileSync(join(repo, 'packages', 'daemon-core', 'src', 'x.ts'), 'export const x = 1;\n');
+      commit(repo, 'c2 (marker + daemon-core)');
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit) });
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(true);
+      expect(status.daemonBuildBehind?.affectedPackages).toContain('daemon-core');
+    });
+
+    it('stays daemon-affecting for an unrecognized root file (conservative default)', async () => {
+      const repo = tempRepo('build-behind-unknown-root');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      // A root config/script change could affect the daemon build — not benign.
+      writeFileSync(join(repo, 'tsconfig.base.json'), '{}\n');
+      commit(repo, 'c2 (root config change)');
+
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit) });
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(true);
+    });
+
     it('does not flag when the build commit equals HEAD (daemon current)', async () => {
       const repo = tempRepo('build-behind-current');
       writeFileSync(join(repo, 'a.txt'), 'one\n');
