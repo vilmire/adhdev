@@ -6965,6 +6965,32 @@ export class DaemonCommandRouter {
                     const mesh = meshRecord?.mesh;
                     const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
 
+                    // Guard: refuse to remove the coordinator's OWN local base node
+                    // (same machine, NOT a worktree). Removing it breaks live mesh
+                    // membership — the coordinator can no longer be reached and has
+                    // to be restarted. Worktree clones are always safe to remove;
+                    // only the non-worktree node bound to this daemon is protected.
+                    // An explicit force:true overrides for intentional mesh teardown.
+                    if (node && !args?._meshDirectDispatch && node.isLocalWorktree !== true && args?.force !== true) {
+                        const nodeDaemonId = typeof node.daemonId === 'string' ? node.daemonId.trim() : '';
+                        const nodeMachineId = readMeshNodeMachineId(node as Record<string, unknown>) || '';
+                        const selfDaemonId = this.deps.statusInstanceId || '';
+                        const selfMachineId = (() => { try { return loadConfig().machineId || ''; } catch { return ''; } })();
+                        const isCoordinatorBaseNode =
+                            (!!selfDaemonId && (nodeDaemonId === selfDaemonId || nodeMachineId === selfDaemonId))
+                            || (!!selfMachineId && (nodeDaemonId === selfMachineId || nodeMachineId === selfMachineId));
+                        if (isCoordinatorBaseNode) {
+                            return {
+                                success: false,
+                                removed: false,
+                                code: 'mesh_remove_coordinator_base_node_protected',
+                                error: `Refusing to remove the coordinator's own base node '${typeof node.workspace === 'string' ? node.workspace : nodeId}'. `
+                                    + `It is the local non-worktree node bound to this coordinator daemon; removing it breaks live mesh membership and forces a restart.`,
+                                recoveryHint: 'Remove worktree clone nodes instead, or pass force:true only if you are intentionally tearing down this mesh and accept that the coordinator must be re-registered/restarted.',
+                            };
+                        }
+                    }
+
                     const sessionCleanupMode = this.normalizeMeshSessionCleanupMode(
                         args?.sessionCleanupMode ?? args?.session_cleanup_mode ?? mesh?.policy?.sessionCleanupOnNodeRemove,
                     );

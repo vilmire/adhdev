@@ -512,4 +512,81 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       allowFreeform: true,
     });
   });
+
+  it('detects multi-select from checkbox option markers even when the footer hint drifts (regression)', () => {
+    // Regression: the dashboard rendered single-select (radio) for a
+    // multi-select AskUserQuestion because multiSelect was derived solely from
+    // the footer text /Space to select|toggle selections/. When claude-cli
+    // changed that footer wording, the parse fell back to multiSelect:false and
+    // the user could no longer check multiple boxes in the dashboard — even
+    // though the picker visibly drew checkboxes. Pin that the per-option
+    // checkbox markers ([ ] / ☐) are now an authoritative multi-select signal.
+    // The footer keeps "Enter to select" (the prompt-presence gate) but the
+    // old multi-select hint "Space to select" is gone — only the per-option
+    // checkbox markers remain to signal multi-select.
+    const screen = [
+      '←  ☐ Languages  ✔ Submit  →',
+      '',
+      'Pick all the languages you use',
+      '',
+      '❯ [ ] 1. TypeScript',
+      '  [x] 2. Python',
+      '  [ ] 3. Rust',
+      '────────────────────────────────────────────────',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'multi-drift', createdAt: 1234 });
+
+    expect(prompt?.questions).toHaveLength(1);
+    expect(prompt?.questions[0].multiSelect).toBe(true);
+    expect(prompt?.questions[0].options.map(o => o.label)).toEqual([
+      'TypeScript', 'Python', 'Rust',
+    ]);
+  });
+
+  it('detects multi-select from ☐ glyph option markers (regression)', () => {
+    const screen = [
+      '←  ☐ Features  ✔ Submit  →',
+      '',
+      'Pick features',
+      '',
+      '❯ ☐ 1. Alpha',
+      '  ☒ 2. Beta',
+      '  ☐ 3. Gamma',
+      '────────────────────────────────────────────────',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'multi-glyph', createdAt: 1234 });
+
+    expect(prompt?.questions[0]?.multiSelect).toBe(true);
+  });
+
+  it('keeps single-select numbered screens as multiSelect:false (no false positive)', () => {
+    // No per-option checkbox markers and no multi-select footer hint. The ☐ on
+    // the `✔ Submit` nav line is per-question answered state, NOT multi-select,
+    // and must not trigger a false positive.
+    const screen = [
+      '←  ☐ Move  ✔ Submit  →',
+      '',
+      '무엇을 내시겠어요?',
+      '',
+      '❯ 1. 바위',
+      '  2. 가위',
+      '  3. 보',
+      '────────────────────────────────────────────────',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'single-no-fp', createdAt: 1234 });
+
+    expect(prompt?.questions[0]?.multiSelect).toBe(false);
+  });
 });

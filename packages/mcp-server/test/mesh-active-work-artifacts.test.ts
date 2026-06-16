@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHistory, meshViewQueue } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, drainPendingMeshCoordinatorEvents, enqueueTask, getLedgerDir, insertDirectDispatch, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
+import { appendLedgerEntry, buildTaskCompletionEvidence, drainPendingMeshCoordinatorEvents, enqueueTask, getLedgerDir, getQueue, insertDirectDispatch, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
 import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
 import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
@@ -754,6 +754,96 @@ test('mesh_enqueue_task enqueue-and-push remains queue-sourced active work', asy
     const status = JSON.parse(await meshStatus(ctx as any));
     assert.ok(status.activeWork.some((entry: any) => entry.source === 'queue' && entry.taskId === enqueued.taskId));
     assert.equal(status.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === enqueued.taskId), false);
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+function createWorktreeRoutingCtx(meshId: string) {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const mesh = {
+    id: meshId,
+    name: 'Worktree Routing',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [
+      // base node (main workspace) — would normally win the unconstrained claim
+      { id: 'node-base', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-base', machineId: 'machine-base', userOverrides: {}, policy: {}, sessions: [] },
+      // first worktree clone
+      { id: 'node-wt-1', workspace: '/repo-wt-1', repoRoot: '/repo', daemonId: 'daemon-base', machineId: 'machine-base', isLocalWorktree: true, worktreeBranch: 'feat/a', clonedFromNodeId: 'node-base', userOverrides: {}, policy: {}, sessions: [] },
+      // most recently cloned worktree (appended last) — prefer_worktree should pick this
+      { id: 'node-wt-2', workspace: '/repo-wt-2', repoRoot: '/repo', daemonId: 'daemon-base', machineId: 'machine-base', isLocalWorktree: true, worktreeBranch: 'feat/b', clonedFromNodeId: 'node-base', userOverrides: {}, policy: {}, sessions: [] },
+    ],
+  };
+  transport.command = async (command: string) => {
+    if (command === 'get_mesh') return { success: true, mesh };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    return { success: true };
+  };
+  transport.meshCommand = async () => ({ success: true });
+  return { ctx: { mesh, transport, localDaemonId: 'daemon-base' } };
+}
+
+test('mesh_enqueue_task prefer_worktree routes the task to the most recently cloned worktree node', async () => {
+  const meshId = 'mesh-enqueue-prefer-worktree-test';
+  cleanupMesh(meshId);
+  const { ctx } = createWorktreeRoutingCtx(meshId);
+  try {
+    const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
+      message: 'Isolated work that must not be claimed by the base node',
+      prefer_worktree: true,
+    } as any));
+    assert.equal(enqueued.success, true);
+    // Most recently appended worktree node wins.
+    assert.equal(enqueued.targetNodeId, 'node-wt-2');
+
+    const entry = getQueue(meshId).find((t: any) => t.id === enqueued.taskId);
+    assert.ok(entry, 'expected the enqueued task in the queue');
+    assert.equal(entry.targetNodeId, 'node-wt-2');
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('mesh_enqueue_task explicit target_node_id overrides prefer_worktree', async () => {
+  const meshId = 'mesh-enqueue-explicit-target-test';
+  cleanupMesh(meshId);
+  const { ctx } = createWorktreeRoutingCtx(meshId);
+  try {
+    const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
+      message: 'Target the first worktree specifically',
+      prefer_worktree: true,
+      target_node_id: 'node-wt-1',
+    } as any));
+    assert.equal(enqueued.success, true);
+    assert.equal(enqueued.targetNodeId, 'node-wt-1');
+    const entry = getQueue(meshId).find((t: any) => t.id === enqueued.taskId);
+    assert.equal(entry.targetNodeId, 'node-wt-1');
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('mesh_enqueue_task prefer_worktree is a no-op when no worktree node exists', async () => {
+  const meshId = 'mesh-enqueue-prefer-worktree-noop-test';
+  cleanupMesh(meshId);
+  const { ctx } = createRemoteCtx(meshId); // only a single non-worktree node
+  try {
+    const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
+      message: 'No worktree to prefer',
+      prefer_worktree: true,
+    } as any));
+    assert.equal(enqueued.success, true);
+    assert.equal(enqueued.targetNodeId, undefined);
+    assert.equal(enqueued.preferWorktreeNoOp, true);
+    const entry = getQueue(meshId).find((t: any) => t.id === enqueued.taskId);
+    assert.equal(entry.targetNodeId, undefined);
   } finally {
     cleanupMesh(meshId);
   }

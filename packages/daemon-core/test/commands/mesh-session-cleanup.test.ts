@@ -47,7 +47,7 @@ async function createTempGitRepoWithSubmodule(prefix: string) {
   return { dir, repoRoot, submoduleRoot }
 }
 
-function createRouter(overrides: Record<string, unknown> = {}) {
+function createRouter(overrides: Record<string, unknown> = {}, depsOverrides: Record<string, unknown> = {}) {
   const sessionHostControl = {
     listSessions: vi.fn(async () => []),
     stopSession: vi.fn(async (sessionId: string) => ({ sessionId })),
@@ -76,6 +76,7 @@ function createRouter(overrides: Record<string, unknown> = {}) {
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
     sessionHostControl: sessionHostControl as any,
+    ...depsOverrides,
   })
 
   return { router, sessionHostControl }
@@ -618,6 +619,81 @@ describe('mesh session cleanup', () => {
       expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses to remove the coordinator base node (same daemon, not a worktree) without force', async () => {
+    const meshId = `mesh-base-guard-${Date.now()}`
+    try {
+      // statusInstanceId matches the node daemonId → this is the coordinator's
+      // own local base node. It is NOT a worktree, so removing it would break
+      // live mesh membership; the guard must reject without force.
+      const { router } = createRouter({}, { statusInstanceId: 'coordinator-daemon-1' })
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-base',
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          nodes: [{ id: 'node-base', workspace: '/Users/me/Work/adhdev', daemonId: 'coordinator-daemon-1' }],
+        },
+      })
+      expect(result).toMatchObject({
+        success: false,
+        removed: false,
+        code: 'mesh_remove_coordinator_base_node_protected',
+      })
+      expect(String(result.error)).toContain("coordinator's own base node")
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
+  })
+
+  it('removes the coordinator base node when force:true is passed', async () => {
+    const meshId = `mesh-base-force-${Date.now()}`
+    try {
+      const { router } = createRouter({}, { statusInstanceId: 'coordinator-daemon-1' })
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-base',
+        force: true,
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          nodes: [{ id: 'node-base', workspace: '/Users/me/Work/adhdev', daemonId: 'coordinator-daemon-1' }],
+        },
+      })
+      expect(result).toMatchObject({ success: true, removed: true })
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
+  })
+
+  it('does not guard a worktree node owned by the coordinator daemon', async () => {
+    const meshId = `mesh-base-worktree-${Date.now()}`
+    try {
+      // Same daemon, but isLocalWorktree:true → safe to remove, no guard. The
+      // worktree-cleanup path will run; for this inline node without a real
+      // worktree on disk it simply removes the membership entry.
+      const { router } = createRouter({}, { statusInstanceId: 'coordinator-daemon-1' })
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-wt',
+        sessionCleanupMode: 'preserve',
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          nodes: [{ id: 'node-wt', workspace: '/repo/worktree-x', daemonId: 'coordinator-daemon-1', isLocalWorktree: true, worktreeBranch: 'feat/x', clonedFromNodeId: 'node-base' }],
+        },
+      })
+      // The guard is NOT the thing that blocks here — it must not produce the
+      // coordinator-base-node protection code for a worktree node.
+      expect(result?.code).not.toBe('mesh_remove_coordinator_base_node_protected')
+    } finally {
+      cleanupLedgerFile(meshId)
     }
   })
 })

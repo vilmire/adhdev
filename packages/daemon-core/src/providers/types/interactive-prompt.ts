@@ -137,7 +137,14 @@ export interface ClaudeInteractiveTuiPage {
   header?: string;
 }
 
-const CLAUDE_TUI_OPTION_PATTERN = /^\s*(?:[❯›>]\s*)?(\d+)\.\s+(.+?)\s*$/;
+// Option rows look like "❯ 1. Label". The multi-select picker additionally
+// draws a checkbox marker that can sit before or after the number
+// ("❯ [ ] 1. Label" / "❯ 1. [x] Label" / "☐ 1. Label"); the optional,
+// non-capturing checkbox groups absorb it so the captured label stays clean.
+const CLAUDE_TUI_OPTION_CHECKBOX = '(?:\\[[ xX]\\]|[☐☒◻◼])';
+const CLAUDE_TUI_OPTION_PATTERN = new RegExp(
+  `^\\s*(?:[❯›>]\\s*)?(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(\\d+)\\.\\s+(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(.+?)\\s*$`,
+);
 
 function claudeTuiQuestionHeaders(screenText: string): string[] {
   const navLine = screenText.split(/\r?\n/).find(line => line.includes('✔ Submit') && /[☐☒]/.test(line));
@@ -153,6 +160,41 @@ function claudeTuiQuestionHeaders(screenText: string): string[] {
 
 function isClaudeTuiSelectFooter(text: string): boolean {
   return /Enter to select/i.test(text) && /Esc to cancel/i.test(text);
+}
+
+/**
+ * Decide whether a captured claude-cli AskUserQuestion TUI page is multi-select.
+ *
+ * The original heuristic only matched the footer hint `/Space to select|toggle
+ * selections/i`. That string drifts between claude-cli versions, so when it
+ * changed the dashboard silently fell back to multiSelect:false and rendered
+ * single-select (radio) controls even though the on-screen picker showed
+ * checkboxes — the user could not check more than one box. (The CLI's own
+ * terminal still rendered `[ ]` correctly because it never depends on this
+ * parse.)
+ *
+ * Make detection robust by ALSO recognising the actual checkbox markers the
+ * multi-select picker draws on its option rows (`[ ]` / `[x]` / `☐` / `☒` /
+ * `◻` / `◼`). Single-select rows are drawn with a `❯`/number cursor only and
+ * carry none of these box glyphs, so their presence is a reliable signal. The
+ * broadened footer patterns ("Space to", "toggle", "select multiple") are kept
+ * as a secondary signal for layouts that render markers differently.
+ */
+function detectClaudeTuiMultiSelect(screenText: string): boolean {
+  if (/Space to (?:select|toggle)|toggle selection|select multiple|select all that apply/i.test(screenText)) {
+    return true;
+  }
+  // A checkbox glyph sitting in front of a NUMBERED option row only appears in
+  // the multi-select picker (e.g. "❯ [ ] 1. TypeScript" / "☐ 2. Python"). We
+  // require the numbered "N." option marker so we don't false-positive on the
+  // `✔ Submit` nav line (per-question answered-state ☐/☒) or on the headerless
+  // variant where the QUESTION line itself begins with `☐ ` (single-select).
+  const optionCheckbox = /^\s*(?:[❯›>]\s*)?(?:\[[ xX]\]|[☐☒◻◼])\s*\d+\.\s+\S/;
+  for (const line of screenText.split(/\r?\n/)) {
+    if (line.includes('✔ Submit')) continue; // header/nav line
+    if (optionCheckbox.test(line)) return true;
+  }
+  return false;
 }
 
 function readClaudeHeaderLine(lines: string[], beforeIndex: number): string | undefined {
@@ -254,7 +296,7 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
     questionId: `q${index + 1}`,
     question,
     ...(header ? { header } : {}),
-    multiSelect: /Space to select|toggle selections/i.test(page.screenText),
+    multiSelect: detectClaudeTuiMultiSelect(page.screenText),
     options,
     ...(allowFreeform ? { allowFreeform: true } : {}),
   };
@@ -313,7 +355,7 @@ function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index
     questionId: `q${index + 1}`,
     question,
     ...(header ? { header } : {}),
-    multiSelect: /Space to select|toggle selections/i.test(page.screenText),
+    multiSelect: detectClaudeTuiMultiSelect(page.screenText),
     options,
     ...(allowFreeform ? { allowFreeform: true } : {}),
   };
