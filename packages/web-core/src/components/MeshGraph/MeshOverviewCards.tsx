@@ -13,6 +13,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { canonicalizeRepoMeshStatus } from '../../utils/repo-mesh-status'
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
+import { IconHelp } from '../Icons'
 
 /**
  * MeshOverviewCards — the text/card "Overview" surface for a mesh. This is the
@@ -60,6 +61,154 @@ const EMPTY_LEDGER_SUMMARY: RepoMeshLedgerSummaryStatus = {
     checkpointCreated: 0,
     lastActivityAt: null,
     recentFailures: 0,
+}
+
+// ── concept help ──────────────────────────────────────────────────────────────
+// Plain-language definitions for the mesh vocabulary, surfaced behind "?" help
+// buttons on each card header so an end user can learn the terms without leaving
+// the dashboard. Keep these short and jargon-light.
+
+type MeshConcept = {
+    key: 'node' | 'mission' | 'task' | 'queue' | 'ledger' | 'refinery'
+    term: string
+    summary: string
+}
+
+const MESH_CONCEPTS: MeshConcept[] = [
+    {
+        key: 'node',
+        term: 'Node',
+        summary: 'A workspace taking part in the mesh — a repo checkout or an isolated git worktree where an agent can run.',
+    },
+    {
+        key: 'mission',
+        term: 'Mission',
+        summary: 'A goal. It groups the related tasks working toward that goal and stays as a durable record of the effort.',
+    },
+    {
+        key: 'task',
+        term: 'Task',
+        summary: "A unit of work an agent on a node performs. It moves through states: pending → assigned → completed or failed.",
+    },
+    {
+        key: 'queue',
+        term: 'Queue',
+        summary: 'The list of waiting tasks that idle nodes autonomously pull and pick up on their own.',
+    },
+    {
+        key: 'ledger',
+        term: 'Ledger',
+        summary: 'The mesh audit log — a record of what has already happened across the mesh. It is history, not a to-do list.',
+    },
+    {
+        key: 'refinery',
+        term: 'Refinery',
+        summary: 'The process that converges a worktree branch back into its base: validate → merge → push → clean up.',
+    },
+]
+
+const MESH_CONCEPT_BY_KEY: Record<MeshConcept['key'], MeshConcept> = MESH_CONCEPTS.reduce(
+    (acc, concept) => { acc[concept.key] = concept; return acc },
+    {} as Record<MeshConcept['key'], MeshConcept>,
+)
+
+/**
+ * A compact "?" help button that opens an accessible popover explaining one or
+ * more mesh concepts. Reuses the same solid-shell modal pattern as the detail
+ * modal below so it reads on mobile (opaque slate-950 / white shell, never a
+ * transparent sheet) and is keyboard reachable + Esc-closable.
+ */
+function HelpButton({ meshTheme, concepts, label }: {
+    meshTheme: MeshGraphTheme
+    concepts: MeshConcept[]
+    label: string
+}) {
+    const [open, setOpen] = useState(false)
+    const dk = meshTheme.isDark
+    const btnClass = dk
+        ? 'inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-slate-400 transition hover:bg-white/[0.08] hover:text-slate-100'
+        : 'inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 transition hover:bg-slate-50 hover:text-slate-700'
+    return (
+        <>
+            <button
+                type="button"
+                onClick={() => setOpen(true)}
+                aria-label={label}
+                title={label}
+                className={btnClass}
+            >
+                <IconHelp size={13} />
+            </button>
+            {open && <ConceptPopover meshTheme={meshTheme} concepts={concepts} title={label} onClose={() => setOpen(false)} />}
+        </>
+    )
+}
+
+function ConceptPopover({ meshTheme, concepts, title, onClose }: {
+    meshTheme: MeshGraphTheme
+    concepts: MeshConcept[]
+    title: string
+    onClose: () => void
+}) {
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') onClose()
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+    }, [onClose])
+
+    const dk = meshTheme.isDark
+    const overlayClass = dk ? 'bg-[#030617]/[0.92]' : 'bg-[rgba(15,23,42,0.82)]'
+    const shellClass = dk
+        ? 'border-white/10 bg-slate-950 md:bg-slate-950/98 shadow-[0_28px_120px_rgba(2,6,23,0.5)]'
+        : 'border-slate-200 bg-white md:bg-white/98 shadow-[0_28px_120px_rgba(148,163,184,0.3)]'
+
+    return (
+        <div
+            className={`fixed inset-0 z-[1300] flex items-stretch justify-center p-0 md:items-center md:p-4 ${overlayClass}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            onClick={onClose}
+        >
+            <div
+                className={`flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden border ${shellClass} md:h-auto md:max-h-[88dvh] md:max-w-[min(560px,calc(100vw-32px))] md:rounded-2xl`}
+                onClick={event => event.stopPropagation()}
+            >
+                <div className={`sticky top-0 z-10 flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3 ${dk ? 'border-white/8' : 'border-slate-200'}`}>
+                    <div className="min-w-0">
+                        <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Help</div>
+                        <div className={`mt-0.5 text-sm font-semibold ${meshTheme.textPrimary}`}>{title}</div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label="Close help"
+                        className={dk ? 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white' : 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}
+                    >
+                        ✕
+                    </button>
+                </div>
+                <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
+                    <dl className="flex flex-col gap-3">
+                        {concepts.map(concept => (
+                            <div key={concept.key}>
+                                <dt className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{concept.term}</dt>
+                                <dd className={`mt-0.5 text-xs leading-5 ${meshTheme.textSecondary}`}>{concept.summary}</dd>
+                            </div>
+                        ))}
+                    </dl>
+                </div>
+            </div>
+        </div>
+    )
+}
+
+/** Shorthand: a "?" button scoped to a single concept by key. */
+function ConceptHelpButton({ meshTheme, conceptKey }: { meshTheme: MeshGraphTheme; conceptKey: MeshConcept['key'] }) {
+    const concept = MESH_CONCEPT_BY_KEY[conceptKey]
+    return <HelpButton meshTheme={meshTheme} concepts={[concept]} label={`What is a ${concept.term}?`} />
 }
 
 function shortSessionId(sessionId: string): string {
@@ -582,7 +731,12 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
     const dk = meshTheme.isDark
     const live = useRecentList(liveMissions)
     return (
-        <Card meshTheme={meshTheme} title="Missions" count={liveMissions.length || undefined}>
+        <Card
+            meshTheme={meshTheme}
+            title="Missions"
+            count={liveMissions.length || undefined}
+            action={<ConceptHelpButton meshTheme={meshTheme} conceptKey="mission" />}
+        >
             {liveMissions.length > 0 ? (
                 <div className="flex flex-col gap-0.5">
                     {live.visible.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} onSelect={() => onSelect(m)} />)}
@@ -631,7 +785,7 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, onSelect }: {
     const recent = useMemo(() => [...entries].reverse(), [entries])
     const list = useRecentList(recent)
     return (
-        <Card meshTheme={meshTheme} title="Ledger">
+        <Card meshTheme={meshTheme} title="Ledger" action={<ConceptHelpButton meshTheme={meshTheme} conceptKey="ledger" />}>
             <div className="grid grid-cols-3 gap-1.5">
                 <StatTile meshTheme={meshTheme} label="Dispatched" value={ledgerSummary.taskDispatched} />
                 <StatTile meshTheme={meshTheme} label="Completed" value={ledgerSummary.taskCompleted} tone="emerald" />
@@ -686,15 +840,25 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
     }, [tasks])
     const list = useRecentList(recent)
 
+    // Queue and Task are explained together here — the queue *is* the list of
+    // tasks idle nodes pull, so the single "?" covers both terms.
+    const queueHelp = (
+        <HelpButton
+            meshTheme={meshTheme}
+            concepts={[MESH_CONCEPT_BY_KEY.queue, MESH_CONCEPT_BY_KEY.task]}
+            label="What are the Queue and Tasks?"
+        />
+    )
+
     if (!queueSummary) {
         return (
-            <Card meshTheme={meshTheme} title="Queue">
+            <Card meshTheme={meshTheme} title="Queue" action={queueHelp}>
                 <EmptyHint meshTheme={meshTheme}>No queue activity.</EmptyHint>
             </Card>
         )
     }
     return (
-        <Card meshTheme={meshTheme} title="Queue" count={queueSummary.active > 0 ? `${queueSummary.active} active` : undefined}>
+        <Card meshTheme={meshTheme} title="Queue" count={queueSummary.active > 0 ? `${queueSummary.active} active` : undefined} action={queueHelp}>
             <div className="grid grid-cols-3 gap-1.5">
                 <StatTile meshTheme={meshTheme} label="Pending" value={queueSummary.pending} />
                 <StatTile meshTheme={meshTheme} label="Assigned" value={queueSummary.assigned} tone={queueSummary.assigned > 0 ? 'sky' : undefined} />
@@ -733,7 +897,7 @@ function convergenceBadge(node: RepoMeshNodeStatus): { label: string; tone: Tone
 function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: RepoMeshNodeStatus[] }) {
     const dk = meshTheme.isDark
     return (
-        <Card meshTheme={meshTheme} title="Nodes" count={nodes.length}>
+        <Card meshTheme={meshTheme} title="Nodes" count={nodes.length} action={<ConceptHelpButton meshTheme={meshTheme} conceptKey="node" />}>
             {nodes.length === 0 ? (
                 <EmptyHint meshTheme={meshTheme}>No nodes in this mesh yet.</EmptyHint>
             ) : (
@@ -798,7 +962,12 @@ function RefineJobsCard({ meshTheme, jobs }: { meshTheme: MeshGraphTheme; jobs: 
             meshTheme={meshTheme}
             title="Refine jobs"
             count={jobs.length || undefined}
-            action={failed > 0 ? <StatusBadge meshTheme={meshTheme} label={`${failed} failed`} tone="rose" /> : undefined}
+            action={(
+                <span className="flex items-center gap-1.5">
+                    {failed > 0 && <StatusBadge meshTheme={meshTheme} label={`${failed} failed`} tone="rose" />}
+                    <HelpButton meshTheme={meshTheme} concepts={[MESH_CONCEPT_BY_KEY.refinery]} label="What is the Refinery?" />
+                </span>
+            )}
         >
             {jobs.length === 0 ? (
                 <EmptyHint meshTheme={meshTheme}>No refine jobs.</EmptyHint>
