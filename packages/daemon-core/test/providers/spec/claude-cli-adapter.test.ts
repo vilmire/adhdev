@@ -389,7 +389,7 @@ describe('SpecCliAdapter — setInteractivePromptResponse submit path', () => {
     ],
   };
 
-  it('writes Space-toggle key steps for every checked box on a multi-select submit', async () => {
+  it('writes a digit per checked box (no Space) and Tab to advance on a multi-select submit', async () => {
     const { adapter, writes } = makeSubmitAdapter(MULTI_PROMPT);
 
     await adapter.setInteractivePromptResponse({
@@ -397,9 +397,12 @@ describe('SpecCliAdapter — setInteractivePromptResponse submit path', () => {
       answers: { q1: { selectedLabels: ['TypeScript', 'Rust'] } },
     });
 
-    // TypeScript(idx0) → '1' + Space, Rust(idx2) → '3' + Space, Enter to leave
-    // the question, then a final Enter to submit the confirm screen.
-    expect(writes).toEqual(['1', ' ', '3', ' ', '\r', '\r']);
+    // In the claude-cli checkbox picker a digit toggles its option directly
+    // (cursor does not move), so TypeScript(idx0) → '1', Rust(idx2) → '3' — NO
+    // trailing Space (which would toggle the cursor's row instead). Tab commits
+    // the question and advances to the Review screen; final Enter submits.
+    expect(writes).toEqual(['1', '3', '\t', '\r']);
+    expect(writes).not.toContain(' ');
     // The held prompt is cleared after a successful submit.
     expect(adapter.activeInteractivePrompt).toBeNull();
     expect(adapter.interactivePromptTransport).toBeNull();

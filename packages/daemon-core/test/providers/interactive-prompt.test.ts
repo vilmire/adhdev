@@ -333,7 +333,7 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     )).toEqual(['1', '3', '\r']);
   });
 
-  it('builds multi-select answer steps by jumping to each option and pressing Space to toggle', () => {
+  it('builds multi-select answer steps with a digit per option (digit toggles directly, no Space)', () => {
     const prompt = {
       promptId: 'multi-select',
       origin: 'cli' as const,
@@ -356,19 +356,22 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       ],
     };
 
-    // Check TypeScript(idx0)→'1'+Space, Rust(idx2)→'3'+Space, then Enter to
-    // leave the question, then Enter to submit the confirm screen.
+    // In the claude-cli checkbox picker the digit key toggles that option's
+    // box directly (no cursor move), so TypeScript(idx0)→'1', Rust(idx2)→'3'.
+    // No Space — a trailing Space would toggle the cursor's row (option 1).
+    // Tab (not Enter) commits the question and advances to the Review screen,
+    // then a final Enter submits.
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt, {
       promptId: 'multi-select',
       answers: { q1: { selectedLabels: ['TypeScript', 'Rust'] } },
-    })).toEqual(['1', ' ', '3', ' ', '\r', '\r']);
+    })).toEqual(['1', '3', '\t', '\r']);
 
     // Order of selected labels is preserved as emitted; a single checked box
-    // still gets its toggle + advance, distinguishing it from single-select.
+    // still gets its toggle + advance Tab, distinguishing it from single-select.
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt, {
       promptId: 'multi-select',
       answers: { q1: { selectedLabels: ['Go'] } },
-    })).toEqual(['4', ' ', '\r', '\r']);
+    })).toEqual(['4', '\t', '\r']);
   });
 
   it('handles a multi-select question mixed with a single-select question', () => {
@@ -397,15 +400,15 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       ],
     };
 
-    // q1 multi: A(0)→'1'+Space, C(2)→'3'+Space, Enter advance.
-    // q2 single: Pro(1)→'2' (auto-advances). Final Enter submits.
+    // q1 multi: A(0)→'1', C(2)→'3' (digits toggle directly), Tab to advance.
+    // q2 single: Pro(1)→'2' (auto-advances to Review). Final Enter submits.
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt, {
       promptId: 'mixed',
       answers: {
         q1: { selectedLabels: ['A', 'C'] },
         q2: { selectedLabels: ['Pro'] },
       },
-    })).toEqual(['1', ' ', '3', ' ', '\r', '2', '\r']);
+    })).toEqual(['1', '3', '\t', '2', '\r']);
   });
 
   it('treats a 2+ label answer as multi-select even when the question was captured single-select (page 2+ capture-race guard)', () => {
@@ -447,11 +450,11 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       ],
     };
 
-    // q1 (true): 계란말이(0)+콩자반(2) → '1' ' ' '3' ' ' Enter.
+    // q1 (true): 계란말이(0)+콩자반(2) → '1' '3' Tab.
     // q2 (frozen false, 2 boxes): guard kicks in → toggle protocol, NOT a throw.
-    //   제육볶음(0)+감자조림(2) → '1' ' ' '3' ' ' Enter.
+    //   제육볶음(0)+감자조림(2) → '1' '3' Tab.
     // q3 (frozen false, 1 box): guard treats >1? no — single box stays single.
-    //   고등어구이(0) → '1' (auto-advance). Final Enter submits.
+    //   고등어구이(0) → '1' (single-select digit auto-advances). Final Enter submits.
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt, {
       promptId: 'meals',
       answers: {
@@ -459,7 +462,7 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
         q2: { selectedLabels: ['제육볶음', '감자조림'] },
         q3: { selectedLabels: ['고등어구이'] },
       },
-    })).toEqual(['1', ' ', '3', ' ', '\r', '1', ' ', '3', ' ', '\r', '1', '\r']);
+    })).toEqual(['1', '3', '\t', '1', '3', '\t', '1', '\r']);
   });
 
   it('throws when a multi-select question has no selected labels', () => {

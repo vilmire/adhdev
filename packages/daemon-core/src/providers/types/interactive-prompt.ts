@@ -433,12 +433,21 @@ export function buildClaudeInteractiveTuiAnswerSteps(
     const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
 
     if (treatAsMultiSelect) {
-      // Multi-select: Claude TUI renders each option as a checkbox and the
-      // footer reads "Space to select". A numeric digit jumps the cursor to
-      // that option; Space toggles its checkbox. So for every selected label
-      // emit `[digit, ' ']` to land on it and toggle it on. After toggling all
-      // boxes for this question, Enter advances to the next question (or to the
-      // final confirm screen for the last question).
+      // Multi-select: Claude TUI renders each option as a checkbox. The
+      // keystroke model here was reverse-engineered live against claude-cli
+      // v2.1.170 (do not "simplify" from the screen text — it lies):
+      //
+      //   * A numeric digit key TOGGLES that option's checkbox directly and
+      //     does NOT move the cursor. So a digit alone checks the option.
+      //   * Space toggles whatever row the cursor is sitting on (the digit
+      //     never moved it), so a trailing Space would spuriously toggle the
+      //     cursor's row (usually option 1) — NEVER pair digit+Space here.
+      //   * Enter does NOT advance the page; it toggles the cursor's row too.
+      //     The ONLY key that commits this question and advances (to the next
+      //     question, or to the final "Review your answers" screen for the
+      //     last question) is Tab.
+      //
+      // So: one digit per selected label, then a single Tab to advance.
       const labels = answer.selectedLabels;
       if (labels.length === 0) {
         throw new Error(`Expected at least one selected label for ${question.questionId}`);
@@ -447,12 +456,11 @@ export function buildClaudeInteractiveTuiAnswerSteps(
         const selectedIndex = question.options.findIndex(option => option.label === label);
         if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label}`);
         steps.push(String(selectedIndex + 1));
-        steps.push(' ');
       }
-      // Confirm this question's checked set and move on. Unlike single-select
-      // (where the digit auto-advances), multi-select stays on the page until an
-      // explicit Enter so the user can toggle multiple boxes.
-      steps.push('\r');
+      // Tab commits this question's checked set and advances. (Unlike
+      // single-select, where the digit auto-advances, a multi-select page
+      // stays put under digit input so the user can toggle multiple boxes.)
+      steps.push('\t');
     } else if (freeformText) {
       // Freeform: select the "Type something." option (always the last visible
       // option before "Chat about this"), then type the text and confirm.
