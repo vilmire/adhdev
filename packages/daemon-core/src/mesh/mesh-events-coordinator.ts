@@ -474,6 +474,19 @@ function activeAssignedCount(meshId: string): number {
     return getQueue(meshId, { status: ['assigned'] as any }).length;
 }
 
+/** Active assignments that hold the one-active-per-node / global-parallel invariant
+ *  (everything except read-only diagnoses, which run unbounded by the write cap). */
+export function activeWriteAssignedCount(meshId: string): number {
+    return getQueue(meshId, { status: ['assigned'] as any })
+        .filter(task => task.taskMode !== 'live_debug_readonly').length;
+}
+
+/** Active read-only (live_debug_readonly) assignments, for the read-only safety cap. */
+export function activeReadonlyAssignedCount(meshId: string): number {
+    return getQueue(meshId, { status: ['assigned'] as any })
+        .filter(task => task.taskMode === 'live_debug_readonly').length;
+}
+
 function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean {
     return getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedNodeId === nodeId);
 }
@@ -628,10 +641,22 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
     if (!pending.length) return false;
 
     const maxParallelTasks = Math.max(1, Math.floor(Number(mesh?.policy?.maxParallelTasks) || 2));
+    // Read-only diagnoses carry no isolation/merge cost, so they are exempt from the
+    // write-task parallel cap. To prevent runaway auto-launch they get their own,
+    // higher safety cap (2x the write cap).
+    const maxReadonlyParallelTasks = Math.max(2, maxParallelTasks * 2);
     for (const task of pending) {
-        if (activeAssignedCount(meshId) >= maxParallelTasks) {
+        const isReadonly = task.taskMode === 'live_debug_readonly';
+        if (isReadonly) {
+            if (activeReadonlyAssignedCount(meshId) >= maxReadonlyParallelTasks) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_readonly_parallel_tasks_reached' });
+                continue;
+            }
+        } else if (activeWriteAssignedCount(meshId) >= maxParallelTasks) {
+            // Write tasks are capped; skip this one but keep scanning so a later
+            // read-only task in the queue can still launch under its own cap.
             markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_parallel_tasks_reached' });
-            return false;
+            continue;
         }
         if (task.targetSessionId) {
             markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_constraint' });
@@ -687,7 +712,10 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: localSkipReason, nodeId });
                 continue;
             }
-            if (nodeHasActiveAssignment(meshId, nodeId)) {
+            // Write tasks keep the one-active-per-node invariant (worktree isolation);
+            // read-only (live_debug_readonly) diagnoses may auto-launch onto a node
+            // that already has an active assignment.
+            if (task.taskMode !== 'live_debug_readonly' && nodeHasActiveAssignment(meshId, nodeId)) {
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_has_active_assignment', nodeId });
                 continue;
             }

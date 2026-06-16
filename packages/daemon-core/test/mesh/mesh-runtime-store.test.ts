@@ -407,6 +407,106 @@ describe('mesh-runtime-store', () => {
         });
     });
 
+    // ── Read-only concurrent claim (P2: solution A) ──────────────────────────
+    // Read-only (live_debug_readonly) tasks carry no isolation/merge cost, so the
+    // one-active-per-node invariant is bypassed for them: N read-only tasks may be
+    // claimed concurrently on the same node by distinct sessions. Write tasks keep
+    // the one-active-per-node invariant (worktree isolation). A single session still
+    // executes only one task at a time regardless of mode.
+    describe('claimNextQueueTask — read-only concurrent claim', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        const insertReadonly = (db: any, meshId: string, id: string, ageMs: number) => {
+            const iso = new Date(Date.now() - ageMs).toISOString();
+            db.insertQueueEntry({ id, meshId, message: 'diagnose', status: 'pending', taskMode: 'live_debug_readonly', createdAt: iso, updatedAt: iso });
+        };
+        const insertWrite = (db: any, meshId: string, id: string, ageMs: number) => {
+            const iso = new Date(Date.now() - ageMs).toISOString();
+            db.insertQueueEntry({ id, meshId, message: 'edit code', status: 'pending', taskMode: 'code_change', createdAt: iso, updatedAt: iso });
+        };
+
+        it('allows N read-only tasks to be claimed concurrently on the same node (gate A bypass)', () => {
+            const meshId = `mesh-ro-concurrent-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertReadonly(db, meshId, 'ro-1', 3000);
+            insertReadonly(db, meshId, 'ro-2', 2000);
+            insertReadonly(db, meshId, 'ro-3', 1000);
+
+            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1');
+            const c2 = db.claimNextQueueTask(meshId, 'node1', 'sess2');
+            const c3 = db.claimNextQueueTask(meshId, 'node1', 'sess3');
+
+            expect(c1?.id).toBe('ro-1');
+            expect(c2?.id).toBe('ro-2');
+            expect(c3?.id).toBe('ro-3');
+            // All three are now assigned on the same node.
+            const assigned = db.getQueueStatsByStatus(meshId).find((s: any) => s.status === 'assigned');
+            expect(assigned?.count).toBe(3);
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('still blocks a single session from claiming two tasks at once even for read-only', () => {
+            const meshId = `mesh-ro-session-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertReadonly(db, meshId, 'ro-a', 2000);
+            insertReadonly(db, meshId, 'ro-b', 1000);
+
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess1')?.id).toBe('ro-a');
+            // Same session must not claim a second concurrent task.
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess1')).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('keeps one-active-per-node for write tasks (gate A retained)', () => {
+            const meshId = `mesh-write-node-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertWrite(db, meshId, 'w-1', 2000);
+            insertWrite(db, meshId, 'w-2', 1000);
+
+            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1');
+            expect(c1?.id).toBe('w-1');
+            // Different session, same node: the node is busy with a write task → blocked.
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2')).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('a write task cannot claim a node already running a read-only task', () => {
+            const meshId = `mesh-mixed-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            // Read-only claimed first, then a write task arrives.
+            insertReadonly(db, meshId, 'ro-first', 2000);
+            const ro = db.claimNextQueueTask(meshId, 'node1', 'sess1');
+            expect(ro?.id).toBe('ro-first');
+
+            insertWrite(db, meshId, 'w-after', 1000);
+            // The node now has an active (read-only) assignment, so the write task is
+            // blocked by the per-candidate node-conflict gate.
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2')).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('a read-only task can claim a node already running a write task', () => {
+            const meshId = `mesh-mixed2-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertWrite(db, meshId, 'w-first', 2000);
+            const w = db.claimNextQueueTask(meshId, 'node1', 'sess1');
+            expect(w?.id).toBe('w-first');
+
+            insertReadonly(db, meshId, 'ro-after', 1000);
+            // Read-only bypasses node-busy, so it claims even though a write is running.
+            const ro = db.claimNextQueueTask(meshId, 'node1', 'sess2');
+            expect(ro?.id).toBe('ro-after');
+
+            __clearMeshQueueForTests(meshId);
+        });
+    });
+
     describe('findQueueEntryById', () => {
         afterEach(() => {
             __resetMeshRuntimeStoreForTests();

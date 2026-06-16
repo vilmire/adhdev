@@ -459,11 +459,37 @@ export class MeshRuntimeStore {
         return row !== undefined;
     }
 
+    /** A session may only execute one task at a time, regardless of task mode. */
+    private hasActiveSessionAssignment(meshId: string, sessionId: string): boolean {
+        const row = this.db.prepare(`
+            SELECT 1 FROM mesh_queue
+            WHERE mesh_id = ? AND status = 'assigned' AND assigned_session_id = ?
+            LIMIT 1
+        `).get(meshId, sessionId);
+        return row !== undefined;
+    }
+
+    /** A node may only execute one write task at a time (worktree isolation). */
+    private hasActiveNodeAssignment(meshId: string, nodeId: string): boolean {
+        const row = this.db.prepare(`
+            SELECT 1 FROM mesh_queue
+            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id = ?
+            LIMIT 1
+        `).get(meshId, nodeId);
+        return row !== undefined;
+    }
+
     // O(1) claim: transaction ensures only one session claims a pending task
     claimNextQueueTask(meshId: string, nodeId: string, sessionId: string, capabilityTags: string[] = []): MeshWorkQueueEntry | null {
         return this.transaction(() => {
             this.ensureLegacyQueueMigrated(meshId);
-            if (this.hasActiveAssignment(meshId, sessionId, nodeId)) return null;
+            // A session executes one task at a time regardless of mode — block early.
+            // The node-level conflict is evaluated per-candidate below so that
+            // read-only (live_debug_readonly) tasks can claim concurrently on a node
+            // that already has an active assignment, while write tasks keep the
+            // one-active-per-node invariant (worktree isolation).
+            if (this.hasActiveSessionAssignment(meshId, sessionId)) return null;
+            const nodeBusy = this.hasActiveNodeAssignment(meshId, nodeId);
 
             // Priority: session-targeted > node-targeted (no session) > unconstrained
             const rows = [
@@ -508,9 +534,18 @@ export class MeshRuntimeStore {
                 return deps.every(depId => depStatus.get(depId) === 'completed');
             };
 
+            // Per-candidate node-conflict gate: write tasks (anything other than
+            // live_debug_readonly) require an idle node; read-only tasks bypass the
+            // node-busy check so N read-only diagnoses can run on one node at once.
+            const nodeConflictAllows = (candidate: MeshWorkQueueEntry): boolean => {
+                if (candidate.taskMode === 'live_debug_readonly') return true;
+                return !nodeBusy;
+            };
+
             const entry = candidates.find(candidate =>
                 nodeSatisfiesRequiredTags(candidate.requiredTags, capabilityTags)
-                && dependenciesSatisfied(candidate));
+                && dependenciesSatisfied(candidate)
+                && nodeConflictAllows(candidate));
             if (!entry) return null;
 
             const now = new Date().toISOString();
