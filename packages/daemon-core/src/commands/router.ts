@@ -25,7 +25,7 @@ import { appendRecentActivity, getRecentActivity, markSessionSeen, dismissSessio
 import { getSavedProviderSessions } from '../config/saved-sessions.js';
 import { listProviderHistorySessions } from '../config/chat-history.js';
 import { detectIDEs } from '../detection/ide-detector.js';
-import { detectCLI } from '../detection/cli-detector.js';
+import { detectCLI, detectCLIs } from '../detection/cli-detector.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import {
     normalizeGitStatus as sharedNormalizeGitStatus,
@@ -70,6 +70,7 @@ import {
     runMeshWorktreeBootstrap,
     type WorktreeBootstrapState,
 } from '../mesh/worktree-bootstrap-config.js';
+import { runMeshInit } from '../mesh/mesh-init.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
@@ -7079,6 +7080,20 @@ export class DaemonCommandRouter {
                     ...suggestMeshRefineConfig(mesh, workspace),
                     note: 'Suggestions are heuristic scaffold only; Refinery will not execute them until saved into repo mesh/refine config.',
                 };
+            }
+
+            case 'mesh_init': {
+                const workspace = typeof args?.workspace === 'string' && args.workspace.trim() ? args.workspace.trim() : process.cwd();
+                const mesh = args?.inlineMesh || {};
+                try {
+                    const detected = await detectCLIs(this.deps.providerLoader, { includeVersion: true });
+                    return { ...runMeshInit(mesh, workspace, detected, {
+                        write: args?.write === true,
+                        overwrite: args?.overwrite === true,
+                    }) };
+                } catch (e: any) {
+                    return { success: false, error: e?.message || String(e) };
+                }
             }
 
             case 'plan_mesh_refine_node': {

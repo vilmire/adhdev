@@ -41,7 +41,7 @@ import {
   meshReadDebug,
   meshLaunchSession, meshGitStatus, meshFastForwardNode, meshCheckpoint, meshApprove,
   meshCloneNode, meshRemoveNode, meshRefineNode,
-  meshRefineConfigSchema, meshValidateRefineConfig, meshSuggestRefineConfig, meshRefinePlan, meshRefineBatch,
+  meshRefineConfigSchema, meshValidateRefineConfig, meshSuggestRefineConfig, meshInit, meshRefinePlan, meshRefineBatch,
   meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshReconcileLedger, meshMissionUpsert,
   meshMissionList, meshReviewInbox
 } from './tools/mesh-tools.js';
@@ -209,6 +209,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_refine_config_schema': text = await meshRefineConfigSchema(meshCtx); break;
           case 'mesh_validate_refine_config': text = await meshValidateRefineConfig(meshCtx, a as any); break;
           case 'mesh_suggest_refine_config': text = await meshSuggestRefineConfig(meshCtx, a as any); break;
+          case 'mesh_init': text = await meshInit(meshCtx, a as any); break;
           case 'mesh_refine_plan': text = await meshRefinePlan(meshCtx, a as any); break;
           case 'mesh_cleanup_sessions': text = await meshCleanupSessions(meshCtx, a as any); break;
           case 'mesh_prune_stale_direct': text = await meshPruneStaleDirect(meshCtx, a as any); break;

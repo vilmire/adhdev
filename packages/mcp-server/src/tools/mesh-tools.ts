@@ -3077,6 +3077,19 @@ export const MESH_SUGGEST_REFINE_CONFIG_TOOL = {
     },
 };
 
+export const MESH_INIT_TOOL = {
+    name: 'mesh_init',
+    description: 'One-click mesh onboarding for an existing git project. Detects installed CLI providers, suggests Refinery (.adhdev/refine.json) and worktree bootstrap (.adhdev/worktree_bootstrap.json) configs, optionally writes them to disk, and recommends a node providerPriority from the detected providers. Suggestions are scaffold only and never execute until saved; providerPriority is a recommendation to apply to node policy, not auto-applied. Defaults to dry-run (no files written) and never overwrites an existing config unless overwrite=true.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Optional node/workspace to onboard. Defaults to the first mesh node with a workspace.' },
+            write: { type: 'boolean', description: 'When true, persist the suggested configs to disk. Defaults false (dry-run preview only).' },
+            overwrite: { type: 'boolean', description: 'When true, overwrite an existing config file. Defaults false (never clobber an existing refine/bootstrap config).' },
+        },
+    },
+};
+
 export const MESH_REFINE_PLAN_TOOL = {
     name: 'mesh_refine_plan',
     description: 'Dry-run Refinery plan for a worktree node: reports config source, validation commands, suggestions/unavailable reason, and merge/cleanup intent without executing validation or git merge.',
@@ -3123,6 +3136,7 @@ export const ALL_MESH_TOOLS = [
     MESH_REFINE_CONFIG_SCHEMA_TOOL,
     MESH_VALIDATE_REFINE_CONFIG_TOOL,
     MESH_SUGGEST_REFINE_CONFIG_TOOL,
+    MESH_INIT_TOOL,
     MESH_REFINE_PLAN_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
     MESH_PRUNE_STALE_DIRECT_TOOL,
@@ -5236,6 +5250,20 @@ export async function meshSuggestRefineConfig(
     const result = await commandForNode(ctx, node, 'suggest_mesh_refine_config', {
         workspace: node.workspace,
         inlineMesh: ctx.mesh,
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+export async function meshInit(
+    ctx: MeshContext,
+    args: { node_id?: string; write?: boolean; overwrite?: boolean },
+): Promise<string> {
+    const node = resolveRefineConfigNode(ctx, args.node_id);
+    const result = await commandForNode(ctx, node, 'mesh_init', {
+        workspace: node.workspace,
+        inlineMesh: ctx.mesh,
+        ...(args.write !== undefined ? { write: args.write } : {}),
+        ...(args.overwrite !== undefined ? { overwrite: args.overwrite } : {}),
     });
     return JSON.stringify(result, null, 2);
 }
