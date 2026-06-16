@@ -243,6 +243,111 @@ describe('SpecCliAdapter — interactive prompt resolved in terminal', () => {
   });
 });
 
+describe('SpecCliAdapter — TUI multiSelect re-evaluated on later frames', () => {
+  // Regression (first-frame glyph miss): the TUI prompt is captured on the FIRST
+  // frame that renders the "Enter to select" footer. If the option rows'
+  // checkbox column has not drawn yet on that frame, detectClaudeTuiMultiSelect
+  // returns false and the prompt freezes as single-select — the dashboard then
+  // renders radio buttons even though the picker is multi-select. Once the glyph
+  // column appears on a later frame the adapter must promote the held prompt to
+  // multiSelect:true and re-emit status. Promotion is one-way (false→true).
+
+  // Frame 1: a headerless numbered-choice picker with NO checkbox glyphs yet —
+  // captured as multiSelect:false. (Same shape as SINGLE_QUESTION_SCREEN.)
+  const FRAME_NO_GLYPH = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '────────────────────────────────────────────────────────────────',
+    ' ☐ Languages ',
+    '',
+    '무엇을 내시겠어요?',
+    '',
+    '❯ 1. ✊ 바위',
+    '  2. ✌️  가위',
+    '  3. ✋  보',
+    '  4. Type something.',
+    '────────────────────────────────────────────────────────────────',
+    '  5. Chat about this',
+    '',
+    'Enter to select · ↑/↓ to navigate · Esc to cancel',
+  ].join('\n');
+
+  // Frame 2: the same prompt, now with the per-option checkbox column rendered.
+  const FRAME_WITH_GLYPH = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '────────────────────────────────────────────────────────────────',
+    ' ☐ Languages ',
+    '',
+    '무엇을 내시겠어요?',
+    '',
+    '❯ [ ] 1. ✊ 바위',
+    '  [x] 2. ✌️  가위',
+    '  [ ] 3. ✋  보',
+    '  4. Type something.',
+    '────────────────────────────────────────────────────────────────',
+    '  5. Chat about this',
+    '',
+    'Enter to select · ↑/↓ to navigate · Esc to cancel',
+  ].join('\n');
+
+  it('promotes multiSelect false→true when the checkbox glyphs appear on a later frame', () => {
+    let screen = FRAME_NO_GLYPH;
+    const adapter = makeAdapter(FRAME_NO_GLYPH);
+    adapter.driver = { snapshot: () => screen };
+
+    // First frame: captured as single-select (no glyph column yet).
+    adapter.maybeCaptureClaudeTuiPrompt();
+    expect(adapter.activeInteractivePrompt).not.toBeNull();
+    expect(adapter.activeInteractivePrompt.questions).toHaveLength(1);
+    expect(adapter.activeInteractivePrompt.questions[0].multiSelect).toBe(false);
+    adapter.statusCallback.mockClear();
+
+    // Later frame: glyph column now rendered → promote to multi-select.
+    screen = FRAME_WITH_GLYPH;
+    adapter.maybeUpgradeClaudeTuiMultiSelect();
+    expect(adapter.activeInteractivePrompt.questions[0].multiSelect).toBe(true);
+    expect(adapter.statusCallback).toHaveBeenCalled();
+  });
+
+  it('does not promote a genuine single-select prompt on later frames (no false-positive)', () => {
+    const screen = FRAME_NO_GLYPH;
+    const adapter = makeAdapter(FRAME_NO_GLYPH);
+    adapter.driver = { snapshot: () => screen };
+
+    adapter.maybeCaptureClaudeTuiPrompt();
+    expect(adapter.activeInteractivePrompt.questions[0].multiSelect).toBe(false);
+    adapter.statusCallback.mockClear();
+
+    // Subsequent frames keep showing the numbered rows without any checkbox
+    // glyph → stays single-select, no spurious status re-emit.
+    adapter.maybeUpgradeClaudeTuiMultiSelect();
+    adapter.maybeUpgradeClaudeTuiMultiSelect();
+    expect(adapter.activeInteractivePrompt.questions[0].multiSelect).toBe(false);
+    expect(adapter.statusCallback).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op once multiSelect is already true (one-way promotion, no demote)', () => {
+    let screen = FRAME_WITH_GLYPH;
+    const adapter = makeAdapter(FRAME_WITH_GLYPH);
+    adapter.driver = { snapshot: () => screen };
+
+    // Captured straight as multi-select (glyphs present on the first frame).
+    adapter.maybeCaptureClaudeTuiPrompt();
+    expect(adapter.activeInteractivePrompt.questions[0].multiSelect).toBe(true);
+    adapter.statusCallback.mockClear();
+
+    // A later frame where the glyph column has scrolled out of view must NOT
+    // demote the already-known multi-select prompt, and must not re-emit.
+    screen = FRAME_NO_GLYPH;
+    adapter.maybeUpgradeClaudeTuiMultiSelect();
+    expect(adapter.activeInteractivePrompt.questions[0].multiSelect).toBe(true);
+    expect(adapter.statusCallback).not.toHaveBeenCalled();
+  });
+});
+
 describe('SpecCliAdapter — setInteractivePromptResponse submit path', () => {
   // End-to-end of the actual daemon submit entry point: when the dashboard
   // submits an interactive prompt answer, cli-provider-instance forwards it to

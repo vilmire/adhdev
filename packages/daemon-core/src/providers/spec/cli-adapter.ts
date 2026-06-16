@@ -31,6 +31,7 @@ import {
     buildClaudeInteractiveToolResult,
     detectClaudeAskUserQuestionPromptFromJson,
     detectClaudeAskUserQuestionPromptFromTuiPages,
+    detectClaudeTuiMultiSelect,
     type ClaudeInteractiveTuiPage,
     type InteractivePrompt,
     type InteractivePromptResponse,
@@ -445,12 +446,14 @@ export class SpecCliAdapter implements CliAdapter {
                 }
                 this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
+                this.maybeUpgradeClaudeTuiMultiSelect();
                 this.statusCallback?.();
                 return;
             case 'pty_data':
                 this.detectInteractivePromptFromPtyChunk(ev.chunk);
                 this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
+                this.maybeUpgradeClaudeTuiMultiSelect();
                 try { this.ptyDataCallback?.(ev.chunk); } catch { /* ignore */ }
                 return;
             case 'exit':
@@ -612,6 +615,43 @@ export class SpecCliAdapter implements CliAdapter {
         void this.captureClaudeTuiPrompt(screenText, headers).finally(() => {
             this.claudeTuiPromptCaptureInFlight = false;
         });
+    }
+
+    /**
+     * The TUI prompt is captured on the FIRST frame that renders the
+     * "Enter to select" footer. At that instant the option rows' checkbox
+     * column may not have drawn yet, so `detectClaudeTuiMultiSelect` returns
+     * false and the prompt is frozen as single-select — the dashboard then
+     * renders radio buttons even though the picker is multi-select.
+     *
+     * While the same TUI prompt is still on screen, re-check the live snapshot:
+     * if checkbox glyphs have since appeared, promote any single-select
+     * question to multi-select and re-emit status. Promotion is one-way
+     * (false→true only) — once a question is known multi-select we never demote
+     * it, since the glyph column can scroll out of view on later frames.
+     */
+    private maybeUpgradeClaudeTuiMultiSelect(): void {
+        if (this.cliType !== 'claude-cli'
+            || this.interactivePromptTransport !== 'tui'
+            || !this.activeInteractivePrompt) return;
+        const questions = this.activeInteractivePrompt.questions;
+        // The live snapshot only shows the CURRENTLY focused question's rows, so
+        // we can only attribute the glyphs to a specific question when there is
+        // exactly one. Multi-question prompts are tab-captured per page at
+        // capture time and aren't re-evaluated here to avoid cross-contaminating
+        // a mixed single/multi prompt.
+        if (questions.length !== 1) return;
+        if (questions[0].multiSelect) return;
+        let screenText = '';
+        try {
+            screenText = this.driver.snapshot();
+        } catch {
+            return;
+        }
+        if (!screenText.includes('Enter to select')) return;
+        if (!detectClaudeTuiMultiSelect(screenText)) return;
+        questions[0].multiSelect = true;
+        this.statusCallback?.();
     }
 
     private readClaudeTuiHeaders(screenText: string): string[] {

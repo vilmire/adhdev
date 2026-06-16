@@ -180,7 +180,7 @@ function isClaudeTuiSelectFooter(text: string): boolean {
  * broadened footer patterns ("Space to", "toggle", "select multiple") are kept
  * as a secondary signal for layouts that render markers differently.
  */
-function detectClaudeTuiMultiSelect(screenText: string): boolean {
+export function detectClaudeTuiMultiSelect(screenText: string): boolean {
   if (/Space to (?:select|toggle)|toggle selection|select multiple|select all that apply/i.test(screenText)) {
     return true;
   }
