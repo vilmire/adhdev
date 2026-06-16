@@ -54,7 +54,7 @@ function renderTabBar(conversation: ActiveConversation) {
 }
 
 describe('PaneGroupTabBar mesh role label', () => {
-    it('renders compact Korean mesh labels beside the tab status marker', () => {
+    it('renders compact mesh labels beside the tab status marker', () => {
         const html = renderTabBar(createConversation({
             settings: {
                 meshNodeFor: 'mesh-1',
@@ -65,7 +65,7 @@ describe('PaneGroupTabBar mesh role label', () => {
 
         expect(html).toContain('adhdev-dockview-tab-status')
         expect(html).toContain('adhdev-dockview-tab-mesh-role')
-        expect(html).toContain('메시 노드 · 코디네이터')
+        expect(html).toContain('Mesh node · Coordinator')
         expect(html.indexOf('adhdev-dockview-tab-mesh-role')).toBeGreaterThan(html.indexOf('adhdev-dockview-tab-status'))
         expect(html.indexOf('adhdev-dockview-tab-mesh-role')).toBeLessThan(html.indexOf('adhdev-dockview-tab-copy'))
     })

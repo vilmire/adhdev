@@ -68,7 +68,7 @@ describe('conversation presenters', () => {
         expect(getConversationStopDialogLabel(conversation)).toBe('Codex CLI')
     })
 
-    it('formats compact Korean mesh role labels with detailed tooltip metadata', () => {
+    it('formats compact mesh role labels with detailed tooltip metadata', () => {
         const conversation = createConversation({
             settings: {
                 meshNodeFor: 'mesh-1',
@@ -83,9 +83,9 @@ describe('conversation presenters', () => {
             },
         })
 
-        expect(getConversationMeshRoleLabels(conversation)).toEqual(['메시 노드', '코디네이터'])
+        expect(getConversationMeshRoleLabels(conversation)).toEqual(['Mesh node', 'Coordinator'])
         expect(getConversationMeshRoleTitle(conversation)).toBe(
-            '메시 노드: mesh-1 · 코디네이터: mesh-1 · Queue: 2 pending, 1 assigned, 4 completed, 0 failed',
+            'Mesh node: mesh-1 · Coordinator: mesh-1 · Queue: 2 pending, 1 assigned, 4 completed, 0 failed',
         )
     })
 

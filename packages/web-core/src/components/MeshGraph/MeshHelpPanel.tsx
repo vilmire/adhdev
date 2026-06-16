@@ -25,69 +25,69 @@ type HelpSection = {
 }
 
 /**
- * The mesh concept reference, in reading order. Korean copy to match the
- * dashboard tone — concise but not thin.
+ * The mesh concept reference, in reading order. Concise but not thin — matches
+ * the dashboard's developer-facing English tone.
  */
 const MESH_HELP_SECTIONS: HelpSection[] = [
     {
-        term: '노드 (Node)',
-        summary: '메시에 참여하는 워크스페이스. 저장소 체크아웃 또는 격리된 git 워크트리.',
+        term: 'Node',
+        summary: 'A workspace participating in the mesh — a repo checkout or an isolated git worktree.',
         details: [
-            '베이스 노드 vs 워크트리 clone 노드 — clone은 충돌 없이 병렬 작업을 격리하기 위한 것.',
-            'health(online/offline)와 git 상태(branch · ahead/behind · dirty)를 함께 표시.',
-            '여러 노드가 같은 daemon을 공유할 수 있음.',
+            'Base node vs worktree clone node — a clone isolates parallel work without conflicts.',
+            'Shows health (online/offline) alongside git state (branch · ahead/behind · dirty).',
+            'Multiple nodes can share the same daemon.',
         ],
     },
     {
-        term: '세션 (Session)',
-        summary: '노드 위에서 도는 에이전트 CLI 세션.',
+        term: 'Session',
+        summary: 'An agent CLI session running on a node.',
         details: [
             'status = idle / generating / waiting_approval.',
-            '코디네이터 세션(작업을 분배·취합)과 위임 워커 세션(실제 작업 수행)을 구분.',
+            'Distinguishes coordinator sessions (which dispatch and collect work) from delegated worker sessions (which do the work).',
         ],
     },
     {
-        term: '태스크 (Task)',
-        summary: '큐 기반 풀 모델로 처리되는 한 단위의 작업.',
+        term: 'Task',
+        summary: 'A single unit of work handled by the queue-based pull model.',
         details: [
-            '상태: pending → assigned → completed / failed / cancelled.',
-            'idle 노드가 큐에서 자동으로 claim. direct dispatch는 특정 세션을 타겟으로 직접 보냄.',
+            'States: pending → assigned → completed / failed / cancelled.',
+            'Idle nodes claim from the queue automatically; direct dispatch targets a specific session.',
         ],
     },
     {
-        term: '미션 (Mission)',
-        summary: '하나의 목표를 향한 다중 태스크 묶음이자 그 노력의 영속 기록.',
+        term: 'Mission',
+        summary: 'A multi-task batch aimed at one goal, and the durable record of that effort.',
         details: [
-            '상태: active / paused / completed / abandoned.',
-            '진행도는 소속 태스크들의 상태에서 파생됨.',
+            'States: active / paused / completed / abandoned.',
+            'Progress is derived from the states of its member tasks.',
         ],
     },
     {
         term: 'Refinery (refine)',
-        summary: '워크트리 브랜치를 베이스로 안전하게 수렴·병합하는 과정.',
+        summary: 'The process of safely converging and merging a worktree branch into the base.',
         details: [
-            'config 기반(.adhdev/refine.*) — patch-equivalence preflight와 no-op guard로 보호.',
-            'ff-only 원칙, force-push 금지.',
-            '서브모듈 commit이 origin에서 도달 불가하면 publish 필요 → blocked_review로 분류.',
+            'Config-driven (.adhdev/refine.*) — guarded by a patch-equivalence preflight and a no-op guard.',
+            'ff-only by principle; no force-push.',
+            'If a submodule commit is unreachable from origin it must be published → classified as blocked_review.',
         ],
     },
     {
-        term: '완료 인지 모델',
-        summary: '위임 작업의 완료는 큐(pending-events)에 영속됨.',
+        term: 'Completion model',
+        summary: 'Completion of delegated work is persisted to the queue (pending-events).',
         details: [
-            '코디네이터는 주기 폴링/이벤트로 완료를 인지.',
-            '큐에 영속되므로 완료 신호는 유실되지 않음.',
+            'The coordinator learns of completion via periodic polling or events.',
+            'Because it is persisted to the queue, completion signals are never lost.',
         ],
     },
     {
-        term: '브랜치 수렴 상태',
-        summary: '워크트리 작업 후 각 브랜치는 정확히 하나의 최종 상태로 분류됨.',
+        term: 'Branch convergence states',
+        summary: 'After worktree work, each branch is classified into exactly one final state.',
         details: [
-            'merged_to_main — 베이스에 병합 완료.',
-            'pushed_feature_branch_needs_merge — 푸시됨, 병합 대기.',
-            'blocked_review — 리뷰/도달성 문제로 보류.',
-            'cleanup_candidate — 정리 대상.',
-            'not_mergeable — 병합 불가.',
+            'merged_to_main — merged into the base.',
+            'pushed_feature_branch_needs_merge — pushed, awaiting merge.',
+            'blocked_review — held back by review/reachability issues.',
+            'cleanup_candidate — ready to clean up.',
+            'not_mergeable — cannot be merged.',
         ],
     },
 ]
@@ -114,9 +114,9 @@ export function MeshHelpToggle({ meshTheme, open, onToggle }: {
         <button
             type="button"
             onClick={onToggle}
-            aria-label="Mesh 도움말"
+            aria-label="Mesh help"
             aria-expanded={open}
-            title="Mesh 개념 도움말"
+            title="Mesh concept help"
             className={`${base} ${cls}`}
         >
             <IconHelp size={15} />
@@ -147,17 +147,17 @@ export function MeshHelpPanel({ meshTheme, onClose }: {
         <div
             className={`shrink-0 rounded-2xl border p-4 ${dk ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-white/80'}`}
             role="region"
-            aria-label="Mesh 개념 도움말"
+            aria-label="Mesh concept help"
         >
             <div className="mb-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                     <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Help</div>
-                    <div className={`mt-0.5 text-sm font-semibold ${meshTheme.textPrimary}`}>Mesh 개념 한눈에</div>
+                    <div className={`mt-0.5 text-sm font-semibold ${meshTheme.textPrimary}`}>Mesh concepts at a glance</div>
                 </div>
                 <button
                     type="button"
                     onClick={onClose}
-                    aria-label="도움말 닫기"
+                    aria-label="Close help"
                     className={dk
                         ? 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white'
                         : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}

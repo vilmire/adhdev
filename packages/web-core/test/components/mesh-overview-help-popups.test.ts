@@ -28,7 +28,7 @@ describe('Mesh consolidated help panel', () => {
 
     // One labelled, keyboard-focusable toggle carrying the help icon. It reports
     // its open/closed state for assistive tech.
-    expect(html).toContain('aria-label="Mesh 도움말"')
+    expect(html).toContain('aria-label="Mesh help"')
     expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('type="button"')
     expect(html).toContain('<svg')
@@ -43,17 +43,17 @@ describe('Mesh consolidated help panel', () => {
 
     // The panel is a labelled region (replaces the scattered per-card popovers).
     expect(html).toContain('role="region"')
-    expect(html).toContain('aria-label="Mesh 개념 도움말"')
+    expect(html).toContain('aria-label="Mesh concept help"')
 
     // One definition entry per concept the end user needs to understand. The
     // consolidated panel covers them all in one place instead of one "?" per card.
-    expect(html).toContain('노드 (Node)')
-    expect(html).toContain('세션 (Session)')
-    expect(html).toContain('태스크 (Task)')
-    expect(html).toContain('미션 (Mission)')
+    expect(html).toContain('Node')
+    expect(html).toContain('Session')
+    expect(html).toContain('Task')
+    expect(html).toContain('Mission')
     expect(html).toContain('Refinery (refine)')
-    expect(html).toContain('완료 인지 모델')
-    expect(html).toContain('브랜치 수렴 상태')
+    expect(html).toContain('Completion model')
+    expect(html).toContain('Branch convergence states')
 
     // It is a real definition list so each term/summary pair is semantically paired.
     expect(html).toContain('<dl')
@@ -66,11 +66,11 @@ describe('Mesh consolidated help panel', () => {
     // rendered panel so a future edit that drops or muddles a definition is caught.
     const html = renderPanel()
 
-    expect(html).toContain('격리된 git 워크트리')              // Node
-    expect(html).toContain('영속 기록')                        // Mission
-    expect(html).toContain('pending → assigned → completed')   // Task
-    expect(html).toContain('idle 노드가 큐에서 자동으로 claim') // Queue/Task
-    expect(html).toContain('영속됨')                           // 완료 인지 모델 (ledger/completion)
-    expect(html).toContain('수렴·병합')                        // Refinery
+    expect(html).toContain('isolated git worktree')                   // Node
+    expect(html).toContain('durable record')                          // Mission
+    expect(html).toContain('pending → assigned → completed')          // Task
+    expect(html).toContain('Idle nodes claim from the queue')         // Queue/Task
+    expect(html).toContain('persisted to the queue')                  // completion model
+    expect(html).toContain('converging and merging')                  // Refinery
   })
 })

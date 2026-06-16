@@ -26,8 +26,8 @@ export function getConversationMeshRoleLabels(conversation: ActiveConversation):
         || (typeof conversation.settings?.meshCoordinatorFor === 'string'
             && conversation.settings.meshCoordinatorFor.trim().length > 0)
 
-    if (isMeshNode) labels.push('메시 노드')
-    if (isMeshCoordinator) labels.push('코디네이터')
+    if (isMeshNode) labels.push('Mesh node')
+    if (isMeshCoordinator) labels.push('Coordinator')
     return labels
 }
 
@@ -44,8 +44,8 @@ export function getConversationMeshRoleTitle(conversation: ActiveConversation): 
         : ''
     const coordinatorFor = coordinatorMeshId || settingsCoordinatorFor
 
-    if (meshNodeFor) details.push(`메시 노드: ${meshNodeFor}`)
-    if (coordinatorFor) details.push(`코디네이터: ${coordinatorFor}`)
+    if (meshNodeFor) details.push(`Mesh node: ${meshNodeFor}`)
+    if (coordinatorFor) details.push(`Coordinator: ${coordinatorFor}`)
     if (conversation.meshQueueStats) {
         const { pending, assigned, completed, failed } = conversation.meshQueueStats
         details.push(`Queue: ${pending} pending, ${assigned} assigned, ${completed} completed, ${failed} failed`)
