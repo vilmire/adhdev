@@ -12,7 +12,7 @@ import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeli
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
-import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent } from './mesh-routing.js';
+import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
 import {
     findRecentTerminalLedgerEvidence,
@@ -1446,11 +1446,16 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
     if (!isMeshCoordinatorEvent(eventName)) {
         return { success: false, error: 'unsupported mesh event' };
     }
-    const meshId = readNonEmptyString(payload.meshId);
-    if (!meshId) return { success: false, error: 'meshId required' };
-
     const nodeId = readNonEmptyString(payload.nodeId);
     const workspace = readNonEmptyString(payload.workspace);
+
+    // The fallback worker-forward path (forwardUnresolvedDelegateEvent) cannot resolve a
+    // mesh id locally on the remote worker, so it forwards the event with workspace only.
+    // The coordinator hosting the mesh CAN resolve it: recover the mesh id by workspace
+    // when the payload doesn't carry one.
+    const meshId = readNonEmptyString(payload.meshId)
+        || (workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '');
+    if (!meshId) return { success: false, error: 'meshId required' };
     const nodeLabel = nodeId ? `Node '${nodeId}'` : workspace ? `Agent at ${workspace}` : 'Remote agent';
     const relayModalMessage = readNonEmptyString(payload.modalMessage);
     const relayModalButtons = Array.isArray(payload.modalButtons)
@@ -1491,6 +1496,67 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             source: readNonEmptyString(payload.source),
         },
     });
+}
+
+// ---------------------------------------------------------------------------
+// Worker-side fallback forward for unresolved-mesh delegates.
+//
+// A REMOTE worker daemon that is being P2P-remote-controlled by a coordinator is
+// NOT a member of the coordinator's mesh — it has no local mesh record. So when its
+// completion event reaches the forwarder, resolveWorkerDelegateRouting() resolves the
+// coordinator anchor (meshCoordinatorDaemonId) from the worker envelope but cannot
+// resolve the mesh id (neither meshNodeFor nor a workspace→mesh lookup yields one) and
+// returns isDelegate=false / mesh_unresolved. Before this fallback the event was dropped
+// (delivery_unroutable) and only recovered later when the coordinator happened to pull
+// the worker's queue — which it can't, because the worker never queued an unroutable
+// event. Live symptom: `WARN [MeshEvents] delivery_unroutable: ... mesh unresolved`.
+//
+// The fix: the routing object still carries coordinatorDaemonId. Forward the raw event
+// straight to that coordinator daemon over P2P (mesh_forward_event). The coordinator
+// hosts the mesh, so it recovers the mesh id by workspace in handleMeshForwardEvent and
+// injects/queues it normally. meshId is intentionally omitted from the payload (the
+// worker has none); workspace is the routing anchor the coordinator resolves from.
+//
+// No loop / no double-delivery:
+//  - This only fires on the WORKER (the coordinator-own session is rejected by the
+//    resolver before reaching here), and the coordinator merely injects — it does not
+//    re-enter this forwarder for the relayed event.
+//  - It fires only when the normal queue path did NOT run (isDelegate=false), so the
+//    event is never both queued locally and forwarded.
+//
+// Returns true when the event was handed off to the coordinator daemon (so the caller
+// skips the delivery_unroutable diagnostic); false when no fallback was possible.
+function forwardUnresolvedDelegateEvent(
+    components: DaemonComponents,
+    routing: ReturnType<typeof resolveWorkerDelegateRouting>,
+    event: Record<string, unknown>,
+): boolean {
+    const coordinatorDaemonId = readNonEmptyString(routing.coordinatorDaemonId);
+    if (!coordinatorDaemonId) return false;
+    if (!components.dispatchMeshCommand) return false;
+
+    const eventName = readNonEmptyString(event.event);
+    if (!eventName) return false;
+
+    // Flat payload mirroring buildForwardPayloadFromPending / what handleMeshForwardEvent
+    // reads. meshId is omitted on purpose — the worker can't resolve it; the coordinator
+    // recovers it from workspace. nodeId/workspace come from the worker envelope so the
+    // coordinator can name and locate the node.
+    const payload: Record<string, unknown> = {
+        ...event,
+        event: eventName,
+        nodeId: readNonEmptyString(routing.nodeId) || readNonEmptyString(event.meshNodeId) || undefined,
+        workspace: readNonEmptyString(routing.workspace) || readNonEmptyString(event.workspace) || undefined,
+    };
+
+    Promise.resolve(components.dispatchMeshCommand(coordinatorDaemonId, 'mesh_forward_event', payload))
+        .catch((e: any) => {
+            // The coordinator may be momentarily unreachable; the diagnostic was already
+            // skipped, so leave a trace here so an operator can see the relay attempt failed.
+            LOG.warn('MeshEvents', `Fallback forward of ${eventName} to coordinator ${coordinatorDaemonId} failed: ${e?.message || e}`);
+        });
+    LOG.info('MeshEvents', `Fallback-forwarded ${eventName} for unresolved-mesh worker at ${routing.workspace || '(no workspace)'} to coordinator daemon ${coordinatorDaemonId}`);
+    return true;
 }
 
 export function setupMeshEventForwarding(components: DaemonComponents) {
@@ -1572,10 +1638,19 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
             getMeshByWorkspace: (workspace) => getCachedMeshByWorkspace(workspace),
         });
         if (!routing.isDelegate) {
-            // R4: a worker that presented a valid envelope but resolved to no mesh used to be
-            // dropped silently. Leave a fail-loud diagnostic so the missing completion is
-            // traceable. Benign non-delegate rejections (not_cli / no_workspace / etc.) are
-            // no-ops inside recordUnroutableDelegateEvent.
+            // Fallback: a REMOTE worker that isn't a member of the coordinator's mesh can't
+            // resolve a mesh id locally (mesh_unresolved), but it still carries the coordinator
+            // daemon anchor. Forward the event straight to that coordinator over P2P instead of
+            // dropping it — the coordinator hosts the mesh and recovers the id by workspace.
+            if (isUnroutableDelegateRejection(routing)
+                && forwardUnresolvedDelegateEvent(components, routing, event)) {
+                return;
+            }
+            // R4: a worker that presented a valid envelope but resolved to no mesh (and could
+            // not be fallback-forwarded — e.g. no coordinator anchor) used to be dropped
+            // silently. Leave a fail-loud diagnostic so the missing completion is traceable.
+            // Benign non-delegate rejections (not_cli / no_workspace / etc.) are no-ops inside
+            // recordUnroutableDelegateEvent.
             recordUnroutableDelegateEvent(routing, event.event);
             return;
         }

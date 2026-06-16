@@ -286,10 +286,11 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('R4: emits a delivery_unroutable diagnostic when an enveloped worker resolves to no mesh', () => {
+  it('R4: emits a delivery_unroutable diagnostic when an enveloped worker resolves to no mesh AND has no coordinator anchor', () => {
     // The worker presents a valid envelope (launchedByCoordinator) but neither the mesh-id
-    // lookup nor the workspace lookup resolves a mesh. Before R4 the completion was dropped
-    // silently — no coordinator inject, no queue, no trace. R4 leaves a fail-loud
+    // lookup nor the workspace lookup resolves a mesh, AND it carries no coordinator daemon
+    // anchor — so there is nowhere to fallback-forward the event. Before R4 the completion
+    // was dropped silently — no coordinator inject, no queue, no trace. R4 leaves a fail-loud
     // delivery_unroutable ledger entry so the lost completion is discoverable.
     const meshId = `mesh_unroutable_${Date.now()}`
     __resetUnroutableDiagnosticsForTests()
@@ -299,7 +300,11 @@ describe('setupMeshEventForwarding', () => {
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined) // no mesh resolvable by workspace either
       const { components, emit, coordinator } = createComponents(meshId, {
         launchedByCoordinator: true, // envelope present, but meshNodeFor absent and workspace unresolved
+        // NOTE: deliberately no meshCoordinatorDaemonId — without it the fallback forward
+        // cannot run, so the event must still land in the unroutable diagnostic stream.
       })
+      const dispatchMeshCommand = vi.fn(async () => ({}))
+      components.dispatchMeshCommand = dispatchMeshCommand
 
       setupMeshEventForwarding(components)
       emit({
@@ -310,8 +315,10 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 4242,
       })
 
-      // The event was unroutable: no coordinator inject.
+      // The event was unroutable: no coordinator inject, and no fallback P2P forward
+      // (there was no coordinator anchor to forward to).
       expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(dispatchMeshCommand).not.toHaveBeenCalled()
 
       // A fail-loud diagnostic landed in the shared unroutable stream.
       const diagnostics = readLedgerEntries(UNROUTABLE_DIAGNOSTIC_STREAM, { kind: ['delivery_unroutable'] })
@@ -322,6 +329,75 @@ describe('setupMeshEventForwarding', () => {
     } finally {
       cleanupMeshFiles(meshId)
       // The diagnostic stream is shared across meshes; clean our entries up too.
+      const diagPath = path.join(getLedgerDir(), `${UNROUTABLE_DIAGNOSTIC_STREAM}.jsonl`)
+      if (fs.existsSync(diagPath)) fs.unlinkSync(diagPath)
+      __resetUnroutableDiagnosticsForTests()
+    }
+  })
+
+  it('fallback-forwards an unresolved-mesh worker completion to its coordinator daemon over P2P', async () => {
+    // A REMOTE worker (P2P-remote-controlled by a coordinator) is NOT a member of the
+    // coordinator's mesh: meshNodeFor is absent and the workspace lookup resolves no mesh,
+    // so routing returns mesh_unresolved. But the worker carries the coordinator daemon
+    // anchor (meshCoordinatorDaemonId). Instead of dropping the event (delivery_unroutable),
+    // the forwarder must dispatch it straight to that coordinator daemon via P2P, which
+    // hosts the mesh and recovers the id by workspace.
+    const meshId = `mesh_fallback_fwd_${Date.now()}`
+    __resetUnroutableDiagnosticsForTests()
+    __resetMeshWorkspaceCacheForTests()
+    // The unroutable stream is shared across tests (same workspace/session); start from a
+    // clean slate — JSONL file, the SQLite runtime store, and the in-memory read cache —
+    // so a prior test's diagnostic can't leak into our "no unroutable entry" assertion.
+    const diagPathStart = path.join(getLedgerDir(), `${UNROUTABLE_DIAGNOSTIC_STREAM}.jsonl`)
+    if (fs.existsSync(diagPathStart)) fs.unlinkSync(diagPathStart)
+    __resetMeshRuntimeStoreForTests()
+    try {
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined) // worker can't resolve the mesh locally
+      const { components, emit, coordinator } = createComponents(meshId, {
+        meshCoordinatorDaemonId: 'daemon_remote_coordinator', // the routing anchor survives
+        meshNodeId: 'node_child_1',
+        launchedByCoordinator: true,
+      })
+      const dispatchMeshCommand = vi.fn(async () => ({}))
+      components.dispatchMeshCommand = dispatchMeshCommand
+
+      // Baseline unroutable count for our (session, workspace) BEFORE the emit — the shared
+      // stream may already hold entries from earlier tests, so we assert the delta is zero.
+      const matchesMine = (d: any) => d.sessionId === 'runtime-session-1' && (d.payload as any)?.workspace === '/repo/worktree-a'
+      const unroutableCountBefore = readLedgerEntries(UNROUTABLE_DIAGNOSTIC_STREAM, { kind: ['delivery_unroutable'] }).filter(matchesMine).length
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'claude-history-9',
+        finalSummary: 'remote task done',
+        timestamp: 7777,
+      })
+
+      // The event was forwarded to the coordinator daemon via P2P mesh_forward_event …
+      expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
+      const [targetDaemonId, command, payload] = dispatchMeshCommand.mock.calls[0]
+      expect(targetDaemonId).toBe('daemon_remote_coordinator')
+      expect(command).toBe('mesh_forward_event')
+      expect(payload.event).toBe('agent:generating_completed')
+      expect(payload.workspace).toBe('/repo/worktree-a')
+      expect(payload.nodeId).toBe('node_child_1')
+      expect(payload.finalSummary).toBe('remote task done')
+      // meshId is intentionally omitted — the worker has none; the coordinator recovers it.
+      expect(payload.meshId).toBeUndefined()
+
+      // … and was NOT recorded as unroutable, because the fallback succeeded: no new entry.
+      const unroutableCountAfter = readLedgerEntries(UNROUTABLE_DIAGNOSTIC_STREAM, { kind: ['delivery_unroutable'] }).filter(matchesMine).length
+      expect(unroutableCountAfter).toBe(unroutableCountBefore)
+
+      // The local worker daemon does not inject into a coordinator (it isn't one).
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+    } finally {
+      cleanupMeshFiles(meshId)
       const diagPath = path.join(getLedgerDir(), `${UNROUTABLE_DIAGNOSTIC_STREAM}.jsonl`)
       if (fs.existsSync(diagPath)) fs.unlinkSync(diagPath)
       __resetUnroutableDiagnosticsForTests()

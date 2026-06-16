@@ -82,10 +82,13 @@ export function resolveWorkerDelegateRouting(
     const sessionId = readNonEmptyString(instanceId);
     let workspace = '';
     let coordinatorDaemonId = '';
+    // Runtime node-id stamp, surfaced even on rejection so the unresolved-mesh fallback
+    // forward can name the worker node for the coordinator.
+    let runtimeNodeId = '';
     const reject = (rejectionReason: WorkerDelegateRejectionReason): WorkerDelegateRouting => ({
         isDelegate: false,
         meshId: '',
-        nodeId: '',
+        nodeId: runtimeNodeId,
         nodeLabel: '',
         coordinatorDaemonId,
         workspace,
@@ -102,6 +105,7 @@ export function resolveWorkerDelegateRouting(
 
     const settings = readSettings(state);
     coordinatorDaemonId = readNonEmptyString(settings.meshCoordinatorDaemonId);
+    runtimeNodeId = readNonEmptyString(settings.meshNodeId);
 
     // A coordinator session (meshCoordinatorFor set) is only treated as a worker delegate
     // when it is itself the target of an active direct dispatch — otherwise its own events
@@ -138,7 +142,6 @@ export function resolveWorkerDelegateRouting(
     if (!meshId) return reject('mesh_unresolved');
 
     const targetNode = mesh?.nodes?.find((n: any) => n.workspace === workspace);
-    const runtimeNodeId = readNonEmptyString(settings.meshNodeId);
     const nodeId = readNonEmptyString(targetNode?.id) || runtimeNodeId;
     const nodeLabel = targetNode
         ? `Node '${targetNode.id}'`
