@@ -4,6 +4,7 @@ import { hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { appendLedgerEntry, readLedgerEntries } from './mesh-ledger.js';
 import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
+import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 
 // ---------------------------------------------------------------------------
 // R1: single-source coordinator routing resolution
@@ -141,13 +142,28 @@ export function resolveWorkerDelegateRouting(
     const meshId = meshIdFromRuntime || readNonEmptyString(mesh?.id);
     if (!meshId) return reject('mesh_unresolved');
 
-    const targetNode = mesh?.nodes?.find((n: any) => n.workspace === workspace);
-    const nodeId = readNonEmptyString(targetNode?.id) || runtimeNodeId;
-    const nodeLabel = targetNode
-        ? `Node '${targetNode.id}'`
-        : runtimeNodeId
-            ? `Node '${runtimeNodeId}'`
-            : `Agent at ${workspace}`;
+    // Node resolution authority: the runtime stamp (meshNodeId) is the worker's
+    // own identity, set when the coordinator dispatched/launched it. Trust it FIRST,
+    // matched against mesh.nodes with the 3-form normalizer (id / nodeId / node_id).
+    // Workspace lookup is only a fallback for workers that never carried a node stamp.
+    //
+    // This is the P1 fix: a worktree clone and its base node can share the same
+    // `workspace`, or a freshly-cloned node may not yet be in mesh.nodes — in either
+    // case `.find(n => n.workspace === workspace)` would match the BASE node (or
+    // undefined) and stamp the completion event with the wrong/absent nodeId, so the
+    // event fails post-hoc node matching and the coordinator never sees the completion.
+    // The stamped meshNodeId splits base vs worktree correctly even on shared workspace.
+    const stampedNode = runtimeNodeId
+        ? mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, runtimeNodeId))
+        : undefined;
+    const targetNode = stampedNode || mesh?.nodes?.find((n: any) => n.workspace === workspace);
+    const nodeId = runtimeNodeId || readNonEmptyString(targetNode?.id);
+    // Label off the resolved nodeId (which now prefers the stamp) so a node matched
+    // by its `nodeId`/`node_id` form — where `targetNode.id` may be absent — never
+    // renders as `Node 'undefined'`.
+    const nodeLabel = nodeId
+        ? `Node '${nodeId}'`
+        : `Agent at ${workspace}`;
 
     return {
         isDelegate: true,

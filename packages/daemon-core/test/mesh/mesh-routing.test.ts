@@ -146,6 +146,69 @@ describe('resolveWorkerDelegateRouting', () => {
     expect(r.nodeLabel).toBe('Agent at /repo/worktree-a')
   })
 
+  // P1: the stamped meshNodeId is the worker's own identity and must be the FIRST
+  // authority for node resolution. Workspace lookup is only a fallback. Without this,
+  // a worktree clone sharing the base node's workspace (or a clone not yet in
+  // mesh.nodes) gets mis-resolved to the base node, and the completion event is stamped
+  // with the wrong nodeId — failing post-hoc matching so the coordinator never sees it.
+  describe('P1: stamped meshNodeId is the node-resolution authority', () => {
+    it('splits a worktree clone from its base node when they share a workspace', () => {
+      // Base + worktree clone both report the SAME workspace. A workspace-only .find()
+      // would always return the base (node_base, listed first); the stamp must win.
+      deps.getMeshById.mockReturnValueOnce({
+        id: 'mesh_1',
+        nodes: [
+          { id: 'node_base', workspace: '/repo/shared' },
+          { id: 'node_worktree', workspace: '/repo/shared' },
+        ],
+      })
+      const r = resolveWorkerDelegateRouting(
+        makeComponents({
+          workspace: '/repo/shared',
+          settings: { meshNodeFor: 'mesh_1', meshNodeId: 'node_worktree' },
+        }),
+        'session-1',
+        deps,
+      )
+      expect(r.isDelegate).toBe(true)
+      expect(r.nodeId).toBe('node_worktree')
+      expect(r.nodeLabel).toBe("Node 'node_worktree'")
+    })
+
+    it('matches the stamped node via the nodeId / node_id serialization forms', () => {
+      // The mesh node arrived in inline-cache (nodeId) and DB-column (node_id) forms,
+      // not the config `id` form. meshNodeIdMatches must still find it by the stamp.
+      deps.getMeshById.mockReturnValueOnce({
+        id: 'mesh_1',
+        nodes: [{ nodeId: 'node_inline', node_id: 'node_inline', workspace: '/repo/other' }],
+      })
+      const r = resolveWorkerDelegateRouting(
+        makeComponents({
+          workspace: '/repo/worktree-a',
+          settings: { meshNodeFor: 'mesh_1', meshNodeId: 'node_inline' },
+        }),
+        'session-1',
+        deps,
+      )
+      expect(r.isDelegate).toBe(true)
+      expect(r.nodeId).toBe('node_inline')
+      expect(r.nodeLabel).toBe("Node 'node_inline'")
+    })
+
+    it('still falls back to workspace lookup when no node stamp is present (no regression)', () => {
+      const r = resolveWorkerDelegateRouting(
+        makeComponents({ settings: { meshCoordinatorDaemonId: 'daemon_x' } }),
+        'session-1',
+        deps,
+      )
+      expect(r.isDelegate).toBe(true)
+      // node_a is resolved purely off the workspace-matched mesh node.
+      expect(r.nodeId).toBe('node_a')
+      expect(r.nodeLabel).toBe("Node 'node_a'")
+      expect(deps.getMeshByWorkspace).toHaveBeenCalledWith('/repo/worktree-a')
+    })
+  })
+
   describe('direct-dispatch coordinator handling', () => {
     it('rejects a coordinator session that is NOT a dispatch target', () => {
       const r = resolveWorkerDelegateRouting(

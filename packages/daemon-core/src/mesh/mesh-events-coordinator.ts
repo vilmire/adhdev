@@ -15,7 +15,7 @@ import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
 import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -109,7 +109,10 @@ function hasRecentIntentionalCleanupStop(meshId: string, sessionId?: string, nod
         if (!Number.isNaN(timestamp) && timestamp < cutoff) break;
         if (!isIntentionalCleanupStopEntry(entry)) continue;
         if (sessionId && entry.sessionId === sessionId) return true;
-        if (!sessionId && nodeId && entry.nodeId === nodeId) return true;
+        // Normalized node-id match (P4): the cleanup-stop entry's node id may be stored as
+        // `nodeId` or `node_id` and the `nodeId` arg can be in either form — a raw `===`
+        // would miss a genuine intentional-cleanup entry and fail to suppress the stop event.
+        if (!sessionId && nodeId && meshNodeIdMatches(entry as unknown as MeshNodeIdentified, nodeId)) return true;
     }
     return false;
 }

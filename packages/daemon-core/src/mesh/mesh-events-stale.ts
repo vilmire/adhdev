@@ -4,6 +4,7 @@ import { updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './m
 import { markSessionDeliveriesTerminal } from './mesh-delivery-policy.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { readNonEmptyString, readRecord, resolveEventSessionId, readWorkerResultMetadata } from './mesh-events-utils.js';
+import { meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 
 // ---------------------------------------------------------------------------
 // Stale direct-dispatch detection & transcript reconciliation
@@ -25,7 +26,13 @@ export function findRecentTerminalLedgerEvidence(args: {
         if (args.sessionId && entry.sessionId === args.sessionId) {
             return { id: entry.id, kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
         }
-        if (!args.sessionId && args.nodeId && entry.nodeId === args.nodeId) {
+        // Normalized node-id match (P4): a ledger entry may store its node id as `nodeId`
+        // (runtime form) or `node_id` (DB column form leaked onto the object). A raw `===`
+        // against args.nodeId drops the entry when the entry's stored form differs from the
+        // form the caller passes, so a valid terminal completion goes unfound. meshNodeIdMatches
+        // normalizes the entry across all 3 forms before comparing. (The entry's typed shape
+        // omits the open index signature MeshNodeIdentified declares, hence the cast.)
+        if (!args.sessionId && args.nodeId && meshNodeIdMatches(entry as unknown as MeshNodeIdentified, args.nodeId)) {
             return { id: entry.id, kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
         }
     }
