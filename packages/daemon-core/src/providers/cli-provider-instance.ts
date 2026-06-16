@@ -37,6 +37,18 @@ type PersistableCliHistoryMessage = {
     receivedAt?: number;
 };
 
+// Status snapshots only ever surface the newest messages: the cloud 'live'
+// profile drops chat messages entirely (loaded lazily via read_chat on
+// subscribe) and the 'full' profile caps activeChat.messages to the last 60
+// (see status/normalize.ts). Unread/completion markers walk only the tail.
+// So getState()'s saved-history hydration — which runs once per resume/manual
+// CLI session on every status report — must read only a bounded tail, not the
+// entire transcript. A full MAX_SAFE_INTEGER read here makes the initial
+// status report O(transcript) × N(sessions), which is the real cold first-
+// connection bottleneck on chat-heavy machines. The window comfortably exceeds
+// the 60-message snapshot cap so dedup/collapse at the boundary stays stable.
+const STATUS_HYDRATION_TAIL_LIMIT = 200;
+
 type CompletedDebouncePending = {
     chatTitle: string;
     duration: number;
@@ -2190,13 +2202,21 @@ export class CliProviderInstance implements ProviderInstance {
         return newestMessageAt === 0;
     }
 
-    private syncCanonicalSavedHistoryIfNeeded(): boolean {
+    private syncCanonicalSavedHistoryIfNeeded(options: { full?: boolean } = {}): boolean {
         if (!this.providerSessionId) return false;
         const canonicalHistory = this.provider.nativeHistory;
         if (!canonicalHistory) return false;
 
+        // Per-status-report hydration reads only a bounded tail (snapshot needs at
+        // most the newest 60). The once-per-resume restore path passes full:true
+        // because seedSessionHistory needs the COMPLETE transcript to seed dedup
+        // state. The read-cache key encodes the window so the bounded and full
+        // reads don't share/clobber each other's 2s cache entry.
+        const limit = options.full ? Number.MAX_SAFE_INTEGER : STATUS_HYDRATION_TAIL_LIMIT;
+        const windowTag = options.full ? 'full' : `tail:${STATUS_HYDRATION_TAIL_LIMIT}`;
+
         if (isNativeSourceCanonicalHistory(canonicalHistory)) {
-            const cacheKey = [this.type, this.providerSessionId, this.workingDir].join('\0');
+            const cacheKey = [this.type, this.providerSessionId, this.workingDir, windowTag].join('\0');
             const now = Date.now();
             if (cacheKey === this.lastNativeSourceCanonicalCacheKey && now - this.lastNativeSourceCanonicalCheckAt < 2_000) {
                 return true;
@@ -2209,7 +2229,7 @@ export class CliProviderInstance implements ProviderInstance {
                 historySessionId: this.providerSessionId,
                 workspace: this.workingDir,
                 offset: 0,
-                limit: Number.MAX_SAFE_INTEGER,
+                limit,
                 historyBehavior: this.provider.historyBehavior,
                 scripts: this.provider.scripts as any,
             });
@@ -2226,7 +2246,7 @@ export class CliProviderInstance implements ProviderInstance {
         }
 
         try {
-            const cacheKey = [this.type, this.providerSessionId, this.workingDir, canonicalHistory.mode || 'materialized-mirror'].join('\0');
+            const cacheKey = [this.type, this.providerSessionId, this.workingDir, canonicalHistory.mode || 'materialized-mirror', windowTag].join('\0');
             const now = Date.now();
             if (cacheKey === this.lastNativeSourceCanonicalCacheKey && now - this.lastNativeSourceCanonicalCheckAt < 2_000) {
                 return true;
@@ -2237,15 +2257,14 @@ export class CliProviderInstance implements ProviderInstance {
             if (!materializeProviderNativeHistory(this.type, canonicalHistory, this.providerSessionId, this.workingDir, this.provider.scripts as any)) {
                 return false;
             }
-            // Full read is intentional: lastPersistedHistoryMessages is the COMPLETE
-            // session transcript — emitted as statusMessages and used as the
-            // prefix-comparison base for incremental appends — so a bounded tail
-            // would both truncate output and break prefix dedup. This is gated to
-            // once-per-2s (cache key above) for resume/manual launches only, so it
-            // does not run on the per-subscribe/per-poll dashboard tail path (that
-            // path goes through handleReadChat → readChatHistory with a bounded
-            // tailLimit, which is now O(tail)).
-            const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
+            // Bounded by default: the per-status-report path only needs the newest
+            // STATUS_HYDRATION_TAIL_LIMIT messages because the snapshot caps
+            // activeChat.messages to the last 60 (status/normalize.ts) and loads
+            // the rest lazily via read_chat on subscribe. The once-per-resume
+            // restore path passes full:true so seedSessionHistory still sees the
+            // COMPLETE transcript for prefix-dedup seeding. readChatHistory serves
+            // a bounded limit as an O(tail) read.
+            const restoredHistory = readChatHistory(this.type, 0, limit, this.providerSessionId, 0, this.provider.historyBehavior);
             this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
                 role: message.role,
                 content: message.content,
@@ -2261,7 +2280,10 @@ export class CliProviderInstance implements ProviderInstance {
 
     private restorePersistedHistoryFromCurrentSession(): void {
         if (!this.providerSessionId) return;
-        this.syncCanonicalSavedHistoryIfNeeded();
+        // Restore is the once-per-resume seeding path: it needs the COMPLETE
+        // transcript so seedSessionHistory can prime dedup state. Pass full so the
+        // hydration read is unbounded here (and only here).
+        this.syncCanonicalSavedHistoryIfNeeded({ full: true });
         const restoredHistory = isNativeSourceCanonicalHistory(this.provider.nativeHistory)
             ? readProviderChatHistory(this.type, {
                 canonicalHistory: this.provider.nativeHistory,
