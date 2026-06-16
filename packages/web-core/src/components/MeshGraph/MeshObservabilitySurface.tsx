@@ -10,6 +10,7 @@ import type {
 import { useTheme } from '../../hooks/useTheme'
 import MeshGraphView from './MeshGraphView'
 import MeshOverviewCards from './MeshOverviewCards'
+import { MeshHelpPanel, MeshHelpToggle } from './MeshHelpPanel'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import { buildMeshGraph, type MeshGraphSessionDetail } from '../../utils/mesh-visualization'
@@ -651,6 +652,7 @@ export default function MeshObservabilitySurface({
     const statusGraphFingerprint = useMemo(() => getRepoMeshStatusGraphFingerprint(canonicalStatus), [canonicalStatus])
     const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [statusGraphFingerprint]) as MeshGraphData
     const [activeTab, setActiveTab] = useState<'overview' | 'graph'>('overview')
+    const [helpOpen, setHelpOpen] = useState(false)
     // Lazy-mount the graph: only build/render React Flow once the graph tab has
     // been opened, so the default overview tab stays cheap.
     const [graphMounted, setGraphMounted] = useState(false)
@@ -901,19 +903,27 @@ export default function MeshObservabilitySurface({
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
         <div className="flex min-h-0 flex-1 flex-col gap-3">
-            {/* ── Tab bar: Overview (cards) ↔ Graph ── */}
-            <div className={`shrink-0 inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
-                <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => setActiveTab('overview')}>Overview</button>
-                <button
-                    type="button"
-                    role="tab"
-                    aria-selected={activeTab === 'graph'}
-                    className={tabButtonClass(activeTab === 'graph')}
-                    onClick={() => { setGraphMounted(true); setActiveTab('graph') }}
-                >
-                    Graph
-                </button>
+            {/* ── Tab bar: Overview (cards) ↔ Graph — with the single consolidated help toggle ── */}
+            <div className="shrink-0 flex items-center gap-2">
+                <div className={`inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
+                    <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => setActiveTab('overview')}>Overview</button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={activeTab === 'graph'}
+                        className={tabButtonClass(activeTab === 'graph')}
+                        onClick={() => { setGraphMounted(true); setActiveTab('graph') }}
+                    >
+                        Graph
+                    </button>
+                </div>
+                <div className="ml-auto">
+                    <MeshHelpToggle meshTheme={meshTheme} open={helpOpen} onToggle={() => setHelpOpen(v => !v)} />
+                </div>
             </div>
+
+            {/* ── Consolidated help panel — spans both tabs, in flow so it never clips the header ── */}
+            {helpOpen && <MeshHelpPanel meshTheme={meshTheme} onClose={() => setHelpOpen(false)} />}
 
             {/* ── Overview tab: text/card surface (own scroll region) ──
                  The cards can exceed the dialog body height, so this wrapper is the
