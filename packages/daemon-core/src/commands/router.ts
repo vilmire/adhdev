@@ -3268,6 +3268,15 @@ export class DaemonCommandRouter {
      *  Allows the MCP server to query mesh data via get_mesh even when
      *  the mesh doesn't exist in the local meshes.json file. */
     private inlineMeshCache = new Map<string, any>();
+    /** Tombstones for inline mesh nodes removed via remove_mesh_node, keyed by
+     *  meshId → set of removed nodeIds. The dashboard keeps echoing the removed
+     *  node in the inlineMesh it attaches to every command; without a tombstone,
+     *  reconcileInlineMeshCache MERGEs it straight back (resurrection). A
+     *  tombstoned node is skipped during reconcile only while its workspace is
+     *  absent from disk — a genuine re-registration (same nodeId, workspace back
+     *  on disk) clears the tombstone and merges normally, preserving clone
+     *  worktree visibility and legitimate node re-creation. */
+    private removedInlineMeshNodeIds = new Map<string, Set<string>>();
     /** Coordinator-owned whole-mesh aggregate status snapshots. Browser callers read this by default. */
     private aggregateMeshStatusCache = new Map<string, { builtAt: number; snapshot: any; queueRevision: string }>();
     /** Shared per-peer git_status probe dedup + recently-probed reuse gate.
@@ -3465,7 +3474,10 @@ export class DaemonCommandRouter {
         // Save-boundary node-id normalization: reconcile each node's identity so
         // `id` and `nodeId` agree before it enters the cache, so reconcile keys
         // and the round-trip through the status serializer stay form-stable.
-        const sanitizedInlineMesh = sanitizeInlineMesh(normalizeInlineMeshNodeIdentity(inlineMesh as any));
+        const sanitizedInlineMesh = this.applyInlineMeshNodeTombstones(
+            meshId,
+            sanitizeInlineMesh(normalizeInlineMeshNodeIdentity(inlineMesh as any)),
+        );
         const cached = this.inlineMeshCache.get(meshId);
         if (cached) {
             const merged = reconcileInlineMeshCache(cached, sanitizedInlineMesh);
@@ -3486,7 +3498,10 @@ export class DaemonCommandRouter {
             const cached = this.getCachedInlineMesh(meshId);
             if (cached) {
                 if (inlineMeshCarriesTransientNodeTruth(inlineMesh)) {
-                    const merged = reconcileInlineMeshCache(cached, inlineMesh as any);
+                    const merged = reconcileInlineMeshCache(
+                        cached,
+                        this.applyInlineMeshNodeTombstones(meshId, inlineMesh as any),
+                    );
                     this.inlineMeshCache.set(meshId, sanitizeInlineMesh(normalizeInlineMeshNodeIdentity(merged)));
                     return { mesh: merged, inline: true, source: 'inline_cache' };
                 }
@@ -3546,11 +3561,54 @@ export class DaemonCommandRouter {
         if (!mesh || !Array.isArray(mesh.nodes)) return false;
         const idx = mesh.nodes.findIndex((entry: any) => meshNodeIdMatches(entry, nodeId));
         if (idx === -1) return false;
+        const canonicalNodeId = readInlineMeshNodeId(mesh.nodes[idx]) || nodeId;
         mesh.nodes.splice(idx, 1);
         mesh.updatedAt = new Date().toISOString();
         this.inlineMeshCache.set(meshId, mesh);
+        // Tombstone the removed node so the dashboard's stale inlineMesh echo does
+        // not MERGE it back on the next command (see removedInlineMeshNodeIds).
+        this.tombstoneRemovedInlineMeshNode(meshId, canonicalNodeId);
+        if (canonicalNodeId !== nodeId) this.tombstoneRemovedInlineMeshNode(meshId, nodeId);
         this.invalidateAggregateMeshStatus(meshId);
         return true;
+    }
+
+    private tombstoneRemovedInlineMeshNode(meshId: string, nodeId: string): void {
+        if (!nodeId) return;
+        let set = this.removedInlineMeshNodeIds.get(meshId);
+        if (!set) {
+            set = new Set<string>();
+            this.removedInlineMeshNodeIds.set(meshId, set);
+        }
+        set.add(nodeId);
+    }
+
+    /** Filter an incoming inline mesh against this mesh's tombstones before it is
+     *  reconciled into the cache. A tombstoned node is dropped only while its
+     *  workspace is still absent from disk; if the workspace is back (genuine
+     *  re-registration), the tombstone is cleared and the node merges normally. */
+    private applyInlineMeshNodeTombstones(meshId: string, incoming: any): any {
+        const tombstones = this.removedInlineMeshNodeIds.get(meshId);
+        if (!tombstones?.size || !incoming || typeof incoming !== 'object' || !Array.isArray(incoming.nodes)) {
+            return incoming;
+        }
+        let dropped = false;
+        const nodes = incoming.nodes.filter((node: any) => {
+            const nodeId = readInlineMeshNodeId(node);
+            if (!nodeId || !tombstones.has(nodeId)) return true;
+            const workspace = readStringValue(node?.workspace);
+            // Genuine re-registration: same nodeId, workspace back on disk →
+            // clear the tombstone and let the node merge normally.
+            if (workspace && fs.existsSync(workspace)) {
+                tombstones.delete(nodeId);
+                return true;
+            }
+            dropped = true;
+            return false;
+        });
+        if (tombstones.size === 0) this.removedInlineMeshNodeIds.delete(meshId);
+        if (!dropped) return incoming;
+        return { ...incoming, nodes };
     }
 
     private normalizeMeshSessionCleanupMode(value: unknown): RepoMeshSessionCleanupMode {

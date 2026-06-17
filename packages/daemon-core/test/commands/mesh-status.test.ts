@@ -2165,3 +2165,139 @@ describe('mesh_status dead local worktree exclusion', () => {
     }
   })
 })
+
+describe('inline mesh node tombstone', () => {
+  it('does not resurrect a removed inline node when the dashboard re-echoes it (workspace still gone)', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-tombstone-')
+    try {
+      const { router } = createRouter({ statusInstanceId: 'daemon_self' })
+      const deadWorkspace = join(dir, 'gone', 'node_wt')
+      const inlineMesh = (updatedAt?: string) => ({
+        id: 'mesh_tombstone',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        coordinator: { preferredNodeId: 'node_self' },
+        policy: {},
+        ...(updatedAt ? { updatedAt } : {}),
+        nodes: [
+          {
+            id: 'node_self',
+            daemonId: 'daemon_self',
+            machineLabel: 'Local',
+            workspace: repoRoot,
+            repoRoot,
+            providers: ['hermes-cli'],
+            policy: { providerPriority: ['hermes-cli'] },
+          },
+          {
+            id: 'node_wt',
+            daemonId: 'daemon_self',
+            machineLabel: 'Worktree',
+            isLocalWorktree: true,
+            workspace: deadWorkspace,
+            repoRoot: deadWorkspace,
+            providers: [],
+            policy: { providerPriority: ['hermes-cli'] },
+            // Transient node truth forces reconcileInlineMeshCache to MERGE the
+            // echo (the genuine resurrection path) rather than ignore it.
+            cachedStatus: { health: 'unknown', gitProbePending: true },
+          },
+        ],
+      })
+
+      // Seed the inline cache with both nodes.
+      await router.execute('get_mesh', { meshId: 'mesh_tombstone', inlineMesh: inlineMesh() })
+
+      // Remove the worktree node (force, since the workspace is already gone).
+      const removed = await router.execute('remove_mesh_node', {
+        meshId: 'mesh_tombstone',
+        nodeId: 'node_wt',
+        force: true,
+        inlineMesh: inlineMesh(),
+      }) as any
+      expect(removed.success).toBe(true)
+      expect(removed.removed).toBe(true)
+
+      // Dashboard re-echoes the removed node on the next command, stamped newer
+      // than the cache so reconcile's membership-preservation would otherwise
+      // keep it. It must still NOT come back: the tombstone drops it because its
+      // workspace is absent from disk.
+      const afterEcho = await router.execute('get_mesh', {
+        meshId: 'mesh_tombstone',
+        inlineMesh: inlineMesh('2999-01-01T00:00:00.000Z'),
+      }) as any
+      expect(afterEcho.success).toBe(true)
+      const echoedIds = (afterEcho.mesh?.nodes ?? []).map((n: any) => n.id ?? n.nodeId)
+      expect(echoedIds).toContain('node_self')
+      expect(echoedIds).not.toContain('node_wt')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('allows genuine re-registration of a tombstoned node once its workspace is back on disk', async () => {
+    const primary = await createTempGitRepo('mesh-tombstone-revive-primary-')
+    const reborn = await createTempGitRepo('mesh-tombstone-revive-reborn-')
+    try {
+      const { router } = createRouter({ statusInstanceId: 'daemon_self' })
+      const deadWorkspace = join(primary.dir, 'gone', 'node_wt')
+      const baseNodes = (worktreeWorkspace: string) => [
+        {
+          id: 'node_self',
+          daemonId: 'daemon_self',
+          machineLabel: 'Local',
+          workspace: primary.repoRoot,
+          repoRoot: primary.repoRoot,
+          providers: ['hermes-cli'],
+          policy: { providerPriority: ['hermes-cli'] },
+        },
+        {
+          id: 'node_wt',
+          daemonId: 'daemon_self',
+          machineLabel: 'Worktree',
+          isLocalWorktree: true,
+          workspace: worktreeWorkspace,
+          repoRoot: worktreeWorkspace,
+          providers: [],
+          policy: { providerPriority: ['hermes-cli'] },
+          cachedStatus: { health: 'unknown', gitProbePending: true },
+        },
+      ]
+      const meshWith = (worktreeWorkspace: string, updatedAt?: string) => ({
+        id: 'mesh_revive',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        coordinator: { preferredNodeId: 'node_self' },
+        policy: {},
+        ...(updatedAt ? { updatedAt } : {}),
+        nodes: baseNodes(worktreeWorkspace),
+      })
+
+      await router.execute('get_mesh', { meshId: 'mesh_revive', inlineMesh: meshWith(deadWorkspace) })
+      const removed = await router.execute('remove_mesh_node', {
+        meshId: 'mesh_revive',
+        nodeId: 'node_wt',
+        force: true,
+        inlineMesh: meshWith(deadWorkspace),
+      }) as any
+      expect(removed.removed).toBe(true)
+
+      // Re-register the same nodeId with a workspace that exists on disk. The
+      // re-echo is stamped newer than the cache so reconcile's membership-
+      // preservation keeps the incoming node; the tombstone must clear (workspace
+      // is back on disk) and not drop it.
+      const revived = await router.execute('get_mesh', {
+        meshId: 'mesh_revive',
+        inlineMesh: meshWith(reborn.repoRoot, '2999-01-01T00:00:00.000Z'),
+      }) as any
+      expect(revived.success).toBe(true)
+      const ids = (revived.mesh?.nodes ?? []).map((n: any) => n.id ?? n.nodeId)
+      expect(ids).toContain('node_wt')
+    } finally {
+      await rm(primary.dir, { recursive: true, force: true })
+      await rm(reborn.dir, { recursive: true, force: true })
+    }
+  })
+})
