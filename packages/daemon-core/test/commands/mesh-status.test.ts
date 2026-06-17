@@ -938,6 +938,9 @@ describe('mesh_status', () => {
 
       const result = await router.execute('mesh_status', {
         meshId: 'mesh-retry',
+        // Standing-state model: per-node remote git probe + retry only fires on
+        // an explicit refresh; the default load returns held truth without it.
+        refresh: true,
         inlineMesh: {
           id: 'mesh-retry',
           name: 'Mesh Retry',
@@ -1381,17 +1384,19 @@ describe('mesh_status', () => {
       allowRemoteGit = true
       dispatchMeshCommand.mockClear()
       sessionHostControl.listSessions.mockClear()
+      // Standing-state model: a stale pending cache no longer auto-triggers a
+      // blocking peer fan-out on a default load — only an explicit refresh does.
       const refreshed = await router.execute('mesh_status', {
         meshId: 'mesh_stale_pending_cache',
         inlineMesh,
         requireDirectPeerTruth: true,
-        refresh: false,
+        refresh: true,
       }) as any
 
       expect(refreshed.success).toBe(true)
       expect(refreshed.sourceOfTruth.aggregateSnapshot).toMatchObject({
         cached: false,
-        refreshReason: 'stale_pending_cache_refresh',
+        refreshReason: 'explicit_refresh',
       })
       expect(dispatchMeshCommand).toHaveBeenCalled()
       expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
@@ -1738,9 +1743,12 @@ describe('mesh_status', () => {
       })
       const { router } = createRouter({ dispatchMeshCommand, getMeshPeerConnectionStatus })
 
+      // Standing-state model: the hard fail-closed on an unreachable peer is
+      // reserved for an explicit refresh that actually attempts the fan-out.
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_303',
         requireDirectPeerTruth: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_303',
           name: 'ADHDev',
@@ -1802,6 +1810,66 @@ describe('mesh_status', () => {
         },
       })
       expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('default (non-refresh) load renders the graph from held standing-state truth without fanning out to a slow peer', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-standing-state-default-')
+    try {
+      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      // Any fan-out would call this and (like a slow/TURN-relayed peer) hang or
+      // throw. The default load must not call it at all.
+      const dispatchMeshCommand = vi.fn(async () => {
+        throw new Error('default load must not fan out a blocking git_status probe')
+      })
+      const { router } = createRouter({ dispatchMeshCommand })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_standing_default',
+        requireDirectPeerTruth: true,
+        // No refresh: the held standing state is returned immediately.
+        inlineMesh: {
+          id: 'mesh_standing_default',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_7' },
+          policy: {},
+          nodes: [
+            {
+              id: 'node_7',
+              daemonId: 'daemon_7',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+            {
+              // A slow peer with NO held git truth yet — must not block the graph.
+              id: 'node_slow',
+              daemonId: 'daemon_slow',
+              machineLabel: 'Slow peer',
+              workspace: remoteWorkspace,
+              repoRoot: remoteWorkspace,
+              providers: [],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      // Graph renders: success, the local node carries live git, and the slow
+      // peer is simply pending (setup inventory) rather than fatal.
+      expect(result.success).toBe(true)
+      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+      expect(result.sourceOfTruth.coordinatorOwnsLiveTruth).toBe(true)
+      const localNode = result.nodes.find((node: any) => node.nodeId === 'node_7')
+      expect(localNode.git).toMatchObject({ isGitRepo: true })
+      const slowNode = result.nodes.find((node: any) => node.nodeId === 'node_slow')
+      expect(slowNode.gitProbePending).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -110,10 +110,13 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       ],
     }
 
+    // Standing-state model: a non-local peer's git is only fanned out on an
+    // explicit refresh. The default load returns held truth without probing.
     const result: any = await router.execute('get_mesh', {
       meshId: 'mesh_303',
       inlineMesh,
       requireDirectPeerTruth: true,
+      refresh: true,
     })
 
     expect(result.success).toBe(true)
@@ -249,6 +252,9 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
           ],
         },
         requireDirectPeerTruth: true,
+        // Explicit refresh fans out the remote peer git probe (default load
+        // would return held standing-state truth without probing).
+        refresh: true,
       })
 
       expect(result.success).toBe(true)
@@ -336,10 +342,12 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       ],
     }
 
+    // Explicit refresh records direct peer truth into the standing cache.
     await router.execute('get_mesh', {
       meshId: 'mesh_303',
       inlineMesh,
       requireDirectPeerTruth: true,
+      refresh: true,
     })
 
     dispatchMeshCommand.mockClear()

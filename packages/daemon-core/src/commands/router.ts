@@ -1009,11 +1009,21 @@ async function hydrateInlineMeshDirectTruth(args: {
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
     statusInstanceId?: string;
     localMachineId?: string;
+    // Standing-state model: the default (non-refresh) bootstrap load must NOT
+    // fan out a blocking git_status probe to every peer — a single slow
+    // (TURN-relayed) peer would time out and mark the whole mesh unavailable,
+    // blocking the graph. When false, a non-local node is satisfied from its
+    // held standing git truth (lastGit / cachedStatus reflected via mesh
+    // events) and is never pushed to unavailableNodeIds merely because no live
+    // probe was attempted. Only an explicit refresh (probeRemotePeers=true)
+    // performs the fan-out and classifies an unreachable peer as unavailable.
+    probeRemotePeers: boolean;
 }): Promise<{
     directEvidenceCount: number;
     localConfirmedCount: number;
     peerAttemptedCount: number;
     peerConfirmedCount: number;
+    standingEvidenceCount: number;
     unavailableNodeIds: string[];
 }> {
     const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
@@ -1023,6 +1033,7 @@ async function hydrateInlineMeshDirectTruth(args: {
             localConfirmedCount: 0,
             peerAttemptedCount: 0,
             peerConfirmedCount: 0,
+            standingEvidenceCount: 0,
             unavailableNodeIds: [],
         };
     }
@@ -1036,6 +1047,7 @@ async function hydrateInlineMeshDirectTruth(args: {
     let localConfirmedCount = 0;
     let peerAttemptedCount = 0;
     let peerConfirmedCount = 0;
+    let standingEvidenceCount = 0;
     const unavailableNodeIds: string[] = [];
 
     for (const [nodeIndex, node] of nodes.entries()) {
@@ -1066,6 +1078,25 @@ async function hydrateInlineMeshDirectTruth(args: {
             }
         }
 
+        // Standing-state first: a non-local peer's held git truth (reflected
+        // from its self-emitted mesh events into node.lastGit / cachedStatus)
+        // counts as direct evidence without any probe. On the default load this
+        // is the ONLY thing we consult — no fan-out, so one slow peer can't
+        // block the bootstrap.
+        const standingGit = buildInlineMeshTransitGitStatus(node);
+        if (standingGit) {
+            standingEvidenceCount += 1;
+            continue;
+        }
+
+        if (!args.probeRemotePeers) {
+            // Default (non-refresh) load: a peer with no held truth yet is left
+            // pending (the per-node loop marks it gitProbePending and the graph
+            // shows setup inventory for it). It is NOT unavailable — the graph
+            // must still render. An explicit refresh will fan out and freshen it.
+            continue;
+        }
+
         if (!daemonId || !args.dispatchMeshCommand) {
             if (!isSelfNode) unavailableNodeIds.push(nodeId);
             continue;
@@ -1092,10 +1123,11 @@ async function hydrateInlineMeshDirectTruth(args: {
     }
 
     return {
-        directEvidenceCount: localConfirmedCount + peerConfirmedCount,
+        directEvidenceCount: localConfirmedCount + peerConfirmedCount + standingEvidenceCount,
         localConfirmedCount,
         peerAttemptedCount,
         peerConfirmedCount,
+        standingEvidenceCount,
         unavailableNodeIds,
     };
 }
@@ -6504,12 +6536,16 @@ export class DaemonCommandRouter {
                 if (!meshRecord?.mesh) return { success: false, error: 'Mesh not found' };
 
                 const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
+                // Only an explicit refresh fans out a blocking peer probe.
+                // Default loads are satisfied from held standing-state git truth.
+                const probeRemotePeers = args?.refresh === true || args?.forceRefresh === true;
                 const directTruth = await hydrateInlineMeshDirectTruth({
                     mesh: meshRecord.mesh,
                     meshSource: meshRecord.source,
                     dispatchMeshCommand: this.deps.dispatchMeshCommand,
                     statusInstanceId: this.deps.statusInstanceId,
                     localMachineId: loadConfig().machineId || '',
+                    probeRemotePeers,
                 });
                 const directTruthSatisfied = meshRecord.source !== 'inline_bootstrap' || directTruth.directEvidenceCount > 0;
                 const sourceOfTruth = {
@@ -8398,12 +8434,17 @@ export class DaemonCommandRouter {
                             dispatchMeshCommand: this.deps.dispatchMeshCommand,
                             statusInstanceId: this.deps.statusInstanceId,
                             localMachineId,
+                            // Standing-state model: only an explicit refresh fans
+                            // out a blocking peer git probe. Default loads return
+                            // held truth so one slow peer can't block the graph.
+                            probeRemotePeers: refreshRequested,
                         })
                         : {
                             directEvidenceCount: 0,
                             localConfirmedCount: 0,
                             peerAttemptedCount: 0,
                             peerConfirmedCount: 0,
+                            standingEvidenceCount: 0,
                             unavailableNodeIds: [] as string[],
                         };
                     // Default/cached loads may not attempt a remote peer probe yet; do not surface that as
@@ -8421,9 +8462,15 @@ export class DaemonCommandRouter {
                         && mesh.nodes
                             .filter((node: any) => unavailableDirectTruthNodeIds.has(normalizeMeshNodeId(node) ?? ''))
                             .every((node: any) => node?.isLocalWorktree === true);
+                    // Default (non-refresh) loads never hard-fail: held
+                    // standing-state truth is returned and the graph renders
+                    // immediately. The hard mesh_direct_peer_truth_unavailable
+                    // failure is reserved for an explicit refresh that actually
+                    // attempted a peer probe and could not confirm any evidence.
                     const directTruthSatisfied = !requireDirectPeerTruth
+                        || !refreshRequested
                         || (effectiveDirectTruth.directEvidenceCount > 0 && (effectiveDirectTruth.unavailableNodeIds.length === 0 || unavailableNodesAreOnlyRemovedWorktrees));
-                    if (requireDirectPeerTruth && !directTruthSatisfied) {
+                    if (requireDirectPeerTruth && refreshRequested && !directTruthSatisfied) {
                         const failureResult = {
                             success: false,
                             code: 'mesh_direct_peer_truth_unavailable',
@@ -8588,7 +8635,11 @@ export class DaemonCommandRouter {
                                         status.connection = buildLivePeerGitConnection(connection, refreshedAt);
                                     }
                                     remoteProbeApplied = true;
-                                } else if (!isSelfNode && daemonId && this.deps.dispatchMeshCommand && !directTruthUnavailableNodeIds.has(nodeId)) {
+                                } else if (refreshRequested && !isSelfNode && daemonId && this.deps.dispatchMeshCommand && !directTruthUnavailableNodeIds.has(nodeId)) {
+                                    // Only an explicit refresh fans out a blocking
+                                    // per-node git probe. On the default load a peer
+                                    // with no held truth falls through to
+                                    // gitProbePending below — the graph still renders.
                                     try {
                                         const remoteGit = await probeRemoteMeshGitStatus({
                                             dispatchMeshCommand: this.deps.dispatchMeshCommand,
