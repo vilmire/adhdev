@@ -40,6 +40,8 @@ import { logCommand } from '../logging/command-log.js';
 import type { CommandLogEntry } from '../logging/command-log.js';
 import * as yaml from 'js-yaml';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
+import { readDaemonLogTail, MAX_TAIL_BYTES } from '../logging/log-tail-reader.js';
+import { redactLogLines } from '../logging/log-redactor.js';
 import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
 import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
@@ -7484,6 +7486,68 @@ export class DaemonCommandRouter {
                     allowAutoPublishSubmoduleMainCommits,
                 }) as Promise<unknown>);
                 return result as CommandRouterResult;
+            }
+
+            case 'get_mesh_node_logs': {
+                // Coordinator-driven remote log fetch: read a (possibly remote)
+                // daemon's recent log tail over P2P instead of opening a session
+                // and grepping the file by hand. Mirrors fast_forward_mesh_node's
+                // forward pattern — resolve the node, forward to its owning daemon
+                // when remote, otherwise read locally. The reply tail is HARD
+                // byte-bounded and secret-redacted before it leaves the machine.
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+                let nodeDaemonId: string | undefined;
+                if (meshId && nodeId) {
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                    const node = meshRecord?.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
+                    nodeDaemonId = typeof node?.daemonId === 'string' ? node.daemonId.trim() : undefined;
+                }
+                // _meshDirectDispatch prevents re-forwarding (and P2P self-dial)
+                // once the call lands on the owning daemon — that daemon then reads
+                // its own logs even if the stored daemonId uses a legacy form.
+                const selfDaemonId = this.deps.statusInstanceId;
+                const isRemote = nodeDaemonId && selfDaemonId && nodeDaemonId !== selfDaemonId;
+                if (isRemote && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
+                    const forwarded = await this.deps.dispatchMeshCommand(nodeDaemonId!, 'get_mesh_node_logs', {
+                        ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+                        _meshDirectDispatch: true,
+                    });
+                    return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+                }
+
+                // Local read on the owning daemon.
+                const rawTailBytes = Number(args?.tailBytes);
+                const tail = readDaemonLogTail({
+                    date: typeof args?.date === 'string' ? args.date : undefined,
+                    tailBytes: Number.isFinite(rawTailBytes) ? Math.min(rawTailBytes, MAX_TAIL_BYTES) : undefined,
+                    grep: typeof args?.grep === 'string' ? args.grep : undefined,
+                    sinceMs: Number.isFinite(Number(args?.sinceMs)) ? Number(args?.sinceMs) : undefined,
+                });
+                if (!tail.success) {
+                    return {
+                        success: false,
+                        error: tail.error || 'failed to read daemon log tail',
+                        nodeId,
+                        logPath: tail.logPath,
+                        platform: tail.platform,
+                    } as CommandRouterResult;
+                }
+                // SECURITY: redact secrets from every line before returning over P2P.
+                const redactedLines = redactLogLines(tail.lines);
+                return {
+                    success: true,
+                    nodeId,
+                    daemonId: selfDaemonId,
+                    logPath: tail.logPath,
+                    platform: tail.platform,
+                    lines: redactedLines,
+                    lineCount: redactedLines.length,
+                    truncated: tail.truncated,
+                    filtered: tail.filtered,
+                    bytesReturned: tail.bytesReturned,
+                    ...(tail.grep ? { grep: tail.grep } : {}),
+                } as CommandRouterResult;
             }
 
             case 'refine_mesh_node': {

@@ -2828,6 +2828,25 @@ export const MESH_GIT_STATUS_TOOL = {
     },
 };
 
+export const MESH_READ_NODE_LOGS_TOOL = {
+    name: 'mesh_read_node_logs',
+    description: 'Fetch a recent daemon LOG tail directly from a (possibly remote) mesh node over P2P — no session launch, no PowerShell/shell grep on the remote machine. '
+        + 'Use this to debug a node\'s daemon: read its error/warn lines, grep for a pattern, or read since a timestamp. '
+        + 'The reply is byte-bounded (≤128KB, default 64KB; truncated:true when the file was larger, newest lines kept) and secrets (API keys, machine secrets, bearer tokens, JWTs, TURN credentials) are redacted before transmission. '
+        + 'This reads the DAEMON log, not an agent session transcript — for a session transcript use mesh_read_chat / mesh_read_debug.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Target node ID (the daemon owning it serves its own log).' },
+            grep: { type: 'string', description: 'Optional regex (case-insensitive) — only matching log lines are returned. Invalid regex falls back to a literal substring match.' },
+            since_ms: { type: 'number', description: 'Optional epoch-ms floor — only log lines at/after this time are returned (lines without a parseable timestamp are kept).' },
+            tail_bytes: { type: 'number', description: 'Max bytes of log tail to read (default 65536, capped at 131072). Larger files are truncated to the newest tail_bytes.' },
+            date: { type: 'string', description: 'Optional YYYY-MM-DD log date (defaults to today). Falls back to the size-rotation backup when the active file is absent.' },
+        },
+        required: ['node_id'],
+    },
+};
+
 export const MESH_FAST_FORWARD_NODE_TOOL = {
     name: 'mesh_fast_forward_node',
     description: 'Safely dry-run or execute an obvious direct fast-forward for a mesh node without launching an agent session. '
@@ -3126,6 +3145,7 @@ export const ALL_MESH_TOOLS = [
     MESH_READ_DEBUG_TOOL,
     MESH_LAUNCH_SESSION_TOOL,
     MESH_GIT_STATUS_TOOL,
+    MESH_READ_NODE_LOGS_TOOL,
     MESH_FAST_FORWARD_NODE_TOOL,
     MESH_CHECKPOINT_TOOL,
     MESH_APPROVE_TOOL,
@@ -5025,6 +5045,32 @@ export async function meshGitStatus(
             ...failure,
             workspace: node.workspace,
         }, null, 2);
+    }
+}
+
+export async function meshReadNodeLogs(
+    ctx: MeshContext,
+    args: { node_id: string; grep?: string; since_ms?: number; tail_bytes?: number; date?: string },
+): Promise<string> {
+    const node = await findNodeWithRefresh(ctx, args.node_id);
+    try {
+        const result = await commandForNode(ctx, node, 'get_mesh_node_logs', {
+            meshId: ctx.mesh.id,
+            nodeId: args.node_id,
+            ...(typeof args.grep === 'string' && args.grep.trim() ? { grep: args.grep.trim() } : {}),
+            ...(Number.isFinite(args.since_ms) ? { sinceMs: args.since_ms } : {}),
+            ...(Number.isFinite(args.tail_bytes) ? { tailBytes: args.tail_bytes } : {}),
+            ...(typeof args.date === 'string' && args.date.trim() ? { date: args.date.trim() } : {}),
+        });
+        const payload = unwrapCommandPayload(result);
+        return JSON.stringify(payload, null, 2);
+    } catch (e: any) {
+        const failure = buildCoordinatorP2pRelayFailure(e, {
+            command: 'get_mesh_node_logs',
+            targetDaemonId: node.daemonId,
+            nodeId: args.node_id,
+        });
+        return JSON.stringify(failure, null, 2);
     }
 }
 

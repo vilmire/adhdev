@@ -342,6 +342,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_read_debug\` | Collect a daemon-side chat/parser debug bundle for a session |
 | \`mesh_task_history\` | Read the task ledger — dispatches, completions, failures. Use to understand what has been done before deciding next steps |
 | \`mesh_git_status\` | Check git status on a specific node |
+| \`mesh_read_node_logs\` | Fetch a remote node's daemon log tail directly over P2P (grep/since/byte-bounded, secrets redacted) — no session/PowerShell needed to debug a node's daemon |
 | \`mesh_fast_forward_node\` | Safely dry-run or explicitly execute an obvious clean fast-forward without launching an agent session |
 | \`mesh_checkpoint\` | Create a git checkpoint on a node |
 | \`mesh_approve\` | Approve/reject a pending agent action |
