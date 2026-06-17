@@ -1,5 +1,6 @@
 import * as os from 'os';
 import { ensureNodePtySpawnHelperPermissions } from './spawn-env.js';
+import { resolveWin32Executable } from './resolve-executable.js';
 
 let cachedPty: any | null | undefined;
 
@@ -119,7 +120,7 @@ export class NodePtyTransportFactory implements PtyTransportFactory {
         cwd = os.homedir();
       }
     }
-    const handle = pty.spawn(command, args, {
+    const handle = pty.spawn(resolveWin32Executable(command), args, {
       name: 'xterm-256color',
       cols: options.cols,
       rows: options.rows,

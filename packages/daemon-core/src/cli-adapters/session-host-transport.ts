@@ -6,6 +6,7 @@ import {
     type SessionHostRecord,
 } from '@adhdev/session-host-core';
 import { LOG } from '../logging/logger.js';
+import { resolveWin32Executable } from './resolve-executable.js';
 import type { PtyRuntimeMetadata, PtyRuntimeTransport, PtySpawnOptions, PtyTransportFactory } from './pty-transport.js';
 
 interface SessionHostPtyTransportFactoryOptions {
@@ -435,7 +436,7 @@ export class SessionHostPtyTransportFactory implements PtyTransportFactory {
     spawn(command: string, args: string[], spawnOptions: PtySpawnOptions): PtyRuntimeTransport {
         return new SessionHostRuntimeTransport({
             ...this.options,
-            command,
+            command: resolveWin32Executable(command),
             args,
             spawnOptions,
         });
