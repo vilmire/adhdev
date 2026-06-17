@@ -966,6 +966,26 @@ function finalizeMeshNodeStatus(args: {
     );
 }
 
+// Reads a positive integer timeout (ms) from an env var, clamped to [1s, 120s];
+// falls back to the default when unset or out of range. Lets slow cross-machine
+// peers (e.g. a TURN-relayed Windows daemon whose git_status RTT is 10-18s) be
+// tuned without a rebuild.
+function readMeshTimeoutEnvMs(name: string, defaultMs: number): number {
+    const raw = process.env[name]?.trim();
+    if (!raw) return defaultMs;
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 1_000 && parsed <= 120_000) return parsed;
+    return defaultMs;
+}
+
+// Direct-peer git_status probe timeout for the dashboard's requireDirectPeerTruth
+// bootstrap. The previous hard-coded 8s/12s were shorter than the real P2P
+// round-trip to slow (often TURN-relayed) peers, so such a node was permanently
+// marked unavailable and blocked the whole mesh graph. Default raised to 25s
+// (still under the P2P REQUEST_TIMEOUT of 30s) and made env-overridable.
+const MESH_DIRECT_PROBE_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_TIMEOUT_MS', 25_000);
+const MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS', 25_000);
+
 async function probeRemoteMeshGitStatus(args: {
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
     daemonId: string;
@@ -1057,7 +1077,7 @@ async function hydrateInlineMeshDirectTruth(args: {
                 dispatchMeshCommand: args.dispatchMeshCommand,
                 daemonId,
                 workspace,
-                timeoutMs: 8_000,
+                timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
             });
             if (remoteGit) {
                 recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
@@ -8574,7 +8594,7 @@ export class DaemonCommandRouter {
                                             dispatchMeshCommand: this.deps.dispatchMeshCommand,
                                             daemonId,
                                             workspace,
-                                            timeoutMs: 8000,
+                                            timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
                                         });
                                         if (remoteGit) {
                                             status.git = remoteGit;
@@ -8600,7 +8620,7 @@ export class DaemonCommandRouter {
                                                     dispatchMeshCommand: this.deps.dispatchMeshCommand,
                                                     daemonId,
                                                     workspace,
-                                                    timeoutMs: 12000,
+                                                    timeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
                                                 });
                                                 if (remoteGit) {
                                                     status.git = remoteGit;
