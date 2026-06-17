@@ -183,7 +183,23 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     useEffect(() => {
         mountedRef.current = true
         pendingGitRetryAttemptRef.current = 0
-        loadGraph(true)
+        // Open with held-state truth so the graph paints immediately: a default
+        // (non-refresh) mesh_status returns the daemon's inlineMeshCache without
+        // a blocking remote git_status fan-out, so one slow peer can't gate the
+        // dialog. The await below does not block the first paint — it runs after
+        // mount. Then kick a single non-blocking background refresh to pull fresh
+        // remote truth (stale-while-revalidate); since hasUsableGraphRef is set
+        // by the first load, the refresh shows the small refreshing indicator
+        // rather than the full "Loading live mesh status…" loader.
+        void (async () => {
+            await loadGraph(false)
+            if (!mountedRef.current) return
+            // Don't double up with the hasPendingDashboardMeshRefresh auto-retry
+            // loop (it already schedules loadGraph(true) when nodes are pending).
+            if (pendingGitRetryTimerRef.current === null && !loadInFlightRef.current) {
+                void loadGraph(true)
+            }
+        })()
         return () => {
             mountedRef.current = false
             cancelPendingGitRetry()
