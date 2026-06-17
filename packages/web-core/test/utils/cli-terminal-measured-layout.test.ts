@@ -90,12 +90,7 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(paneSource.includes('if (!force && seq > 0 && seededSnapshotSeqRef.current >= seq) return;')).toBe(true)
     expect(paneSource.includes('if (!force && seq === 0 && liveOutputStartedRef.current) return;')).toBe(true)
     expect(paneSource.includes('sendPtyResize(')).toBe(false)
-    // Dashboard terminals use `fixed` sizing: measure cols/rows once at mount,
-    // never re-observe the container. This avoids the wterm full-rebuild that a
-    // resize round-trip triggers on every container size change (the scrollback
-    // hang). The xterm renderer treats `fixed` like `measured` (no fit/observer).
-    expect(paneSource.includes('sizingMode="fixed"')).toBe(true)
-    expect(paneSource.includes('sizingMode="measured"')).toBe(false)
+    expect(paneSource.includes('sizingMode="measured"')).toBe(true)
     expect(compatSource.includes('_options?: { sinceSeq?: number; force?: boolean }')).toBe(true)
   })
 

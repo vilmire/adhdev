@@ -10,12 +10,6 @@ const localWebCoreCss = fileURLToPath(new URL('../web-core/src/index.css', impor
 const localWebCoreSupported = fileURLToPath(new URL('../web-core/src/constants/supported.ts', import.meta.url))
 const localWebCoreRoot = fileURLToPath(new URL('../web-core', import.meta.url))
 const workspaceRoot = searchForWorkspaceRoot(process.cwd())
-// When developed inside the parent monorepo (as a git submodule), hoisted deps
-// like @wterm/ghostty's WASM live in the repo-root node_modules, one level above
-// the oss workspace root. Allow ONLY that node_modules dir (not the whole parent
-// monorepo — that would expose proprietary packages/ and secrets via the dev
-// server) so Vite can serve the hoisted WASM asset without a 403.
-const repoNodeModules = fileURLToPath(new URL('../../../node_modules', import.meta.url))
 
 export default defineConfig({
     plugins: [react(), tailwindcss()],
@@ -28,13 +22,6 @@ export default defineConfig({
     },
     define: {
         __APP_VERSION__: JSON.stringify(packageJson.version),
-    },
-    optimizeDeps: {
-        // Don't pre-bundle the opt-in wterm renderer packages. @wterm/ghostty
-        // loads its WASM via `new URL('../wasm/...', import.meta.url)`; if Vite
-        // rewrites the module into .vite/deps that relative URL breaks and the
-        // fetch falls through to the SPA index.html (WASM magic-word error).
-        exclude: ['@wterm/ghostty', '@wterm/dom', '@wterm/core'],
     },
     build: {
         rollupOptions: {
@@ -56,15 +43,6 @@ export default defineConfig({
                 id === 'module',
             output: {
                 manualChunks(id) {
-                    // The opt-in @wterm/ghostty renderer is dynamically imported
-                    // (React.lazy) so its ~428KB WASM + JS never load unless the
-                    // user selects it. Keep wterm-view and the @wterm/* packages
-                    // OUT of the eager 'terminal' chunk — forcing them in here
-                    // would defeat that code-split and load them for everyone.
-                    if (
-                        id.includes('terminal-render-web/src/wterm-view') ||
-                        id.includes('@wterm/')
-                    ) return 'terminal-wterm'
                     if (
                         id.includes('packages/terminal-render-web') ||
                         id.includes('ghostty-web') ||
@@ -80,7 +58,7 @@ export default defineConfig({
     server: {
         port: 3000,
         fs: {
-            allow: [workspaceRoot, localWebCoreRoot, repoNodeModules],
+            allow: [workspaceRoot, localWebCoreRoot],
         },
         proxy: {
             '/api': 'http://localhost:3847',

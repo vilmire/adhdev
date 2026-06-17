@@ -172,13 +172,6 @@ export {
     setMobileDashboardMode,
 } from './components/settings/MobileDashboardModeSection'
 export type { MobileDashboardMode } from './components/settings/MobileDashboardModeSection'
-export {
-    TerminalRendererSection,
-    getTerminalRendererBackend,
-    setTerminalRendererBackend,
-    TERMINAL_RENDERER_KEY,
-} from './components/settings/TerminalRendererSection'
-export type { TerminalRendererBackend } from './components/settings/TerminalRendererSection'
 
 // ── Icons ──
 export {

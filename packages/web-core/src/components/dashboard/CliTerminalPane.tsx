@@ -729,14 +729,7 @@ export default function CliTerminalPane({
                             <CliTerminal
                                 ref={terminalRef}
                                 readOnly={!runtimeReady || !isVisible}
-                                // Dashboard terminals render in a fixed-size box; `fixed` measures
-                                // cols/rows once at mount and never re-observes the container. This
-                                // avoids the wterm full-rebuild (renderer.setup() clears the DOM and
-                                // replays the entire scrollback) that a resize round-trip triggers on
-                                // every container size change — the source of the scrollback hang. The
-                                // xterm renderer treats `fixed` identically to `measured` (no fit, no
-                                // observer), so it is unaffected.
-                                sizingMode="fixed"
+                                sizingMode="measured"
                                 onViewportMetrics={setTerminalIntrinsicViewport}
                                 onScrollMetrics={setTerminalScrollMetrics}
                                 onInput={(data) => {
