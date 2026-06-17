@@ -169,6 +169,34 @@ export function buildPinnedGlobalInstallCommand(options: {
   };
 }
 
+/**
+ * Build an env for the `npm install` child whose PATH is prefixed with the
+ * directory of the node binary currently running this helper.
+ *
+ * npm runs lifecycle scripts (e.g. adhdev's `preinstall` Node-version guard) by
+ * spawning a bare `node`, which resolves from PATH — NOT from the node that runs
+ * npm. On Windows a machine can have several node installs (e.g. a standalone
+ * `C:\Program Files\nodejs` ahead of an nvm-managed node on PATH). Without this,
+ * the guard sees the wrong (unsupported) node version and aborts the upgrade,
+ * even though npm/adhdev actually run under a supported node. Pinning the
+ * running node's dir to the front of PATH makes lifecycle scripts use the same
+ * node as the install itself.
+ */
+function buildInstallEnvWithNodeOnPath(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  // The Node-version guard this works around only fires on Windows, so scope the
+  // PATH rewrite to win32 — POSIX keeps its env untouched.
+  if (process.platform !== 'win32') return { ...baseEnv };
+  const nodeBinDir = path.dirname(process.execPath);
+  if (!nodeBinDir) return { ...baseEnv };
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  // Windows env keys are case-insensitive and conventionally spelled `Path`;
+  // prepend to the existing key (whatever its case) to avoid creating a dupe.
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+  const current = env[pathKey] || '';
+  env[pathKey] = current ? `${nodeBinDir};${current}` : nodeBinDir;
+  return env;
+}
+
 export function getNpmExecOptions(platform: NodeJS.Platform = process.platform): NpmExecOptions {
   if (platform === 'win32') {
     return { shell: false, windowsHide: true };
@@ -375,6 +403,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
       encoding: 'utf8',
       stdio: 'pipe',
       maxBuffer: 20 * 1024 * 1024,
+      env: buildInstallEnvWithNodeOnPath(),
       ...installCommand.execOptions,
     },
   );
