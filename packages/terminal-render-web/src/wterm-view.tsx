@@ -35,7 +35,7 @@ import {
 // matches the standard `declare module '*.css'` ambient and type-checks in
 // strict consumers (web-cloud's `tsc -b`) without a custom module declaration.
 import '@wterm/dom/src/terminal.css';
-import { WTerm, type TerminalCore } from '@wterm/dom';
+import { WTerm, type TerminalCore, type CellData } from '@wterm/dom';
 import { GhosttyCore } from '@wterm/ghostty';
 import { sanitizeTerminalInputForProvider } from './input-sanitizer';
 import type {
@@ -47,6 +47,21 @@ const DEFAULT_SESSION_HOST_COLS = 80;
 const DEFAULT_SESSION_HOST_ROWS = 32;
 const TERMINAL_CHROME_PADDING_Y = 8;
 const TERMINAL_CHROME_PADDING_X = 14;
+
+// Scrollback cap for the wterm (libghostty WASM + @wterm/dom) renderer.
+//
+// @wterm/dom has NO viewport virtualization: its syncScrollback() materializes
+// the ENTIRE accumulated scrollback into real DOM <div> rows in a single rAF,
+// reading every cell through our catppuccin core wrapper. With a large cap (the
+// xterm renderer uses ~50000 rows) a "Load older terminal output" replay or a
+// burst of output produces tens of thousands of DOM rows at once and freezes the
+// main thread. xterm.js virtualizes its viewport so it tolerates a big number;
+// wterm cannot. Until the external renderer gains virtual scrolling, bound the
+// scrollback so the worst-case DOM materialization stays small.
+//
+// UX trade-off: less scrollback history is retained in the wterm view than in
+// xterm. Acceptable because wterm is an opt-in beta renderer (default is xterm).
+const WTERM_SCROLLBACK_LIMIT = 3000;
 
 // RIS — full reset (clears screen + scrollback, exits alt-screen). Used to
 // emulate xterm's clear()/reset() which @wterm/dom does not expose directly.
@@ -111,8 +126,41 @@ const GHOSTTY_TO_CATPPUCCIN: Record<number, number> = {
   0x666666: 0x585b70, 0xd54e53: 0xf38ba8, 0xb9ca4a: 0xa6e3a1, 0xe7c547: 0xf9e2af,
   0x7aa6da: 0x89b4fa, 0xc397d8: 0xcba6f7, 0x70c0b1: 0x94e2d5, 0xeaeaea: 0xa6adc8,
 };
-const remapRgb = (v: number | undefined): number | undefined =>
-  v === undefined ? v : (GHOSTTY_TO_CATPPUCCIN[v >>> 0] ?? v);
+// remapRgb is on the per-cell hot path (every cell of every materialized
+// scrollback row passes through it). Memoize the lookup so repeated colors —
+// which dominate real terminal output — are a single Map hit, not a fresh
+// object-property lookup + `??` each time. The remap domain is tiny (≤16 ghostty
+// palette entries plus pass-throughs), so the cache stays bounded in practice.
+const remapCache = new Map<number, number>();
+const remapRgb = (v: number | undefined): number | undefined => {
+  if (v === undefined) return v;
+  const key = v >>> 0;
+  const cached = remapCache.get(key);
+  if (cached !== undefined) return cached;
+  const mapped = GHOSTTY_TO_CATPPUCCIN[key] ?? key;
+  remapCache.set(key, mapped);
+  return mapped;
+};
+
+// Remap a freshly-returned cell's truecolor RGB in place. The ghostty core hands
+// back a NEW CellData object on every getCell/getScrollbackCell call for
+// non-blank cells, so mutating it is safe and avoids the per-cell `{...cell}`
+// spread allocation. Crucially, when the cell carries no truecolor RGB (the
+// common case — index-color cells themed via the CSS vars) we return it
+// untouched with zero allocation and zero work, which is the bulk of the
+// scrollback-materialization cost. (Blank cells come back as a shared singleton
+// with no fgRgb/bgRgb, so they hit this no-op fast path and are never mutated.)
+function remapCellInPlace(cell: CellData): CellData {
+  if (cell.fgRgb !== undefined) {
+    const m = remapRgb(cell.fgRgb);
+    if (m !== cell.fgRgb) cell.fgRgb = m;
+  }
+  if (cell.bgRgb !== undefined) {
+    const m = remapRgb(cell.bgRgb);
+    if (m !== cell.bgRgb) cell.bgRgb = m;
+  }
+  return cell;
+}
 
 /**
  * Wrap a TerminalCore so cell reads remap ghostty's baked palette RGB to the
@@ -122,21 +170,16 @@ const remapRgb = (v: number | undefined): number | undefined =>
 function withCatppuccinPalette(core: TerminalCore): TerminalCore {
   // Use a JS Proxy so `this` stays bound to the real core (its methods touch
   // private WASM-pointer fields), while only getCell/getScrollbackCell return
-  // values are post-processed.
+  // values are post-processed. The wrapped methods remap in place (no spread)
+  // and short-circuit cells without truecolor RGB, keeping the per-cell cost
+  // near-zero during large scrollback materialization.
+  const getCell = (row: number, col: number) => remapCellInPlace(core.getCell(row, col));
+  const getScrollbackCell = (offset: number, col: number) =>
+    remapCellInPlace(core.getScrollbackCell(offset, col));
   return new Proxy(core, {
     get(target, prop, receiver) {
-      if (prop === 'getCell') {
-        return (row: number, col: number) => {
-          const cell = target.getCell(row, col);
-          return { ...cell, fgRgb: remapRgb(cell.fgRgb), bgRgb: remapRgb(cell.bgRgb) };
-        };
-      }
-      if (prop === 'getScrollbackCell') {
-        return (offset: number, col: number) => {
-          const cell = target.getScrollbackCell(offset, col);
-          return { ...cell, fgRgb: remapRgb(cell.fgRgb), bgRgb: remapRgb(cell.bgRgb) };
-        };
-      }
+      if (prop === 'getCell') return getCell;
+      if (prop === 'getScrollbackCell') return getScrollbackCell;
       const value = Reflect.get(target, prop, receiver);
       return typeof value === 'function' ? value.bind(target) : value;
     },
@@ -381,7 +424,7 @@ export const WtermTerminalView = forwardRef<TerminalRendererHandle, GhosttyTermi
       async function init(): Promise<void> {
         if (!containerRef.current) return;
         try {
-          const core = await loadGhosttyCore(50000);
+          const core = await loadGhosttyCore(WTERM_SCROLLBACK_LIMIT);
           if (cancelled || !containerRef.current) return;
 
           wt = new WTerm(containerRef.current, {
