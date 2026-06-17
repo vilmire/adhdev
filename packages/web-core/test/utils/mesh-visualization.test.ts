@@ -1,5 +1,207 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshGraph, isMeshGraphStructurallyComplete } from '../../src/utils/mesh-visualization'
+import { buildMeshGraph, formatMeshConnectionTransport, isMeshGraphStructurallyComplete } from '../../src/utils/mesh-visualization'
+
+/** Minimal two-node mesh: a self coordinator + one remote peer with the given connection. */
+function buildConnectionGraph(remoteConnection: Record<string, unknown> | undefined) {
+    return buildMeshGraph({
+        meshId: 'mesh_conn',
+        meshName: 'Conn Mesh',
+        repoIdentity: 'repo',
+        refreshedAt: '2026-06-18T00:00:00.000Z',
+        nodes: [
+            {
+                nodeId: 'node_coordinator',
+                machineLabel: 'Coordinator',
+                workspace: '/repo/main',
+                daemonId: 'daemon_coord',
+                health: 'online',
+                providers: [],
+                activeSessions: [],
+                git: {
+                    isGitRepo: true,
+                    branch: 'main',
+                    upstream: 'origin/main',
+                    upstreamStatus: 'fresh',
+                    ahead: 0,
+                    behind: 0,
+                    staged: 0,
+                    modified: 0,
+                    untracked: 0,
+                    deleted: 0,
+                    renamed: 0,
+                    hasConflicts: false,
+                },
+                connection: {
+                    perspective: 'selected_coordinator',
+                    source: 'mesh_peer_status',
+                    state: 'self',
+                    transport: 'local',
+                    reported: true,
+                },
+            },
+            {
+                nodeId: 'node_remote',
+                machineLabel: 'Windows peer',
+                workspace: '/repo/main',
+                daemonId: 'daemon_remote',
+                health: 'online',
+                providers: [],
+                activeSessions: [],
+                git: {
+                    isGitRepo: true,
+                    branch: 'main',
+                    upstream: 'origin/main',
+                    upstreamStatus: 'fresh',
+                    ahead: 0,
+                    behind: 0,
+                    staged: 0,
+                    modified: 0,
+                    untracked: 0,
+                    deleted: 0,
+                    renamed: 0,
+                    hasConflicts: false,
+                },
+                connection: remoteConnection,
+            },
+        ],
+    } as any)
+}
+
+describe('mesh graph P2P connection projection', () => {
+    it('propagates relay transport + state + reason onto the remote MeshGraphNode', () => {
+        const graph = buildConnectionGraph({
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'connected',
+            transport: 'relay',
+            reported: true,
+            reason: 'TURN relay candidate pair',
+        })
+        const remote = graph.nodes.find(n => n.id === 'node_remote')!
+        expect(remote.connectionTransport).toBe('relay')
+        expect(remote.connectionState).toBe('connected')
+        expect(remote.connectionReason).toBe('TURN relay candidate pair')
+        expect(remote.connectionReported).toBe(true)
+        expect(remote.connectionRttMs).toBeNull()
+        expect(formatMeshConnectionTransport(remote)).toBe('relay')
+    })
+
+    it('propagates direct transport and an optional rttMs', () => {
+        const graph = buildConnectionGraph({
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'connected',
+            transport: 'direct',
+            reported: true,
+            rttMs: 18.4,
+        })
+        const remote = graph.nodes.find(n => n.id === 'node_remote')!
+        expect(remote.connectionTransport).toBe('direct')
+        expect(remote.connectionRttMs).toBeCloseTo(18.4)
+    })
+
+    it('marks the coordinator node as local/self and never draws a self link', () => {
+        const graph = buildConnectionGraph({
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'connected',
+            transport: 'direct',
+            reported: true,
+        })
+        const coordinator = graph.nodes.find(n => n.id === 'node_coordinator')!
+        expect(coordinator.connectionState).toBe('self')
+        expect(coordinator.connectionTransport).toBe('local')
+        const selfLink = graph.edges.find(e => e.type === 'coordinatorLink' && e.target === 'node_coordinator')
+        expect(selfLink).toBeUndefined()
+    })
+
+    it('creates a directed coordinatorLink edge from coordinator to a reported remote node, labelled by transport', () => {
+        const graph = buildConnectionGraph({
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'connected',
+            transport: 'relay',
+            reported: true,
+            rttMs: 240,
+        })
+        const link = graph.edges.find(e => e.type === 'coordinatorLink' && e.target === 'node_remote')
+        expect(link).toBeDefined()
+        expect(link!.source).toBe('node_coordinator')
+        expect(link!.direction).toBe('directed')
+        expect(link!.label).toBe('relay · 240ms')
+    })
+
+    it('does not draw a coordinatorLink for a node with no reported connection', () => {
+        const graph = buildConnectionGraph(undefined)
+        const remote = graph.nodes.find(n => n.id === 'node_remote')!
+        expect(remote.connectionTransport).toBeNull()
+        expect(remote.connectionReported).toBe(false)
+        const link = graph.edges.find(e => e.type === 'coordinatorLink')
+        expect(link).toBeUndefined()
+    })
+
+    it('still draws a coordinatorLink (down state) when telemetry is reported but disconnected', () => {
+        const graph = buildConnectionGraph({
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'disconnected',
+            transport: 'unknown',
+            reported: true,
+            reason: 'ICE connection lost',
+        })
+        const remote = graph.nodes.find(n => n.id === 'node_remote')!
+        expect(formatMeshConnectionTransport(remote)).toBe('disconnected')
+        const link = graph.edges.find(e => e.type === 'coordinatorLink' && e.target === 'node_remote')
+        expect(link).toBeDefined()
+        expect(link!.label).toBe('disconnected')
+    })
+
+    it('inherits parent transport onto synthetic submodule child nodes but draws no submodule coordinatorLink', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_sub_conn',
+            meshName: 'Sub Conn',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-06-18T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_coordinator',
+                    machineLabel: 'Coordinator',
+                    workspace: '/repo/main',
+                    daemonId: 'daemon_coord',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: {
+                        isGitRepo: true, branch: 'main', upstream: 'origin/main', upstreamStatus: 'fresh',
+                        ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, deleted: 0, renamed: 0, hasConflicts: false,
+                    },
+                    connection: { perspective: 'selected_coordinator', source: 'mesh_peer_status', state: 'self', transport: 'local', reported: true },
+                },
+                {
+                    nodeId: 'node_remote',
+                    machineLabel: 'Remote',
+                    workspace: '/repo/main',
+                    daemonId: 'daemon_remote',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: {
+                        isGitRepo: true, branch: 'main', upstream: 'origin/main', upstreamStatus: 'fresh',
+                        ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, deleted: 0, renamed: 0, hasConflicts: false,
+                        submodules: [{ path: 'oss', commit: '1111111', repoPath: '/repo/main/oss', dirty: false, outOfSync: false }],
+                    },
+                    connection: { perspective: 'selected_coordinator', source: 'mesh_peer_status', state: 'connected', transport: 'relay', reported: true },
+                },
+            ],
+        } as any)
+        const submoduleNode = graph.nodes.find(n => n.type === 'submoduleNode')!
+        expect(submoduleNode.connectionTransport).toBe('relay')
+        const coordinatorLinks = graph.edges.filter(e => e.type === 'coordinatorLink')
+        // Only one coordinatorLink — to the remote worktree node, not its submodule child.
+        expect(coordinatorLinks).toHaveLength(1)
+        expect(coordinatorLinks[0].target).toBe('node_remote')
+    })
+})
 
 function baseGit(branch: string) {
     return {

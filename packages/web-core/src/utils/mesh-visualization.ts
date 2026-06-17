@@ -7,13 +7,15 @@ import type {
     GitRepoStatus,
     RepoMeshNodeHealth,
     RepoMeshNodeStatus,
+    RepoMeshPeerConnectionState,
+    RepoMeshPeerConnectionTransport,
     RepoMeshSessionStatus,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
 import { canonicalizeRepoMeshStatus, repoMeshNodeHasLiveGitEvidence } from './repo-mesh-status'
 
 export type MeshGraphNodeType = 'defaultBranchNode' | 'worktreeNode' | 'orphanNode' | 'submoduleNode'
-export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink' | 'cloneLink'
+export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink' | 'cloneLink' | 'coordinatorLink'
 
 type MeshGraphSubmoduleStatus = NonNullable<GitRepoStatus['submodules']>[number]
 
@@ -67,6 +69,21 @@ export interface MeshGraphNode {
     machineId: string | null
     machineLabel: string | null
     locality: 'local' | 'remote' | 'unknown'
+    /**
+     * P2P transport the selected coordinator uses to reach this node, mapped from
+     * `node.connection.transport`. 'local' is the coordinator (self) node, 'direct'
+     * is a host/srflx WebRTC path, 'relay' is TURN-relayed (slow), 'unknown' when no
+     * live peer telemetry has been reported yet.
+     */
+    connectionTransport: RepoMeshPeerConnectionTransport | null
+    /** Live WebRTC connection state from the selected coordinator's perspective. */
+    connectionState: RepoMeshPeerConnectionState | null
+    /** Human-readable reason / note attached to the reported connection, if any. */
+    connectionReason: string | null
+    /** True when the coordinator reported live peer telemetry (vs. a not_reported fallback). */
+    connectionReported: boolean
+    /** Round-trip time in ms, when the coordinator collected it via getStats(). */
+    connectionRttMs: number | null
     health: RepoMeshNodeHealth
     ahead: number
     behind: number
@@ -173,6 +190,68 @@ function inferNodeLocality(node: RepoMeshNodeStatus): MeshGraphNode['locality'] 
     if (node.connection?.transport === 'direct' || node.connection?.transport === 'relay') return 'remote'
     if (readNodeDaemonId(node) || readNodeMachineId(node)) return 'remote'
     return 'unknown'
+}
+
+interface ProjectedNodeConnection {
+    connectionTransport: MeshGraphNode['connectionTransport']
+    connectionState: MeshGraphNode['connectionState']
+    connectionReason: MeshGraphNode['connectionReason']
+    connectionReported: boolean
+    connectionRttMs: number | null
+}
+
+/**
+ * Project the coordinator-reported `node.connection` onto the flat graph node
+ * fields the UI consumes (transport chip, link edge, RTT). Read-only: the daemon's
+ * mesh_peer_status is the source of truth; we just surface transport/state/reason/RTT
+ * without reinterpreting them. `rttMs` is optional and only present once the
+ * coordinator collects WebRTC getStats() — older daemons omit it.
+ */
+function projectNodeConnection(node: RepoMeshNodeStatus): ProjectedNodeConnection {
+    const connection = node.connection
+    if (!connection) {
+        return {
+            connectionTransport: null,
+            connectionState: null,
+            connectionReason: null,
+            connectionReported: false,
+            connectionRttMs: null,
+        }
+    }
+    const rawRtt = (connection as { rttMs?: unknown }).rttMs
+    const rttMs = typeof rawRtt === 'number' && Number.isFinite(rawRtt) && rawRtt >= 0 ? rawRtt : null
+    return {
+        connectionTransport: connection.transport ?? null,
+        connectionState: connection.state ?? null,
+        connectionReason: typeof connection.reason === 'string' && connection.reason.trim() ? connection.reason.trim() : null,
+        connectionReported: connection.reported === true,
+        connectionRttMs: rttMs,
+    }
+}
+
+/**
+ * Short transport label for chips/edges: 'direct' | 'relay' | 'local' | the raw
+ * state when no usable transport is reported ('connecting', 'disconnected', …),
+ * or null when there is nothing meaningful to show.
+ */
+export function formatMeshConnectionTransport(node: Pick<MeshGraphNode, 'connectionTransport' | 'connectionState'>): string | null {
+    const transport = node.connectionTransport
+    if (transport === 'direct' || transport === 'relay' || transport === 'local') return transport
+    const state = node.connectionState
+    if (state === 'connecting') return 'connecting'
+    if (state === 'disconnected') return 'disconnected'
+    if (state === 'failed') return 'failed'
+    if (state === 'closed') return 'closed'
+    return null
+}
+
+/** Edge label for a coordinator→peer link: transport + RTT when available. */
+function buildCoordinatorLinkLabel(node: MeshGraphNode): string {
+    const transport = formatMeshConnectionTransport(node) ?? 'unknown'
+    if (typeof node.connectionRttMs === 'number') {
+        return `${transport} · ${Math.round(node.connectionRttMs)}ms`
+    }
+    return transport
 }
 
 function hasLiveGitEvidence(node: RepoMeshNodeStatus): boolean {
@@ -626,6 +705,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             : null
         const sessionDetails = readNodeSessionDetails(nodeStatus)
         const dominantRefineJob = pickDominantRefineJob(refineJobsByNode.get(nodeStatus.nodeId) ?? [])
+        const projectedConnection = projectNodeConnection(nodeStatus)
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
@@ -638,6 +718,11 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             machineId: readNodeMachineId(nodeStatus),
             machineLabel: nodeStatus.machineLabel || null,
             locality: inferNodeLocality(nodeStatus),
+            connectionTransport: projectedConnection.connectionTransport,
+            connectionState: projectedConnection.connectionState,
+            connectionReason: projectedConnection.connectionReason,
+            connectionReported: projectedConnection.connectionReported,
+            connectionRttMs: projectedConnection.connectionRttMs,
             health: pickDominantHealth([nodeStatus.health, submoduleHealth]),
             ahead: git?.ahead ?? 0,
             behind: git?.behind ?? 0,
@@ -689,6 +774,11 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 machineId: graphNode.machineId,
                 machineLabel: graphNode.machineLabel,
                 locality: graphNode.locality,
+                connectionTransport: graphNode.connectionTransport,
+                connectionState: graphNode.connectionState,
+                connectionReason: graphNode.connectionReason,
+                connectionReported: graphNode.connectionReported,
+                connectionRttMs: graphNode.connectionRttMs,
                 health: getSubmoduleHealth(submodule),
                 ahead: 0,
                 behind: 0,
@@ -767,6 +857,11 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             machineId: null,
             machineLabel: 'default branch',
             locality: 'unknown',
+            connectionTransport: null,
+            connectionState: null,
+            connectionReason: null,
+            connectionReported: false,
+            connectionRttMs: null,
             health: pickDominantHealth(branchNodes.map(node => node.health)),
             ahead: 0,
             behind: 0,
@@ -858,6 +953,28 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             label: branchLabel ? `cloned · ${branchLabel}` : 'cloned',
             direction: 'directed',
         })
+    }
+
+    // Coordinator transport edges: the selected coordinator (the `self` node) reaches
+    // each remote daemon over a direct or TURN-relayed P2P link. Draw one directed
+    // edge per remote node so the operator can see at a glance which peer is on a slow
+    // relay path. The transport/state is daemon-reported truth — we only project it.
+    const coordinatorNode = nodes.find(node => node.type !== 'submoduleNode' && node.connectionState === 'self')
+    if (coordinatorNode) {
+        for (const node of nodes) {
+            if (node.id === coordinatorNode.id) continue
+            if (node.type === 'submoduleNode' || node.type === 'defaultBranchNode') continue
+            if (!node.connectionReported && node.connectionTransport === null) continue
+            if (node.connectionState === 'self') continue
+            edges.push({
+                id: `coord_${coordinatorNode.id}--${node.id}`,
+                source: coordinatorNode.id,
+                target: node.id,
+                type: 'coordinatorLink',
+                label: buildCoordinatorLinkLabel(node),
+                direction: 'directed',
+            })
+        }
     }
 
     const visibleGraphNodes = nodes.filter(node => node.type !== 'defaultBranchNode')
