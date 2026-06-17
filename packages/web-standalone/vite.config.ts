@@ -12,9 +12,10 @@ const localWebCoreRoot = fileURLToPath(new URL('../web-core', import.meta.url))
 const workspaceRoot = searchForWorkspaceRoot(process.cwd())
 // When developed inside the parent monorepo (as a git submodule), hoisted deps
 // like @wterm/ghostty's WASM live in the repo-root node_modules, one level above
-// the oss workspace root. Allow it so Vite can serve those assets (otherwise the
-// ghostty WASM ?url import 403s and the wterm renderer fails to load).
-const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
+// the oss workspace root. Allow ONLY that node_modules dir (not the whole parent
+// monorepo — that would expose proprietary packages/ and secrets via the dev
+// server) so Vite can serve the hoisted WASM asset without a 403.
+const repoNodeModules = fileURLToPath(new URL('../../../node_modules', import.meta.url))
 
 export default defineConfig({
     plugins: [react(), tailwindcss()],
@@ -79,7 +80,7 @@ export default defineConfig({
     server: {
         port: 3000,
         fs: {
-            allow: [workspaceRoot, localWebCoreRoot, repoRoot],
+            allow: [workspaceRoot, localWebCoreRoot, repoNodeModules],
         },
         proxy: {
             '/api': 'http://localhost:3847',
