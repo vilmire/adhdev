@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import type {
     MeshMissionStatus,
     MeshMissionSummary,
+    MeshMissionSlimSummary,
     RepoMeshLedgerEntryStatus,
     RepoMeshLedgerSummaryStatus,
     RepoMeshNodeStatus,
@@ -9,6 +10,13 @@ import type {
     RepoMeshQueueTask,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
+
+/**
+ * Mission summary as it arrives on the wire: compact status calls send the slim
+ * shape (`goalPreview`/`goalTruncated`, no `goal`), verbose sends the full
+ * `goal`. Both may carry an optional `stats` rollup. Read `goal ?? goalPreview`.
+ */
+type MeshMissionDisplay = MeshMissionSummary | MeshMissionSlimSummary
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { canonicalizeRepoMeshStatus } from '../../utils/repo-mesh-status'
@@ -153,6 +161,22 @@ function relativeTime(iso: string | null | undefined): string | null {
     return `${Math.floor(hours / 24)}d ago`
 }
 
+/** Human-readable duration from a millisecond span, e.g. 83000 → "1m 23s". */
+function formatDuration(ms: number | null | undefined): string | null {
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return null
+    if (ms < 1000) return `${Math.round(ms)}ms`
+    const totalSeconds = Math.round(ms / 1000)
+    const seconds = totalSeconds % 60
+    const totalMinutes = Math.floor(totalSeconds / 60)
+    const minutes = totalMinutes % 60
+    const hours = Math.floor(totalMinutes / 60)
+    const parts: string[] = []
+    if (hours > 0) parts.push(`${hours}h`)
+    if (minutes > 0) parts.push(`${minutes}m`)
+    if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`)
+    return parts.join(' ')
+}
+
 function ledgerKindLabel(kind: string): string {
     return kind.replace(/[_-]+/g, ' ')
 }
@@ -176,7 +200,7 @@ function payloadSummary(payload: Record<string, unknown> | undefined): string | 
 // ── detail modal selection ───────────────────────────────────────────────────
 
 type DetailSelection =
-    | { kind: 'mission'; mission: MeshMissionSummary }
+    | { kind: 'mission'; mission: MeshMissionDisplay }
     | { kind: 'ledger'; entry: RepoMeshLedgerEntryStatus }
     | { kind: 'queue'; task: RepoMeshQueueTask }
     | { kind: 'session'; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }
@@ -441,16 +465,27 @@ function DetailModal({ meshTheme, detail, onClose }: {
     )
 }
 
-function MissionDetail({ meshTheme, mission }: { meshTheme: MeshGraphTheme; mission: MeshMissionSummary }) {
+function MissionDetail({ meshTheme, mission }: { meshTheme: MeshGraphTheme; mission: MeshMissionDisplay }) {
     const t = mission.tasks
+    // Compact (slim) status payloads send `goalPreview`/`goalTruncated` instead of
+    // the full `goal`, so the previous `mission.goal`-only read rendered blank.
+    const goalText = ('goal' in mission && typeof mission.goal === 'string' && mission.goal)
+        ? mission.goal
+        : ('goalPreview' in mission ? mission.goalPreview : '')
+    const goalTruncated = 'goalTruncated' in mission ? mission.goalTruncated === true : false
+    const stats = mission.stats ?? null
+    const incompleteCount = stats?.incompleteTaskIds?.length ?? 0
     return (
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={mission.status} tone={missionStatusTone(mission.status)} />
                 <StatusBadge meshTheme={meshTheme} label={`${t.total} tasks`} tone="muted" />
             </div>
-            {mission.goal && (
-                <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{mission.goal}</div>
+            {goalText && (
+                <div className={`max-h-64 overflow-y-auto whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>
+                    {goalText}
+                    {goalTruncated && <span className={meshTheme.textMuted}> … (truncated)</span>}
+                </div>
             )}
             <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
                 <StatTile meshTheme={meshTheme} label="Completed" value={t.completed} tone="emerald" />
@@ -460,11 +495,34 @@ function MissionDetail({ meshTheme, mission }: { meshTheme: MeshGraphTheme; miss
                 <StatTile meshTheme={meshTheme} label="Blocked" value={t.blocked} tone={t.blocked > 0 ? 'amber' : undefined} />
                 <StatTile meshTheme={meshTheme} label="Cancelled" value={t.cancelled} tone="muted" />
             </div>
+            {stats && (
+                <div className="grid grid-cols-3 gap-1.5">
+                    <StatTile meshTheme={meshTheme} label="Wall clock" value={formatDuration(stats.wallClockMs) ?? '—'} />
+                    <StatTile meshTheme={meshTheme} label="Total runtime" value={formatDuration(stats.totalDurationMs) ?? '—'} />
+                    <StatTile meshTheme={meshTheme} label="Retries" value={stats.retries} tone={stats.retries > 0 ? 'amber' : undefined} />
+                </div>
+            )}
             <div className="grid gap-1.5 text-xs">
                 <ModalRow meshTheme={meshTheme} label="Mission id" value={mission.id} />
                 <ModalRow meshTheme={meshTheme} label="Created" value={relativeTime(mission.createdAt) ?? mission.createdAt} />
                 <ModalRow meshTheme={meshTheme} label="Updated" value={relativeTime(mission.updatedAt) ?? mission.updatedAt} />
                 {t.lastActivityAt && <ModalRow meshTheme={meshTheme} label="Last task activity" value={relativeTime(t.lastActivityAt) ?? t.lastActivityAt} />}
+                {incompleteCount > 0 && stats && (
+                    <ModalRow
+                        meshTheme={meshTheme}
+                        label="Incomplete evidence"
+                        value={
+                            <details>
+                                <summary className="cursor-pointer select-none">{incompleteCount} task{incompleteCount === 1 ? '' : 's'}</summary>
+                                <div className="mt-1 flex flex-col gap-0.5 break-all">
+                                    {stats.incompleteTaskIds.map(id => (
+                                        <span key={id} className={`font-mono text-[10px] ${meshTheme.textMuted}`}>{id}</span>
+                                    ))}
+                                </div>
+                            </details>
+                        }
+                    />
+                )}
             </div>
         </div>
     )
@@ -556,7 +614,7 @@ function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme
 
 function MissionRow({ meshTheme, mission, onSelect }: {
     meshTheme: MeshGraphTheme
-    mission: MeshMissionSummary
+    mission: MeshMissionDisplay
     onSelect: () => void
 }) {
     const t = mission.tasks
@@ -573,10 +631,10 @@ function MissionRow({ meshTheme, mission, onSelect }: {
 
 function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionField, onSelect }: {
     meshTheme: MeshGraphTheme
-    liveMissions: MeshMissionSummary[]
-    historyMissions: MeshMissionSummary[]
+    liveMissions: MeshMissionDisplay[]
+    historyMissions: MeshMissionDisplay[]
     hasMissionField: boolean
-    onSelect: (mission: MeshMissionSummary) => void
+    onSelect: (mission: MeshMissionDisplay) => void
 }) {
     const [showHistory, setShowHistory] = useState(false)
     const dk = meshTheme.isDark

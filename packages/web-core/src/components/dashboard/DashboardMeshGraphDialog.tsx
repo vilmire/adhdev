@@ -281,7 +281,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             className="btn btn-secondary btn-sm rounded-xl px-3.5"
                             title="Refresh live mesh graph"
                         >
-                            {loading || refreshing ? 'Refreshing...' : 'Refresh'}
+                            {loading || refreshing ? 'Refreshing…' : 'Refresh'}
                         </button>
                         <button
                             type="button"
