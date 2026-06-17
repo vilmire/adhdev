@@ -21,7 +21,7 @@ import type {
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
 } from '../repo-mesh-types.js';
-import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
+import { DEFAULT_MESH_POLICY, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
 // ─── Persistence ────────────────────────────────
@@ -117,6 +117,15 @@ function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMe
     }
     if (!SPAWNED_SESSION_VISIBILITY_MODES.has(String(policy.spawnedSessionVisibility))) {
         policy.spawnedSessionVisibility = 'visible';
+    }
+    // Load-balancing: normalize the scheduling strategy so an invalid/blank value
+    // falls back to 'first_eligible' (strict no-change). Only persist the field when
+    // it is explicitly a non-default value to keep existing meshes.json untouched.
+    const normalizedStrategy = normalizeMeshSchedulingStrategy(policy.schedulingStrategy);
+    if (normalizedStrategy === 'first_eligible') {
+        delete policy.schedulingStrategy;
+    } else {
+        policy.schedulingStrategy = normalizedStrategy;
     }
     return policy;
 }

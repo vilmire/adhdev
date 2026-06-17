@@ -203,6 +203,45 @@ function firstProviderPriority(policy: unknown): string | undefined {
     return raw.find(type => typeof type === 'string' && type.trim())?.trim();
 }
 
+/**
+ * Synthetic `role=<x>` capability tags advertised by a node's policy.providerRoles.
+ *
+ * When a specific `providerType` is being evaluated, only that provider's declared
+ * role is emitted — so role-based routing (requiredTags: ["role=validation"]) gates
+ * the *selected* provider through the ordinary capability-tag filter. When no
+ * provider is selected (node-level eligibility scan), every declared role is emitted
+ * so the node passes the filter if ANY of its providers could satisfy the role; the
+ * per-provider tag set then narrows it during provider selection.
+ *
+ * Roles are lowercased and deduped. Missing/empty providerRoles emits nothing, so a
+ * node that never declares roles advertises no `role=` tags and is therefore only
+ * matched by role-unconstrained tasks (full backward compatibility).
+ */
+function roleCapabilityTags(policy: unknown, providerType: string | undefined): string[] {
+    const roles = policy && typeof policy === 'object' && !Array.isArray(policy)
+        ? (policy as Record<string, unknown>).providerRoles
+        : undefined;
+    if (!Array.isArray(roles)) return [];
+    const wantedProvider = typeof providerType === 'string' && providerType.trim()
+        ? providerType.trim().toLowerCase()
+        : '';
+    const out: string[] = [];
+    for (const entry of roles) {
+        if (!entry || typeof entry !== 'object') continue;
+        const type = typeof (entry as any).providerType === 'string'
+            ? (entry as any).providerType.trim().toLowerCase()
+            : '';
+        const role = typeof (entry as any).role === 'string'
+            ? (entry as any).role.trim().toLowerCase()
+            : '';
+        if (!role) continue;
+        // When narrowing to a selected provider, only emit that provider's role.
+        if (wantedProvider && type && type !== wantedProvider) continue;
+        out.push(`role=${role}`);
+    }
+    return out;
+}
+
 export function buildMeshNodeCapabilityTags(
     node: { capabilities?: unknown; policy?: unknown; isLocalWorktree?: unknown; worktreeBranch?: unknown } | undefined,
     providerType?: string,
@@ -222,6 +261,13 @@ export function buildMeshNodeCapabilityTags(
         // mesh_enqueue_task with required_tags: ["worktree=<branch>"] routes
         // only to the matching worktree node.
         ...(node?.isLocalWorktree === true && worktreeBranch ? [`worktree=${worktreeBranch}`] : []),
+        // Role-based routing: advertise role=<x> for each (node, provider) role
+        // declared in policy.providerRoles. Narrowed to the selected provider when
+        // one is given so the chosen provider must match a task's required role;
+        // when no provider is selected, all declared roles are advertised for the
+        // node-level eligibility scan. Reuses the ordinary required-tags filter —
+        // no separate role field/gate.
+        ...roleCapabilityTags(node?.policy, providerType),
     ]);
 }
 

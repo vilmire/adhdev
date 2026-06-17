@@ -590,6 +590,82 @@ describe('buildMeshNodeCapabilityTags — worktree tag auto-registration', () =>
     });
 });
 
+describe('buildMeshNodeCapabilityTags — role= routing tags', () => {
+    const roleNode = (providerRoles: Array<{ providerType: string; role?: string; maxParallel?: number }>) => ({
+        policy: { providerPriority: providerRoles.map(r => r.providerType), providerRoles },
+    });
+
+    it('node without providerRoles advertises no role= tags (backward compatible)', () => {
+        const tags = buildMeshNodeCapabilityTags({ policy: { providerPriority: ['claude-cli'] } }, 'claude-cli');
+        expect(tags.some(t => t.startsWith('role='))).toBe(false);
+    });
+
+    it('emits role=<x> for the selected provider only', () => {
+        const node = roleNode([
+            { providerType: 'claude-cli', role: 'coding' },
+            { providerType: 'codex-cli', role: 'validation' },
+        ]);
+        const codingTags = buildMeshNodeCapabilityTags(node, 'claude-cli');
+        expect(codingTags).toContain('role=coding');
+        expect(codingTags).not.toContain('role=validation');
+
+        const validationTags = buildMeshNodeCapabilityTags(node, 'codex-cli');
+        expect(validationTags).toContain('role=validation');
+        expect(validationTags).not.toContain('role=coding');
+    });
+
+    it('emits all declared roles when no provider is selected (node-level scan)', () => {
+        const node = roleNode([
+            { providerType: 'claude-cli', role: 'coding' },
+            { providerType: 'codex-cli', role: 'validation' },
+        ]);
+        const tags = buildMeshNodeCapabilityTags(node);
+        expect(tags).toContain('role=coding');
+        expect(tags).toContain('role=validation');
+    });
+
+    it('roles are lowercased', () => {
+        const node = roleNode([{ providerType: 'claude-cli', role: 'Validation' }]);
+        expect(buildMeshNodeCapabilityTags(node, 'claude-cli')).toContain('role=validation');
+    });
+
+    it('required_tags role= matches a node declaring that role, not a node without it', () => {
+        const validationNode = buildMeshNodeCapabilityTags(
+            roleNode([{ providerType: 'codex-cli', role: 'validation' }]), 'codex-cli');
+        const codingNode = buildMeshNodeCapabilityTags(
+            roleNode([{ providerType: 'claude-cli', role: 'coding' }]), 'claude-cli');
+
+        expect(nodeSatisfiesRequiredTags(['role=validation'], validationNode)).toBe(true);
+        expect(nodeSatisfiesRequiredTags(['role=validation'], codingNode)).toBe(false);
+    });
+
+    it('claimNextTask with required_tags role= is claimed only by a matching-role session', () => {
+        const meshId = `test-role-claim-${Date.now()}`;
+        enqueueTask(meshId, 'validate the build', { requiredTags: ['role=validation'] });
+
+        // Coding-role session must NOT claim a validation-role task.
+        const codingTags = buildMeshNodeCapabilityTags(
+            roleNode([{ providerType: 'claude-cli', role: 'coding' }]), 'claude-cli');
+        expect(claimNextTask(meshId, 'node-a', 'sess-coding', codingTags)).toBeNull();
+
+        // Validation-role session SHOULD claim it.
+        const validationTags = buildMeshNodeCapabilityTags(
+            roleNode([{ providerType: 'codex-cli', role: 'validation' }]), 'codex-cli');
+        const claim = claimNextTask(meshId, 'node-b', 'sess-validation', validationTags);
+        expect(claim).not.toBeNull();
+        expect(claim!.message).toBe('validate the build');
+    });
+
+    it('role-unconstrained task is claimable by any session (opt-in gating)', () => {
+        const meshId = `test-role-noreq-${Date.now()}`;
+        enqueueTask(meshId, 'anything', {});
+        const codingTags = buildMeshNodeCapabilityTags(
+            roleNode([{ providerType: 'claude-cli', role: 'coding' }]), 'claude-cli');
+        const claim = claimNextTask(meshId, 'node-a', 'sess-coding', codingTags);
+        expect(claim).not.toBeNull();
+    });
+});
+
 describe('validateMeshTaskModeRequest — live_debug_readonly git guardrail', () => {
     const expectAllowed = (message: string) => {
         const result = validateMeshTaskModeRequest('live_debug_readonly', message);

@@ -14,7 +14,8 @@ import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } f
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
-import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel } from '../repo-mesh-types.js';
+import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
+import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
@@ -499,6 +500,91 @@ function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean {
     return getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedNodeId === nodeId);
 }
 
+/** Active (status='assigned') task count for a node — the load metric for
+ *  least-loaded / round-robin ranking. Lower = preferred. */
+function nodeActiveLoad(meshId: string, nodeId: string): number {
+    return MeshRuntimeStore.getInstance().nodeActiveAssignmentCount(meshId, nodeId);
+}
+
+/**
+ * The mesh-wide scheduling strategy. Defaults to 'first_eligible' (strict
+ * no-change) for any mesh that does not set it. Only governs the final tie-break;
+ * eligibility, capacity, and priority gates apply identically to every strategy.
+ */
+function resolveSchedulingStrategy(mesh: any): RepoMeshSchedulingStrategy {
+    return normalizeMeshSchedulingStrategy(mesh?.policy?.schedulingStrategy);
+}
+
+/**
+ * Order eligible nodes for assignment per the mesh scheduling pipeline:
+ *   PRIORITY (schedulingPriority desc) → TIE-BREAK (strategy).
+ *
+ * The caller has already applied the TAG hard-filter and is responsible for the
+ * MAX-ALLOC capacity gate (the per-node launch/claim checks). This function only
+ * decides the *preference order* among nodes that are otherwise eligible.
+ *
+ * - 'first_eligible' (default): returns the input order verbatim and does NOT touch
+ *   the round-robin cursor — byte-for-byte the pre-feature behavior.
+ * - 'priority_only': schedulingPriority desc, then input order (load ignored).
+ * - 'least_loaded': schedulingPriority desc, then active load asc, then input order.
+ * - 'round_robin': same as least_loaded, but among nodes tied at (priority, load)
+ *   the input order is rotated by a per-mesh cursor that advances once per pass.
+ *
+ * `nodes` carries the original config/array index so the tie-break can fall back to
+ * deterministic input order. `bumpCursor` advances the round-robin cursor exactly
+ * once per scheduling pass (only consulted for 'round_robin').
+ */
+interface RankableNode { nodeId: string; node: any; index: number }
+
+/** Test-only: the pure node-ordering stage (PRIORITY → TIE-BREAK). Exposed so the
+ *  scheduling pipeline can be unit-tested without standing up live CLI sessions. */
+export function __orderEligibleNodesForTests(
+    meshId: string,
+    strategy: RepoMeshSchedulingStrategy,
+    nodes: RankableNode[],
+    opts?: { bumpCursor?: boolean },
+): RankableNode[] {
+    return orderEligibleNodes(meshId, strategy, nodes, opts);
+}
+
+function orderEligibleNodes(
+    meshId: string,
+    strategy: RepoMeshSchedulingStrategy,
+    nodes: RankableNode[],
+    opts?: { bumpCursor?: boolean },
+): RankableNode[] {
+    if (strategy === 'first_eligible' || nodes.length <= 1) {
+        return nodes;
+    }
+
+    const priorityOf = (n: { node: any }) => resolveNodeSchedulingPriority(n.node?.policy);
+
+    // Round-robin rotation offset: rotate the deterministic input order by a
+    // per-mesh cursor so the tie-break winner among equal (priority, load) nodes
+    // cycles across passes. The cursor advances once per scheduling pass.
+    let rotation = 0;
+    if (strategy === 'round_robin') {
+        const cursor = opts?.bumpCursor
+            ? MeshRuntimeStore.getInstance().bumpSchedulerCursor(meshId)
+            : MeshRuntimeStore.getInstance().getSchedulerCursor(meshId);
+        rotation = ((cursor % nodes.length) + nodes.length) % nodes.length;
+    }
+
+    // Rotation rank: position of each node after rotating input order by `rotation`.
+    // For non-round-robin strategies rotation is 0, so this is just the input index.
+    const rotationRank = (index: number) => (index - rotation + nodes.length) % nodes.length;
+
+    return [...nodes].sort((a, b) => {
+        const prioDelta = priorityOf(b) - priorityOf(a); // higher priority first
+        if (prioDelta !== 0) return prioDelta;
+        if (strategy === 'least_loaded' || strategy === 'round_robin') {
+            const loadDelta = nodeActiveLoad(meshId, a.nodeId) - nodeActiveLoad(meshId, b.nodeId);
+            if (loadDelta !== 0) return loadDelta;
+        }
+        return rotationRank(a.index) - rotationRank(b.index);
+    });
+}
+
 /** Active assignments on a (node, provider) — pre-launch guard for the per-(node,
  *  provider) maxParallel cap. The authoritative enforcement is in the claim
  *  transaction; this only avoids spawning a session that would fail the claim. */
@@ -700,7 +786,25 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             continue;
         }
 
-        for (const node of candidateNodes) {
+        // PRIORITY → TIE-BREAK: order the eligible (TAG-filtered) candidate nodes by
+        // the mesh scheduling strategy. 'first_eligible' (default) returns them in
+        // config/array order unchanged, so distribution is strictly opt-in. The
+        // per-node MAX-ALLOC capacity gate (nodeHasActiveAssignment, provider cap,
+        // maxConcurrentSessions) is still applied inside the loop below; this only
+        // chooses which eligible node is *tried first*.
+        const strategy = resolveSchedulingStrategy(mesh);
+        const orderedCandidateNodes = strategy === 'first_eligible'
+            ? candidateNodes
+            : orderEligibleNodes(
+                meshId,
+                strategy,
+                candidateNodes
+                    .map((node: any, index: number) => ({ nodeId: readMeshNodeId(node), node, index }))
+                    .filter((c: RankableNode) => c.nodeId),
+                { bumpCursor: true },
+            ).map((c: RankableNode) => c.node);
+
+        for (const node of orderedCandidateNodes) {
             const nodeId = readMeshNodeId(node);
             if (!nodeId) continue;
             const launchKey = `${meshId}:${nodeId}`;
@@ -866,6 +970,19 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         };
     }
 
+    // Collect every idle mesh session (local CLI instances + remote idle records)
+    // as drain candidates. The drain ORDER depends on the scheduling strategy:
+    //   - 'first_eligible' (default): local-first, then remote, exactly as before.
+    //   - otherwise: local + remote merged into one pool and drained in scheduling
+    //     order (priority → load → tie-break). This local-first debias is required
+    //     because without it the coordinator's own local node is always visited
+    //     first and greedily absorbs all untargeted work before any remote idle
+    //     session is even considered — the comparator alone can't spread work if
+    //     local is always tried first.
+    type IdleCandidate = { nodeId: string; sessionId: string; providerType: string; origin: 'local' | 'remote'; node: any };
+    const strategy = resolveSchedulingStrategy(mesh);
+    const localCandidates: IdleCandidate[] = [];
+
     const cliInstances = components.instanceManager.getByCategory('cli');
     for (const inst of cliInstances) {
         const state = inst.getState();
@@ -893,7 +1010,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
 
         if (providerType) {
             localIdleSessionsChecked += 1;
-            tryAssignQueueTask(components, meshId, nodeId, sessionId, providerType);
+            localCandidates.push({ nodeId, sessionId, providerType, origin: 'local', node: mesh.nodes.find((n: any) => readMeshNodeId(n) === nodeId) });
         } else {
             skippedSessions.push({
                 nodeId,
@@ -908,16 +1025,55 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         remoteSessions = MeshRuntimeStore.getInstance().getRemoteIdleSessions();
     } catch { /* best-effort */ }
 
+    const remoteCandidates: IdleCandidate[] = [];
     for (const idle of remoteSessions) {
         const node = mesh.nodes.find((n: any) => n.id === idle.nodeId);
         if (node) {
             remoteIdleSessionsChecked += 1;
-            const assigned = tryAssignQueueTask(components, meshId, idle.nodeId, idle.sessionId, idle.providerType);
-            if (assigned) {
-                try {
-                    MeshRuntimeStore.getInstance().deleteRemoteIdleSession(idle.nodeId, idle.sessionId);
-                } catch { /* best-effort */ }
-            }
+            remoteCandidates.push({ nodeId: idle.nodeId, sessionId: idle.sessionId, providerType: idle.providerType, origin: 'remote', node });
+        }
+    }
+
+    const assignIdleCandidate = (candidate: IdleCandidate): void => {
+        const assigned = tryAssignQueueTask(components, meshId, candidate.nodeId, candidate.sessionId, candidate.providerType);
+        if (assigned && candidate.origin === 'remote') {
+            try {
+                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(candidate.nodeId, candidate.sessionId);
+            } catch { /* best-effort */ }
+        }
+    };
+
+    if (strategy === 'first_eligible') {
+        // Strict no-change: drain local idle sessions first (original order), then
+        // remote idle sessions. tryAssignQueueTask is a no-op when nothing matches.
+        for (const candidate of localCandidates) assignIdleCandidate(candidate);
+        for (const candidate of remoteCandidates) assignIdleCandidate(candidate);
+    } else {
+        // Merge local + remote into one pool and drain in scheduling order. Each
+        // assignment mutates a node's active load, and the next pick re-reads it,
+        // so re-ranking after every assignment keeps the spread fair as load shifts.
+        const pool = [...localCandidates, ...remoteCandidates];
+        const baseIndex = new Map<string, number>();
+        pool.forEach((c, i) => { if (!baseIndex.has(c.nodeId)) baseIndex.set(c.nodeId, i); });
+        // Bump the round-robin cursor once for this whole drain pass.
+        const uniqueNodes = [...new Set(pool.map(c => c.nodeId))]
+            .map((nodeId, index) => ({ nodeId, node: pool.find(c => c.nodeId === nodeId)?.node, index }));
+        const ranked = orderEligibleNodes(meshId, strategy, uniqueNodes, { bumpCursor: true });
+        const rankIndex = new Map<string, number>(ranked.map((r, i) => [r.nodeId, i]));
+        const remaining = [...pool];
+        while (remaining.length > 0) {
+            // Re-rank each pass so a node that just took work defers its next session.
+            remaining.sort((a, b) => {
+                const aPrio = resolveNodeSchedulingPriority(a.node?.policy);
+                const bPrio = resolveNodeSchedulingPriority(b.node?.policy);
+                if (aPrio !== bPrio) return bPrio - aPrio;
+                if (strategy === 'least_loaded' || strategy === 'round_robin') {
+                    const loadDelta = nodeActiveLoad(meshId, a.nodeId) - nodeActiveLoad(meshId, b.nodeId);
+                    if (loadDelta !== 0) return loadDelta;
+                }
+                return (rankIndex.get(a.nodeId) ?? 0) - (rankIndex.get(b.nodeId) ?? 0);
+            });
+            assignIdleCandidate(remaining.shift()!);
         }
     }
 

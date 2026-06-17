@@ -268,6 +268,17 @@ export class MeshRuntimeStore {
 
             CREATE INDEX IF NOT EXISTS idx_mesh_missions_mesh_status
                 ON mesh_missions(mesh_id, status, updated_at);
+
+            -- Load-balancing scheduler: per-mesh round-robin rotation cursor. When
+            -- the schedulingStrategy is 'round_robin', several eligible nodes tied at
+            -- the least load are rotated by this cursor so the tie-break winner cycles
+            -- across scheduling passes instead of always favouring the same array-order
+            -- node. Persisted (not a module Map) so rotation survives daemon restarts
+            -- and stays a single source of truth across scheduling entry points.
+            CREATE TABLE IF NOT EXISTS mesh_scheduler_cursor (
+                mesh_id TEXT PRIMARY KEY,
+                cursor INTEGER NOT NULL DEFAULT 0
+            );
         `);
     }
 
@@ -477,6 +488,47 @@ export class MeshRuntimeStore {
             LIMIT 1
         `).get(meshId, nodeId);
         return row !== undefined;
+    }
+
+    /**
+     * Count active (status='assigned') tasks on a node, regardless of provider or
+     * task mode. This is the load metric for least-loaded / round-robin ranking:
+     * the scheduler prefers the node with the fewest active assignments so
+     * untargeted work spreads instead of piling onto whichever node asks first.
+     */
+    nodeActiveAssignmentCount(meshId: string, nodeId: string): number {
+        const row = this.db.prepare(`
+            SELECT COUNT(*) as count FROM mesh_queue
+            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id = ?
+        `).get(meshId, nodeId) as { count: number } | undefined;
+        return row?.count ?? 0;
+    }
+
+    /**
+     * Read the current per-mesh round-robin cursor (0 when unset). Used to rotate
+     * the tie-break winner among nodes tied at the least load.
+     */
+    getSchedulerCursor(meshId: string): number {
+        const row = this.db.prepare(
+            'SELECT cursor FROM mesh_scheduler_cursor WHERE mesh_id = ?'
+        ).get(meshId) as { cursor: number } | undefined;
+        return row?.cursor ?? 0;
+    }
+
+    /**
+     * Atomically advance the per-mesh round-robin cursor by one and return the
+     * value that was current BEFORE the bump (the value the caller should rotate
+     * by for this pass). UPSERT keeps it lock-free across concurrent passes.
+     */
+    bumpSchedulerCursor(meshId: string): number {
+        return this.transaction(() => {
+            const current = this.getSchedulerCursor(meshId);
+            this.db.prepare(`
+                INSERT INTO mesh_scheduler_cursor (mesh_id, cursor) VALUES (?, ?)
+                ON CONFLICT(mesh_id) DO UPDATE SET cursor = excluded.cursor
+            `).run(meshId, current + 1);
+            return current;
+        });
     }
 
     /**

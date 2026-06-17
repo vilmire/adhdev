@@ -91,6 +91,67 @@ export type RepoMeshNodeHealth =
 export type RepoMeshSessionCleanupMode = 'preserve' | 'stop' | 'delete_stopped' | 'stop_and_delete';
 export type RepoMeshSpawnedSessionVisibility = 'visible' | 'hidden';
 
+/**
+ * Mesh-wide tie-break strategy for distributing untargeted queue work across
+ * eligible nodes. This ONLY governs the final tie-break stage of the scheduler
+ * pipeline (TAG hard-filter → MAX-ALLOC capacity gate → PRIORITY soft score →
+ * TIE-BREAK); eligibility/capacity/priority are evaluated identically for every
+ * strategy.
+ *
+ * - 'first_eligible' (DEFAULT): preserve today's behavior exactly. Nodes are
+ *   visited in config/array order and the first that can launch wins. No
+ *   load-spreading. This is the strict no-change default — a mesh that never
+ *   sets schedulingStrategy behaves identically to before this feature.
+ * - 'least_loaded': prefer the eligible node with the fewest active assignments,
+ *   so untargeted work spreads instead of piling onto whichever node asks first.
+ * - 'round_robin': among nodes tied at the least load, rotate the winner using a
+ *   per-mesh cursor so distribution stays fair across passes.
+ * - 'priority_only': rank purely by schedulingPriority (then config order),
+ *   ignoring load — always send to the highest-priority eligible node.
+ *
+ * Distribution is explicit opt-in: a strategy other than 'first_eligible' must be
+ * configured for any load-spreading to occur.
+ */
+export type RepoMeshSchedulingStrategy =
+    | 'first_eligible'
+    | 'least_loaded'
+    | 'round_robin'
+    | 'priority_only';
+
+export const MESH_SCHEDULING_STRATEGIES: RepoMeshSchedulingStrategy[] = [
+    'first_eligible',
+    'least_loaded',
+    'round_robin',
+    'priority_only',
+];
+
+export const DEFAULT_MESH_SCHEDULING_STRATEGY: RepoMeshSchedulingStrategy = 'first_eligible';
+
+/**
+ * Normalize an unknown scheduling-strategy value to a valid strategy, defaulting
+ * to 'first_eligible' (strict no-change) for anything missing/blank/unrecognized.
+ */
+export function normalizeMeshSchedulingStrategy(value: unknown): RepoMeshSchedulingStrategy {
+    if (typeof value !== 'string') return DEFAULT_MESH_SCHEDULING_STRATEGY;
+    const trimmed = value.trim() as RepoMeshSchedulingStrategy;
+    return (MESH_SCHEDULING_STRATEGIES as string[]).includes(trimmed)
+        ? trimmed
+        : DEFAULT_MESH_SCHEDULING_STRATEGY;
+}
+
+/**
+ * Resolve a node's soft scheduling priority — a single scalar used as the PRIORITY
+ * stage rank key (higher = preferred). It is NOT an eligibility gate (the MAX-ALLOC
+ * capacity gate alone decides whether a node can take work). Missing/blank/NaN
+ * resolves to 0 so unconfigured nodes all share the same neutral priority.
+ */
+export function resolveNodeSchedulingPriority(
+    nodePolicy: Pick<RepoMeshNodePolicy, 'schedulingPriority'> | null | undefined,
+): number {
+    const raw = Number(nodePolicy?.schedulingPriority);
+    return Number.isFinite(raw) ? raw : 0;
+}
+
 export interface RepoMeshAutoFastForwardPolicy {
     /** Defaults to true. Set false to disable daemon-initiated idle fast-forwards. */
     enabled: boolean;
@@ -115,6 +176,14 @@ export interface RepoMeshPolicy {
     dirtyWorkspaceBehavior: 'block' | 'warn' | 'checkpoint_then_continue';
     maxParallelTasks: number;
     allowedProviders?: string[];
+    /**
+     * Mesh-wide tie-break strategy for distributing untargeted queue work across
+     * eligible nodes. Defaults to 'first_eligible' (today's exact behavior — no
+     * load-spreading). Set to 'least_loaded' / 'round_robin' / 'priority_only' to
+     * opt into distribution. Only governs the final tie-break stage; eligibility,
+     * capacity, and priority are evaluated identically regardless of strategy.
+     */
+    schedulingStrategy?: RepoMeshSchedulingStrategy;
     /**
      * Whether sessions spawned by mesh/coordinator policy should auto-open as visible
      * dashboard tabs or start hidden. Defaults to 'visible' to preserve existing
@@ -163,12 +232,17 @@ export interface RepoMeshRelatedRepo {
  *
  * `role` is a free-form resource-pool label (recommended values:
  * 'investigation' | 'coding' | 'orchestration') describing what this
- * (node, provider) combination is *for*. It is a label/hint only — it is
- * surfaced to the coordinator and dashboards but the daemon does NOT route
- * tasks by role (task routing stays driven by taskMode + requiredTags +
- * targetNode/targetSession). role is intentionally orthogonal to taskMode:
- * taskMode classifies the *work* (code_change vs live_debug_readonly), role
- * classifies the *resource pool*.
+ * (node, provider) combination is *for*. As of the load-balancing scheduler it
+ * is ALSO routable: each declared role is advertised as a synthetic `role=<x>`
+ * capability tag (see buildMeshNodeCapabilityTags), so a task enqueued with
+ * requiredTags: ["role=validation"] is hard-filtered to nodes/providers that
+ * declare that role — through the same nodeSatisfiesRequiredTags path as any
+ * other tag. There is intentionally no separate "advertisedRoles" field: the
+ * label and the routing tag are one mechanism. A task that does not require a
+ * `role=` tag ignores roles entirely (opt-in, fully backward compatible).
+ *
+ * role is intentionally orthogonal to taskMode: taskMode classifies the *work*
+ * (code_change vs live_debug_readonly), role classifies the *resource pool*.
  *
  * `maxParallel` is the only enforced field: the queue will not assign a task
  * to this (node, provider) once it already has `maxParallel` active
@@ -190,15 +264,24 @@ export interface RepoMeshNodePolicy {
     readOnly?: boolean;
     canPush?: boolean;
     maxConcurrentSessions?: number;
+    /**
+     * Soft scheduling priority used as the PRIORITY rank key (higher = preferred)
+     * when the mesh schedulingStrategy spreads work across nodes. Defaults to 0.
+     * This is NOT an eligibility gate — a node with a high priority that is at its
+     * capacity (MAX-ALLOC gate) is still skipped; priority only orders nodes that
+     * can actually take work. Ignored entirely under 'first_eligible'.
+     */
+    schedulingPriority?: number;
     /** Ordered provider preference used when mesh_launch_session omits an explicit type. */
     providerPriority?: string[];
     /**
      * Per-(node, provider) role + parallelism declarations. Each entry binds a
      * providerType on THIS node to an optional free-form role label and an
-     * optional maxParallel cap. Only maxParallel is enforced (as an additional,
+     * optional maxParallel cap. maxParallel is enforced (as an additional,
      * stricter-wins constraint on top of the global maxParallelTasks/taskMode
-     * caps); role is a label/hint surfaced to the coordinator. Missing/empty:
-     * the node behaves exactly as before (global caps only).
+     * caps); role is advertised as a routable `role=<x>` capability tag so tasks
+     * can hard-filter by required role. Missing/empty: the node behaves exactly
+     * as before (global caps only, no role tags).
      */
     providerRoles?: RepoMeshProviderRole[];
     /**
