@@ -10,40 +10,13 @@ import { Terminal } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { FitAddon } from '@xterm/addon-fit';
 import { sanitizeTerminalInputForProvider } from './input-sanitizer';
+import type { GhosttyTerminalViewProps, TerminalRendererHandle } from './types';
 
 export { sanitizeTerminalInputForProvider } from './input-sanitizer';
+export type { GhosttyTerminalViewProps, TerminalRendererHandle } from './types';
 
 const DEFAULT_SESSION_HOST_COLS = 80;
 const DEFAULT_SESSION_HOST_ROWS = 32;
-
-export interface TerminalRendererHandle {
-  write: (data: string, onProcessed?: () => void) => void;
-  clear: () => void;
-  reset: () => void;
-  resize: (cols: number, rows: number) => void;
-  fit: () => void;
-  bumpResize: () => void;
-  scrollToTop: () => void;
-  getSelection: () => string;
-  getVisibleText: () => string;
-}
-
-export interface GhosttyTerminalViewProps {
-  onInput: (data: string) => void;
-  onResize?: (cols: number, rows: number) => void;
-  onViewportMetrics?: (metrics: { width: number; height: number }) => void;
-  onScrollMetrics?: (metrics: { scrollTop: number; scrollHeight: number; clientHeight: number; atTop: boolean; canScroll: boolean }) => void;
-  fontSize?: number;
-  readOnly?: boolean;
-  /**
-   * Default is `measured`, which avoids xterm's `fit()` and only uses measured
-   * dimensions plus explicit `resize()`. `fit` is an opt-in escape hatch for
-   * non-dashboard consumers and is not exposed in the dashboard GUI.
-   */
-  sizingMode?: 'measured' | 'fit';
-  className?: string;
-  style?: React.CSSProperties;
-}
 
 type RendererKind = 'webgl' | 'dom';
 
@@ -625,3 +598,63 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 );
 
 GhosttyTerminalView.displayName = 'GhosttyTerminalView';
+
+// ---------------------------------------------------------------------------
+// Phase0 PoC: renderer backend selection (xterm vs @wterm/ghostty)
+// ---------------------------------------------------------------------------
+//
+// Default backend is the proven xterm-based GhosttyTerminalView. The wterm
+// (libghostty WASM) backend is opt-in and lazily code-split so its ~428KB WASM
+// + DOM renderer never load unless explicitly selected.
+//
+// Selection precedence (first hit wins):
+//   1. localStorage 'adhdev:terminalRenderer' = 'wterm' | 'xterm'  (runtime toggle)
+//   2. Vite env import.meta.env.VITE_TERMINAL_RENDERER                (build-time)
+//   3. 'xterm' (default)
+export type TerminalRendererBackend = 'xterm' | 'wterm';
+
+export function selectTerminalRendererBackend(): TerminalRendererBackend {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const v = localStorage.getItem('adhdev:terminalRenderer');
+      if (v === 'wterm' || v === 'xterm') return v;
+    }
+  } catch {}
+  try {
+    // import.meta.env exists under Vite; guard for non-Vite consumers.
+    const env = (import.meta as any)?.env;
+    const v = env?.VITE_TERMINAL_RENDERER;
+    if (v === 'wterm' || v === 'xterm') return v;
+  } catch {}
+  return 'xterm';
+}
+
+// Lazy wrapper so the wterm WASM bundle is only fetched when selected.
+const LazyWtermTerminalView = React.lazy(() =>
+  import('./wterm-view').then((m) => ({ default: m.WtermTerminalView })),
+);
+
+/**
+ * TerminalView — backend-dispatching renderer. Picks xterm or wterm per
+ * selectTerminalRendererBackend(), or an explicit `backend` prop override.
+ * Keeps the exact same handle/props contract regardless of backend.
+ */
+export const TerminalView = forwardRef<
+  TerminalRendererHandle,
+  GhosttyTerminalViewProps & { backend?: TerminalRendererBackend }
+>(({ backend, ...props }, ref) => {
+  const [resolved] = useState<TerminalRendererBackend>(() => backend ?? selectTerminalRendererBackend());
+
+  if (resolved === 'wterm') {
+    return (
+      <React.Suspense
+        fallback={<div style={{ width: '100%', height: '100%', background: '#0f1117' }} />}
+      >
+        <LazyWtermTerminalView ref={ref} {...props} />
+      </React.Suspense>
+    );
+  }
+  return <GhosttyTerminalView ref={ref} {...props} />;
+});
+
+TerminalView.displayName = 'TerminalView';

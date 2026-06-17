@@ -116,7 +116,9 @@ export const CliTerminal = forwardRef<CliTerminalHandle | null, CliTerminalProps
                         rendererLoadLogged = true;
                         console.info('[CliTerminal] renderer module loaded: terminal-render-web');
                     }
-                    if (!cancelled) setLoadedTerminal(() => mod.GhosttyTerminalView as TerminalViewComponent);
+                    // Phase0 PoC: TerminalView dispatches to xterm (default) or
+                    // the @wterm/ghostty backend based on selectTerminalRendererBackend().
+                    if (!cancelled) setLoadedTerminal(() => mod.TerminalView as TerminalViewComponent);
                 })
                 .catch((error) => {
                     console.error('[CliTerminal] failed to load terminal renderer', error);
