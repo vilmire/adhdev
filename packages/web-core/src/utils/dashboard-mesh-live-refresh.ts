@@ -2,7 +2,14 @@ import type { RepoMeshStatus } from '@adhdev/daemon-core'
 
 type RefreshableMeshNode = Pick<RepoMeshStatus['nodes'][number], 'git' | 'gitProbePending' | 'machineStatus' | 'launchReady' | 'connection'>
 
-const DASHBOARD_PENDING_MESH_REFRESH_DELAYS_MS = [1500, 3000, 5000, 8000, 12000] as const
+// Bounded auto-retry backoff for the dashboard's on-open mesh refresh. The
+// retry loop fires while any node still has a pending git probe, but it must
+// CONVERGE: a perpetually-slow (TURN-relayed) peer would otherwise re-arm the
+// loop forever, storming the peer with back-to-back blocking git_status probes.
+// Capped at a small number of exponential-backoff attempts; after the last one
+// the loop stops re-arming and the slow peer simply stays "git probe pending"
+// in the rendered graph (held-state design), instead of looping indefinitely.
+const DASHBOARD_PENDING_MESH_REFRESH_DELAYS_MS = [1500, 4000, 9000] as const
 
 function hasLivePeerGitTruth(node: RefreshableMeshNode): boolean {
     return Boolean(

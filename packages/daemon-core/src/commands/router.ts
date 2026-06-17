@@ -985,6 +985,73 @@ function readMeshTimeoutEnvMs(name: string, defaultMs: number): number {
 // (still under the P2P REQUEST_TIMEOUT of 30s) and made env-overridable.
 const MESH_DIRECT_PROBE_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_TIMEOUT_MS', 25_000);
 const MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS', 25_000);
+// How long a successful per-peer git_status probe stays fresh enough to be
+// reused instead of issuing another blocking `refreshUpstream:true` fan-out.
+// A slow (TURN-relayed) peer's probe can take 9-23s, and the dashboard's
+// auto-retry loop re-fires every few seconds; without this gate every retry
+// would start a brand new probe storm to the same peer. Within this window the
+// last successful result is reused so a refresh quiesces instead of looping.
+// Min-clamped to 1s by readMeshTimeoutEnvMs; raise via env for very slow peers.
+const MESH_DIRECT_PROBE_REUSE_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_REUSE_MS', 12_000);
+
+/**
+ * De-duplicates and rate-limits per-peer git_status probes so a single mesh
+ * refresh — or a burst of refreshes from the dashboard auto-retry loop — cannot
+ * launch a storm of concurrent/back-to-back `refreshUpstream:true` commands to
+ * the same slow peer.
+ *
+ * Two gates, both keyed by `daemonId::workspace`:
+ *  - In-flight dedup: a second probe for a key with a probe already running
+ *    shares (awaits) the in-flight promise instead of issuing a second command.
+ *  - Recently-probed reuse: a successful probe younger than `reuseMs` is reused
+ *    verbatim instead of issuing a fresh probe. Failures are NOT cached (so a
+ *    transient timeout doesn't pin a peer to "no truth" for the whole window).
+ *
+ * Lives on the router instance so the gate spans separate mesh_status calls,
+ * which is exactly where the refresh storm happens.
+ */
+class MeshGitProbeCache {
+    private inflight = new Map<string, Promise<Record<string, unknown> | null>>();
+    private recent = new Map<string, { at: number; value: Record<string, unknown> }>();
+
+    constructor(private readonly reuseMs: number, private readonly now: () => number = Date.now) {}
+
+    private key(daemonId: string, workspace: string): string {
+        return `${daemonId}::${workspace}`;
+    }
+
+    /**
+     * Run `probe` for this peer, but reuse a fresh recent result or an in-flight
+     * probe for the same key when one is available. `probe` is only invoked when
+     * neither gate is satisfied.
+     */
+    async probe(
+        daemonId: string,
+        workspace: string,
+        probe: () => Promise<Record<string, unknown> | null>,
+    ): Promise<Record<string, unknown> | null> {
+        const key = this.key(daemonId, workspace);
+        const cached = this.recent.get(key);
+        if (cached && this.now() - cached.at < this.reuseMs) {
+            return cached.value;
+        }
+        const existing = this.inflight.get(key);
+        if (existing) return existing;
+        const pending = (async () => {
+            const result = await probe();
+            if (result) this.recent.set(key, { at: this.now(), value: result });
+            return result;
+        })();
+        this.inflight.set(key, pending);
+        try {
+            return await pending;
+        } finally {
+            // Only clear the slot if it is still ours — a later overlapping call
+            // would have reused this very promise, so it is safe to delete here.
+            if (this.inflight.get(key) === pending) this.inflight.delete(key);
+        }
+    }
+}
 
 async function probeRemoteMeshGitStatus(args: {
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
@@ -1074,6 +1141,10 @@ async function hydrateInlineMeshDirectTruth(args: {
     // probe was attempted. Only an explicit refresh (probeRemotePeers=true)
     // performs the fan-out and classifies an unreachable peer as unavailable.
     probeRemotePeers: boolean;
+    // Optional shared probe cache: dedups concurrent probes and reuses a
+    // recently-probed peer's result instead of re-issuing a blocking
+    // refreshUpstream probe within the reuse window.
+    probeCache?: MeshGitProbeCache;
 }): Promise<{
     directEvidenceCount: number;
     localConfirmedCount: number;
@@ -1162,8 +1233,10 @@ async function hydrateInlineMeshDirectTruth(args: {
         // Bounded retry, gated on the peer staying `connected`: a slow
         // (TURN-relayed) peer that just exceeds one probe window is recovered
         // instead of being hard-failed. The connection is re-checked before each
-        // retry so a peer that actually dropped is abandoned promptly.
-        const remoteGit = await probeRemoteMeshGitStatusWithRetry({
+        // retry so a peer that actually dropped is abandoned promptly. Routed
+        // through the shared probe cache so a refresh burst reuses a recent
+        // result / shares an in-flight probe instead of storming the peer.
+        const runProbe = () => probeRemoteMeshGitStatusWithRetry({
             dispatchMeshCommand: args.dispatchMeshCommand,
             daemonId,
             workspace,
@@ -1171,6 +1244,9 @@ async function hydrateInlineMeshDirectTruth(args: {
             retryTimeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
             getConnection: args.getMeshPeerConnectionStatus,
         });
+        const remoteGit = args.probeCache
+            ? await args.probeCache.probe(daemonId, workspace, runProbe)
+            : await runProbe();
         if (remoteGit) {
             recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
             peerConfirmedCount += 1;
@@ -3159,6 +3235,10 @@ export class DaemonCommandRouter {
     private inlineMeshCache = new Map<string, any>();
     /** Coordinator-owned whole-mesh aggregate status snapshots. Browser callers read this by default. */
     private aggregateMeshStatusCache = new Map<string, { builtAt: number; snapshot: any; queueRevision: string }>();
+    /** Shared per-peer git_status probe dedup + recently-probed reuse gate.
+     *  Spans separate mesh_status/get_mesh calls so the dashboard auto-retry
+     *  loop cannot storm a slow peer with back-to-back refreshUpstream probes. */
+    private meshGitProbeCache = new MeshGitProbeCache(MESH_DIRECT_PROBE_REUSE_MS);
     /** In-memory async Refinery jobs keyed by meshId:nodeId to reject/return duplicate in-flight requests. */
     private runningRefineJobs = new Map<string, MeshRefineJobHandle>();
     /** Terminal async Refinery jobs preserve a clear answer after the worktree node has been removed. */
@@ -6611,6 +6691,7 @@ export class DaemonCommandRouter {
                     statusInstanceId: this.deps.statusInstanceId,
                     localMachineId: loadConfig().machineId || '',
                     probeRemotePeers,
+                    probeCache: this.meshGitProbeCache,
                 });
                 const directTruthSatisfied = meshRecord.source !== 'inline_bootstrap' || directTruth.directEvidenceCount > 0;
                 const sourceOfTruth = {
@@ -8492,6 +8573,11 @@ export class DaemonCommandRouter {
 
                     const localMachineId = loadConfig().machineId || '';
                     const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
+                    // Shared probe gate for this mesh_status call: the bootstrap
+                    // hydrate below and the per-node render loop further down both
+                    // probe the same peers — route both through this cache so they
+                    // dedup within the call and reuse recent results across calls.
+                    const meshGitProbeCache = this.meshGitProbeCache;
                     const directTruth = requireDirectPeerTruth
                         ? await hydrateInlineMeshDirectTruth({
                             mesh,
@@ -8504,6 +8590,7 @@ export class DaemonCommandRouter {
                             // out a blocking peer git probe. Default loads return
                             // held truth so one slow peer can't block the graph.
                             probeRemotePeers: refreshRequested,
+                            probeCache: meshGitProbeCache,
                         })
                         : {
                             directEvidenceCount: 0,
@@ -8710,7 +8797,7 @@ export class DaemonCommandRouter {
                                     // path), gated on the peer staying connected, so a
                                     // slow TURN-relayed peer is recovered rather than
                                     // dropped after a single timeout.
-                                    const remoteGit = await probeRemoteMeshGitStatusWithRetry({
+                                    const runNodeProbe = () => probeRemoteMeshGitStatusWithRetry({
                                         dispatchMeshCommand: this.deps.dispatchMeshCommand,
                                         daemonId,
                                         workspace,
@@ -8719,6 +8806,12 @@ export class DaemonCommandRouter {
                                         getConnection: this.deps.getMeshPeerConnectionStatus,
                                         onConnection: connection => { status.connection = connection; },
                                     });
+                                    // Same shared cache as the bootstrap hydrate path: within one
+                                    // mesh_status call this dedups the bootstrap probe against this
+                                    // per-node probe for the same peer, and across calls it reuses a
+                                    // recent result so the dashboard auto-retry loop can't restart a
+                                    // fresh refreshUpstream probe seconds apart.
+                                    const remoteGit = await meshGitProbeCache.probe(daemonId, workspace, runNodeProbe);
                                     if (remoteGit) {
                                         status.git = remoteGit;
                                         status.health = remoteGit.isGitRepo

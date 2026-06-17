@@ -39,13 +39,14 @@ describe('dashboard mesh live refresh helpers', () => {
     ])).toBe(false)
   })
 
-  it('uses the bounded dashboard follow-up refresh window', () => {
+  it('uses a bounded dashboard follow-up refresh window that converges', () => {
     expect(nextDashboardMeshRefreshDelayMs(-1)).toBe(1500)
     expect(nextDashboardMeshRefreshDelayMs(0)).toBe(1500)
-    expect(nextDashboardMeshRefreshDelayMs(1)).toBe(3000)
-    expect(nextDashboardMeshRefreshDelayMs(2)).toBe(5000)
-    expect(nextDashboardMeshRefreshDelayMs(3)).toBe(8000)
-    expect(nextDashboardMeshRefreshDelayMs(4)).toBe(12000)
-    expect(nextDashboardMeshRefreshDelayMs(5)).toBeNull()
+    expect(nextDashboardMeshRefreshDelayMs(1)).toBe(4000)
+    expect(nextDashboardMeshRefreshDelayMs(2)).toBe(9000)
+    // The loop must STOP re-arming after the bounded attempts so a perpetually
+    // pending slow peer cannot storm the daemon with refresh probes forever.
+    expect(nextDashboardMeshRefreshDelayMs(3)).toBeNull()
+    expect(nextDashboardMeshRefreshDelayMs(4)).toBeNull()
   })
 })

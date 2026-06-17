@@ -574,6 +574,89 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
     })
   })
 
+  it('reuses a recently-probed peer git_status across refreshes instead of re-probing (cache-age gate)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-probe-reuse-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    let probeCount = 0
+    const dispatchMeshCommand = vi.fn(async () => {
+      probeCount += 1
+      return { status: REMOTE_GIT_STATUS }
+    })
+    const getMeshPeerConnectionStatus = vi.fn(() => ({ state: 'connected', reported: true }))
+    const router = createRouter(dispatchMeshCommand, getMeshPeerConnectionStatus)
+    const inlineMesh = {
+      id: 'mesh_reuse',
+      coordinator: { preferredNodeId: 'node_local' },
+      nodes: [
+        { id: 'node_local', daemonId: 'daemon-local', machineId: 'machine-local', workspace: localRepo, repoRoot: localRepo, policy: {} },
+        { id: 'node_slow', daemonId: 'daemon-slow', machineId: 'machine-slow', workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev', repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev', policy: {} },
+      ],
+    }
+
+    // First explicit refresh probes the peer once and records its truth.
+    const first: any = await router.execute('mesh_status', {
+      meshId: 'mesh_reuse',
+      inlineMesh,
+      requireDirectPeerTruth: true,
+      refresh: true,
+    })
+    expect(first.success).toBe(true)
+    expect(probeCount).toBe(1)
+
+    // A second refresh seconds later (the dashboard auto-retry loop) must NOT
+    // start a fresh refreshUpstream probe — the cache-age gate reuses the
+    // recent result, so the storm cannot happen.
+    const second: any = await router.execute('mesh_status', {
+      meshId: 'mesh_reuse',
+      inlineMesh,
+      requireDirectPeerTruth: true,
+      refresh: true,
+    })
+    expect(second.success).toBe(true)
+    expect(probeCount).toBe(1)
+    const remoteNode = second.nodes.find((node: any) => node.nodeId === 'node_slow')
+    expect(remoteNode.git).toMatchObject({ branch: 'main', headCommit: 'cafe1234' })
+  })
+
+  it('dedups a concurrent bootstrap + per-node probe for the same peer within one refresh', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-probe-dedup-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    // A single explicit refresh runs hydrateInlineMeshDirectTruth AND the
+    // per-node render loop, both of which probe the same remote peer. Before the
+    // shared probe cache this fired git_status twice per refresh; now the second
+    // reuses the first's cached result, so exactly one git_status is dispatched.
+    let probeCount = 0
+    const dispatchMeshCommand = vi.fn(async () => {
+      probeCount += 1
+      return { status: REMOTE_GIT_STATUS }
+    })
+    const getMeshPeerConnectionStatus = vi.fn(() => ({ state: 'connected', reported: true }))
+    const router = createRouter(dispatchMeshCommand, getMeshPeerConnectionStatus)
+
+    const result: any = await router.execute('mesh_status', {
+      meshId: 'mesh_dedup',
+      inlineMesh: {
+        id: 'mesh_dedup',
+        coordinator: { preferredNodeId: 'node_local' },
+        nodes: [
+          { id: 'node_local', daemonId: 'daemon-local', machineId: 'machine-local', workspace: localRepo, repoRoot: localRepo, policy: {} },
+          { id: 'node_slow', daemonId: 'daemon-slow', machineId: 'machine-slow', workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev', repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev', policy: {} },
+        ],
+      },
+      requireDirectPeerTruth: true,
+      refresh: true,
+    })
+
+    expect(result.success).toBe(true)
+    expect(probeCount).toBe(1)
+  })
+
   it('does not retry — and marks unavailable — a peer that is not connected', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-router-probe-disconnected-'))
     roots.push(root)

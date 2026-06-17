@@ -37,7 +37,13 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).toContain('meshOverrides?.loadMeshStatus')
     expect(dialogSource).toContain("sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })")
     expect(dialogSource).toContain('meshOverrides.loadMeshStatus(daemonId, meshId, {')
-    expect(dialogSource).toContain("retryProfile: 'settled'")
+    // Manual user Refresh keeps the full blocking probe; the automatic on-open
+    // retry loop uses the lighter 'interactive' profile so a slow peer can't
+    // make every auto-retry a 25s blocking fan-out and storm the daemon.
+    expect(dialogSource).toContain("retryProfile: isAutoRetry ? 'interactive' : 'settled'")
+    // The on-open background refresh is an auto-retry (lighter profile), so the
+    // bounded hasPendingDashboardMeshRefresh loop converges instead of looping.
+    expect(dialogSource).toContain('loadGraph(true, true)')
     expect(dialogSource).not.toContain('buildMeshGraph')
     expect(dialogSource).toContain('setLoading(showInitialLoader)')
     expect(dialogSource).toContain('dashboardMeshGraphStatusCache')

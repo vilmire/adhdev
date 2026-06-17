@@ -141,7 +141,15 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             const response = meshOverrides?.loadMeshStatus
                 ? await meshOverrides.loadMeshStatus(daemonId, meshId, {
                     refresh,
-                    retryProfile: 'settled',
+                    // The automatic on-open retry loop must NOT run the full
+                    // blocking peer-git probe window — a single slow (TURN-relayed)
+                    // peer would make every auto-retry a 25s blocking fan-out and
+                    // the loop would never quiesce. The 'interactive' profile caps
+                    // the loader-level retry budget so the slow peer simply stays
+                    // "git probe pending" in the rendered graph (held-state design).
+                    // Only the user-driven manual Refresh keeps the full 'settled'
+                    // probe window.
+                    retryProfile: isAutoRetry ? 'interactive' : 'settled',
                 })
                 : await sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })
             const status = extractRepoMeshStatus(response)
@@ -191,13 +199,19 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         // remote truth (stale-while-revalidate); since hasUsableGraphRef is set
         // by the first load, the refresh shows the small refreshing indicator
         // rather than the full "Loading live mesh status…" loader.
+        //
+        // The background kick is marked isAutoRetry so it uses the lighter
+        // 'interactive' probe profile, not the full blocking peer-git window. A
+        // slow peer therefore can't turn the on-open refresh into a 25s blocking
+        // fan-out, and the bounded hasPendingDashboardMeshRefresh loop converges.
+        // Only the user-driven manual Refresh button runs the full probe.
         void (async () => {
             await loadGraph(false)
             if (!mountedRef.current) return
             // Don't double up with the hasPendingDashboardMeshRefresh auto-retry
             // loop (it already schedules loadGraph(true) when nodes are pending).
             if (pendingGitRetryTimerRef.current === null && !loadInFlightRef.current) {
-                void loadGraph(true)
+                void loadGraph(true, true)
             }
         })()
         return () => {
