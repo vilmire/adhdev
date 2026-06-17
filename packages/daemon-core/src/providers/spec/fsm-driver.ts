@@ -752,7 +752,20 @@ export class FsmDriver implements ISpecDriver {
         switch (a.type) {
             case 'send_keys': this.adapter.send_keys(a.keys); return;
             case 'open_picker':
-                this.adapter.send_keys(a.trigger_keys);
+                // Some TUIs (e.g. codex) don't register a slash command if its
+                // text and the submitting Enter arrive in the same write — the
+                // composer needs a beat to recognise the command before the CR.
+                // Split a trailing CR/LF off the trigger and send it after a
+                // short delay, mirroring send_message's delay_ms_before_submit.
+                {
+                    const m = /^([\s\S]*?)([\r\n]+)$/.exec(a.trigger_keys);
+                    if (m && m[1]) {
+                        this.adapter.send_keys(m[1]);
+                        setTimeout(() => this.adapter.send_keys(m[2]), 200);
+                    } else {
+                        this.adapter.send_keys(a.trigger_keys);
+                    }
+                }
                 this.pickerInProgress = { control_id: ctl.id, spec: ctl };
                 return;
             case 'attach_image': {

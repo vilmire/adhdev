@@ -21,7 +21,7 @@
 import { FsmDriver, type DashboardEvent, type ISpecDriver } from './fsm-driver.js';
 import { executeNativeHistory } from './native-history-executor.js';
 import * as fs from 'node:fs';
-import type { NativeHistoryConfig, Control } from './types.js';
+import type { NativeHistoryConfig, Control, ControlAction } from './types.js';
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
@@ -45,6 +45,10 @@ function stripAnsi(text: string): string {
         .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
         .replace(/\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g, '')
         .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
+function delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export class SpecCliAdapter implements CliAdapter {
@@ -311,9 +315,15 @@ export class SpecCliAdapter implements CliAdapter {
      * drives the dispatch:
      *
      *   send_keys     → click_control                   (e.g. stop)
-     *   open_picker   → click_control then resolve when extract_choices
-     *                   surface; choice index comes from args.choiceIndex
-     *                   or args.choice (string label match), defaulting to 0
+     *   open_picker   → two roles, driven by the screen, not a hardcoded list:
+     *                   - LIST  (no choice arg): open the picker, wait for it
+     *                     to render, parse the on-screen options via
+     *                     `extract_choices`, and return them as
+     *                     `controlResult.options` (+ `currentValue`). This is
+     *                     how the dashboard's Model/Mode controls learn what is
+     *                     actually selectable in this CLI right now.
+     *                   - SELECT (args.choiceIndex / args.choiceLabel): drive
+     *                     the picker to that option using `submit_key`.
      *   attach_image  → attach_image dispatch; expects args.blob (data url
      *                   or base64) and args.mime
      *
@@ -341,16 +351,148 @@ export class SpecCliAdapter implements CliAdapter {
             this.driver.dispatch({ kind: 'attach_image', blob, mime });
             return Promise.resolve({ ok: true, effects: [{ type: 'attached_image', controlId: ctl.id }] });
         }
-        // send_keys + open_picker both route through click_control. For
-        // open_picker the dashboard sees the picker modal arrive via a
-        // state_changed event, then submits the choice using
-        // resolveModal/click_modal_button. invokeScript's synchronous
-        // return is just an acknowledgement that the trigger fired.
+        if (action.type === 'open_picker') {
+            const choiceIndex = typeof flat.choiceIndex === 'number' ? flat.choiceIndex
+                : typeof flat.choiceIndex === 'string' && flat.choiceIndex.trim() ? Number(flat.choiceIndex)
+                : undefined;
+            const choiceLabel = typeof flat.choiceLabel === 'string' ? flat.choiceLabel
+                : typeof flat.choice === 'string' ? flat.choice
+                : undefined;
+            if ((typeof choiceIndex === 'number' && Number.isFinite(choiceIndex)) || (choiceLabel && choiceLabel.trim())) {
+                return this.selectPickerChoice(ctl, action, choiceIndex, choiceLabel);
+            }
+            return this.openPickerAndListChoices(ctl, action);
+        }
+        // send_keys routes through click_control.
         this.driver.dispatch({ kind: 'click_control', control_id: ctl.id, payload: flat });
-        const effects: { type: string; controlId: string }[] = [];
-        if (action.type === 'open_picker') effects.push({ type: 'opened_picker', controlId: ctl.id });
-        else if (action.type === 'send_keys') effects.push({ type: 'sent_keys', controlId: ctl.id });
-        return Promise.resolve({ ok: true, effects });
+        return Promise.resolve({ ok: true, effects: [{ type: 'sent_keys', controlId: ctl.id }] });
+    }
+
+    /**
+     * Open an `open_picker` control and return the options the CLI is showing,
+     * parsed live from the screen via `extract_choices`. Nothing is selected —
+     * the picker is left open so a follow-up SELECT invoke can commit a choice.
+     */
+    private async openPickerAndListChoices(
+        ctl: Control,
+        action: Extract<ControlAction, { type: 'open_picker' }>,
+    ): Promise<unknown> {
+        this.driver.dispatch({ kind: 'click_control', control_id: ctl.id });
+        const ready = await this.waitForPickerRendered(action);
+        const options = this.extractPickerChoices(action);
+        const currentValue = options.find(o => o.current)?.label;
+        return {
+            ok: true,
+            effects: [{ type: 'opened_picker', controlId: ctl.id }],
+            controlResult: {
+                options: options.map(o => ({ value: o.label, label: o.label, current: o.current })),
+                ...(currentValue ? { currentValue } : {}),
+                source: 'screen-parse',
+                ...(ready ? {} : { warning: 'picker_render_timeout' }),
+            },
+        };
+    }
+
+    /**
+     * Drive an already-listable picker to a specific option. The option can be
+     * named (choiceLabel — matched against the parsed on-screen labels) or
+     * positional (choiceIndex — the on-screen number). The actual keystrokes
+     * come from the spec's `submit_key` with `{index}` substituted, so the spec
+     * — not this code — decides how a selection is keyed for each CLI.
+     */
+    private async selectPickerChoice(
+        ctl: Control,
+        action: Extract<ControlAction, { type: 'open_picker' }>,
+        choiceIndex: number | undefined,
+        choiceLabel: string | undefined,
+    ): Promise<unknown> {
+        // Open + wait so the choice list is on screen before we resolve the
+        // label → index mapping (a fresh invoke may arrive with the picker
+        // closed; re-opening an open picker is a no-op on these CLIs).
+        this.driver.dispatch({ kind: 'click_control', control_id: ctl.id });
+        await this.waitForPickerRendered(action);
+        const options = this.extractPickerChoices(action);
+
+        let index = choiceIndex;
+        if ((index == null || !Number.isFinite(index)) && choiceLabel) {
+            const needle = choiceLabel.trim().toLowerCase();
+            const match = options.find(o => o.label.toLowerCase().includes(needle));
+            if (!match) {
+                return { ok: false, error: `choice not found on screen: ${choiceLabel}`, controlResult: { options: options.map(o => ({ value: o.label, label: o.label })) } };
+            }
+            index = match.index;
+        }
+        if (index == null || !Number.isFinite(index)) {
+            return { ok: false, error: 'choiceIndex or choiceLabel required to select' };
+        }
+
+        const keys = (action.submit_key || '{index}\r').replace(/\{index\}/g, String(index));
+        this.driver.dispatch({ kind: 'pty_write', data: keys });
+        const selected = options.find(o => o.index === index);
+        return {
+            ok: true,
+            effects: [{ type: 'selected_choice', controlId: ctl.id }],
+            controlResult: {
+                ok: true,
+                ...(selected ? { currentValue: selected.label } : {}),
+                selectedIndex: index,
+            },
+        };
+    }
+
+    /** Poll the live screen until the picker's `wait_for` condition matches,
+     *  up to a short budget. Returns true if it rendered, false on timeout. */
+    private async waitForPickerRendered(action: Extract<ControlAction, { type: 'open_picker' }>): Promise<boolean> {
+        const wf = action.wait_for;
+        if (!wf?.regex) { await delay(250); return true; }
+        const re = new RegExp(wf.regex, wf.flags ?? 'i');
+        const deadline = Date.now() + 2500;
+        while (Date.now() < deadline) {
+            await delay(120);
+            const hay = this.readScreenSectionText(wf.section);
+            if (re.test(hay)) return true;
+        }
+        return false;
+    }
+
+    /** Parse the picker's `extract_choices` pattern against the live screen.
+     *  Each match yields { index, label, current }. `current` is true for the
+     *  line the CLI marks with its cursor glyph (❯ ›). Purely screen-driven —
+     *  no model/mode names are baked in. */
+    private extractPickerChoices(action: Extract<ControlAction, { type: 'open_picker' }>): Array<{ index: number; label: string; current: boolean }> {
+        const ec = action.extract_choices;
+        if (!ec?.pattern) return [];
+        const text = this.readScreenSectionText(ec.section);
+        const out: Array<{ index: number; label: string; current: boolean }> = [];
+        const seen = new Set<number>();
+        for (const rawLine of text.split('\n')) {
+            const line = rawLine.replace(/\r$/, '');
+            const m = new RegExp(ec.pattern, ec.flags ?? '').exec(line);
+            if (!m) continue;
+            const idx = Number(m[1]);
+            if (!Number.isFinite(idx) || seen.has(idx)) continue;
+            const label = (m[2] ?? '').replace(/\s+/g, ' ').trim();
+            if (!label) continue;
+            const current = /^\s*[❯›>]/.test(line) || /[✔✓●]\s*$/.test(label);
+            seen.add(idx);
+            out.push({ index: idx, label, current });
+        }
+        return out;
+    }
+
+    /** Live text of a named screen section (or the whole screen when no
+     *  section is named), resolved from the driver's current sections. */
+    private readScreenSectionText(sectionId?: string): string {
+        try {
+            const sections = this.driver.getSections();
+            if (sectionId && sections) {
+                const hit = sections.find(s => s.id === sectionId);
+                if (hit) return hit.text;
+            }
+            return this.driver.getScreen();
+        } catch {
+            return '';
+        }
     }
     getDebugSnapshot(): unknown {
         let screen = '';

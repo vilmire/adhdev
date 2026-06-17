@@ -245,6 +245,14 @@ export function normalizeProviderScriptArgs(args: any, scriptName?: string): Rec
 function buildControlScriptResult(scriptName: string, payload: any): Record<string, unknown> {
     if (!payload || typeof payload !== 'object') return {};
 
+    // The spec-driven control adapter (open_picker LIST/SELECT) already
+    // produced a structured controlResult by parsing the live screen. Honour
+    // it verbatim instead of re-deriving one from legacy payload shapes —
+    // otherwise the screen-parsed options/currentValue get clobbered.
+    if (payload.controlResult && typeof payload.controlResult === 'object') {
+        return { controlResult: payload.controlResult };
+    }
+
     const legacyListPayload = (() => {
         if (Array.isArray(payload.options)) return payload;
         if (/^listmodels$/i.test(scriptName) && Array.isArray(payload.models)) {
