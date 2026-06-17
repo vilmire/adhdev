@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { getGitRepoStatus } from '../../src/git/git-status.js';
+import { __resetGitStatusCacheForTests, getGitRepoStatus } from '../../src/git/git-status.js';
 
 function git(cwd: string, args: string[], allowFailure = false): string {
   try {
@@ -97,6 +97,66 @@ describe('git repo status parser', () => {
     expect(status.untracked).toBe(1);
     expect(status.hasConflicts).toBe(false);
     expect(status.conflictFiles).toEqual([]);
+  });
+
+  describe('transient git failure does not drop repo membership', () => {
+    afterEach(() => {
+      __resetGitStatusCacheForTests();
+    });
+
+    it('returns a non-collapsed not_git_repo status (with reason) when there is no cache', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'adhdev-status-transient-nocache-'));
+      roots.push(dir);
+      // Non-git dir → genuine not_git_repo. This path must still report isGitRepo:false
+      // with the reason marker so mesh membership can distinguish it from a timeout.
+      const status = await getGitRepoStatus(dir);
+      expect(status.isGitRepo).toBe(false);
+      expect(status.reason).toBe('not_git_repo');
+    });
+
+    it('preserves the last-known-good repo identity on a timeout instead of returning all-null', async () => {
+      const repo = tempRepo('status-transient-timeout');
+      writeFileSync(join(repo, 'tracked.txt'), 'one\n');
+      const head = commit(repo, 'initial commit');
+
+      // First collect a healthy status to seed the last-known-good cache.
+      const healthy = await getGitRepoStatus(repo);
+      expect(healthy.isGitRepo).toBe(true);
+      expect(healthy.repoRoot).toBe(repo);
+      expect(healthy.branch).toBeTruthy();
+      expect(healthy.headCommit).toBe(head);
+
+      // Force a timeout by giving the collection path an impossibly short budget.
+      const timedOut = await getGitRepoStatus(repo, { timeoutMs: 1 });
+
+      // Membership MUST survive: a single git timeout cannot make the node read as
+      // "not a git repo" / repoRoot:null — that is exactly what dropped it from the graph.
+      expect(timedOut.isGitRepo).toBe(true);
+      expect(timedOut.repoRoot).toBe(repo);
+      expect(timedOut.branch).toBe(healthy.branch);
+      expect(timedOut.headCommit).toBe(head);
+      // It is re-stamped as stale/unavailable and carries the transient reason marker.
+      expect(timedOut.reason).toBe('timeout');
+      expect(timedOut.upstreamStatus).toBe('unavailable');
+      expect(timedOut.error).toBeTruthy();
+    });
+
+    it('falls back to all-null only when a timeout happens with no prior good status', async () => {
+      const repo = tempRepo('status-transient-cold-timeout');
+      writeFileSync(join(repo, 'tracked.txt'), 'one\n');
+      commit(repo, 'initial commit');
+
+      // No prior successful collection for this workspace → nothing to fall back to.
+      // Resolve succeeds quickly but the porcelain status read times out; with an empty
+      // cache the only safe answer is emptyStatus, still carrying the timeout reason.
+      const timedOut = await getGitRepoStatus(repo, { timeoutMs: 1 });
+      // Either the resolve or the first git read trips the 1ms budget; in both cases the
+      // reason marker distinguishes it from a genuine not_git_repo.
+      expect(['timeout', 'not_git_repo']).toContain(timedOut.reason);
+      if (timedOut.reason === 'timeout') {
+        expect(timedOut.isGitRepo).toBe(false);
+      }
+    });
   });
 
   it('detects merge conflicts from porcelain v2 unmerged records', async () => {

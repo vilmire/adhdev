@@ -1,8 +1,30 @@
 import type { DaemonBuildBehind, GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './git-types.js';
-import { GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
+import { GIT_STATUS_TIMEOUT_MS, GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
 import { getDaemonBuildInfo, type DaemonBuildInfo } from '../build-info.js';
 
 type ResolvedGitRepo = { workspace: string; repoRoot: string | null; isGitRepo: boolean };
+
+/**
+ * Last successfully-collected status per workspace, used to survive a transient git
+ * failure (timeout, slow Windows spawn under load, a momentary lock) WITHOUT dropping
+ * the node out of the mesh graph. A genuine "not a git repository" answer is NOT a
+ * transient failure — it never populates this cache and always reports isGitRepo:false.
+ */
+const lastKnownGoodStatus = new Map<string, GitRepoStatus>();
+
+/** Test seam: clear the last-known-good status cache between cases. */
+export function __resetGitStatusCacheForTests(): void {
+  lastKnownGoodStatus.clear();
+}
+
+/**
+ * git failure reasons that are transient/environmental rather than a real statement
+ * that the workspace is not a repo. On these we prefer the last-known-good status so a
+ * single slow git call cannot make a healthy node vanish from the graph.
+ */
+function isTransientGitFailure(error: GitCommandError): boolean {
+  return error.reason === 'timeout' || error.reason === 'git_command_failed';
+}
 
 export interface GitStatusOptions {
   timeoutMs?: number;
@@ -35,9 +57,50 @@ export async function getGitRepoStatus(
 ): Promise<GitRepoStatus> {
   const lastCheckedAt = Date.now();
   const includeSubmodules = options.includeSubmodules !== false;
+  // Status collection fans out into several git subprocesses (status, head, stash,
+  // submodule, optionally fetch). On Windows the per-spawn cost alone can exceed the
+  // 5s default, so unless the caller pinned a timeout, give the whole collection path
+  // the larger status budget. A caller that explicitly sets timeoutMs (e.g. a test
+  // injecting 1ms to exercise the transient-failure path) is respected.
+  const effectiveOptions: GitStatusOptions =
+    options.timeoutMs === undefined ? { ...options, timeoutMs: GIT_STATUS_TIMEOUT_MS } : options;
 
   try {
-    const repo = await resolveGitRepository(workspace, options);
+    const repo = await resolveGitRepository(workspace, effectiveOptions);
+    const status = await collectGitRepoStatus(repo, includeSubmodules, lastCheckedAt, effectiveOptions);
+    lastKnownGoodStatus.set(workspace, status);
+    return status;
+  } catch (error) {
+    const gitError = error instanceof GitCommandError
+      ? error
+      : new GitCommandError('git_command_failed', 'Failed to read Git status', { cause: error });
+
+    // A transient/environmental failure (timeout, slow-spawn-under-load) must NOT make
+    // a healthy node lose its repo identity and drop out of the mesh graph. Prefer the
+    // last status we successfully collected for this workspace, re-stamped as stale.
+    if (isTransientGitFailure(gitError)) {
+      const cached = lastKnownGoodStatus.get(workspace);
+      if (cached) {
+        return {
+          ...cached,
+          lastCheckedAt,
+          upstreamStatus: 'unavailable',
+          error: gitError.stderr || gitError.message,
+          reason: gitError.reason,
+        };
+      }
+    }
+
+    return emptyStatus(workspace, lastCheckedAt, gitError);
+  }
+}
+
+async function collectGitRepoStatus(
+  repo: ResolvedGitRepo,
+  includeSubmodules: boolean,
+  lastCheckedAt: number,
+  options: GitStatusOptions,
+): Promise<GitRepoStatus> {
     let parsed = await readPorcelainStatus(repo, options);
     let upstreamProbe: GitUpstreamProbe = getInitialUpstreamProbe(parsed);
 
@@ -89,16 +152,6 @@ export async function getGitRepoStatus(
       submodules,
       ...(daemonBuildBehind ? { daemonBuildBehind } : {}),
     };
-  } catch (error) {
-    if (error instanceof GitCommandError) {
-      return emptyStatus(workspace, lastCheckedAt, error);
-    }
-    return emptyStatus(
-      workspace,
-      lastCheckedAt,
-      new GitCommandError('git_command_failed', 'Failed to read Git status', { cause: error }),
-    );
-  }
 }
 
 /**
@@ -507,7 +560,12 @@ async function getSubmoduleStatuses(
   if (!repo.repoRoot) return [];
 
   try {
-    const result = await runGit(repo, ['submodule', 'status', '--recursive'], options);
+    // No `--recursive`: this superproject's submodules (oss, adhdev-providers) are
+    // leaf repos with no nested submodules, so `--recursive` doubles the (already
+    // slow on Windows) submodule-status spawn time for zero additional rows. If a
+    // nested submodule is ever introduced, restore --recursive WITH its own longer
+    // per-command timeout rather than reverting this wholesale.
+    const result = await runGit(repo, ['submodule', 'status'], options);
     const submodules = parseSubmoduleStatusOutput(result.stdout, repo.repoRoot, options.submoduleIgnorePaths);
     await Promise.all(submodules.map(submodule => enrichSubmoduleWorktreeStatus(repo, submodule, options)));
     return submodules;

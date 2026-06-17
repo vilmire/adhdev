@@ -10,6 +10,18 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_BUFFER = 1024 * 1024;
 
+/**
+ * Timeout for status-collection git commands (status/log/submodule/stash/fetch).
+ * The default 5s is fine for porcelain status, but on Windows the `git` subprocess
+ * spawn itself is pathologically slow (measured: `submodule status` ~3.5s, cold
+ * `log -1` ~4.2s) and overlaps with refreshUpstream fetches — a single command
+ * routinely exceeds 5s, which previously collapsed the whole status to all-null and
+ * dropped the node from the mesh graph. Give the collection path a much larger
+ * budget so a slow-but-healthy repo never reads as "not a git repo". Windows gets a
+ * larger budget than POSIX because the spawn cost is OS-specific, not repo-specific.
+ */
+export const GIT_STATUS_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 20_000;
+
 export interface GitExecutorOptions {
   timeoutMs?: number;
   maxBuffer?: number;
