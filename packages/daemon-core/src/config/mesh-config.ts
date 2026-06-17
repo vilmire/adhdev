@@ -127,6 +127,13 @@ function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMe
     } else {
         policy.schedulingStrategy = normalizedStrategy;
     }
+    // Convergence routing: strict opt-in (default false). Only persist when explicitly
+    // enabled so existing meshes.json stays byte-for-byte untouched.
+    if (policy.autoConvergeCodeChange === true) {
+        policy.autoConvergeCodeChange = true;
+    } else {
+        delete policy.autoConvergeCodeChange;
+    }
     return policy;
 }
 

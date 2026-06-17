@@ -152,6 +152,32 @@ export function resolveNodeSchedulingPriority(
     return Number.isFinite(raw) ? raw : 0;
 }
 
+/**
+ * Synthetic capability tag advertised by every mesh node describing how it can land
+ * its work onto the base branch:
+ *   - converge=refine: a local worktree node (on any machine — refine_mesh_node
+ *     forwards to the owning daemon) can run the Refinery merge → push → cleanup.
+ *   - converge=fast_forward: a non-worktree node (the machine itself) can only
+ *     fast-forward/push an already-converged branch.
+ * Emitted by buildMeshNodeCapabilityTags and matched through the ordinary
+ * required-tags filter.
+ */
+export const MESH_CONVERGE_REFINE_TAG = 'converge=refine';
+export const MESH_CONVERGE_FAST_FORWARD_TAG = 'converge=fast_forward';
+
+/**
+ * Resolve whether the load-balancing scheduler should auto-inject a
+ * `converge=refine` required tag onto code_change tasks so they hard-filter onto
+ * refine-capable (worktree) nodes only. Strict opt-in: defaults to false, so a mesh
+ * that does not set it behaves exactly as before (code_change routes to any eligible
+ * node, including a non-worktree machine node when no worktree exists).
+ */
+export function resolveAutoConvergeCodeChange(
+    policy: Pick<RepoMeshPolicy, 'autoConvergeCodeChange'> | null | undefined,
+): boolean {
+    return policy?.autoConvergeCodeChange === true;
+}
+
 export interface RepoMeshAutoFastForwardPolicy {
     /** Defaults to true. Set false to disable daemon-initiated idle fast-forwards. */
     enabled: boolean;
@@ -184,6 +210,16 @@ export interface RepoMeshPolicy {
      * capacity, and priority are evaluated identically regardless of strategy.
      */
     schedulingStrategy?: RepoMeshSchedulingStrategy;
+    /**
+     * Convergence routing opt-in: when true, the scheduler auto-injects a
+     * `converge=refine` required tag onto every code_change task at enqueue time, so
+     * code_change work hard-filters onto refine-capable worktree nodes (on any
+     * machine — refine_mesh_node forwards to the owning daemon) and never lands on a
+     * non-worktree machine node. Explicit target_node_id routing and any
+     * caller-supplied required_tags are preserved (the tag is merged, not replaced).
+     * Defaults to false: code_change routing is unchanged unless opted in.
+     */
+    autoConvergeCodeChange?: boolean;
     /**
      * Whether sessions spawned by mesh/coordinator policy should auto-open as visible
      * dashboard tabs or start hidden. Defaults to 'visible' to preserve existing

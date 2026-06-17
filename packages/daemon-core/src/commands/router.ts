@@ -7374,6 +7374,49 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+
+                // Remote forward: a worktree node lives on its OWN daemon's machine, so the
+                // refine (cd into node.workspace, merge → push → cleanup) must run on THAT
+                // daemon — not the coordinator, whose filesystem has no such path. The sibling
+                // fast_forward_mesh_node / clone_mesh_node handlers already forward to the
+                // node's daemon; refine_mesh_node was the gap (the coordinator would cd into a
+                // non-existent local path and fail), so remote-machine worktrees could not be
+                // converged at all. Forward both dry-run (plan reads the worktree git state)
+                // and execute (async merge job) so the same machine that owns the worktree
+                // resolves it.
+                //
+                // coordinatorDaemonId: refine is ASYNC — the completed/failed event is queued
+                // on the executing daemon's pending-events queue scoped to a coordinator id and
+                // recovered by the coordinator's reconcile loop (pullRemoteNodeQueues →
+                // get_pending_mesh_events). Without stamping our own status id, the remote
+                // daemon would fall back to ITS OWN statusInstanceId as the coordinator
+                // (startMeshRefineJob), scoping the terminal event to the wrong inbox where the
+                // real coordinator never pulls it. Stamp the canonical status id (which is in
+                // the coordinator's self-identity set used to scope the remote drain) so the
+                // event routes back here. Preserve any caller-supplied coordinatorDaemonId.
+                //
+                // _meshDirectDispatch prevents re-forwarding (and P2P self-dial) once the call
+                // has landed on the owning daemon — that daemon then executes locally even if
+                // the stored daemonId uses a legacy form that doesn't match its own identity.
+                {
+                    const meshRecordForForward = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                    const forwardNode = meshRecordForForward?.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
+                    const nodeDaemonId = typeof forwardNode?.daemonId === 'string' ? forwardNode.daemonId.trim() : undefined;
+                    const selfDaemonId = this.deps.statusInstanceId;
+                    const isRemote = nodeDaemonId && selfDaemonId && nodeDaemonId !== selfDaemonId;
+                    if (isRemote && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
+                        const callerCoordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
+                            ? args.coordinatorDaemonId.trim()
+                            : undefined;
+                        const forwarded = await this.deps.dispatchMeshCommand(nodeDaemonId!, 'refine_mesh_node', {
+                            ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+                            coordinatorDaemonId: callerCoordinatorDaemonId || selfDaemonId,
+                            _meshDirectDispatch: true,
+                        });
+                        return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+                    }
+                }
+
                 // Dry-run (plan-only) is the default and stays synchronous: it does no
                 // validation/merge/push and returns the plan instantly. Only execute=true
                 // (and not dry_run) goes through the async refine job that actually

@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
+import { MESH_CONVERGE_REFINE_TAG, resolveAutoConvergeCodeChange } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMesh } from '../config/mesh-config.js';
 
@@ -261,6 +262,17 @@ export function buildMeshNodeCapabilityTags(
         // mesh_enqueue_task with required_tags: ["worktree=<branch>"] routes
         // only to the matching worktree node.
         ...(node?.isLocalWorktree === true && worktreeBranch ? [`worktree=${worktreeBranch}`] : []),
+        // Convergence routing: advertise how this node can land its work onto base.
+        //   - converge=refine: local worktree nodes (on ANY machine — refine_mesh_node
+        //     now forwards to the owning daemon) can run the Refinery merge → push →
+        //     cleanup against their own checkout, so they accept code_change tasks.
+        //   - converge=fast_forward: non-worktree nodes (the machine itself) can only
+        //     ff/push an already-converged branch; they are NOT a destination for
+        //     code_change work (a worktree is created first, and that worktree node
+        //     receives the task instead). Reuses the ordinary required-tags filter —
+        //     the load-balancing scheduler auto-injects converge=refine for code_change
+        //     so such work is hard-filtered onto refine-capable nodes.
+        ...(node?.isLocalWorktree === true ? ['converge=refine'] : ['converge=fast_forward']),
         // Role-based routing: advertise role=<x> for each (node, provider) role
         // declared in policy.providerRoles. Narrowed to the selected provider when
         // one is given so the chosen provider must match a task's required role;
@@ -276,6 +288,44 @@ export function nodeSatisfiesRequiredTags(requiredTags: unknown, capabilityTags:
     if (required.length === 0) return true;
     const available = new Set(normalizeMeshCapabilityTags(capabilityTags));
     return required.every(tag => available.has(tag));
+}
+
+/**
+ * Convergence-aware required-tags resolution (load-balancing scheduler, opt-in).
+ *
+ * When the mesh enables policy.autoConvergeCodeChange, a `converge=refine` required
+ * tag is merged into a code_change task's required tags at enqueue time, so the
+ * scheduler hard-filters the task onto refine-capable worktree nodes only (on any
+ * machine — refine_mesh_node forwards to the owning daemon). Because the tag is
+ * persisted on the queue entry, BOTH the eligibility scan (maybeAutoLaunchOneQueueSession)
+ * and the claim transaction (claimNextQueueTask → nodeSatisfiesRequiredTags) enforce
+ * it consistently.
+ *
+ * Strict backward compatibility — the injection is skipped (returns the explicit tags
+ * unchanged) when ANY of:
+ *   - the mesh does not opt in (autoConvergeCodeChange !== true), or
+ *   - the task is not code_change (validation / live_debug_readonly / launch_app /
+ *     convergence carry no merge cost and may run anywhere), or
+ *   - the task is explicitly targeted (targetNodeId): the operator chose the node, so
+ *     we do not second-guess it by filtering on convergence capability.
+ * Idempotent: normalizeMeshCapabilityTags dedupes, so re-injection is a no-op.
+ */
+export function resolveConvergeRequiredTags(
+    meshId: string,
+    taskMode: MeshTaskMode | undefined,
+    explicitRequiredTags: string[],
+    opts?: { targetNodeId?: string },
+): string[] {
+    if (taskMode !== 'code_change') return explicitRequiredTags;
+    if (typeof opts?.targetNodeId === 'string' && opts.targetNodeId.trim()) return explicitRequiredTags;
+    let optedIn = false;
+    try {
+        optedIn = resolveAutoConvergeCodeChange(getMesh(meshId)?.policy as any);
+    } catch {
+        optedIn = false;
+    }
+    if (!optedIn) return explicitRequiredTags;
+    return normalizeMeshCapabilityTags([...explicitRequiredTags, MESH_CONVERGE_REFINE_TAG]);
 }
 
 function withQueueLock<T>(_meshId: string, fn: () => T): T {
@@ -371,7 +421,15 @@ export function enqueueTask(
             taskMode: modeValidation.taskMode,
             targetNodeId: opts?.targetNodeId,
             targetSessionId: opts?.targetSessionId,
-            requiredTags: normalizeMeshCapabilityTags(opts?.requiredTags),
+            // Convergence routing (opt-in): auto-inject converge=refine for code_change
+            // tasks so they hard-filter onto refine-capable worktree nodes. No-op unless
+            // the mesh opts in; explicit target_node_id / required_tags are preserved.
+            requiredTags: resolveConvergeRequiredTags(
+                meshId,
+                modeValidation.taskMode,
+                normalizeMeshCapabilityTags(opts?.requiredTags),
+                { targetNodeId: opts?.targetNodeId },
+            ),
             ...(dependsOn.length > 0 ? { dependsOn } : {}),
             ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
             createdAt: new Date().toISOString(),
