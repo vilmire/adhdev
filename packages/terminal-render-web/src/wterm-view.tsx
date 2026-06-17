@@ -169,6 +169,11 @@ export const WtermTerminalView = forwardRef<TerminalRendererHandle, GhosttyTermi
     const sizingModeRef = useRef(sizingMode);
     const lastReportedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
+    // In `fixed` sizing mode we measure cols/rows exactly once per mount and then
+    // never resize again, so we don't trigger wterm's expensive full-rebuild on
+    // every container size change. This guard tracks whether that one-time
+    // measurement has already happened.
+    const fixedMeasuredRef = useRef(false);
     const [ready, setReady] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -249,6 +254,14 @@ export const WtermTerminalView = forwardRef<TerminalRendererHandle, GhosttyTermi
       const wt = wtermRef.current;
       const host = containerRef.current;
       if (!wt || !host) return;
+      // `fixed` mode: measure once per mount, then never resize again (a resize
+      // round-trip triggers wterm's full DOM rebuild + scrollback replay, the
+      // exact hang we want to avoid for fixed-size surfaces). The initial
+      // measurement still runs so cols/rows are correct on first paint.
+      if (sizingModeRef.current === 'fixed') {
+        if (fixedMeasuredRef.current) return;
+        fixedMeasuredRef.current = true;
+      }
       const el = getWtermEl();
       if (!el) return;
       const rowHeight = Math.max(1, Math.round((fontSizeRef.current || 13) * 1.2));
@@ -331,7 +344,10 @@ export const WtermTerminalView = forwardRef<TerminalRendererHandle, GhosttyTermi
         requestAnimationFrame(() => reportViewportMetrics());
       },
       bumpResize: () => {
-        if (sizingModeRef.current !== 'fit') measureAndResize();
+        // `fixed` never re-measures after mount (measureAndResize would no-op
+        // anyway, but skip entirely to make intent explicit). `fit` lets wterm's
+        // own observer handle sizing.
+        if (sizingModeRef.current === 'measured') measureAndResize();
         requestAnimationFrame(() => reportViewportMetrics());
       },
       scrollToTop: () => {
@@ -440,6 +456,7 @@ export const WtermTerminalView = forwardRef<TerminalRendererHandle, GhosttyTermi
       return () => {
         cancelled = true;
         lastReportedSizeRef.current = null;
+        fixedMeasuredRef.current = false;
         try { wt?.destroy(); } catch {}
         wtermRef.current = null;
       };
@@ -447,12 +464,16 @@ export const WtermTerminalView = forwardRef<TerminalRendererHandle, GhosttyTermi
     }, [sizingMode]);
 
     // fontSize change: update CSS var + retrigger char measurement / reflow.
+    // A font change is an explicit user action, so even in `fixed` mode we allow
+    // exactly one re-measure for the new glyph metrics (release the one-shot
+    // guard so cols/rows recompute against the new font, then it stays put).
     useEffect(() => {
       fontSizeRef.current = fontSize;
       const wtEl = getWtermEl();
       if (!wtEl || !wtermRef.current) return;
       wtEl.style.setProperty('--term-font-size', `${fontSize}px`);
       wtEl.style.setProperty('--term-row-height', `${Math.round(fontSize * 1.2)}px`);
+      if (sizingModeRef.current === 'fixed') fixedMeasuredRef.current = false;
       requestAnimationFrame(() => {
         if (sizingModeRef.current !== 'fit') measureAndResize();
         reportViewportMetrics();
@@ -460,9 +481,10 @@ export const WtermTerminalView = forwardRef<TerminalRendererHandle, GhosttyTermi
     }, [fontSize]);
 
     // Measured-mode container ResizeObserver → reflow the grid. (fit mode uses
-    // wterm's own observer.)
+    // wterm's own observer; fixed mode never observes — it measures once at
+    // mount and stays put, avoiding the resize-driven full rebuild.)
     useEffect(() => {
-      if (sizingMode === 'fit') return;
+      if (sizingMode === 'fit' || sizingMode === 'fixed') return;
       const host = containerRef.current;
       const Ctor = host?.ownerDocument?.defaultView?.ResizeObserver;
       if (!host || !Ctor) return;
