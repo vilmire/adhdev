@@ -22,6 +22,7 @@ import { LOG } from '../logging/logger.js';
 import { VersionArchive } from './version-archive.js';
 import type {
   ProviderCompatibilityEntry,
+  ProviderControlDef,
   ProviderModule,
   ProviderCategory,
   ProviderScripts,
@@ -85,6 +86,70 @@ export interface MachineProviderConfig {
   args?: string[];
   lastDetection?: MachineProviderCheckResult;
   lastVerification?: MachineProviderCheckResult;
+}
+
+/**
+ * Translate a spec `control_bar` array into the web-facing
+ * `ProviderControlDef[]` shape the dashboard renders.
+ *
+ * The two shapes are distinct: `control_bar` entries are daemon-side
+ * `{ id, label, visible_when_state, action }` records driving
+ * SpecCliAdapter.invokeScript, while the dashboard's chat bar reads
+ * `ProviderControlDef` (`{ id, type, label, placement, ... }`). Spec
+ * providers (claude-cli / codex-cli) historically declared *only*
+ * `control_bar`, so the dashboard saw no controls at all — the Model / Mode
+ * pickers never rendered. This bridges that gap without changing how the
+ * controls actually dispatch.
+ *
+ * Script-name contract: the dashboard sends the control's
+ * `listScript` / `setScript` / `invokeScript` name through
+ * `invoke_provider_script`, which gates on `provider.scripts[<name>]` and then
+ * routes to `SpecCliAdapter.invokeScript(<name>)` — which matches the name
+ * against `control_bar[].id`. So every synthesized script name MUST equal the
+ * control id (the loader stubs `provider.scripts[id]` from the same source).
+ *
+ * Mapping:
+ *   open_picker  → select (dynamic): list + set both keyed on the control id;
+ *                  the adapter distinguishes LIST vs SELECT by the presence of
+ *                  a choice arg, so one id serves both roles.
+ *   send_keys    → action: one-shot keystroke (stop, cycle_mode).
+ *   attach_image → skipped: it needs an image blob from a file picker, not a
+ *                  bare bar button; surfacing it as an `action` would only
+ *                  produce a button that errors with "requires args.blob".
+ */
+function synthesizeControlsFromControlBar(specControls: any[]): ProviderControlDef[] {
+  const out: ProviderControlDef[] = [];
+  specControls.forEach((ctl, index) => {
+    const id = typeof ctl?.id === 'string' ? ctl.id.trim() : '';
+    const actionType = ctl?.action?.type;
+    if (!id || !actionType) return;
+    const label = typeof ctl?.label === 'string' && ctl.label.trim() ? ctl.label : id;
+    if (actionType === 'open_picker') {
+      out.push({
+        id,
+        type: 'select',
+        label,
+        placement: 'bar',
+        dynamic: true,
+        listScript: id,
+        setScript: id,
+        readFrom: id,
+        order: index,
+      });
+    } else if (actionType === 'send_keys') {
+      out.push({
+        id,
+        type: 'action',
+        label,
+        placement: 'bar',
+        invokeScript: id,
+        resultDisplay: 'none',
+        order: index,
+      });
+    }
+    // attach_image intentionally skipped — see fn doc.
+  });
+  return out;
 }
 
 type CliDetectionEntry = {
@@ -1269,6 +1334,19 @@ export class ProviderLoader {
                   controlId: ctl.id,
                   actionType: ctl.action.type,
                 });
+              }
+            }
+            // Bridge the spec control_bar into the web-facing controls schema so
+            // the dashboard chat bar actually renders Model/Mode pickers. Only
+            // synthesize when the provider hasn't already declared its own
+            // `controls` in provider.v1.json (e.g. hermes-cli) — an explicit
+            // declaration wins and must not be clobbered.
+            const hasDeclaredControls = Array.isArray((resolved as any).controls)
+              && (resolved as any).controls.length > 0;
+            if (!hasDeclaredControls) {
+              const synthesized = synthesizeControlsFromControlBar(specControls);
+              if (synthesized.length > 0) {
+                resolved.controls = synthesized;
               }
             }
           }

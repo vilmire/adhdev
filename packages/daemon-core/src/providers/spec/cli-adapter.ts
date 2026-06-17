@@ -355,8 +355,14 @@ export class SpecCliAdapter implements CliAdapter {
             const choiceIndex = typeof flat.choiceIndex === 'number' ? flat.choiceIndex
                 : typeof flat.choiceIndex === 'string' && flat.choiceIndex.trim() ? Number(flat.choiceIndex)
                 : undefined;
+            // `value` is the arg the dashboard's generic value-control set path
+            // sends ({ value: <chosen option> }). control_bar pickers are
+            // surfaced to the dashboard as dynamic `select` controls whose
+            // option values are the screen-parsed labels, so a bare `value`
+            // is just a label to match against the live choices.
             const choiceLabel = typeof flat.choiceLabel === 'string' ? flat.choiceLabel
                 : typeof flat.choice === 'string' ? flat.choice
+                : typeof flat.value === 'string' ? flat.value
                 : undefined;
             if ((typeof choiceIndex === 'number' && Number.isFinite(choiceIndex)) || (choiceLabel && choiceLabel.trim())) {
                 return this.selectPickerChoice(ctl, action, choiceIndex, choiceLabel);

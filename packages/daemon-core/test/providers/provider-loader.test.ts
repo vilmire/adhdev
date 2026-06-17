@@ -17,6 +17,12 @@ function writeScriptsJs(root: string, category: string, type: string, scriptDir:
   writeFileSync(join(dir, 'scripts.js'), source, 'utf-8');
 }
 
+function writeSpecJson(root: string, category: string, type: string, spec: Record<string, unknown>) {
+  const dir = join(root, category, type);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'spec.json'), JSON.stringify(spec, null, 2), 'utf-8');
+}
+
 function byKey(settings: Array<{ key: string } & Record<string, unknown>>) {
   return Object.fromEntries(settings.map((setting) => [setting.key, setting]));
 }
@@ -647,5 +653,108 @@ describe('ProviderLoader settings schema', () => {
 
     const provider = loader.getExtensionProviders().find((entry) => entry.type === 'test-extension');
     expect(provider?.extensionIdPattern?.test('PUBLISHER.TEST-EXTENSION')).toBe(true);
+  });
+});
+
+describe('ProviderLoader spec control_bar → web controls translation', () => {
+  let userDir = '';
+  let testConfig: { providerSettings?: Record<string, Record<string, unknown>> };
+
+  beforeEach(() => {
+    userDir = mkdtempSync(join(tmpdir(), 'adhdev-provider-controlbar-'));
+    testConfig = { providerSettings: {} };
+  });
+
+  afterEach(() => {
+    if (userDir) {
+      rmSync(userDir, { recursive: true, force: true });
+    }
+    userDir = '';
+    testConfig = { providerSettings: {} };
+  });
+
+  it('synthesizes web controls from a spec control_bar (open_picker → select, send_keys → action)', () => {
+    writeProvider(userDir, 'cli', 'claude-cli', {
+      type: 'claude-cli',
+      name: 'Claude CLI',
+      displayName: 'Claude CLI',
+      category: 'cli',
+      spawn: { command: 'claude' },
+    });
+    writeSpecJson(userDir, 'cli', 'claude-cli', {
+      control_bar: [
+        { id: 'stop', label: 'Stop', visible_when_state: ['busy'], action: { type: 'send_keys', keys: '' } },
+        {
+          id: 'set_model', label: 'Model', visible_when_state: ['idle'],
+          action: {
+            type: 'open_picker',
+            trigger_keys: '/model\r',
+            wait_for: { section: 'modal', regex: 'Select a model' },
+            extract_choices: { section: 'modal', pattern: '^\\s*(\\d+)\\.\\s+(.+)$' },
+            submit_key: '{index}\r',
+          },
+        },
+        { id: 'cycle_mode', label: 'Mode', visible_when_state: ['idle'], action: { type: 'send_keys', keys: '[Z' } },
+        { id: 'attach_image', label: '📎', visible_when_state: ['idle'], action: { type: 'attach_image', method: 'tempfile_then_keys', keys_template: '{path}\r' } },
+      ],
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    const resolved = loader.resolve('claude-cli');
+    const controls = resolved?.controls ?? [];
+    // attach_image is intentionally skipped (needs a blob from a file picker).
+    expect(controls.map((c) => c.id)).toEqual(['stop', 'set_model', 'cycle_mode']);
+
+    const model = controls.find((c) => c.id === 'set_model');
+    expect(model).toMatchObject({
+      id: 'set_model',
+      type: 'select',
+      label: 'Model',
+      placement: 'bar',
+      dynamic: true,
+      // Script names MUST equal the control id so invoke routes to control_bar.
+      listScript: 'set_model',
+      setScript: 'set_model',
+      order: 1,
+    });
+
+    const stop = controls.find((c) => c.id === 'stop');
+    expect(stop).toMatchObject({
+      id: 'stop',
+      type: 'action',
+      placement: 'bar',
+      invokeScript: 'stop',
+      order: 0,
+    });
+
+    // The invoke-gate stub still exists alongside the web controls.
+    expect(typeof (resolved?.scripts as any)?.set_model).toBe('function');
+  });
+
+  it('does not overwrite controls a provider already declares in provider.json', () => {
+    writeProvider(userDir, 'cli', 'hermes-cli', {
+      type: 'hermes-cli',
+      name: 'Hermes CLI',
+      displayName: 'Hermes CLI',
+      category: 'cli',
+      spawn: { command: 'hermes' },
+      controls: [
+        { id: 'provider', type: 'select', label: 'Provider', placement: 'bar', order: 10, setScript: 'setProvider', readFrom: 'provider', options: [{ value: 'auto', label: 'Auto' }] },
+      ],
+    });
+    writeSpecJson(userDir, 'cli', 'hermes-cli', {
+      control_bar: [
+        { id: 'set_model', label: 'Model', visible_when_state: ['idle'], action: { type: 'open_picker', trigger_keys: '/model\r', wait_for: { section: 'modal', regex: 'x' }, extract_choices: { section: 'modal', pattern: 'x' }, submit_key: '{index}\r' } },
+      ],
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    const resolved = loader.resolve('hermes-cli');
+    // The declared controls win — no synthesized set_model is injected.
+    expect((resolved?.controls ?? []).map((c) => c.id)).toEqual(['provider']);
   });
 });
