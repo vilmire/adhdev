@@ -172,6 +172,15 @@ function collapseReplayAssistantTurns(messages: HistoryMessage[], historyBehavio
         }
 
         if (message.role === 'assistant') {
+            // Tool / activity bubbles are distinct events, not replayed prose —
+            // collapsing them would erase every tool call and result after the
+            // turn's first assistant message. Only consecutive *prose* assistant
+            // turns are the replay-dedup target this collapse exists for.
+            const isActivity = message.kind === 'tool' || message.kind === 'terminal' || message.kind === 'thought';
+            if (isActivity) {
+                collapsed.push(message);
+                continue;
+            }
             if (sawAssistantSinceLastUser) continue;
             sawAssistantSinceLastUser = true;
             collapsed.push(message);

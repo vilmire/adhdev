@@ -98,6 +98,43 @@ export interface NativeHistoryMessageMap {
     content_unwrap?: string[];
     timestamp_ms?: string;
     kind?: string;
+    /**
+     * Declarative tool-bubble extraction. Without it the executor only emits
+     * the text-bearing parts of each record, so a turn that is purely a tool
+     * call or tool result (no prose) is dropped — the restored transcript
+     * loses every tool interaction. When present, the executor walks each
+     * record's content blocks and emits an extra `kind:'tool'` message for
+     * any block whose `$.type` matches a tool shape.
+     *
+     * Defaults target the Anthropic-style content-block shape that claude-cli
+     * and codex-cli persist (blocks of `{ type: 'tool_use' | 'tool_result',
+     * name, input, content }`); a provider with a different on-disk shape
+     * overrides the field paths. Set `tools: {}` to opt in with the defaults.
+     */
+    tools?: NativeHistoryToolMap;
+}
+
+/**
+ * How to surface tool-call / tool-result blocks as `kind:'tool'` bubbles.
+ * Every field is optional — the defaults read the Anthropic block shape.
+ * Paths are jsonpath-lite evaluated against a single content block (the
+ * element of `$.message.content[]`), not the whole record.
+ */
+export interface NativeHistoryToolMap {
+    /** Path to a block's discriminator. Default `$.type`. */
+    block_type?: string;
+    /** Block-type values that mean "a tool was invoked". Default
+     *  `['tool_use', 'function_call', 'custom_tool_call']`. */
+    call_types?: string[];
+    /** Block-type values that mean "a tool returned". Default
+     *  `['tool_result', 'function_call_output', 'custom_tool_call_output']`. */
+    result_types?: string[];
+    /** Path to the tool name on a call block. Default `$.name`. */
+    call_name?: string;
+    /** Path to the tool arguments on a call block. Default `$.input`. */
+    call_args?: string;
+    /** Path to the result payload on a result block. Default `$.content`. */
+    result_content?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

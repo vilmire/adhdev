@@ -26,6 +26,7 @@ import type {
     NativeHistoryJsonlSource,
     NativeHistoryMessageMap,
     NativeHistorySqliteSource,
+    NativeHistoryToolMap,
 } from './types.js';
 
 export interface NativeHistoryInput {
@@ -163,8 +164,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     for (let i = 0; i < lines.length; i += 1) {
         const rec = lines[i];
         if (filter && !filter(rec)) continue;
-        const msg = projectMessage(rec, src.message_map, i, lines.length, mtime);
-        if (msg) {
+        for (const msg of projectMessages(rec, src.message_map, i, lines.length, mtime)) {
             if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
             messages.push(msg);
         }
@@ -256,8 +256,9 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
         const mtime = safeMtimeMs(resolved);
         const messages: NativeHistoryMessage[] = [];
         for (let i = 0; i < messageRows.length; i += 1) {
-            const msg = projectMessage(messageRows[i], src.message_map, i, messageRows.length, mtime);
-            if (msg) messages.push(msg);
+            for (const msg of projectMessages(messageRows[i], src.message_map, i, messageRows.length, mtime)) {
+                messages.push(msg);
+            }
         }
         if (messages.length === 0) return null;
 
@@ -749,11 +750,75 @@ function jsonPathGet(record: any, expr: string): unknown {
     return cur;
 }
 
-function projectMessage(record: any, map: NativeHistoryMessageMap, index: number, total: number, sourceMtimeMs: number): NativeHistoryMessage | null {
+/**
+ * Project one on-disk record into zero or more transcript messages.
+ *
+ * A record yields at most one text bubble (the prose turn) plus — when the
+ * spec declares `message_map.tools` — one `kind:'tool'` bubble per tool-call
+ * or tool-result content block. Without `tools`, behaviour is identical to
+ * the old single-message projection: text-only, tool blocks dropped.
+ */
+function projectMessages(record: any, map: NativeHistoryMessageMap, index: number, total: number, sourceMtimeMs: number): NativeHistoryMessage[] {
     const roleRaw = jsonPathGet(record, map.role);
-    const contentRaw = jsonPathGet(record, map.content);
     const role = normalizeRole(roleRaw);
-    let content = stringifyContent(contentRaw);
+
+    // Records are passed in chronological order (oldest → newest), so the
+    // last record's receivedAt should be ~sourceMtimeMs (when the file was
+    // last touched) and earlier records should walk backwards. Earlier
+    // version had this inverted, which made the dashboard render bubbles
+    // in reverse order and produce the "chat jumping" effect.
+    let receivedAt = sourceMtimeMs - ((total - 1 - index) * 1000);
+    if (map.timestamp_ms) {
+        const tsRaw = jsonPathGet(record, map.timestamp_ms);
+        const parsed = parseTimestamp(tsRaw);
+        if (parsed != null) receivedAt = parsed;
+    }
+    const kindRaw = map.kind ? jsonPathGet(record, map.kind) : undefined;
+    const kind = typeof kindRaw === 'string' && kindRaw ? kindRaw : 'standard';
+
+    const out: NativeHistoryMessage[] = [];
+
+    // Two transcript shapes carry tool activity:
+    //   - record-level: the whole record IS a tool call/result (codex stores
+    //     each function_call / function_call_output as its own jsonl record).
+    //   - block-nested: tool blocks live inside the message's content array
+    //     (claude stores tool_use / tool_result as content blocks).
+    // When the spec opts into `tools`, try the record itself first; if it's a
+    // tool record we emit only that bubble (it has no prose). Otherwise emit
+    // the text bubble plus a tool bubble per matching content block.
+    if (map.tools) {
+        const recordTool = projectToolBlock(record, role, map.tools);
+        if (recordTool) {
+            out.push({ ...recordTool, receivedAt });
+            return out;
+        }
+    }
+
+    const contentRaw = jsonPathGet(record, map.content);
+    const content = cleanContent(stringifyContent(contentRaw), map);
+    if (content) out.push({ role, content, receivedAt, kind });
+
+    // Block-nested tool bubbles are ordered just after the text bubble of the
+    // same record by nudging receivedAt forward a millisecond per bubble, so a
+    // turn's prose still renders before its tool activity without colliding
+    // with the next record's timestamp.
+    if (map.tools && Array.isArray(contentRaw)) {
+        let nudge = 1;
+        for (const block of contentRaw) {
+            const tool = projectToolBlock(block, role, map.tools);
+            if (tool) {
+                out.push({ ...tool, receivedAt: receivedAt + nudge });
+                nudge += 1;
+            }
+        }
+    }
+
+    return out;
+}
+
+/** Apply content_strip / content_unwrap tag surgery and trim. */
+function cleanContent(input: string, map: NativeHistoryMessageMap): string {
+    let content = input;
     if (content && map.content_strip) {
         for (const tag of map.content_strip) {
             const safeTag = tag.replace(/[.+^${}()|[\]\\]/g, '\\$&');
@@ -769,23 +834,50 @@ function projectMessage(record: any, map: NativeHistoryMessageMap, index: number
             content = content.replace(open, '').replace(close, '');
         }
     }
-    if (content) content = content.trim();
-    if (!content) return null;
+    return content ? content.trim() : '';
+}
 
-    // Records are passed in chronological order (oldest → newest), so the
-    // last record's receivedAt should be ~sourceMtimeMs (when the file was
-    // last touched) and earlier records should walk backwards. Earlier
-    // version had this inverted, which made the dashboard render bubbles
-    // in reverse order and produce the "chat jumping" effect.
-    let receivedAt = sourceMtimeMs - ((total - 1 - index) * 1000);
-    if (map.timestamp_ms) {
-        const tsRaw = jsonPathGet(record, map.timestamp_ms);
-        const parsed = parseTimestamp(tsRaw);
-        if (parsed != null) receivedAt = parsed;
+const DEFAULT_TOOL_CALL_TYPES = ['tool_use', 'function_call', 'custom_tool_call'];
+const DEFAULT_TOOL_RESULT_TYPES = ['tool_result', 'function_call_output', 'custom_tool_call_output'];
+
+/**
+ * Turn a single content block into a `kind:'tool'` message, or null if the
+ * block is not a tool call/result. Field locations come from the spec's
+ * `tools` map with Anthropic-block defaults.
+ *
+ * Both tool calls and tool results render on the assistant side: a tool call
+ * is the agent's action, and a tool result is part of the agent's work, not a
+ * user turn (claude/codex persist results under the user / no role, which would
+ * otherwise misattribute them). Calls render as `↗ {name}: {one-line args}`,
+ * results as `↘ {one-line result}`. The `role` param is accepted for symmetry
+ * but tool bubbles are always assistant.
+ */
+function projectToolBlock(block: any, role: 'user' | 'assistant' | 'system', tmap: NativeHistoryToolMap): NativeHistoryMessage | null {
+    void role;
+    if (block == null || typeof block !== 'object') return null;
+    const typeVal = String(jsonPathGet(block, tmap.block_type || '$.type') ?? '');
+    if (!typeVal) return null;
+    const callTypes = tmap.call_types ?? DEFAULT_TOOL_CALL_TYPES;
+    const resultTypes = tmap.result_types ?? DEFAULT_TOOL_RESULT_TYPES;
+
+    if (callTypes.includes(typeVal)) {
+        const name = String(jsonPathGet(block, tmap.call_name || '$.name') ?? 'tool').trim() || 'tool';
+        const args = oneLine(stringifyContent(jsonPathGet(block, tmap.call_args || '$.input')), 240);
+        const content = args ? `↗ ${name}: ${args}` : `↗ ${name}`;
+        return { role: 'assistant', content, receivedAt: 0, kind: 'tool' };
     }
-    const kindRaw = map.kind ? jsonPathGet(record, map.kind) : undefined;
-    const kind = typeof kindRaw === 'string' && kindRaw ? kindRaw : 'standard';
-    return { role, content, receivedAt, kind };
+    if (resultTypes.includes(typeVal)) {
+        const result = oneLine(stringifyContent(jsonPathGet(block, tmap.result_content || '$.content')), 600);
+        if (!result) return null;
+        return { role: 'assistant', content: `↘ ${result}`, receivedAt: 0, kind: 'tool' };
+    }
+    return null;
+}
+
+/** Collapse whitespace to single spaces and cap length for a tool summary. */
+function oneLine(s: string, max: number): string {
+    const flat = s.replace(/\s+/g, ' ').trim();
+    return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
 }
 
 /**

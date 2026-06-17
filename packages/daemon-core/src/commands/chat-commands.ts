@@ -29,7 +29,7 @@ import {
 } from '../chat/source-resolver.js';
 import type { ChatMessage } from '../types.js';
 import type { SessionTransport } from '../shared-types.js';
-import { filterUserFacingChatMessages, normalizeChatMessages } from '../providers/chat-message-normalization.js';
+import { filterUserFacingChatMessages, isActivityChatMessage, isUserFacingChatMessage, normalizeChatMessages } from '../providers/chat-message-normalization.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
@@ -1531,7 +1531,15 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any, h?:
     const filteredMessages = h
         ? maybeHideCoordinatorPromptMessage(h, providerHint, sessionIdHint, messages)
         : messages;
-    const visibleMessages = filterUserFacingChatMessages(filteredMessages);
+    // By default read_chat returns only user-facing prose turns. When the
+    // caller opts in with `includeActivity`, tool/terminal/thought activity
+    // bubbles (e.g. the native transcript's tool calls and results) are kept
+    // inline too, in chronological order, so a restored conversation can show
+    // what the agent actually did — not just the prose around it.
+    const includeActivity = args?.includeActivity === true || args?.includeActivity === 'true';
+    const visibleMessages = includeActivity
+        ? filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m))
+        : filterUserFacingChatMessages(filteredMessages);
     const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
     const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
     const preservedPayloadFields = Object.fromEntries(Object.entries(payload).filter(([key]) => shouldPreserveReadChatPayloadField(key)));
