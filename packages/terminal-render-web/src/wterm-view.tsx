@@ -31,7 +31,10 @@ import {
   useState,
 } from 'react';
 // Structural + selection CSS for the wterm DOM grid (scroll/overflow/::selection).
-import '@wterm/dom/css';
+// Import the concrete `.css` path (not the `@wterm/dom/css` subpath) so it
+// matches the standard `declare module '*.css'` ambient and type-checks in
+// strict consumers (web-cloud's `tsc -b`) without a custom module declaration.
+import '@wterm/dom/src/terminal.css';
 import { WTerm, type TerminalCore } from '@wterm/dom';
 import { GhosttyCore } from '@wterm/ghostty';
 import { sanitizeTerminalInputForProvider } from './input-sanitizer';

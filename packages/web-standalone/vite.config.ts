@@ -43,6 +43,15 @@ export default defineConfig({
                 id === 'module',
             output: {
                 manualChunks(id) {
+                    // The opt-in @wterm/ghostty renderer is dynamically imported
+                    // (React.lazy) so its ~428KB WASM + JS never load unless the
+                    // user selects it. Keep wterm-view and the @wterm/* packages
+                    // OUT of the eager 'terminal' chunk — forcing them in here
+                    // would defeat that code-split and load them for everyone.
+                    if (
+                        id.includes('terminal-render-web/src/wterm-view') ||
+                        id.includes('@wterm/')
+                    ) return 'terminal-wterm'
                     if (
                         id.includes('packages/terminal-render-web') ||
                         id.includes('ghostty-web') ||
