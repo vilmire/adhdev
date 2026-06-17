@@ -210,24 +210,44 @@ export const WtermTerminalView = forwardRef<TerminalRendererHandle, GhosttyTermi
 
     // Measure how many cols/rows fit the container and resize the core to match.
     // wterm only auto-resizes in autoResize mode; in measured mode we drive it.
+    // Pin the scroll element to the bottom over a few animation frames, to win
+    // the race against wterm's own rAF-scheduled re-render after a resize.
+    const pinToBottom = (framesLeft: number) => {
+      const el = getScrollEl();
+      if (el && el.scrollHeight > el.clientHeight) {
+        el.scrollTop = el.scrollHeight;
+      }
+      reportScrollMetrics();
+      if (framesLeft > 0) {
+        requestAnimationFrame(() => pinToBottom(framesLeft - 1));
+      }
+    };
+
+    // Derive the per-character advance width. wterm renders each color run as a
+    // single span, so a span's width must be divided by its character count —
+    // NOT used directly (a full-line run is ~the row width).
+    const measureCharWidth = (el: HTMLElement): number => {
+      const spans = el.querySelectorAll('.term-row > span');
+      for (const sp of Array.from(spans)) {
+        const len = (sp.textContent || '').length;
+        const w = (sp as HTMLElement).getBoundingClientRect().width;
+        if (len > 0 && w > 0) return w / len;
+      }
+      // Fallback: monospace advance ≈ 0.6em.
+      return (fontSizeRef.current || 13) * 0.6;
+    };
+
     const measureAndResize = () => {
       const wt = wtermRef.current;
       const host = containerRef.current;
       if (!wt || !host) return;
       const el = getWtermEl();
       if (!el) return;
-      // Probe a single cell to derive char metrics.
-      const probe = el.querySelector('.term-row > span') as HTMLElement | null;
-      const cs = el.ownerDocument.defaultView?.getComputedStyle(el);
       const rowHeight = Math.max(1, Math.round((fontSizeRef.current || 13) * 1.2));
-      let charWidth = probe?.getBoundingClientRect().width || 0;
-      if (!charWidth) {
-        // Fallback: monospace ~0.6em advance.
-        charWidth = (fontSizeRef.current || 13) * 0.6;
-      }
+      const charWidth = measureCharWidth(el);
       const availW = host.clientWidth;
       const availH = host.clientHeight;
-      if (availW <= 0 || availH <= 0) return;
+      if (availW <= 0 || availH <= 0 || charWidth <= 0) return;
       const cols = Math.max(2, Math.floor(availW / charWidth));
       const rows = Math.max(1, Math.floor(availH / rowHeight));
       const last = lastReportedSizeRef.current;
@@ -236,8 +256,13 @@ export const WtermTerminalView = forwardRef<TerminalRendererHandle, GhosttyTermi
         wt.resize(cols, rows);
         lastReportedSizeRef.current = { cols, rows };
         onResizeRef.current?.(cols, rows);
+        // After a reflow, content shifts into scrollback. wterm re-renders on
+        // its own rAF, so pin to the latest output across a few frames to win
+        // the race with that render (otherwise the viewport shows blank top
+        // padding rows). Matches the live-streaming dashboard expectation of
+        // staying at the newest output after a resize.
+        pinToBottom(4);
       } catch {}
-      void cs;
     };
 
     const getVisibleText = (): string => {
