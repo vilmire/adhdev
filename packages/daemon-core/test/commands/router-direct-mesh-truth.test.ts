@@ -20,7 +20,10 @@ function initRepo(path: string) {
   git(['commit', '-m', 'init'], path)
 }
 
-function createRouter(dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<unknown>) {
+function createRouter(
+  dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<unknown>,
+  getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null,
+) {
   return new DaemonCommandRouter({
     commandHandler: { handle: vi.fn(async () => ({ success: false })) } as any,
     cliManager: { handleCliCommand: vi.fn(async () => ({ success: false })) } as any,
@@ -40,10 +43,27 @@ function createRouter(dispatchMeshCommand?: (daemonId: string, command: string, 
       listSessions: vi.fn(async () => []),
     } as any,
     dispatchMeshCommand,
+    getMeshPeerConnectionStatus,
     packageName: 'adhdev',
     statusVersion: '0.9.71',
   })
 }
+
+const REMOTE_GIT_STATUS = {
+  isGitRepo: true,
+  workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+  repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+  branch: 'main',
+  ahead: 0,
+  behind: 0,
+  staged: 0,
+  modified: 0,
+  untracked: 0,
+  deleted: 0,
+  renamed: 0,
+  conflicted: 0,
+  headCommit: 'cafe1234',
+} as const
 
 describe('DaemonCommandRouter direct Repo Mesh truth', () => {
   const roots: string[] = []
@@ -510,5 +530,83 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       behind: 0,
       needsConvergence: false,
     })
+  })
+
+  it('retries a slow-but-connected peer git probe and confirms it on a later attempt', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-probe-retry-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    // First probe fails (slow peer), the retry succeeds. The peer stays
+    // 'connected' throughout so the bounded retry budget is spent.
+    let calls = 0
+    const dispatchMeshCommand = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) throw new Error('timeout')
+      return { status: REMOTE_GIT_STATUS }
+    })
+    const getMeshPeerConnectionStatus = vi.fn(() => ({ state: 'connected', reported: true }))
+    const router = createRouter(dispatchMeshCommand, getMeshPeerConnectionStatus)
+
+    const result: any = await router.execute('get_mesh', {
+      meshId: 'mesh_retry',
+      inlineMesh: {
+        id: 'mesh_retry',
+        coordinator: { preferredNodeId: 'node_local' },
+        nodes: [
+          { id: 'node_local', daemonId: 'daemon-local', machineId: 'machine-local', workspace: localRepo, repoRoot: localRepo, policy: {} },
+          { id: 'node_slow', daemonId: 'daemon-slow', machineId: 'machine-slow', workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev', repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev', policy: {} },
+        ],
+      },
+      requireDirectPeerTruth: true,
+      refresh: true,
+    })
+
+    expect(result.success).toBe(true)
+    // More than one git_status dispatch proves the retry actually fired.
+    expect(dispatchMeshCommand.mock.calls.length).toBeGreaterThan(1)
+    expect(result.sourceOfTruth.directPeerTruth).toMatchObject({
+      satisfied: true,
+      peerAttemptedCount: 1,
+      peerConfirmedCount: 1,
+      unavailableNodeIds: [],
+    })
+  })
+
+  it('does not retry — and marks unavailable — a peer that is not connected', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-probe-disconnected-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    // The probe always fails and the peer reports disconnected, so the retry
+    // loop short-circuits after the single initial attempt.
+    const dispatchMeshCommand = vi.fn(async () => { throw new Error('timeout') })
+    const getMeshPeerConnectionStatus = vi.fn(() => ({ state: 'disconnected', reported: true }))
+    const router = createRouter(dispatchMeshCommand, getMeshPeerConnectionStatus)
+
+    // Exercise the mesh_status path, whose explicit-refresh hard-fail is driven
+    // by unavailableNodeIds (the browser-facing graph bootstrap).
+    const result: any = await router.execute('mesh_status', {
+      meshId: 'mesh_disconnected',
+      inlineMesh: {
+        id: 'mesh_disconnected',
+        coordinator: { preferredNodeId: 'node_local' },
+        nodes: [
+          { id: 'node_local', daemonId: 'daemon-local', machineId: 'machine-local', workspace: localRepo, repoRoot: localRepo, policy: {} },
+          { id: 'node_down', daemonId: 'daemon-down', machineId: 'machine-down', workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev', repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev', policy: {} },
+        ],
+      },
+      requireDirectPeerTruth: true,
+      refresh: true,
+    })
+
+    // Only the initial probe ran (no retry while disconnected) and the peer is
+    // classified unavailable — driving the explicit-refresh hard-fail.
+    expect(dispatchMeshCommand.mock.calls.length).toBe(1)
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('mesh_direct_peer_truth_unavailable')
+    expect(result.sourceOfTruth.directPeerTruth.unavailableNodeIds).toContain('node_down')
   })
 })

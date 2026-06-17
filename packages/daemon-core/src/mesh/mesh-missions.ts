@@ -15,6 +15,7 @@
 import { randomUUID } from 'crypto';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getQueue } from './mesh-work-queue.js';
+import { computeMeshMissionStats, type MeshMissionStats } from './mesh-task-stats.js';
 
 export type MeshMissionStatus = 'active' | 'paused' | 'completed' | 'abandoned';
 
@@ -45,6 +46,13 @@ export interface MeshMissionTaskAggregate {
 
 export interface MeshMissionSummary extends MeshMissionRecord {
     tasks: MeshMissionTaskAggregate;
+    /**
+     * Operational rollup (durations / attempts) derived from the ledger via
+     * computeMeshMissionStats. Optional: only populated by surfaces that opt in
+     * (e.g. mesh_status), since the rollup scans a bounded ledger tail per
+     * mission. Absent on the lightweight task-aggregate-only summaries.
+     */
+    stats?: MeshMissionStats;
 }
 
 /**
@@ -171,7 +179,7 @@ function slimMissionSummary(summary: MeshMissionSummary): MeshMissionSlimSummary
  */
 export function getMeshStatusMissionSummaries(
     meshId: string,
-    options?: { historyLimit?: number; verbose?: boolean },
+    options?: { historyLimit?: number; verbose?: boolean; withStats?: boolean },
 ): MeshMissionSummary[] | MeshMissionSlimSummary[] {
     const historyLimit = Math.max(0, options?.historyLimit ?? 10);
     const all = getMeshMissions(meshId);
@@ -180,7 +188,15 @@ export function getMeshStatusMissionSummaries(
         .filter(m => m.status === 'completed' || m.status === 'abandoned')
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
         .slice(0, historyLimit);
-    const full = [...live, ...history].map(mission => summarizeMeshMission(meshId, mission));
+    let full = [...live, ...history].map(mission => summarizeMeshMission(meshId, mission));
+    // Operational stats (durations / attempts) are an opt-in projection: each
+    // mission's rollup scans a bounded ledger tail, so we only compute it for
+    // the bounded set we are about to return (live + capped history), not for
+    // every mission in the mesh. The dashboard graph opts in so mission detail
+    // can show wall-clock / retries without a second round trip.
+    if (options?.withStats) {
+        full = full.map(summary => ({ ...summary, stats: computeMeshMissionStats(meshId, summary.id) }));
+    }
     return options?.verbose ? full : full.map(slimMissionSummary);
 }
 

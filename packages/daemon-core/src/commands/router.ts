@@ -1003,10 +1003,66 @@ async function probeRemoteMeshGitStatus(args: {
         : null;
 }
 
+/** Number of bounded retries after the initial direct-peer git probe attempt. */
+const MESH_DIRECT_PROBE_MAX_RETRIES = 2;
+
+function readMeshConnectionState(connection: Record<string, unknown> | null | undefined): string | undefined {
+    return readStringValue((connection as any)?.state);
+}
+
+/**
+ * Probe a remote peer's git_status with a bounded retry budget, but only while
+ * the peer is reported `connected`. A single slow (often TURN-relayed) peer can
+ * exceed one probe window; retrying — with the connection re-checked before each
+ * attempt so we abandon a peer that dropped — recovers it without blocking the
+ * mesh forever. Shared by the bootstrap hydrate path and the per-node render
+ * path so both treat a connected-but-slow peer identically.
+ *
+ * Returns the git status on success, or null if every attempt failed/timed out
+ * (caller decides how to classify). `getConnection` is consulted before each
+ * attempt; a non-`connected` state short-circuits the retry loop (the very first
+ * attempt always runs so a missing connection getter still gets one try).
+ */
+async function probeRemoteMeshGitStatusWithRetry(args: {
+    dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    daemonId: string;
+    workspace: string;
+    timeoutMs: number;
+    /** Per-attempt timeout for retries (attempts > 0); defaults to timeoutMs. */
+    retryTimeoutMs?: number;
+    getConnection?: (daemonId: string) => Record<string, unknown> | null;
+    onConnection?: (connection: Record<string, unknown>) => void;
+}): Promise<Record<string, unknown> | null> {
+    for (let attempt = 0; attempt <= MESH_DIRECT_PROBE_MAX_RETRIES; attempt += 1) {
+        if (attempt > 0) {
+            // Re-check liveness before spending another probe window; a peer that
+            // dropped between attempts is not worth retrying.
+            const connection = args.getConnection?.(args.daemonId);
+            if (args.getConnection && readMeshConnectionState(connection) !== 'connected') break;
+            if (connection) args.onConnection?.(connection);
+            // Exponential backoff: 250ms, 500ms before attempts 1 and 2.
+            await new Promise(resolve => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
+        }
+        try {
+            const remoteGit = await probeRemoteMeshGitStatus({
+                dispatchMeshCommand: args.dispatchMeshCommand,
+                daemonId: args.daemonId,
+                workspace: args.workspace,
+                timeoutMs: attempt === 0 ? args.timeoutMs : (args.retryTimeoutMs ?? args.timeoutMs),
+            });
+            if (remoteGit) return remoteGit;
+        } catch {
+            // Timed out or P2P error — fall through to the next bounded attempt.
+        }
+    }
+    return null;
+}
+
 async function hydrateInlineMeshDirectTruth(args: {
     mesh: any;
     meshSource: 'inline_cache' | 'inline_bootstrap' | 'local_config';
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
     statusInstanceId?: string;
     localMachineId?: string;
     // Standing-state model: the default (non-refresh) bootstrap load must NOT
@@ -1103,22 +1159,30 @@ async function hydrateInlineMeshDirectTruth(args: {
         }
 
         peerAttemptedCount += 1;
-        try {
-            const remoteGit = await probeRemoteMeshGitStatus({
-                dispatchMeshCommand: args.dispatchMeshCommand,
-                daemonId,
-                workspace,
-                timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
-            });
-            if (remoteGit) {
-                recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
-                peerConfirmedCount += 1;
-                continue;
-            }
-        } catch {
-            // Strict direct-only path: do not fall back to persisted cloud truth here.
+        // Bounded retry, gated on the peer staying `connected`: a slow
+        // (TURN-relayed) peer that just exceeds one probe window is recovered
+        // instead of being hard-failed. The connection is re-checked before each
+        // retry so a peer that actually dropped is abandoned promptly.
+        const remoteGit = await probeRemoteMeshGitStatusWithRetry({
+            dispatchMeshCommand: args.dispatchMeshCommand,
+            daemonId,
+            workspace,
+            timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
+            retryTimeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
+            getConnection: args.getMeshPeerConnectionStatus,
+        });
+        if (remoteGit) {
+            recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
+            peerConfirmedCount += 1;
+            continue;
         }
 
+        // Invariant: a connected peer that still holds standing git truth is
+        // never classified unavailable (standingGit short-circuited above, so by
+        // here there is no held truth). Only push to unavailable when the peer is
+        // not currently connected, or it is connected but every bounded probe
+        // failed — that is the genuine "connected, no truth, retries exhausted"
+        // case that drives the explicit-refresh hard-fail.
         unavailableNodeIds.push(nodeId);
     }
 
@@ -6543,6 +6607,7 @@ export class DaemonCommandRouter {
                     mesh: meshRecord.mesh,
                     meshSource: meshRecord.source,
                     dispatchMeshCommand: this.deps.dispatchMeshCommand,
+                    getMeshPeerConnectionStatus: this.deps.getMeshPeerConnectionStatus,
                     statusInstanceId: this.deps.statusInstanceId,
                     localMachineId: loadConfig().machineId || '',
                     probeRemotePeers,
@@ -8432,6 +8497,7 @@ export class DaemonCommandRouter {
                             mesh,
                             meshSource: meshRecord.source,
                             dispatchMeshCommand: this.deps.dispatchMeshCommand,
+                            getMeshPeerConnectionStatus: this.deps.getMeshPeerConnectionStatus,
                             statusInstanceId: this.deps.statusInstanceId,
                             localMachineId,
                             // Standing-state model: only an explicit refresh fans
@@ -8640,57 +8706,32 @@ export class DaemonCommandRouter {
                                     // per-node git probe. On the default load a peer
                                     // with no held truth falls through to
                                     // gitProbePending below — the graph still renders.
-                                    try {
-                                        const remoteGit = await probeRemoteMeshGitStatus({
-                                            dispatchMeshCommand: this.deps.dispatchMeshCommand,
-                                            daemonId,
-                                            workspace,
-                                            timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
-                                        });
-                                        if (remoteGit) {
-                                            status.git = remoteGit;
-                                            status.health = remoteGit.isGitRepo
-                                                ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
-                                                : 'degraded';
-                                            const connection = readObjectRecord(status.connection);
-                                            const connectionState = readStringValue(connection.state);
-                                            const connectionReported = readBooleanValue(connection.reported) ?? false;
-                                            if (!connectionReported || connectionState === 'unknown') {
-                                                status.connection = buildLivePeerGitConnection(connection, refreshedAt);
-                                            }
-                                            recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
-                                            remoteProbeApplied = true;
+                                    // Bounded retry (shared with the bootstrap hydrate
+                                    // path), gated on the peer staying connected, so a
+                                    // slow TURN-relayed peer is recovered rather than
+                                    // dropped after a single timeout.
+                                    const remoteGit = await probeRemoteMeshGitStatusWithRetry({
+                                        dispatchMeshCommand: this.deps.dispatchMeshCommand,
+                                        daemonId,
+                                        workspace,
+                                        timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
+                                        retryTimeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
+                                        getConnection: this.deps.getMeshPeerConnectionStatus,
+                                        onConnection: connection => { status.connection = connection; },
+                                    });
+                                    if (remoteGit) {
+                                        status.git = remoteGit;
+                                        status.health = remoteGit.isGitRepo
+                                            ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
+                                            : 'degraded';
+                                        const connection = readObjectRecord(status.connection);
+                                        const connectionState = readStringValue(connection.state);
+                                        const connectionReported = readBooleanValue(connection.reported) ?? false;
+                                        if (!connectionReported || connectionState === 'unknown') {
+                                            status.connection = buildLivePeerGitConnection(connection, refreshedAt);
                                         }
-                                    } catch {
-                                        const refreshedConnection = this.deps.getMeshPeerConnectionStatus?.(daemonId);
-                                        const refreshedConnectionState = readStringValue(refreshedConnection?.state);
-                                        if (refreshedConnection && refreshedConnectionState === 'connected') {
-                                            status.connection = refreshedConnection;
-                                            try {
-                                                const remoteGit = await probeRemoteMeshGitStatus({
-                                                    dispatchMeshCommand: this.deps.dispatchMeshCommand,
-                                                    daemonId,
-                                                    workspace,
-                                                    timeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
-                                                });
-                                                if (remoteGit) {
-                                                    status.git = remoteGit;
-                                                    status.health = remoteGit.isGitRepo
-                                                        ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
-                                                        : 'degraded';
-                                                    const connection = readObjectRecord(status.connection);
-                                                    const connectionState = readStringValue(connection.state);
-                                                    const connectionReported = readBooleanValue(connection.reported) ?? false;
-                                                    if (!connectionReported || connectionState === 'unknown') {
-                                                        status.connection = buildLivePeerGitConnection(connection, refreshedAt);
-                                                    }
-                                                    recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
-                                                    remoteProbeApplied = true;
-                                                }
-                                            } catch {
-                                                // Probe timed out again or P2P unavailable — fall back to cached status
-                                            }
-                                        }
+                                        recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
+                                        remoteProbeApplied = true;
                                     }
                                 }
                                 if (!remoteProbeApplied) {
@@ -8781,7 +8822,12 @@ export class DaemonCommandRouter {
                         liveSessionRecords: liveMeshSessions,
                     });
                     const { getMeshStatusMissionSummaries } = await import('../mesh/mesh-missions.js');
-                    const missions = getMeshStatusMissionSummaries(meshId, { verbose: verboseMissions });
+                    // withStats opts in to per-mission operational rollups (durations /
+                    // retries) for the dashboard mission detail. The rollup scans a
+                    // bounded ledger tail per mission, but only over the bounded set
+                    // returned here (live + capped history), so the cost stays linear
+                    // in visible missions rather than the whole mesh history.
+                    const missions = getMeshStatusMissionSummaries(meshId, { verbose: verboseMissions, withStats: true });
                     const statusResult = {
                         success: true,
                         meshId: mesh.id,

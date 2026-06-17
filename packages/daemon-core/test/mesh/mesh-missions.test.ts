@@ -242,6 +242,63 @@ describe('getMeshStatusMissionSummaries — compact (default) elides full goal t
     });
 });
 
+describe('getMeshStatusMissionSummaries — withStats merges operational rollups', () => {
+    const meshId = `mission-stats-${randomUUID().slice(0, 8)}`;
+
+    afterEach(() => {
+        __clearMeshQueueForTests(meshId);
+        try { MeshRuntimeStore.getInstance().clearMissionsForMesh(meshId); } catch { /* fresh store */ }
+        MeshRuntimeStore.resetForTests();
+    });
+
+    function dispatchAndComplete(taskId: string, dispatchedAt: string, terminalAt: string) {
+        const store = MeshRuntimeStore.getInstance();
+        store.appendLedgerEntry({
+            id: randomUUID(), meshId, timestamp: dispatchedAt, kind: 'task_dispatched',
+            sessionId: 'session-1', payload: { taskId, source: 'queue' },
+        });
+        store.appendLedgerEntry({
+            id: randomUUID(), meshId, timestamp: terminalAt, kind: 'task_completed',
+            sessionId: 'session-1', payload: { taskId },
+        });
+    }
+
+    it('omits stats by default; includes the rollup when withStats:true', () => {
+        const mission = upsertMeshMission(meshId, { title: 'Stats mission', goal: 'do work' });
+        const a = enqueueTask(meshId, 'task A', { missionId: mission.id });
+        updateTaskStatus(meshId, a.id, 'completed');
+        dispatchAndComplete(a.id, '2026-06-17T10:00:00.000Z', '2026-06-17T10:00:30.000Z');
+
+        const withoutStats = getMeshStatusMissionSummaries(meshId) as any[];
+        expect(withoutStats[0]).not.toHaveProperty('stats');
+
+        const withStats = getMeshStatusMissionSummaries(meshId, { withStats: true }) as any[];
+        expect(withStats[0].stats).toBeDefined();
+        const stats = withStats[0].stats;
+        expect(stats.missionId).toBe(mission.id);
+        expect(stats.taskCount).toBe(1);
+        expect(stats.completed).toBe(1);
+        // 30s dispatched → terminal window.
+        expect(stats.totalDurationMs).toBe(30_000);
+        expect(stats.wallClockMs).toBe(30_000);
+        expect(Array.isArray(stats.incompleteTaskIds)).toBe(true);
+    });
+
+    it('matches computeMeshMissionStats and survives the slim (compact) projection', () => {
+        const mission = upsertMeshMission(meshId, { title: 'Compact stats', goal: 'G'.repeat(GOAL_PREVIEW_MAX + 50) });
+        const a = enqueueTask(meshId, 'task A', { missionId: mission.id });
+        updateTaskStatus(meshId, a.id, 'completed');
+        dispatchAndComplete(a.id, '2026-06-17T10:00:00.000Z', '2026-06-17T10:00:10.000Z');
+
+        const direct = computeMeshMissionStats(meshId, mission.id);
+        const slim = getMeshStatusMissionSummaries(meshId, { withStats: true }) as any[];
+        // Compact projection still carries stats alongside goalPreview/goalTruncated.
+        expect(slim[0]).not.toHaveProperty('goal');
+        expect(slim[0].goalTruncated).toBe(true);
+        expect(slim[0].stats).toEqual(direct);
+    });
+});
+
 describe('mission visibility — paused missions are surfaced (not active-only)', () => {
     const meshId = `mission-visible-${randomUUID().slice(0, 8)}`;
 

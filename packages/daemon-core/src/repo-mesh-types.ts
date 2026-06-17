@@ -12,7 +12,7 @@
  */
 
 import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
-import type { MeshMissionSummary } from './mesh/mesh-missions.js';
+import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
 
 // ─── Core Mesh Types ────────────────────────────
 
@@ -486,8 +486,13 @@ export interface RepoMeshStatus {
      * capped, newest-first slice of completed/abandoned history. Omitted by older
      * daemons — the dashboard must treat this as optional and render an empty
      * state when absent. Split on each entry's `status` for live vs. history.
+     *
+     * Compact (the default) status calls send the slim shape — `goalPreview` +
+     * `goalTruncated` instead of the full `goal` — while verbose sends the full
+     * `goal`. Consumers must read `goal ?? goalPreview`. Each entry may also carry
+     * an optional `stats` operational rollup (durations / retries).
      */
-    missions?: MeshMissionSummary[];
+    missions?: (MeshMissionSummary | MeshMissionSlimSummary)[];
 }
 
 // RepoMeshSessionStatus shape now lives in @adhdev/mesh-shared (shared with
