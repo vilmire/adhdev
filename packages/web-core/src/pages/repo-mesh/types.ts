@@ -6,6 +6,13 @@ export interface AvailableCliAgent {
     meshCoordinator?: MeshCoordinatorMetadata
 }
 
+/** Per-(node, provider) role + parallelism declaration. Mirrors RepoMeshProviderRole. */
+export interface MeshProviderRole {
+    providerType: string
+    role?: string
+    maxParallel?: number
+}
+
 export interface MeshNode {
     id: string
     workspace: string
@@ -14,6 +21,10 @@ export interface MeshNode {
     policy?: {
         providerPriority?: string[]
         readOnly?: boolean
+        /** Soft scheduling priority (higher = preferred) for distribution strategies. */
+        schedulingPriority?: number
+        /** Per-(node, provider) role + maxParallel declarations. */
+        providerRoles?: MeshProviderRole[]
     }
     isLocalWorktree?: boolean
     worktreeBranch?: string
@@ -81,6 +92,18 @@ export const SESSION_CLEANUP_MODE_OPTIONS: Array<{ value: RepoMeshSessionCleanup
     { value: 'stop_and_delete', label: 'Stop and delete sessions', description: 'Stop matching runtimes, then remove their session records/transcripts.' },
 ]
 
+/** Mesh-wide tie-break strategy for distributing untargeted queue work. Mirrors
+ *  RepoMeshSchedulingStrategy in daemon-core. 'first_eligible' is the strict
+ *  no-change default. */
+export type MeshSchedulingStrategy = 'first_eligible' | 'least_loaded' | 'round_robin' | 'priority_only'
+
+export const SCHEDULING_STRATEGY_OPTIONS: Array<{ value: MeshSchedulingStrategy; label: string; description: string }> = [
+    { value: 'first_eligible', label: 'First available (default)', description: 'Send work to the first eligible node in order. No load-spreading — preserves the original behavior.' },
+    { value: 'least_loaded', label: 'Spread evenly (least-loaded)', description: 'Prefer the eligible node with the fewest active tasks so work spreads instead of piling on one node.' },
+    { value: 'round_robin', label: 'Round-robin', description: 'Among the least-loaded nodes, rotate the winner each pass for fair distribution.' },
+    { value: 'priority_only', label: 'Priority order', description: "Always send to the highest-priority eligible node (see each node's scheduling priority), ignoring load." },
+]
+
 export const DEFAULT_MESH_POLICY: Record<string, any> = {
     requirePreTaskCheckpoint: false,
     requirePostTaskCheckpoint: true,
@@ -89,6 +112,7 @@ export const DEFAULT_MESH_POLICY: Record<string, any> = {
     requireApprovalForDestructiveGit: true,
     dirtyWorkspaceBehavior: 'warn',
     maxParallelTasks: 2,
+    schedulingStrategy: 'first_eligible',
     sessionCleanupOnNodeRemove: 'preserve',
 }
 

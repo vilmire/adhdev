@@ -10,7 +10,7 @@ import {
     type AvailableCliProviderOption,
 } from '../../utils/provider-priority'
 import type { RepoMeshContextValue, RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
-import type { MeshEntry, MeshNode, ProviderPriorityDrafts } from './types'
+import type { MeshEntry, MeshNode, MeshProviderRole, ProviderPriorityDrafts } from './types'
 import { readMeshPolicy } from './types'
 
 interface UseMeshNodeActionsOptions {
@@ -185,6 +185,34 @@ export function useMeshNodeActions({
         finally { setSavingNodePolicyId(null) }
     }
 
+    // Per-node scheduling settings (priority / provider roles). Saved as a minimal
+    // policy patch — updateNode shallow-merges into the existing node policy, so
+    // this never clobbers providerPriority/systemPrompt or vice versa.
+    const [savingNodeSchedulingId, setSavingNodeSchedulingId] = useState<string | null>(null)
+    async function handleUpdateNodeScheduling(node: MeshNode, patch: { schedulingPriority?: number; providerRoles?: MeshProviderRole[] }) {
+        if (!selectedMeshId) return
+        const targetDaemonId = (selectedMesh as any)?.__sourceDaemonId || primaryDaemonId
+        const policyPatch: Record<string, unknown> = {}
+        if (Object.prototype.hasOwnProperty.call(patch, 'schedulingPriority')) {
+            policyPatch.schedulingPriority = Number.isFinite(patch.schedulingPriority) ? patch.schedulingPriority : 0
+        }
+        const command: Record<string, unknown> = { meshId: selectedMeshId, nodeId: node.id, policy: policyPatch }
+        // providerRoles is sent as a top-level arg so the router normalizes it; an
+        // explicit (possibly empty) array clears/replaces declarations.
+        if (Object.prototype.hasOwnProperty.call(patch, 'providerRoles')) {
+            command.providerRoles = patch.providerRoles
+        }
+        try {
+            setSavingNodeSchedulingId(node.id)
+            setError(null)
+            const raw = await sendCommand(targetDaemonId, 'update_mesh_node', command)
+            const result = unwrapResult(raw)
+            if (result?.success === false) { setError(result.error || 'Node scheduling update failed'); return }
+            await loadMeshes()
+        } catch (e: any) { setError(e?.message || 'Node scheduling update failed') }
+        finally { setSavingNodeSchedulingId(null) }
+    }
+
     async function handleSaveCoordinatorPrompt() {
         if (!primaryDaemonId || !selectedMeshId) return
         const existingCoord = ((selectedMesh as any)?.coordinator || {}) as Record<string, unknown>
@@ -275,11 +303,14 @@ export function useMeshNodeActions({
         nodeSystemPromptDrafts,
         setNodeSystemPromptDrafts,
         savingNodeSystemPromptId,
+        // node scheduling
+        savingNodeSchedulingId,
         // actions
         handleAddNode,
         handleRemoveNode,
         handleUpdatePolicy,
         handleUpdateNodeProviderPriority,
+        handleUpdateNodeScheduling,
         handleSaveCoordinatorPrompt,
         handleSaveNodeSystemPrompt,
         handleLaunchCoordinator,

@@ -16,8 +16,11 @@ import { IconRefresh } from './icons'
 import {
     readMeshPolicy,
     SESSION_CLEANUP_MODE_OPTIONS,
+    SCHEDULING_STRATEGY_OPTIONS,
     type MeshEntry,
     type MeshNode,
+    type MeshProviderRole,
+    type MeshSchedulingStrategy,
     type MeshQueueEntry,
     type MeshQueueSummary,
     type MeshDetailViewFeatures,
@@ -79,6 +82,9 @@ interface Props {
     availableCliProviders: AvailableCliProviderOption[]
     savingNodePolicyId: string | null
     onUpdateNodeProviderPriority: (node: MeshNode) => void
+    savingNodeSchedulingId: string | null
+    onUpdateNodeScheduling: (node: MeshNode, patch: { schedulingPriority?: number; providerRoles?: MeshProviderRole[] }) => void
+    schedulingStrategy: MeshSchedulingStrategy
     nodeSystemPromptDrafts: Record<string, string>
     onNodeSystemPromptDraftChange: (nodeId: string, value: string) => void
     savingNodeSystemPromptId: string | null
@@ -164,6 +170,9 @@ export function MeshDetailView({
     availableCliProviders,
     savingNodePolicyId,
     onUpdateNodeProviderPriority,
+    savingNodeSchedulingId,
+    onUpdateNodeScheduling,
+    schedulingStrategy,
     nodeSystemPromptDrafts,
     onNodeSystemPromptDraftChange,
     savingNodeSystemPromptId,
@@ -211,7 +220,7 @@ export function MeshDetailView({
                 <div className="flex gap-2">
                     <button className="btn btn-secondary btn-sm" onClick={onBack}>← Back</button>
                     <button className="btn btn-secondary btn-sm inline-flex items-center gap-1.5" onClick={() => onRefreshGraph(true)} disabled={graphLoading}>
-                        <IconRefresh size={13} />{graphLoading ? 'Probing...' : 'Refresh'}
+                        <IconRefresh size={13} />{graphLoading ? 'Probing…' : 'Refresh'}
                     </button>
                     <button className="btn btn-danger btn-sm" onClick={() => onDelete(selectedMesh.id)}>Delete</button>
                 </div>
@@ -219,71 +228,7 @@ export function MeshDetailView({
         >
             {error && <AlertBanner variant="error" onDismiss={onDismissError} className="mb-4">{error}</AlertBanner>}
 
-            {/* ── Policy ── */}
-            <Section title="Policy" description="Coordinator safety defaults and session cleanup behavior.">
-                <div className="grid gap-4 sm:grid-cols-2">
-                    {[
-                        { label: 'Checkpoint before task', key: 'requirePreTaskCheckpoint', opts: [['no', 'No'], ['yes', 'Yes']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
-                        { label: 'Checkpoint after task', key: 'requirePostTaskCheckpoint', opts: [['yes', 'Yes'], ['no', 'No']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
-                        { label: 'Push approval', key: 'requireApprovalForPush', opts: [['required', 'Require approval before push'], ['not_required', 'Do not require approval']], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
-                        { label: 'Submodule main auto-publish', key: 'allowAutoPublishSubmoduleMainCommits', opts: [['disabled', 'Require explicit approval'], ['enabled', 'Allow Refinery non-force publish']], val: (v: any) => v ? 'enabled' : 'disabled', parse: (v: string) => v === 'enabled' },
-                        { label: 'Destructive git approval', key: 'requireApprovalForDestructiveGit', opts: [['required', 'Require approval'], ['not_required', 'Do not require approval']], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
-                        { label: 'Dirty workspace behavior', key: 'dirtyWorkspaceBehavior', opts: [['warn', 'Warn and continue'], ['block', 'Block task'], ['checkpoint_then_continue', 'Checkpoint then continue']], val: (v: any) => v || 'warn', parse: (v: string) => v },
-                    ].map(({ label, key, opts, val, parse }) => (
-                        <FormField key={key} label={label}>
-                            <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                                value={val(policy[key])} onChange={e => onUpdatePolicy({ [key]: parse(e.target.value) })} disabled={savingPolicy}>
-                                {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                            </select>
-                        </FormField>
-                    ))}
-                    <FormField label="Max parallel tasks">
-                        <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                            value={String(policy.maxParallelTasks ?? 2)} onChange={e => onUpdatePolicy({ maxParallelTasks: Number(e.target.value) })} disabled={savingPolicy}>
-                            {[1, 2, 3, 4, 5, 6, 7, 8].map(v => <option key={v} value={v}>{v}</option>)}
-                        </select>
-                    </FormField>
-                </div>
-                <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-4">
-                    <FormField label="Node removal session cleanup" hint="Separate transcript cleanup from runtime/process cleanup.">
-                        <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                            value={policy.sessionCleanupOnNodeRemove || 'preserve'} onChange={e => onUpdatePolicy({ sessionCleanupOnNodeRemove: e.target.value })} disabled={savingPolicy}>
-                            {SESSION_CLEANUP_MODE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                        </select>
-                    </FormField>
-                    <div className="mt-2 text-[12px] text-text-muted">
-                        {SESSION_CLEANUP_MODE_OPTIONS.find(o => o.value === policy.sessionCleanupOnNodeRemove)?.description || SESSION_CLEANUP_MODE_OPTIONS[0].description}
-                    </div>
-                </div>
-                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving policy...</div>}
-            </Section>
-
-            {/* ── Coordinator prompt ── */}
-            {features.coordinatorPrompt && (
-                <Section title="Coordinator prompt"
-                    description="Customize the system prompt for coordinator sessions. Supports placeholders: {{meshName}}, {{repo}}, {{defaultBranch}}, {{cliType}}, {{nodes}}, {{policy}}, {{tools}}, {{workflow}}, {{rules}}, {{toolExposurePreflight}}.">
-                    <FormField label="Override (replaces default)" hint="When set, replaces the daemon's default base prompt. Leave empty to keep the default.">
-                        <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
-                            rows={6} value={coordinatorPromptDraft.override}
-                            onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
-                            disabled={savingCoordinatorPrompt} placeholder="(empty — daemon default applies)" />
-                    </FormField>
-                    <FormField label="Append (added after the base)" hint="Always added after whichever base prompt wins.">
-                        <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
-                            rows={4} value={coordinatorPromptDraft.append}
-                            onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
-                            disabled={savingCoordinatorPrompt} placeholder="(empty — nothing appended)" />
-                    </FormField>
-                    <div className="mt-3 flex items-center gap-2">
-                        <button type="button" className="btn btn-primary btn-sm" onClick={onSaveCoordinatorPrompt} disabled={savingCoordinatorPrompt}>
-                            {savingCoordinatorPrompt ? 'Saving…' : 'Save coordinator prompt'}
-                        </button>
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title="Clear both fields. Click Save to commit.">Clear</button>
-                    </div>
-                </Section>
-            )}
-
-            {/* ── Cloud: Mesh Host daemon section ── */}
+            {/* ── Cloud: Coordinator machine ── */}
             {features.meshHostDaemonSection && (
                 <MeshHostDaemonSection
                     daemons={daemons}
@@ -314,16 +259,11 @@ export function MeshDetailView({
 
             {/* ── Mesh overview + graph (tabbed inside the surface) ── */}
             <Section title="Mesh" description="Overview cards (missions, ledger, queue, nodes, sessions) with the live topology graph behind the Graph tab.">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-[12px] text-text-muted max-w-2xl">
-                        {features.meshHostDaemonSection
-                            ? <>Direct aggregate mesh_status from the selected Mesh Host is preferred. Refresh asks the host for the latest peer git provenance.{graphProvenance === 'settling' && <span className="ml-1 text-amber-300">Refreshing peer data...</span>}</>
-                            : <>Overview shows live mesh state as cards; switch to the Graph tab for the topology view.</>
-                        }
-                    </div>
-                    <button type="button" className="btn btn-secondary btn-sm inline-flex items-center gap-1.5" onClick={() => onRefreshGraph(true)} disabled={graphLoading || (features.meshHostDaemonSection && !activeDaemonId)}>
-                        <IconRefresh size={13} />{graphLoading ? 'Loading...' : 'Refresh'}
-                    </button>
+                <div className="mb-4 text-[12px] text-text-muted max-w-2xl">
+                    {features.meshHostDaemonSection
+                        ? <>Direct aggregate mesh_status from the selected Mesh Host is preferred. Use Refresh above to ask the host for the latest peer git provenance.{graphProvenance === 'settling' && <span className="ml-1 text-amber-300">Refreshing peer data…</span>}</>
+                        : <>Overview shows live mesh state as cards; switch to the Graph tab for the topology view.</>
+                    }
                 </div>
                 {graphBootstrapFallback && (
                     <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-200">
@@ -368,7 +308,7 @@ export function MeshDetailView({
                 />
             )}
 
-            {/* ── Nodes ── */}
+            {/* ── Nodes & Providers ── */}
             <MeshNodeList
                 nodes={nodes}
                 meshQueue={meshQueue}
@@ -378,11 +318,14 @@ export function MeshDetailView({
                 userName={userName}
                 features={{ addNodeDaemonPicker: features.addNodeDaemonPicker, nodeInstruction: features.nodeInstruction }}
                 coordinatorDaemonId={coordinatorDaemonId}
+                schedulingStrategy={schedulingStrategy}
                 nodeProviderPriorityDrafts={nodeProviderPriorityDrafts}
                 onNodeProviderPriorityDraftChange={onNodeProviderPriorityDraftChange}
                 availableCliProviders={availableCliProviders}
                 savingNodePolicyId={savingNodePolicyId}
                 onUpdateNodeProviderPriority={onUpdateNodeProviderPriority}
+                savingNodeSchedulingId={savingNodeSchedulingId}
+                onUpdateNodeScheduling={onUpdateNodeScheduling}
                 nodeSystemPromptDrafts={nodeSystemPromptDrafts}
                 onNodeSystemPromptDraftChange={onNodeSystemPromptDraftChange}
                 savingNodeSystemPromptId={savingNodeSystemPromptId}
@@ -407,12 +350,117 @@ export function MeshDetailView({
                 onRemoveNode={onRemoveNode}
             />
 
-            {/* ── Standalone: Hermes MCP config ── */}
+            {/* ── Scheduling ── */}
+            <Section title="Scheduling" description="How untargeted queue work is distributed across eligible nodes.">
+                <div className="grid gap-4 sm:grid-cols-2">
+                    <FormField label="Max parallel tasks" hint="Cap on concurrently assigned tasks across the mesh.">
+                        <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={String(policy.maxParallelTasks ?? 2)} onChange={e => onUpdatePolicy({ maxParallelTasks: Number(e.target.value) })} disabled={savingPolicy}>
+                            {[1, 2, 3, 4, 5, 6, 7, 8].map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                    </FormField>
+                </div>
+                <fieldset className="mt-4 border-none p-0 m-0">
+                    <legend className="text-[13px] font-medium text-text-secondary mb-2">Distribution strategy</legend>
+                    <div className="flex flex-col gap-2">
+                        {SCHEDULING_STRATEGY_OPTIONS.map(opt => {
+                            const selected = (policy.schedulingStrategy || 'first_eligible') === opt.value
+                            return (
+                                <label key={opt.value}
+                                    className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors ${selected ? 'border-accent-primary/60 bg-accent-primary/10' : 'border-border-subtle bg-bg-secondary/60 hover:border-border-default'}`}>
+                                    <input type="radio" name="mesh-scheduling-strategy" className="mt-0.5 accent-[var(--accent-primary)]"
+                                        value={opt.value} checked={selected} disabled={savingPolicy}
+                                        onChange={() => onUpdatePolicy({ schedulingStrategy: opt.value })} />
+                                    <span className="min-w-0">
+                                        <span className="block text-sm text-text-primary">{opt.label}</span>
+                                        <span className="block text-[12px] text-text-muted">{opt.description}</span>
+                                    </span>
+                                </label>
+                            )
+                        })}
+                    </div>
+                    {(policy.schedulingStrategy === 'priority_only' || policy.schedulingStrategy === 'least_loaded' || policy.schedulingStrategy === 'round_robin') && (
+                        <div className="mt-2 text-[12px] text-text-muted">
+                            Per-node scheduling priority is set in each node's <span className="text-text-secondary">Advanced</span> panel above.
+                        </div>
+                    )}
+                </fieldset>
+                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving…</div>}
+            </Section>
+
+            {/* ── Coordinator prompt (advanced) ── */}
+            {features.coordinatorPrompt && (
+                <Section title="Coordinator prompt" collapsible defaultOpen={false}
+                    badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">advanced</span>}
+                    description="Customize the system prompt for coordinator sessions. Leave empty to use the daemon default.">
+                    <FormField label="Override (replaces default)" hint="When set, replaces the daemon's default base prompt. Leave empty to keep the default.">
+                        <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
+                            rows={6} value={coordinatorPromptDraft.override}
+                            onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
+                            disabled={savingCoordinatorPrompt} placeholder="(empty — daemon default applies)" />
+                    </FormField>
+                    <FormField label="Append (added after the base)" hint="Always added after whichever base prompt wins.">
+                        <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
+                            rows={4} value={coordinatorPromptDraft.append}
+                            onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
+                            disabled={savingCoordinatorPrompt} placeholder="(empty — nothing appended)" />
+                    </FormField>
+                    <details className="mt-2 text-[12px] text-text-muted">
+                        <summary className="cursor-pointer select-none">Available placeholders</summary>
+                        <p className="mt-1 font-mono break-words">
+                            {'{{meshName}}, {{repo}}, {{defaultBranch}}, {{cliType}}, {{nodes}}, {{policy}}, {{tools}}, {{workflow}}, {{rules}}, {{toolExposurePreflight}}'}
+                        </p>
+                    </details>
+                    <div className="mt-3 flex items-center gap-2">
+                        <button type="button" className="btn btn-primary btn-sm" onClick={onSaveCoordinatorPrompt} disabled={savingCoordinatorPrompt}>
+                            {savingCoordinatorPrompt ? 'Saving…' : 'Save coordinator prompt'}
+                        </button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title="Clear both fields. Click Save to commit.">Clear</button>
+                    </div>
+                </Section>
+            )}
+
+            {/* ── Safety & Git (advanced) ── */}
+            <Section title="Safety & Git" collapsible defaultOpen={false}
+                badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">advanced</span>}
+                description="Checkpointing, approval gates, and git safety behavior for coordinator-driven tasks.">
+                <div className="grid gap-4 sm:grid-cols-2">
+                    {[
+                        { label: 'Auto-commit a checkpoint before each task', key: 'requirePreTaskCheckpoint', opts: [['no', 'No'], ['yes', 'Yes']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
+                        { label: 'Auto-commit a checkpoint after each task', key: 'requirePostTaskCheckpoint', opts: [['yes', 'Yes'], ['no', 'No']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
+                        { label: 'Push approval', key: 'requireApprovalForPush', opts: [['required', 'Require approval before push'], ['not_required', 'Do not require approval']], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
+                        { label: 'Destructive git approval', key: 'requireApprovalForDestructiveGit', opts: [['required', 'Require approval'], ['not_required', 'Do not require approval']], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
+                        { label: 'When the workspace has uncommitted changes', key: 'dirtyWorkspaceBehavior', opts: [['warn', 'Warn and continue'], ['block', 'Block task'], ['checkpoint_then_continue', 'Checkpoint then continue']], val: (v: any) => v || 'warn', parse: (v: string) => v },
+                        { label: 'Auto-publish submodule commits (advanced)', key: 'allowAutoPublishSubmoduleMainCommits', opts: [['disabled', 'Require explicit approval'], ['enabled', 'Allow Refinery non-force publish']], val: (v: any) => v ? 'enabled' : 'disabled', parse: (v: string) => v === 'enabled' },
+                    ].map(({ label, key, opts, val, parse }) => (
+                        <FormField key={key} label={label}>
+                            <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                                value={val(policy[key])} onChange={e => onUpdatePolicy({ [key]: parse(e.target.value) })} disabled={savingPolicy}>
+                                {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                        </FormField>
+                    ))}
+                </div>
+                <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-4">
+                    <FormField label="When removing a node, its sessions…" hint="Separate transcript cleanup from runtime/process cleanup.">
+                        <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={policy.sessionCleanupOnNodeRemove || 'preserve'} onChange={e => onUpdatePolicy({ sessionCleanupOnNodeRemove: e.target.value })} disabled={savingPolicy}>
+                            {SESSION_CLEANUP_MODE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
+                    </FormField>
+                    <div className="mt-2 text-[12px] text-text-muted">
+                        {SESSION_CLEANUP_MODE_OPTIONS.find(o => o.value === policy.sessionCleanupOnNodeRemove)?.description || SESSION_CLEANUP_MODE_OPTIONS[0].description}
+                    </div>
+                </div>
+                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving…</div>}
+            </Section>
+
+            {/* ── Integrations: Standalone Hermes MCP config ── */}
             {features.hermesMcpConfig && (
                 <RepoMeshHermesMcpConfig meshId={selectedMesh.id} availableCliAgents={availableCliAgents} />
             )}
 
-            {/* ── Cloud: MCP hint ── */}
+            {/* ── Integrations: Cloud MCP hint ── */}
             {features.meshHostDaemonSection && (
                 <AlertBanner variant="info" className="mt-4">
                     <strong>MCP Mode:</strong>{' '}

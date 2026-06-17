@@ -28,6 +28,7 @@ import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph } from './repo-mesh/useMeshGraph'
 import { useMeshReviewInbox } from './repo-mesh/useMeshReviewInbox'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
+import { readMeshPolicy } from './repo-mesh/types'
 
 // Re-export types that cloud/standalone wrappers may reference
 export type { MeshNode, MeshQueueEntry, AvailableCliAgent }
@@ -148,8 +149,10 @@ export default function RepoMesh() {
         savingCoordinatorPrompt,
         nodeSystemPromptDrafts, setNodeSystemPromptDrafts,
         savingNodeSystemPromptId,
+        savingNodeSchedulingId,
         handleAddNode, handleRemoveNode, handleUpdatePolicy,
         handleUpdateNodeProviderPriority,
+        handleUpdateNodeScheduling,
         handleSaveCoordinatorPrompt, handleSaveNodeSystemPrompt,
         handleLaunchCoordinator,
     } = useMeshNodeActions({
@@ -382,6 +385,9 @@ export default function RepoMesh() {
             availableCliProviders={availableCliProviders}
             savingNodePolicyId={savingNodePolicyId}
             onUpdateNodeProviderPriority={handleUpdateNodeProviderPriority}
+            savingNodeSchedulingId={savingNodeSchedulingId}
+            onUpdateNodeScheduling={handleUpdateNodeScheduling}
+            schedulingStrategy={readMeshPolicy(selectedMesh).schedulingStrategy}
             nodeSystemPromptDrafts={nodeSystemPromptDrafts}
             onNodeSystemPromptDraftChange={(nodeId, value) => setNodeSystemPromptDrafts(prev => ({ ...prev, [nodeId]: value }))}
             savingNodeSystemPromptId={savingNodeSystemPromptId}
