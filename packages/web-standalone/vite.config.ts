@@ -10,6 +10,11 @@ const localWebCoreCss = fileURLToPath(new URL('../web-core/src/index.css', impor
 const localWebCoreSupported = fileURLToPath(new URL('../web-core/src/constants/supported.ts', import.meta.url))
 const localWebCoreRoot = fileURLToPath(new URL('../web-core', import.meta.url))
 const workspaceRoot = searchForWorkspaceRoot(process.cwd())
+// When developed inside the parent monorepo (as a git submodule), hoisted deps
+// like @wterm/ghostty's WASM live in the repo-root node_modules, one level above
+// the oss workspace root. Allow it so Vite can serve those assets (otherwise the
+// ghostty WASM ?url import 403s and the wterm renderer fails to load).
+const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
 
 export default defineConfig({
     plugins: [react(), tailwindcss()],
@@ -22,6 +27,13 @@ export default defineConfig({
     },
     define: {
         __APP_VERSION__: JSON.stringify(packageJson.version),
+    },
+    optimizeDeps: {
+        // Don't pre-bundle the opt-in wterm renderer packages. @wterm/ghostty
+        // loads its WASM via `new URL('../wasm/...', import.meta.url)`; if Vite
+        // rewrites the module into .vite/deps that relative URL breaks and the
+        // fetch falls through to the SPA index.html (WASM magic-word error).
+        exclude: ['@wterm/ghostty', '@wterm/dom', '@wterm/core'],
     },
     build: {
         rollupOptions: {
@@ -67,7 +79,7 @@ export default defineConfig({
     server: {
         port: 3000,
         fs: {
-            allow: [workspaceRoot, localWebCoreRoot],
+            allow: [workspaceRoot, localWebCoreRoot, repoRoot],
         },
         proxy: {
             '/api': 'http://localhost:3847',

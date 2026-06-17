@@ -146,6 +146,11 @@ function withCatppuccinPalette(core: TerminalCore): TerminalCore {
 let wtermRuntimeLogged = false;
 
 async function loadGhosttyCore(scrollback: number): Promise<TerminalCore> {
+  // GhosttyCore.load() resolves its WASM via `new URL('../wasm/ghostty-vt.wasm',
+  // import.meta.url)` relative to the package's own module — which works in both
+  // dev and production bundlers. (In dev the host app's Vite `server.fs.allow`
+  // must include the dir holding @wterm/ghostty so the asset isn't 403'd into the
+  // SPA index.html fallback — see web-standalone/web-cloud vite configs.)
   const core = await GhosttyCore.load({ scrollbackLimit: scrollback });
   return withCatppuccinPalette(core as unknown as TerminalCore);
 }
