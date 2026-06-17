@@ -631,6 +631,12 @@ export interface RepoMeshPeerConnectionStatus {
     transport: RepoMeshPeerConnectionTransport;
     reported: boolean;
     reason?: string;
+    /**
+     * Round-trip time in ms for the selected candidate pair, as sampled by the
+     * coordinator daemon when connected. Optional — older daemons and not_reported
+     * fallbacks omit it; the dashboard must treat it as best-effort telemetry.
+     */
+    rttMs?: number;
     lastStateChangeAt?: string;
     lastConnectedAt?: string;
     lastCommandAt?: string;
