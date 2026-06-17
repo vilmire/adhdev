@@ -513,6 +513,21 @@ function readInlineMeshNodeId(node: any): string {
     return normalizeMeshNodeId(node) ?? '';
 }
 
+// A local worktree node whose workspace directory has been deleted from disk.
+// The worktree was removed (or the machine pruned it) but the node still lingers
+// in the inline mesh cache. Such a node has no live truth to confirm and must
+// never be probed or counted toward direct-peer-truth — doing so blocks the
+// graph with a permanent `direct_peer_truth_unavailable`. Deliberately narrow:
+// it only fires for `isLocalWorktree === true` nodes with a recorded workspace
+// that does not exist. Remote nodes and nodes whose workspace is present on disk
+// are never matched, so a slow remote peer is still classified unavailable.
+function isDeadLocalWorktreeNode(node: any): boolean {
+    if (node?.isLocalWorktree !== true) return false;
+    const workspace = readStringValue(node?.workspace);
+    if (!workspace) return false;
+    return !fs.existsSync(workspace);
+}
+
 // Boundary normalization: reconcile a node's identity so `id` and `nodeId` both
 // carry the same canonical value (any incoming form — id / nodeId / node_id — is
 // absorbed by normalizeMeshNodeId, and the SQLite `node_id` leak is dropped).
@@ -1152,6 +1167,7 @@ async function hydrateInlineMeshDirectTruth(args: {
     peerConfirmedCount: number;
     standingEvidenceCount: number;
     unavailableNodeIds: string[];
+    deadNodeIds: string[];
 }> {
     const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
     if (!nodes.length) {
@@ -1162,6 +1178,7 @@ async function hydrateInlineMeshDirectTruth(args: {
             peerConfirmedCount: 0,
             standingEvidenceCount: 0,
             unavailableNodeIds: [],
+            deadNodeIds: [],
         };
     }
 
@@ -1176,6 +1193,7 @@ async function hydrateInlineMeshDirectTruth(args: {
     let peerConfirmedCount = 0;
     let standingEvidenceCount = 0;
     const unavailableNodeIds: string[] = [];
+    const deadNodeIds: string[] = [];
 
     for (const [nodeIndex, node] of nodes.entries()) {
         const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
@@ -1186,6 +1204,22 @@ async function hydrateInlineMeshDirectTruth(args: {
         ) || Boolean(
             daemonId && (daemonId === args.localMachineId || daemonId === args.statusInstanceId),
         ) || Boolean(args.meshSource !== 'local_config' && nodeIndex === 0);
+
+        // A dead local worktree owned by this coordinator (isLocalWorktree, the
+        // node's daemon is us, workspace path gone) has no live truth and cannot
+        // be probed — the directory it would self-probe no longer exists. Exclude
+        // it entirely from direct-peer-truth accounting: do not probe it, do not
+        // attempt it, do not push it to unavailableNodeIds (which would otherwise
+        // wedge the graph in a permanent direct_peer_truth_unavailable). This is
+        // strictly self + isLocalWorktree + absent-path; remote peers and nodes
+        // whose workspace still exists are unaffected and stay classifiable.
+        const isSelfDaemonNode = Boolean(
+            daemonId && (daemonId === args.localMachineId || daemonId === args.statusInstanceId),
+        );
+        if ((isSelfNode || isSelfDaemonNode) && isDeadLocalWorktreeNode(node)) {
+            deadNodeIds.push(nodeId);
+            continue;
+        }
 
         if (!workspace) {
             if (!isSelfNode && daemonId) unavailableNodeIds.push(nodeId);
@@ -1269,6 +1303,7 @@ async function hydrateInlineMeshDirectTruth(args: {
         peerConfirmedCount,
         standingEvidenceCount,
         unavailableNodeIds,
+        deadNodeIds,
     };
 }
 
@@ -3270,10 +3305,33 @@ export class DaemonCommandRouter {
         const unavailableNodeIds = new Set<string>();
         const sourceOfTruth = readObjectRecord(snapshot.sourceOfTruth);
         const directPeerTruth = readObjectRecord(sourceOfTruth.directPeerTruth);
+        // Dead local worktree nodes (isLocalWorktree, workspace deleted from disk)
+        // carry no live truth and must never gate the aggregate as unavailable.
+        // A cached snapshot built before the worktree was removed can still list
+        // such a node in unavailableNodeIds, which would wedge the graph in a
+        // permanent direct_peer_truth_unavailable; drop them here so the held
+        // standing-state truth for the surviving nodes satisfies the aggregate.
+        const deadNodeIds = new Set<string>();
+        for (const node of mesh.nodes) {
+            if (!isDeadLocalWorktreeNode(node)) continue;
+            const deadId = readInlineMeshNodeId(node);
+            if (deadId) deadNodeIds.add(deadId);
+        }
+        let droppedDeadUnavailable = false;
         for (const entry of Array.isArray(directPeerTruth.unavailableNodeIds) ? directPeerTruth.unavailableNodeIds : []) {
             const nodeId = readStringValue(entry);
-            if (nodeId) unavailableNodeIds.add(nodeId);
+            if (!nodeId) continue;
+            if (deadNodeIds.has(nodeId)) {
+                droppedDeadUnavailable = true;
+                continue;
+            }
+            unavailableNodeIds.add(nodeId);
         }
+        // Force a rewrite when a dead worktree was filtered out of a previously
+        // built unavailable set, even if no live git was re-hydrated this pass —
+        // otherwise the early-return below would hand back the stale snapshot that
+        // still says direct_peer_truth_unavailable.
+        if (droppedDeadUnavailable) changed = true;
 
         const nodes = snapshot.nodes.map((statusNode: any) => {
             const nodeId = normalizeMeshNodeId(statusNode);
@@ -8642,6 +8700,7 @@ export class DaemonCommandRouter {
                             peerConfirmedCount: 0,
                             standingEvidenceCount: 0,
                             unavailableNodeIds: [] as string[],
+                            deadNodeIds: [] as string[],
                         };
                     // Default/cached loads may not attempt a remote peer probe yet; do not surface that as
                     // a direct mesh truth failure until an explicit probe attempt actually fails.

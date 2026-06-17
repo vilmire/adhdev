@@ -2025,3 +2025,143 @@ describe('mesh_status', () => {
     }
   })
 })
+
+describe('mesh_status dead local worktree exclusion', () => {
+  it('does not let a dead local worktree node (workspace deleted) block direct peer truth on refresh', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-dead-worktree-')
+    try {
+      const deadWorkspace = join(dir, 'gone', 'node_7ebd')
+      // Self-daemon: the coordinator owns both the healthy local node and the
+      // dead worktree node. statusInstanceId matches the dead node's daemonId.
+      const dispatchMeshCommand = vi.fn(async () => {
+        throw new Error('no remote peer should be probed for a dead local worktree')
+      })
+      const { router } = createRouter({ dispatchMeshCommand, statusInstanceId: 'daemon_self' })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_dead_worktree',
+        requireDirectPeerTruth: true,
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh_dead_worktree',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_self' },
+          policy: {},
+          nodes: [
+            {
+              id: 'node_self',
+              daemonId: 'daemon_self',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+            {
+              id: 'node_7ebd',
+              daemonId: 'daemon_self',
+              machineLabel: 'Stale worktree',
+              isLocalWorktree: true,
+              workspace: deadWorkspace,
+              repoRoot: deadWorkspace,
+              worktreeBranch: 'feature/gone',
+              providers: [],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.code).not.toBe('mesh_direct_peer_truth_unavailable')
+      expect(result.sourceOfTruth.directPeerTruth).toMatchObject({
+        required: true,
+        satisfied: true,
+      })
+      expect(result.sourceOfTruth.directPeerTruth.unavailableNodeIds).not.toContain('node_7ebd')
+      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('still fails closed for a genuinely unavailable remote peer (dead-worktree guard does not over-apply)', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-dead-worktree-remote-')
+    try {
+      const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string) => {
+        expect(command).toBe('git_status')
+        if (daemonId === 'daemon_remote') {
+          throw new Error('P2P probe failed for remote peer')
+        }
+        throw new Error(`unexpected daemon ${daemonId}`)
+      })
+      const getMeshPeerConnectionStatus = vi.fn((daemonId: string) => {
+        if (daemonId === 'daemon_remote') {
+          return { state: 'connected', transport: 'direct', reported: true }
+        }
+        return null
+      })
+      const { router } = createRouter({ dispatchMeshCommand, getMeshPeerConnectionStatus, statusInstanceId: 'daemon_self' })
+
+      const deadWorkspace = join(dir, 'gone', 'node_dead')
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_dead_plus_remote',
+        requireDirectPeerTruth: true,
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh_dead_plus_remote',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_self' },
+          policy: {},
+          nodes: [
+            {
+              id: 'node_self',
+              daemonId: 'daemon_self',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+            {
+              id: 'node_dead',
+              daemonId: 'daemon_self',
+              machineLabel: 'Stale worktree',
+              isLocalWorktree: true,
+              workspace: deadWorkspace,
+              repoRoot: deadWorkspace,
+              providers: [],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+            {
+              id: 'node_remote',
+              daemonId: 'daemon_remote',
+              machineLabel: 'Remote (no live truth)',
+              workspace: '/remote/adhdev',
+              repoRoot: '/remote/adhdev',
+              providers: [],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(false)
+      expect(result.code).toBe('mesh_direct_peer_truth_unavailable')
+      expect(result.sourceOfTruth.directPeerTruth.unavailableNodeIds).toContain('node_remote')
+      expect(result.sourceOfTruth.directPeerTruth.unavailableNodeIds).not.toContain('node_dead')
+      // The dead worktree was never probed; only the genuine remote peer was
+      // (the remote may be retried, so assert the target rather than the count).
+      expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon_remote', 'git_status', expect.anything())
+      for (const call of dispatchMeshCommand.mock.calls) {
+        expect(call[0]).not.toBe('daemon_self')
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
