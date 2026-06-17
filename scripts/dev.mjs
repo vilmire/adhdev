@@ -93,6 +93,19 @@ function delay(ms) {
 
 async function terminatePid(pid) {
   if (!processExists(pid)) return;
+  if (process.platform === 'win32') {
+    // Children are spawned through npm.cmd with shell:true, so `pid` is the
+    // cmd.exe wrapper — the real node daemon is a grandchild. process.kill()
+    // only signals the wrapper and orphans the node process, which keeps
+    // holding port 3847 and makes the next bind fail with EADDRINUSE. taskkill
+    // /T tears down the whole tree.
+    try { spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
+    for (let i = 0; i < 20; i += 1) {
+      if (!processExists(pid)) return;
+      await delay(100);
+    }
+    return;
+  }
   try {
     process.kill(pid, 'SIGTERM');
   } catch {}
@@ -181,6 +194,8 @@ function startChild(spec) {
     cwd: repoRoot,
     env,
     stdio: ['inherit', 'pipe', 'pipe'],
+    // Node 22+ refuses to spawn .cmd shims (npm.cmd) without a shell (EINVAL).
+    shell: process.platform === 'win32',
   });
   children.set(spec.name, child);
   writePidFile();
@@ -193,6 +208,10 @@ function startChild(spec) {
     if (child.__restarting) {
       child.__restarting = false;
       log(label(spec.name, spec.color, 'restarting after daemon-core rebuild...'));
+      // Windows only: give the OS a moment to release the daemon's listener
+      // (3847) after the tree was killed, so the respawned daemon doesn't race
+      // into EADDRINUSE. POSIX keeps the original immediate restart.
+      if (process.platform === 'win32') await delay(1500);
       startChild(spec);
       return;
     }
@@ -208,6 +227,8 @@ function runPrebuild(labelName, args) {
   const result = spawnSync(npmCmd, args, {
     cwd: repoRoot,
     stdio: 'inherit',
+    // Node 22+ refuses to spawn .cmd shims (npm.cmd) without a shell (EINVAL).
+    shell: process.platform === 'win32',
   });
   if (result.status !== 0) {
     log(`ERROR: ${labelName} prebuild failed. Cannot start daemon with stale runtime code.`);
@@ -274,7 +295,13 @@ function watchDaemonCoreDist() {
       if (!child || !child.pid || !processExists(child.pid)) return;
       log(label('core', '\x1b[35m', 'daemon-core dist changed — restarting daemon...'));
       child.__restarting = true;
-      try { child.kill('SIGTERM'); } catch {}
+      if (process.platform === 'win32') {
+        // child.kill() would only signal the npm.cmd/cmd.exe wrapper on Windows
+        // and orphan the node daemon (keeps holding 3847). Kill the whole tree.
+        try { await terminatePid(child.pid); } catch {}
+      } else {
+        try { child.kill('SIGTERM'); } catch {}
+      }
     }, 400);
   });
 }
