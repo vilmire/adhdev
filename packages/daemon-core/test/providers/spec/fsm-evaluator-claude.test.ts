@@ -127,3 +127,117 @@ describe('claude-cli v4 FSM — divider-less approval modal', () => {
         expect(buttons[0].key).toBe('1\r');
     });
 });
+
+// ── Spinner-glyph unification (false-idle root fix) ───────────────────────────
+// Live root cause: the busy→idle not-spinner check and the idle→busy spinner
+// check used a narrow inline glyph set (8 Braille frames + a few asterisks). When
+// a tool ran, claude-cli's spinner cycled through OTHER glyphs in the full Braille
+// range (U+2800–U+28FF) or showed only the textual "esc to interrupt" cue. Those
+// frames did not match the narrow set, so:
+//   - idle→busy failed to re-fire after a brief idle blip → stuck idle, and
+//   - busy→idle's not-spinner clause read TRUE (no glyph matched) → false idle.
+// Fix: both transitions now match the full Braille range + asterisk frames + the
+// "esc to interrupt/stop" cue, aligned with provider.v1.json tui.spinner. The
+// completion footer (✻ … for Ns, no token) is a SEPARATE glyph (✻ ∉ spinner set)
+// and must keep driving busy→idle — it must not be misread as a spinner.
+
+// All screens carry the real generating-layout chrome (input box + footer hints)
+// so the spinner/footer line resolves into the `body` section, mirroring a live
+// claude-cli frame. Without the input box the modal section swallows the screen.
+
+// A busy screen mid-tool: the spinner is a richer Braille frame NOT in the old
+// narrow set, plus the "esc to interrupt" cue. No completion footer present.
+const richSpinnerBusy = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '⏺ Let me run the tests.',
+    '',
+    '⣾ Running the test suite… (esc to interrupt)',
+    '',
+    '────────────────────────────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────────────────────────────',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+].join('\n');
+
+// Another mid-tool frame whose only generation cue is the textual interrupt hint
+// appearing mid-line (no leading spinner glyph this frame).
+const interruptCueOnly = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '⏺ Working on it.',
+    '',
+    'Bloviating about edge cases (esc to interrupt · ctrl+t to hide todos)',
+    '',
+    '────────────────────────────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────────────────────────────',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+].join('\n');
+
+// A real completion footer: settled ✻ glyph + "for Ns", no token counter. This is
+// what legitimately ends generation → busy→idle.
+const completionFooter = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '⏺ Done — all tests pass.',
+    '',
+    '✻ Compacting conversation for 12s',
+    '',
+    '────────────────────────────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────────────────────────────',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+].join('\n');
+
+describe('claude-cli v4 FSM — spinner glyph unification', () => {
+    const spec = loadSpec();
+
+    it('(a) idle→busy fires on a rich Braille spinner frame outside the old narrow set', () => {
+        const ev = evaluateFsm(spec, 'idle', richSpinnerBusy, undefined, undefined, clk(5000, 0));
+        expect(ev.fired?.to).toBe('busy');
+    });
+
+    it('(a) idle→busy fires on a mid-line "esc to interrupt" cue with no leading glyph', () => {
+        const ev = evaluateFsm(spec, 'idle', interruptCueOnly, undefined, undefined, clk(5000, 0));
+        expect(ev.fired?.to).toBe('busy');
+    });
+
+    it('(a) busy STAYS busy on a rich Braille spinner frame (no false idle)', () => {
+        // Clock is well past every busy→idle time gate (stable 6s, hold 800ms) so
+        // the only thing keeping it busy is the not-spinner clause reading the rich
+        // spinner as "still spinning". Pre-fix this frame slipped through to idle.
+        const ev = evaluateFsm(spec, 'busy', richSpinnerBusy, undefined, undefined, clk(20000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('(b) busy→idle fires on a genuine completion footer once stable (no regression)', () => {
+        const ev = evaluateFsm(spec, 'busy', completionFooter, undefined, undefined, clk(20000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('(c) the completion footer glyph (✻) is NOT misclassified as a spinner', () => {
+        // If ✻ leaked into the spinner set, the not-spinner clause of busy→idle
+        // would read FALSE on the footer and idle would never be reached — a
+        // false-busy stall. Assert the spinner condition itself does not match.
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const notSpinner = (busyToIdle.when as any).all.find(
+            (c: any) => c.not && c.not.matches && c.not.matches.includes('2800'));
+        const spinnerRe = new RegExp(notSpinner.not.matches, 'i');
+        expect(spinnerRe.test('✻ Compacting conversation for 12s')).toBe(false);
+        // ...but a real spinner frame still matches.
+        expect(spinnerRe.test('⣾ Running the test suite… (esc to interrupt)')).toBe(true);
+    });
+
+    it('(c) approval-modal "Esc to cancel" footer is NOT read as a spinner cue', () => {
+        // The spinner cue is "esc to interrupt/stop", deliberately excluding the
+        // approval modal's "Esc to cancel" — otherwise an approval screen would
+        // look like generation.
+        const idleToBusy = spec.transitions.find(t => t.label === 'idle→busy')!;
+        const spinnerRe = new RegExp((idleToBusy.when as any).matches, 'i');
+        expect(spinnerRe.test(' Esc to cancel · Tab to amend · ctrl+e to explain')).toBe(false);
+    });
+});
