@@ -3597,7 +3597,11 @@ async function meshQueueRequeue(ctx, args) {
         hint: "Use force=true to bypass the retry cap for explicit operator recovery."
       }, null, 2);
     }
-    ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
+    const triggerPreferredNodeId = targetNodeId || task.targetNodeId || void 0;
+    ctx.transport.command("trigger_mesh_queue", {
+      meshId: ctx.mesh.id,
+      ...triggerPreferredNodeId ? { preferredNodeId: triggerPreferredNodeId } : {}
+    }).catch(() => {
     });
     return JSON.stringify({ success: true, task }, null, 2);
   } catch (e) {
