@@ -241,3 +241,104 @@ describe('claude-cli v4 FSM — spinner glyph unification', () => {
         expect(spinnerRe.test(' Esc to cancel · Tab to amend · ctrl+e to explain')).toBe(false);
     });
 });
+
+// ── busy→idle completion-footer position guard (false-idle root fix #2) ──────
+// Live root cause (Windows Spec Debug Snapshot): the busy→idle completion-footer
+// clause `✻ … for <dur>` matched a STALE footer left over from a *previous* turn
+// while the session was still generating. The footer line sits above the active
+// spinner in the `body` section, so when the spinner frame momentarily lacked its
+// trailing ellipsis (e.g. `✽ Ebbing (3m 29s · ↑ 10.1k tokens)`), the not-spinner
+// clause flipped TRUE and busy→idle fired off the stale footer → false idle, with
+// the session oscillating busy↔idle every few seconds.
+//
+// Fix: the footer match is now position-constrained. It only counts as a genuine
+// end-of-turn footer when (a) the footer line itself carries no token counter
+// (· ↑/↓ N tokens) and (b) NO active-spinner frame / "esc to interrupt" cue /
+// token counter appears anywhere below it (through to the input-box chrome).
+// A live progress line — with OR without an ellipsis that frame — therefore keeps
+// the session busy. The duration-only completion footer still drives idle.
+
+const FRAME_HEAD = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+];
+const FRAME_TAIL = [
+    '',
+    '────────────────────────────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────────────────────────────',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+];
+function frame(...mid: string[]): string {
+    return [...FRAME_HEAD, ...mid, ...FRAME_TAIL].join('\n');
+}
+
+describe('claude-cli v4 FSM — busy→idle completion-footer position guard', () => {
+    const spec = loadSpec();
+
+    // (a) Active spinner WITH the elapsed/token progress trailer, plus a stale
+    // completion footer above it from the prior turn. Must STAY busy.
+    it('(a) stale footer above an active spinner trailer → stays busy (no false idle)', () => {
+        const screen = frame(
+            '⏺ Did the thing',
+            '',
+            '✻ Baked for 7s',
+            '',
+            '✽ Ebbing… (3m 29s · ↑ 10.1k tokens)',
+        );
+        const ev = evaluateFsm(spec, 'busy', screen, undefined, undefined, clk(20000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    // (a') Same, but the spinner frame has NO trailing ellipsis — the exact frame
+    // that defeated the old not-spinner clause. The position guard must still win.
+    it("(a') stale footer above a spinner frame WITHOUT ellipsis → stays busy", () => {
+        const screen = frame(
+            '⏺ Did the thing',
+            '',
+            '✻ Baked for 7s',
+            '',
+            '✽ Ebbing (3m 29s · ↑ 10.1k tokens)',
+        );
+        const ev = evaluateFsm(spec, 'busy', screen, undefined, undefined, clk(20000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    // (b) A genuine completion footer (no token, nothing active below) → idle.
+    it('(b) genuine completion footer "✻ Baked for 7s" once stable → idle', () => {
+        const screen = frame('⏺ Done.', '', '✻ Baked for 7s');
+        const ev = evaluateFsm(spec, 'busy', screen, undefined, undefined, clk(20000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    // (c) Compound-duration completion footer → idle.
+    it('(c) compound-duration footer "✻ Worked for 8m 24s" → idle', () => {
+        const screen = frame('⏺ Done.', '', '✻ Worked for 8m 24s');
+        const ev = evaluateFsm(spec, 'busy', screen, undefined, undefined, clk(20000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    // (d) The footer line itself carries a token counter — that is a live progress
+    // line, not a completion footer. Must STAY busy.
+    it('(d) footer line with "· ↑ N tokens" trailer → stays busy', () => {
+        const screen = frame('⏺ working', '', '✻ Worked for 7s · ↑ 1.2k tokens');
+        const ev = evaluateFsm(spec, 'busy', screen, undefined, undefined, clk(20000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    // The position guard itself accepts a completion footer that sits below an
+    // older spinner frame (the spinner is above, the footer is the latest line).
+    // The separate not-spinner clause is intentionally conservative and still
+    // holds busy while ANY spinner glyph remains on screen — eliminating false
+    // idle takes priority over the rarer stale-spinner-above-footer frame. Assert
+    // the footer clause does not, on its own, reject this layout.
+    it('(e) footer clause accepts a completion footer below a stale spinner', () => {
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const footerClause = (busyToIdle.when as any).all.find(
+            (c: any) => typeof c.matches === 'string' && c.matches.includes('for')) as { matches: string };
+        const footerRe = new RegExp(footerClause.matches, 'i');
+        const body = ['✽ Thinking… (1s)', '', '✻ Baked for 7s'].join('\n');
+        expect(footerRe.test(body)).toBe(true);
+    });
+});
