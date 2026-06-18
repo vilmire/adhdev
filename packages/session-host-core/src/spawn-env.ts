@@ -57,6 +57,23 @@ export function sanitizeSpawnEnv(
     delete env.NO_COLOR;
     delete env.COLOR;
 
+    // Do not leak a parent Claude Code session identity into spawned claude-cli
+    // children. CLAUDE_CODE_CHILD_SESSION makes a spawned claude run as a nested
+    // child that does NOT persist its ~/.claude/projects transcript, so the
+    // native-source history reader finds no file and the live dashboard renders
+    // empty. This bites when the daemon itself was launched from inside a Claude
+    // Code session (the markers are inherited and forwarded to every child).
+    // Scoped to win32 for now: the macOS/Linux path works today and we want to
+    // keep the blast radius small. Safe to make unconditional later — a
+    // daemon-spawned claude should always be a fresh top-level session.
+    if (process.platform === 'win32') {
+        delete env.CLAUDECODE;
+        delete env.CLAUDE_CODE_CHILD_SESSION;
+        delete env.CLAUDE_CODE_ENTRYPOINT;
+        delete env.CLAUDE_CODE_SESSION_ID;
+        delete env.CLAUDE_CODE_EXECPATH;
+    }
+
     applyTerminalColorEnv(env);
     return env;
 }
