@@ -6345,6 +6345,12 @@ export class DaemonCommandRouter {
                 const runtimeMeta = (adapter && typeof (adapter as any).getRuntimeMetadata === 'function')
                     ? (adapter as any).getRuntimeMetadata()
                     : undefined;
+                // Launch metadata (args / cwd / extra-env keys / providerSessionId) is
+                // derived from the live adapter's spawn plan; only available while the
+                // adapter is alive (resumed-from-history sessions report nothing here).
+                const launchInfo = (adapter && typeof (adapter as any).getLaunchInfo === 'function')
+                    ? (adapter as any).getLaunchInfo()
+                    : undefined;
                 const providerType = target?.providerType || coord?.cliType || '';
                 const providerMetaForSession = providerType
                     ? this.deps.providerLoader.resolve?.(providerType) || this.deps.providerLoader.getMeta(providerType)
@@ -6358,8 +6364,11 @@ export class DaemonCommandRouter {
                         transport: target?.transport,
                         workspace: (target as any)?.workspace || coord?.workspace,
                         spawnedAtMs: (target as any)?.spawnedAtMs || coord?.startedAt,
-                        providerSessionId: (target as any)?.providerSessionId,
+                        // providerSessionId now comes from the live adapter's launch info
+                        // (the registry target never carried it — it was always undefined).
+                        providerSessionId: launchInfo?.providerSessionId || (target as any)?.providerSessionId,
                         runtimeMetadata: runtimeMeta,
+                        launch: launchInfo,
                     },
                     coordinator: coord ? {
                         meshId: coord.meshId,

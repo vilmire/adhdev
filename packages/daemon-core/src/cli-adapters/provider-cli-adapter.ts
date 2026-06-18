@@ -15,7 +15,7 @@
  */
 
 import * as os from 'os';
-import type { CliAdapter } from '../cli-adapter-types.js';
+import type { CliAdapter, CliLaunchInfo } from '../cli-adapter-types.js';
 import type { InteractivePromptResponse } from '../providers/types/interactive-prompt.js';
 import { LOG } from '../logging/logger.js';
 import { getDebugRuntimeConfig } from '../logging/debug-config.js';
@@ -1593,6 +1593,41 @@ export class ProviderCliAdapter implements CliAdapter {
     getRuntimeMetadata(): PtyRuntimeMetadata | null {
         if (!this.ptyProcess || typeof this.ptyProcess.getMetadata !== 'function') return null;
         return this.ptyProcess.getMetadata();
+    }
+
+    /**
+     * Launch metadata for the dashboard Session info panel. Re-derives the spawn plan
+     * (pure — same inputs the live PTY was spawned with) so the dashboard sees the
+     * resolved binary, full arg vector, and cwd without us having to persist it.
+     * extraEnv values are intentionally dropped (keys only) so secrets passed at
+     * launch time never reach the dashboard.
+     */
+    getLaunchInfo(): CliLaunchInfo {
+        let command: string | undefined;
+        let args: string[] = [...this.extraArgs];
+        try {
+            const plan = resolveCliSpawnPlan({
+                provider: this.provider,
+                runtimeSettings: this.runtimeSettings,
+                workingDir: this.workingDir,
+                extraArgs: this.extraArgs,
+                extraEnv: this.extraEnv,
+            });
+            command = plan.binaryPath;
+            args = plan.allArgs;
+        } catch {
+            // Spawn plan resolution can throw before the binary is resolvable
+            // (e.g. CLI not installed). Fall back to the raw extra args so the
+            // panel still shows what it can rather than failing the whole call.
+        }
+        return {
+            command,
+            args,
+            extraArgs: [...this.extraArgs],
+            cwd: this.workingDir,
+            extraEnvKeys: Object.keys(this.extraEnv || {}),
+            providerSessionId: this.providerSessionId || undefined,
+        };
     }
 
     updateRuntimeMeta(meta: Record<string, unknown>, replace = false): void {

@@ -402,7 +402,7 @@ export default function ChatPane({
                 takes its place: same row, right-aligned, opens SessionInfoDialog. */}
             <div className="chat-activity-toggle-bar">
                 <div className="ml-auto flex items-center gap-1">
-                    <SessionInfoButton sessionId={activeConv.sessionId} daemonId={activeConv.daemonId} />
+                    <SessionInfoButton sessionId={activeConv.sessionId} daemonId={activeConv.daemonId} conv={activeConv} />
                 </div>
             </div>
             <ChatMessageList

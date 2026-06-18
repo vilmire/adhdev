@@ -38,6 +38,29 @@ export interface AcpAdapterHandle {
     resolvePermission?(approved: boolean): Promise<void>;
 }
 
+/**
+ * Launch metadata for a CLI session, surfaced by the dashboard Session info panel.
+ * Derived from the live adapter's spawn plan — the resolved binary, the full
+ * argument vector (provider base args + per-launch extra args), the cwd, and the
+ * set of per-launch extra-env KEYS (values are intentionally omitted so secrets in
+ * extraEnv are never sent to the dashboard). providerSessionId is the upstream
+ * agent's own session id once the CLI reports it.
+ */
+export interface CliLaunchInfo {
+    /** Resolved executable path the PTY actually spawns. */
+    command?: string;
+    /** Full argument vector (provider spawn.args + extraArgs, {{workingDir}} expanded). */
+    args: string[];
+    /** Per-launch extra args only (subset of args), for attribution. */
+    extraArgs: string[];
+    /** Working directory the session was spawned in. */
+    cwd: string;
+    /** KEYS of per-launch extra env (values omitted — may contain secrets). */
+    extraEnvKeys: string[];
+    /** Upstream agent session id, once the CLI reports one. */
+    providerSessionId?: string;
+}
+
 export interface CliAdapter {
     cliType: string;
     cliName: string;
@@ -70,6 +93,8 @@ export interface CliAdapter {
     setOnPtyData?(callback: (data: string) => void): void;
     writeRaw?(data: string): void;
     resize?(cols: number, rows: number): void;
+    // ── Launch metadata for the dashboard Session info panel (args/cwd/env keys) ──
+    getLaunchInfo?(): CliLaunchInfo;
     // ── Runtime metadata used by CliProviderInstance for session tracking ──
     getRuntimeMetadata?(): unknown;
     updateRuntimeMeta?(meta: Record<string, unknown>): void;

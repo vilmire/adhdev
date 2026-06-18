@@ -5,14 +5,17 @@
  */
 
 import { useState } from 'react'
-import SessionInfoDialog from './SessionInfoDialog'
+import SessionInfoDialog, { type SessionInfoConversation } from './SessionInfoDialog'
 
 interface Props {
     sessionId: string | undefined
     daemonId: string | undefined
+    /** Rich client-side session context (settings/git/mesh/workspace) so the dialog
+     *  can render mesh-node + workspace detail without a second round-trip. */
+    conv?: SessionInfoConversation
 }
 
-export default function SessionInfoButton({ sessionId, daemonId }: Props) {
+export default function SessionInfoButton({ sessionId, daemonId, conv }: Props) {
     const [open, setOpen] = useState(false)
     if (!sessionId || !daemonId) return null
     return (
@@ -20,7 +23,7 @@ export default function SessionInfoButton({ sessionId, daemonId }: Props) {
             <button
                 type="button"
                 onClick={() => setOpen(true)}
-                title="Session info — system prompt, MCP config, spawned at, …"
+                title="Session info — launch args, mesh node, system prompt, …"
                 aria-label="Session info"
                 className="inline-flex items-center justify-center w-6 h-6 rounded-full text-text-secondary hover:text-text-primary hover:bg-surface-secondary text-sm leading-none"
                 /* The parent activity-toggle-bar disables pointer events so the
@@ -31,7 +34,7 @@ export default function SessionInfoButton({ sessionId, daemonId }: Props) {
             >
                 ⓘ
             </button>
-            {open && <SessionInfoDialog sessionId={sessionId} daemonId={daemonId} onClose={() => setOpen(false)} />}
+            {open && <SessionInfoDialog sessionId={sessionId} daemonId={daemonId} conv={conv} onClose={() => setOpen(false)} />}
         </>
     )
 }

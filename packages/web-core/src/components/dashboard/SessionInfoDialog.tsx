@@ -11,8 +11,18 @@
  * non-coordinator sessions and only pays the round-trip when a user opens it.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTransport } from '../../context/TransportContext'
+import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
+import {
+    joinMeshNodeForSession,
+    resolveSessionMeshId,
+    resolveSessionMeshNodeId,
+    type JoinedMeshNode,
+    type SessionInfoConversation,
+} from './session-info-data'
+
+export type { SessionInfoConversation } from './session-info-data'
 
 interface SessionInjection {
     mode: string
@@ -29,6 +39,16 @@ interface SessionInfoCoordinator {
     mcpConfigPath?: string
 }
 
+/** Launch metadata mirrored from daemon-core CliLaunchInfo (get_session_info). */
+interface SessionLaunchInfo {
+    command?: string
+    args?: string[]
+    extraArgs?: string[]
+    cwd?: string
+    extraEnvKeys?: string[]
+    providerSessionId?: string
+}
+
 interface SessionInfoSession {
     sessionId: string
     providerType: string
@@ -38,6 +58,7 @@ interface SessionInfoSession {
     spawnedAtMs?: number
     providerSessionId?: string
     runtimeMetadata?: unknown
+    launch?: SessionLaunchInfo
 }
 
 interface SessionInfoResponse {
@@ -50,6 +71,7 @@ interface SessionInfoResponse {
 interface Props {
     sessionId: string
     daemonId: string
+    conv?: SessionInfoConversation
     onClose: () => void
 }
 
@@ -76,11 +98,17 @@ function formatRelative(ms?: number): string {
     return `${Math.floor(hr / 24)}d ago`
 }
 
-export default function SessionInfoDialog({ sessionId, daemonId, onClose }: Props) {
+export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }: Props) {
     const { sendCommand } = useTransport()
+    const meshOverrides = useDashboardMeshOverrides()
     const [loading, setLoading] = useState(true)
     const [data, setData] = useState<SessionInfoResponse | null>(null)
     const [error, setError] = useState<string | null>(null)
+    const [meshNode, setMeshNode] = useState<JoinedMeshNode | null>(null)
+    const [meshNodeError, setMeshNodeError] = useState<string | null>(null)
+
+    const meshId = useMemo(() => resolveSessionMeshId(conv), [conv])
+    const meshNodeId = useMemo(() => resolveSessionMeshNodeId(conv), [conv])
 
     const load = useCallback(async () => {
         setLoading(true)
@@ -110,6 +138,29 @@ export default function SessionInfoDialog({ sessionId, daemonId, onClose }: Prop
     }, [sendCommand, daemonId, sessionId])
 
     useEffect(() => { void load() }, [load])
+
+    // Join the live mesh node this session belongs to. Best-effort: a session that
+    // isn't a mesh member (no meshId), a daemon with no loadMeshStatus override, or a
+    // failed/empty mesh_status all leave the Mesh node section hidden rather than
+    // blocking the whole panel.
+    const loadMeshNode = useCallback(async () => {
+        setMeshNode(null)
+        setMeshNodeError(null)
+        if (!meshId || !meshNodeId || !meshOverrides?.loadMeshStatus) return
+        try {
+            const raw = await meshOverrides.loadMeshStatus(daemonId, meshId, { refresh: false })
+            const node = joinMeshNodeForSession(raw, meshNodeId)
+            if (!node) {
+                setMeshNodeError('This session is stamped to a mesh node that the coordinator no longer reports.')
+                return
+            }
+            setMeshNode(node)
+        } catch (e: any) {
+            setMeshNodeError(e?.message || 'Failed to load mesh node info')
+        }
+    }, [meshOverrides, daemonId, meshId, meshNodeId])
+
+    useEffect(() => { void loadMeshNode() }, [loadMeshNode])
 
     // Esc closes — same convention as other modals in web-core.
     useEffect(() => {
@@ -166,6 +217,103 @@ export default function SessionInfoDialog({ sessionId, daemonId, onClose }: Prop
                             {data.session.providerSessionId && (
                                 <Row k="Provider session ID" v={<Mono>{data.session.providerSessionId}</Mono>} />
                             )}
+                            {!data.session.workspace && conv?.workspacePath && (
+                                <Row k="Workspace" v={<Mono>{conv.workspacePath}</Mono>} />
+                            )}
+                            {conv?.machineName && <Row k="Machine" v={conv.machineName} />}
+                            {conv?.connectionState && <Row k="Connection" v={conv.connectionState} />}
+                            {conv?.git && (
+                                <Row
+                                    k="Workspace git"
+                                    v={
+                                        <span>
+                                            {conv.git.branch || '(detached)'}
+                                            {conv.git.ahead ? ` ↑${conv.git.ahead}` : ''}
+                                            {conv.git.behind ? ` ↓${conv.git.behind}` : ''}
+                                            {conv.git.dirty ? ' · dirty' : ' · clean'}
+                                        </span>
+                                    }
+                                />
+                            )}
+                        </Section>
+                    )}
+                    {data?.session?.launch && (
+                        <Section title="Launch">
+                            {data.session.launch.command && (
+                                <Row k="Command" v={<Mono>{data.session.launch.command}</Mono>} />
+                            )}
+                            {data.session.launch.cwd && (
+                                <Row k="Working directory" v={<Mono>{data.session.launch.cwd}</Mono>} />
+                            )}
+                            {Array.isArray(data.session.launch.args) && data.session.launch.args.length > 0 && (
+                                <Row k="Args" v={<Mono>{data.session.launch.args.join(' ')}</Mono>} />
+                            )}
+                            {Array.isArray(data.session.launch.extraArgs) && data.session.launch.extraArgs.length > 0 && (
+                                <Row k="Extra args" v={<Mono>{data.session.launch.extraArgs.join(' ')}</Mono>} />
+                            )}
+                            {Array.isArray(data.session.launch.extraEnvKeys) && data.session.launch.extraEnvKeys.length > 0 && (
+                                <Row
+                                    k="Extra env"
+                                    v={<Mono>{data.session.launch.extraEnvKeys.join(', ')}</Mono>}
+                                />
+                            )}
+                        </Section>
+                    )}
+                    {meshNode && (
+                        <Section title="Mesh node">
+                            {meshNode.nodeId && <Row k="Node ID" v={<Mono>{meshNode.nodeId}</Mono>} />}
+                            {meshNode.workspace && <Row k="Workspace" v={<Mono>{meshNode.workspace}</Mono>} />}
+                            {meshNode.repoRoot && meshNode.repoRoot !== meshNode.workspace && (
+                                <Row k="Repo root" v={<Mono>{meshNode.repoRoot}</Mono>} />
+                            )}
+                            {meshNode.daemonId && <Row k="Daemon ID" v={<Mono>{meshNode.daemonId}</Mono>} />}
+                            {meshNode.role && <Row k="Role" v={meshNode.role} />}
+                            {meshNode.machineStatus && <Row k="Machine status" v={meshNode.machineStatus} />}
+                            {meshNode.health && <Row k="Health" v={meshNode.health} />}
+                            {meshNode.isLocalWorktree && (
+                                <Row k="Worktree" v={meshNode.worktreeBranch ? <Mono>{meshNode.worktreeBranch}</Mono> : 'yes'} />
+                            )}
+                            {typeof meshNode.launchReady === 'boolean' && (
+                                <Row k="Launch ready" v={meshNode.launchReady ? 'yes' : 'no'} />
+                            )}
+                            {meshNode.git && (
+                                <Row
+                                    k="Git"
+                                    v={
+                                        <span>
+                                            {meshNode.git.branch || '(detached)'}
+                                            {meshNode.git.headCommit ? ` @ ${String(meshNode.git.headCommit).slice(0, 10)}` : ''}
+                                            {meshNode.git.ahead ? ` ↑${meshNode.git.ahead}` : ''}
+                                            {meshNode.git.behind ? ` ↓${meshNode.git.behind}` : ''}
+                                            {meshNode.git.dirty ? ' · dirty' : ' · clean'}
+                                            {meshNode.git.upstream ? ` · ${meshNode.git.upstream}` : ''}
+                                        </span>
+                                    }
+                                />
+                            )}
+                            {meshNode.connection && (
+                                <Row
+                                    k="Connection"
+                                    v={
+                                        <span>
+                                            {meshNode.connection.transport || '—'}
+                                            {meshNode.connection.state ? ` · ${meshNode.connection.state}` : ''}
+                                            {typeof meshNode.connection.rttMs === 'number' ? ` · ${meshNode.connection.rttMs}ms RTT` : ''}
+                                        </span>
+                                    }
+                                />
+                            )}
+                            {Array.isArray(meshNode.providers) && meshNode.providers.length > 0 && (
+                                <Row k="Providers" v={<Mono>{meshNode.providers.join(', ')}</Mono>} />
+                            )}
+                            {Array.isArray(meshNode.providerPriority) && meshNode.providerPriority.length > 0 && (
+                                <Row k="Provider priority" v={<Mono>{meshNode.providerPriority.join(' › ')}</Mono>} />
+                            )}
+                        </Section>
+                    )}
+                    {!meshNode && meshNodeError && (meshId || meshNodeId) && (
+                        <Section title="Mesh node">
+                            <div className="text-text-secondary italic">{meshNodeError}</div>
                         </Section>
                     )}
                     {data?.coordinator && (
@@ -197,6 +345,9 @@ export default function SessionInfoDialog({ sessionId, daemonId, onClose }: Prop
                                 <Block title="Final system prompt (click to expand)" body={data.coordinator.systemPrompt} />
                             )}
                         </Section>
+                    )}
+                    {data?.session?.runtimeMetadata != null && (
+                        <RuntimeMetadataSection meta={data.session.runtimeMetadata} />
                     )}
                     {data && !data.coordinator && (
                         <div className="text-text-secondary italic">
@@ -243,6 +394,43 @@ function Row({ k, v }: { k: string; v: React.ReactNode }) {
 
 function Mono({ children }: { children: React.ReactNode }) {
     return <code className="font-mono text-xs">{children}</code>
+}
+
+/**
+ * Renders the daemon-reported runtime metadata (PtyRuntimeMetadata). Surfaces the
+ * known scalar fields as rows and the full object as a collapsible JSON block so the
+ * panel stays useful even as the metadata shape evolves.
+ */
+function RuntimeMetadataSection({ meta }: { meta: unknown }) {
+    if (!meta || typeof meta !== 'object') return null
+    const m = meta as Record<string, unknown>
+    const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null)
+    const runtimeId = str(m.runtimeId)
+    const lifecycle = str(m.lifecycle)
+    const surfaceKind = str(m.surfaceKind)
+    const recoveryState = str(m.recoveryState)
+    const attached = Array.isArray(m.attachedClients) ? m.attachedClients.length : null
+    return (
+        <Section title="Runtime">
+            {runtimeId && <Row k="Runtime ID" v={<Mono>{runtimeId}</Mono>} />}
+            {lifecycle && <Row k="Lifecycle" v={lifecycle} />}
+            {surfaceKind && <Row k="Surface" v={surfaceKind} />}
+            {recoveryState && <Row k="Recovery state" v={recoveryState} />}
+            {typeof m.restoredFromStorage === 'boolean' && (
+                <Row k="Restored from storage" v={m.restoredFromStorage ? 'yes' : 'no'} />
+            )}
+            {attached != null && <Row k="Attached clients" v={String(attached)} />}
+            <Block title="Raw runtime metadata (click to expand)" body={safeJson(meta)} />
+        </Section>
+    )
+}
+
+function safeJson(value: unknown): string {
+    try {
+        return JSON.stringify(value, null, 2)
+    } catch {
+        return String(value)
+    }
 }
 
 function Block({ title, body, defaultOpen = false }: { title: string; body: string; defaultOpen?: boolean }) {
