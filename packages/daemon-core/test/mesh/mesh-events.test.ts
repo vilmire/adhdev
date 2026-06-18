@@ -11,12 +11,15 @@ import { tmpdir } from 'os'
 // by 4 per test run across the production coordinator view.
 const testTmpDir = path.join(tmpdir(), `adhdev-mesh-events-test-${randomUUID().slice(0, 8)}`)
 const testConfigDir = path.join(testTmpDir, '.adhdev')
+const configMocks = vi.hoisted(() => ({
+  loadConfig: vi.fn(() => ({ machineId: 'test-machine' } as any)),
+}))
 vi.mock('../../src/config/config.js', () => ({
   getConfigDir: () => {
     if (!fs.existsSync(testConfigDir)) fs.mkdirSync(testConfigDir, { recursive: true })
     return testConfigDir
   },
-  loadConfig: () => ({ machineId: 'test-machine' }),
+  loadConfig: configMocks.loadConfig,
 }))
 
 const meshConfigMocks = vi.hoisted(() => ({
@@ -2085,7 +2088,10 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('skips remote nodes instead of local auto-launching through cliManager', async () => {
+  it('gracefully skips a remote node when no dispatchMeshCommand transport is available', async () => {
+    // With no dispatch transport (standalone, or cloud component without the relay),
+    // a remote node cannot be reached — fall back to a graceful skip rather than a
+    // local cliManager launch. The local launch path must NOT fire.
     const meshId = `mesh_auto_launch_remote_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue({
@@ -2102,6 +2108,7 @@ describe('setupMeshEventForwarding', () => {
       })
       enqueueTask(meshId, 'pending remote task')
       const { components, cliManager } = createQueueAutoLaunchComponents()
+      // No components.dispatchMeshCommand → remote launch impossible.
 
       await triggerMeshQueue(components, meshId)
 
@@ -2109,6 +2116,144 @@ describe('setupMeshEventForwarding', () => {
       const [entry] = getQueue(meshId)
       expect(entry.status).toBe('pending')
       expect(entry.autoLaunch?.reason).toBe('remote_auto_launch_unsupported')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('forwards launch_cli to a remote node via dispatchMeshCommand when a transport is available', async () => {
+    // Root fix: a remote queue task with no idle session must FORWARD launch_cli to the
+    // node's daemon (mirroring mesh_launch_session) instead of being permanently skipped
+    // with remote_auto_launch_unsupported. The local cliManager.launch_cli path must NOT
+    // fire for a remote node; dispatchMeshCommand must be called exactly once.
+    const meshId = `mesh_auto_launch_remote_forward_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{
+          id: 'node_remote_1',
+          workspace: '/repo/remote-worktree',
+          health: 'online',
+          daemonId: 'daemon_remote_machine',
+          machineId: 'mach_remote',
+          policy: { providerPriority: ['hermes-cli'] },
+        }],
+        policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
+      })
+      detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
+      const queued = enqueueTask(meshId, 'pending remote task')
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+      const dispatchMeshCommand = vi.fn(async () => ({ success: true, sessionId: 'remote-session-1' }))
+      components.dispatchMeshCommand = dispatchMeshCommand
+
+      await triggerMeshQueue(components, meshId)
+
+      // Local launch path is untouched for a remote node.
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      // launch_cli was forwarded to the remote daemon exactly once.
+      const launchForwards = dispatchMeshCommand.mock.calls.filter(([, command]: [string, string]) => command === 'launch_cli')
+      expect(launchForwards).toHaveLength(1)
+      const [targetDaemonId, command, payload] = launchForwards[0] as [string, string, any]
+      expect(targetDaemonId).toBe('daemon_remote_machine')
+      expect(command).toBe('launch_cli')
+      expect(payload).toMatchObject({
+        cliType: 'hermes-cli',
+        dir: '/repo/remote-worktree',
+        settings: expect.objectContaining({
+          role: 'worker',
+          meshNodeFor: meshId,
+          meshNodeId: 'node_remote_1',
+          launchedByCoordinator: true,
+          autoLaunchedForQueueTaskId: queued.id,
+          // Relay-safe coordinator anchor (bare machineId from mocked loadConfig).
+          meshCoordinatorDaemonId: 'test-machine',
+          meshCoordinatorNodeId: 'node_remote_1',
+        }),
+      })
+      // Task stays pending until the remote worker's agent:ready is forwarded back and
+      // the normal claim path assigns it — remote launch is async, not an immediate claim.
+      const [entry] = getQueue(meshId)
+      expect(entry.status).toBe('pending')
+      expect(entry.autoLaunch?.status).toBe('completed')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('de-dups repeated skipped auto-launch ledger entries across reconcile re-triggers', async () => {
+    // The reconcile loop re-runs triggerMeshQueue every 4s. A task that keeps skipping
+    // for the SAME reason (e.g. a remote node with no transport) must append the
+    // session_auto_launch{phase:'skipped'} ledger entry only once, not once per tick.
+    const meshId = `mesh_auto_launch_skip_dedup_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{
+          id: 'node_remote_1',
+          workspace: '/repo/remote-worktree',
+          health: 'online',
+          daemonId: 'daemon_remote_machine',
+          machineId: 'mach_remote',
+          policy: { providerPriority: ['hermes-cli'] },
+        }],
+        policy: { maxParallelTasks: 2 },
+      })
+      enqueueTask(meshId, 'pending remote task')
+      const { components } = createQueueAutoLaunchComponents()
+      // No dispatchMeshCommand → skips every time with remote_auto_launch_unsupported.
+
+      await triggerMeshQueue(components, meshId)
+      await triggerMeshQueue(components, meshId)
+      await triggerMeshQueue(components, meshId)
+
+      const skips = readLedgerEntries(meshId).filter(
+        e => e.kind === 'session_auto_launch'
+          && e.payload?.phase === 'skipped'
+          && e.payload?.reason === 'remote_auto_launch_unsupported',
+      )
+      expect(skips).toHaveLength(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('gracefully skips a remote node when no coordinator daemonId can be resolved', async () => {
+    // dispatchMeshCommand exists but there is no local machineId to stamp as the
+    // coordinator anchor → relay-safe completion routing is impossible, so skip
+    // (with a distinct reason) rather than launch an unroutable remote worker.
+    const meshId = `mesh_auto_launch_no_coord_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{
+          id: 'node_remote_1',
+          workspace: '/repo/remote-worktree',
+          health: 'online',
+          daemonId: 'daemon_remote_machine',
+          machineId: 'mach_remote',
+          policy: { providerPriority: ['hermes-cli'] },
+        }],
+        policy: { maxParallelTasks: 2 },
+      })
+      enqueueTask(meshId, 'pending remote task')
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+      components.dispatchMeshCommand = vi.fn(async () => ({ success: true }))
+      // Force loadConfig().machineId to be empty so no coordinator id resolves.
+      // The node still reads as remote (its daemonId 'daemon_remote_machine' does not
+      // match the empty-machine local ids), so this isolates the no-coordinator skip.
+      configMocks.loadConfig.mockReturnValue({ machineId: '' } as any)
+
+      try {
+        await triggerMeshQueue(components, meshId)
+
+        expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+        expect(components.dispatchMeshCommand).not.toHaveBeenCalledWith('daemon_remote_machine', 'launch_cli', expect.anything())
+        const [entry] = getQueue(meshId)
+        expect(entry.status).toBe('pending')
+        expect(entry.autoLaunch?.reason).toBe('remote_auto_launch_no_coordinator_daemon_id')
+      } finally {
+        configMocks.loadConfig.mockReturnValue({ machineId: 'test-machine' } as any)
+      }
     } finally {
       cleanupMeshFiles(meshId)
     }

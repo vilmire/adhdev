@@ -380,6 +380,16 @@ const autoLaunchInProgress = new Set<string>();
 const autoLaunchCooldownUntil = new Map<string, number>();
 const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
 
+// De-dup for repeated `skipped` ledger noise: the reconcile loop re-runs the queue
+// trigger every 4s, so a task that can't be claimed (e.g. a remote node with no
+// transport, or a node under cooldown) would otherwise append an identical
+// session_auto_launch{phase:'skipped'} entry on every tick — flooding the ledger.
+// We suppress a `skipped` ledger append when the immediately-prior recorded event
+// for that task was the SAME (phase, reason). Any non-skip phase (started/failed/
+// completed) or a changed reason resets the de-dup so real transitions still record.
+const lastAutoLaunchLedgerKey = new Map<string, string>();
+const AUTO_LAUNCH_LEDGER_DEDUP_MAX = 2000;
+
 function sweepExpiredCooldowns(): void {
     const now = Date.now();
     for (const [key, until] of autoLaunchCooldownUntil) {
@@ -457,7 +467,9 @@ function isLaunchableNode(node: any): boolean {
     return health === 'online' || health === 'unknown';
 }
 
-function localAutoLaunchSkipReason(node: any): string | null {
+/** Whether a mesh node's daemon/machine identity resolves to THIS coordinator daemon
+ *  (i.e. the queue session can be spawned by a direct local `launch_cli`). */
+function isLocalAutoLaunchNode(node: any): boolean {
     const daemonId = readNonEmptyString(node?.daemonId);
     const machineId = readNonEmptyString(node?.machineId);
     const appConfig = loadConfig();
@@ -466,17 +478,44 @@ function localAutoLaunchSkipReason(node: any): string | null {
     const standaloneDaemonId = localMachineId ? `standalone_${localMachineId}` : '';
 
     const daemonMatchesLocal = !daemonId || daemonId === cloudDaemonId || daemonId === standaloneDaemonId;
-    const machineMatchesLocal = !machineId || (localMachineId && machineId === localMachineId);
+    const machineMatchesLocal = !machineId || (!!localMachineId && machineId === localMachineId);
 
     if (node?.isLocalWorktree === true) {
-        return daemonMatchesLocal && machineMatchesLocal ? null : 'remote_auto_launch_unsupported';
+        return daemonMatchesLocal && machineMatchesLocal;
     }
-
     if (daemonId || machineId) {
-        return daemonMatchesLocal && machineMatchesLocal ? null : 'remote_auto_launch_unsupported';
+        return daemonMatchesLocal && machineMatchesLocal;
     }
+    return true;
+}
 
-    return null;
+/**
+ * Resolve how a pending queue task should be auto-launched onto a node.
+ *
+ * - `local`: spawn directly on this daemon via cliManager.handleCliCommand('launch_cli').
+ * - `remote`: forward `launch_cli` to the node's daemon via dispatchMeshCommand
+ *   (mirrors what mesh_launch_session does). Requires dispatchMeshCommand AND a
+ *   resolvable coordinator daemonId for relay-safe completion routing.
+ * - `skip`: not launchable from here — carries the reason (e.g. a remote node with
+ *   no dispatch transport, or no coordinator daemonId to stamp).
+ */
+function resolveAutoLaunchTarget(components: DaemonComponents, node: any): {
+    mode: 'local' | 'remote' | 'skip';
+    reason?: string;
+    daemonId?: string;
+    coordinatorDaemonId?: string;
+} {
+    if (isLocalAutoLaunchNode(node)) return { mode: 'local' };
+
+    // Remote node. Forwarding the launch is possible only with a dispatch transport
+    // (cloud mode) plus a coordinator daemonId to stamp into the worker so completion
+    // events route back here. Without either, fall back to a graceful skip.
+    const daemonId = readNonEmptyString(node?.daemonId);
+    if (!daemonId) return { mode: 'skip', reason: 'remote_auto_launch_unsupported' };
+    if (!components.dispatchMeshCommand) return { mode: 'skip', reason: 'remote_auto_launch_unsupported' };
+    const coordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
+    if (!coordinatorDaemonId) return { mode: 'skip', reason: 'remote_auto_launch_no_coordinator_daemon_id' };
+    return { mode: 'remote', daemonId, coordinatorDaemonId };
 }
 
 function activeAssignedCount(meshId: string): number {
@@ -632,6 +671,20 @@ function recordAutoLaunchEvent(meshId: string, args: {
     reason?: string;
     error?: string;
 }) {
+    // Suppress consecutive identical `skipped` entries for the same task (4s reconcile
+    // re-trigger noise). Non-skip phases and changed reasons always record and reset
+    // the de-dup so genuine state transitions remain visible in the ledger.
+    const dedupKey = `${meshId}:${args.taskId}`;
+    const currentSig = `${args.phase}|${args.reason || ''}`;
+    if (args.phase === 'skipped' && lastAutoLaunchLedgerKey.get(dedupKey) === currentSig) {
+        return;
+    }
+    lastAutoLaunchLedgerKey.set(dedupKey, currentSig);
+    if (lastAutoLaunchLedgerKey.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
+        // Bound memory: drop the oldest insertion (Map preserves insertion order).
+        const oldest = lastAutoLaunchLedgerKey.keys().next().value;
+        if (oldest !== undefined) lastAutoLaunchLedgerKey.delete(oldest);
+    }
     try {
         appendLedgerEntry(meshId, {
             kind: 'session_auto_launch',
@@ -827,9 +880,13 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_not_launch_ready', nodeId });
                 continue;
             }
-            const localSkipReason = localAutoLaunchSkipReason(node);
-            if (localSkipReason) {
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: localSkipReason, nodeId });
+            const launchTarget = resolveAutoLaunchTarget(components, node);
+            if (launchTarget.mode === 'skip') {
+                // Remote node we can't reach (no transport / no coordinator daemonId).
+                // Set a cooldown so the 4s reconcile loop doesn't re-attempt this node
+                // every tick; the de-dup'd skip ledger keeps it diagnosable without flood.
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: launchTarget.reason || 'auto_launch_unavailable', nodeId });
+                autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                 continue;
             }
             // Write tasks keep the one-active-per-node invariant (worktree isolation);
@@ -865,23 +922,68 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     continue;
                 }
 
+                // Shared worker-launch envelope. For a local node it spawns directly on this
+                // daemon; for a remote node the identical command is forwarded to the node's
+                // daemon (mirrors mesh_launch_session), with the coordinator daemonId stamped
+                // so the worker's completion events route back to this coordinator.
+                const launchSettings: Record<string, unknown> = {
+                    // Worker launch envelope: role + mesh context so worker can route completion events.
+                    role: 'worker',
+                    meshNodeFor: meshId,
+                    meshNodeId: nodeId,
+                    spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
+                    // Coordinator-dispatched worker: auto-approve unless mesh/node policy
+                    // opts out (default true). Lands in settingsOverride and beats the
+                    // global per-provider-type autoApprove config (see shouldAutoApprove).
+                    autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
+                    launchedByCoordinator: true,
+                    autoLaunchedForQueueTaskId: task.id,
+                };
+
+                if (launchTarget.mode === 'remote') {
+                    // Relay-safe completion routing: stamp the coordinator anchor the same way
+                    // mesh_launch_session does so the worker forwards events back to this daemon.
+                    const remoteSettings: Record<string, unknown> = {
+                        ...launchSettings,
+                        meshCoordinatorDaemonId: launchTarget.coordinatorDaemonId,
+                        meshCoordinatorNodeId: nodeId,
+                    };
+                    markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType });
+                    let launchResult: any;
+                    try {
+                        launchResult = await components.dispatchMeshCommand!(launchTarget.daemonId!, 'launch_cli', {
+                            cliType: resolved.providerType,
+                            dir: node.workspace,
+                            settings: remoteSettings,
+                        });
+                    } catch (e: any) {
+                        markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: resolved.providerType });
+                        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+                        return false;
+                    }
+                    const payload = (launchResult && typeof launchResult === 'object' && 'payload' in launchResult && launchResult.payload && typeof launchResult.payload === 'object')
+                        ? launchResult.payload
+                        : launchResult;
+                    if (!payload?.success) {
+                        const reason = readNonEmptyString(payload?.error) || 'remote_launch_cli_failed';
+                        markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: resolved.providerType });
+                        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+                        return false;
+                    }
+                    // Remote launch is async: the worker session will register and emit agent:ready,
+                    // which (forwarded back here) drives the claim via the normal event path / PHASE 1
+                    // reconcile. Set a cooldown so the 4s loop doesn't re-launch before that lands.
+                    const remoteSessionId = readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.id) || readNonEmptyString(payload.runtimeSessionId);
+                    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId: remoteSessionId || undefined });
+                    autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+                    return true;
+                }
+
                 markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType });
                 const launchResult: any = await components.cliManager.handleCliCommand('launch_cli', {
                     cliType: resolved.providerType,
                     dir: node.workspace,
-                    settings: {
-                        // Worker launch envelope: role + mesh context so worker can route completion events.
-                        role: 'worker',
-                        meshNodeFor: meshId,
-                        meshNodeId: nodeId,
-                        spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
-                        // Coordinator-dispatched worker: auto-approve unless mesh/node policy
-                        // opts out (default true). Lands in settingsOverride and beats the
-                        // global per-provider-type autoApprove config (see shouldAutoApprove).
-                        autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
-                        launchedByCoordinator: true,
-                        autoLaunchedForQueueTaskId: task.id,
-                    },
+                    settings: launchSettings,
                 });
                 if (!launchResult?.success) {
                     const reason = launchResult?.error || 'launch_cli_failed';
