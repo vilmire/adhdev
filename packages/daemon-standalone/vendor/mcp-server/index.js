@@ -2404,6 +2404,21 @@ var MESH_GIT_STATUS_TOOL = {
     required: ["node_id"]
   }
 };
+var MESH_READ_NODE_LOGS_TOOL = {
+  name: "mesh_read_node_logs",
+  description: "Fetch a recent daemon LOG tail directly from a (possibly remote) mesh node over P2P \u2014 no session launch, no PowerShell/shell grep on the remote machine. Use this to debug a node's daemon: read its error/warn lines, grep for a pattern, or read since a timestamp. The reply is byte-bounded (\u2264128KB, default 64KB; truncated:true when the file was larger, newest lines kept) and secrets (API keys, machine secrets, bearer tokens, JWTs, TURN credentials) are redacted before transmission. This reads the DAEMON log, not an agent session transcript \u2014 for a session transcript use mesh_read_chat / mesh_read_debug.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Target node ID (the daemon owning it serves its own log)." },
+      grep: { type: "string", description: "Optional regex (case-insensitive) \u2014 only matching log lines are returned. Invalid regex falls back to a literal substring match." },
+      since_ms: { type: "number", description: "Optional epoch-ms floor \u2014 only log lines at/after this time are returned (lines without a parseable timestamp are kept)." },
+      tail_bytes: { type: "number", description: "Max bytes of log tail to read (default 65536, capped at 131072). Larger files are truncated to the newest tail_bytes." },
+      date: { type: "string", description: "Optional YYYY-MM-DD log date (defaults to today). Falls back to the size-rotation backup when the active file is absent." }
+    },
+    required: ["node_id"]
+  }
+};
 var MESH_FAST_FORWARD_NODE_TOOL = {
   name: "mesh_fast_forward_node",
   description: 'Safely dry-run or execute an obvious direct fast-forward for a mesh node without launching an agent session. mode="merge" (default) absorbs upstream commits into the local branch via git merge --ff-only (ahead=0, behind>0). mode="push" publishes local commits to origin via a strict ff-only push (HEAD must be a descendant of origin/<branch>). Defaults to dry-run; execution requires execute=true. Never force-pushes, rebases, resets, cleans, or checks out arbitrary revisions. When the merge path finds the branch ahead with nothing to merge, it returns code "ahead_needs_push" pointing at mode="push".',
@@ -2668,6 +2683,7 @@ var ALL_MESH_TOOLS = [
   MESH_READ_DEBUG_TOOL,
   MESH_LAUNCH_SESSION_TOOL,
   MESH_GIT_STATUS_TOOL,
+  MESH_READ_NODE_LOGS_TOOL,
   MESH_FAST_FORWARD_NODE_TOOL,
   MESH_CHECKPOINT_TOOL,
   MESH_APPROVE_TOOL,
@@ -4146,6 +4162,28 @@ async function meshGitStatus(ctx, args) {
     }, null, 2);
   }
 }
+async function meshReadNodeLogs(ctx, args) {
+  const node = await findNodeWithRefresh(ctx, args.node_id);
+  try {
+    const result = await commandForNode(ctx, node, "get_mesh_node_logs", {
+      meshId: ctx.mesh.id,
+      nodeId: args.node_id,
+      ...typeof args.grep === "string" && args.grep.trim() ? { grep: args.grep.trim() } : {},
+      ...Number.isFinite(args.since_ms) ? { sinceMs: args.since_ms } : {},
+      ...Number.isFinite(args.tail_bytes) ? { tailBytes: args.tail_bytes } : {},
+      ...typeof args.date === "string" && args.date.trim() ? { date: args.date.trim() } : {}
+    });
+    const payload = unwrapCommandPayload(result);
+    return JSON.stringify(payload, null, 2);
+  } catch (e) {
+    const failure = buildCoordinatorP2pRelayFailure(e, {
+      command: "get_mesh_node_logs",
+      targetDaemonId: node.daemonId,
+      nodeId: args.node_id
+    });
+    return JSON.stringify(failure, null, 2);
+  }
+}
 async function meshFastForwardNode(ctx, args) {
   await refreshMeshFromDaemon(ctx);
   const node = await findNodeWithRefresh(ctx, args.node_id);
@@ -5556,6 +5594,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_git_status":
             text = await meshGitStatus(meshCtx, a);
+            break;
+          case "mesh_read_node_logs":
+            text = await meshReadNodeLogs(meshCtx, a);
             break;
           case "mesh_fast_forward_node":
             text = await meshFastForwardNode(meshCtx, a);
