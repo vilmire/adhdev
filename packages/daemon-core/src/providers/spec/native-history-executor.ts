@@ -21,6 +21,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { LOG } from '../../logging/logger.js';
 import type {
     NativeHistoryConfig,
     NativeHistoryJsonlSource,
@@ -138,8 +139,48 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
                 || (requestedSessionId ? null : pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint))
                 || (requestedSessionId ? null : newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor));
         }
+        // Raw-workspace slug candidate: `resolved` derives its {cwd*} slug from
+        // fs.realpathSync(workspace). On Windows realpath normalizes the path
+        // (drive-letter case D:↔d:, \\?\ long-path prefix, junction expansion)
+        // so the slug can diverge from the one the CLI actually wrote — and the
+        // concrete path above then misses with ENOENT. Retry with the slug built
+        // from the RAW workspace string before falling back to a scan; it's the
+        // cheap fix when realpath divergence is the only problem.
+        if (!sourcePath && !hasDateTemplateSegment(src.path)) {
+            const resolvedRaw = expandPath(src.path, input, { skipWorkspaceRealpath: true });
+            if (resolvedRaw && resolvedRaw !== resolved) {
+                try {
+                    const rawStat = fs.statSync(resolvedRaw);
+                    if (rawStat.isFile()) sourcePath = resolvedRaw;
+                    else if (rawStat.isDirectory()) {
+                        sourcePath = pickExactSessionFile(resolvedRaw, filePat, requestedSessionId)
+                            || (requestedSessionId ? null : newestRecentFile(resolvedRaw, filePat, windowMs, sessionFloor));
+                    }
+                } catch { /* raw slug also missed — fall through to scan */ }
+            }
+        }
+        // Last-resort scan: the slug-derived directory missed entirely (the
+        // dominant Windows failure: realpath/raw slug both diverge from the CLI's
+        // on-disk project dir → 0 messages, no PTY fallback for native-source
+        // providers). When we have an exact session id, walk the projects root
+        // for `<sessionId>.jsonl` regardless of which project subdir holds it.
+        // The session id is a UUID, so basename matching is unambiguous; mirrors
+        // the standalone reader's scan (claude-cli-transcript.ts resolveTranscriptPath).
+        if (!sourcePath && requestedSessionId) {
+            sourcePath = scanProjectsRootForSessionFile(src.path, input, requestedSessionId);
+        }
     }
-    if (!sourcePath) return null;
+    if (!sourcePath) {
+        // Was silent before — a slug miss produced 0 messages with no trace, so
+        // a live read_chat returning empty was indistinguishable from "no file"
+        // vs "wrong path". Log the attempted concrete path + both slug variants
+        // so the failure mode is greppable in daemon logs.
+        const wsRaw = typeof input.workspace === 'string' ? input.workspace : '';
+        let wsReal = wsRaw;
+        try { if (wsRaw) wsReal = fs.realpathSync(wsRaw); } catch { /* keep raw */ }
+        LOG.debug('NativeHistory', `jsonl unresolved: tried=${JSON.stringify(resolved)} sessionId=${requestedSessionId || '(none)'} wsRaw=${JSON.stringify(wsRaw)} wsReal=${JSON.stringify(wsReal)} rawSlug=${JSON.stringify(claudeProjectDirName(wsRaw))} realSlug=${JSON.stringify(claudeProjectDirName(wsReal))} (concrete miss + raw-slug retry + projects scan all failed)`);
+        return null;
+    }
 
     const mtime = safeMtimeMs(sourcePath);
     const lines = readJsonlLines(sourcePath);
@@ -278,7 +319,7 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
 // Path expansion + globbing
 // ────────────────────────────────────────────────────────────────────────────
 
-function expandPath(template: string, input: NativeHistoryInput): string | null {
+function expandPath(template: string, input: NativeHistoryInput, opts?: { skipWorkspaceRealpath?: boolean }): string | null {
     if (!template) return null;
     let out = template;
     if (out.startsWith('~/') || out === '~') {
@@ -301,7 +342,11 @@ function expandPath(template: string, input: NativeHistoryInput): string | null 
     // `-`. Realpath also handles aliases such as /tmp -> /private/tmp.
     const workspaceRaw = input.workspace ?? '';
     let workspaceResolved = workspaceRaw;
-    if (workspaceRaw) {
+    // The caller may request the RAW slug (skip realpath) to recover from
+    // Windows realpath normalization diverging the {cwd*} slug from the dir
+    // the CLI actually created. Default keeps realpath (handles /tmp ->
+    // /private/tmp aliasing that the CLI itself resolves on macOS).
+    if (workspaceRaw && !opts?.skipWorkspaceRealpath) {
         try { workspaceResolved = fs.realpathSync(workspaceRaw); }
         catch { /* path may not exist yet — keep the raw value */ }
     }
@@ -331,6 +376,62 @@ function expandPath(template: string, input: NativeHistoryInput): string | null 
 
 function claudeProjectDirName(workspace: string): string {
     return workspace.replace(/[^A-Za-z0-9_-]/g, '-');
+}
+
+/**
+ * Last-resort lookup for a transcript by its exact session id, ignoring the
+ * per-cwd slug entirely. The slug-derived directory above can miss completely
+ * when the CLI's on-disk project dir disagrees with the slug we reconstruct
+ * (notably on Windows, where fs.realpathSync normalizes drive-letter case and
+ * adds a \\?\ prefix). Since the session id is a UUID, scanning the projects
+ * root for `<sessionId>.jsonl` is unambiguous.
+ *
+ * Derives the scan base from the template's segments up to (but excluding) the
+ * first one that references a per-session variable ({cwd*} or {session_id}) —
+ * e.g. `~/.claude/projects/{cwd_claude_project}/{session_id}.jsonl` → scan
+ * `~/.claude/projects`. Returns the matching file path, or null.
+ */
+function scanProjectsRootForSessionFile(template: string, input: NativeHistoryInput, requestedSessionId: string): string | null {
+    if (!requestedSessionId) return null;
+    // Resolve the leading static portion of the template (everything before the
+    // first {var} segment) into a concrete base directory.
+    let head = template;
+    if (head.startsWith('~/') || head === '~') head = path.join(os.homedir(), head.slice(2));
+    const segs = head.split('/');
+    const baseParts: string[] = [];
+    for (const seg of segs) {
+        if (/[{}*?]/.test(seg)) break;
+        baseParts.push(seg);
+    }
+    const base = baseParts.join('/');
+    if (!base) return null;
+    let baseStat: fs.Stats | null = null;
+    try { baseStat = fs.statSync(base); } catch { return null; }
+    if (!baseStat.isDirectory()) return null;
+
+    const needle = `${requestedSessionId.toLowerCase()}.jsonl`;
+    // Bounded walk: project layouts are <root>/<projectDir>/<uuid>.jsonl, so a
+    // shallow scan (root + one level of subdirs) suffices and avoids walking an
+    // unbounded tree. Check the root itself first, then each immediate subdir.
+    const dirsToScan: string[] = [base];
+    try {
+        for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+            if (entry.isDirectory()) dirsToScan.push(path.join(base, entry.name));
+        }
+    } catch { /* readdir failed — fall back to scanning base only */ }
+
+    for (const dir of dirsToScan) {
+        let entries: fs.Dirent[];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+        for (const entry of entries) {
+            if (!entry.isFile()) continue;
+            if (entry.name.toLowerCase() !== needle) continue;
+            const found = path.join(dir, entry.name);
+            LOG.debug('NativeHistory', `jsonl scan-fallback hit: sessionId=${requestedSessionId} resolved via projects-root scan → ${JSON.stringify(found)} (slug-derived path missed; likely realpath/slug divergence)`);
+            return found;
+        }
+    }
+    return null;
 }
 
 function globToRegex(pattern: string): RegExp {
