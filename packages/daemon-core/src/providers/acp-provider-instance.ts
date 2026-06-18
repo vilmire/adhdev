@@ -52,6 +52,7 @@ import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } 
 import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext, SessionModalState } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { buildLegacyModelModeSummaryMetadata } from './summary-metadata.js';
+import { workingDirBasename } from './working-dir.js';
 import {
     buildAssistantChatMessage,
     buildChatMessage,
@@ -345,7 +346,7 @@ export class AcpProviderInstance implements ProviderInstance {
     }
 
     getSessionModalState(): SessionModalState {
-        const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+        const dirName = workingDirBasename(this.workingDir);
         return {
             id: this.instanceId,
             status: this.currentStatus,
@@ -358,7 +359,7 @@ export class AcpProviderInstance implements ProviderInstance {
     }
 
     getState(): AcpProviderState {
-        const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+        const dirName = workingDirBasename(this.workingDir);
 
         const recentMessages = normalizeChatMessages(this.messages.map(m => {
             const content = m.content;
@@ -1504,7 +1505,7 @@ export class AcpProviderInstance implements ProviderInstance {
     private detectStatusTransition(): void {
         const now = Date.now();
         const newStatus = this.currentStatus;
-        const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+        const dirName = workingDirBasename(this.workingDir);
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const progressFingerprint = newStatus === 'generating'
             ? `${this.partialContent}::${JSON.stringify(this.partialBlocks)}::${JSON.stringify(this.activeToolCalls.map(t => ({ name: t.name, status: t.status })))}`.slice(-2000)

@@ -28,6 +28,7 @@ import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
+import { workingDirBasename } from './working-dir.js';
 
 type PersistableCliHistoryMessage = {
     role: string;
@@ -685,7 +686,7 @@ export class CliProviderInstance implements ProviderInstance {
             }))
             : mergedMessages;
 
-        const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+        const dirName = workingDirBasename(this.workingDir);
         const parsedChatStatus = typeof parsedStatus?.status === 'string' && parsedStatus.status.trim()
             ? parsedStatus.status.trim()
             : undefined;
@@ -827,7 +828,7 @@ export class CliProviderInstance implements ProviderInstance {
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
         const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
         const visibleStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status;
-        const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+        const dirName = workingDirBasename(this.workingDir);
         return {
             // Honor the caller-supplied sessionId — InstanceMgr rejects the
             // projection when projected.id !== requested sessionId, and
@@ -1541,7 +1542,7 @@ export class CliProviderInstance implements ProviderInstance {
         // transcript shape does NOT override the FSM's busy/idle decision.
         const autoApproveHoldIdle = this.autoApproveBusy && rawStatus === 'idle';
         const newStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : rawStatus;
-        const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+        const dirName = workingDirBasename(this.workingDir);
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const partial = this.adapter.getPartialResponse();
         const progressFingerprint = newStatus === 'generating'
@@ -2053,7 +2054,7 @@ export class CliProviderInstance implements ProviderInstance {
                     receivedAt: normalizedMessage.receivedAt || normalizedMessage.timestamp,
                     historyDedupKey: dedupKey,
                 }],
-                this.adapter.getScriptParsedStatus?.()?.title || this.workingDir.split('/').filter(Boolean).pop() || 'session',
+                this.adapter.getScriptParsedStatus?.()?.title || workingDirBasename(this.workingDir),
                 this.instanceId,
                 this.providerSessionId,
             );
