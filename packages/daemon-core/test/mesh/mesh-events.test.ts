@@ -449,6 +449,93 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('queues a silent agent:ready from a remote-coordinator worker so the coordinator can pull and claim', () => {
+    // Regression (remote queue auto-launch claim loop): an auto-launched REMOTE worker
+    // carries meshNodeFor (so resolveWorkerDelegateRouting treats it as a delegate) AND a
+    // REMOTE meshCoordinatorDaemonId. When its session goes starting→idle it emits
+    // agent:ready, which produces NO coordinator message. injectMeshSystemMessage used to
+    // return early on the empty message and NEVER queue it — so the agent:ready (the event
+    // that drives setRemoteIdleSession + tryAssignQueueTask) never reached the coordinator's
+    // daemon. The coordinator never learned the session was idle, the queue task stayed
+    // pending, and the reconcile loop re-auto-launched a fresh session every tick forever.
+    // The fix queues the silent lifecycle event scoped to the remote coordinator daemon so
+    // PHASE 1 pullRemoteNodeQueues delivers it and the claim runs on the right daemon.
+    const meshId = `mesh_ready_remote_claim_${Date.now()}`
+    try {
+      // On the remote worker daemon the mesh is not locally hosted, but the meshNodeFor
+      // stamp keeps the resolved meshId non-empty (delegate=true).
+      meshConfigMocks.getMesh.mockReturnValue(undefined)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+        meshCoordinatorDaemonId: 'daemon_remote_coordinator', // a DIFFERENT daemon than this one
+        launchedByCoordinator: true,
+      })
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:ready',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        timestamp: 7001,
+      })
+
+      // The silent agent:ready is queued and stamped for the remote coordinator daemon, so
+      // a scoped pull (PHASE 1 get_pending_mesh_events { coordinatorDaemonId }) delivers it.
+      const scoped = getPendingMeshCoordinatorEvents(meshId, 'daemon_remote_coordinator')
+      expect(scoped).toHaveLength(1)
+      expect(scoped[0].event).toBe('agent:ready')
+      expect(scoped[0].targetCoordinatorDaemonId).toBe('daemon_remote_coordinator')
+      // It is a silent lifecycle event: no coordinator message, so a live CLI coordinator
+      // is never injected/spammed with it (injectPendingIntoCoordinator skips empty messages).
+      expect(scoped[0].coordinatorMessage ?? '').toBe('')
+      // The claim-relevant metadata the coordinator needs to run tryAssignQueueTask survives.
+      expect(scoped[0].metadataEvent.providerType).toBe('claude-cli')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does NOT queue a silent agent:ready when the worker is co-located with its coordinator', () => {
+    // The mirror of the regression above: when the worker's coordinator IS this daemon
+    // (the auto-launch stamped no meshCoordinatorDaemonId, or it equals this daemon's id),
+    // the agent:ready claim already ran locally on the correct daemon. Queuing the silent
+    // event would be pointless churn (nothing pulls it) — so it must NOT be queued. This
+    // also guards against the coordinator re-queuing an agent:ready it pulled from a worker
+    // (that path has no sourceSession, so workerCoordinatorDaemonId is empty → no re-queue).
+    const meshId = `mesh_ready_local_no_queue_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      // No meshCoordinatorDaemonId stamp → workerCoordinatorDaemonId is empty → co-located.
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      components.cliManager = { handleCliCommand: vi.fn(async () => ({ success: true })) }
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:ready',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        timestamp: 7002,
+      })
+
+      // Nothing queued under any scope — the local claim path handled it directly.
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+      expect(getPendingMeshCoordinatorEvents(meshId, 'test-machine')).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('queues a completion exactly-once via the atomic queue drain (a second drain returns nothing)', () => {
     // Queue-only delivery: the terminal event is persisted to the pending queue exactly once.
     // A single drain consumes it; the SQLite drained=1 marking guarantees a second drain
@@ -2175,6 +2262,56 @@ describe('setupMeshEventForwarding', () => {
       const [entry] = getQueue(meshId)
       expect(entry.status).toBe('pending')
       expect(entry.autoLaunch?.status).toBe('completed')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does not re-forward launch_cli for a task whose remote auto-launch is still awaiting its claim', async () => {
+    // Regression (remote queue auto-launch claim loop): the remote launch is async — the
+    // task stays pending until the worker's agent:ready round-trips back and claims it.
+    // The reconcile loop re-runs triggerMeshQueue every few seconds, well within that
+    // round trip, and the per-(mesh,node) cooldown is only 5s. Without a per-TASK guard
+    // every tick fired a fresh launch_cli for the same still-pending task, spawning a new
+    // orphan worker session each time (observed live: dozens of sessions for one task).
+    // The await-claim guard keys on autoLaunch.status==='completed' + a recent updatedAt and
+    // skips re-launching until the claim lands or the window lapses.
+    const meshId = `mesh_auto_launch_await_claim_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{
+          id: 'node_remote_1',
+          workspace: '/repo/remote-worktree',
+          health: 'online',
+          daemonId: 'daemon_remote_machine',
+          machineId: 'mach_remote',
+          policy: { providerPriority: ['hermes-cli'] },
+        }],
+        policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
+      })
+      detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
+      enqueueTask(meshId, 'pending remote task')
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+      const dispatchMeshCommand = vi.fn(async () => ({ success: true, sessionId: 'remote-session-1' }))
+      components.dispatchMeshCommand = dispatchMeshCommand
+
+      // First tick forwards launch_cli once and records autoLaunch.status='completed'.
+      await triggerMeshQueue(components, meshId)
+      expect(getQueue(meshId)[0].autoLaunch?.status).toBe('completed')
+      expect(getQueue(meshId)[0].status).toBe('pending')
+
+      // Subsequent ticks (still within the await-claim window) must NOT forward again.
+      await triggerMeshQueue(components, meshId)
+      await triggerMeshQueue(components, meshId)
+
+      const launchForwards = dispatchMeshCommand.mock.calls.filter(([, command]: [string, string]) => command === 'launch_cli')
+      expect(launchForwards).toHaveLength(1)
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      // The guard skip must NOT clobber the 'completed' autoLaunch record (that record is the
+      // guard's own state for the next tick — overwriting it would reopen the duplicate hole).
+      expect(getQueue(meshId)[0].autoLaunch?.status).toBe('completed')
+      expect(getQueue(meshId)[0].autoLaunch?.sessionId).toBe('remote-session-1')
     } finally {
       cleanupMeshFiles(meshId)
     }

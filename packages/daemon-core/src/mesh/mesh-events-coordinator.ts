@@ -379,6 +379,17 @@ export function tryAssignQueueTask(
 const autoLaunchInProgress = new Set<string>();
 const autoLaunchCooldownUntil = new Map<string, number>();
 const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
+// A remote auto-launch (launch_cli forward) is fire-and-async: the worker session
+// spawns, reaches idle, emits agent:ready, that ready is queued on the worker, pulled
+// by this coordinator (reconcile PHASE 1), and only THEN claims the task. That round
+// trip routinely exceeds the 5s per-(mesh,node) cooldown, so cooldown alone lets the
+// reconcile loop fire a SECOND launch for the same still-pending task before the first
+// session's claim lands — every tick spawns yet another orphan session (observed live:
+// 26 sessions for one task). This is a per-TASK await-claim window: once a task has a
+// successfully-launched session whose claim we are still waiting on, do not launch it
+// again until the window lapses. It is generous (a slow remote spawn can take tens of
+// seconds) but bounded so a launch that silently never reaches idle is eventually retried.
+const AUTO_LAUNCH_AWAIT_CLAIM_MS = 90_000;
 
 // De-dup for repeated `skipped` ledger noise: the reconcile loop re-runs the queue
 // trigger every 4s, so a task that can't be claimed (e.g. a remote node with no
@@ -816,6 +827,25 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
         if (task.targetSessionId) {
             markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_constraint' });
             continue;
+        }
+
+        // Per-task await-claim guard. A prior auto-launch already spawned a session for
+        // this task and we are waiting for that session's idle→claim to land (remote
+        // claims arrive via the worker→coordinator agent:ready pull, which can lag well
+        // past the per-node cooldown). Re-launching now would spawn a duplicate orphan
+        // session that never gets work. The task leaves `pending` the instant the claim
+        // succeeds, so this guard only suppresses the in-flight window; if the launched
+        // session never reaches idle within the window, a later tick retries.
+        if (task.autoLaunch?.status === 'completed' && task.autoLaunch.sessionId) {
+            const launchedAtMs = Date.parse(task.autoLaunch.updatedAt);
+            if (Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS) {
+                // Record the skip in the ledger ONLY (dedup'd). Do NOT call markAutoLaunch
+                // here: recordTaskAutoLaunch overwrites task.autoLaunch wholesale, which would
+                // erase the very `completed` record (status + sessionId + updatedAt) this guard
+                // reads on the next tick, reopening the duplicate-launch hole it closes.
+                recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim', nodeId: task.autoLaunch.nodeId, sessionId: task.autoLaunch.sessionId });
+                continue;
+            }
         }
 
         const candidateNodes = Array.isArray(mesh?.nodes)
@@ -1738,7 +1768,27 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         metadataEvent: args.metadataEvent,
         recoveryContext,
     });
-    if (!messageText) return { success: false, error: 'unsupported mesh event' };
+    if (!messageText) {
+        // Lifecycle events that carry no coordinator-facing message (agent:ready /
+        // agent:generating_started) still drive the remote-claim state machine: the
+        // coordinator's agent:ready branch above runs setRemoteIdleSession +
+        // tryAssignQueueTask, and agent:generating_started clears the remote-idle entry.
+        // For a LOCAL worker whose coordinator is a REMOTE daemon those side effects ran
+        // on the wrong daemon (this worker's empty queue / store), so the coordinator never
+        // learns the auto-launched session went idle and re-auto-launches it forever
+        // (queue task stuck pending). Queue the silent event so the coordinator pulls it
+        // (PHASE 1 pullRemoteNodeQueues → handleMeshForwardEvent) and re-runs the claim on
+        // the daemon that actually owns the queue. Gate strictly on a present, REMOTE
+        // coordinator daemon id: a co-located worker already ran the claim on the right
+        // daemon, and a coordinator processing a *pulled* event has no sourceSession so
+        // workerCoordinatorDaemonId is empty — neither re-queues, so there is no loop.
+        const isSilentClaimRelevantEvent = args.event === 'agent:ready' || args.event === 'agent:generating_started';
+        const coordinatorIsRemote = !!workerCoordinatorDaemonId
+            && !resolveCoordinatorDrainDaemonIds(components).includes(workerCoordinatorDaemonId);
+        if (!(isSilentClaimRelevantEvent && coordinatorIsRemote)) {
+            return { success: false, error: 'unsupported mesh event' };
+        }
+    }
 
     // ── Queue-only delivery (single-model: queue + periodic poll) ──────────────
     // Every mesh coordinator event — terminal or not, local-coordinator or
@@ -1768,7 +1818,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             ...args.metadataEvent,
             ...(recoveryContext ? { recoveryContext } : {}),
         },
-        coordinatorMessage: messageText,
+        // Silent lifecycle events (agent:ready / agent:generating_started) carry no
+        // coordinator message; they are queued only so the coordinator re-runs the
+        // remote-claim state machine on pull. injectPendingIntoCoordinator skips
+        // entries without a coordinatorMessage, so a live CLI coordinator is not spammed.
+        ...(messageText ? { coordinatorMessage: messageText } : {}),
         queuedAt: Date.now(),
         ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
     };
