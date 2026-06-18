@@ -104,6 +104,8 @@ interface Props {
     coordinatorDaemonId: string
     /** Mesh-wide distribution strategy — drives per-node scheduling-priority emphasis. */
     schedulingStrategy: MeshSchedulingStrategy
+    /** Dashboard role dropdown options: standard roles + config-declared custom roles. */
+    roleOptions: string[]
 
     // Provider priority drafts
     nodeProviderPriorityDrafts: ProviderPriorityDrafts
@@ -156,6 +158,7 @@ export function MeshNodeList({
     features,
     coordinatorDaemonId,
     schedulingStrategy,
+    roleOptions,
     nodeProviderPriorityDrafts,
     onNodeProviderPriorityDraftChange,
     availableCliProviders,
@@ -456,6 +459,7 @@ export function MeshNodeList({
                                             <NodeAdvancedPanel
                                                 node={node}
                                                 schedulingStrategy={schedulingStrategy}
+                                                roleOptions={roleOptions}
                                                 saving={savingNodeSchedulingId === node.id}
                                                 onSave={patch => onUpdateNodeScheduling(node, patch)}
                                             />
@@ -513,14 +517,18 @@ export function MeshNodeList({
 function NodeAdvancedPanel({
     node,
     schedulingStrategy,
+    roleOptions,
     saving,
     onSave,
 }: {
     node: MeshNode
     schedulingStrategy: MeshSchedulingStrategy
+    roleOptions: string[]
     saving: boolean
     onSave: (patch: { schedulingPriority?: number; providerRoles?: MeshProviderRole[] }) => void
 }) {
+    // Stable id so the <datalist> of standard + config roles binds to each role input.
+    const roleListId = `mesh-role-options-${node.id}`
     const savedPriority = readNodeSchedulingPriority(node)
     const savedRoles = useMemo(() => readNodeProviderRoles(node), [node])
     const [priority, setPriority] = useState<string>(String(savedPriority))
@@ -578,8 +586,11 @@ function NodeAdvancedPanel({
                 </FormField>
 
                 <FormField label="Provider roles (optional)"
-                    hint="Tag a tool on this node with a role (routable as role=<x>) and an optional max-parallel cap.">
+                    hint="Tag a tool on this node with a role (routable as role=<x>) and an optional max-parallel cap. Standard roles auto-route by task mode; pick one or type a custom role.">
                     <div className="flex flex-col gap-2">
+                        <datalist id={roleListId}>
+                            {roleOptions.map(role => <option key={role} value={role} />)}
+                        </datalist>
                         {roles.length === 0 && (
                             <div className="text-[12px] text-text-muted">No role declarations. This node uses global caps only.</div>
                         )}
@@ -591,7 +602,8 @@ function NodeAdvancedPanel({
                                     onChange={e => updateRole(i, { providerType: e.target.value })}
                                     onClick={e => e.stopPropagation()}
                                     disabled={saving} />
-                                <input type="text" placeholder="role (e.g. coding)"
+                                <input type="text" placeholder="role (e.g. coder)"
+                                    list={roleListId}
                                     className="flex-1 min-w-[8rem] px-2 py-1.5 rounded-lg bg-bg-secondary border border-border-subtle text-[12px] text-text-primary"
                                     value={r.role ?? ''}
                                     onChange={e => updateRole(i, { role: e.target.value })}

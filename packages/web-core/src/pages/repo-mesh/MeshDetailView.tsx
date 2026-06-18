@@ -1,4 +1,5 @@
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
+import { resolveMeshRoleOptions } from '@adhdev/daemon-core'
 import AppPage from '../../components/ui/AppPage'
 import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
@@ -209,6 +210,10 @@ export function MeshDetailView({
 }: Props) {
     const policy = readMeshPolicy(selectedMesh)
     const nodes: MeshNode[] = selectedMesh.nodes || []
+    // Dashboard role dropdown options: the four standard roles plus any roles declared
+    // in this mesh's taskAffinity policy (byTaskMode values + customRoles). Shared with
+    // the daemon's affinity resolver so the UI and routing agree on the role set.
+    const roleOptions = resolveMeshRoleOptions(policy.taskAffinity)
 
     return (
         <AppPage
@@ -319,6 +324,7 @@ export function MeshDetailView({
                 features={{ addNodeDaemonPicker: features.addNodeDaemonPicker, nodeInstruction: features.nodeInstruction }}
                 coordinatorDaemonId={coordinatorDaemonId}
                 schedulingStrategy={schedulingStrategy}
+                roleOptions={roleOptions}
                 nodeProviderPriorityDrafts={nodeProviderPriorityDrafts}
                 onNodeProviderPriorityDraftChange={onNodeProviderPriorityDraftChange}
                 availableCliProviders={availableCliProviders}

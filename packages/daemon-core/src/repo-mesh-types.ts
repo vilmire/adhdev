@@ -166,6 +166,106 @@ export const MESH_CONVERGE_REFINE_TAG = 'converge=refine';
 export const MESH_CONVERGE_FAST_FORWARD_TAG = 'converge=fast_forward';
 
 /**
+ * Standard mesh resource-pool roles. These are the dashboard-provided defaults for
+ * the role=<x> routing tag (advertised by node policy.providerRoles and matched
+ * through nodeSatisfiesRequiredTags). A mesh is free to declare additional custom
+ * role strings in policy.taskAffinity; the dashboard role dropdown exposes the union
+ * of these four standards plus any config-declared roles. Roles are lowercased
+ * everywhere (the role=<x> tag is lowercased in roleCapabilityTags).
+ */
+export const STANDARD_MESH_ROLES = ['investigator', 'coder', 'validator', 'converger'] as const;
+export type StandardMeshRole = typeof STANDARD_MESH_ROLES[number];
+
+/**
+ * Default taskMode → role mapping (all five task modes). A task enqueued with a
+ * given taskMode auto-routes to a node advertising the mapped role=<x> tag, unless
+ * the mesh overrides the mapping in policy.taskAffinity.byTaskMode. Keyed by the
+ * MeshTaskMode string literals (the canonical union lives in mesh-work-queue.ts;
+ * this map is keyed by string to avoid a types ↔ queue import cycle). Kept in sync
+ * with MeshTaskMode by the exhaustive lookup in resolveTaskAffinityRole.
+ */
+export const DEFAULT_TASKMODE_ROLE_MAP: Readonly<Record<string, StandardMeshRole>> = {
+    live_debug_readonly: 'investigator',
+    code_change: 'coder',
+    launch_app: 'coder',
+    validation: 'validator',
+    convergence: 'converger',
+};
+
+/**
+ * Declarative task_mode → role affinity policy. When set, enqueueTask auto-injects a
+ * `role=<role>` required tag (see resolveTaskAffinityRequiredTags) so the task
+ * hard-filters onto nodes advertising that role — but only when the caller did NOT
+ * already pin the task with an explicit target_node_id or its own required_tags.
+ *
+ * - `enabled`: master switch. Defaults to true so the built-in DEFAULT_TASKMODE_ROLE_MAP
+ *   takes effect even when a mesh declares no taskAffinity block at all. Set false to
+ *   fully disable affinity routing (today's pre-affinity behavior).
+ * - `byTaskMode`: per-taskMode override of the default mapping. A role string here may
+ *   be any of STANDARD_MESH_ROLES or a custom role declared by the operator. An empty
+ *   string disables affinity for that one task mode.
+ * - `customRoles`: extra (non-standard) role strings to surface in the dashboard role
+ *   dropdown. Routing itself does not require a role to be pre-declared here — any role
+ *   referenced in byTaskMode is injected regardless; customRoles only widens the UI list.
+ */
+export interface RepoMeshTaskAffinityPolicy {
+    enabled?: boolean;
+    byTaskMode?: Record<string, string>;
+    customRoles?: string[];
+}
+
+/**
+ * Resolve the affinity role for a task mode against a mesh's taskAffinity policy.
+ * Returns the lowercased role string to inject as `role=<role>`, or null when no
+ * affinity applies (affinity disabled, an explicit empty override, or an unknown mode).
+ *
+ * Precedence: policy.byTaskMode[mode] (operator override) → DEFAULT_TASKMODE_ROLE_MAP[mode].
+ * A blank override string explicitly opts that mode out of affinity routing.
+ */
+export function resolveTaskAffinityRole(
+    taskMode: string | undefined,
+    policy: RepoMeshTaskAffinityPolicy | null | undefined,
+): string | null {
+    if (!taskMode) return null;
+    if (policy?.enabled === false) return null;
+    const override = policy?.byTaskMode && Object.prototype.hasOwnProperty.call(policy.byTaskMode, taskMode)
+        ? policy.byTaskMode[taskMode]
+        : undefined;
+    if (typeof override === 'string') {
+        const trimmed = override.trim().toLowerCase();
+        // An explicit blank override opts this task mode out of affinity routing.
+        return trimmed ? trimmed : null;
+    }
+    const fallback = DEFAULT_TASKMODE_ROLE_MAP[taskMode];
+    return fallback ?? null;
+}
+
+/**
+ * Union of the standard roles plus any operator-declared roles (byTaskMode values +
+ * customRoles), lowercased and deduped, preserving standard-first ordering. Used by
+ * the dashboard role dropdown so operators can pick a standard or a config-declared
+ * custom role. Pure/UI-facing — does not gate routing.
+ */
+export function resolveMeshRoleOptions(policy: RepoMeshTaskAffinityPolicy | null | undefined): string[] {
+    const out: string[] = [...STANDARD_MESH_ROLES];
+    const seen = new Set<string>(out);
+    const add = (raw: unknown) => {
+        if (typeof raw !== 'string') return;
+        const role = raw.trim().toLowerCase();
+        if (!role || seen.has(role)) return;
+        seen.add(role);
+        out.push(role);
+    };
+    if (policy?.byTaskMode) {
+        for (const value of Object.values(policy.byTaskMode)) add(value);
+    }
+    if (Array.isArray(policy?.customRoles)) {
+        for (const value of policy.customRoles) add(value);
+    }
+    return out;
+}
+
+/**
  * Resolve whether the load-balancing scheduler should auto-inject a
  * `converge=refine` required tag onto code_change tasks so they hard-filter onto
  * refine-capable (worktree) nodes only. Strict opt-in: defaults to false, so a mesh
@@ -220,6 +320,18 @@ export interface RepoMeshPolicy {
      * Defaults to false: code_change routing is unchanged unless opted in.
      */
     autoConvergeCodeChange?: boolean;
+    /**
+     * Declarative task_mode → role affinity routing. When present (and not disabled),
+     * enqueueTask auto-injects a `role=<role>` required tag for the task's taskMode so
+     * the work hard-filters onto nodes advertising that role. Explicit target_node_id
+     * routing and any caller-supplied required_tags are preserved (auto-injection only
+     * applies when the caller pinned neither). When the mapped role has no advertising
+     * node in the mesh, the task is NOT blocked — the role tag is skipped so the work
+     * falls back to ordinary least_loaded eligibility (soft affinity). Defaults to the
+     * built-in DEFAULT_TASKMODE_ROLE_MAP even when this block is omitted; set
+     * `{ enabled: false }` to fully restore pre-affinity routing.
+     */
+    taskAffinity?: RepoMeshTaskAffinityPolicy;
     /**
      * Whether sessions spawned by mesh/coordinator policy should auto-open as visible
      * dashboard tabs or start hidden. Defaults to 'visible' to preserve existing

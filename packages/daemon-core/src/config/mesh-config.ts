@@ -20,8 +20,9 @@ import type {
     RepoMeshCoordinatorConfig,
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
+    RepoMeshTaskAffinityPolicy,
 } from '../repo-mesh-types.js';
-import { DEFAULT_MESH_POLICY, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
+import { DEFAULT_MESH_POLICY, normalizeMeshSchedulingStrategy, STANDARD_MESH_ROLES } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
 // ─── Persistence ────────────────────────────────
@@ -134,7 +135,77 @@ function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMe
     } else {
         delete policy.autoConvergeCodeChange;
     }
+    // Task-mode → role affinity: format-only validation (drop blanks). Unknown/custom
+    // roles are NOT blocked — only a warning is logged. Only persist when the block
+    // carries meaningful content so existing meshes.json stays untouched.
+    const normalizedAffinity = normalizeTaskAffinityPolicy(policy.taskAffinity);
+    if (normalizedAffinity) {
+        policy.taskAffinity = normalizedAffinity;
+    } else {
+        delete policy.taskAffinity;
+    }
     return policy;
+}
+
+/**
+ * Format-only normalization of a task-affinity policy. Trims/lowercases role strings,
+ * drops blank custom roles and blank byTaskMode keys, and warns (never blocks) when a
+ * declared role is not one of the standard four. Returns undefined when the result is
+ * empty/no-op so the field stays absent from persisted config.
+ */
+function normalizeTaskAffinityPolicy(
+    value: unknown,
+): RepoMeshTaskAffinityPolicy | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    const out: RepoMeshTaskAffinityPolicy = {};
+    let hasContent = false;
+
+    if (typeof record.enabled === 'boolean') {
+        out.enabled = record.enabled;
+        // `enabled:true` is the default — only persist the explicit `false`.
+        if (record.enabled === false) hasContent = true;
+        else delete out.enabled;
+    }
+
+    if (record.byTaskMode && typeof record.byTaskMode === 'object' && !Array.isArray(record.byTaskMode)) {
+        const byTaskMode: Record<string, string> = {};
+        for (const [mode, raw] of Object.entries(record.byTaskMode as Record<string, unknown>)) {
+            const modeKey = mode.trim();
+            if (!modeKey) continue;
+            if (typeof raw !== 'string') continue;
+            // A blank value is a deliberate opt-out for that mode — preserve it as ''.
+            const role = raw.trim().toLowerCase();
+            byTaskMode[modeKey] = role;
+            if (role && !STANDARD_MESH_ROLES.includes(role as any)) {
+                try {
+                    console.warn(`[mesh] task_affinity.byTaskMode.${modeKey}: custom role "${role}" is not a standard mesh role (${STANDARD_MESH_ROLES.join('/')}); routing still applies`);
+                } catch { /* best-effort */ }
+            }
+        }
+        if (Object.keys(byTaskMode).length > 0) {
+            out.byTaskMode = byTaskMode;
+            hasContent = true;
+        }
+    }
+
+    if (Array.isArray(record.customRoles)) {
+        const seen = new Set<string>();
+        const customRoles: string[] = [];
+        for (const raw of record.customRoles) {
+            if (typeof raw !== 'string') continue;
+            const role = raw.trim().toLowerCase();
+            if (!role || seen.has(role)) continue;
+            seen.add(role);
+            customRoles.push(role);
+        }
+        if (customRoles.length > 0) {
+            out.customRoles = customRoles;
+            hasContent = true;
+        }
+    }
+
+    return hasContent ? out : undefined;
 }
 
 function normalizeAutoFastForwardPolicy(value: unknown): NonNullable<RepoMeshPolicy['autoFastForward']> {
