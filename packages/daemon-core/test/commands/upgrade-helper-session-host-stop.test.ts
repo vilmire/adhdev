@@ -27,14 +27,25 @@ function writePidFile(appName: string, pid: number): string {
   return pidFile
 }
 
+// stopSessionHostProcesses branches on process.platform (POSIX uses `ps` +
+// process.kill; win32 uses powershell/wmic + taskkill). Pin the platform so this
+// suite deterministically exercises the POSIX path regardless of the host OS the
+// tests run on (e.g. a Windows dev machine).
+let platformDescriptor: PropertyDescriptor | undefined
+
 beforeEach(() => {
   mocks.execFileSync.mockReset()
   mocks.spawn.mockClear()
   killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+  platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
 })
 
 afterEach(() => {
   killSpy.mockRestore()
+  if (platformDescriptor) {
+    Object.defineProperty(process, 'platform', platformDescriptor)
+  }
   for (const appName of createdAppNames.splice(0)) {
     fs.rmSync(pidFileFor(appName), { force: true })
   }

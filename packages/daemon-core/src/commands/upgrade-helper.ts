@@ -321,42 +321,64 @@ function removeDaemonPidFile(): void {
   }
 }
 
-function cleanupStaleGlobalInstallDirs(pkgName: string, surface: CurrentGlobalInstallSurface): void {
-  const prefixArgs = surface.installPrefix ? ['--prefix', surface.installPrefix] : [];
-  const npmRoot = String(execNpmCommandSync(['root', '-g', ...prefixArgs], { encoding: 'utf8' }, surface)).trim();
-  if (!npmRoot) return;
-  const npmPrefix = surface.installPrefix
-    || String(execNpmCommandSync(['prefix', '-g', ...prefixArgs], { encoding: 'utf8' }, surface)).trim();
-  const binDir = process.platform === 'win32' ? npmPrefix : path.join(npmPrefix, 'bin');
-  const packageBaseName = pkgName.startsWith('@') ? pkgName.split('/')[1] : pkgName;
-  const binNames = new Set<string>([packageBaseName]);
-  if (pkgName === '@adhdev/daemon-standalone') {
-    binNames.add('adhdev-standalone');
+/**
+ * Best-effort removal of a leftover npm staging entry.
+ *
+ * A stale staging dir can hold a locked native binary — e.g. `ghostty-vt.dll`
+ * from `@adhdev/ghostty-vt-node` still mapped by a lingering session-host
+ * process — which makes `rmSync` throw `EPERM` on Windows. Staging cleanup is
+ * only housekeeping: the leftover is inert and npm creates its own fresh
+ * staging dir for the real install, so a lock on an old leftover must NOT abort
+ * the upgrade. Log and continue instead of letting the error propagate.
+ */
+export function safeRemoveStaleEntry(target: string, label: string): void {
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+    appendUpgradeLog(`${label}: ${target}`);
+  } catch (error: any) {
+    appendUpgradeLog(`Skipped locked stale entry (${error?.code || 'error'}): ${target} — ${error?.message || String(error)}`);
   }
+}
 
-  if (pkgName.startsWith('@')) {
-    const [scope, name] = pkgName.split('/');
-    const scopeDir = path.join(npmRoot, scope);
-    if (!fs.existsSync(scopeDir)) return;
-    for (const entry of fs.readdirSync(scopeDir)) {
-      if (!entry.startsWith(`.${name}-`)) continue;
-      fs.rmSync(path.join(scopeDir, entry), { recursive: true, force: true });
-      appendUpgradeLog(`Removed stale scoped staging dir: ${path.join(scopeDir, entry)}`);
+export function cleanupStaleGlobalInstallDirs(pkgName: string, surface: CurrentGlobalInstallSurface): void {
+  // The whole routine is housekeeping — never let it throw out and abort the
+  // upgrade (npm root/prefix probing or readdir can fail for unrelated reasons).
+  try {
+    const prefixArgs = surface.installPrefix ? ['--prefix', surface.installPrefix] : [];
+    const npmRoot = String(execNpmCommandSync(['root', '-g', ...prefixArgs], { encoding: 'utf8' }, surface)).trim();
+    if (!npmRoot) return;
+    const npmPrefix = surface.installPrefix
+      || String(execNpmCommandSync(['prefix', '-g', ...prefixArgs], { encoding: 'utf8' }, surface)).trim();
+    const binDir = process.platform === 'win32' ? npmPrefix : path.join(npmPrefix, 'bin');
+    const packageBaseName = pkgName.startsWith('@') ? pkgName.split('/')[1] : pkgName;
+    const binNames = new Set<string>([packageBaseName]);
+    if (pkgName === '@adhdev/daemon-standalone') {
+      binNames.add('adhdev-standalone');
     }
-  } else {
-    for (const entry of fs.readdirSync(npmRoot)) {
-      if (!entry.startsWith(`.${pkgName}-`)) continue;
-      fs.rmSync(path.join(npmRoot, entry), { recursive: true, force: true });
-      appendUpgradeLog(`Removed stale staging dir: ${path.join(npmRoot, entry)}`);
-    }
-  }
 
-  if (fs.existsSync(binDir)) {
-    for (const entry of fs.readdirSync(binDir)) {
-      if (!Array.from(binNames).some((name) => entry.startsWith(`.${name}-`))) continue;
-      fs.rmSync(path.join(binDir, entry), { recursive: true, force: true });
-      appendUpgradeLog(`Removed stale bin staging entry: ${path.join(binDir, entry)}`);
+    if (pkgName.startsWith('@')) {
+      const [scope, name] = pkgName.split('/');
+      const scopeDir = path.join(npmRoot, scope);
+      if (!fs.existsSync(scopeDir)) return;
+      for (const entry of fs.readdirSync(scopeDir)) {
+        if (!entry.startsWith(`.${name}-`)) continue;
+        safeRemoveStaleEntry(path.join(scopeDir, entry), 'Removed stale scoped staging dir');
+      }
+    } else {
+      for (const entry of fs.readdirSync(npmRoot)) {
+        if (!entry.startsWith(`.${pkgName}-`)) continue;
+        safeRemoveStaleEntry(path.join(npmRoot, entry), 'Removed stale staging dir');
+      }
     }
+
+    if (fs.existsSync(binDir)) {
+      for (const entry of fs.readdirSync(binDir)) {
+        if (!Array.from(binNames).some((name) => entry.startsWith(`.${name}-`))) continue;
+        safeRemoveStaleEntry(path.join(binDir, entry), 'Removed stale bin staging entry');
+      }
+    }
+  } catch (error: any) {
+    appendUpgradeLog(`Stale staging cleanup skipped (${error?.code || 'error'}): ${error?.message || String(error)}`);
   }
 }
 
