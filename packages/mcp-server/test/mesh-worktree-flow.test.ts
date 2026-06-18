@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
@@ -3951,4 +3951,101 @@ test('mesh_status compact payload does not grow O(nodes × sessions) when nodes 
   // core N×M guarantee.
   const fullSession0 = occurrences(fullText, '"id":"session-0"');
   assert.ok(fullSession0 >= 4, `un-folded shape duplicates the session per node (got ${fullSession0}, proves the N×M source)`);
+});
+
+test('mesh_queue_requeue passes the task target node as preferredNodeId to trigger_mesh_queue', async () => {
+  const meshId = `mesh-requeue-preferred-${Date.now()}`;
+  const queuePath = join(getLedgerDir(), `${meshId}.queue.json`);
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const triggerCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    if (command === 'trigger_mesh_queue') {
+      triggerCalls.push({ command, args });
+      return { success: true, trigger: { success: true, claimed: false } };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+
+  try {
+    // A task routed to a specific (remote) node, then requeued.
+    const task = enqueueTask(meshId, 'targeted work', { targetNodeId: 'node-remote' });
+    const ctx = {
+      mesh: {
+        id: meshId,
+        name: 'Requeue Preferred Mesh',
+        repoIdentity: 'example/repo',
+        policy: {},
+        coordinator: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        nodes: [{ id: 'node-remote', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-remote', userOverrides: {}, policy: {} }],
+      },
+      transport,
+      localDaemonId: 'daemon-coordinator',
+    } as any;
+
+    // keep_target_session keeps the persisted targetNodeId intact through the requeue.
+    const result = JSON.parse(await meshQueueRequeue(ctx, { task_id: task.id }));
+    assert.equal(result.success, true);
+
+    // The fire-and-forget trigger must carry preferredNodeId = the task's target node
+    // so router.ts's preferred-node tier claims it on that node's idle session first.
+    assert.equal(triggerCalls.length, 1);
+    assert.equal(triggerCalls[0].args.meshId, meshId);
+    assert.equal(triggerCalls[0].args.preferredNodeId, 'node-remote');
+  } finally {
+    try { unlinkSync(queuePath); } catch { /* best-effort */ }
+  }
+});
+
+test('mesh_queue_requeue omits preferredNodeId when the task has no target node', async () => {
+  const meshId = `mesh-requeue-no-target-${Date.now()}`;
+  const queuePath = join(getLedgerDir(), `${meshId}.queue.json`);
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const triggerCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    if (command === 'trigger_mesh_queue') {
+      triggerCalls.push({ command, args });
+      return { success: true, trigger: { success: true, claimed: false } };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+
+  try {
+    const task = enqueueTask(meshId, 'untargeted work');
+    const ctx = {
+      mesh: {
+        id: meshId,
+        name: 'Requeue No Target Mesh',
+        repoIdentity: 'example/repo',
+        policy: {},
+        coordinator: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        nodes: [{ id: 'node-a', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-a', userOverrides: {}, policy: {} }],
+      },
+      transport,
+      localDaemonId: 'daemon-coordinator',
+    } as any;
+
+    const result = JSON.parse(await meshQueueRequeue(ctx, { task_id: task.id }));
+    assert.equal(result.success, true);
+    assert.equal(triggerCalls.length, 1);
+    assert.equal(triggerCalls[0].args.meshId, meshId);
+    assert.equal('preferredNodeId' in triggerCalls[0].args, false);
+  } finally {
+    try { unlinkSync(queuePath); } catch { /* best-effort */ }
+  }
 });

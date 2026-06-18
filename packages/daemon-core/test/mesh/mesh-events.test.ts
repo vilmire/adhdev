@@ -49,6 +49,7 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
 
 import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
 
@@ -1966,6 +1967,49 @@ describe('setupMeshEventForwarding', () => {
       expect(entry.assignedNodeId).toBe('node_worktree_1')
       expect(entry.assignedSessionId).toBe('auto-session-1')
       expect(entry.autoLaunch?.status).toBe('completed')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('claims a pending task for a REMOTE idle session whose node is keyed by nodeId (not id) — normalizer match', async () => {
+    // Regression: triggerMeshQueue matched remote idle-session candidates with raw
+    // `n.id === idle.nodeId`, but an inline-cached worktree node carries its id under
+    // `nodeId`/`node_id` (readInlineMeshNodeId). A remote idle session registered for
+    // such a node was silently dropped from the candidate pool, so its pending task
+    // could never be claimed. The fix uses meshNodeIdMatches (the shared 3-form
+    // normalizer), matching how the local-candidate and auto-launch paths already work.
+    const meshId = `mesh_remote_idle_nodeid_${Date.now()}`
+    try {
+      // Inline-cache form: the remote worktree node's id lives under `nodeId`, NOT `id`.
+      const mesh = {
+        id: meshId,
+        nodes: [{ nodeId: 'node_remote_wt', workspace: '/repo/worktree-r', health: 'online', daemonId: 'remote-daemon' }],
+        policy: { maxParallelTasks: 2 },
+      }
+      meshConfigMocks.getMesh.mockReturnValue(mesh)
+      enqueueTask(meshId, 'remote queued task', { targetNodeId: 'node_remote_wt' })
+
+      // A remote idle session the coordinator registered (e.g. from a forwarded
+      // agent:ready), keyed by the node's inline-cache id form.
+      MeshRuntimeStore.getInstance().setRemoteIdleSession('node_remote_wt', 'remote-session-1', 'claude-cli', Date.now() + 60_000)
+
+      const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
+      const { components } = createQueueAutoLaunchComponents()
+      ;(components as any).dispatchMeshCommand = dispatchMeshCommand
+
+      await triggerMeshQueue(components, meshId)
+
+      // The remote idle session was matched (via the normalizer) and the task dispatched
+      // to its daemon over P2P, leaving the queue task assigned to that node/session.
+      expect(dispatchMeshCommand).toHaveBeenCalledWith('remote-daemon', 'agent_command', expect.objectContaining({
+        targetSessionId: 'remote-session-1',
+        action: 'send_chat',
+      }))
+      const [entry] = getQueue(meshId)
+      expect(entry.status).toBe('assigned')
+      expect(entry.assignedNodeId).toBe('node_remote_wt')
+      expect(entry.assignedSessionId).toBe('remote-session-1')
     } finally {
       cleanupMeshFiles(meshId)
     }

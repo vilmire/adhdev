@@ -505,6 +505,19 @@ export class MeshRuntimeStore {
     }
 
     /**
+     * O(1) count of queue tasks in 'pending' status for a mesh. A COUNT(*) over the
+     * indexed status column, so it avoids JSON.parse-ing every queue row — used as a
+     * cheap guard before the reconcile loop runs a full triggerMeshQueue scan.
+     */
+    pendingQueueTaskCount(meshId: string): number {
+        const row = this.db.prepare(`
+            SELECT COUNT(*) as count FROM mesh_queue
+            WHERE mesh_id = ? AND status = 'pending'
+        `).get(meshId) as { count: number } | undefined;
+        return row?.count ?? 0;
+    }
+
+    /**
      * Read the current per-mesh round-robin cursor (0 when unset). Used to rotate
      * the tie-break winner among nodes tied at the least load.
      */

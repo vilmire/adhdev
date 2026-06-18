@@ -1027,7 +1027,11 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
 
     const remoteCandidates: IdleCandidate[] = [];
     for (const idle of remoteSessions) {
-        const node = mesh.nodes.find((n: any) => n.id === idle.nodeId);
+        // Match with the shared 3-form normalizer (id / nodeId / node_id), not raw
+        // `n.id`, so an inline-cached worktree node whose identity arrived under a
+        // different form is not silently dropped — leaving a remote idle session
+        // unable to claim its pending queue task.
+        const node = mesh.nodes.find((n: any) => meshNodeIdMatches(n, idle.nodeId));
         if (node) {
             remoteIdleSessionsChecked += 1;
             remoteCandidates.push({ nodeId: idle.nodeId, sessionId: idle.sessionId, providerType: idle.providerType, origin: 'remote', node });

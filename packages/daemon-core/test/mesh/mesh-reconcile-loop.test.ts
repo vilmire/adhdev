@@ -30,14 +30,47 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { runMeshReconcileTick } from '../../src/mesh/mesh-reconcile-loop.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
-import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js'
+import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js'
 
 function cleanup(meshId: string) {
+  try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
   __resetMeshRuntimeStoreForTests()
   meshConfigMocks.listMeshes.mockReturnValue([])
+  meshConfigMocks.getMesh.mockReset()
   const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
   if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
+  const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
+  if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
+}
+
+// An idle local CLI worker session stamped for `nodeId` of `meshId`, plus the
+// cliManager/instanceManager surface tryAssignQueueTask's local-claim path needs.
+function makeIdleWorkerComponents(meshId: string, nodeId: string, sessionId: string, providerType: string) {
+  const handleCliCommand = vi.fn(async () => ({ success: true }))
+  const workerInstance = {
+    category: 'cli',
+    getState: () => ({
+      instanceId: sessionId,
+      status: 'idle',
+      type: providerType,
+      settings: { meshNodeFor: meshId, meshNodeId: nodeId, providerType },
+    }),
+    updateSettings: vi.fn(),
+  }
+  return {
+    handleCliCommand,
+    components: {
+      instanceManager: {
+        getByCategory: (category: string) => (category === 'cli' ? [workerInstance] : []),
+        getInstance: (id: string) => (id === sessionId ? workerInstance : undefined),
+      },
+      cliManager: {
+        adapters: new Map([[sessionId, {}]]),
+        handleCliCommand,
+      },
+    } as any,
+  }
 }
 
 // A live CLI coordinator instance on THIS daemon for `meshId`, with the given status.
@@ -511,5 +544,89 @@ describe('runMeshReconcileTick', () => {
     } finally {
       cleanup(meshId)
     }
+  })
+
+  // ── PHASE 3: pending-claim recovery ───────────────────────────────────────
+  describe('PHASE 3 pending-claim recovery', () => {
+    it('claims a pending queue task for a now-idle local session that never got a ready-event', async () => {
+      const meshId = `mesh_reconcile_phase3_claim_${Date.now()}`
+      const nodeId = 'node_worker'
+      const sessionId = 'sess-idle-worker'
+      try {
+        // A pending task targeting the worker node, and an idle worker session that
+        // already exists — exactly the state left behind when the agent:ready event
+        // that would have triggered the claim was missed/dropped.
+        enqueueTask(meshId, 'do the work', { targetNodeId: nodeId })
+
+        const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/worker', daemonId: 'test-machine' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        // PHASE 3 ran triggerMeshQueue, which claimed the pending task onto the idle
+        // session and dispatched it locally.
+        expect(handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
+          targetSessionId: sessionId,
+          action: 'send_chat',
+        }))
+        const assigned = getQueue(meshId, { status: ['assigned'] as any })
+        expect(assigned).toHaveLength(1)
+        expect(assigned[0].assignedNodeId).toBe(nodeId)
+        expect(assigned[0].assignedSessionId).toBe(sessionId)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('O(1) guard: skips triggerMeshQueue entirely when there are no pending tasks', async () => {
+      const meshId = `mesh_reconcile_phase3_empty_${Date.now()}`
+      const nodeId = 'node_worker'
+      try {
+        // No pending tasks enqueued — the guard must short-circuit before any claim scan.
+        const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, 'sess-idle', 'claude-cli')
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/worker', daemonId: 'test-machine' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        // pendingQueueTaskCount===0 → continue before triggerMeshQueue. triggerMeshQueue
+        // resolves the mesh via getMesh (getMeshWithCache); the guard means it is never
+        // reached, so getMesh is not called and no claim/dispatch is attempted.
+        expect(meshConfigMocks.getMesh).not.toHaveBeenCalled()
+        expect(handleCliCommand).not.toHaveBeenCalled()
+        expect(getQueue(meshId, { status: ['assigned'] as any })).toHaveLength(0)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('does not run PHASE 3 for a mesh this daemon does not host', async () => {
+      const meshId = `mesh_reconcile_phase3_nothost_${Date.now()}`
+      const nodeId = 'node_remote'
+      try {
+        enqueueTask(meshId, 'remote work', { targetNodeId: nodeId })
+
+        const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, 'sess-x', 'claude-cli')
+        // Mesh is hosted by a DIFFERENT daemon: a pinned hostDaemonId that is not one
+        // of this daemon's ids → daemonHostsMesh is false → PHASE 3 must skip it.
+        const mesh = {
+          id: meshId,
+          meshHost: { role: 'host', hostDaemonId: 'other-daemon' },
+          nodes: [{ id: nodeId, workspace: '/repo/remote', daemonId: 'other-daemon' }],
+        }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        expect(meshConfigMocks.getMesh).not.toHaveBeenCalled()
+        expect(handleCliCommand).not.toHaveBeenCalled()
+      } finally {
+        cleanup(meshId)
+      }
+    })
   })
 })

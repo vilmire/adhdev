@@ -48,7 +48,7 @@ import { LOG } from '../logging/logger.js';
 import { drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { handleMeshForwardEvent, shouldForceInjectMeshEvent, MESH_FORCE_INJECT_EVENTS } from './mesh-events-coordinator.js';
+import { handleMeshForwardEvent, shouldForceInjectMeshEvent, MESH_FORCE_INJECT_EVENTS, triggerMeshQueue } from './mesh-events-coordinator.js';
 import {
     peekUnresolvedDelegateForwards,
     ackUnresolvedDelegateForward,
@@ -248,6 +248,36 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Remote node pull failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
+        }
+    }
+
+    // ── PHASE 3: recover pending queue claims for newly-idle sessions ──────────
+    // The event-driven claim paths (agent:ready / agent:generating_completed in
+    // mesh-events-coordinator) re-claim the queue the moment a session goes idle,
+    // but that depends on a single event being emitted AND (for a remote node)
+    // successfully forwarded to this coordinator. If that event is missed/dropped,
+    // a pending task targeting a now-idle session would sit unclaimed forever —
+    // there was no periodic safety net. This phase is that net: for every mesh this
+    // daemon hosts that has at least one pending task, run one triggerMeshQueue so a
+    // session that became idle without a delivered ready-event still gets its work.
+    //
+    // O(1) guard: skip the (relatively expensive) full idle-session + remote-idle
+    // scan entirely when the queue has no pending tasks — a COUNT(*) over the
+    // indexed status column, so an idle mesh costs one cheap query per tick.
+    // claimNextQueueTask is atomic, so racing the event-driven path can only have
+    // one winner; double-claiming is impossible.
+    for (const mesh of listMeshes()) {
+        const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+        if (!daemonHostsMesh(mesh, selfIds)) continue;
+        if (store) {
+            try {
+                if (store.pendingQueueTaskCount(mesh.id) === 0) continue;
+            } catch { /* fall through and let triggerMeshQueue decide */ }
+        }
+        try {
+            await triggerMeshQueue(components, mesh.id);
+        } catch (e: any) {
+            LOG.warn('MeshReconcile', `Pending-claim recovery trigger failed for mesh ${mesh.id}: ${e?.message || e}`);
         }
     }
 

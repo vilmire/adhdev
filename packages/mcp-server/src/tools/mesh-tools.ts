@@ -4367,7 +4367,15 @@ export async function meshQueueRequeue(
                 hint: 'Use force=true to bypass the retry cap for explicit operator recovery.',
             }, null, 2);
         }
-        ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
+        // Pass the task's target node as preferredNodeId so the trigger claims the
+        // requeued task on the intended node's idle session FIRST (router.ts
+        // preferred-node tier) before the general round-robin picks a different node.
+        // Honours an explicit requeue target_node_id over the persisted one.
+        const triggerPreferredNodeId = targetNodeId || task.targetNodeId || undefined;
+        ctx.transport.command('trigger_mesh_queue', {
+            meshId: ctx.mesh.id,
+            ...(triggerPreferredNodeId ? { preferredNodeId: triggerPreferredNodeId } : {}),
+        }).catch(() => {});
         return JSON.stringify({ success: true, task }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
