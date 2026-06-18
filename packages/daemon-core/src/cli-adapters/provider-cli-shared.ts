@@ -534,9 +534,26 @@ export function findBinary(name: string): string {
     }
     const isWin = os.platform() === 'win32';
     const paths = (process.env.PATH || '').split(path.delimiter);
+    // Also search well-known global-bin directories that are frequently NOT on
+    // the daemon's inherited PATH. A daemon running under one Node install (e.g.
+    // nvm) never sees another npm prefix's bin dir — notably npm's Windows
+    // default prefix at %APPDATA%\npm, where `npm i -g @openai/codex` lands. We
+    // append these after PATH (so explicit PATH entries still win) so that an
+    // npm-global CLI resolves to an absolute path; the spawn layer's .cmd-shim
+    // handling then launches it correctly regardless of PATH.
+    const extraDirs: string[] = [];
+    if (isWin) {
+        if (process.env.APPDATA) extraDirs.push(path.join(process.env.APPDATA, 'npm'));
+        try { extraDirs.push(path.dirname(process.execPath)); } catch { /* best-effort */ }
+    } else {
+        extraDirs.push(path.join(os.homedir(), '.npm-global', 'bin'));
+        extraDirs.push('/usr/local/bin', '/opt/homebrew/bin');
+        try { extraDirs.push(path.dirname(process.execPath)); } catch { /* best-effort */ }
+    }
+    const searchDirs = [...paths, ...extraDirs];
     const exes = isWin ? ['.exe', '.cmd', '.bat', ''] : [''];
-    
-    for (const p of paths) {
+
+    for (const p of searchDirs) {
         if (!p) continue;
         for (const ext of exes) {
             const fullPath = path.join(p, trimmed + ext);
