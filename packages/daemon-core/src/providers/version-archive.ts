@@ -16,6 +16,7 @@ import * as os from 'os';
 import { platform } from 'os';
 import type { ProviderLoader } from './provider-loader.js';
 import type { ProviderModule } from './contracts.js';
+import { isKnownWin32GuiExe, readWin32IdeVersionFromDisk } from '../detection/win32-ide-version.js';
 
 // ─── Types ──────────────────────────────────────
 
@@ -226,6 +227,10 @@ export async function detectAllVersions(
 ): Promise<ProviderVersionInfo[]> {
   const results: ProviderVersionInfo[] = [];
   const currentOs = platform() as string;
+  // Map of provider type → GUI exe names (win32), used to refuse spawning a
+  // GUI executable for version detection (which would boot the IDE window).
+  const win32ProcessNames: Record<string, string[]> =
+    typeof loader.getWinProcessNames === 'function' ? loader.getWinProcessNames() : {};
 
   for (const provider of loader.getAll()) {
     const info: ProviderVersionInfo = {
@@ -258,12 +263,29 @@ export async function detectAllVersions(
       info.path = appPath || null;
       info.binary = resolvedBin || null;
 
-      // Version: try CLI first, then plist
-      if (resolvedBin) {
-        info.version = await getVersion(resolvedBin, versionCommand);
-      }
-      if (!info.version && appPath) {
-        info.version = await getMacAppVersion(appPath);
+      // Version detection for IDEs must avoid spawning the GUI executable.
+      // On Windows the resolved binary is frequently the GUI Electron exe
+      // (case-insensitive FS), and `<exe> --version` boots the IDE window.
+      // Strategy (all spawn-free where possible):
+      //   1. win32: read bundled product.json/package.json next to the exe.
+      //   2. darwin: read Info.plist via PlistBuddy (read-only).
+      //   3. Fallback to `<bin> --version` ONLY when the binary is not a
+      //      known GUI exe — the safety-net guard (#4).
+      if (currentOs === 'win32') {
+        info.version = readWin32IdeVersionFromDisk(resolvedBin || appPath || '');
+        if (!info.version && resolvedBin && !isKnownWin32GuiExe(resolvedBin, win32ProcessNames)) {
+          info.version = await getVersion(resolvedBin, versionCommand);
+        }
+      } else if (currentOs === 'darwin') {
+        if (appPath) info.version = await getMacAppVersion(appPath);
+        if (!info.version && resolvedBin) {
+          info.version = await getVersion(resolvedBin, versionCommand);
+        }
+      } else {
+        // linux and others: bundled CLI wrappers are real CLIs, safe to exec.
+        if (resolvedBin) {
+          info.version = await getVersion(resolvedBin, versionCommand);
+        }
       }
 
     } else if (provider.category === 'cli' || provider.category === 'acp') {

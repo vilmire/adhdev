@@ -14,6 +14,7 @@ import { existsSync, statSync } from 'fs';
 import { platform, homedir } from 'os';
 import * as path from 'path';
 import type { ProviderLoader } from '../providers/provider-loader.js';
+import { isKnownWin32GuiExe, readWin32IdeVersionFromDisk } from './win32-ide-version.js';
 
 // ─── Types ──────────────────────────────────────
 
@@ -95,7 +96,28 @@ function findCliCommand(command: string): string | null {
     return null;
 }
 
-async function getIdeVersion(cliCommand: string): Promise<string | null> {
+/**
+ * Resolve an IDE version on demand (NOT at boot).
+ *
+ * Order of preference, all spawn-free where possible:
+ *  1. win32: read the bundled product.json/package.json next to the exe.
+ *  2. Otherwise spawn `<cli> --version` — but ONLY when the binary is not a
+ *     known GUI executable (the #4 guard), so we never boot an IDE window.
+ *
+ * `win32ProcessNames` is provider.json `processNames.win32` (type → exe names),
+ * used to recognise GUI executables. Callers that have a ProviderLoader can
+ * pass `providerLoader.getWinProcessNames()`.
+ */
+export async function getIdeVersion(
+    cliCommand: string,
+    win32ProcessNames: Record<string, string[]> = {},
+): Promise<string | null> {
+    if (platform() === 'win32') {
+        const fromDisk = readWin32IdeVersionFromDisk(cliCommand);
+        if (fromDisk) return fromDisk;
+        // Refuse to spawn a known GUI exe — it would launch the IDE window.
+        if (isKnownWin32GuiExe(cliCommand, win32ProcessNames)) return null;
+    }
     try {
         const { stdout } = await execAsync(`"${cliCommand}" --version`, {
             encoding: 'utf-8',
@@ -162,7 +184,14 @@ export async function detectIDEs(providerLoader?: ProviderLoader): Promise<IDEIn
         const installed = os === 'darwin'
             ? !!(resolvedCli || appPath)
             : !!resolvedCli;
-        const version = resolvedCli ? await getIdeVersion(resolvedCli) : null;
+        // Boot-time IDE detection must NOT spawn `<cli> --version`. On Windows
+        // the resolved "CLI" is frequently the GUI Electron exe (case-insensitive
+        // FS matches `...\cursor\cursor.exe` against `Cursor.exe`), and running it
+        // with `--version` boots the IDE window. `installed` is decided purely by
+        // existsSync above, and the dashboard drops `version` anyway — the only
+        // real version consumer is provider-loader.resolve() at CDP attach time,
+        // which fetches the version lazily. So leave it null here.
+        const version: string | null = null;
 
         results.push({
             id: def.id,
