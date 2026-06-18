@@ -25,6 +25,16 @@ export interface TerminalAdapterOpts {
     args?: string[];
     cwd?: string;
     env?: Record<string, string>;
+    /**
+     * When true, `env` is already a COMPLETE, sanitized environment (the spawn
+     * planner merged + stripped process.env already) and must be passed to the
+     * PTY verbatim — NOT overlaid on top of process.env. Overlaying would
+     * re-introduce the npm_/PNPM_/parent-session keys the planner explicitly
+     * stripped, so the spec path's spawn env would diverge from the legacy
+     * path's. Defaults to false (legacy overlay behaviour) for any caller that
+     * still passes a partial env.
+     */
+    envIsComplete?: boolean;
     cols?: number;
     rows?: number;
     /** Coalesce screen snapshots: emit on_screen_changed at most this often. */
@@ -76,9 +86,12 @@ export class TerminalAdapter {
     }
 
     start(): void {
+        const env = this.opts.envIsComplete
+            ? ((this.opts.env ?? {}) as Record<string, string>)
+            : ({ ...process.env, ...(this.opts.env ?? {}) } as Record<string, string>);
         this.pty = this.factory.spawn(this.opts.binary, this.opts.args ?? [], {
             cwd: this.opts.cwd ?? process.cwd(),
-            env: { ...process.env, ...(this.opts.env ?? {}) } as Record<string, string>,
+            env,
             cols: this.cols,
             rows: this.rows,
         });

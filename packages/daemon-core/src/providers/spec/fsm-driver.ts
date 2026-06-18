@@ -22,6 +22,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { TerminalAdapter, type TerminalAdapterOpts } from './adapter.js';
+import { resolveCliSpawnPlanFromParts } from '../../cli-adapters/provider-cli-runtime.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import {
@@ -389,15 +390,35 @@ export class FsmDriver implements ISpecDriver {
     }
 
     private buildAdapterOpts(): TerminalAdapterOpts {
-        const baseArgs = this.spec.spawn_args ?? [];
-        const extra = this.opts.extraCliArgs ?? [];
+        // Single-source spawn resolution: route the spec's binary/args/env
+        // through the SAME planner the legacy ProviderCliAdapter uses
+        // (resolveCliSpawnPlanFromParts). This gives the spec/FSM path
+        // findBinary (PATH + npm-global / Node-dir fallback so an off-PATH
+        // `codex`/`claude` resolves), `{{workingDir}}` token substitution, shell
+        // wrapping for script-shims / non-absolute / non-native binaries, and a
+        // sanitized env with TERMINAL_CWD — none of which it had when it passed
+        // `this.spec.binary` straight to the PTY.
+        const cols = this.opts.cols ?? DEFAULT_SESSION_HOST_COLS;
+        const rows = this.opts.rows ?? DEFAULT_SESSION_HOST_ROWS;
+        const plan = resolveCliSpawnPlanFromParts({
+            command: this.spec.binary,
+            baseArgs: this.spec.spawn_args ?? [],
+            baseEnv: this.spec.env ?? {},
+            workingDir: this.opts.workingDir,
+            extraArgs: this.opts.extraCliArgs ?? [],
+            extraEnv: this.opts.extraEnv ?? {},
+            geometry: { cols, rows },
+        });
         return {
-            binary: this.spec.binary,
-            args: [...baseArgs, ...extra],
-            cwd: this.opts.workingDir,
-            env: { ...(this.spec.env ?? {}), ...(this.opts.extraEnv ?? {}) },
-            cols: this.opts.cols ?? DEFAULT_SESSION_HOST_COLS,
-            rows: this.opts.rows ?? DEFAULT_SESSION_HOST_ROWS,
+            binary: plan.shellCmd,
+            args: plan.shellArgs,
+            cwd: plan.ptyOptions.cwd,
+            // plan.ptyOptions.env is already a complete, sanitized environment —
+            // pass it verbatim, do not overlay process.env (see envIsComplete).
+            env: plan.ptyOptions.env,
+            envIsComplete: true,
+            cols,
+            rows,
             transportFactory: this.opts.transportFactory,
         };
     }

@@ -34,22 +34,69 @@ export function resolveCliSpawnPlan(options: {
     const configuredCommand = typeof runtimeSettings.executablePath === 'string' && runtimeSettings.executablePath.trim()
         ? runtimeSettings.executablePath.trim()
         : spawnConfig.command;
-    const binaryPath = findBinary(configuredCommand);
+    return resolveCliSpawnPlanFromParts({
+        command: configuredCommand,
+        baseArgs: spawnConfig.args,
+        shell: spawnConfig.shell,
+        baseEnv: spawnConfig.env,
+        workingDir,
+        extraArgs,
+        extraEnv,
+    });
+}
+
+/**
+ * Cols/rows for a PTY spawn. Defaults to the session-host terminal size; the
+ * spec driver may override per-instance.
+ */
+export interface CliSpawnGeometry {
+    cols?: number;
+    rows?: number;
+}
+
+/**
+ * Core spawn-plan resolution from already-flattened spawn parts — the single
+ * source of truth for binary resolution (findBinary: PATH + npm-global / Node
+ * dir fallback), `{{workingDir}}` token substitution, shell wrapping
+ * (script-shims / non-absolute / non-native binaries), and env sanitization +
+ * TERMINAL_CWD. Both the legacy provider-module path (resolveCliSpawnPlan) and
+ * the spec/FSM path (FsmDriver.buildAdapterOpts) feed into this so the two
+ * spawn paths can never diverge.
+ */
+export function resolveCliSpawnPlanFromParts(options: {
+    /** Raw command from the spec/provider (`binary` / `spawn.command`), or an
+     *  operator-configured executable path override. */
+    command: string;
+    /** Base launch args declared by the spec/provider (`spawn_args` /
+     *  `spawn.args`). */
+    baseArgs?: string[];
+    /** When true, always wrap the launch in a login shell. */
+    shell?: boolean;
+    /** Base env declared by the spec/provider (`env` / `spawn.env`). */
+    baseEnv?: Record<string, string>;
+    workingDir: string;
+    /** Per-launch extra args (e.g. resume session id) appended after baseArgs. */
+    extraArgs?: string[];
+    extraEnv?: Record<string, string>;
+    geometry?: CliSpawnGeometry;
+}): CliSpawnPlan {
+    const { command, baseArgs, shell, baseEnv, workingDir, extraArgs, extraEnv, geometry } = options;
+    const binaryPath = findBinary(command);
     const isWin = os.platform() === 'win32';
-    const allArgs = [...spawnConfig.args, ...extraArgs].map((arg) =>
+    const allArgs = [...(baseArgs ?? []), ...(extraArgs ?? [])].map((arg) =>
         typeof arg === 'string' ? arg.replace(/\{\{workingDir\}\}/g, workingDir) : arg,
     );
 
     let shellCmd: string;
     let shellArgs: string[];
     const useShellUnix = !isWin && (
-        !!spawnConfig.shell
+        !!shell
         || !path.isAbsolute(binaryPath)
         || isScriptBinary(binaryPath)
         || !looksLikeMachOOrElf(binaryPath)
     );
     const isCmdShim = isWin && /\.(cmd|bat)$/i.test(binaryPath);
-    const useShellWin = !!spawnConfig.shell
+    const useShellWin = !!shell
         || isCmdShim
         || !path.isAbsolute(binaryPath)
         || isScriptBinary(binaryPath);
@@ -68,7 +115,7 @@ export function resolveCliSpawnPlan(options: {
         shellArgs = allArgs;
     }
 
-    const env = buildCliSpawnEnv(process.env, { ...(spawnConfig.env || {}), ...(extraEnv || {}) });
+    const env = buildCliSpawnEnv(process.env, { ...(baseEnv || {}), ...(extraEnv || {}) });
     // Some CLI agents, notably Hermes, route their tools through TERMINAL_CWD
     // rather than process.cwd(). Keep the generic ADHDev launch workspace as
     // the single source of truth so PTY cwd and tool cwd cannot diverge.
@@ -82,8 +129,8 @@ export function resolveCliSpawnPlan(options: {
         isWin,
         useShell,
         ptyOptions: {
-            cols: DEFAULT_SESSION_HOST_COLS,
-            rows: DEFAULT_SESSION_HOST_ROWS,
+            cols: geometry?.cols ?? DEFAULT_SESSION_HOST_COLS,
+            rows: geometry?.rows ?? DEFAULT_SESSION_HOST_ROWS,
             cwd: workingDir,
             env,
         },
