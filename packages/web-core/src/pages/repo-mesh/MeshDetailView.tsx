@@ -1,5 +1,4 @@
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
-import { resolveMeshRoleOptions } from '@adhdev/daemon-core'
 import AppPage from '../../components/ui/AppPage'
 import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
@@ -16,6 +15,7 @@ import { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'
 import { IconRefresh } from './icons'
 import {
     readMeshPolicy,
+    resolveMeshRoleOptions,
     SESSION_CLEANUP_MODE_OPTIONS,
     SCHEDULING_STRATEGY_OPTIONS,
     type MeshEntry,

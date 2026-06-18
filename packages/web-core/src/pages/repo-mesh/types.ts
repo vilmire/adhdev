@@ -120,6 +120,40 @@ export function readMeshPolicy(mesh: MeshEntry | null): Record<string, any> {
     return { ...DEFAULT_MESH_POLICY, ...(mesh?.policy || {}) }
 }
 
+/**
+ * Standard mesh resource-pool roles — mirrors daemon-core STANDARD_MESH_ROLES.
+ * Re-declared here (not imported from the @adhdev/daemon-core barrel) so the
+ * browser bundle never pulls the daemon-core dist — that barrel statically imports
+ * Node built-ins (child_process/fs/os/…) which break the browser at load time.
+ */
+export const STANDARD_MESH_ROLES = ['investigator', 'coder', 'validator', 'converger'] as const
+
+/**
+ * Dashboard role dropdown options: the four standard roles plus any roles declared in
+ * the mesh's taskAffinity policy (byTaskMode values + customRoles), lowercased/deduped,
+ * standard-first. Pure mirror of daemon-core resolveMeshRoleOptions.
+ */
+export function resolveMeshRoleOptions(
+    policy: { byTaskMode?: Record<string, unknown>; customRoles?: unknown[] } | null | undefined,
+): string[] {
+    const out: string[] = [...STANDARD_MESH_ROLES]
+    const seen = new Set<string>(out)
+    const add = (raw: unknown) => {
+        if (typeof raw !== 'string') return
+        const role = raw.trim().toLowerCase()
+        if (!role || seen.has(role)) return
+        seen.add(role)
+        out.push(role)
+    }
+    if (policy?.byTaskMode) {
+        for (const value of Object.values(policy.byTaskMode)) add(value)
+    }
+    if (Array.isArray(policy?.customRoles)) {
+        for (const value of policy.customRoles) add(value)
+    }
+    return out
+}
+
 // Feature flags shape used by MeshListView
 export interface MeshListViewFeatures {
     createDaemonPicker: boolean
