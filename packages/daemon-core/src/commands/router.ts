@@ -1095,6 +1095,25 @@ function readMeshConnectionState(connection: Record<string, unknown> | null | un
 }
 
 /**
+ * Connection states that mean the peer is definitively NOT reachable right now —
+ * an offline machine (no peer entry at all) or a transport that has dropped
+ * (failed/closed/disconnected). Probing such a peer would just burn the full
+ * MESH_DIRECT_PROBE_TIMEOUT_MS window before timing out, so the cold-open of the
+ * mesh graph stalls 25s behind one powered-off node. `connecting` is deliberately
+ * NOT here: a peer mid-handshake may complete during the probe window, so it still
+ * gets its attempt. Held standing git truth is consulted by the caller BEFORE this
+ * runs, so the invariant "connected+held is never unavailable" is untouched — this
+ * only short-circuits a peer that has no usable transport to probe over.
+ */
+function isMeshConnectionDefinitivelyDown(
+    connection: Record<string, unknown> | null | undefined,
+): boolean {
+    if (!connection) return true;
+    const state = readMeshConnectionState(connection);
+    return state === 'failed' || state === 'closed' || state === 'disconnected';
+}
+
+/**
  * Probe a remote peer's git_status with a bounded retry budget, but only while
  * the peer is reported `connected`. A single slow (often TURN-relayed) peer can
  * exceed one probe window; retrying — with the connection re-checked before each
@@ -1117,6 +1136,19 @@ async function probeRemoteMeshGitStatusWithRetry(args: {
     getConnection?: (daemonId: string) => Record<string, unknown> | null;
     onConnection?: (connection: Record<string, unknown>) => void;
 }): Promise<Record<string, unknown> | null> {
+    // Fast-fail an offline / dropped peer BEFORE the first attempt. Previously the
+    // liveness re-check only ran *between* attempts, so a powered-off node still ate
+    // the full first MESH_DIRECT_PROBE_TIMEOUT_MS (25s) window — stalling the mesh
+    // graph cold-open behind one dead machine. If a connection getter is wired and
+    // it reports the peer as definitively down (no peer entry / failed / closed /
+    // disconnected), skip straight to "no truth" instead of awaiting a 25s timeout.
+    // A `connecting` peer still gets its attempt (it may complete mid-probe). No
+    // onConnection side effect here: this is a pure liveness gate, and the caller's
+    // own connection read already seeds status.connection — only the between-attempt
+    // path needs to surface a freshly-observed connection.
+    if (args.getConnection && isMeshConnectionDefinitivelyDown(args.getConnection(args.daemonId))) {
+        return null;
+    }
     for (let attempt = 0; attempt <= MESH_DIRECT_PROBE_MAX_RETRIES; attempt += 1) {
         if (attempt > 0) {
             // Re-check liveness before spending another probe window; a peer that

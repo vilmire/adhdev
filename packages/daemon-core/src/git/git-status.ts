@@ -560,17 +560,132 @@ async function getSubmoduleStatuses(
   if (!repo.repoRoot) return [];
 
   try {
-    // No `--recursive`: this superproject's submodules (oss, adhdev-providers) are
-    // leaf repos with no nested submodules, so `--recursive` doubles the (already
-    // slow on Windows) submodule-status spawn time for zero additional rows. If a
-    // nested submodule is ever introduced, restore --recursive WITH its own longer
-    // per-command timeout rather than reverting this wholesale.
-    const result = await runGit(repo, ['submodule', 'status'], options);
-    const submodules = parseSubmoduleStatusOutput(result.stdout, repo.repoRoot, options.submoduleIgnorePaths);
+    // Do NOT shell out to `git submodule status`. That porcelain wrapper is a
+    // shell script (`git-submodule`) that, per submodule, spawns several child
+    // `git` processes; on Windows the wrapper + per-spawn cost alone measured
+    // 6.9–62.4s under AV, which dominated the whole collectGitRepoStatus budget
+    // and stalled the mesh graph cold-open. The information it gives us — the
+    // gitlink sync state (path / recorded SHA / +/-/U prefix) — is fully
+    // derivable from plumbing commands that don't go through the shell wrapper:
+    //   • paths           ← `.gitmodules` (git config --file, plumbing)
+    //   • expected SHA     ← `git ls-tree HEAD <path>` (the gitlink the super-
+    //                        project's HEAD tree records)
+    //   • actual SHA       ← `git -C <sub> rev-parse HEAD` (already paid below by
+    //                        enrichSubmoduleWorktreeStatus for the dirty check)
+    // Comparing expected vs actual reproduces `+` (out of sync); a checked-out
+    // submodule whose worktree is absent/uninitialized reproduces `-`. The `U`
+    // (conflict) prefix is surfaced separately via the superproject porcelain
+    // status that the caller already parses, and a conflicted submodule's own
+    // status read here also flags it dirty — so no row is lost.
+    const submodules = await deriveSubmoduleGitlinkStatuses(repo, options);
     await Promise.all(submodules.map(submodule => enrichSubmoduleWorktreeStatus(repo, submodule, options)));
     return submodules;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Enumerate the superproject's submodules and their gitlink sync state without the
+ * slow `git submodule status` shell wrapper. Pure plumbing: read paths from
+ * `.gitmodules`, the expected (recorded) gitlink SHA from `ls-tree HEAD`, and the
+ * actual checked-out SHA from the submodule's own `rev-parse HEAD`.
+ */
+async function deriveSubmoduleGitlinkStatuses(
+  repo: ResolvedGitRepo,
+  options: GitStatusOptions,
+): Promise<GitSubmoduleStatus[]> {
+  if (!repo.repoRoot) return [];
+  const paths = await readSubmodulePaths(repo, options);
+  const ignoreSet = new Set(options.submoduleIgnorePaths || []);
+  const lastCheckedAt = Date.now();
+
+  const entries = await Promise.all(
+    paths
+      .filter(path => !ignoreSet.has(path))
+      .map(async (path): Promise<GitSubmoduleStatus> => {
+        const repoPath = repo.repoRoot + '/' + path;
+        const expected = await readGitlinkExpectedSha(repo, path, options);
+        const actual = await readSubmoduleHeadSha(repo, repoPath, options);
+        // Uninitialized / no checked-out HEAD reproduces `git submodule status`'s
+        // `-` prefix; a present-but-divergent HEAD reproduces the `+` prefix.
+        const outOfSync = actual === null
+          ? true
+          : expected !== null && expected !== actual;
+        return {
+          path,
+          // Prefer the recorded gitlink SHA (matches the legacy column); fall back
+          // to the checked-out SHA so the field is never empty when both are known.
+          commit: expected ?? actual ?? '',
+          repoPath,
+          dirty: false,
+          outOfSync,
+          lastCheckedAt,
+        };
+      }),
+  );
+  return entries;
+}
+
+/** Read submodule paths from `.gitmodules` via plumbing (no shell wrapper). */
+async function readSubmodulePaths(repo: ResolvedGitRepo, options: GitStatusOptions): Promise<string[]> {
+  if (!repo.repoRoot) return [];
+  const gitmodulesPath = repo.repoRoot + '/.gitmodules';
+  try {
+    const result = await runGit(
+      repo,
+      ['config', '--file', gitmodulesPath, '--get-regexp', '^submodule\\..*\\.path$'],
+      options,
+    );
+    const paths: string[] = [];
+    for (const line of result.stdout.split('\n')) {
+      // Each line: `submodule.<name>.path <path>`
+      const spaceIdx = line.indexOf(' ');
+      if (spaceIdx < 0) continue;
+      const value = line.slice(spaceIdx + 1).trim();
+      if (value) paths.push(value);
+    }
+    return paths;
+  } catch {
+    // No .gitmodules (not a superproject) or unreadable → no submodules.
+    return [];
+  }
+}
+
+/** Expected gitlink SHA recorded in the superproject HEAD tree for this submodule path. */
+async function readGitlinkExpectedSha(
+  repo: ResolvedGitRepo,
+  submodulePath: string,
+  options: GitStatusOptions,
+): Promise<string | null> {
+  try {
+    // `ls-tree HEAD <path>` prints: `<mode> commit <sha>\t<path>` for a gitlink.
+    const result = await runGit(repo, ['ls-tree', 'HEAD', submodulePath], options);
+    const line = result.stdout.split('\n').find(l => l.trim().length > 0);
+    if (!line) return null;
+    const match = line.match(/^\s*\d+\s+commit\s+([0-9a-f]{40})\b/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Actual checked-out HEAD SHA of a submodule, or null if uninitialized/unreadable. */
+async function readSubmoduleHeadSha(
+  repo: ResolvedGitRepo,
+  repoPath: string,
+  options: GitStatusOptions,
+): Promise<string | null> {
+  try {
+    // Run in the submodule worktree via cwd (inside the superproject root, so the
+    // executor's path-inside-repo guard is satisfied) rather than resolving the
+    // submodule as a fresh repo — that would cost an extra `rev-parse --show-toplevel`
+    // spawn per submodule, which is exactly the Windows spawn cost this fix removes.
+    const result = await runGit(repo, ['rev-parse', 'HEAD'], { ...options, cwd: repoPath });
+    const sha = result.stdout.trim();
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+  } catch {
+    return null;
   }
 }
 
@@ -594,37 +709,3 @@ async function enrichSubmoduleWorktreeStatus(
   }
 }
 
-function parseSubmoduleStatusOutput(
-  output: string,
-  repoRoot: string,
-  ignorePaths?: string[],
-): GitSubmoduleStatus[] {
-  const submodules: GitSubmoduleStatus[] = [];
-  const ignoreSet = new Set(ignorePaths || []);
-
-  for (const line of output.split('\n')) {
-    if (!line.trim()) continue;
-
-    // Format: [+-U ]<commit> <path> (<branch>)
-    // - = not initialized, + = gitlink out of sync, U = conflict, ' ' = aligned.
-    const match = line.match(/^([\-+U\s])([0-9a-f]{40})\s+(\S+)(?:\s+\(([^)]+)\))?/);
-    if (!match) continue;
-
-    const prefix = match[1];
-    const commit = match[2];
-    const path = match[3];
-
-    if (ignoreSet.has(path)) continue;
-
-    submodules.push({
-      path,
-      commit,
-      repoPath: repoRoot + '/' + path,
-      dirty: prefix === 'U',
-      outOfSync: prefix === '-' || prefix === '+',
-      lastCheckedAt: Date.now(),
-    });
-  }
-
-  return submodules;
-}

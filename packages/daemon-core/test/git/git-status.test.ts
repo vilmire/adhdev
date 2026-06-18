@@ -225,6 +225,44 @@ describe('git repo status parser', () => {
     });
   });
 
+  it('marks submodules out of sync when the checked-out HEAD differs from the recorded gitlink (no `git submodule status` shell wrapper)', async () => {
+    // Regression for the Windows cold-open stall: getSubmoduleStatuses no longer
+    // shells out to `git submodule status` (a slow shell wrapper). The gitlink sync
+    // state must still be derived purely from `.gitmodules` + ls-tree HEAD vs the
+    // submodule's own rev-parse HEAD — this exercises the `+` (out of sync) case.
+    const submoduleRepo = tempRepo('status-submodule-oos-child');
+    writeFileSync(join(submoduleRepo, 'child.txt'), 'child\n');
+    commit(submoduleRepo, 'child init');
+
+    const repo = tempRepo('status-submodule-oos-parent');
+    writeFileSync(join(repo, 'README.md'), 'parent\n');
+    commit(repo, 'parent init');
+    git(repo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', submoduleRepo, 'oss']);
+    commit(repo, 'add oss submodule');
+
+    const recordedSha = git(repo, ['rev-parse', 'HEAD:oss']);
+
+    // Advance the submodule's own HEAD past the SHA the superproject records, WITHOUT
+    // staging the new gitlink in the parent — exactly the `+` out-of-sync condition.
+    writeFileSync(join(repo, 'oss', 'child.txt'), 'child\nadvanced\n');
+    git(join(repo, 'oss'), ['add', '.']);
+    git(join(repo, 'oss'), ['commit', '-m', 'advance submodule HEAD']);
+    const advancedSha = git(join(repo, 'oss'), ['rev-parse', 'HEAD']);
+    expect(advancedSha).not.toBe(recordedSha);
+
+    const status = await getGitRepoStatus(repo);
+
+    expect(status.submodules).toHaveLength(1);
+    expect(status.submodules?.[0]).toMatchObject({
+      path: 'oss',
+      // commit reflects the gitlink the superproject HEAD records, not the advanced HEAD.
+      commit: recordedSha,
+      outOfSync: true,
+    });
+    // An out-of-sync (or dirty) submodule makes the whole repo dirty.
+    expect(status.dirty).toBe(true);
+  });
+
   it('marks tracked upstream state as unchecked until refreshed and updates behind counts after a bounded fetch', async () => {
     const repo = tempRepo('status-upstream-refresh');
     writeFileSync(join(repo, 'tracked.txt'), 'base\n');

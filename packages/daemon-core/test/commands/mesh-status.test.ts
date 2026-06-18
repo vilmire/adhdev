@@ -974,7 +974,13 @@ describe('mesh_status', () => {
 
       expect(result.success).toBe(true)
       expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
-      expect(getMeshPeerConnectionStatus).toHaveBeenCalledTimes(2)
+      // The bounded retry now reads the peer connection one extra time: a pre-attempt
+      // liveness gate (added to fast-fail offline/dropped peers before burning a 25s
+      // probe window) consults getConnection once before the first attempt. The peer
+      // is `connecting` there — not definitively down — so the probe still runs and
+      // the connection flips to `connected` on the between-attempt re-check, exactly
+      // as before. Only the read count changes (2 → 3); the surfaced git truth does not.
+      expect(getMeshPeerConnectionStatus).toHaveBeenCalledTimes(3)
       const remoteNode = result.nodes.find((node: any) => node.nodeId === 'node-remote')
       expect(remoteNode?.gitProbePending).toBeUndefined()
       expect(remoteNode).toEqual(expect.objectContaining({
@@ -1809,7 +1815,12 @@ describe('mesh_status', () => {
           }),
         },
       })
-      expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
+      // The `failed` peer is still ATTEMPTED (peerAttemptedCount: 2) and classified
+      // unavailable, but its git_status probe is now SKIPPED before dispatch — a
+      // definitively-down transport (state: 'failed') no longer burns a 25s probe
+      // window that would stall the graph cold-open. So only the one reachable peer
+      // (daemon_303) actually dispatches git_status.
+      expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

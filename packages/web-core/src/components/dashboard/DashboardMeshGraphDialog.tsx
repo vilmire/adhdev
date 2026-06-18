@@ -200,13 +200,17 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         // by the first load, the refresh shows the small refreshing indicator
         // rather than the full "Loading live mesh status…" loader.
         //
-        // The background kick is marked isAutoRetry so it uses the lighter
-        // 'interactive' probe profile, not the full blocking peer-git window. A
-        // slow peer therefore can't turn the on-open refresh into a 25s blocking
-        // fan-out, and the bounded hasPendingDashboardMeshRefresh loop converges.
-        // Only the user-driven manual Refresh button runs the full probe.
+        // BOTH the cold-open paint AND the background kick use the lighter
+        // 'interactive' probe profile (isAutoRetry=true). The cold-open must be
+        // interactive too: a `settled` cold-open whose held snapshot is a cached
+        // aggregate would self-escalate to a blocking refresh:true fan-out inside
+        // the loader (getCanonicalRetryReason → cached_aggregate_requires_live_refresh)
+        // and wait 25s on the slowest/offline peer behind the "Loading…" loader —
+        // exactly the cold-open stall we are removing. Interactive paints the held
+        // state immediately and never self-fires refresh; only the user-driven
+        // manual Refresh button (settled) runs the full peer-git probe window.
         void (async () => {
-            await loadGraph(false)
+            await loadGraph(false, true)
             if (!mountedRef.current) return
             // Don't double up with the hasPendingDashboardMeshRefresh auto-retry
             // loop (it already schedules loadGraph(true) when nodes are pending).

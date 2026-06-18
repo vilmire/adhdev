@@ -44,6 +44,12 @@ describe('dashboard mesh graph dialog wiring', () => {
     // The on-open background refresh is an auto-retry (lighter profile), so the
     // bounded hasPendingDashboardMeshRefresh loop converges instead of looping.
     expect(dialogSource).toContain('loadGraph(true, true)')
+    // The cold-open paint ALSO uses the auto-retry (interactive) profile — a
+    // `settled` cold-open over a cached aggregate would self-escalate to a blocking
+    // refresh:true fan-out and stall 25s on the slowest/offline peer. Interactive
+    // paints the held state immediately and never self-fires refresh.
+    expect(dialogSource).toContain('loadGraph(false, true)')
+    expect(dialogSource).not.toContain('await loadGraph(false)\n')
     expect(dialogSource).not.toContain('buildMeshGraph')
     expect(dialogSource).toContain('setLoading(showInitialLoader)')
     expect(dialogSource).toContain('dashboardMeshGraphStatusCache')

@@ -657,14 +657,17 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
     expect(probeCount).toBe(1)
   })
 
-  it('does not retry — and marks unavailable — a peer that is not connected', async () => {
+  it('does not probe at all — and marks unavailable — a peer that is definitively down', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-router-probe-disconnected-'))
     roots.push(root)
     const localRepo = join(root, 'local')
     initRepo(localRepo)
 
-    // The probe always fails and the peer reports disconnected, so the retry
-    // loop short-circuits after the single initial attempt.
+    // The peer reports `disconnected` (a definitively-down transport, like a
+    // powered-off machine). The probe must be SKIPPED entirely — not even the
+    // initial attempt runs — so the mesh graph cold-open never waits the full
+    // MESH_DIRECT_PROBE_TIMEOUT_MS window on a dead node. It is still classified
+    // unavailable so the explicit-refresh hard-fail is driven exactly as before.
     const dispatchMeshCommand = vi.fn(async () => { throw new Error('timeout') })
     const getMeshPeerConnectionStatus = vi.fn(() => ({ state: 'disconnected', reported: true }))
     const router = createRouter(dispatchMeshCommand, getMeshPeerConnectionStatus)
@@ -685,9 +688,44 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       refresh: true,
     })
 
-    // Only the initial probe ran (no retry while disconnected) and the peer is
-    // classified unavailable — driving the explicit-refresh hard-fail.
-    expect(dispatchMeshCommand.mock.calls.length).toBe(1)
+    // No probe ran at all (definitively-down peer is skipped before the first
+    // attempt) and the peer is classified unavailable — driving the
+    // explicit-refresh hard-fail.
+    expect(dispatchMeshCommand.mock.calls.length).toBe(0)
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('mesh_direct_peer_truth_unavailable')
+    expect(result.sourceOfTruth.directPeerTruth.unavailableNodeIds).toContain('node_down')
+  })
+
+  it('does not probe at all — and marks unavailable — an offline peer with no live connection entry', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-probe-offline-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    // A powered-off machine that never established a peer: getMeshPeerConnectionStatus
+    // returns null. This is the canonical "node turned off" case — the probe must be
+    // skipped entirely (0 dispatches) so the graph cold-open paints immediately, while
+    // the node is still classified unavailable on the explicit refresh.
+    const dispatchMeshCommand = vi.fn(async () => { throw new Error('timeout') })
+    const getMeshPeerConnectionStatus = vi.fn(() => null)
+    const router = createRouter(dispatchMeshCommand, getMeshPeerConnectionStatus)
+
+    const result: any = await router.execute('mesh_status', {
+      meshId: 'mesh_offline',
+      inlineMesh: {
+        id: 'mesh_offline',
+        coordinator: { preferredNodeId: 'node_local' },
+        nodes: [
+          { id: 'node_local', daemonId: 'daemon-local', machineId: 'machine-local', workspace: localRepo, repoRoot: localRepo, policy: {} },
+          { id: 'node_down', daemonId: 'daemon-down', machineId: 'machine-down', workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev', repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev', policy: {} },
+        ],
+      },
+      requireDirectPeerTruth: true,
+      refresh: true,
+    })
+
+    expect(dispatchMeshCommand.mock.calls.length).toBe(0)
     expect(result.success).toBe(false)
     expect(result.code).toBe('mesh_direct_peer_truth_unavailable')
     expect(result.sourceOfTruth.directPeerTruth.unavailableNodeIds).toContain('node_down')
