@@ -6,6 +6,42 @@ import * as path from 'path';
 // need a cmd.exe wrapper).
 const DIRECT_EXEC_EXT = new Set(['.exe', '.com']);
 
+// Executable extensions to probe when scanning a directory ourselves, ordered
+// most-directly-launchable first. node-pty's ConPTY backend launches an
+// absolute `.cmd`/`.bat` shim fine (verified) — it only fails to *resolve* a
+// bare command against an incomplete PATH — so once we hand it an absolute
+// path, a `.cmd` shim works just as well as a real `.exe`.
+const WIN_EXEC_EXT = ['.exe', '.com', '.cmd', '.bat'];
+
+/**
+ * Resolve a bare command against well-known global-bin directories that are
+ * frequently NOT on the daemon's inherited PATH, so `where` (which only
+ * searches PATH) misses them. A daemon running under one Node install (e.g.
+ * nvm) never sees another npm prefix's bin dir — notably npm's Windows default
+ * prefix at %APPDATA%\npm, where `npm i -g @openai/codex` lands. Returns an
+ * absolute path on the first hit, or null. Mirrors findBinary()'s extraDirs in
+ * provider-cli-shared.ts; kept inline here so this lightweight module (loaded
+ * by pty-transport) need not pull in the heavier shared module.
+ */
+function resolveWin32GlobalBin(trimmed: string): string | null {
+  // Only resolve a bare command name — anything with a path separator is the
+  // caller's explicit location and must not be re-pointed at a global bin dir.
+  if (path.isAbsolute(trimmed) || trimmed.includes('/') || trimmed.includes('\\')) {
+    return null;
+  }
+  const extraDirs: string[] = [];
+  if (process.env.APPDATA) extraDirs.push(path.join(process.env.APPDATA, 'npm'));
+  try { extraDirs.push(path.dirname(process.execPath)); } catch { /* best-effort */ }
+  for (const dir of extraDirs) {
+    if (!dir) continue;
+    for (const ext of WIN_EXEC_EXT) {
+      const full = path.join(dir, trimmed + ext);
+      if (existsSync(full)) return full;
+    }
+  }
+  return null;
+}
+
 /**
  * Resolve a launch command to an absolute executable path on Windows.
  *
@@ -39,7 +75,16 @@ export function resolveWin32Executable(command: string): string {
       return direct || matches[0] || command;
     }
   } catch {
-    // `where` not found / non-zero exit — fall through to original command.
+    // `where` not found / non-zero exit — fall through to the global-bin scan.
   }
+
+  // `where` found nothing on PATH. Before giving up (and letting node-pty crash
+  // with "File not found:" on the bare command), search npm's off-PATH global
+  // bin dir(s). This is the codex case: `npm i -g @openai/codex` installs to
+  // %APPDATA%\npm, which is absent from a nvm-launched daemon's PATH, so a spec
+  // binary of "codex" never resolved and the spawn ENOENT'd.
+  const globalBin = resolveWin32GlobalBin(trimmed);
+  if (globalBin) return globalBin;
+
   return command;
 }
