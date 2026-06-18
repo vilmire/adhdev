@@ -12,6 +12,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { existsSync } from 'fs';
 import type { ProviderLoader } from '../providers/provider-loader.js';
+import { findBinary } from '../cli-adapters/provider-cli-shared.js';
 
 export interface CLIInfo {
     id: string;
@@ -57,6 +58,29 @@ function resolveCommandPath(command: string): string | null {
     return null;
 }
 
+/**
+ * Resolve a CLI command to an absolute path for install detection.
+ * Order: explicit path → PATH (`where`/`which`) → well-known global-bin dirs
+ * (e.g. %APPDATA%\npm) via the shared spawn-layer findBinary.
+ *
+ * The final step keeps detection consistent with the spawn layer: findBinary
+ * already searches npm's default Windows prefix at %APPDATA%\npm (where
+ * `npm i -g @openai/codex` lands), so a CLI installed under an npm prefix that
+ * is NOT on the daemon's inherited PATH is detected as installed instead of
+ * being blocked at the launch gate. findBinary returns a bare "<name>.cmd"
+ * (non-absolute) when nothing is found, so we only accept an absolute path
+ * that actually exists.
+ */
+async function resolveDetectionPath(command: string, whichCmd: string): Promise<string | null> {
+    const explicitPath = resolveCommandPath(command);
+    if (explicitPath) return explicitPath;
+    const whichResult = await execAsync(`${whichCmd} ${shellQuote(command)}`);
+    if (whichResult) return whichResult.split('\n')[0];
+    const resolved = findBinary(command);
+    if (path.isAbsolute(resolved) && existsSync(resolved)) return resolved;
+    return null;
+}
+
 /** Run a shell command with timeout, returning stdout or null on failure */
 function execAsync(cmd: string, timeoutMs = 5000): Promise<string | null> {
     return new Promise((resolve) => {
@@ -97,11 +121,8 @@ export async function detectCLIs(
     const results = await Promise.all(
         cliList.map(async (cli): Promise<CLIInfo> => {
             try {
-                const explicitPath = resolveCommandPath(cli.command);
-                const pathResult = explicitPath || await execAsync(`${whichCmd} ${shellQuote(cli.command)}`);
-                if (!pathResult) return { ...cli, installed: false };
-
-                const firstPath = explicitPath || pathResult.split('\n')[0];
+                const firstPath = await resolveDetectionPath(cli.command, whichCmd);
+                if (!firstPath) return { ...cli, installed: false };
 
                 // Get version (parallel with other checks)
                 let version: string | undefined;
@@ -148,10 +169,8 @@ export async function detectCLI(
             const platform = os.platform();
             const whichCmd = platform === 'win32' ? 'where' : 'which';
             try {
-                const explicitPath = resolveCommandPath(target.command);
-                const pathResult = explicitPath || await execAsync(`${whichCmd} ${shellQuote(target.command)}`);
-                if (!pathResult) return null;
-                const firstPath = explicitPath || pathResult.split('\n')[0];
+                const firstPath = await resolveDetectionPath(target.command, whichCmd);
+                if (!firstPath) return null;
                 let version: string | undefined;
                 if (options?.includeVersion !== false) {
                     const versionCommands = [
