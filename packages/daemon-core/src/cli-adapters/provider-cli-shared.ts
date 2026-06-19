@@ -50,6 +50,21 @@ export interface CliSessionStatus {
     errorMessage?: string;
     errorReason?: string;
     providerSessionId?: string;
+    /**
+     * Timestamp (ms) of the most recent raw PTY output chunk. Advances on every
+     * byte the process emits, including tool/build output that produces no
+     * parsed assistant text. Liveness watchdogs use this to distinguish a real
+     * stall (no output at all) from an active turn whose assistant buffer is
+     * momentarily static while a tool runs.
+     */
+    lastOutputAt?: number;
+    /**
+     * Timestamp (ms) of the most recent *visible* terminal screen change.
+     * Stricter than lastOutputAt — only advances when the rendered screen
+     * content actually differs, so repeated keepalive bytes do not register as
+     * progress. Preferred liveness signal for the long-generating watchdog.
+     */
+    lastScreenChangeAt?: number;
     bufferState?: {
         responseBuffer?: { truncated: boolean; droppedChars: number; maxChars: number };
         recentOutputBuffer?: { truncated: boolean; droppedChars: number; maxChars: number };

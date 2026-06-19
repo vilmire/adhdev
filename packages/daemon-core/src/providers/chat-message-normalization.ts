@@ -27,6 +27,53 @@ export function extractFinalSummaryFromMessages(
   return '';
 }
 
+function readChatMessageTimestampIso(message: ChatMessage | null | undefined): string | undefined {
+  if (!message) return undefined;
+  const record = message as ChatMessage & Record<string, unknown>;
+  for (const value of [record.timestamp, record.createdAt, record.created_at, record.updatedAt, record.time]) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      // Heuristic seconds-vs-ms detection mirrors the mesh transcript reader.
+      const ms = value > 10_000_000_000 ? value : value * 1000;
+      return new Date(ms).toISOString();
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const ms = new Date(value.trim()).getTime();
+      if (Number.isFinite(ms)) return new Date(ms).toISOString();
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Like extractFinalSummaryFromMessages but also returns the ISO timestamp of the
+ * selected final assistant/model message. Completion reconciliation needs the
+ * timestamp to prove the transcript was produced AFTER the dispatch — without it
+ * reconcileDirectDispatchCompletionFromTranscript rejects non-JSON summaries as
+ * "transcript_not_proven_after_dispatch". The summary selection is identical so the
+ * timestamp always belongs to the message whose text became the summary.
+ */
+export function extractFinalAssistantSummaryEvidence(
+  messages: ChatMessage[] | null | undefined,
+  maxChars: number = DEFAULT_FINAL_SUMMARY_MAX_CHARS,
+): { finalSummary: string; transcriptMessageAt?: string } {
+  if (!Array.isArray(messages) || messages.length === 0) return { finalSummary: '' };
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg) continue;
+    const classification = classifyChatMessageVisibility(msg);
+    if (classification.isUserFacing && (msg.role === 'assistant' || msg.role === 'model')) {
+      const text = flattenContent(msg.content).trim();
+      if (text) {
+        return {
+          finalSummary: text.slice(0, maxChars),
+          transcriptMessageAt: readChatMessageTimestampIso(msg),
+        };
+      }
+    }
+  }
+  return { finalSummary: '' };
+}
+
 export const BUILTIN_CHAT_MESSAGE_KINDS = ['standard', 'thought', 'tool', 'terminal', 'system'] as const;
 
 export type BuiltinChatMessageKind = typeof BUILTIN_CHAT_MESSAGE_KINDS[number];

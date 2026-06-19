@@ -18,6 +18,8 @@ export interface CliSessionStatus {
     activeModal: { message: string; buttons: string[] } | null;
     errorMessage?: string;
     errorReason?: string;
+    lastOutputAt?: number;
+    lastScreenChangeAt?: number;
 }
 export interface CliScripts {
     detectStatus?: (input: CliStatusInput) => string | null;

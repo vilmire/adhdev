@@ -1545,8 +1545,16 @@ export class CliProviderInstance implements ProviderInstance {
         const dirName = workingDirBasename(this.workingDir);
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const partial = this.adapter.getPartialResponse();
+        // Liveness fingerprint for the long-generating watchdog. The parsed
+        // assistant buffer (`partial`) alone goes static while a tool/build runs
+        // — the assistant emits no tokens even though the PTY is actively
+        // printing tool output — which made the watchdog false-fire a "stuck"
+        // alert mid-turn. Fold in the adapter's raw-activity timestamps so any
+        // visible terminal progress (lastScreenChangeAt) or raw PTY byte
+        // (lastOutputAt) keeps the fingerprint moving. The watchdog then only
+        // survives a genuine stall where nothing at all is happening.
         const progressFingerprint = newStatus === 'generating'
-            ? `${partial || ''}`.slice(-2000)
+            ? `${`${partial || ''}`.slice(-2000)}::scr=${adapterStatus.lastScreenChangeAt ?? 0}::out=${adapterStatus.lastOutputAt ?? 0}`
             : undefined;
 
         const previousStatus = this.lastStatus;

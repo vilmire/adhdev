@@ -30,8 +30,8 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { runMeshReconcileTick } from '../../src/mesh/mesh-reconcile-loop.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
-import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js'
-import { getLedgerDir } from '../../src/mesh/mesh-ledger.js'
+import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches } from '../../src/mesh/mesh-work-queue.js'
+import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
@@ -624,6 +624,205 @@ describe('runMeshReconcileTick', () => {
 
         expect(meshConfigMocks.getMesh).not.toHaveBeenCalled()
         expect(handleCliCommand).not.toHaveBeenCalled()
+      } finally {
+        cleanup(meshId)
+      }
+    })
+  })
+
+  // ── PHASE 4: synthesize lost completions for unterminated direct dispatches ──
+  // [H] A worker completed + went idle but its terminal completion event was never
+  // persisted (dropped before reaching the queue/outbox). The reconcile loop reads
+  // the worker's transcript and synthesizes the missing completion so the coordinator
+  // stops believing it is still generating. Previously this only ran when an LLM
+  // polled mesh_status; now the daemon timer drives it.
+  describe('PHASE 4 — transcript completion reconcile for unterminated direct dispatches', () => {
+    function dispatchTimeIso(secondsAgo: number): string {
+      // Fixed epoch base avoids Date.now() (the runtime forbids it in some contexts)
+      // while keeping the transcript message provably after the dispatch.
+      return new Date(1_700_000_000_000 - secondsAgo * 1000).toISOString()
+    }
+
+    it('local node: synthesizes task_completed from a live idle session transcript when no terminal ledger exists', async () => {
+      const meshId = `mesh_reconcile_phase4_local_${Date.now()}`
+      try {
+        const sessionId = 'sess-local-done'
+        const nodeId = 'node_local'
+        const taskId = 'task_local_done'
+
+        // A dispatch was recorded but no terminal event ever landed.
+        appendLedgerEntry(meshId, {
+          kind: 'task_dispatched',
+          nodeId,
+          sessionId,
+          providerType: 'claude-cli',
+          payload: { source: 'direct', via: 'local_direct', taskId, message: 'do work' },
+          timestamp: dispatchTimeIso(60),
+        } as any)
+        insertDirectDispatch(meshId, {
+          taskId,
+          nodeId,
+          sessionId,
+          providerType: 'claude-cli',
+          message: 'do work',
+          via: 'local_direct',
+          dispatchedAt: dispatchTimeIso(60),
+        })
+
+        // A local node (no daemonId) so read_chat is resolved via the local commandHandler.
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'claude-history-local',
+            messages: [
+              { role: 'user', content: 'do work', timestamp: 1_700_000_000_000 - 30_000 },
+              { role: 'assistant', content: 'All done — built and tests pass.', timestamp: 1_700_000_000_000 - 5_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: () => [],
+            getInstance: () => undefined,
+          },
+          commandHandler: { handle: readChat },
+        } as any
+
+        await runMeshReconcileTick(components)
+
+        // read_chat was issued for the idle session.
+        expect(readChat).toHaveBeenCalledWith('read_chat', expect.objectContaining({ targetSessionId: sessionId }))
+        // A synthetic task_completed ledger entry now exists for the missed completion.
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+        expect(completed).toBeTruthy()
+        expect((completed?.payload as any)?.source).toBe('daemon_reconcile_transcript_completion')
+        expect((completed?.payload as any)?.finalSummary).toContain('All done')
+        // ...and the coordinator gets a pending completion event to drain.
+        const pending = getPendingMeshCoordinatorEvents(meshId)
+        expect(pending.some(p => p.event === 'agent:generating_completed')).toBe(true)
+        // The dispatch is now terminal, so the next tick is a no-op (idempotent).
+        readChat.mockClear()
+        await runMeshReconcileTick(components)
+        const completedCount = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed' && e.sessionId === sessionId).length
+        expect(completedCount).toBe(1)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('remote node: reads the worker transcript over dispatchMeshCommand and synthesizes the missing completion', async () => {
+      const meshId = `mesh_reconcile_phase4_remote_${Date.now()}`
+      try {
+        const sessionId = 'sess-remote-done'
+        const nodeId = 'node_remote'
+        const taskId = 'task_remote_done'
+
+        appendLedgerEntry(meshId, {
+          kind: 'task_dispatched',
+          nodeId,
+          sessionId,
+          providerType: 'claude-cli',
+          payload: { source: 'direct', via: 'p2p_direct', taskId, message: 'do work' },
+          timestamp: dispatchTimeIso(120),
+        } as any)
+        insertDirectDispatch(meshId, {
+          taskId,
+          nodeId,
+          sessionId,
+          providerType: 'claude-cli',
+          message: 'do work',
+          via: 'p2p_direct',
+          dispatchedAt: dispatchTimeIso(120),
+        })
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/remote', daemonId: 'remote-daemon' }] },
+        ])
+
+        const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string) => {
+          if (command === 'read_chat' && daemonId === 'remote-daemon') {
+            return {
+              success: true,
+              payload: {
+                status: 'idle',
+                providerSessionId: 'claude-history-remote',
+                messages: [
+                  { role: 'assistant', content: 'Finished the remote task.', timestamp: 1_700_000_000_000 - 5_000 },
+                ],
+              },
+            }
+          }
+          return { success: true, events: [] }
+        })
+
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: vi.fn(async () => ({ success: true })) },
+          dispatchMeshCommand,
+        } as any
+
+        await runMeshReconcileTick(components)
+
+        expect(dispatchMeshCommand).toHaveBeenCalledWith(
+          'remote-daemon',
+          'read_chat',
+          expect.objectContaining({ targetSessionId: sessionId }),
+        )
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+        expect(completed).toBeTruthy()
+        expect((completed?.payload as any)?.finalSummary).toContain('Finished the remote task')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('does NOT synthesize a completion while the session is still generating', async () => {
+      const meshId = `mesh_reconcile_phase4_busy_${Date.now()}`
+      try {
+        const sessionId = 'sess-busy'
+        const nodeId = 'node_local'
+        const taskId = 'task_busy'
+
+        appendLedgerEntry(meshId, {
+          kind: 'task_dispatched',
+          nodeId,
+          sessionId,
+          providerType: 'claude-cli',
+          payload: { source: 'direct', via: 'local_direct', taskId, message: 'do work' },
+          timestamp: dispatchTimeIso(30),
+        } as any)
+        insertDirectDispatch(meshId, {
+          taskId, nodeId, sessionId, providerType: 'claude-cli', message: 'do work',
+          via: 'local_direct', dispatchedAt: dispatchTimeIso(30),
+        })
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: {
+            handle: vi.fn(async () => ({
+              success: true,
+              status: 'generating', // mid-turn — must not be completed
+              messages: [{ role: 'assistant', content: 'still working…', timestamp: 1_700_000_000_000 - 5_000 }],
+            })),
+          },
+        } as any
+
+        await runMeshReconcileTick(components)
+
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')
+        expect(completed).toBeFalsy()
+        // The dispatch stays active (non-terminal) for a future reconcile.
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
       } finally {
         cleanup(meshId)
       }

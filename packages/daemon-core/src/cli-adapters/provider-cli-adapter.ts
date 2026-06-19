@@ -952,6 +952,8 @@ export class ProviderCliAdapter implements CliAdapter {
             errorMessage: this.parseErrorMessage || this.engine.providerErrorMessage || undefined,
             errorReason: this.parseErrorMessage ? 'parse_error' : (this.engine.providerErrorReason || undefined),
             providerSessionId: this.providerSessionId || undefined,
+            lastOutputAt: this.lastOutputAt,
+            lastScreenChangeAt: this.lastScreenChangeAt,
             ...(bufferState ? { bufferState } : {}),
         };
     }

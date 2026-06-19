@@ -55,6 +55,10 @@ import {
     expireStaleUnresolvedDelegateForwards,
 } from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
+import { getActiveDirectDispatches } from './mesh-work-queue.js';
+import { reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
+import { extractFinalAssistantSummaryEvidence } from '../providers/chat-message-normalization.js';
+import type { ChatMessage } from '../types.js';
 
 // Default reconcile cadence. approval/completion notifications to a live CLI
 // coordinator land within at most one interval. Overridable via env for tuning.
@@ -281,6 +285,31 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         }
     }
 
+    // ── PHASE 4: synthesize lost completions for unterminated direct dispatches ─
+    // Symmetric to PHASE 3 (which recovers a *lost claim* for a newly-idle session)
+    // but for the opposite gap: a worker that ALREADY completed, went idle, and
+    // whose terminal completion event was never persisted (dropped before reaching
+    // the queue/outbox, or its forward was lost). PHASE 1/2/3 can only deliver an
+    // event that exists in a queue — they cannot recover a completion that was
+    // never recorded, so the coordinator keeps believing the worker is generating.
+    //
+    // reconcileDirectDispatchCompletionFromTranscript already synthesizes the
+    // missing terminal event from the worker's transcript, but until now it ran
+    // ONLY when an LLM coordinator polled mesh_status (mcp_mesh_status_transcript_
+    // reconciliation). This phase pulls that same correction onto the daemon timer
+    // so it no longer depends on the LLM polling. The reconcile is idempotent
+    // (hasTerminalLedgerAfterDispatch guards against re-synthesis), so attempting it
+    // every tick for the same dispatch is safe — once a terminal exists it no-ops.
+    for (const mesh of listMeshes()) {
+        const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+        if (!daemonHostsMesh(mesh, selfIds)) continue;
+        try {
+            await reconcileUnterminatedDirectDispatches(components, mesh, selfIds, localDaemonId);
+        } catch (e: any) {
+            LOG.warn('MeshReconcile', `Completion reconcile failed for mesh ${mesh.id}: ${e?.message || e}`);
+        }
+    }
+
     // ── PHASE 2: inject into live CLI coordinators on this daemon ──────────────
     const coordinators = findLiveCoordinators(components);
     if (coordinators.length === 0) {
@@ -441,6 +470,124 @@ async function pullRemoteNodeQueues(
                     handleMeshForwardEvent(components, payload);
                 } catch { /* best-effort re-inject */ }
             }
+        }
+    }
+}
+
+// Pull the read_chat payload out of whatever envelope the transport returned.
+// A local commandHandler.handle() returns the CommandResult directly; a remote
+// dispatchMeshCommand returns it possibly wrapped in { payload } / { result }.
+function unwrapReadChatPayload(raw: unknown): Record<string, unknown> | null {
+    let cursor: unknown = raw;
+    for (let depth = 0; depth < 4 && cursor && typeof cursor === 'object'; depth++) {
+        const record = cursor as Record<string, unknown>;
+        if (Array.isArray(record.messages)) return record;
+        if (record.payload && typeof record.payload === 'object') { cursor = record.payload; continue; }
+        if (record.result && typeof record.result === 'object') { cursor = record.result; continue; }
+        if (record.data && typeof record.data === 'object') { cursor = record.data; continue; }
+        break;
+    }
+    return cursor && typeof cursor === 'object' ? cursor as Record<string, unknown> : null;
+}
+
+function readChatPayloadStatus(payload: Record<string, unknown> | null): string {
+    return readNonEmptyString(payload?.status).toLowerCase();
+}
+
+// PHASE 4 helper. For every active (non-terminal) direct dispatch this daemon
+// hosts, confirm the worker session is idle via a read_chat and — if a final
+// assistant summary is present but no terminal ledger exists for that dispatch —
+// synthesize the missing completion through reconcileDirectDispatchCompletionFromTranscript.
+//
+// read_chat is resolved against the target node: a node on THIS daemon is read
+// through the local commandHandler; a remote node is read over P2P via
+// dispatchMeshCommand. Both yield the same { messages, status, providerSessionId }
+// shape. We only synthesize when the session reports idle AND a final assistant
+// message exists — the same evidence bar the MCP poll path uses — so an actively
+// generating worker is never falsely completed. The reconcile itself is idempotent.
+async function reconcileUnterminatedDirectDispatches(
+    components: DaemonComponents,
+    mesh: LocalMeshEntry,
+    selfIds: string[],
+    localDaemonId: string | undefined,
+): Promise<void> {
+    const dispatches = getActiveDirectDispatches(mesh.id);
+    if (dispatches.length === 0) return; // cheap exit — nothing dispatched, nothing to reconcile
+
+    const dispatchMeshCommand = components.dispatchMeshCommand;
+    const nodeById = new Map(mesh.nodes.map(n => [n.id, n] as const));
+
+    for (const dispatch of dispatches) {
+        const sessionId = readNonEmptyString(dispatch.sessionId);
+        const nodeId = readNonEmptyString(dispatch.nodeId);
+        const taskId = readNonEmptyString(dispatch.taskId);
+        if (!sessionId || !nodeId || !taskId) continue;
+
+        const node = nodeById.get(nodeId);
+        const nodeDaemonId = readNonEmptyString(node?.daemonId);
+        // A node is local when it has no daemonId, names this daemon, or actually
+        // has a live instance here. Anything else is reached over P2P.
+        const isLocalNode = !nodeDaemonId
+            || selfIds.includes(nodeDaemonId)
+            || (localDaemonId !== undefined && nodeDaemonId === localDaemonId)
+            || !!components.instanceManager.getInstance(sessionId);
+
+        const providerType = readNonEmptyString(dispatch.providerType);
+        const readArgs: Record<string, unknown> = {
+            sessionId,
+            targetSessionId: sessionId,
+            tailLimit: 10,
+            ...(node?.workspace ? { workspace: node.workspace } : {}),
+            ...(providerType ? { agentType: providerType, providerType } : {}),
+        };
+
+        let payload: Record<string, unknown> | null = null;
+        try {
+            if (isLocalNode) {
+                const result = await components.commandHandler.handle('read_chat', readArgs);
+                if (result && (result as { success?: boolean }).success === false) continue;
+                payload = unwrapReadChatPayload(result);
+            } else if (dispatchMeshCommand) {
+                const result = await dispatchMeshCommand(nodeDaemonId, 'read_chat', readArgs);
+                payload = unwrapReadChatPayload(result);
+                if (payload && (payload as { success?: boolean }).success === false) continue;
+            } else {
+                continue; // remote node but no P2P transport — can't read; retry next tick
+            }
+        } catch {
+            continue; // best-effort; session may be gone or node offline — retry next tick
+        }
+        if (!payload) continue;
+
+        // Only act on a session that has actually settled to idle. A generating /
+        // waiting_approval session is mid-turn — synthesizing a completion now would
+        // be wrong. (idle is the only status the MCP poll path reconciles too.)
+        if (readChatPayloadStatus(payload) !== 'idle') continue;
+
+        const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
+        const evidence = extractFinalAssistantSummaryEvidence(messages);
+        if (!evidence.finalSummary) continue; // no assistant result yet — nothing to attribute
+
+        const providerSessionId = readNonEmptyString(payload.providerSessionId);
+        const coordinatorDaemonId = selfIds.find(id => !!id);
+        try {
+            const result = reconcileDirectDispatchCompletionFromTranscript({
+                meshId: mesh.id,
+                nodeId,
+                sessionId,
+                providerType: providerType || undefined,
+                providerSessionId: providerSessionId || undefined,
+                taskId,
+                finalSummary: evidence.finalSummary,
+                ...(evidence.transcriptMessageAt ? { transcriptMessageAt: evidence.transcriptMessageAt } : {}),
+                ...(coordinatorDaemonId ? { targetCoordinatorDaemonId: coordinatorDaemonId } : {}),
+                source: 'daemon_reconcile_transcript_completion',
+            });
+            if (result.reconciled) {
+                LOG.info('MeshReconcile', `Synthesized missing completion (${result.kind}) for task ${taskId} on node ${nodeId} (mesh ${mesh.id})`);
+            }
+        } catch (e: any) {
+            LOG.warn('MeshReconcile', `Transcript completion reconcile threw for task ${taskId}: ${e?.message || e}`);
         }
     }
 }
