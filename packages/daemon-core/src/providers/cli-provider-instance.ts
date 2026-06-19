@@ -1816,6 +1816,14 @@ export class CliProviderInstance implements ProviderInstance {
             workspaceName: typeof event.workspaceName === 'string' && event.workspaceName.trim()
                 ? event.workspaceName
                 : this.workingDir,
+            // Carry the workspace under BOTH `workspace` and `workspaceName` so the
+            // downstream mesh forward/merge path — which reads `workspace` — can
+            // propagate it to the coordinator snapshot. Without `workspace` the live
+            // event path delivers an empty workspace and the dashboard falls back to
+            // the generic "Terminal (Mesh Node)" title.
+            workspace: typeof event.workspace === 'string' && event.workspace.trim()
+                ? event.workspace
+                : this.workingDir,
             providerSessionId: typeof event.providerSessionId === 'string' && event.providerSessionId.trim()
                 ? event.providerSessionId
                 : this.providerSessionId,

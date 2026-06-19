@@ -1399,6 +1399,12 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 meshId: args.meshId,
                 nodeId: eventNodeId || undefined,
                 ...args.metadataEvent,
+                // Ensure a `workspace` field reaches updateMeshOwnedSession even when the
+                // worker provider event only carried `workspaceName`. The merge spread of
+                // metadataEvent above wins when it already has a non-empty `workspace`.
+                workspace: readNonEmptyString(args.metadataEvent.workspace)
+                    || readNonEmptyString(args.metadataEvent.workspaceName)
+                    || undefined,
             });
         } catch { /* dashboard metadata sync is best-effort */ }
     }
@@ -1814,7 +1820,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         meshId: args.meshId,
         nodeLabel: args.nodeLabel,
         nodeId: args.nodeId || undefined,
-        workspace: readNonEmptyString(args.metadataEvent.workspace),
+        workspace: readNonEmptyString(args.metadataEvent.workspace)
+            || readNonEmptyString(args.metadataEvent.workspaceName),
         metadataEvent: {
             ...args.metadataEvent,
             ...(recoveryContext ? { recoveryContext } : {}),
