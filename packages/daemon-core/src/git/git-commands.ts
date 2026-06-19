@@ -110,7 +110,10 @@ type GitCommandFailure = {
 };
 
 type GitCommandSuccess =
-  | { success: true; status: GitRepoStatus }
+  // reporterPlatform/reporterArch carry the responding daemon's process.platform/
+  // process.arch so a mesh coordinator probing this node over P2P can self-heal the
+  // node's userOverrides.platform/arch (the fields capability-tag routing reads).
+  | { success: true; status: GitRepoStatus; reporterPlatform?: string; reporterArch?: string }
   | { success: true; diffSummary: GitDiffSummary }
   | { success: true; diff: GitFileDiff }
   | { success: true; snapshot: GitSnapshot }
@@ -304,7 +307,15 @@ export async function handleGitCommand(
       if (includeSubmodules !== undefined) statusParams.includeSubmodules = includeSubmodules;
       if (submoduleIgnorePaths && submoduleIgnorePaths.length > 0) statusParams.submoduleIgnorePaths = submoduleIgnorePaths;
       const status = await runService(() => services.getStatus!(statusParams));
-      return 'success' in status ? status : { success: true, status };
+      if ('success' in status) return status;
+      // Carry the responding daemon's real platform/arch alongside the git
+      // status. A mesh coordinator dispatches `git_status` to each member over
+      // P2P on every explicit graph refresh, so this is the recurring live
+      // channel that lets a member self-report its OS to the coordinator — which
+      // stamps it onto the node's userOverrides.platform/arch (the fields
+      // buildMeshNodeCapabilityTags reads). These are siblings of `status`, not
+      // part of GitRepoStatus, so the git payload shape is untouched.
+      return { success: true, status, reporterPlatform: process.platform, reporterArch: process.arch };
     }
 
     case 'git_diff_summary': {

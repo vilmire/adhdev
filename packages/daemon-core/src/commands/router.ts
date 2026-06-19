@@ -426,6 +426,38 @@ function recordInlineMeshDirectGitTruth(
     node.lastSeenAt = updatedAt;
     const repoRoot = readStringValue(nextGit.repoRoot);
     if (repoRoot && !readStringValue(node.repoRoot)) node.repoRoot = repoRoot;
+    // Self-heal per-node platform/arch from the live probe. For a remote member
+    // this is the platform the member daemon reported in its git_status envelope
+    // (threaded through as reporter*); for the local coordinator's own / worktree
+    // nodes the git was computed locally (source 'selected_coordinator_local_git'
+    // ⇒ the workspace lives on THIS machine), so process.platform/process.arch is
+    // the correct value. Stamp into userOverrides — the exact fields
+    // buildMeshNodeCapabilityTags reads — only when absent, so an operator's
+    // explicit override is preserved and the value is corrected once per reconnect
+    // without any migration.
+    const isLocalSource = source === 'selected_coordinator_local_git';
+    const reporterPlatform = readStringValue(git.reporterPlatform) ?? (isLocalSource ? process.platform : null);
+    const reporterArch = readStringValue(git.reporterArch) ?? (isLocalSource ? process.arch : null);
+    stampNodeReporterPlatform(node, reporterPlatform, reporterArch);
+}
+
+/**
+ * Fill node.userOverrides.platform/arch from a live report, but never overwrite a
+ * value that is already present (an operator override or an earlier report). Used
+ * by both the remote-member probe path and the local self-stamp path so the
+ * coordinator advertises each node's real OS instead of falling back to the
+ * coordinator's own process.platform.
+ */
+function stampNodeReporterPlatform(node: any, platform: string | null, arch: string | null): void {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    if (!platform && !arch) return;
+    const overrides = (node.userOverrides && typeof node.userOverrides === 'object' && !Array.isArray(node.userOverrides))
+        ? node.userOverrides as Record<string, unknown>
+        : {};
+    let changed = false;
+    if (platform && !readStringValue(overrides.platform)) { overrides.platform = platform; changed = true; }
+    if (arch && !readStringValue(overrides.arch)) { overrides.arch = arch; changed = true; }
+    if (changed) node.userOverrides = overrides;
 }
 
 function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | undefined {
@@ -1101,9 +1133,17 @@ async function probeRemoteMeshGitStatus(args: {
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), args.timeoutMs)),
     ]) as any;
     const remoteGit = remoteResult?.status ?? remoteResult?.git ?? remoteResult;
-    return remoteGit && typeof remoteGit === 'object' && typeof remoteGit.isGitRepo === 'boolean'
-        ? remoteGit as Record<string, unknown>
-        : null;
+    if (!remoteGit || typeof remoteGit !== 'object' || typeof remoteGit.isGitRepo !== 'boolean') return null;
+    // The member daemon stamps its own platform/arch onto the git_status result
+    // envelope (see git-commands.ts). Reflect them onto the returned git object
+    // under non-colliding reporter* keys so recordInlineMeshDirectGitTruth can
+    // persist them to node.userOverrides without touching the git status shape.
+    const reporterPlatform = readStringValue(remoteResult?.reporterPlatform);
+    const reporterArch = readStringValue(remoteResult?.reporterArch);
+    const git = remoteGit as Record<string, unknown>;
+    if (reporterPlatform) git.reporterPlatform = reporterPlatform;
+    if (reporterArch) git.reporterArch = reporterArch;
+    return git;
 }
 
 /** Number of bounded retries after the initial direct-peer git probe attempt. */

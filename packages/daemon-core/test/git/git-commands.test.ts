@@ -157,6 +157,20 @@ describe('git command skeleton', () => {
     expect(services.getLog).toHaveBeenCalledWith({ workspace, limit: 50, path: undefined, since: undefined, until: undefined });
   });
 
+  it('git_status carries the responding daemon platform/arch so a mesh coordinator can stamp it', async () => {
+    const services: GitCommandServices = { getStatus: vi.fn(async () => status()) };
+    const result = await handleGitCommand('git_status', { workspace }, services) as Record<string, unknown>;
+    // These are siblings of `status`, computed on the daemon that ran the command
+    // (process.platform/process.arch), and become the live channel a coordinator
+    // reads to self-heal node.userOverrides.platform/arch.
+    expect(result.success).toBe(true);
+    expect(result.reporterPlatform).toBe(process.platform);
+    expect(result.reporterArch).toBe(process.arch);
+    // The git status payload itself is untouched (no platform leaking into it).
+    expect(result.status).toMatchObject(status());
+    expect((result.status as Record<string, unknown>).reporterPlatform).toBeUndefined();
+  });
+
   it('bounds git_log and does not pass arbitrary raw args to the service', async () => {
     const getLog = vi.fn(async () => ({
       workspace,

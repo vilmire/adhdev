@@ -165,6 +165,117 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
     ])
   })
 
+  it('stamps a remote member platform/arch (reported via git_status) and the local coordinator self-platform onto userOverrides', async () => {
+    const { buildMeshNodeCapabilityTags } = await import('../../src/mesh/mesh-work-queue.js')
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-platform-stamp-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    // A win32 member daemon answers the coordinator's git_status probe with its
+    // own platform/arch on the result envelope (git-commands.ts adds these).
+    const dispatchMeshCommand = vi.fn(async () => ({
+      status: { ...REMOTE_GIT_STATUS },
+      reporterPlatform: 'win32',
+      reporterArch: 'x64',
+    }))
+    const router = createRouter(dispatchMeshCommand)
+    const inlineMesh = {
+      id: 'mesh_stamp',
+      name: 'ADHDev',
+      coordinator: { preferredNodeId: 'node_local' },
+      nodes: [
+        {
+          id: 'node_local',
+          daemonId: 'daemon-local',
+          machineId: 'machine-local',
+          workspace: localRepo,
+          repoRoot: localRepo,
+          policy: { providerPriority: ['claude-cli'] },
+        },
+        {
+          id: 'node_win',
+          daemonId: 'daemon-remote',
+          machineId: 'machine-remote',
+          workspace: REMOTE_GIT_STATUS.workspace,
+          repoRoot: REMOTE_GIT_STATUS.repoRoot,
+          policy: { providerPriority: ['claude-cli'] },
+        },
+      ],
+    }
+
+    const result: any = await router.execute('get_mesh', {
+      meshId: 'mesh_stamp',
+      inlineMesh,
+      requireDirectPeerTruth: true,
+      refresh: true,
+    })
+    expect(result.success).toBe(true)
+
+    // Remote member: the win32 it reported is stamped onto the node record's
+    // userOverrides (the exact field buildMeshNodeCapabilityTags reads), so the
+    // coordinator (running on this test's process.platform) advertises os=win32.
+    const winNode = result.mesh.nodes.find((node: any) => node.id === 'node_win')
+    expect(winNode.userOverrides).toMatchObject({ platform: 'win32', arch: 'x64' })
+    const winTags = buildMeshNodeCapabilityTags(winNode)
+    expect(winTags).toContain('os=win32')
+    expect(winTags).toContain('arch=x64')
+
+    // Local coordinator node: its git was computed locally, so it self-stamps
+    // process.platform/process.arch instead of being left blank (which would have
+    // it fall back to the coordinator's process.platform anyway, but now it is a
+    // real stored override, surviving for any later non-self read).
+    const localNode = result.mesh.nodes.find((node: any) => node.id === 'node_local')
+    expect(localNode.userOverrides).toMatchObject({ platform: process.platform, arch: process.arch })
+  })
+
+  it('never overwrites an operator-set platform override with a live report', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-router-platform-keep-'))
+    roots.push(root)
+    const localRepo = join(root, 'local')
+    initRepo(localRepo)
+
+    const dispatchMeshCommand = vi.fn(async () => ({
+      status: { ...REMOTE_GIT_STATUS },
+      reporterPlatform: 'win32',
+      reporterArch: 'x64',
+    }))
+    const router = createRouter(dispatchMeshCommand)
+    const result: any = await router.execute('get_mesh', {
+      meshId: 'mesh_keep',
+      inlineMesh: {
+        id: 'mesh_keep',
+        name: 'ADHDev',
+        coordinator: { preferredNodeId: 'node_local' },
+        nodes: [
+          {
+            id: 'node_local',
+            daemonId: 'daemon-local',
+            machineId: 'machine-local',
+            workspace: localRepo,
+            repoRoot: localRepo,
+            policy: {},
+          },
+          {
+            id: 'node_win',
+            daemonId: 'daemon-remote',
+            machineId: 'machine-remote',
+            workspace: REMOTE_GIT_STATUS.workspace,
+            repoRoot: REMOTE_GIT_STATUS.repoRoot,
+            // Operator pinned this node to linux — a live win32 report must NOT win.
+            userOverrides: { platform: 'linux', arch: 'arm64' },
+            policy: {},
+          },
+        ],
+      },
+      requireDirectPeerTruth: true,
+      refresh: true,
+    })
+    expect(result.success).toBe(true)
+    const winNode = result.mesh.nodes.find((node: any) => node.id === 'node_win')
+    expect(winNode.userOverrides).toMatchObject({ platform: 'linux', arch: 'arm64' })
+  })
+
   it('fails closed when bootstrap get_mesh cannot confirm any direct truth', async () => {
     const router = createRouter()
     const result: any = await router.execute('get_mesh', {
