@@ -2226,8 +2226,11 @@ function readProviderPriority(policy: unknown): string[] {
  *     (already folded into capabilityTags; surfaced raw so operators can see
  *     which tags they configured vs. which are auto-advertised).
  *
- * Note: os=/arch= reflect the daemon process that computes the tags (the
- * coordinator), matching the matcher's own behavior — so the exposed set is a
+ * Note: os=/arch= reflect the TARGET node's own machine — for remote member
+ * nodes these come from the platform/arch the member daemon stamped into its
+ * node record at join time (node.userOverrides.platform/arch), falling back to
+ * the local process platform/arch only for the coordinator's own / local
+ * worktree nodes. This matches the matcher's behavior, so the exposed set is a
  * faithful preview of routing, not an independent re-derivation.
  */
 function buildNodeCapabilityExposure(node: LocalMeshNodeEntry): {

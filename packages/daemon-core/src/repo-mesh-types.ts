@@ -398,7 +398,13 @@ export function resolveProviderMaxParallel(
 // ─── Capabilities ───────────────────────────────
 
 export interface RepoMeshNodeCapabilities {
+    /** Node's OS, raw NodeJS.Platform value ("darwin"/"win32"/"linux"). For
+     *  remote member nodes this is stamped by the member daemon at join time
+     *  (its own process.platform) and drives os= capability-tag routing. */
     platform?: string;
+    /** Node's CPU architecture, raw process.arch value ("arm64"/"x64"). Stamped
+     *  by the member daemon at join time; drives arch= capability-tag routing. */
+    arch?: string;
     packageManagers?: string[];
     detectedCommands?: DetectedCommand[];
     canRunLongJobs?: boolean;

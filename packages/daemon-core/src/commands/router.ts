@@ -3303,13 +3303,26 @@ function buildMemberJoinNode(mesh: any, args: any, fallbackDaemonId?: string): R
         : typeof source?.nodeId === 'string' && source.nodeId.trim()
             ? source.nodeId.trim()
             : undefined;
+    const baseOverrides = source?.userOverrides && typeof source.userOverrides === 'object' && !Array.isArray(source.userOverrides)
+        ? source.userOverrides as Record<string, unknown>
+        : {};
+    // This payload is built ON THE MEMBER DAEMON, so process.platform/process.arch
+    // are the member's OWN machine. Stamp them into userOverrides so the host
+    // stores the member's real platform/arch on the node record — the coordinator's
+    // buildMeshNodeCapabilityTags then advertises os=<member-os> instead of the
+    // coordinator's own platform. Only fill values the operator hasn't already set.
+    const userOverrides: Record<string, unknown> = {
+        ...baseOverrides,
+        ...(typeof baseOverrides.platform === 'string' && baseOverrides.platform.trim() ? {} : { platform: process.platform }),
+        ...(typeof baseOverrides.arch === 'string' && baseOverrides.arch.trim() ? {} : { arch: process.arch }),
+    };
     return {
         ...(nodeId ? { id: nodeId } : {}),
         workspace,
         ...(typeof source?.repoRoot === 'string' && source.repoRoot.trim() ? { repoRoot: source.repoRoot.trim() } : {}),
         ...(typeof source?.daemonId === 'string' && source.daemonId.trim() ? { daemonId: source.daemonId.trim() } : fallbackDaemonId ? { daemonId: fallbackDaemonId } : {}),
         ...(typeof source?.machineId === 'string' && source.machineId.trim() ? { machineId: source.machineId.trim() } : {}),
-        userOverrides: source?.userOverrides && typeof source.userOverrides === 'object' && !Array.isArray(source.userOverrides) ? source.userOverrides : {},
+        userOverrides,
         policy: source?.policy && typeof source.policy === 'object' && !Array.isArray(source.policy) ? source.policy : {},
         role: 'member',
     };

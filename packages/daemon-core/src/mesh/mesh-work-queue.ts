@@ -204,8 +204,15 @@ function firstProviderPriority(policy: unknown): string | undefined {
     return raw.find(type => typeof type === 'string' && type.trim())?.trim();
 }
 
+function readNodeOverride(node: { userOverrides?: unknown } | undefined, key: 'platform' | 'arch'): string | null {
+    const overrides = node?.userOverrides;
+    if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return null;
+    const value = (overrides as Record<string, unknown>)[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 export function buildMeshNodeCapabilityTags(
-    node: { capabilities?: unknown; policy?: unknown; isLocalWorktree?: unknown; worktreeBranch?: unknown } | undefined,
+    node: { capabilities?: unknown; policy?: unknown; isLocalWorktree?: unknown; worktreeBranch?: unknown; userOverrides?: unknown } | undefined,
     providerType?: string,
 ): string[] {
     const provider = typeof providerType === 'string' && providerType.trim()
@@ -214,10 +221,21 @@ export function buildMeshNodeCapabilityTags(
     const worktreeBranch = typeof node?.worktreeBranch === 'string' && node.worktreeBranch.trim()
         ? node.worktreeBranch.trim()
         : null;
+    // Per-node platform/arch: prefer the value the remote daemon stamped into
+    // its node record (userOverrides.platform/arch) so a Windows member advertises
+    // os=win32 even though the COORDINATOR computing these tags runs on darwin.
+    // Fall back to process.platform/process.arch only when absent — that covers the
+    // local coordinator node and local worktree nodes, where process.* IS correct.
+    // Vocabulary is raw process.platform/process.arch ("darwin"/"win32"/"linux",
+    // "arm64"/"x64") on both the advertiser and the required_tags matcher, which
+    // compares with plain string equality (nodeSatisfiesRequiredTags) — so this
+    // keeps the win32/darwin/linux vocabulary the matcher already expects.
+    const os = readNodeOverride(node, 'platform') ?? process.platform;
+    const arch = readNodeOverride(node, 'arch') ?? process.arch;
     return normalizeMeshCapabilityTags([
         ...(Array.isArray(node?.capabilities) ? node.capabilities : []),
-        `os=${process.platform}`,
-        `arch=${process.arch}`,
+        `os=${os}`,
+        `arch=${arch}`,
         ...(provider ? [`provider=${provider}`] : []),
         // Worktree nodes automatically expose a "worktree=<branch>" tag so that
         // mesh_enqueue_task with required_tags: ["worktree=<branch>"] routes

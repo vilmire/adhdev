@@ -590,6 +590,49 @@ describe('buildMeshNodeCapabilityTags — worktree tag auto-registration', () =>
     });
 });
 
+describe('buildMeshNodeCapabilityTags — per-node platform/arch (not coordinator)', () => {
+    it('emits the NODE platform/arch from userOverrides (e.g. a win32 member on a darwin coordinator)', () => {
+        const tags = buildMeshNodeCapabilityTags(
+            { userOverrides: { platform: 'win32', arch: 'x64' }, policy: { providerPriority: ['claude-cli'] } },
+            'claude-cli',
+        );
+        expect(tags).toContain('os=win32');
+        expect(tags).toContain('arch=x64');
+        // The coordinator's own process.platform must NOT leak through.
+        expect(tags).not.toContain(`os=${process.platform}`);
+    });
+
+    it('falls back to process.platform/process.arch when the node has no override (local/worktree node)', () => {
+        const tags = buildMeshNodeCapabilityTags(
+            { policy: { providerPriority: ['claude-cli'] } },
+            'claude-cli',
+        );
+        expect(tags).toContain(`os=${process.platform}`);
+        expect(tags).toContain(`arch=${process.arch}`);
+    });
+
+    it('an empty/blank userOverrides platform still falls back to process.platform', () => {
+        const tags = buildMeshNodeCapabilityTags(
+            { userOverrides: { platform: '  ' }, policy: { providerPriority: ['claude-cli'] } },
+            'claude-cli',
+        );
+        expect(tags).toContain(`os=${process.platform}`);
+    });
+
+    it('required_tags os= hard-routes a win32-only task onto the win32 member, not the darwin coordinator', () => {
+        const winMemberTags = buildMeshNodeCapabilityTags(
+            { userOverrides: { platform: 'win32', arch: 'x64' } },
+            'claude-cli',
+        );
+        const localCoordinatorTags = buildMeshNodeCapabilityTags(
+            { userOverrides: { platform: 'darwin', arch: 'arm64' } },
+            'claude-cli',
+        );
+        expect(nodeSatisfiesRequiredTags(['os=win32'], winMemberTags)).toBe(true);
+        expect(nodeSatisfiesRequiredTags(['os=win32'], localCoordinatorTags)).toBe(false);
+    });
+});
+
 describe('buildMeshNodeCapabilityTags — no role= advertising (role affinity removed)', () => {
     const node = (providerRoles: Array<{ providerType: string; maxParallel?: number }>) => ({
         policy: { providerPriority: providerRoles.map(r => r.providerType), providerRoles },
