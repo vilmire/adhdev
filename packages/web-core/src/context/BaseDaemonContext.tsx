@@ -311,12 +311,18 @@ function buildMergedRichEntry(
         preserveMissing: preserveMissingChildSessions,
     })
     const activeChat = mergeActiveChatData(incoming.activeChat, existing.activeChat)
+    // workspace is immutable for a session's lifetime (a new workspace = new launch = new ide.id),
+    // so an empty/undefined incoming.workspace means "unknown", not "cleared". Fill-if-empty here
+    // prevents an idle snapshot that drops workspace from clobbering a good value and flapping the
+    // session tab title between the real workspace name and the 'Terminal (Mesh Node)' fallback.
+    const workspace = incoming.workspace || existing.workspace
     return mergeDaemonVersionFlags(existing, incoming, {
         ...existing,
         ...incoming,
         chats,
         childSessions,
         activeChat,
+        workspace,
         _lastUpdate: now,
     })
 }
@@ -337,9 +343,14 @@ function buildWeakMetadataUpdate(
     }
     if (incoming.chats?.length && !existing.chats?.length) safeUpdate.chats = incoming.chats
 
+    // workspace is handled explicitly below: copyDefinedField only guards against `undefined`,
+    // so a falsy-but-defined incoming.workspace ('') would still clobber a good existing value
+    // and flap the session tab title to the 'Terminal (Mesh Node)' fallback. Keep it out of the
+    // generic loop and apply fill-if-empty (truthy incoming wins; empty incoming preserves existing).
+    if (incoming.workspace) safeUpdate.workspace = incoming.workspace
+
     for (const key of [
         'title',
-        'workspace',
         'providerSessionId',
         'parentSessionId',
         'sessionKind',
