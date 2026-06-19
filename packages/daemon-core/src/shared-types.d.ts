@@ -206,6 +206,14 @@ export interface SessionEntry {
     completionMarker?: string;
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;
+    /**
+     * True owning-daemon id for a session a coordinator synthesises into its own
+     * status snapshot (mesh delegated sessions), so the dashboard attributes it to the
+     * worker node instead of the coordinator daemon hosting the snapshot.
+     */
+    ownerDaemonId?: string;
+    /** True owning-machine display name fallback when the owning daemon is not aggregated. */
+    ownerMachineName?: string;
 }
 /**
  * Compact session metadata stored in UserSessionDO and reused by server-side

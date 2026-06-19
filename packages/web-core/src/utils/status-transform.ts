@@ -242,6 +242,10 @@ export function statusPayloadToEntries(
             cliName: mergedSession.providerName || mergedSession.providerType,
             mode: mergedSession.mode || existingEntry?.mode || 'terminal',
             workspace: mergedSession.workspace || '',
+            // Mesh delegated sessions a coordinator synthesises into its own snapshot carry
+            // the true owning node's attribution so the dashboard shows the worker machine.
+            ...((session as { ownerDaemonId?: string }).ownerDaemonId && { ownerDaemonId: (session as { ownerDaemonId?: string }).ownerDaemonId }),
+            ...((session as { ownerMachineName?: string }).ownerMachineName && { ownerMachineName: (session as { ownerMachineName?: string }).ownerMachineName }),
             activeChat: mergedSession.activeChat,
             ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
             ...(mergedSession.resume !== undefined && { resume: mergedSession.resume }),
@@ -291,6 +295,9 @@ export function statusPayloadToEntries(
             cliName: mergedSession.providerName || mergedSession.providerType,
             mode: 'chat',
             workspace: mergedSession.workspace || '',
+            // See CLI block: carry mesh delegated-session owner attribution.
+            ...((session as { ownerDaemonId?: string }).ownerDaemonId && { ownerDaemonId: (session as { ownerDaemonId?: string }).ownerDaemonId }),
+            ...((session as { ownerMachineName?: string }).ownerMachineName && { ownerMachineName: (session as { ownerMachineName?: string }).ownerMachineName }),
             activeChat: mergedSession.activeChat,
             ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
             ...(mergedSession.runtimeKey !== undefined && { runtimeKey: mergedSession.runtimeKey }),

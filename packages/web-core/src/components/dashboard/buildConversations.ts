@@ -96,8 +96,17 @@ export function getIdeConversationBuildContext(
     options: SharedConversationBuildContextOptions = {},
 ): BuildConversationContext {
     const daemonId = ide.daemonId || ide.id?.split(':')[0] || ide.id;
+    // Mesh delegated sessions are synthesised into the coordinator's snapshot but belong to a
+    // worker node. Honour the per-session owner attribution (resolved owning daemon's machine
+    // name, then an explicit fallback) so the dashboard shows the worker machine rather than the
+    // coordinator's. Falls back to the snapshot daemon's machine for ordinary local sessions.
+    const ownerMachineName = (ide.ownerDaemonId && options.machineNames?.[ide.ownerDaemonId])
+        || ide.ownerMachineName
+        || undefined;
     return {
-        machineName: (ide.daemonId && options.machineNames?.[ide.daemonId]) || undefined,
+        machineName: ownerMachineName
+            || (ide.daemonId && options.machineNames?.[ide.daemonId])
+            || undefined,
         connectionState: options.connectionStates
             ? (options.connectionStates[daemonId] || options.defaultConnectionState || 'new')
             : options.defaultConnectionState,

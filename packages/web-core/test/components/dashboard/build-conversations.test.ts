@@ -331,4 +331,69 @@ describe('build conversations shared context', () => {
             { role: 'assistant', content: 'Existing reply', receivedAt: 1000 },
         ])
     })
+
+    it('attributes a mesh delegated session to the owning worker daemon machine, not the coordinator', () => {
+        // Entry lives under the coordinator's daemonId (machine-1) but carries owner attribution
+        // for the worker daemon (machine-2 = Windows node).
+        const meshSession = createIdeEntry({
+            id: 'machine-1:cli:remote-1',
+            daemonId: 'machine-1',
+            sessionId: 'remote-1',
+            type: 'claude-cli',
+            transport: 'pty',
+            cliName: 'Claude Cli',
+            ownerDaemonId: 'machine-2',
+            settings: { meshNodeFor: 'mesh-x', meshNodeId: 'node-win', launchedByCoordinator: true },
+        })
+
+        const context = getIdeConversationBuildContext(meshSession, {
+            machineNames: { 'machine-1': 'Studio Mac', 'machine-2': 'Windows DST' },
+        })
+        // Machine resolves to the worker (machine-2), NOT the coordinator (machine-1).
+        expect(context.machineName).toBe('Windows DST')
+
+        const conversation = buildScopedIdeConversations(meshSession, {
+            machineNames: { 'machine-1': 'Studio Mac', 'machine-2': 'Windows DST' },
+        })[0]
+        expect(conversation?.machineName).toBe('Windows DST')
+        // Mesh node tab keeps its provider identity; title is not a generic "Terminal".
+        expect(conversation?.agentName).toContain('Claude Cli')
+        expect(conversation?.agentName).toContain('(Mesh Node)')
+        expect(conversation?.agentName).not.toContain('Terminal')
+    })
+
+    it('falls back to ownerMachineName when the owning worker daemon is not aggregated', () => {
+        const meshSession = createIdeEntry({
+            id: 'machine-1:cli:remote-2',
+            daemonId: 'machine-1',
+            sessionId: 'remote-2',
+            type: 'claude-cli',
+            transport: 'pty',
+            cliName: 'Claude Cli',
+            ownerDaemonId: 'machine-2',
+            ownerMachineName: 'Windows DST',
+            settings: { meshNodeFor: 'mesh-x', meshNodeId: 'node-win', launchedByCoordinator: true },
+        })
+
+        // machineNames lacks machine-2 (worker daemon not in the aggregate) → use the explicit fallback.
+        const context = getIdeConversationBuildContext(meshSession, {
+            machineNames: { 'machine-1': 'Studio Mac' },
+        })
+        expect(context.machineName).toBe('Windows DST')
+    })
+
+    it('keeps coordinator/local sessions attributed to the snapshot daemon machine', () => {
+        const localCli = createIdeEntry({
+            id: 'machine-1:cli:local-1',
+            daemonId: 'machine-1',
+            sessionId: 'local-1',
+            type: 'claude-cli',
+            transport: 'pty',
+            cliName: 'Claude Cli',
+        })
+        const context = getIdeConversationBuildContext(localCli, {
+            machineNames: { 'machine-1': 'Studio Mac', 'machine-2': 'Windows DST' },
+        })
+        expect(context.machineName).toBe('Studio Mac')
+    })
 })

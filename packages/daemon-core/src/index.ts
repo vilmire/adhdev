@@ -300,7 +300,7 @@ export type { CdpInitializerConfig } from './cdp/initializer.js';
 // ── Commands ──
 export { DaemonCommandHandler } from './commands/handler.js';
 export type { CommandResult, CommandContext } from './commands/handler.js';
-export { DaemonCommandRouter, readCachedInlineMeshActiveSessionDetails } from './commands/router.js';
+export { DaemonCommandRouter, readCachedInlineMeshActiveSessionDetails, resolveMeshNodeAttribution } from './commands/router.js';
 export type { CommandRouterDeps, CommandRouterResult } from './commands/router.js';
 export {
   maybeRunDaemonUpgradeHelperFromEnv,

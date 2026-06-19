@@ -610,6 +610,16 @@ export interface CompactSessionEntry {
     providerControls?: DaemonData['providerControls']
     summaryMetadata?: DaemonData['summaryMetadata']
     activeInteractivePrompt?: InteractivePrompt | null
+    /**
+     * True owning-daemon id for a session that a coordinator synthesises into its own
+     * snapshot (mesh delegated sessions). When present, the expanded entry is attributed
+     * to this daemon instead of the snapshot daemon so the dashboard shows the worker
+     * machine, not the coordinator.
+     */
+    ownerDaemonId?: string
+    /** True owning-machine display name fallback when the owning daemon is not aggregated. */
+    ownerMachineName?: string
+    settings?: Record<string, any>
 }
 
 export interface CompactDaemon {
@@ -771,6 +781,9 @@ export function expandCompactDaemons(
                 agentType: cli.providerType,
                 status: cli.status || 'online',
                 daemonId: d.id,
+                ...(cli.ownerDaemonId && { ownerDaemonId: cli.ownerDaemonId }),
+                ...(cli.ownerMachineName && { ownerMachineName: cli.ownerMachineName }),
+                ...(cli.settings && { settings: cli.settings }),
                 instanceId: cli.id,
                 cliName: cli.providerName,
                 title: cli.title,
@@ -816,6 +829,9 @@ export function expandCompactDaemons(
                 agentType: acp.providerType,
                 status: acp.status || 'online',
                 daemonId: d.id,
+                ...(acp.ownerDaemonId && { ownerDaemonId: acp.ownerDaemonId }),
+                ...(acp.ownerMachineName && { ownerMachineName: acp.ownerMachineName }),
+                ...(acp.settings && { settings: acp.settings }),
                 instanceId: acp.id,
                 cliName: acp.providerName,
                 title: acp.title,

@@ -877,6 +877,22 @@ function readCachedInlineMeshActiveSessions(node: any): string[] {
     return sessionId ? [sessionId] : [];
 }
 
+/**
+ * Resolve the owning-node attribution for a mesh node record so a coordinator can
+ * stamp the TRUE owner onto a synthetic session entry instead of letting the
+ * dashboard fall back to the coordinator's own daemonId. Returns whichever of the
+ * owning node's `daemonId` / display machine name could be read from the node's
+ * (possibly multi-serialization-path) shape; both may be undefined for a node that
+ * never carried machine identity.
+ */
+export function resolveMeshNodeAttribution(node: unknown): { daemonId?: string; machineName?: string } {
+    const record = readObjectRecord(node);
+    return {
+        daemonId: readMeshNodeDaemonId(record),
+        machineName: readMeshNodeDisplayMachineName(record),
+    };
+}
+
 export function readCachedInlineMeshActiveSessionDetails(node: any): Array<Record<string, unknown>> {
     const cachedStatus = readObjectRecord(node?.cachedStatus);
     const activeSession = readObjectRecord(cachedStatus.activeSession);

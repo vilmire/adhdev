@@ -399,6 +399,15 @@ export interface SessionEntry {
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;
     settings?: Record<string, any>;
+    /**
+     * True owning-daemon id for a session a coordinator synthesises into its own
+     * status snapshot (mesh delegated sessions). The dashboard attributes the session
+     * to this daemon instead of the snapshot daemon so the worker node — not the
+     * coordinator — is shown as its machine.
+     */
+    ownerDaemonId?: string;
+    /** True owning-machine display name fallback when the owning daemon is not aggregated. */
+    ownerMachineName?: string;
     /** Set when this session is acting as a mesh coordinator for the given mesh. */
     coordinator?: { meshId: string; role: 'coordinator' };
     meshQueueStats?: {

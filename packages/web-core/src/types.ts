@@ -220,6 +220,14 @@ export interface BaseDaemonData {
     /** @internal Status payload included an explicit sessions list, even if empty. */
     _sessionListAuthoritative?: boolean;
     settings?: Record<string, any>;
+    /**
+     * True owning-daemon id for a session a coordinator synthesises into its own
+     * snapshot (mesh delegated sessions). Used to attribute the session's machine to
+     * the worker node instead of the coordinator daemon hosting the snapshot.
+     */
+    ownerDaemonId?: string;
+    /** True owning-machine display name fallback when the owning daemon is not aggregated. */
+    ownerMachineName?: string;
     /** Set when this session is acting as a mesh coordinator for the given mesh. */
     coordinator?: { meshId: string; role: 'coordinator' };
     meshQueueStats?: {

@@ -550,4 +550,30 @@ describe('statusPayloadToEntries', () => {
             title: 'Meaningful Conversation Title',
         })
     })
+
+    it('carries mesh delegated-session owner attribution from the payload session onto the CLI entry', () => {
+        const entries = statusPayloadToEntries(createPayload({
+            sessions: [
+                createSession({
+                    id: 'remote-1',
+                    transport: 'pty',
+                    providerType: 'claude-cli',
+                    providerName: 'Claude Cli',
+                    // Coordinator-synthesised owner attribution fields.
+                    ownerDaemonId: 'daemon_windows',
+                    ownerMachineName: 'Windows DST',
+                    settings: { meshNodeFor: 'mesh-x', meshNodeId: 'node-win', launchedByCoordinator: true },
+                } as Partial<SessionEntry>),
+            ],
+        }), { daemonId: 'daemon_coordinator' })
+
+        const cliEntry = entries.find(e => e.sessionId === 'remote-1')
+        // Entry stays scoped under the coordinator snapshot for identity coherence …
+        expect(cliEntry?.daemonId).toBe('daemon_coordinator')
+        expect(cliEntry?.id).toBe('daemon_coordinator:cli:remote-1')
+        // … but carries the true owner attribution so the dashboard shows the worker machine.
+        expect(cliEntry?.ownerDaemonId).toBe('daemon_windows')
+        expect(cliEntry?.ownerMachineName).toBe('Windows DST')
+        expect(cliEntry?.settings).toMatchObject({ meshNodeFor: 'mesh-x', meshNodeId: 'node-win' })
+    })
 });

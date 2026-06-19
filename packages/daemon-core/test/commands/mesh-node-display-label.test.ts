@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshNodeDisplayLabel } from '../../src/commands/router.js'
+import { buildMeshNodeDisplayLabel, resolveMeshNodeAttribution } from '../../src/commands/router.js'
 
 describe('buildMeshNodeDisplayLabel', () => {
     it('shortens a Windows backslash workspace to its OS-agnostic basename', () => {
@@ -35,5 +35,36 @@ describe('buildMeshNodeDisplayLabel', () => {
 
     it('falls back to the node id when no workspace/host/provider is known', () => {
         expect(buildMeshNodeDisplayLabel({}, 'node_abcdef', [])).toBe('node_abcdef')
+    })
+})
+
+describe('resolveMeshNodeAttribution', () => {
+    it('reads the owning daemon id and display machine name from a node record', () => {
+        expect(resolveMeshNodeAttribution({
+            daemonId: 'daemon_windows',
+            machineName: 'Windows DST',
+        })).toEqual({ daemonId: 'daemon_windows', machineName: 'Windows DST' })
+    })
+
+    it('reads snake_case / nested machine forms', () => {
+        expect(resolveMeshNodeAttribution({
+            daemon_id: 'daemon_windows',
+            machine: { name: 'Windows DST' },
+        })).toEqual({ daemonId: 'daemon_windows', machineName: 'Windows DST' })
+    })
+
+    it('falls back to hostname for the machine name when no explicit name is present', () => {
+        expect(resolveMeshNodeAttribution({
+            daemonId: 'daemon_windows',
+            hostname: 'dst-win',
+        })).toEqual({ daemonId: 'daemon_windows', machineName: 'dst-win' })
+    })
+
+    it('returns undefined fields for a node carrying no machine identity', () => {
+        expect(resolveMeshNodeAttribution({ id: 'node_x' })).toEqual({ daemonId: undefined, machineName: undefined })
+    })
+
+    it('tolerates a non-object node', () => {
+        expect(resolveMeshNodeAttribution(null)).toEqual({ daemonId: undefined, machineName: undefined })
     })
 })
