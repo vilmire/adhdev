@@ -66,6 +66,14 @@ export interface DaemonBuildBehind {
     isDaemonAffecting: boolean
     /** Distinct package names changed between buildCommit..HEAD (best-effort). */
     affectedPackages?: string[]
+    /**
+     * Stable Change-Impact action key for the detected classification.
+     * 'daemon' → rebuild/redeploy + restart required; 'web' → web redeploy only;
+     * 'none' → no action. Derived from the (config-driven) impact classification.
+     */
+    recommendedAction?: 'daemon' | 'web' | 'none'
+    /** Human-facing recommended command/recipe to act on the impact. */
+    recommendedCommand?: string
     warning: string
 }
 

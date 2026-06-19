@@ -1,6 +1,13 @@
 import type { DaemonBuildBehind, GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './git-types.js';
 import { GIT_STATUS_TIMEOUT_MS, GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
 import { getDaemonBuildInfo, type DaemonBuildInfo } from '../build-info.js';
+import {
+  type ChangeImpactConfig,
+  type ChangeImpactKind,
+  type ChangeImpactTarget,
+  globToRegExp,
+  loadChangeImpactConfig,
+} from './change-impact-config.js';
 
 type ResolvedGitRepo = { workspace: string; repoRoot: string | null; isGitRepo: boolean };
 
@@ -12,9 +19,42 @@ type ResolvedGitRepo = { workspace: string; repoRoot: string | null; isGitRepo: 
  */
 const lastKnownGoodStatus = new Map<string, GitRepoStatus>();
 
+/**
+ * Memoized Change Impact evaluation, keyed by the inputs that can change the
+ * verdict: the scope repo path, the buildCommit..HEAD pair, and the resolved
+ * config source. The daemonBuildBehind probe runs on every mesh_status /
+ * mesh_git_status / fast_forward / git-monitor hit; without this, each hit
+ * re-shells `git diff` for the identical commit range. The cache stays correct
+ * because HEAD or a config edit perturbs the key, forcing re-evaluation.
+ */
+interface ChangeImpactEvalEntry {
+  isDaemonAffecting: boolean;
+  affectedPackages: string[];
+}
+const changeImpactEvalCache = new Map<string, ChangeImpactEvalEntry>();
+
+/**
+ * Best-effort cache of the loaded Change Impact config per repo root, keyed by the
+ * config sourceKey (path+mtime). A new sourceKey (config edited/added/removed)
+ * supersedes the entry. Avoids re-reading + re-parsing the config file on every
+ * status probe while still honoring on-disk edits.
+ */
+interface ChangeImpactConfigCacheEntry {
+  sourceKey: string;
+  config: ChangeImpactConfig | null;
+}
+const changeImpactConfigCache = new Map<string, ChangeImpactConfigCacheEntry>();
+
 /** Test seam: clear the last-known-good status cache between cases. */
 export function __resetGitStatusCacheForTests(): void {
   lastKnownGoodStatus.clear();
+  changeImpactEvalCache.clear();
+  changeImpactConfigCache.clear();
+}
+
+/** Test-only introspection: number of memoized Change Impact evaluations. */
+export function __changeImpactEvalCacheSizeForTests(): number {
+  return changeImpactEvalCache.size;
 }
 
 /**
@@ -43,6 +83,17 @@ export interface GitStatusOptions {
    * (getDaemonBuildInfo) is used.
    */
   daemonBuildInfo?: DaemonBuildInfo;
+  /**
+   * Change Impact policy override. When provided, the daemonBuildBehind
+   * classifier uses this declarative config instead of auto-loading the repo's
+   * `.adhdev/change-impact.*` file. When omitted, getGitRepoStatus auto-loads the
+   * repo config (cached); when neither is present the built-in ADHDev default
+   * policy applies, preserving the legacy behavior exactly.
+   *
+   * Pass `null` to force the built-in default policy and skip auto-loading (used
+   * to assert legacy parity in tests).
+   */
+  changeImpactConfig?: ChangeImpactConfig | null;
 }
 
 interface GitUpstreamProbe {
@@ -177,7 +228,7 @@ async function collectGitRepoStatus(
  * same process surface as the daemon tooling, so it is classified as
  * daemon-affecting (conservative). Unknown package → daemon-affecting.
  */
-const DAEMON_RUNTIME_PACKAGES = new Set([
+const DEFAULT_DAEMON_RUNTIME_PACKAGES = [
   'daemon-core',
   'daemon-standalone',
   'session-host-core',
@@ -187,14 +238,66 @@ const DAEMON_RUNTIME_PACKAGES = new Set([
   'terminal-mux-cli',
   'ghostty-vt-node',
   'mcp-server',
-]);
+];
 
-const WEB_ONLY_PACKAGES = new Set([
+const DEFAULT_WEB_ONLY_PACKAGES = [
   'web-core',
   'web-standalone',
   'web-devconsole',
   'terminal-render-web',
-]);
+];
+
+/**
+ * Built-in recommended action/command per impact classification. A change-impact
+ * config may override any of these via `impactTargets`; missing keys fall back here.
+ */
+const DEFAULT_IMPACT_TARGETS: Record<ChangeImpactKind, ChangeImpactTarget> = {
+  daemon: {
+    recommendedCommand: 'Redeploy + restart the daemon (a local dist rebuild alone does not update a cloud daemon).',
+  },
+  web: {
+    recommendedCommand: 'Redeploy the web app (no daemon restart required).',
+  },
+  none: {
+    recommendedCommand: 'No action required.',
+  },
+};
+
+/**
+ * The resolved Change Impact policy: the built-in ADHDev defaults merged with any
+ * config override. This is what the classifier consults — git-status only knows the
+ * facts (changed files/packages), policy is data.
+ */
+interface ResolvedChangeImpactPolicy {
+  daemonRuntimePackages: Set<string>;
+  webOnlyPackages: Set<string>;
+  /** Compiled config globs for additional non-runtime root files (on top of built-ins). */
+  nonRuntimeRootFilePatterns: RegExp[];
+  impactTargets: Record<ChangeImpactKind, ChangeImpactTarget>;
+}
+
+function resolveChangeImpactPolicy(config: ChangeImpactConfig | null | undefined): ResolvedChangeImpactPolicy {
+  // A field provided in config REPLACES the built-in default for that field; an
+  // omitted field falls back to the ADHDev default, so a repo with no config (or a
+  // partial config) behaves exactly as before.
+  const daemonRuntimePackages = new Set(
+    config?.daemonRuntimePackages && config.daemonRuntimePackages.length
+      ? config.daemonRuntimePackages
+      : DEFAULT_DAEMON_RUNTIME_PACKAGES,
+  );
+  const webOnlyPackages = new Set(
+    config?.webOnlyPackages && config.webOnlyPackages.length
+      ? config.webOnlyPackages
+      : DEFAULT_WEB_ONLY_PACKAGES,
+  );
+  const nonRuntimeRootFilePatterns = (config?.nonRuntimeRootFilePatterns || []).map(globToRegExp);
+  const impactTargets: Record<ChangeImpactKind, ChangeImpactTarget> = {
+    daemon: config?.impactTargets?.daemon ?? DEFAULT_IMPACT_TARGETS.daemon,
+    web: config?.impactTargets?.web ?? DEFAULT_IMPACT_TARGETS.web,
+    none: config?.impactTargets?.none ?? DEFAULT_IMPACT_TARGETS.none,
+  };
+  return { daemonRuntimePackages, webOnlyPackages, nonRuntimeRootFilePatterns, impactTargets };
+}
 
 /**
  * Root-level (non-package) files that demonstrably cannot change what the daemon
@@ -210,8 +313,11 @@ const WEB_ONLY_PACKAGES = new Set([
  * real-world case (e.g. `.verify-patch-equiv-rc292`), so they are matched broadly;
  * docs are matched by the `docs/` prefix or a markdown/text-doc extension at a
  * filename we recognize as documentation (README/CHANGELOG/LICENSE/NOTICE).
+ *
+ * Config-supplied `nonRuntimeRootFilePatterns` are matched in ADDITION to these
+ * built-ins, so a repo can extend (never narrow) the benign set declaratively.
  */
-function isNonRuntimeRootFile(file: string): boolean {
+function isNonRuntimeRootFile(file: string, policy: ResolvedChangeImpactPolicy): boolean {
   const base = file.slice(file.lastIndexOf('/') + 1);
   // Verify/convergence markers: dotfiles whose name signals a transient marker.
   if (/^\.(?:verify|marker|converge|ff-verify|patch-equiv|live-verify)\b/i.test(base)) return true;
@@ -221,19 +327,24 @@ function isNonRuntimeRootFile(file: string): boolean {
   if (/^(?:README|CHANGELOG|LICENSE|NOTICE|AUTHORS|CONTRIBUTING|CODEOWNERS)(?:\.[A-Za-z0-9]+)?$/i.test(base)) {
     return true;
   }
+  // Config-declared additional non-runtime root globs.
+  for (const re of policy.nonRuntimeRootFilePatterns) {
+    if (re.test(file)) return true;
+  }
   return false;
 }
 
 /**
  * Determine whether the changes between buildCommit..HEAD touch any daemon-runtime
- * package. Returns isDaemonAffecting:true conservatively when the changed-file set
- * can't be obtained or any changed path is outside the known web-only package set
- * AND is not a recognized non-runtime root file (marker/doc/license).
+ * package, per the resolved policy. Returns isDaemonAffecting:true conservatively
+ * when the changed-file set can't be obtained or any changed path is outside the
+ * known web-only package set AND is not a recognized non-runtime root file.
  */
 async function classifyDaemonBuildChange(
   repoPath: string,
   buildCommit: string,
   options: GitStatusOptions,
+  policy: ResolvedChangeImpactPolicy,
 ): Promise<{ isDaemonAffecting: boolean; affectedPackages: string[] }> {
   try {
     const diff = await runGit(repoPath, ['diff', '--name-only', `${buildCommit}..HEAD`], options);
@@ -254,7 +365,7 @@ async function classifyDaemonBuildChange(
     for (const file of files) {
       const match = file.match(/(?:^|\/)packages\/([^/]+)\//);
       if (!match) {
-        if (!isNonRuntimeRootFile(file)) sawRuntimeAmbiguousNonPackage = true;
+        if (!isNonRuntimeRootFile(file, policy)) sawRuntimeAmbiguousNonPackage = true;
         continue;
       }
       pkgs.add(match[1]);
@@ -267,12 +378,52 @@ async function classifyDaemonBuildChange(
     // file changed) — i.e. nothing runtime-ambiguous remains.
     const allBenign =
       !sawRuntimeAmbiguousNonPackage &&
-      affectedPackages.every((p) => WEB_ONLY_PACKAGES.has(p) && !DAEMON_RUNTIME_PACKAGES.has(p));
+      affectedPackages.every((p) => policy.webOnlyPackages.has(p) && !policy.daemonRuntimePackages.has(p));
     return { isDaemonAffecting: !allBenign, affectedPackages };
   } catch {
     // diff probe failed → can't prove web-only; stay conservative.
     return { isDaemonAffecting: true, affectedPackages: [] };
   }
+}
+
+/**
+ * Resolve the Change Impact config to apply for this status read. Priority:
+ *   - options.changeImpactConfig === null → force built-in default policy (no load).
+ *   - options.changeImpactConfig provided → use it verbatim (override seam).
+ *   - otherwise → auto-load the repo's `.adhdev/change-impact.*` (cached by sourceKey).
+ * Returns the (possibly null) config plus the sourceKey used for cache invalidation.
+ */
+function resolveChangeImpactConfigForRepo(
+  repoRoot: string | null,
+  options: GitStatusOptions,
+): { config: ChangeImpactConfig | null; sourceKey: string } {
+  if (options.changeImpactConfig === null) {
+    return { config: null, sourceKey: 'forced-default' };
+  }
+  if (options.changeImpactConfig !== undefined) {
+    // Injected override — key it to its content so a different injected config
+    // re-evaluates rather than reusing a prior verdict.
+    let key = 'injected';
+    try {
+      key = `injected:${JSON.stringify(options.changeImpactConfig)}`;
+    } catch {
+      // Non-serializable override (shouldn't happen) — fall back to a constant key.
+    }
+    return { config: options.changeImpactConfig, sourceKey: key };
+  }
+  if (!repoRoot) {
+    return { config: null, sourceKey: 'no-repo-root' };
+  }
+  const loaded = loadChangeImpactConfig(repoRoot);
+  const cached = changeImpactConfigCache.get(repoRoot);
+  if (cached && cached.sourceKey === loaded.sourceKey) {
+    return { config: cached.config, sourceKey: loaded.sourceKey };
+  }
+  // An invalid config is conservatively ignored (built-in default policy applies),
+  // mirroring the "fail safe" rule — never let a malformed config silence warnings.
+  const config = loaded.sourceType === 'repo_file' ? loaded.config ?? null : null;
+  changeImpactConfigCache.set(repoRoot, { sourceKey: loaded.sourceKey, config });
+  return { config, sourceKey: loaded.sourceKey };
 }
 
 async function detectDaemonBuildBehind(
@@ -282,6 +433,9 @@ async function detectDaemonBuildBehind(
 ): Promise<DaemonBuildBehind | undefined> {
   const build = options.daemonBuildInfo ?? getDaemonBuildInfo();
   if (!build.commit || build.commit === 'unknown') return undefined;
+
+  const { config, sourceKey: configKey } = resolveChangeImpactConfigForRepo(repo.repoRoot, options);
+  const policy = resolveChangeImpactPolicy(config);
 
   // Check the root repo first, then each submodule. The daemon build commit is
   // baked from the daemon-core (oss submodule) HEAD, so on an adhdev
@@ -307,12 +461,22 @@ async function detectDaemonBuildBehind(
       // Inspect WHICH packages changed in buildCommit..HEAD. A daemon rebuild/restart
       // is only actually required when a daemon-runtime package changed; if only web /
       // render packages changed, the daemon is unaffected and just the web deploy is
-      // pending. Conservative: any probe failure → treat as daemon-affecting.
-      const { isDaemonAffecting, affectedPackages } = await classifyDaemonBuildChange(
-        repoPath,
-        build.commit,
-        options,
-      );
+      // pending. Conservative: any probe failure → treat as daemon-affecting. The
+      // verdict is memoized on (repoPath, buildCommit, head, config) to suppress
+      // re-evaluation on the hot status path.
+      const evalKey = `${repoPath} ${build.commit} ${head} ${configKey}`;
+      let evaluated = changeImpactEvalCache.get(evalKey);
+      if (!evaluated) {
+        evaluated = await classifyDaemonBuildChange(repoPath, build.commit, options, policy);
+        changeImpactEvalCache.set(evalKey, evaluated);
+      }
+      const { isDaemonAffecting, affectedPackages } = evaluated;
+      const kind: ChangeImpactKind = isDaemonAffecting
+        ? 'daemon'
+        : affectedPackages.length > 0
+          ? 'web'
+          : 'none';
+      const target = policy.impactTargets[kind];
       const scopeLabel = scope === 'root' ? 'workspace' : scope;
       const benignDetail = affectedPackages.length > 0
         ? `only web packages changed (${affectedPackages.join(', ')})`
@@ -330,6 +494,8 @@ async function detectDaemonBuildBehind(
         scope,
         isDaemonAffecting,
         ...(affectedPackages && affectedPackages.length > 0 ? { affectedPackages } : {}),
+        recommendedAction: kind,
+        recommendedCommand: target.recommendedCommand,
         warning,
       };
     } catch {

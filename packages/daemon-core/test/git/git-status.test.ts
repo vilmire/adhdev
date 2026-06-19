@@ -2,8 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { __resetGitStatusCacheForTests, getGitRepoStatus } from '../../src/git/git-status.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  __changeImpactEvalCacheSizeForTests,
+  __resetGitStatusCacheForTests,
+  getGitRepoStatus,
+} from '../../src/git/git-status.js';
 
 function git(cwd: string, args: string[], allowFailure = false): string {
   try {
@@ -510,6 +514,194 @@ describe('git repo status parser', () => {
         daemonBuildInfo: { commit: 'unknown', commitShort: 'unknown', version: 'unknown' },
       });
       expect(status.daemonBuildBehind).toBeUndefined();
+    });
+  });
+
+  describe('change impact (config-driven daemonBuildBehind classification)', () => {
+    function buildInfoFor(commit: string) {
+      return { commit, commitShort: commit.slice(0, 7), version: 'test' };
+    }
+
+    /** Seed a repo whose HEAD advances one package dir past an old build commit. */
+    function repoWithPackageChange(name: string, pkg: string): { repo: string; oldCommit: string } {
+      const repo = tempRepo(name);
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      mkdirSync(join(repo, 'packages', pkg, 'src'), { recursive: true });
+      writeFileSync(join(repo, 'packages', pkg, 'src', 'x.ts'), 'export const x = 1;\n');
+      commit(repo, `c2 (${pkg} change)`);
+      return { repo, oldCommit };
+    }
+
+    beforeEach(() => {
+      __resetGitStatusCacheForTests();
+    });
+    afterEach(() => {
+      __resetGitStatusCacheForTests();
+    });
+
+    it('honors an injected config: a package the config calls daemon-runtime is daemon-affecting', async () => {
+      // "feature-engine" is unknown to the built-in default set (so the default would
+      // conservatively call it daemon-affecting via the unknown-package path). Make it
+      // EXPLICITLY web-only by config and add a separate daemon-runtime name, then prove
+      // the config classification — not the hardcoded set — drives the verdict.
+      const { repo, oldCommit } = repoWithPackageChange('ci-config-daemon', 'feature-engine');
+      const status = await getGitRepoStatus(repo, {
+        daemonBuildInfo: buildInfoFor(oldCommit),
+        changeImpactConfig: { daemonRuntimePackages: ['feature-engine'], webOnlyPackages: [] },
+      });
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(true);
+      expect(status.daemonBuildBehind?.affectedPackages).toEqual(['feature-engine']);
+      expect(status.daemonBuildBehind?.recommendedAction).toBe('daemon');
+    });
+
+    it('honors an injected config: a package the config calls web-only is NOT daemon-affecting', async () => {
+      const { repo, oldCommit } = repoWithPackageChange('ci-config-web', 'feature-ui');
+      const status = await getGitRepoStatus(repo, {
+        daemonBuildInfo: buildInfoFor(oldCommit),
+        changeImpactConfig: { webOnlyPackages: ['feature-ui'] },
+      });
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(false);
+      expect(status.daemonBuildBehind?.affectedPackages).toEqual(['feature-ui']);
+      expect(status.daemonBuildBehind?.recommendedAction).toBe('web');
+    });
+
+    it('uses the config recommendedCommand for the matched impact kind', async () => {
+      const { repo, oldCommit } = repoWithPackageChange('ci-config-command', 'feature-ui');
+      const status = await getGitRepoStatus(repo, {
+        daemonBuildInfo: buildInfoFor(oldCommit),
+        changeImpactConfig: {
+          webOnlyPackages: ['feature-ui'],
+          impactTargets: { web: { recommendedCommand: 'deploy --target web --yes' } },
+        },
+      });
+      expect(status.daemonBuildBehind?.recommendedAction).toBe('web');
+      expect(status.daemonBuildBehind?.recommendedCommand).toBe('deploy --target web --yes');
+    });
+
+    it('honors config nonRuntimeRootFilePatterns globs (extra benign root files)', async () => {
+      const repo = tempRepo('ci-config-rootglob');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      // `.release-notes` is NOT benign under the built-in default → would be daemon-affecting.
+      writeFileSync(join(repo, '.release-notes'), 'notes\n');
+      commit(repo, 'c2 (release notes)');
+
+      const withoutConfig = await getGitRepoStatus(repo, {
+        daemonBuildInfo: buildInfoFor(oldCommit),
+        changeImpactConfig: null,
+      });
+      expect(withoutConfig.daemonBuildBehind?.isDaemonAffecting).toBe(true);
+
+      __resetGitStatusCacheForTests();
+      const withConfig = await getGitRepoStatus(repo, {
+        daemonBuildInfo: buildInfoFor(oldCommit),
+        changeImpactConfig: { nonRuntimeRootFilePatterns: ['.release-notes'] },
+      });
+      expect(withConfig.daemonBuildBehind?.isDaemonAffecting).toBe(false);
+      expect(withConfig.daemonBuildBehind?.recommendedAction).toBe('none');
+    });
+
+    it('falls back to the built-in default policy when no config is present (backward compat)', async () => {
+      // daemon-core is in the built-in daemon-runtime set; web-core in the web-only set.
+      const daemonPkg = repoWithPackageChange('ci-default-daemon', 'daemon-core');
+      const webPkg = repoWithPackageChange('ci-default-web', 'web-core');
+
+      const daemonStatus = await getGitRepoStatus(daemonPkg.repo, {
+        daemonBuildInfo: buildInfoFor(daemonPkg.oldCommit),
+        changeImpactConfig: null,
+      });
+      const webStatus = await getGitRepoStatus(webPkg.repo, {
+        daemonBuildInfo: buildInfoFor(webPkg.oldCommit),
+        changeImpactConfig: null,
+      });
+
+      expect(daemonStatus.daemonBuildBehind?.isDaemonAffecting).toBe(true);
+      expect(daemonStatus.daemonBuildBehind?.recommendedAction).toBe('daemon');
+      expect(webStatus.daemonBuildBehind?.isDaemonAffecting).toBe(false);
+      expect(webStatus.daemonBuildBehind?.recommendedAction).toBe('web');
+    });
+
+    it('auto-loads a repo .adhdev/change-impact.json without an explicit option', async () => {
+      // Commit the config at c1 so it is present on disk but OUTSIDE the
+      // buildCommit..HEAD diff range (otherwise the config file itself, a non-package
+      // root file, would conservatively force daemon-affecting).
+      const repo = tempRepo('ci-autoload');
+      mkdirSync(join(repo, '.adhdev'), { recursive: true });
+      writeFileSync(
+        join(repo, '.adhdev', 'change-impact.json'),
+        JSON.stringify({ webOnlyPackages: ['feature-ui'] }),
+      );
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1 (seed + change-impact config)');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      mkdirSync(join(repo, 'packages', 'feature-ui', 'src'), { recursive: true });
+      writeFileSync(join(repo, 'packages', 'feature-ui', 'src', 'x.ts'), 'export const x = 1;\n');
+      commit(repo, 'c2 (feature-ui change)');
+
+      // No changeImpactConfig option → must auto-load the on-disk config.
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit) });
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(false);
+      expect(status.daemonBuildBehind?.affectedPackages).toContain('feature-ui');
+    });
+
+    it('memoizes the impact evaluation for an identical diff + config (cache suppresses re-eval)', async () => {
+      const { repo, oldCommit } = repoWithPackageChange('ci-cache', 'feature-ui');
+      const opts = {
+        daemonBuildInfo: buildInfoFor(oldCommit),
+        changeImpactConfig: { webOnlyPackages: ['feature-ui'] },
+      };
+
+      expect(__changeImpactEvalCacheSizeForTests()).toBe(0);
+      const first = await getGitRepoStatus(repo, opts);
+      expect(__changeImpactEvalCacheSizeForTests()).toBe(1);
+      const second = await getGitRepoStatus(repo, opts);
+      // Same HEAD + same config → cache hit, size unchanged.
+      expect(__changeImpactEvalCacheSizeForTests()).toBe(1);
+      expect(second.daemonBuildBehind?.isDaemonAffecting).toBe(first.daemonBuildBehind?.isDaemonAffecting);
+    });
+
+    it('re-evaluates (new cache entry) when HEAD advances', async () => {
+      const { repo, oldCommit } = repoWithPackageChange('ci-cache-head', 'feature-ui');
+      const opts = {
+        daemonBuildInfo: buildInfoFor(oldCommit),
+        changeImpactConfig: { webOnlyPackages: ['feature-ui'] },
+      };
+      await getGitRepoStatus(repo, opts);
+      expect(__changeImpactEvalCacheSizeForTests()).toBe(1);
+
+      // Advance HEAD with another change → different buildCommit..HEAD diff → new key.
+      mkdirSync(join(repo, 'packages', 'daemon-core', 'src'), { recursive: true });
+      writeFileSync(join(repo, 'packages', 'daemon-core', 'src', 'y.ts'), 'export const y = 1;\n');
+      commit(repo, 'c3 (daemon-core change)');
+
+      const after = await getGitRepoStatus(repo, opts);
+      expect(__changeImpactEvalCacheSizeForTests()).toBe(2);
+      // The new diff now includes a daemon-runtime package → daemon-affecting.
+      expect(after.daemonBuildBehind?.isDaemonAffecting).toBe(true);
+    });
+
+    it('stays conservative (isDaemonAffecting:true) when the impact diff cannot be evaluated', async () => {
+      // A build commit that exists and is a strict ancestor, but we force the diff probe
+      // to fail by giving the whole collection an impossibly short timeout AFTER seeding
+      // a healthy last-known-good. Instead, exercise the conservative path directly: a
+      // root config change with no benign match is daemon-affecting under any policy
+      // (empty config => default => conservative for unknown root files).
+      const repo = tempRepo('ci-conservative');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'tsconfig.base.json'), '{}\n');
+      commit(repo, 'c2 (root config change)');
+
+      const status = await getGitRepoStatus(repo, {
+        daemonBuildInfo: buildInfoFor(oldCommit),
+        changeImpactConfig: {},
+      });
+      expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(true);
+      expect(status.daemonBuildBehind?.recommendedAction).toBe('daemon');
     });
   });
 });

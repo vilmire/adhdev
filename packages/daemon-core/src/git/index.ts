@@ -26,6 +26,20 @@ export type { GitCommandResult as GitExecutorCommandResult, GitExecutorOptions, 
 export { getGitRepoStatus, parsePorcelainV2Status } from './git-status.js';
 export type { GitStatusOptions } from './git-status.js';
 
+export {
+  CHANGE_IMPACT_CONFIG_LOCATIONS,
+  CHANGE_IMPACT_CONFIG_SCHEMA,
+  globToRegExp,
+  loadChangeImpactConfig,
+  validateChangeImpactConfig,
+} from './change-impact-config.js';
+export type {
+  ChangeImpactConfig,
+  ChangeImpactConfigLoadResult,
+  ChangeImpactKind,
+  ChangeImpactTarget,
+} from './change-impact-config.js';
+
 export { getGitDiffSummary, getGitFileDiff } from './git-diff.js';
 export type { GitDiffOptions, GitFileDiffResult } from './git-diff.js';
 
