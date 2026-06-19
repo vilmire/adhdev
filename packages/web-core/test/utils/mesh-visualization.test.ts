@@ -1,37 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshGraph, formatMeshConnectionSummary, formatMeshConnectionTransport, isMeshGraphStructurallyComplete, meshNodeDisplayLabel } from '../../src/utils/mesh-visualization'
-
-describe('meshNodeDisplayLabel', () => {
-    it('collapses a Windows full-path machineLabel to its basename', () => {
-        expect(meshNodeDisplayLabel({ machineLabel: 'D:\\gh\\adhdev-cloud', workspace: 'D:\\gh\\adhdev-cloud', nodeId: 'node_win' }))
-            .toBe('adhdev-cloud')
-    })
-
-    it('collapses a POSIX full-path machineLabel to its basename', () => {
-        expect(meshNodeDisplayLabel({ machineLabel: '/Users/me/Work/adhdev', workspace: '/Users/me/Work/adhdev', nodeId: 'node_mac' }))
-            .toBe('adhdev')
-    })
-
-    it('keeps a composite "repo · host · provider" machineLabel intact', () => {
-        expect(meshNodeDisplayLabel({ machineLabel: 'adhdev · molt-mac · claude', workspace: '/Users/me/adhdev', nodeId: 'node_x' }))
-            .toBe('adhdev · molt-mac · claude')
-    })
-
-    it('keeps a plain (separator-free) machineLabel intact', () => {
-        expect(meshNodeDisplayLabel({ machineLabel: 'molt-mac', workspace: '/Users/me/adhdev', nodeId: 'node_y' }))
-            .toBe('molt-mac')
-    })
-
-    it('falls back to the workspace basename when no machineLabel is present', () => {
-        expect(meshNodeDisplayLabel({ machineLabel: null, workspace: 'D:\\gh\\adhdev-cloud', nodeId: 'node_z' }))
-            .toBe('adhdev-cloud')
-    })
-
-    it('falls back to the provided fallback (or nodeId) when nothing else is usable', () => {
-        expect(meshNodeDisplayLabel({ machineLabel: null, workspace: '', nodeId: 'node_abcdef' }, 'node_abc')).toBe('node_abc')
-        expect(meshNodeDisplayLabel({ machineLabel: '', workspace: null, nodeId: 'node_abcdef' })).toBe('node_abcdef')
-    })
-})
+import { buildMeshGraph, formatMeshConnectionSummary, formatMeshConnectionTransport, isMeshGraphStructurallyComplete } from '../../src/utils/mesh-visualization'
 
 /** Minimal two-node mesh: a self coordinator + one remote peer with the given connection. */
 function buildConnectionGraph(remoteConnection: Record<string, unknown> | undefined) {

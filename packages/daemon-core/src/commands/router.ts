@@ -85,6 +85,7 @@ import { basename as pathBasename, join as pathJoin, resolve as pathResolve } fr
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
 import { normalizeInteractivePromptResponse } from '../providers/types/interactive-prompt.js';
+import { workingDirBasename } from '../providers/working-dir.js';
 
 type ReleaseChannel = 'stable' | 'preview';
 const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
@@ -223,11 +224,14 @@ function logRepoMeshStatusDebug(event: string, fields: Record<string, unknown>):
 // joinRepoPath + readGitSubmodules moved to @adhdev/mesh-shared (readGitSubmodules)
 // — used via sharedNormalizeGitStatus / sharedPickBestTransitGitStatus below.
 
-function buildMeshNodeDisplayLabel(node: Record<string, unknown>, nodeId: string, providerPriority: string[]): string {
+export function buildMeshNodeDisplayLabel(node: Record<string, unknown>, nodeId: string, providerPriority: string[]): string {
     const explicit = readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias);
     if (explicit) return explicit;
     const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
-    const workspaceName = workspace ? pathBasename(workspace) : undefined;
+    // Use the OS-agnostic basename: a workspace reported by a Windows node
+    // (`D:\gh\adhdev-cloud`) must still collapse to its trailing segment even when
+    // this coordinator's own `path.basename` is POSIX-only and would not split `\`.
+    const workspaceName = workspace ? workingDirBasename(workspace) : undefined;
     const host = readStringValue(node.machineName, node.machine_name, node.hostname, node.host, node.daemonId, node.daemon_id, node.machineId, node.machine_id);
     const provider = providerPriority[0] || (Array.isArray(node.providers) ? readStringValue(...node.providers) : undefined);
     const parts = [workspaceName, host, provider].filter(Boolean);

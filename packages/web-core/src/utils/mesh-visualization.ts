@@ -177,42 +177,6 @@ export interface MeshGraph {
 
 const STALE_SNAPSHOT_MS = 5 * 60 * 1000
 
-/**
- * OS-agnostic basename. Windows nodes report workspaces like `D:\gh\adhdev-cloud`;
- * a coordinator running on POSIX would leave such a string un-split because
- * `path.basename` there does not treat `\` as a separator. Split on both
- * separators so Windows full paths collapse to the trailing segment too.
- */
-function osAgnosticBasename(value: string): string {
-    const trimmed = value.replace(/[\\/]+$/, '')
-    const parts = trimmed.split(/[\\/]/).filter(Boolean)
-    return parts[parts.length - 1] || trimmed
-}
-
-/**
- * Resolve the short, human-friendly label for a mesh graph node. Prefers an
- * explicit machine label/nickname when available, but if that label still looks
- * like a filesystem path (e.g. a Windows full path that escaped basename
- * normalisation upstream) we collapse it to its OS-agnostic basename so the
- * graph stays readable. Falls back to the workspace basename, then the node id.
- */
-export function meshNodeDisplayLabel(
-    nodeStatus: { machineLabel?: string | null; workspace?: string | null; nodeId: string },
-    fallback?: string,
-): string {
-    const explicit = typeof nodeStatus.machineLabel === 'string' ? nodeStatus.machineLabel.trim() : ''
-    if (explicit) {
-        // A composite label ("repo · host · provider") is already clean — only
-        // collapse when the whole label is a bare path (contains a separator and
-        // no " · " composition markers).
-        const looksLikeBarePath = /[\\/]/.test(explicit) && !explicit.includes(' · ')
-        return looksLikeBarePath ? osAgnosticBasename(explicit) : explicit
-    }
-    const workspace = typeof nodeStatus.workspace === 'string' ? nodeStatus.workspace.trim() : ''
-    if (workspace) return osAgnosticBasename(workspace)
-    return fallback ?? nodeStatus.nodeId
-}
-
 function readNodeDaemonId(node: RepoMeshNodeStatus): string | null {
     return typeof node.daemonId === 'string' && node.daemonId.trim() ? node.daemonId.trim() : null
 }
@@ -657,7 +621,7 @@ function assessSnapshotCompleteness(args: {
 } {
     const { nodeStatus, expectedSubmodulePaths, refreshedAtMs } = args
     const snapshotWarnings: string[] = []
-    const label = meshNodeDisplayLabel(nodeStatus)
+    const label = nodeStatus.machineLabel || nodeStatus.nodeId
     const git = nodeStatus.git
 
     if (!git) {
@@ -755,7 +719,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
-            label: meshNodeDisplayLabel(nodeStatus, nodeStatus.nodeId.slice(0, 8)),
+            label: nodeStatus.machineLabel || nodeStatus.nodeId.slice(0, 8),
             workspace: nodeStatus.workspace,
             branch,
             upstream: git?.upstream ?? null,

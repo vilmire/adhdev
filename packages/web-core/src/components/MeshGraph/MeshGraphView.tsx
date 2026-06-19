@@ -334,9 +334,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         ? 'default branch anchor'
         : isSubmoduleNode
             ? node.submodulePath || 'submodule checkout'
-            // The node title already shows the (path-normalised) machine label; keep the
-            // subtitle to locality only so a Windows full-path machineLabel never leaks here.
-            : formatLocality(node.locality) || node.workspace
+            : [node.machineLabel, formatLocality(node.locality)].filter(Boolean).join(' · ') || node.workspace
     const shortCommit = node.submoduleCommit ? node.submoduleCommit.slice(0, 7) : null
     const attentionBadge = getMeshGraphAttentionBadge(node)
     const calloutText = getMeshGraphCalloutText(node)
