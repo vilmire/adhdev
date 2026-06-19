@@ -18,6 +18,8 @@ vi.mock('../../src/config/config.js', () => ({
 import {
     enqueueTask,
     getQueue,
+    claimNextTask,
+    updateTaskStatus,
     resolveTaskAffinityRequiredTags,
     buildMeshNodeCapabilityTags,
     nodeSatisfiesRequiredTags,
@@ -270,5 +272,144 @@ describe('mergeMeshPolicy — taskAffinity normalization', () => {
     it('drops an entirely empty taskAffinity block (no-op normalization)', () => {
         updateMesh(meshId, { policy: { taskAffinity: { byTaskMode: {}, customRoles: [] } } });
         expect(getMesh(meshId)!.policy.taskAffinity).toBeUndefined();
+    });
+});
+
+// ─── End-to-end runtime routing: injected role tag actually gates the claim ──
+//
+// The injection tests above prove enqueueTask STAMPS role=<role> onto the task.
+// These tests prove the stamp is ENFORCED at claim time — a session whose node
+// does not advertise the resolved role cannot pull the task, and the right
+// role node can. This is the runtime half of role affinity (injection → claim).
+
+describe('role affinity — runtime claim gating (end-to-end)', () => {
+    let meshId: string;
+
+    function addRoleNode(role: string, providerType = 'claude-cli'): string {
+        const node = addNode(meshId, {
+            workspace: `/tmp/ws-${role}-${randomUUID().slice(0, 8)}`,
+            policy: { providerRoles: [{ providerType, role }] },
+        });
+        return node!.id;
+    }
+
+    // The capability tags a real session would present when claiming, derived from
+    // the node's declared role (exactly what the dispatcher computes at claim time).
+    function nodeClaimTags(role: string, providerType = 'claude-cli'): string[] {
+        return buildMeshNodeCapabilityTags(
+            { policy: { providerRoles: [{ providerType, role }] } },
+            providerType,
+        );
+    }
+
+    beforeEach(() => {
+        const mesh = createMesh({ name: 'affinity-claim-mesh', repoIdentity: `id_${randomUUID().slice(0, 8)}` });
+        meshId = mesh.id;
+        __clearMeshQueueForTests(meshId);
+    });
+
+    afterEach(() => {
+        __clearMeshQueueForTests(meshId);
+    });
+
+    it('a code_change task (role=coder) is claimable by the coder node but NOT a validator node', () => {
+        const coderNode = addRoleNode('coder');
+        const validatorNode = addRoleNode('validator');
+
+        const task = enqueueTask(meshId, 'edit src/x.ts', { taskMode: 'code_change' });
+        expect(task.requiredTags).toContain('role=coder');
+
+        // The validator node presents role=validator → it must be refused.
+        const refused = claimNextTask(meshId, validatorNode, 'sess-validator', nodeClaimTags('validator'));
+        expect(refused).toBeNull();
+
+        // The coder node presents role=coder → it claims the task.
+        const claimed = claimNextTask(meshId, coderNode, 'sess-coder', nodeClaimTags('coder'));
+        expect(claimed?.id).toBe(task.id);
+        expect(claimed?.status).toBe('assigned');
+        expect(claimed?.assignedNodeId).toBe(coderNode);
+    });
+
+    it('a validation task (role=validator) routes to the validator node, not the coder node', () => {
+        const coderNode = addRoleNode('coder');
+        const validatorNode = addRoleNode('validator');
+
+        const task = enqueueTask(meshId, 'run the validation suite', { taskMode: 'validation' });
+        expect(task.requiredTags).toContain('role=validator');
+
+        expect(claimNextTask(meshId, coderNode, 'sess-coder', nodeClaimTags('coder'))).toBeNull();
+
+        const claimed = claimNextTask(meshId, validatorNode, 'sess-validator', nodeClaimTags('validator'));
+        expect(claimed?.id).toBe(task.id);
+        expect(claimed?.assignedNodeId).toBe(validatorNode);
+    });
+
+    it('SOFT fallback task (no role node) is claimable by ANY node', () => {
+        // No node advertises role=coder, so injection is skipped and the task stays
+        // role-unconstrained → least_loaded fallback lets any session claim it.
+        const plainNode = addNode(meshId, { workspace: `/tmp/ws-plain-${randomUUID().slice(0, 8)}` })!.id;
+        const task = enqueueTask(meshId, 'edit src/x.ts', { taskMode: 'code_change' });
+        expect(task.requiredTags).toEqual([]);
+
+        const claimed = claimNextTask(meshId, plainNode, 'sess-plain', nodeClaimTags('anything'));
+        expect(claimed?.id).toBe(task.id);
+    });
+
+    it('multi-provider node: only the selected provider\'s role gates the claim', () => {
+        // One node declares different roles per provider. The claim tags a session
+        // presents depend on which provider it launched. A claude-cli session on this
+        // node presents role=coder; a codex-cli session presents role=validator.
+        const node = addNode(meshId, {
+            workspace: `/tmp/ws-multi-${randomUUID().slice(0, 8)}`,
+            policy: {
+                providerRoles: [
+                    { providerType: 'claude-cli', role: 'coder' },
+                    { providerType: 'codex-cli', role: 'validator' },
+                ],
+            },
+        })!.id;
+
+        const task = enqueueTask(meshId, 'edit src/x.ts', { taskMode: 'code_change' });
+        expect(task.requiredTags).toContain('role=coder');
+
+        // A codex-cli session on this node advertises role=validator → refused.
+        const codexTags = buildMeshNodeCapabilityTags(
+            { policy: { providerRoles: [{ providerType: 'codex-cli', role: 'validator' }] } },
+            'codex-cli',
+        );
+        expect(claimNextTask(meshId, node, 'sess-codex', codexTags)).toBeNull();
+
+        // A claude-cli session on the SAME node advertises role=coder → claims.
+        const claudeTags = buildMeshNodeCapabilityTags(
+            { policy: { providerRoles: [{ providerType: 'claude-cli', role: 'coder' }] } },
+            'claude-cli',
+        );
+        const claimed = claimNextTask(meshId, node, 'sess-claude', claudeTags);
+        expect(claimed?.id).toBe(task.id);
+    });
+
+    it('a custom-role task (config byTaskMode) gates the claim to the custom-role node', () => {
+        updateMesh(meshId, { policy: { taskAffinity: { byTaskMode: { code_change: 'qa-bot' } } } });
+        const qaNode = addRoleNode('qa-bot');
+        const coderNode = addRoleNode('coder');
+
+        const task = enqueueTask(meshId, 'edit src/x.ts', { taskMode: 'code_change' });
+        expect(task.requiredTags).toContain('role=qa-bot');
+
+        expect(claimNextTask(meshId, coderNode, 'sess-coder', nodeClaimTags('coder'))).toBeNull();
+        const claimed = claimNextTask(meshId, qaNode, 'sess-qa', nodeClaimTags('qa-bot'));
+        expect(claimed?.id).toBe(task.id);
+    });
+
+    it('with affinity disabled, a code_change task is claimable by any role node', () => {
+        updateMesh(meshId, { policy: { taskAffinity: { enabled: false } } });
+        const validatorNode = addRoleNode('validator');
+
+        const task = enqueueTask(meshId, 'edit src/x.ts', { taskMode: 'code_change' });
+        expect(task.requiredTags).toEqual([]);
+
+        // No role gate → the validator node (wrong role for code_change) still claims it.
+        const claimed = claimNextTask(meshId, validatorNode, 'sess-validator', nodeClaimTags('validator'));
+        expect(claimed?.id).toBe(task.id);
     });
 });
