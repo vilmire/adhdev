@@ -604,6 +604,11 @@ export function updateNode(
         /** Per-node instruction surfaced in the coordinator prompt. Pass an
          *  empty string or undefined to clear it. */
         systemPrompt?: string;
+        /** Live self-reported platform/arch from the owning daemon's git_status
+         *  envelope. Persisted distinctly from userOverrides (auto-detected, not
+         *  operator intent) so capability-tag os=/arch= self-heals across loads. */
+        reportedPlatform?: string;
+        reportedArch?: string;
     },
 ): LocalMeshNodeEntry | undefined {
     const config = loadMeshConfig();
@@ -614,6 +619,8 @@ export function updateNode(
     if (!node) return undefined;
 
     if (opts.userOverrides) node.userOverrides = { ...node.userOverrides, ...opts.userOverrides };
+    if (opts.reportedPlatform && opts.reportedPlatform.trim()) node.reportedPlatform = opts.reportedPlatform.trim();
+    if (opts.reportedArch && opts.reportedArch.trim()) node.reportedArch = opts.reportedArch.trim();
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
     if (opts.worktreeBootstrap) node.worktreeBootstrap = opts.worktreeBootstrap;
     if (Object.prototype.hasOwnProperty.call(opts, 'systemPrompt')) {

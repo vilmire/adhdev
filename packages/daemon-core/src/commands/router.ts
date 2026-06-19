@@ -407,8 +407,10 @@ function recordInlineMeshDirectGitTruth(
     node: any,
     git: Record<string, unknown>,
     source: 'selected_coordinator_local_git' | 'selected_coordinator_mesh_p2p_git',
-): void {
-    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+): { reporterPlatform: string | null; reporterArch: string | null } {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+        return { reporterPlatform: null, reporterArch: null };
+    }
     const checkedAt = readNumberValue(git.lastCheckedAt) ?? Date.now();
     const updatedAt = new Date(checkedAt).toISOString();
     const nextGit: Record<string, unknown> = {
@@ -439,6 +441,13 @@ function recordInlineMeshDirectGitTruth(
     const reporterPlatform = readStringValue(git.reporterPlatform) ?? (isLocalSource ? process.platform : null);
     const reporterArch = readStringValue(git.reporterArch) ?? (isLocalSource ? process.arch : null);
     stampNodeReporterPlatform(node, reporterPlatform, reporterArch);
+    // Mirror onto the in-memory node's dedicated reporter fields too (distinct
+    // from userOverrides). For a local_config mesh the caller also persists these
+    // to meshes.json via updateNode so the value survives a coordinator restart;
+    // for an inline/cache mesh this keeps the runtime object self-consistent.
+    if (reporterPlatform) node.reportedPlatform = reporterPlatform;
+    if (reporterArch) node.reportedArch = reporterArch;
+    return { reporterPlatform, reporterArch };
 }
 
 /**
@@ -458,6 +467,34 @@ function stampNodeReporterPlatform(node: any, platform: string | null, arch: str
     if (platform && !readStringValue(overrides.platform)) { overrides.platform = platform; changed = true; }
     if (arch && !readStringValue(overrides.arch)) { overrides.arch = arch; changed = true; }
     if (changed) node.userOverrides = overrides;
+}
+
+/**
+ * Persist the live self-reported platform/arch onto the local meshes.json node
+ * record so capability-tag os=/arch= self-heals across coordinator restarts.
+ *
+ * The in-memory stamp done by recordInlineMeshDirectGitTruth lives on the
+ * mesh_status assembly object and is discarded after the response; only a
+ * `local_config` mesh has a backing meshes.json node to write through to. Inline
+ * cache/bootstrap meshes have no local node to update, so we no-op for them.
+ * Fire-and-forget (same pattern as the worktreeBootstrap writer) — a persistence
+ * failure must never block the status response.
+ */
+function persistNodeReporterPlatform(
+    meshSource: 'inline_cache' | 'inline_bootstrap' | 'local_config',
+    mesh: any,
+    nodeId: string | undefined,
+    reporter: { reporterPlatform: string | null; reporterArch: string | null },
+): void {
+    if (meshSource !== 'local_config') return;
+    const meshId = readStringValue(mesh?.id);
+    if (!meshId || !nodeId) return;
+    const reportedPlatform = reporter.reporterPlatform ?? undefined;
+    const reportedArch = reporter.reporterArch ?? undefined;
+    if (!reportedPlatform && !reportedArch) return;
+    void import('../config/mesh-config.js')
+        .then(({ updateNode }) => updateNode(meshId, nodeId, { reportedPlatform, reportedArch }))
+        .catch(() => { /* best-effort self-heal; never block status assembly */ });
 }
 
 function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | undefined {
@@ -1323,7 +1360,8 @@ async function hydrateInlineMeshDirectTruth(args: {
             try {
                 const localGit = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
                 if (localGit?.isGitRepo) {
-                    recordInlineMeshDirectGitTruth(node, localGit as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
+                    const reporter = recordInlineMeshDirectGitTruth(node, localGit as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
+                    persistNodeReporterPlatform(args.meshSource, args.mesh, nodeId, reporter);
                     localConfirmedCount += 1;
                     continue;
                 }
@@ -1375,7 +1413,8 @@ async function hydrateInlineMeshDirectTruth(args: {
             ? await args.probeCache.probe(daemonId, workspace, runProbe)
             : await runProbe();
         if (remoteGit) {
-            recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
+            const reporter = recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
+            persistNodeReporterPlatform(args.meshSource, args.mesh, nodeId, reporter);
             peerConfirmedCount += 1;
             continue;
         }
@@ -9299,7 +9338,8 @@ export class DaemonCommandRouter {
                                         if (!connectionReported || connectionState === 'unknown') {
                                             status.connection = buildLivePeerGitConnection(connection, refreshedAt);
                                         }
-                                        recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
+                                        const reporter = recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
+                                        persistNodeReporterPlatform(meshRecord.source, mesh, nodeId, reporter);
                                         remoteProbeApplied = true;
                                     }
                                 }
@@ -9340,7 +9380,8 @@ export class DaemonCommandRouter {
                                 try {
                                     const gitStatus = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
                                     status.git = gitStatus;
-                                    recordInlineMeshDirectGitTruth(node, gitStatus as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
+                                    const reporter = recordInlineMeshDirectGitTruth(node, gitStatus as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
+                                    persistNodeReporterPlatform(meshRecord.source, mesh, nodeId, reporter);
                                     if (gitStatus.isGitRepo) {
                                         status.health = deriveMeshNodeHealthFromGit(gitStatus as unknown as Record<string, unknown>);
                                     } else {

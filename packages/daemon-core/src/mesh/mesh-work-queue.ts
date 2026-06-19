@@ -385,8 +385,20 @@ function readNodeOverride(node: { userOverrides?: unknown } | undefined, key: 'p
     return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+/**
+ * Live, self-reported platform/arch the owning daemon stamped onto the node from
+ * its own process.platform/process.arch via the git_status envelope. Kept on a
+ * field DISTINCT from userOverrides so capability-tag derivation can prefer an
+ * explicit operator override while still self-healing auto-detected nodes — and
+ * so the value reflects the node's real OS rather than the coordinator's.
+ */
+function readNodeReporter(node: { reportedPlatform?: unknown; reportedArch?: unknown } | undefined, key: 'platform' | 'arch'): string | null {
+    const value = key === 'platform' ? node?.reportedPlatform : node?.reportedArch;
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 export function buildMeshNodeCapabilityTags(
-    node: { capabilities?: unknown; policy?: unknown; isLocalWorktree?: unknown; worktreeBranch?: unknown; userOverrides?: unknown } | undefined,
+    node: { capabilities?: unknown; policy?: unknown; isLocalWorktree?: unknown; worktreeBranch?: unknown; userOverrides?: unknown; reportedPlatform?: unknown; reportedArch?: unknown } | undefined,
     providerType?: string,
 ): string[] {
     const provider = typeof providerType === 'string' && providerType.trim()
@@ -395,17 +407,25 @@ export function buildMeshNodeCapabilityTags(
     const worktreeBranch = typeof node?.worktreeBranch === 'string' && node.worktreeBranch.trim()
         ? node.worktreeBranch.trim()
         : null;
-    // Per-node platform/arch: prefer the value the remote daemon stamped into
-    // its node record (userOverrides.platform/arch) so a Windows member advertises
-    // os=win32 even though the COORDINATOR computing these tags runs on darwin.
-    // Fall back to process.platform/process.arch only when absent — that covers the
-    // local coordinator node and local worktree nodes, where process.* IS correct.
+    // Per-node platform/arch precedence (highest → lowest):
+    //   1. userOverrides.platform/arch — an EXPLICIT operator override always wins.
+    //   2. reportedPlatform/reportedArch — the live OS the owning daemon
+    //      self-reported (its own process.platform/process.arch via the git_status
+    //      envelope), persisted to the node record on each direct probe. This is
+    //      why a Windows member advertises os=win32 even though the COORDINATOR
+    //      computing these tags runs on darwin — without it the consumer reads the
+    //      persistent node (operator userOverrides empty) and would fall straight
+    //      through to the coordinator's own process.platform, mislabeling every
+    //      node os=darwin. We prefer this LIVE value over any stale auto-stamp.
+    //   3. process.platform/process.arch — last-resort fallback, correct only for
+    //      the local coordinator node / local worktree nodes that have not yet
+    //      been probed (their workspace lives on THIS machine anyway).
     // Vocabulary is raw process.platform/process.arch ("darwin"/"win32"/"linux",
     // "arm64"/"x64") on both the advertiser and the required_tags matcher, which
     // compares with plain string equality (nodeSatisfiesRequiredTags) — so this
     // keeps the win32/darwin/linux vocabulary the matcher already expects.
-    const os = readNodeOverride(node, 'platform') ?? process.platform;
-    const arch = readNodeOverride(node, 'arch') ?? process.arch;
+    const os = readNodeOverride(node, 'platform') ?? readNodeReporter(node, 'platform') ?? process.platform;
+    const arch = readNodeOverride(node, 'arch') ?? readNodeReporter(node, 'arch') ?? process.arch;
     return normalizeMeshCapabilityTags([
         ...(Array.isArray(node?.capabilities) ? node.capabilities : []),
         `os=${os}`,

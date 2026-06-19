@@ -533,6 +533,18 @@ export interface LocalMeshNodeEntry {
     /** Operator-defined capability tags used by mesh queue matching. */
     capabilities?: string[];
     userOverrides: Partial<RepoMeshNodeCapabilities>;
+    /**
+     * Live, self-healed platform/arch reported by the daemon that owns this
+     * node's workspace (its own process.platform/process.arch), carried on the
+     * git_status envelope and persisted by the coordinator on each direct git
+     * probe. This is auto-detected truth, kept DISTINCT from `userOverrides`
+     * (operator intent) so capability-tag derivation can prefer an explicit
+     * operator override while still self-correcting auto-detected nodes — and so
+     * a stale value is overwritten by the next report rather than sticking.
+     * Absent until the first direct probe succeeds.
+     */
+    reportedPlatform?: string;
+    reportedArch?: string;
     policy: RepoMeshNodePolicy;
     /**
      * Per-node instruction surfaced in the coordinator prompt so the LLM

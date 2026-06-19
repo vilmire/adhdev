@@ -633,6 +633,65 @@ describe('buildMeshNodeCapabilityTags — per-node platform/arch (not coordinato
     });
 });
 
+describe('buildMeshNodeCapabilityTags — live reportedPlatform/reportedArch self-heal', () => {
+    it('uses the live reportedPlatform when userOverrides is empty (the real bug: stamp was never persisted to userOverrides)', () => {
+        // Persistent node a coordinator reads from meshes.json: operator never set
+        // an override, but the daemon owning the workspace self-reported win32 on
+        // its last direct git probe. Without the reported* fallback this would
+        // mislabel the node as the coordinator's own os.
+        const tags = buildMeshNodeCapabilityTags(
+            { userOverrides: {}, reportedPlatform: 'win32', reportedArch: 'x64', policy: { providerPriority: ['claude-cli'] } },
+            'claude-cli',
+        );
+        expect(tags).toContain('os=win32');
+        expect(tags).toContain('arch=x64');
+        // The coordinator's own process.platform must NOT leak through.
+        expect(tags).not.toContain(`os=${process.platform}`);
+    });
+
+    it('falls back to process.platform when neither userOverrides nor reported* is present', () => {
+        const tags = buildMeshNodeCapabilityTags(
+            { userOverrides: {}, policy: { providerPriority: ['claude-cli'] } },
+            'claude-cli',
+        );
+        expect(tags).toContain(`os=${process.platform}`);
+        expect(tags).toContain(`arch=${process.arch}`);
+    });
+
+    it('preserves an explicit operator userOverrides over the live reported* value', () => {
+        // Operator intent (userOverrides) outranks auto-detected reported* truth.
+        const tags = buildMeshNodeCapabilityTags(
+            {
+                userOverrides: { platform: 'linux', arch: 'arm64' },
+                reportedPlatform: 'win32',
+                reportedArch: 'x64',
+                policy: { providerPriority: ['claude-cli'] },
+            },
+            'claude-cli',
+        );
+        expect(tags).toContain('os=linux');
+        expect(tags).toContain('arch=arm64');
+        expect(tags).not.toContain('os=win32');
+        expect(tags).not.toContain('arch=x64');
+    });
+
+    it('a blank reportedPlatform falls through to process.platform', () => {
+        const tags = buildMeshNodeCapabilityTags(
+            { userOverrides: {}, reportedPlatform: '  ', policy: { providerPriority: ['claude-cli'] } },
+            'claude-cli',
+        );
+        expect(tags).toContain(`os=${process.platform}`);
+    });
+
+    it('required_tags os=win32 hard-routes onto a node known win32 only via reported* (no userOverrides)', () => {
+        const winMemberTags = buildMeshNodeCapabilityTags(
+            { userOverrides: {}, reportedPlatform: 'win32', reportedArch: 'x64' },
+            'claude-cli',
+        );
+        expect(nodeSatisfiesRequiredTags(['os=win32'], winMemberTags)).toBe(true);
+    });
+});
+
 describe('buildMeshNodeCapabilityTags — no role= advertising (role affinity removed)', () => {
     const node = (providerRoles: Array<{ providerType: string; maxParallel?: number }>) => ({
         policy: { providerPriority: providerRoles.map(r => r.providerType), providerRoles },
