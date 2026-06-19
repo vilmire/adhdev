@@ -1233,6 +1233,12 @@ function compactMeshStatusNode(entry: any): any {
     // detail byte-budget; the larger repetition lives in branchConvergenceSummary,
     // which is capped separately. Quiet nodes drop nextStep via minimalCompactNode.
 
+    // capabilityTagsByProvider repeats the os=/arch=/converge= base set once per
+    // provider — heavy and O(nodes × providers). The representative capabilityTags
+    // (kept) already conveys what a node can match; the per-provider breakdown is a
+    // verbose/dashboard concern. Drop it from the compact LLM-facing copy.
+    delete next.capabilityTagsByProvider;
+
     // Generic backstop: elide any other oversized nested blob on the node.
     for (const k of Object.keys(next)) {
         if (k === 'git' || k === 'machine' || k === 'branchConvergence' || k === 'staleDaemonBuild' || k === 'sessions') continue;
@@ -1311,6 +1317,9 @@ function minimalCompactNode(entry: any): any {
         branch: entry.branch,
         launchReady: entry.launchReady,
         ...(entry.providerPriority !== undefined ? { providerPriority: entry.providerPriority } : {}),
+        // Keep the routable tag set on quiet/folded nodes — a coordinator planning
+        // required_tags routing needs it even for nodes with nothing to converge.
+        ...(entry.capabilityTags !== undefined ? { capabilityTags: entry.capabilityTags } : {}),
         ...(entry.launchBlockedReason !== undefined ? { launchBlockedReason: entry.launchBlockedReason } : {}),
         ...(bc ? { branchConvergence: bc } : {}),
         ...(entry.sessionSummary ? { sessionSummary: entry.sessionSummary } : {}),
@@ -2199,6 +2208,52 @@ function readProviderPriority(policy: unknown): string[] {
     return Array.isArray(raw)
         ? raw.map((type: unknown) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
         : [];
+}
+
+/**
+ * Surface the capability tags a node can match against required_tags routing,
+ * plus its operator-defined capability labels. Computed via the same
+ * buildMeshNodeCapabilityTags the queue/dispatch matcher uses, so what the
+ * coordinator sees is exactly what routing will match.
+ *
+ *   - capabilityTags: the representative tag set (os=/arch=/converge= plus the
+ *     first declared provider's provider= tag and any worktree= tag). This is
+ *     what nodeSatisfiesRequiredTags compares against when no provider is pinned.
+ *   - capabilityTagsByProvider: per-provider tag sets, one per entry in the
+ *     node's providerPriority — the provider= tag differs by provider, so a tag
+ *     like provider=codex-cli only matches when that provider is launchable here.
+ *   - capabilities: the operator-defined capability labels persisted on the node
+ *     (already folded into capabilityTags; surfaced raw so operators can see
+ *     which tags they configured vs. which are auto-advertised).
+ *
+ * Note: os=/arch= reflect the daemon process that computes the tags (the
+ * coordinator), matching the matcher's own behavior — so the exposed set is a
+ * faithful preview of routing, not an independent re-derivation.
+ */
+function buildNodeCapabilityExposure(node: LocalMeshNodeEntry): {
+    capabilityTags: string[];
+    capabilityTagsByProvider?: Record<string, string[]>;
+    capabilities?: string[];
+} {
+    const providers = readProviderPriority(node.policy);
+    const capabilityTags = buildMeshNodeCapabilityTags(node);
+    const exposure: {
+        capabilityTags: string[];
+        capabilityTagsByProvider?: Record<string, string[]>;
+        capabilities?: string[];
+    } = { capabilityTags };
+    if (providers.length) {
+        const byProvider: Record<string, string[]> = {};
+        for (const provider of providers) {
+            byProvider[provider] = buildMeshNodeCapabilityTags(node, provider);
+        }
+        exposure.capabilityTagsByProvider = byProvider;
+    }
+    const capabilities = Array.isArray(node.capabilities)
+        ? node.capabilities.filter((tag): tag is string => typeof tag === 'string' && !!tag.trim())
+        : [];
+    if (capabilities.length) exposure.capabilities = capabilities;
+    return exposure;
 }
 
 function readSpawnedSessionVisibility(policy: unknown): 'visible' | 'hidden' {
@@ -3188,6 +3243,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             daemonId: readNodeDaemonId(node),
             machineId: readNodeMachineId(node),
             ...getNodeLaunchReadiness(node),
+            ...buildNodeCapabilityExposure(node),
         };
 
         try {
@@ -3951,6 +4007,7 @@ export async function meshListNodes(ctx: MeshContext): Promise<string> {
             policy: n.policy,
             relatedRepos: readRelatedRepos(n),
             ...getNodeLaunchReadiness(n),
+            ...buildNodeCapabilityExposure(n),
             userOverrides: n.userOverrides,
         })),
     }, null, 2);

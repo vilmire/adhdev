@@ -36,10 +36,69 @@ function loadMeshConfig(): LocalMeshConfig {
     try {
         const raw = JSON.parse(readFileSync(path, 'utf-8'));
         if (!raw || !Array.isArray(raw.meshes)) return { meshes: [] };
-        return raw as LocalMeshConfig;
+        const config = raw as LocalMeshConfig;
+        const migrated = migrateLoadedMeshConfig(config);
+        // Persist eagerly when the on-load migration changed anything, so the
+        // dead field is gone from disk even on a pure-read path (mesh_status /
+        // mesh_list_nodes) that never otherwise mutates the config. Best-effort:
+        // a write failure (e.g. read-only fs) must not break reads, so swallow.
+        if (migrated) {
+            try {
+                saveMeshConfig(config);
+            } catch {
+                // keep the in-memory strip; disk converges on the next mutating op
+            }
+        }
+        return config;
     } catch {
         return { meshes: [] };
     }
+}
+
+/**
+ * In-place migration applied to every loaded meshes.json. Strips data that
+ * outlived the feature that wrote it so the persisted config converges on the
+ * current schema the next time it is saved.
+ *
+ * Currently: drops the dead `role` field from each node policy's providerRoles
+ * entries. providerRoles is retained for its `maxParallel` per-(node, provider)
+ * cap, but the routing `role` was removed (routing is governed solely by
+ * required_tags). A meshes.json written before the removal still carries
+ * `role: "validator"` etc.; this drops it on load so mesh_status / mesh_list_nodes
+ * never surface the dead field and the next saveMeshConfig() persists it gone.
+ *
+ * Returns true when the config was mutated (caller may persist eagerly).
+ */
+function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
+    let changed = false;
+    for (const mesh of config.meshes) {
+        if (!mesh || !Array.isArray(mesh.nodes)) continue;
+        for (const node of mesh.nodes) {
+            if (stripDeadRoleFromProviderRoles(node?.policy)) changed = true;
+        }
+    }
+    return changed;
+}
+
+/**
+ * Drop the legacy `role` field from each providerRoles entry of a node policy,
+ * in place. Keeps providerType + maxParallel (the still-meaningful per-(node,
+ * provider) cap). Defensive against malformed entries — non-object items are
+ * left untouched. Returns true when at least one `role` field was removed.
+ */
+function stripDeadRoleFromProviderRoles(policy: unknown): boolean {
+    if (!policy || typeof policy !== 'object') return false;
+    const roles = (policy as { providerRoles?: unknown }).providerRoles;
+    if (!Array.isArray(roles)) return false;
+    let changed = false;
+    for (const entry of roles) {
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)
+            && Object.prototype.hasOwnProperty.call(entry, 'role')) {
+            delete (entry as Record<string, unknown>).role;
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 function normalizeCapabilityTags(value: unknown): string[] | undefined {
