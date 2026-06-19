@@ -3,7 +3,7 @@ import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
 import { IconMesh, IconX } from '../Icons'
-import { MeshObservabilitySurface } from '../MeshGraph'
+import { MeshObservabilitySurface, MeshSurfaceTabControls, type MeshSurfaceTab } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
@@ -66,6 +66,10 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const { sendData } = useTransport()
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
+    // Hoisted from MeshObservabilitySurface so the Overview/Graph toggle + "?" help
+    // controls can live in the dialog header row instead of taking their own row.
+    const [activeTab, setActiveTab] = useState<MeshSurfaceTab>('overview')
+    const [helpOpen, setHelpOpen] = useState(false)
     const activeConversationLiveSession = useMemo(
         () => buildActiveConversationLiveSessionStatus(activeConv, meshId),
         [
@@ -280,6 +284,13 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                         </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                        <MeshSurfaceTabControls
+                            meshTheme={meshTheme}
+                            activeTab={activeTab}
+                            onActiveTabChange={setActiveTab}
+                            helpOpen={helpOpen}
+                            onHelpOpenChange={setHelpOpen}
+                        />
                         {lastLoadedLabel && (
                             <span className={meshTheme.dialogRefreshedChipClass}>
                                 {refreshing ? 'Refreshing mesh...' : `Refreshed ${lastLoadedLabel}`}
@@ -325,6 +336,11 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             emptyMessage={emptyMessage}
                             daemonId={daemonId}
                             sendDaemonCommand={sendDaemonCommand}
+                            activeTab={activeTab}
+                            onActiveTabChange={setActiveTab}
+                            helpOpen={helpOpen}
+                            onHelpOpenChange={setHelpOpen}
+                            hideControls
                         />
                     ) : (
                         <div className={meshTheme.dialogEmptyClass}>

@@ -5,6 +5,7 @@
 import { useMemo } from 'react'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme } from './meshGraphTheme'
+import { formatMeshConnectionSummary } from '../../utils/mesh-visualization'
 import type { MeshGraphNode } from './types'
 
 interface MeshGraphPanelProps {
@@ -137,6 +138,10 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
 
     const isSubmoduleNode = node.type === 'submoduleNode'
     const headSummary = summarizeHead(node)
+    // Transport (direct/relay) + RTT is no longer drawn inline on the graph canvas —
+    // surface it here in the detail panel instead. Submodule nodes inherit the parent
+    // node's connection, so we skip it for them to avoid duplication.
+    const connectionSummary = !isSubmoduleNode ? formatMeshConnectionSummary(node) : null
 
     return (
         <div className={`${meshTheme.panelShellClass} md:w-64`}>
@@ -170,6 +175,8 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
                 <Field label="Dirty files" value={node.dirtyFiles > 0 ? node.dirtyFiles : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
                 <Field label="Active sessions" value={node.activeSessionCount > 0 ? node.activeSessionCount : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
                 <Field label="Providers" value={!isSubmoduleNode ? (node.providers.join(', ') || null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label="Connection" value={connectionSummary} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label="Link note" value={connectionSummary ? (node.connectionReason ?? null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
                 <Field label="Error" value={node.error ?? null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
             </div>
 

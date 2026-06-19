@@ -27,7 +27,6 @@ import {
     type NodeTypes,
 } from '@xyflow/react'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
-import { formatMeshConnectionTransport } from '../../utils/mesh-visualization'
 import {
     getMeshGraphAttentionBadge,
     getMeshGraphCalloutText,
@@ -153,20 +152,8 @@ function getHealthClasses(node: MeshGraphNode, selected: boolean, isDark: boolea
     }
 }
 
-function getBadgeClasses(kind: 'health' | 'dirty' | 'conflict' | 'orphan' | 'meta' | 'submodule' | 'refineDone' | 'transportDirect' | 'transportRelay' | 'transportDown', isDark: boolean): string {
+function getBadgeClasses(kind: 'health' | 'dirty' | 'conflict' | 'orphan' | 'meta' | 'submodule' | 'refineDone', isDark: boolean): string {
     switch (kind) {
-        case 'transportDirect':
-            return isDark
-                ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200'
-                : 'border-emerald-300 bg-emerald-50 text-emerald-700'
-        case 'transportRelay':
-            return isDark
-                ? 'border-amber-400/25 bg-amber-500/10 text-amber-200'
-                : 'border-amber-300 bg-amber-50 text-amber-700'
-        case 'transportDown':
-            return isDark
-                ? 'border-rose-400/25 bg-rose-500/10 text-rose-200'
-                : 'border-rose-300 bg-rose-50 text-rose-700'
         case 'refineDone':
             return isDark
                 ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200'
@@ -335,28 +322,6 @@ function getLocalityBadgeKind(node: MeshGraphNode): 'meta' | 'health' {
     return node.locality === 'remote' ? 'meta' : 'health'
 }
 
-/**
- * Transport chip for a node: surfaces the P2P link the coordinator uses to reach it
- * (direct = green, relay = amber/slow, disconnected·failed = red). Returns null for
- * the local coordinator and for nodes with no usable transport report yet — those
- * stay represented by the existing locality / connecting badges.
- */
-function getTransportChip(node: MeshGraphNode): { label: string; kind: 'transportDirect' | 'transportRelay' | 'transportDown'; title: string } | null {
-    if (node.connectionTransport === 'local' || node.connectionState === 'self') return null
-    const transport = formatMeshConnectionTransport(node)
-    if (!transport || transport === 'local') return null
-    const rttSuffix = typeof node.connectionRttMs === 'number' ? ` · ${Math.round(node.connectionRttMs)}ms` : ''
-    const reasonSuffix = node.connectionReason ? `\n${node.connectionReason}` : ''
-    if (transport === 'direct') {
-        return { label: `direct${rttSuffix}`, kind: 'transportDirect', title: `P2P link: direct${rttSuffix}${reasonSuffix}` }
-    }
-    if (transport === 'relay') {
-        return { label: `relay${rttSuffix}`, kind: 'transportRelay', title: `P2P link: TURN relay (slower path)${rttSuffix}${reasonSuffix}` }
-    }
-    // connecting / disconnected / failed / closed
-    return { label: transport, kind: 'transportDown', title: `P2P link: ${transport}${reasonSuffix}` }
-}
-
 function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const meshTheme = useContext(MeshGraphThemeContext)
     const compact = useContext(MeshGraphCompactContext)
@@ -365,12 +330,13 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const isDefaultBranchNode = node.type === 'defaultBranchNode'
     const isSubmoduleNode = node.type === 'submoduleNode'
     const shouldShowCallout = shouldShowMeshGraphCallout(node)
-    const transportChip = !isDefaultBranchNode && !isSubmoduleNode ? getTransportChip(node) : null
     const subtitle = isDefaultBranchNode
         ? 'default branch anchor'
         : isSubmoduleNode
             ? node.submodulePath || 'submodule checkout'
-            : [node.machineLabel, formatLocality(node.locality), transportChip?.label].filter(Boolean).join(' · ') || node.workspace
+            // The node title already shows the (path-normalised) machine label; keep the
+            // subtitle to locality only so a Windows full-path machineLabel never leaks here.
+            : formatLocality(node.locality) || node.workspace
     const shortCommit = node.submoduleCommit ? node.submoduleCommit.slice(0, 7) : null
     const attentionBadge = getMeshGraphAttentionBadge(node)
     const calloutText = getMeshGraphCalloutText(node)
@@ -597,14 +563,6 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                             {formatLocality(node.locality)}
                         </span>
                     )}
-                    {transportChip && (
-                        <span
-                            className={`rounded-full border px-2 py-0.5 ${getBadgeClasses(transportChip.kind, meshTheme.isDark)}`}
-                            title={transportChip.title}
-                        >
-                            {transportChip.label}
-                        </span>
-                    )}
                     {shortCommit && isSubmoduleNode && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('meta', meshTheme.isDark)}`}>
                             {shortCommit}
@@ -820,22 +778,6 @@ function getEdgeLabelClasses(edge: MeshGraphEdge, isDark: boolean): string {
             return isDark
                 ? `${base} border-teal-400/30 bg-teal-500/14 text-teal-100`
                 : `${base} border-teal-300 bg-teal-50 text-teal-700`
-        case 'coordinatorLink': {
-            const transport = coordinatorLinkTransport(edge)
-            if (transport === 'direct') {
-                return isDark
-                    ? `${base} border-emerald-400/35 bg-emerald-500/14 text-emerald-100`
-                    : `${base} border-emerald-300 bg-emerald-50 text-emerald-700`
-            }
-            if (transport === 'relay') {
-                return isDark
-                    ? `${base} border-amber-400/35 bg-amber-500/14 text-amber-100`
-                    : `${base} border-amber-300 bg-amber-50 text-amber-700`
-            }
-            return isDark
-                ? `${base} border-rose-400/35 bg-rose-500/14 text-rose-100`
-                : `${base} border-rose-300 bg-rose-50 text-rose-700`
-        }
         default:
             return isDark
                 ? `${base} border-sky-400/25 bg-slate-950/78 text-sky-100`
@@ -936,9 +878,7 @@ function buildFlowLayout(
         style: {
             stroke: edgeColor(edge),
             strokeWidth: edge.type === 'orphanLink' ? 2.25 : edge.type === 'submoduleLink' ? 1.7 : edge.type === 'worktreeLink' ? 1.8 : edge.type === 'cloneLink' ? 1.6 : edge.type === 'coordinatorLink' ? 2.25 : 2,
-            strokeDasharray: edge.type === 'orphanLink' ? '5 4' : edge.type === 'submoduleLink' ? '4 3' : edge.type === 'cloneLink' ? '6 3'
-                // Relay / disconnected coordinator links render dashed to read as a degraded path; direct stays solid.
-                : edge.type === 'coordinatorLink' && coordinatorLinkTransport(edge) !== 'direct' ? '5 4' : undefined,
+            strokeDasharray: edge.type === 'orphanLink' ? '5 4' : edge.type === 'submoduleLink' ? '4 3' : edge.type === 'cloneLink' ? '6 3' : undefined,
         },
         labelStyle: {
             fill: meshTheme.edgeLabelTextColor,
@@ -999,14 +939,6 @@ function pickVisibleEdgeLabels(edges: MeshGraphEdge[]): Set<string> {
     return visible
 }
 
-/** Transport encoded in a coordinatorLink edge's label ("direct", "relay · 42ms", …). */
-function coordinatorLinkTransport(edge: MeshGraphEdge): 'direct' | 'relay' | 'down' {
-    const label = (edge.label ?? '').toLowerCase()
-    if (label.startsWith('direct')) return 'direct'
-    if (label.startsWith('relay')) return 'relay'
-    return 'down'
-}
-
 function edgeColor(edge: MeshGraphEdge): string {
     switch (edge.type) {
         case 'parentBranch':
@@ -1021,12 +953,9 @@ function edgeColor(edge: MeshGraphEdge): string {
             return '#c084fc'
         case 'cloneLink':
             return '#2dd4bf'
-        case 'coordinatorLink': {
-            const transport = coordinatorLinkTransport(edge)
-            if (transport === 'direct') return '#34d399'
-            if (transport === 'relay') return '#fbbf24'
-            return '#fb7185'
-        }
+        case 'coordinatorLink':
+            // Neutral topology link — transport/RTT is shown in the node detail panel, not on the canvas.
+            return '#64748b'
         default:
             return '#64748b'
     }

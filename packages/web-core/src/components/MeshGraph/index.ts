@@ -1,5 +1,6 @@
 export { default as MeshGraphView } from './MeshGraphView'
 export { default as MeshGraphPanel } from './MeshGraphPanel'
-export { default as MeshObservabilitySurface } from './MeshObservabilitySurface'
+export { default as MeshObservabilitySurface, MeshSurfaceTabControls } from './MeshObservabilitySurface'
+export type { MeshSurfaceTab } from './MeshObservabilitySurface'
 export { default as MeshOverviewCards } from './MeshOverviewCards'
 export type { MeshGraphData, MeshGraphNode, MeshGraphEdge } from './types'

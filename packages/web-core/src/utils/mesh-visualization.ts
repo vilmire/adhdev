@@ -177,6 +177,42 @@ export interface MeshGraph {
 
 const STALE_SNAPSHOT_MS = 5 * 60 * 1000
 
+/**
+ * OS-agnostic basename. Windows nodes report workspaces like `D:\gh\adhdev-cloud`;
+ * a coordinator running on POSIX would leave such a string un-split because
+ * `path.basename` there does not treat `\` as a separator. Split on both
+ * separators so Windows full paths collapse to the trailing segment too.
+ */
+function osAgnosticBasename(value: string): string {
+    const trimmed = value.replace(/[\\/]+$/, '')
+    const parts = trimmed.split(/[\\/]/).filter(Boolean)
+    return parts[parts.length - 1] || trimmed
+}
+
+/**
+ * Resolve the short, human-friendly label for a mesh graph node. Prefers an
+ * explicit machine label/nickname when available, but if that label still looks
+ * like a filesystem path (e.g. a Windows full path that escaped basename
+ * normalisation upstream) we collapse it to its OS-agnostic basename so the
+ * graph stays readable. Falls back to the workspace basename, then the node id.
+ */
+export function meshNodeDisplayLabel(
+    nodeStatus: { machineLabel?: string | null; workspace?: string | null; nodeId: string },
+    fallback?: string,
+): string {
+    const explicit = typeof nodeStatus.machineLabel === 'string' ? nodeStatus.machineLabel.trim() : ''
+    if (explicit) {
+        // A composite label ("repo · host · provider") is already clean — only
+        // collapse when the whole label is a bare path (contains a separator and
+        // no " · " composition markers).
+        const looksLikeBarePath = /[\\/]/.test(explicit) && !explicit.includes(' · ')
+        return looksLikeBarePath ? osAgnosticBasename(explicit) : explicit
+    }
+    const workspace = typeof nodeStatus.workspace === 'string' ? nodeStatus.workspace.trim() : ''
+    if (workspace) return osAgnosticBasename(workspace)
+    return fallback ?? nodeStatus.nodeId
+}
+
 function readNodeDaemonId(node: RepoMeshNodeStatus): string | null {
     return typeof node.daemonId === 'string' && node.daemonId.trim() ? node.daemonId.trim() : null
 }
@@ -245,13 +281,23 @@ export function formatMeshConnectionTransport(node: Pick<MeshGraphNode, 'connect
     return null
 }
 
-/** Edge label for a coordinator→peer link: transport + RTT when available. */
-function buildCoordinatorLinkLabel(node: MeshGraphNode): string {
-    const transport = formatMeshConnectionTransport(node) ?? 'unknown'
+/**
+ * Connection summary for the node detail panel. The graph canvas no longer draws
+ * inline transport/RTT badges (too noisy) — the direct/relay link and round-trip
+ * latency are surfaced here instead. Returns null for the local coordinator and
+ * for nodes that have not reported any transport yet.
+ */
+export function formatMeshConnectionSummary(
+    node: Pick<MeshGraphNode, 'connectionTransport' | 'connectionState' | 'connectionRttMs'>,
+): string | null {
+    if (node.connectionTransport === 'local' || node.connectionState === 'self') return null
+    const transport = formatMeshConnectionTransport(node)
+    if (!transport || transport === 'local') return null
+    const label = transport === 'relay' ? 'relay (TURN, slower path)' : transport
     if (typeof node.connectionRttMs === 'number') {
-        return `${transport} · ${Math.round(node.connectionRttMs)}ms`
+        return `${label} · ${Math.round(node.connectionRttMs)}ms`
     }
-    return transport
+    return label
 }
 
 function hasLiveGitEvidence(node: RepoMeshNodeStatus): boolean {
@@ -611,7 +657,7 @@ function assessSnapshotCompleteness(args: {
 } {
     const { nodeStatus, expectedSubmodulePaths, refreshedAtMs } = args
     const snapshotWarnings: string[] = []
-    const label = nodeStatus.machineLabel || nodeStatus.nodeId
+    const label = meshNodeDisplayLabel(nodeStatus)
     const git = nodeStatus.git
 
     if (!git) {
@@ -709,7 +755,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
-            label: nodeStatus.machineLabel || nodeStatus.nodeId.slice(0, 8),
+            label: meshNodeDisplayLabel(nodeStatus, nodeStatus.nodeId.slice(0, 8)),
             workspace: nodeStatus.workspace,
             branch,
             upstream: git?.upstream ?? null,
@@ -957,8 +1003,9 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
 
     // Coordinator transport edges: the selected coordinator (the `self` node) reaches
     // each remote daemon over a direct or TURN-relayed P2P link. Draw one directed
-    // edge per remote node so the operator can see at a glance which peer is on a slow
-    // relay path. The transport/state is daemon-reported truth — we only project it.
+    // edge per remote node so the topology (who the coordinator talks to) stays
+    // visible. The transport/RTT itself is no longer drawn inline on the canvas —
+    // it is surfaced in the node detail panel instead (see formatMeshConnectionSummary).
     const coordinatorNode = nodes.find(node => node.type !== 'submoduleNode' && node.connectionState === 'self')
     if (coordinatorNode) {
         for (const node of nodes) {
@@ -971,7 +1018,6 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 source: coordinatorNode.id,
                 target: node.id,
                 type: 'coordinatorLink',
-                label: buildCoordinatorLinkLabel(node),
                 direction: 'directed',
             })
         }

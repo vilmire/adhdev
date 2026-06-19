@@ -22,6 +22,8 @@ type DetailSelection =
     | { kind: 'session'; nodeId: string; sessionId: string }
     | { kind: 'queue'; taskId: string }
 
+export type MeshSurfaceTab = 'overview' | 'graph'
+
 interface MeshObservabilitySurfaceProps {
     status: RepoMeshStatus
     emptyMessage?: string
@@ -29,6 +31,60 @@ interface MeshObservabilitySurfaceProps {
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
     /** When true, the graph is showing bootstrap inventory data pending live peer truth. */
     bootstrapFallback?: boolean
+    /**
+     * Controlled tab/help state. When provided, the parent owns the Overview↔Graph
+     * toggle and the "?" help toggle (e.g. to host them in the dialog header to save
+     * a vertical row). Leave undefined for the standalone, self-managed behaviour.
+     */
+    activeTab?: MeshSurfaceTab
+    onActiveTabChange?: (tab: MeshSurfaceTab) => void
+    helpOpen?: boolean
+    onHelpOpenChange?: (open: boolean) => void
+    /** When true, the surface does not render its own tab/help control row — the
+     *  parent is rendering the controls (via MeshSurfaceTabControls) elsewhere. */
+    hideControls?: boolean
+}
+
+/**
+ * Overview↔Graph tab toggle + "?" help toggle. Extracted so it can be rendered
+ * either inline by MeshObservabilitySurface (standalone use) or hoisted into a
+ * parent header row (e.g. DashboardMeshGraphDialog) to save vertical space.
+ */
+export function MeshSurfaceTabControls({
+    meshTheme,
+    activeTab,
+    onActiveTabChange,
+    helpOpen,
+    onHelpOpenChange,
+}: {
+    meshTheme: MeshGraphTheme
+    activeTab: MeshSurfaceTab
+    onActiveTabChange: (tab: MeshSurfaceTab) => void
+    helpOpen: boolean
+    onHelpOpenChange: (open: boolean) => void
+}) {
+    const tabButtonClass = (active: boolean) => active
+        ? (meshTheme.isDark
+            ? 'rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-100 bg-white/[0.08] border border-white/12'
+            : 'rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-white border border-slate-300 shadow-sm')
+        : `rounded-lg px-3.5 py-1.5 text-xs font-medium ${meshTheme.textSecondary} border border-transparent hover:bg-white/[0.04]`
+    return (
+        <div className="flex items-center gap-2">
+            <div className={`inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
+                <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => onActiveTabChange('overview')}>Overview</button>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'graph'}
+                    className={tabButtonClass(activeTab === 'graph')}
+                    onClick={() => onActiveTabChange('graph')}
+                >
+                    Graph
+                </button>
+            </div>
+            <MeshHelpToggle meshTheme={meshTheme} open={helpOpen} onToggle={() => onHelpOpenChange(!helpOpen)} />
+        </div>
+    )
 }
 
 type SessionListEntry = {
@@ -644,6 +700,11 @@ export default function MeshObservabilitySurface({
     daemonId = null,
     sendDaemonCommand = null,
     bootstrapFallback,
+    activeTab: controlledActiveTab,
+    onActiveTabChange,
+    helpOpen: controlledHelpOpen,
+    onHelpOpenChange,
+    hideControls = false,
 }: MeshObservabilitySurfaceProps) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -651,11 +712,27 @@ export default function MeshObservabilitySurface({
     const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
     const statusGraphFingerprint = useMemo(() => getRepoMeshStatusGraphFingerprint(canonicalStatus), [canonicalStatus])
     const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [statusGraphFingerprint]) as MeshGraphData
-    const [activeTab, setActiveTab] = useState<'overview' | 'graph'>('overview')
-    const [helpOpen, setHelpOpen] = useState(false)
+    // Tab / help state can be owned by the parent (controlled) or self-managed.
+    const [internalActiveTab, setInternalActiveTab] = useState<MeshSurfaceTab>('overview')
+    const [internalHelpOpen, setInternalHelpOpen] = useState(false)
+    const activeTab = controlledActiveTab ?? internalActiveTab
+    const helpOpen = controlledHelpOpen ?? internalHelpOpen
+    const setActiveTab = useCallback((tab: MeshSurfaceTab) => {
+        if (onActiveTabChange) onActiveTabChange(tab)
+        else setInternalActiveTab(tab)
+    }, [onActiveTabChange])
+    const setHelpOpen = useCallback((next: boolean) => {
+        if (onHelpOpenChange) onHelpOpenChange(next)
+        else setInternalHelpOpen(next)
+    }, [onHelpOpenChange])
     // Lazy-mount the graph: only build/render React Flow once the graph tab has
-    // been opened, so the default overview tab stays cheap.
+    // been opened, so the default overview tab stays cheap. Drive it off activeTab
+    // so the lazy-mount works whether the tab is toggled internally or from a
+    // controlled parent header.
     const [graphMounted, setGraphMounted] = useState(false)
+    useEffect(() => {
+        if (activeTab === 'graph') setGraphMounted(true)
+    }, [activeTab])
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
@@ -894,33 +971,22 @@ export default function MeshObservabilitySurface({
                 ? 'rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-slate-400 hover:text-slate-200'
                 : 'rounded-md border border-slate-300 bg-white/80 px-2 py-0.5 text-slate-500 hover:text-slate-800'
 
-    const tabButtonClass = (active: boolean) => active
-        ? (meshTheme.isDark
-            ? 'rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-100 bg-white/[0.08] border border-white/12'
-            : 'rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-white border border-slate-300 shadow-sm')
-        : `rounded-lg px-3.5 py-1.5 text-xs font-medium ${meshTheme.textSecondary} border border-transparent hover:bg-white/[0.04]`
-
     return (
         <MeshGraphThemeContext.Provider value={meshTheme}>
         <div className="flex min-h-0 flex-1 flex-col gap-3">
-            {/* ── Tab bar: Overview (cards) ↔ Graph — with the single consolidated help toggle ── */}
-            <div className="shrink-0 flex items-center gap-2">
-                <div className={`inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
-                    <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => setActiveTab('overview')}>Overview</button>
-                    <button
-                        type="button"
-                        role="tab"
-                        aria-selected={activeTab === 'graph'}
-                        className={tabButtonClass(activeTab === 'graph')}
-                        onClick={() => { setGraphMounted(true); setActiveTab('graph') }}
-                    >
-                        Graph
-                    </button>
+            {/* ── Tab bar: Overview (cards) ↔ Graph — with the single consolidated help toggle.
+                 Hidden when a parent (e.g. the dialog header) renders these controls itself. ── */}
+            {!hideControls && (
+                <div className="shrink-0 flex items-center justify-end">
+                    <MeshSurfaceTabControls
+                        meshTheme={meshTheme}
+                        activeTab={activeTab}
+                        onActiveTabChange={setActiveTab}
+                        helpOpen={helpOpen}
+                        onHelpOpenChange={setHelpOpen}
+                    />
                 </div>
-                <div className="ml-auto">
-                    <MeshHelpToggle meshTheme={meshTheme} open={helpOpen} onToggle={() => setHelpOpen(v => !v)} />
-                </div>
-            </div>
+            )}
 
             {/* ── Consolidated help panel — spans both tabs, in flow so it never clips the header ── */}
             {helpOpen && <MeshHelpPanel meshTheme={meshTheme} onClose={() => setHelpOpen(false)} />}

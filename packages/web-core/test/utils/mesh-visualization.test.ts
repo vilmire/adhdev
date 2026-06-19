@@ -1,5 +1,37 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshGraph, formatMeshConnectionTransport, isMeshGraphStructurallyComplete } from '../../src/utils/mesh-visualization'
+import { buildMeshGraph, formatMeshConnectionSummary, formatMeshConnectionTransport, isMeshGraphStructurallyComplete, meshNodeDisplayLabel } from '../../src/utils/mesh-visualization'
+
+describe('meshNodeDisplayLabel', () => {
+    it('collapses a Windows full-path machineLabel to its basename', () => {
+        expect(meshNodeDisplayLabel({ machineLabel: 'D:\\gh\\adhdev-cloud', workspace: 'D:\\gh\\adhdev-cloud', nodeId: 'node_win' }))
+            .toBe('adhdev-cloud')
+    })
+
+    it('collapses a POSIX full-path machineLabel to its basename', () => {
+        expect(meshNodeDisplayLabel({ machineLabel: '/Users/me/Work/adhdev', workspace: '/Users/me/Work/adhdev', nodeId: 'node_mac' }))
+            .toBe('adhdev')
+    })
+
+    it('keeps a composite "repo · host · provider" machineLabel intact', () => {
+        expect(meshNodeDisplayLabel({ machineLabel: 'adhdev · molt-mac · claude', workspace: '/Users/me/adhdev', nodeId: 'node_x' }))
+            .toBe('adhdev · molt-mac · claude')
+    })
+
+    it('keeps a plain (separator-free) machineLabel intact', () => {
+        expect(meshNodeDisplayLabel({ machineLabel: 'molt-mac', workspace: '/Users/me/adhdev', nodeId: 'node_y' }))
+            .toBe('molt-mac')
+    })
+
+    it('falls back to the workspace basename when no machineLabel is present', () => {
+        expect(meshNodeDisplayLabel({ machineLabel: null, workspace: 'D:\\gh\\adhdev-cloud', nodeId: 'node_z' }))
+            .toBe('adhdev-cloud')
+    })
+
+    it('falls back to the provided fallback (or nodeId) when nothing else is usable', () => {
+        expect(meshNodeDisplayLabel({ machineLabel: null, workspace: '', nodeId: 'node_abcdef' }, 'node_abc')).toBe('node_abc')
+        expect(meshNodeDisplayLabel({ machineLabel: '', workspace: null, nodeId: 'node_abcdef' })).toBe('node_abcdef')
+    })
+})
 
 /** Minimal two-node mesh: a self coordinator + one remote peer with the given connection. */
 function buildConnectionGraph(remoteConnection: Record<string, unknown> | undefined) {
@@ -115,7 +147,7 @@ describe('mesh graph P2P connection projection', () => {
         expect(selfLink).toBeUndefined()
     })
 
-    it('creates a directed coordinatorLink edge from coordinator to a reported remote node, labelled by transport', () => {
+    it('creates a directed, label-less coordinatorLink edge and exposes transport via the connection summary', () => {
         const graph = buildConnectionGraph({
             perspective: 'selected_coordinator',
             source: 'mesh_peer_status',
@@ -128,7 +160,11 @@ describe('mesh graph P2P connection projection', () => {
         expect(link).toBeDefined()
         expect(link!.source).toBe('node_coordinator')
         expect(link!.direction).toBe('directed')
-        expect(link!.label).toBe('relay · 240ms')
+        // Transport/RTT is no longer drawn inline on the canvas — the edge carries no label.
+        expect(link!.label).toBeUndefined()
+        // The transport detail is surfaced in the node detail panel instead.
+        const remote = graph.nodes.find(n => n.id === 'node_remote')!
+        expect(formatMeshConnectionSummary(remote)).toBe('relay (TURN, slower path) · 240ms')
     })
 
     it('does not draw a coordinatorLink for a node with no reported connection', () => {
@@ -153,7 +189,9 @@ describe('mesh graph P2P connection projection', () => {
         expect(formatMeshConnectionTransport(remote)).toBe('disconnected')
         const link = graph.edges.find(e => e.type === 'coordinatorLink' && e.target === 'node_remote')
         expect(link).toBeDefined()
-        expect(link!.label).toBe('disconnected')
+        // Edge stays label-less; the down state is conveyed via the connection summary.
+        expect(link!.label).toBeUndefined()
+        expect(formatMeshConnectionSummary(remote)).toBe('disconnected')
     })
 
     it('inherits parent transport onto synthetic submodule child nodes but draws no submodule coordinatorLink', () => {
