@@ -1533,7 +1533,8 @@ export class AcpProviderInstance implements ProviderInstance {
 
  // Monitor check
         const agentKey = `${this.type}:acp`;
-        const monitorEvents = this.monitor.check(agentKey, newStatus, now, progressFingerprint);
+        const approvalPending = newStatus === 'waiting_approval';
+        const monitorEvents = this.monitor.check(agentKey, newStatus, now, progressFingerprint, approvalPending);
         for (const me of monitorEvents) {
             this.pushEvent({ event: me.type, agentKey: me.agentKey, message: me.message, elapsedSec: me.elapsedSec, timestamp: me.timestamp });
         }

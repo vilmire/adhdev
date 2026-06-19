@@ -59,7 +59,7 @@ export class StatusMonitor {
   * Check status transition → return notification event array.
   * Called from each onTick() or detectStatusTransition().
   */
-    check(agentKey: string, status: string, now: number, progressFingerprint?: string): MonitorEvent[] {
+    check(agentKey: string, status: string, now: number, progressFingerprint?: string, approvalPending?: boolean): MonitorEvent[] {
         const events: MonitorEvent[] = [];
 
  // 1. Approval waiting notification
@@ -76,6 +76,21 @@ export class StatusMonitor {
 
  // 2. Detect prolonged generating (identical for IDE/Extension/CLI/ACP)
         if (status === 'generating' || status === 'streaming') {
+            // While an approval modal is pending we must NOT count the wait as
+            // no-progress. The assistant emits no tokens and the screen is frozen
+            // on the modal, so the progress fingerprint goes static — but this is
+            // a user action wait, not a freeze. Some callers (CLI/IDE auto-approve)
+            // also synthesize the reported status to 'generating' during the wait,
+            // so the plain `waiting_approval` branch below cannot catch it. Hold the
+            // progress anchor at `now` so the elapsed timer restarts the moment the
+            // approval clears and real generating resumes.
+            if (approvalPending) {
+                this.generatingStartTimes.set(agentKey, now);
+                this.lastProgressFingerprint.set(agentKey, progressFingerprint ?? '');
+                this.lastProgressChangeAt.set(agentKey, now);
+                this.longGeneratingAlerted.set(agentKey, false);
+                return events;
+            }
             if (!this.generatingStartTimes.has(agentKey)) {
                 this.generatingStartTimes.set(agentKey, now);
                 this.longGeneratingAlerted.set(agentKey, false);

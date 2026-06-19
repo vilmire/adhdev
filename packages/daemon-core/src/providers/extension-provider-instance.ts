@@ -253,7 +253,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
 
  // Monitor check (cooldown based notification) — keep monitor events (long_generating etc)
         const agentKey = `${this.type}:ext`;
-        const monitorEvents = this.monitor.check(agentKey, agentStatus, now, progressFingerprint);
+        const approvalPending = agentStatus === 'waiting_approval';
+        const monitorEvents = this.monitor.check(agentKey, agentStatus, now, progressFingerprint, approvalPending);
         for (const me of monitorEvents) {
             this.pushEvent({ event: me.type, agentKey: me.agentKey, message: me.message, elapsedSec: me.elapsedSec, timestamp: me.timestamp });
         }

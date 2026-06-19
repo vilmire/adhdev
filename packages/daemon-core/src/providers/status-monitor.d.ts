@@ -40,7 +40,7 @@ export declare class StatusMonitor {
      * Check status transition → return notification event array.
      * Called from each onTick() or detectStatusTransition().
      */
-    check(agentKey: string, status: string, now: number, progressFingerprint?: string): MonitorEvent[];
+    check(agentKey: string, status: string, now: number, progressFingerprint?: string, approvalPending?: boolean): MonitorEvent[];
     /** Cooldown check — prevent sending the same notification too frequently */
     private shouldAlert;
     /** Reset (on agent terminate/restart) */

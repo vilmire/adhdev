@@ -508,7 +508,11 @@ export class IdeProviderInstance implements ProviderInstance {
         }
 
  // Monitor check (cooldown based notification)
-        const monitorEvents = this.monitor.check(agentKey, agentStatus, now, progressFingerprint);
+        // Approval pending is detected from the raw status: auto-approve synthesizes
+        // `waiting_approval` → 'generating', so the no-progress watchdog must be told
+        // to hold its timer during the wait rather than count it as a stall.
+        const approvalPending = rawAgentStatus === 'waiting_approval';
+        const monitorEvents = this.monitor.check(agentKey, agentStatus, now, progressFingerprint, approvalPending);
         for (const me of monitorEvents) {
             this.pushEvent({ event: me.type, agentKey: me.agentKey, message: me.message, elapsedSec: me.elapsedSec, timestamp: me.timestamp });
         }

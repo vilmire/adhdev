@@ -1764,7 +1764,11 @@ export class CliProviderInstance implements ProviderInstance {
 
  // Monitor check (cooldown based notification, IDE/CLI common)
         const agentKey = `${this.type}:cli`;
-        const monitorEvents = this.monitor.check(agentKey, newStatus, now, progressFingerprint);
+        // Approval pending is detected from the raw adapter status, not `newStatus`:
+        // auto-approve synthesizes `waiting_approval` → 'generating', which would
+        // otherwise let the no-progress watchdog accumulate the approval wait.
+        const approvalPending = rawStatus === 'waiting_approval';
+        const monitorEvents = this.monitor.check(agentKey, newStatus, now, progressFingerprint, approvalPending);
         const monitorParsedStatus: any = parsedStatus;
         for (const me of monitorEvents) {
             if (
