@@ -1,37 +1,37 @@
 import { describe, it, expect } from 'vitest';
 
 import {
-  resolveProviderRole,
   resolveProviderMaxParallel,
   normalizeMeshSchedulingStrategy,
   resolveNodeSchedulingPriority,
   DEFAULT_MESH_SCHEDULING_STRATEGY,
 } from '../../src/repo-mesh-types.js';
 
-describe('resolveProviderRole', () => {
-  it('returns undefined when no providerRoles are configured', () => {
-    expect(resolveProviderRole(undefined, 'claude-cli')).toBeUndefined();
-    expect(resolveProviderRole(null, 'claude-cli')).toBeUndefined();
-    expect(resolveProviderRole({}, 'claude-cli')).toBeUndefined();
-    expect(resolveProviderRole({ providerRoles: [] }, 'claude-cli')).toBeUndefined();
+describe('resolveProviderMaxParallel', () => {
+  it('returns undefined when no cap is declared (backward compatible)', () => {
+    expect(resolveProviderMaxParallel(undefined, 'claude-cli')).toBeUndefined();
+    expect(resolveProviderMaxParallel(null, 'claude-cli')).toBeUndefined();
+    expect(resolveProviderMaxParallel({}, 'claude-cli')).toBeUndefined();
+    expect(resolveProviderMaxParallel({ providerRoles: [] }, 'claude-cli')).toBeUndefined();
+    expect(resolveProviderMaxParallel({ providerRoles: [{ providerType: 'claude-cli' }] }, 'claude-cli')).toBeUndefined();
   });
 
   it('returns undefined for a blank/missing providerType lookup', () => {
-    const policy = { providerRoles: [{ providerType: 'claude-cli', role: 'coding' }] };
-    expect(resolveProviderRole(policy, '')).toBeUndefined();
-    expect(resolveProviderRole(policy, undefined)).toBeUndefined();
-    expect(resolveProviderRole(policy, null)).toBeUndefined();
+    const policy = { providerRoles: [{ providerType: 'claude-cli', maxParallel: 2 }] };
+    expect(resolveProviderMaxParallel(policy, '')).toBeUndefined();
+    expect(resolveProviderMaxParallel(policy, undefined)).toBeUndefined();
+    expect(resolveProviderMaxParallel(policy, null)).toBeUndefined();
   });
 
   it('matches providerType case-insensitively and trims', () => {
     const policy = {
       providerRoles: [
-        { providerType: 'claude-cli', role: 'coding', maxParallel: 2 },
-        { providerType: 'codex-cli', role: 'investigation', maxParallel: 4 },
+        { providerType: 'claude-cli', maxParallel: 2 },
+        { providerType: 'codex-cli', maxParallel: 4 },
       ],
     };
-    expect(resolveProviderRole(policy, 'CLAUDE-CLI')?.role).toBe('coding');
-    expect(resolveProviderRole(policy, '  codex-cli ')?.role).toBe('investigation');
+    expect(resolveProviderMaxParallel(policy, 'CLAUDE-CLI')).toBe(2);
+    expect(resolveProviderMaxParallel(policy, '  codex-cli ')).toBe(4);
   });
 
   it('skips malformed entries without throwing', () => {
@@ -40,17 +40,10 @@ describe('resolveProviderRole', () => {
         null as any,
         'nope' as any,
         { providerType: '' },
-        { providerType: 'claude-cli', role: 'orchestration' },
+        { providerType: 'claude-cli', maxParallel: 3 },
       ],
     };
-    expect(resolveProviderRole(policy, 'claude-cli')?.role).toBe('orchestration');
-  });
-});
-
-describe('resolveProviderMaxParallel', () => {
-  it('returns undefined when no cap is declared (backward compatible)', () => {
-    expect(resolveProviderMaxParallel(undefined, 'claude-cli')).toBeUndefined();
-    expect(resolveProviderMaxParallel({ providerRoles: [{ providerType: 'claude-cli', role: 'coding' }] }, 'claude-cli')).toBeUndefined();
+    expect(resolveProviderMaxParallel(policy, 'claude-cli')).toBe(3);
   });
 
   it('returns the declared cap as a floored non-negative integer', () => {

@@ -166,106 +166,6 @@ export const MESH_CONVERGE_REFINE_TAG = 'converge=refine';
 export const MESH_CONVERGE_FAST_FORWARD_TAG = 'converge=fast_forward';
 
 /**
- * Standard mesh resource-pool roles. These are the dashboard-provided defaults for
- * the role=<x> routing tag (advertised by node policy.providerRoles and matched
- * through nodeSatisfiesRequiredTags). A mesh is free to declare additional custom
- * role strings in policy.taskAffinity; the dashboard role dropdown exposes the union
- * of these four standards plus any config-declared roles. Roles are lowercased
- * everywhere (the role=<x> tag is lowercased in roleCapabilityTags).
- */
-export const STANDARD_MESH_ROLES = ['investigator', 'coder', 'validator', 'converger'] as const;
-export type StandardMeshRole = typeof STANDARD_MESH_ROLES[number];
-
-/**
- * Default taskMode → role mapping (all five task modes). A task enqueued with a
- * given taskMode auto-routes to a node advertising the mapped role=<x> tag, unless
- * the mesh overrides the mapping in policy.taskAffinity.byTaskMode. Keyed by the
- * MeshTaskMode string literals (the canonical union lives in mesh-work-queue.ts;
- * this map is keyed by string to avoid a types ↔ queue import cycle). Kept in sync
- * with MeshTaskMode by the exhaustive lookup in resolveTaskAffinityRole.
- */
-export const DEFAULT_TASKMODE_ROLE_MAP: Readonly<Record<string, StandardMeshRole>> = {
-    live_debug_readonly: 'investigator',
-    code_change: 'coder',
-    launch_app: 'coder',
-    validation: 'validator',
-    convergence: 'converger',
-};
-
-/**
- * Declarative task_mode → role affinity policy. When set, enqueueTask auto-injects a
- * `role=<role>` required tag (see resolveTaskAffinityRequiredTags) so the task
- * hard-filters onto nodes advertising that role — but only when the caller did NOT
- * already pin the task with an explicit target_node_id or its own required_tags.
- *
- * - `enabled`: master switch. Defaults to true so the built-in DEFAULT_TASKMODE_ROLE_MAP
- *   takes effect even when a mesh declares no taskAffinity block at all. Set false to
- *   fully disable affinity routing (today's pre-affinity behavior).
- * - `byTaskMode`: per-taskMode override of the default mapping. A role string here may
- *   be any of STANDARD_MESH_ROLES or a custom role declared by the operator. An empty
- *   string disables affinity for that one task mode.
- * - `customRoles`: extra (non-standard) role strings to surface in the dashboard role
- *   dropdown. Routing itself does not require a role to be pre-declared here — any role
- *   referenced in byTaskMode is injected regardless; customRoles only widens the UI list.
- */
-export interface RepoMeshTaskAffinityPolicy {
-    enabled?: boolean;
-    byTaskMode?: Record<string, string>;
-    customRoles?: string[];
-}
-
-/**
- * Resolve the affinity role for a task mode against a mesh's taskAffinity policy.
- * Returns the lowercased role string to inject as `role=<role>`, or null when no
- * affinity applies (affinity disabled, an explicit empty override, or an unknown mode).
- *
- * Precedence: policy.byTaskMode[mode] (operator override) → DEFAULT_TASKMODE_ROLE_MAP[mode].
- * A blank override string explicitly opts that mode out of affinity routing.
- */
-export function resolveTaskAffinityRole(
-    taskMode: string | undefined,
-    policy: RepoMeshTaskAffinityPolicy | null | undefined,
-): string | null {
-    if (!taskMode) return null;
-    if (policy?.enabled === false) return null;
-    const override = policy?.byTaskMode && Object.prototype.hasOwnProperty.call(policy.byTaskMode, taskMode)
-        ? policy.byTaskMode[taskMode]
-        : undefined;
-    if (typeof override === 'string') {
-        const trimmed = override.trim().toLowerCase();
-        // An explicit blank override opts this task mode out of affinity routing.
-        return trimmed ? trimmed : null;
-    }
-    const fallback = DEFAULT_TASKMODE_ROLE_MAP[taskMode];
-    return fallback ?? null;
-}
-
-/**
- * Union of the standard roles plus any operator-declared roles (byTaskMode values +
- * customRoles), lowercased and deduped, preserving standard-first ordering. Used by
- * the dashboard role dropdown so operators can pick a standard or a config-declared
- * custom role. Pure/UI-facing — does not gate routing.
- */
-export function resolveMeshRoleOptions(policy: RepoMeshTaskAffinityPolicy | null | undefined): string[] {
-    const out: string[] = [...STANDARD_MESH_ROLES];
-    const seen = new Set<string>(out);
-    const add = (raw: unknown) => {
-        if (typeof raw !== 'string') return;
-        const role = raw.trim().toLowerCase();
-        if (!role || seen.has(role)) return;
-        seen.add(role);
-        out.push(role);
-    };
-    if (policy?.byTaskMode) {
-        for (const value of Object.values(policy.byTaskMode)) add(value);
-    }
-    if (Array.isArray(policy?.customRoles)) {
-        for (const value of policy.customRoles) add(value);
-    }
-    return out;
-}
-
-/**
  * Resolve whether the load-balancing scheduler should auto-inject a
  * `converge=refine` required tag onto code_change tasks so they hard-filter onto
  * refine-capable (worktree) nodes only. Strict opt-in: defaults to false, so a mesh
@@ -321,18 +221,6 @@ export interface RepoMeshPolicy {
      */
     autoConvergeCodeChange?: boolean;
     /**
-     * Declarative task_mode → role affinity routing. When present (and not disabled),
-     * enqueueTask auto-injects a `role=<role>` required tag for the task's taskMode so
-     * the work hard-filters onto nodes advertising that role. Explicit target_node_id
-     * routing and any caller-supplied required_tags are preserved (auto-injection only
-     * applies when the caller pinned neither). When the mapped role has no advertising
-     * node in the mesh, the task is NOT blocked — the role tag is skipped so the work
-     * falls back to ordinary least_loaded eligibility (soft affinity). Defaults to the
-     * built-in DEFAULT_TASKMODE_ROLE_MAP even when this block is omitted; set
-     * `{ enabled: false }` to fully restore pre-affinity routing.
-     */
-    taskAffinity?: RepoMeshTaskAffinityPolicy;
-    /**
      * Whether sessions spawned by mesh/coordinator policy should auto-open as visible
      * dashboard tabs or start hidden. Defaults to 'visible' to preserve existing
      * watch-the-agents behavior; hidden sessions remain discoverable and manually openable.
@@ -376,21 +264,7 @@ export interface RepoMeshRelatedRepo {
 }
 
 /**
- * Per-(node, provider) role + parallelism declaration.
- *
- * `role` is a free-form resource-pool label (recommended values:
- * 'investigation' | 'coding' | 'orchestration') describing what this
- * (node, provider) combination is *for*. As of the load-balancing scheduler it
- * is ALSO routable: each declared role is advertised as a synthetic `role=<x>`
- * capability tag (see buildMeshNodeCapabilityTags), so a task enqueued with
- * requiredTags: ["role=validation"] is hard-filtered to nodes/providers that
- * declare that role — through the same nodeSatisfiesRequiredTags path as any
- * other tag. There is intentionally no separate "advertisedRoles" field: the
- * label and the routing tag are one mechanism. A task that does not require a
- * `role=` tag ignores roles entirely (opt-in, fully backward compatible).
- *
- * role is intentionally orthogonal to taskMode: taskMode classifies the *work*
- * (code_change vs live_debug_readonly), role classifies the *resource pool*.
+ * Per-(node, provider) parallelism declaration.
  *
  * `maxParallel` is the only enforced field: the queue will not assign a task
  * to this (node, provider) once it already has `maxParallel` active
@@ -398,12 +272,14 @@ export interface RepoMeshRelatedRepo {
  * provider) cap disagree, the stricter (lower effective) limit wins — a claim
  * must satisfy both. Omitting `maxParallel` means this provider is bounded only
  * by the global/taskMode caps (full backward compatibility).
+ *
+ * Routing is governed exclusively by required_tags (see nodeSatisfiesRequiredTags);
+ * this entry carries no routing role. To route work to a specific node, advertise an
+ * ordinary capability tag on the node and require it on the task.
  */
 export interface RepoMeshProviderRole {
     /** Provider type this entry governs (e.g. 'claude-cli', 'codex-cli'). */
     providerType: string;
-    /** Free-form role label; recommended: 'investigation' | 'coding' | 'orchestration'. */
-    role?: string;
     /** Max concurrent active tasks for this (node, provider). Omit = no per-provider cap. */
     maxParallel?: number;
 }
@@ -423,13 +299,11 @@ export interface RepoMeshNodePolicy {
     /** Ordered provider preference used when mesh_launch_session omits an explicit type. */
     providerPriority?: string[];
     /**
-     * Per-(node, provider) role + parallelism declarations. Each entry binds a
-     * providerType on THIS node to an optional free-form role label and an
-     * optional maxParallel cap. maxParallel is enforced (as an additional,
-     * stricter-wins constraint on top of the global maxParallelTasks/taskMode
-     * caps); role is advertised as a routable `role=<x>` capability tag so tasks
-     * can hard-filter by required role. Missing/empty: the node behaves exactly
-     * as before (global caps only, no role tags).
+     * Per-(node, provider) parallelism declarations. Each entry binds a
+     * providerType on THIS node to an optional maxParallel cap. maxParallel is
+     * enforced as an additional, stricter-wins constraint on top of the global
+     * maxParallelTasks/taskMode caps. Missing/empty: the node behaves exactly as
+     * before (global caps only). Routing is governed solely by required_tags.
      */
     providerRoles?: RepoMeshProviderRole[];
     /**
@@ -496,16 +370,16 @@ export function resolveDelegatedWorkerAutoApprove(
 }
 
 /**
- * Resolve the per-(node, provider) role declaration from a node policy.
- * Case-insensitive, trimmed match on providerType. Returns undefined when the
- * node has no providerRoles entry for this provider (caller then applies only
- * the global caps). Defensive against malformed config — non-object entries and
- * blank providerTypes are skipped rather than throwing.
+ * Resolve the enforced per-(node, provider) maxParallel cap, or undefined when
+ * no finite, non-negative cap is declared for this provider. Used by the queue
+ * claim path as a stricter-wins constraint layered on top of the global caps.
+ * Case-insensitive, trimmed match on providerType. Defensive against malformed
+ * config — non-object entries and blank providerTypes are skipped rather than throwing.
  */
-export function resolveProviderRole(
+export function resolveProviderMaxParallel(
     nodePolicy: Pick<RepoMeshNodePolicy, 'providerRoles'> | null | undefined,
     providerType: string | null | undefined,
-): RepoMeshProviderRole | undefined {
+): number | undefined {
     const wanted = typeof providerType === 'string' ? providerType.trim().toLowerCase() : '';
     if (!wanted) return undefined;
     const roles = nodePolicy?.providerRoles;
@@ -513,24 +387,12 @@ export function resolveProviderRole(
     for (const entry of roles) {
         if (!entry || typeof entry !== 'object') continue;
         const type = typeof entry.providerType === 'string' ? entry.providerType.trim().toLowerCase() : '';
-        if (type && type === wanted) return entry;
+        if (!type || type !== wanted) continue;
+        const raw = Number(entry.maxParallel);
+        if (!Number.isFinite(raw) || raw < 0) return undefined;
+        return Math.floor(raw);
     }
     return undefined;
-}
-
-/**
- * Resolve the enforced per-(node, provider) maxParallel cap, or undefined when
- * no finite, non-negative cap is declared for this provider. Used by the queue
- * claim path as a stricter-wins constraint layered on top of the global caps.
- */
-export function resolveProviderMaxParallel(
-    nodePolicy: Pick<RepoMeshNodePolicy, 'providerRoles'> | null | undefined,
-    providerType: string | null | undefined,
-): number | undefined {
-    const role = resolveProviderRole(nodePolicy, providerType);
-    const raw = Number(role?.maxParallel);
-    if (!Number.isFinite(raw) || raw < 0) return undefined;
-    return Math.floor(raw);
 }
 
 // ─── Capabilities ───────────────────────────────

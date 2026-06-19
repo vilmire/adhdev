@@ -590,78 +590,73 @@ describe('buildMeshNodeCapabilityTags — worktree tag auto-registration', () =>
     });
 });
 
-describe('buildMeshNodeCapabilityTags — role= routing tags', () => {
-    const roleNode = (providerRoles: Array<{ providerType: string; role?: string; maxParallel?: number }>) => ({
+describe('buildMeshNodeCapabilityTags — no role= advertising (role affinity removed)', () => {
+    const node = (providerRoles: Array<{ providerType: string; maxParallel?: number }>) => ({
         policy: { providerPriority: providerRoles.map(r => r.providerType), providerRoles },
     });
 
-    it('node without providerRoles advertises no role= tags (backward compatible)', () => {
-        const tags = buildMeshNodeCapabilityTags({ policy: { providerPriority: ['claude-cli'] } }, 'claude-cli');
+    it('never advertises a role= tag, even when providerRoles are declared', () => {
+        const tags = buildMeshNodeCapabilityTags(
+            node([{ providerType: 'claude-cli', maxParallel: 2 }, { providerType: 'codex-cli', maxParallel: 1 }]),
+            'claude-cli',
+        );
         expect(tags.some(t => t.startsWith('role='))).toBe(false);
     });
 
-    it('emits role=<x> for the selected provider only', () => {
-        const node = roleNode([
-            { providerType: 'claude-cli', role: 'coding' },
-            { providerType: 'codex-cli', role: 'validation' },
-        ]);
-        const codingTags = buildMeshNodeCapabilityTags(node, 'claude-cli');
-        expect(codingTags).toContain('role=coding');
-        expect(codingTags).not.toContain('role=validation');
+    it('still advertises operator capability tags, os/arch/provider/converge tags', () => {
+        const tags = buildMeshNodeCapabilityTags(
+            { capabilities: ['gpu', 'secrets'], policy: { providerPriority: ['claude-cli'] } },
+            'claude-cli',
+        );
+        expect(tags).toContain('gpu');
+        expect(tags).toContain('secrets');
+        expect(tags).toContain('provider=claude-cli');
+        expect(tags).toContain('converge=fast_forward');
+        expect(tags.some(t => t.startsWith('role='))).toBe(false);
+    });
+});
 
-        const validationTags = buildMeshNodeCapabilityTags(node, 'codex-cli');
-        expect(validationTags).toContain('role=validation');
-        expect(validationTags).not.toContain('role=coding');
+describe('required_tags hard routing — unmatched tasks stay pending, matching node claims', () => {
+    it('a task whose required_tags no node satisfies stays pending (claim returns null)', () => {
+        const meshId = `test-hard-pending-${Date.now()}`;
+        enqueueTask(meshId, 'gpu-only work', { requiredTags: ['gpu'] });
+
+        // A node WITHOUT the required tag cannot claim — task stays pending (hard, no fallback).
+        const nonMatchingTags = buildMeshNodeCapabilityTags(
+            { capabilities: ['cpu'], policy: { providerPriority: ['claude-cli'] } }, 'claude-cli');
+        expect(nonMatchingTags).not.toContain('gpu');
+        expect(claimNextTask(meshId, 'node-cpu', 'sess-cpu', nonMatchingTags)).toBeNull();
+
+        // The task is still pending after the failed claim attempt.
+        expect(getQueue(meshId, { status: ['pending'] })).toHaveLength(1);
+        expect(getQueue(meshId, { status: ['assigned'] })).toHaveLength(0);
     });
 
-    it('emits all declared roles when no provider is selected (node-level scan)', () => {
-        const node = roleNode([
-            { providerType: 'claude-cli', role: 'coding' },
-            { providerType: 'codex-cli', role: 'validation' },
-        ]);
-        const tags = buildMeshNodeCapabilityTags(node);
-        expect(tags).toContain('role=coding');
-        expect(tags).toContain('role=validation');
-    });
+    it('only a node advertising all required_tags claims the task', () => {
+        const meshId = `test-hard-match-${Date.now()}`;
+        enqueueTask(meshId, 'gpu-only work', { requiredTags: ['gpu'] });
 
-    it('roles are lowercased', () => {
-        const node = roleNode([{ providerType: 'claude-cli', role: 'Validation' }]);
-        expect(buildMeshNodeCapabilityTags(node, 'claude-cli')).toContain('role=validation');
-    });
+        // Non-matching node first — must not claim.
+        const cpuTags = buildMeshNodeCapabilityTags(
+            { capabilities: ['cpu'], policy: { providerPriority: ['claude-cli'] } }, 'claude-cli');
+        expect(claimNextTask(meshId, 'node-cpu', 'sess-cpu', cpuTags)).toBeNull();
 
-    it('required_tags role= matches a node declaring that role, not a node without it', () => {
-        const validationNode = buildMeshNodeCapabilityTags(
-            roleNode([{ providerType: 'codex-cli', role: 'validation' }]), 'codex-cli');
-        const codingNode = buildMeshNodeCapabilityTags(
-            roleNode([{ providerType: 'claude-cli', role: 'coding' }]), 'claude-cli');
-
-        expect(nodeSatisfiesRequiredTags(['role=validation'], validationNode)).toBe(true);
-        expect(nodeSatisfiesRequiredTags(['role=validation'], codingNode)).toBe(false);
-    });
-
-    it('claimNextTask with required_tags role= is claimed only by a matching-role session', () => {
-        const meshId = `test-role-claim-${Date.now()}`;
-        enqueueTask(meshId, 'validate the build', { requiredTags: ['role=validation'] });
-
-        // Coding-role session must NOT claim a validation-role task.
-        const codingTags = buildMeshNodeCapabilityTags(
-            roleNode([{ providerType: 'claude-cli', role: 'coding' }]), 'claude-cli');
-        expect(claimNextTask(meshId, 'node-a', 'sess-coding', codingTags)).toBeNull();
-
-        // Validation-role session SHOULD claim it.
-        const validationTags = buildMeshNodeCapabilityTags(
-            roleNode([{ providerType: 'codex-cli', role: 'validation' }]), 'codex-cli');
-        const claim = claimNextTask(meshId, 'node-b', 'sess-validation', validationTags);
+        // Matching node — claims it.
+        const gpuTags = buildMeshNodeCapabilityTags(
+            { capabilities: ['gpu'], policy: { providerPriority: ['claude-cli'] } }, 'claude-cli');
+        expect(gpuTags).toContain('gpu');
+        const claim = claimNextTask(meshId, 'node-gpu', 'sess-gpu', gpuTags);
         expect(claim).not.toBeNull();
-        expect(claim!.message).toBe('validate the build');
+        expect(claim!.message).toBe('gpu-only work');
+        expect(getQueue(meshId, { status: ['pending'] })).toHaveLength(0);
     });
 
-    it('role-unconstrained task is claimable by any session (opt-in gating)', () => {
-        const meshId = `test-role-noreq-${Date.now()}`;
+    it('a task with no required_tags is claimable by any node', () => {
+        const meshId = `test-hard-noreq-${Date.now()}`;
         enqueueTask(meshId, 'anything', {});
-        const codingTags = buildMeshNodeCapabilityTags(
-            roleNode([{ providerType: 'claude-cli', role: 'coding' }]), 'claude-cli');
-        const claim = claimNextTask(meshId, 'node-a', 'sess-coding', codingTags);
+        const tags = buildMeshNodeCapabilityTags(
+            { capabilities: ['cpu'], policy: { providerPriority: ['claude-cli'] } }, 'claude-cli');
+        const claim = claimNextTask(meshId, 'node-a', 'sess-a', tags);
         expect(claim).not.toBeNull();
     });
 });

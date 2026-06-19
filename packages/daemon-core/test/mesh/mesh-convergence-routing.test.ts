@@ -92,15 +92,15 @@ describe('resolveConvergeRequiredTags — auto-inject (Part C, opt-out paths)', 
 
     it('leaves non-code_change tasks unchanged (no convergence cost)', () => {
         for (const mode of ['validation', 'live_debug_readonly', 'launch_app', 'convergence'] as const) {
-            expect(resolveConvergeRequiredTags(meshId, mode, ['role=x'])).toEqual(['role=x']);
+            expect(resolveConvergeRequiredTags(meshId, mode, ['cap=x'])).toEqual(['cap=x']);
         }
         expect(resolveConvergeRequiredTags(meshId, undefined, [])).toEqual([]);
     });
 
     it('leaves explicitly-targeted code_change tasks unchanged (operator chose the node)', () => {
         expect(
-            resolveConvergeRequiredTags(meshId, 'code_change', ['role=x'], { targetNodeId: 'node-1' }),
-        ).toEqual(['role=x']);
+            resolveConvergeRequiredTags(meshId, 'code_change', ['cap=x'], { targetNodeId: 'node-1' }),
+        ).toEqual(['cap=x']);
     });
 });
 
@@ -120,16 +120,16 @@ describe('enqueueTask — converge=refine auto-injection (Part C)', () => {
     });
 
     it('does NOT inject when the mesh has not opted in (default — backward compatible)', () => {
-        const task = enqueueTask(meshId, 'edit src/foo.ts', { taskMode: 'code_change', requiredTags: ['role=coding'] });
-        expect(task.requiredTags).toEqual(['role=coding']);
+        const task = enqueueTask(meshId, 'edit src/foo.ts', { taskMode: 'code_change', requiredTags: ['cap=coding'] });
+        expect(task.requiredTags).toEqual(['cap=coding']);
         expect(task.requiredTags).not.toContain(MESH_CONVERGE_REFINE_TAG);
     });
 
     it('injects converge=refine onto code_change once the mesh opts in', () => {
         updateMesh(meshId, { policy: { autoConvergeCodeChange: true } });
-        const task = enqueueTask(meshId, 'edit src/foo.ts', { taskMode: 'code_change', requiredTags: ['role=coding'] });
+        const task = enqueueTask(meshId, 'edit src/foo.ts', { taskMode: 'code_change', requiredTags: ['cap=coding'] });
         expect(task.requiredTags).toContain(MESH_CONVERGE_REFINE_TAG);
-        expect(task.requiredTags).toContain('role=coding');
+        expect(task.requiredTags).toContain('cap=coding');
         // Persisted so the claim transaction enforces it too.
         expect(getQueue(meshId)[0].requiredTags).toContain(MESH_CONVERGE_REFINE_TAG);
     });

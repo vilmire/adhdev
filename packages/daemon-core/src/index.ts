@@ -135,8 +135,6 @@ export type {
   RepoMeshLedgerStatus,
   MeshAsyncJobLifecycle,
   RepoMeshSchedulingStrategy,
-  RepoMeshTaskAffinityPolicy,
-  StandardMeshRole,
 } from './repo-mesh-types.js';
 export {
   DEFAULT_MESH_POLICY,
@@ -148,10 +146,6 @@ export {
   MESH_CONVERGE_REFINE_TAG,
   MESH_CONVERGE_FAST_FORWARD_TAG,
   resolveAutoConvergeCodeChange,
-  STANDARD_MESH_ROLES,
-  DEFAULT_TASKMODE_ROLE_MAP,
-  resolveTaskAffinityRole,
-  resolveMeshRoleOptions,
 } from './repo-mesh-types.js';
 
 // ── Git Surface ──
@@ -237,7 +231,7 @@ export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence }
 export type { AnyLedgerSlice, MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { enqueueTask, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, resolveTaskAffinityRequiredTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, markStaleDirectDispatches, deleteDirectDispatchesByTaskId, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState } from './mesh/mesh-work-queue.js';
+export { enqueueTask, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, markStaleDirectDispatches, deleteDirectDispatchesByTaskId, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState } from './mesh/mesh-work-queue.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshWorkQueueStats, MeshQueueMutationOptions, MeshTaskModeValidationResult, DirectDispatchRecord, MeshToolCallRateResult } from './mesh/mesh-work-queue.js';
 export { buildCompactStaleDirectWorkSummary, buildMeshActiveWork, buildMeshActiveWorkSummary, classifyStaleDirectForPrune, PRUNABLE_ORPHAN_STALE_REASONS } from './mesh/mesh-active-work.js';
 export type { StaleDirectPruneClassification } from './mesh/mesh-active-work.js';

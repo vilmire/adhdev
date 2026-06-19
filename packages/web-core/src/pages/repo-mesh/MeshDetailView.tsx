@@ -15,7 +15,6 @@ import { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'
 import { IconRefresh } from './icons'
 import {
     readMeshPolicy,
-    resolveMeshRoleOptions,
     SESSION_CLEANUP_MODE_OPTIONS,
     SCHEDULING_STRATEGY_OPTIONS,
     type MeshEntry,
@@ -210,10 +209,6 @@ export function MeshDetailView({
 }: Props) {
     const policy = readMeshPolicy(selectedMesh)
     const nodes: MeshNode[] = selectedMesh.nodes || []
-    // Dashboard role dropdown options: the four standard roles plus any roles declared
-    // in this mesh's taskAffinity policy (byTaskMode values + customRoles). Shared with
-    // the daemon's affinity resolver so the UI and routing agree on the role set.
-    const roleOptions = resolveMeshRoleOptions(policy.taskAffinity)
 
     return (
         <AppPage
@@ -324,7 +319,6 @@ export function MeshDetailView({
                 features={{ addNodeDaemonPicker: features.addNodeDaemonPicker, nodeInstruction: features.nodeInstruction }}
                 coordinatorDaemonId={coordinatorDaemonId}
                 schedulingStrategy={schedulingStrategy}
-                roleOptions={roleOptions}
                 nodeProviderPriorityDrafts={nodeProviderPriorityDrafts}
                 onNodeProviderPriorityDraftChange={onNodeProviderPriorityDraftChange}
                 availableCliProviders={availableCliProviders}

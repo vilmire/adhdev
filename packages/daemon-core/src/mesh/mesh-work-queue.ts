@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
-import type { RepoMeshDaemonRole, LocalMeshNodeEntry } from '../repo-mesh-types.js';
-import { MESH_CONVERGE_REFINE_TAG, resolveAutoConvergeCodeChange, resolveTaskAffinityRole } from '../repo-mesh-types.js';
+import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
+import { MESH_CONVERGE_REFINE_TAG, resolveAutoConvergeCodeChange } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMesh } from '../config/mesh-config.js';
 
@@ -204,45 +204,6 @@ function firstProviderPriority(policy: unknown): string | undefined {
     return raw.find(type => typeof type === 'string' && type.trim())?.trim();
 }
 
-/**
- * Synthetic `role=<x>` capability tags advertised by a node's policy.providerRoles.
- *
- * When a specific `providerType` is being evaluated, only that provider's declared
- * role is emitted — so role-based routing (requiredTags: ["role=validation"]) gates
- * the *selected* provider through the ordinary capability-tag filter. When no
- * provider is selected (node-level eligibility scan), every declared role is emitted
- * so the node passes the filter if ANY of its providers could satisfy the role; the
- * per-provider tag set then narrows it during provider selection.
- *
- * Roles are lowercased and deduped. Missing/empty providerRoles emits nothing, so a
- * node that never declares roles advertises no `role=` tags and is therefore only
- * matched by role-unconstrained tasks (full backward compatibility).
- */
-function roleCapabilityTags(policy: unknown, providerType: string | undefined): string[] {
-    const roles = policy && typeof policy === 'object' && !Array.isArray(policy)
-        ? (policy as Record<string, unknown>).providerRoles
-        : undefined;
-    if (!Array.isArray(roles)) return [];
-    const wantedProvider = typeof providerType === 'string' && providerType.trim()
-        ? providerType.trim().toLowerCase()
-        : '';
-    const out: string[] = [];
-    for (const entry of roles) {
-        if (!entry || typeof entry !== 'object') continue;
-        const type = typeof (entry as any).providerType === 'string'
-            ? (entry as any).providerType.trim().toLowerCase()
-            : '';
-        const role = typeof (entry as any).role === 'string'
-            ? (entry as any).role.trim().toLowerCase()
-            : '';
-        if (!role) continue;
-        // When narrowing to a selected provider, only emit that provider's role.
-        if (wantedProvider && type && type !== wantedProvider) continue;
-        out.push(`role=${role}`);
-    }
-    return out;
-}
-
 export function buildMeshNodeCapabilityTags(
     node: { capabilities?: unknown; policy?: unknown; isLocalWorktree?: unknown; worktreeBranch?: unknown } | undefined,
     providerType?: string,
@@ -273,13 +234,6 @@ export function buildMeshNodeCapabilityTags(
         //     the load-balancing scheduler auto-injects converge=refine for code_change
         //     so such work is hard-filtered onto refine-capable nodes.
         ...(node?.isLocalWorktree === true ? ['converge=refine'] : ['converge=fast_forward']),
-        // Role-based routing: advertise role=<x> for each (node, provider) role
-        // declared in policy.providerRoles. Narrowed to the selected provider when
-        // one is given so the chosen provider must match a task's required role;
-        // when no provider is selected, all declared roles are advertised for the
-        // node-level eligibility scan. Reuses the ordinary required-tags filter —
-        // no separate role field/gate.
-        ...roleCapabilityTags(node?.policy, providerType),
     ]);
 }
 
@@ -326,67 +280,6 @@ export function resolveConvergeRequiredTags(
     }
     if (!optedIn) return explicitRequiredTags;
     return normalizeMeshCapabilityTags([...explicitRequiredTags, MESH_CONVERGE_REFINE_TAG]);
-}
-
-/**
- * Whether any node in the mesh advertises the given `role=<role>` capability tag.
- * Reuses buildMeshNodeCapabilityTags (node-level scan: every declared providerRole is
- * advertised) so the membership test matches the exact tag the claim/eligibility filter
- * would see. Used to keep task-affinity SOFT — if no node can satisfy the role, the
- * injection is skipped so the task falls back to ordinary least_loaded eligibility
- * rather than being blocked.
- */
-function meshHasNodeAdvertisingRole(nodes: LocalMeshNodeEntry[] | undefined, role: string): boolean {
-    if (!Array.isArray(nodes) || nodes.length === 0) return false;
-    const wanted = `role=${role}`;
-    return nodes.some(node => buildMeshNodeCapabilityTags(node as any).includes(wanted));
-}
-
-/**
- * Declarative task_mode → role affinity resolution (precedent: resolveConvergeRequiredTags).
- *
- * At enqueue time, auto-inject a `role=<role>` required tag derived from the task's
- * taskMode via the mesh's policy.taskAffinity (falling back to DEFAULT_TASKMODE_ROLE_MAP),
- * so the task hard-filters onto nodes advertising that role through the ordinary
- * required-tags path (nodeSatisfiesRequiredTags) — no claim/scheduler change needed.
- *
- * Strict precedence / backward compatibility — the injection is skipped (returns the
- * explicit tags unchanged) when ANY of:
- *   - the caller pinned an explicit targetNodeId (operator chose the node), or
- *   - the caller supplied their own non-empty required_tags (caller's routing wins), or
- *   - affinity resolves to no role (policy disabled, blank override, or unknown mode), or
- *   - SOFT fallback: no node in the mesh advertises the resolved role=<role> — injecting
- *     would block the task with zero eligible nodes, so we skip it and let least_loaded
- *     eligibility take over (a warning is logged so the misconfiguration is visible).
- * Idempotent: normalizeMeshCapabilityTags dedupes.
- */
-export function resolveTaskAffinityRequiredTags(
-    meshId: string,
-    taskMode: MeshTaskMode | undefined,
-    explicitRequiredTags: string[],
-    opts?: { targetNodeId?: string; callerSpecifiedRequiredTags?: boolean },
-): string[] {
-    // Caller pinned the node, or brought their own required_tags → respect it verbatim.
-    if (typeof opts?.targetNodeId === 'string' && opts.targetNodeId.trim()) return explicitRequiredTags;
-    if (opts?.callerSpecifiedRequiredTags === true) return explicitRequiredTags;
-
-    let mesh;
-    try {
-        mesh = getMesh(meshId);
-    } catch {
-        return explicitRequiredTags;
-    }
-    const role = resolveTaskAffinityRole(taskMode, mesh?.policy?.taskAffinity);
-    if (!role) return explicitRequiredTags;
-
-    // SOFT affinity: only hard-filter when the role actually exists in the mesh.
-    if (!meshHasNodeAdvertisingRole(mesh?.nodes, role)) {
-        try {
-            console.warn(`[mesh] task_affinity: no node advertises role=${role} for taskMode=${taskMode} in mesh ${meshId}; skipping injection (least_loaded fallback)`);
-        } catch { /* logging is best-effort */ }
-        return explicitRequiredTags;
-    }
-    return normalizeMeshCapabilityTags([...explicitRequiredTags, `role=${role}`]);
 }
 
 function withQueueLock<T>(_meshId: string, fn: () => T): T {
@@ -474,30 +367,17 @@ export function enqueueTask(
             throw new Error(`duplicate_task_id: task '${id}' already exists in mesh '${meshId}'`);
         }
         assertNoDependencyCycle(meshId, id, dependsOn);
-        // Did the caller bring their own routing tags? Affinity auto-injection is
-        // suppressed when so (caller's required_tags win), matching the spec — measured
-        // against the ORIGINAL caller tags, before convergence augmentation below.
         const callerTags = normalizeMeshCapabilityTags(opts?.requiredTags);
-        const callerSpecifiedRequiredTags = callerTags.length > 0;
         // Convergence routing (opt-in): auto-inject converge=refine for code_change
         // tasks so they hard-filter onto refine-capable worktree nodes. No-op unless
         // the mesh opts in; explicit target_node_id / required_tags are preserved.
-        let resolvedRequiredTags = resolveConvergeRequiredTags(
+        // Routing is otherwise governed solely by the caller's required_tags (hard
+        // filter through nodeSatisfiesRequiredTags) — no role/taskMode auto-routing.
+        const resolvedRequiredTags = resolveConvergeRequiredTags(
             meshId,
             modeValidation.taskMode,
             callerTags,
             { targetNodeId: opts?.targetNodeId },
-        );
-        // Declarative task_mode → role affinity (precedent: convergence routing above):
-        // inject role=<role> for the task's taskMode unless the caller pinned a node or
-        // supplied their own required_tags. SOFT — skipped when no node advertises the
-        // role (least_loaded fallback). Built-in default mapping applies even without a
-        // taskAffinity config block; { enabled:false } disables it.
-        resolvedRequiredTags = resolveTaskAffinityRequiredTags(
-            meshId,
-            modeValidation.taskMode,
-            resolvedRequiredTags,
-            { targetNodeId: opts?.targetNodeId, callerSpecifiedRequiredTags },
         );
         const entry: MeshWorkQueueEntry = {
             id,

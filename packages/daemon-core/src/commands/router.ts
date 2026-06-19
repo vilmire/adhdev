@@ -128,22 +128,21 @@ function readProviderPriorityFromPolicy(policy: unknown): string[] {
 
 /**
  * Normalize a providerRoles array (RepoMeshNodePolicy.providerRoles) from raw
- * tool args. Each entry binds a providerType to an optional free-form `role`
- * label and an optional `maxParallel` cap. Entries without a usable providerType
- * are dropped; the last entry wins on duplicate providerType. Returns [] when no
- * valid entries — callers then omit the field entirely (full backward compat).
+ * tool args. Each entry binds a providerType to an optional `maxParallel` cap.
+ * Entries without a usable providerType are dropped; the last entry wins on
+ * duplicate providerType. Returns [] when no valid entries — callers then omit
+ * the field entirely (full backward compat). Routing is governed by required_tags;
+ * any legacy `role` field on the input is ignored.
  */
-function normalizeProviderRoles(value: unknown): Array<{ providerType: string; role?: string; maxParallel?: number }> {
+function normalizeProviderRoles(value: unknown): Array<{ providerType: string; maxParallel?: number }> {
     if (!Array.isArray(value)) return [];
-    const byType = new Map<string, { providerType: string; role?: string; maxParallel?: number }>();
+    const byType = new Map<string, { providerType: string; maxParallel?: number }>();
     for (const raw of value) {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
         const rec = raw as Record<string, unknown>;
         const providerType = typeof rec.providerType === 'string' ? rec.providerType.trim() : '';
         if (!providerType) continue;
-        const entry: { providerType: string; role?: string; maxParallel?: number } = { providerType };
-        const role = typeof rec.role === 'string' ? rec.role.trim() : '';
-        if (role) entry.role = role;
+        const entry: { providerType: string; maxParallel?: number } = { providerType };
         const maxParallel = Number(rec.maxParallel);
         if (Number.isFinite(maxParallel) && maxParallel >= 0) entry.maxParallel = Math.floor(maxParallel);
         byType.set(providerType.toLowerCase(), entry);

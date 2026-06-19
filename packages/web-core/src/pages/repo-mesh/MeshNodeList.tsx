@@ -63,7 +63,6 @@ function readNodeProviderRoles(node: MeshNode): MeshProviderRole[] {
         .filter((r): r is MeshProviderRole => !!r && typeof r === 'object' && typeof r.providerType === 'string' && r.providerType.trim().length > 0)
         .map(r => ({
             providerType: r.providerType.trim(),
-            role: typeof r.role === 'string' && r.role.trim() ? r.role.trim() : undefined,
             maxParallel: Number.isFinite(Number(r.maxParallel)) && Number(r.maxParallel) >= 0 ? Math.floor(Number(r.maxParallel)) : undefined,
         }))
 }
@@ -104,8 +103,6 @@ interface Props {
     coordinatorDaemonId: string
     /** Mesh-wide distribution strategy — drives per-node scheduling-priority emphasis. */
     schedulingStrategy: MeshSchedulingStrategy
-    /** Dashboard role dropdown options: standard roles + config-declared custom roles. */
-    roleOptions: string[]
 
     // Provider priority drafts
     nodeProviderPriorityDrafts: ProviderPriorityDrafts
@@ -158,7 +155,6 @@ export function MeshNodeList({
     features,
     coordinatorDaemonId,
     schedulingStrategy,
-    roleOptions,
     nodeProviderPriorityDrafts,
     onNodeProviderPriorityDraftChange,
     availableCliProviders,
@@ -459,7 +455,6 @@ export function MeshNodeList({
                                             <NodeAdvancedPanel
                                                 node={node}
                                                 schedulingStrategy={schedulingStrategy}
-                                                roleOptions={roleOptions}
                                                 saving={savingNodeSchedulingId === node.id}
                                                 onSave={patch => onUpdateNodeScheduling(node, patch)}
                                             />
@@ -512,23 +507,19 @@ export function MeshNodeList({
     )
 }
 
-// ─── Per-node Advanced panel (scheduling priority + provider roles) ─────────────
+// ─── Per-node Advanced panel (scheduling priority + per-provider max-parallel caps) ─────
 
 function NodeAdvancedPanel({
     node,
     schedulingStrategy,
-    roleOptions,
     saving,
     onSave,
 }: {
     node: MeshNode
     schedulingStrategy: MeshSchedulingStrategy
-    roleOptions: string[]
     saving: boolean
     onSave: (patch: { schedulingPriority?: number; providerRoles?: MeshProviderRole[] }) => void
 }) {
-    // Stable id so the <datalist> of standard + config roles binds to each role input.
-    const roleListId = `mesh-role-options-${node.id}`
     const savedPriority = readNodeSchedulingPriority(node)
     const savedRoles = useMemo(() => readNodeProviderRoles(node), [node])
     const [priority, setPriority] = useState<string>(String(savedPriority))
@@ -551,7 +542,6 @@ function NodeAdvancedPanel({
         const cleanedRoles: MeshProviderRole[] = roles
             .map(r => ({
                 providerType: r.providerType.trim(),
-                role: r.role && r.role.trim() ? r.role.trim() : undefined,
                 maxParallel: Number.isFinite(Number(r.maxParallel)) && Number(r.maxParallel) >= 0 ? Math.floor(Number(r.maxParallel)) : undefined,
             }))
             .filter(r => r.providerType.length > 0)
@@ -568,7 +558,7 @@ function NodeAdvancedPanel({
                 <span className="transition-transform group-open:rotate-90" aria-hidden>▸</span> Advanced
                 {(savedPriority !== 0 || savedRoles.length > 0) && (
                     <span className="ml-1 rounded-full border border-border-subtle bg-bg-secondary px-1.5 py-0.5 text-[10px] text-text-muted">
-                        {savedPriority !== 0 ? `priority ${savedPriority}` : ''}{savedPriority !== 0 && savedRoles.length > 0 ? ' · ' : ''}{savedRoles.length > 0 ? `${savedRoles.length} role${savedRoles.length === 1 ? '' : 's'}` : ''}
+                        {savedPriority !== 0 ? `priority ${savedPriority}` : ''}{savedPriority !== 0 && savedRoles.length > 0 ? ' · ' : ''}{savedRoles.length > 0 ? `${savedRoles.length} cap${savedRoles.length === 1 ? '' : 's'}` : ''}
                     </span>
                 )}
             </summary>
@@ -585,14 +575,11 @@ function NodeAdvancedPanel({
                         disabled={saving} />
                 </FormField>
 
-                <FormField label="Provider roles (optional)"
-                    hint="Tag a tool on this node with a role (routable as role=<x>) and an optional max-parallel cap. Standard roles auto-route by task mode; pick one or type a custom role.">
+                <FormField label="Per-provider max parallel (optional)"
+                    hint="Cap concurrent active tasks for a tool on this node. Routing is governed by task required_tags, not by this entry.">
                     <div className="flex flex-col gap-2">
-                        <datalist id={roleListId}>
-                            {roleOptions.map(role => <option key={role} value={role} />)}
-                        </datalist>
                         {roles.length === 0 && (
-                            <div className="text-[12px] text-text-muted">No role declarations. This node uses global caps only.</div>
+                            <div className="text-[12px] text-text-muted">No per-provider caps. This node uses global caps only.</div>
                         )}
                         {roles.map((r, i) => (
                             <div key={i} className="flex flex-wrap items-center gap-2">
@@ -602,13 +589,6 @@ function NodeAdvancedPanel({
                                     onChange={e => updateRole(i, { providerType: e.target.value })}
                                     onClick={e => e.stopPropagation()}
                                     disabled={saving} />
-                                <input type="text" placeholder="role (e.g. coder)"
-                                    list={roleListId}
-                                    className="flex-1 min-w-[8rem] px-2 py-1.5 rounded-lg bg-bg-secondary border border-border-subtle text-[12px] text-text-primary"
-                                    value={r.role ?? ''}
-                                    onChange={e => updateRole(i, { role: e.target.value })}
-                                    onClick={e => e.stopPropagation()}
-                                    disabled={saving} />
                                 <input type="number" min={0} step={1} placeholder="max ∥"
                                     className="w-20 px-2 py-1.5 rounded-lg bg-bg-secondary border border-border-subtle text-[12px] text-text-primary"
                                     value={r.maxParallel ?? ''}
@@ -616,14 +596,14 @@ function NodeAdvancedPanel({
                                     onClick={e => e.stopPropagation()}
                                     disabled={saving} />
                                 <button type="button" className="text-text-muted hover:text-red-400 bg-transparent border-none cursor-pointer"
-                                    onClick={e => { e.stopPropagation(); removeRole(i) }} title="Remove role" disabled={saving}>
+                                    onClick={e => { e.stopPropagation(); removeRole(i) }} title="Remove cap" disabled={saving}>
                                     <IconX size={13} />
                                 </button>
                             </div>
                         ))}
                         <button type="button" className="self-start text-[12px] text-accent-primary bg-transparent border-none cursor-pointer p-0 inline-flex items-center gap-1"
                             onClick={e => { e.stopPropagation(); addRole() }} disabled={saving}>
-                            <IconPlus size={12} /> Add role
+                            <IconPlus size={12} /> Add cap
                         </button>
                     </div>
                 </FormField>

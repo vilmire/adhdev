@@ -269,20 +269,19 @@ function buildNodeConfigSection(mesh: LocalMeshEntry): string {
         const explicitMachineLabel = typeof (n as any).machineLabel === 'string' ? (n as any).machineLabel : '';
         const explicitLabel = explicitMachineLabel ? ` label: **${explicitMachineLabel}** |` : '';
         const providerPriority = n.policy?.providerPriority?.length ? ` | providers: ${n.policy.providerPriority.join(', ')}` : '';
-        // Per-(node, provider) role label + maxParallel cap. role is a hint surfaced
-        // here for delegation context; only maxParallel is enforced by the queue.
+        // Per-(node, provider) maxParallel cap. Only maxParallel is enforced by the
+        // queue; routing is governed by required_tags, not provider roles.
         const providerRoles = Array.isArray(n.policy?.providerRoles)
-            ? (n.policy!.providerRoles as Array<{ providerType?: unknown; role?: unknown; maxParallel?: unknown }>)
+            ? (n.policy!.providerRoles as Array<{ providerType?: unknown; maxParallel?: unknown }>)
                 .map(r => {
                     const type = typeof r?.providerType === 'string' ? r.providerType.trim() : '';
                     if (!type) return '';
-                    const role = typeof r?.role === 'string' && r.role.trim() ? `=${r.role.trim()}` : '';
                     const cap = Number.isFinite(Number(r?.maxParallel)) ? ` (max ${Math.floor(Number(r.maxParallel))})` : '';
-                    return `${type}${role}${cap}`;
+                    return `${type}${cap}`;
                 })
                 .filter(Boolean)
             : [];
-        const providerRolesSuffix = providerRoles.length ? ` | roles: ${providerRoles.join(', ')}` : '';
+        const providerRolesSuffix = providerRoles.length ? ` | caps: ${providerRoles.join(', ')}` : '';
         lines.push(`- ${explicitLabel} nodeId: \`${n.id}\` | workspace: \`${n.workspace}\`${n.daemonId ? ` | daemon: \`${n.daemonId}\`` : ''}${providerPriority}${providerRolesSuffix}${suffix}`);
         const nodePrompt = typeof (n as any).systemPrompt === 'string' ? (n as any).systemPrompt.trim() : '';
         if (nodePrompt) {
