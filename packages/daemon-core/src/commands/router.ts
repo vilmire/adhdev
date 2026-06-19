@@ -2002,6 +2002,122 @@ export async function runMeshRefinePatchEquivalenceGate(
     }
 }
 
+export type MeshWorktreePatchContainmentSummary = {
+    /** True only when merging worktreeHead into ref introduces no new patch. */
+    contained: boolean;
+    ref: string;
+    worktreeHead: string;
+    mergeBase?: string;
+    mergedTree?: string;
+    /** patch-id of (ref -> synthesized merge tree); empty string when nothing new is added. */
+    residualPatchId?: string;
+    durationMs: number;
+    /** Set when the check could not run (treated conservatively as NOT contained). */
+    error?: string;
+};
+
+/**
+ * Patch-equivalence containment check for the worktree force-cleanup convergence
+ * guard. Answers a narrower question than {@link runMeshRefinePatchEquivalenceGate}:
+ * "are the worktree branch's changes ALREADY present in `ref` (e.g. origin/main),
+ * even though the worktree HEAD's commit SHA is not an ancestor of ref?"
+ *
+ * This is the cherry-pick / squash / rebase case: the same content landed on the
+ * default ref under a different commit SHA, so `merge-base --is-ancestor` (the
+ * primary cleanup guard) reports the worktree as un-converged and refuses to
+ * remove it. Refinery already accepts patch-equivalent landings via merge-tree +
+ * patch-id; this brings the same notion of "convergence" to the cleanup guard.
+ *
+ * Mechanism: synthesize the merge of `worktreeHead` into `ref` (reusing the same
+ * trivial-gitlink-fast-forward handling as the refine gate) and compute the
+ * patch-id of (ref -> mergedTree). If that residual diff is EMPTY, merging the
+ * worktree adds nothing new on top of ref — its changes are already present there
+ * and the worktree is safe to remove. A non-empty residual means the worktree
+ * still carries content not in ref, so it is NOT contained and must stay blocked.
+ *
+ * Conservative by construction: any merge-tree / patch-id failure, a genuine
+ * (non-trivial) submodule conflict, or any thrown error yields `contained: false`
+ * so an exception can never widen the cleanup allow-list.
+ */
+export async function checkWorktreeChangesPatchEquivalentInRef(
+    repoRoot: string,
+    ref: string,
+    worktreeHead: string,
+): Promise<MeshWorktreePatchContainmentSummary> {
+    const startedAt = Date.now();
+    try {
+        const { execFileSync } = await import('node:child_process');
+        const git = (gitArgs: string[]) => execFileSync('git', gitArgs, {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+        });
+        const mergeBase = git(['merge-base', ref, worktreeHead]).trim();
+
+        // Reuse the refine gate's trivial-gitlink-fast-forward handling: a clean
+        // submodule pointer fast-forward must not block the cleanup, but a real
+        // (non-ff) submodule divergence must keep it blocked.
+        let mergedTree = '';
+        try {
+            mergedTree = git(['merge-tree', '--write-tree', ref, worktreeHead]).trim().split(/\s+/)[0] || '';
+        } catch (mergeTreeErr: any) {
+            const output = `${mergeTreeErr?.message || ''}\n${mergeTreeErr?.stdout || ''}\n${mergeTreeErr?.stderr || ''}`;
+            const isSubmoduleConflict = /(submodule|160000)/i.test(output)
+                || /Recursive merging with submodules/i.test(output);
+            if (!isSubmoduleConflict) throw mergeTreeErr;
+            const evaluation = evaluateGitlinkTrivialFastForward(repoRoot, ref, worktreeHead);
+            if (!evaluation.trivial) {
+                // A genuine submodule divergence (or unfetched objects): we cannot
+                // prove containment, so block conservatively.
+                return {
+                    contained: false,
+                    ref,
+                    worktreeHead,
+                    mergeBase: mergeBase || undefined,
+                    durationMs: Date.now() - startedAt,
+                    error: `merge-tree submodule conflict is not a trivial fast-forward: ${evaluation.reason || 'unknown'}`,
+                };
+            }
+            mergedTree = synthesizeTrivialFastForwardMergeTree(repoRoot, ref, worktreeHead, evaluation.gitlinks) || '';
+        }
+
+        if (!mergedTree) {
+            return {
+                contained: false,
+                ref,
+                worktreeHead,
+                mergeBase: mergeBase || undefined,
+                durationMs: Date.now() - startedAt,
+                error: 'could not resolve synthetic merge tree for containment check',
+            };
+        }
+
+        // Exclude proven fast-forward gitlinks from the residual diff for the same
+        // reason the refine gate does: advancing a submodule pointer to a strict
+        // descendant is a safe fast-forward and must not count as "new content".
+        const ffGitlinkExcludePaths = collectFastForwardGitlinkPaths(repoRoot, ref, worktreeHead);
+        const residualPatchId = await computeGitPatchId(repoRoot, ref, mergedTree, ffGitlinkExcludePaths);
+        const contained = residualPatchId === '';
+        return {
+            contained,
+            ref,
+            worktreeHead,
+            mergeBase: mergeBase || undefined,
+            mergedTree,
+            residualPatchId,
+            durationMs: Date.now() - startedAt,
+        };
+    } catch (e: any) {
+        return {
+            contained: false,
+            ref,
+            worktreeHead,
+            durationMs: Date.now() - startedAt,
+            error: e?.message || String(e),
+        };
+    }
+}
+
 /**
  * No-op guard: detect a "silent no-op" merge before the Refinery merge runs.
  *
@@ -3928,6 +4044,7 @@ export class DaemonCommandRouter {
 
         const seen = new Set<string>();
         const checkedRefs: string[] = [];
+        const resolvedRefCommits: Array<{ ref: string; commit: string }> = [];
         for (const ref of candidateRefs) {
             if (!ref || seen.has(ref)) continue;
             seen.add(ref);
@@ -3938,11 +4055,33 @@ export class DaemonCommandRouter {
                 continue;
             }
             checkedRefs.push(ref);
+            resolvedRefCommits.push({ ref, commit });
             try {
                 await runGit(['merge-base', '--is-ancestor', head, commit], args.repoRoot);
                 return { allow: true, status: 'merged_to_default_ref', source: 'git_merge_base', ref };
             } catch {
                 // Not contained in this candidate ref; keep checking other safe refs.
+            }
+        }
+
+        // SHA-reachability fallback: the worktree HEAD is not an ancestor of any
+        // candidate ref, but its CONTENT may already be present via cherry-pick /
+        // squash / rebase (a different commit SHA carrying the same patch). The
+        // Refinery accepts such patch-equivalent landings; mirror that here so the
+        // cleanup guard does not falsely block a converged worktree. This is the
+        // heavier merge-tree/patch-id path, so it only runs after every ancestor
+        // check has already failed. Any failure stays conservative (NOT contained).
+        for (const { ref, commit } of resolvedRefCommits) {
+            let containment: MeshWorktreePatchContainmentSummary;
+            try {
+                containment = await checkWorktreeChangesPatchEquivalentInRef(args.repoRoot, commit, head);
+            } catch {
+                // Defensive: the helper is already exception-safe, but never let a
+                // thrown error escape into an allow.
+                continue;
+            }
+            if (containment.contained) {
+                return { allow: true, status: 'patch_equivalent_to_default_ref', source: 'git_patch_equivalence', ref };
             }
         }
 
