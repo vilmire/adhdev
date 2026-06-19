@@ -342,3 +342,126 @@ describe('claude-cli v4 FSM — busy→idle completion-footer position guard', (
         expect(footerRe.test(body)).toBe(true);
     });
 });
+
+// ── busy→idle footer-anchored spinner guard (false-idle root fix #3) ──────────
+// Live root cause (Spec Debug Snapshot): claude-cli was actively generating —
+// the bottom of the screen showed a progress spinner `✢ Spelunking… (1m 37s ·
+// ↓ 6.1k tokens)` plus the `esc to interrupt` cue — yet the FSM read idle.
+//
+// The reason: claude draws the active progress line BELOW the `❯` input prompt
+// (inside the input-box chrome). The footer section anchors on the prompt
+// (`^[❯›>]`, anchor_last) and runs to EOF, so the spinner + `esc to interrupt`
+// land in the `footer` section, NOT `body`. The busy→idle not-spinner clause was
+// scoped to `section: "body"`, so it never saw the footer spinner → read TRUE
+// ("no spinner"). Meanwhile a STALE completion footer (`✻ Baked for 7s`) from a
+// prior turn still sat in `body`, so the completion-footer clause matched too.
+// not-spinner TRUE + footer TRUE + stable TRUE → false idle while generating.
+//
+// Fix: the not-spinner clause now scans the WHOLE screen (section omitted →
+// sectionText() returns the full screen), so an active spinner / esc-to-interrupt
+// cue ANYWHERE — body, footer, or modal chrome — keeps the session busy. The
+// completion-footer clause stays `section: "body"` (its position is correct), and
+// stable_ms was raised 6000→8000 as an extra settle margin. A genuine completion
+// (spinner gone, only the duration footer remains) still drives idle — proving
+// this is a guard, not an over-fix.
+
+// A generating frame where the active spinner sits BELOW the prompt box, with a
+// stale completion footer left in the body from the previous turn. This is the
+// exact layout that produced the live false idle.
+const footerAnchoredSpinner = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '⏺ Earlier output line',
+    '',
+    '✻ Baked for 7s',                  // STALE completion footer, in `body`
+    '',
+    '────────────────────────────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────────────────────────────',
+    '✢ Spelunking… (1m 37s · ↓ 6.1k tokens)',   // active spinner, in `footer`
+    '  esc to interrupt',
+].join('\n');
+
+// Same idea but the only generation cue below the prompt is the textual
+// "esc to interrupt" hint (no leading spinner glyph this frame).
+const footerAnchoredInterruptCue = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '⏺ Earlier output line',
+    '',
+    '✻ Worked for 12s',                // STALE completion footer, in `body`
+    '',
+    '────────────────────────────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────────────────────────────',
+    '  esc to interrupt · ctrl+t to hide todos',  // interrupt cue in `footer`
+].join('\n');
+
+// A genuine completion: the spinner / interrupt cue is gone, only the duration
+// completion footer remains in `body`. Must still go idle (no over-fix).
+const genuineCompletionNoSpinner = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '⏺ Done.',
+    '',
+    '✻ Baked for 7s',                  // duration completion footer, in `body`
+    '',
+    '────────────────────────────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────────────────────────────',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+].join('\n');
+
+describe('claude-cli v4 FSM — footer-anchored spinner false-idle guard', () => {
+    const spec = loadSpec();
+
+    it('the busy→idle not-spinner clause is whole-screen scoped (no section)', () => {
+        // The clause must NOT be body-scoped, or a spinner in the footer section
+        // (below the prompt) is invisible to it and false idle returns.
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const notSpinner = (busyToIdle.when as any).all.find(
+            (c: any) => c.not && c.not.matches && c.not.matches.includes('2800'));
+        expect(notSpinner).toBeTruthy();
+        expect(notSpinner.not.section).toBeUndefined();
+    });
+
+    it('confirms the spinner lands in the footer section, not body', () => {
+        // Documents WHY the body-scoped clause failed: section resolution puts
+        // the active spinner + esc-to-interrupt in `footer`, and the stale
+        // completion footer in `body`.
+        const lines = strip(footerAnchoredSpinner);
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const body = sectionText(sections, 'body', lines.join('\n'));
+        const footer = sectionText(sections, 'footer', lines.join('\n'));
+        expect(footer).toContain('Spelunking');
+        expect(footer).toContain('esc to interrupt');
+        expect(body).not.toContain('Spelunking');
+        expect(body).toContain('✻ Baked for 7s'); // stale footer is in body
+    });
+
+    it('STAYS busy when an active spinner sits below the prompt (footer section)', () => {
+        // Clock is well past every time gate (stable 8s, hold 800ms) so only the
+        // whole-screen not-spinner clause can hold it busy. Pre-fix → idle.
+        const ev = evaluateFsm(spec, 'busy', footerAnchoredSpinner, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('STAYS busy when only an "esc to interrupt" cue sits below the prompt', () => {
+        const ev = evaluateFsm(spec, 'busy', footerAnchoredInterruptCue, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('still goes idle on a genuine completion (spinner gone) — not an over-fix', () => {
+        const ev = evaluateFsm(spec, 'busy', genuineCompletionNoSpinner, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('busy→idle stable_ms is 8000 (raised settle margin)', () => {
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const stable = (busyToIdle.when as any).all.find((c: any) => typeof c.stable_ms === 'number');
+        expect(stable.stable_ms).toBe(8000);
+    });
+});
