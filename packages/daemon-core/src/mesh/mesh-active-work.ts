@@ -1,5 +1,7 @@
 import type { MeshLedgerEntry } from './mesh-ledger.js';
+import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
+import { deleteDirectDispatchesByTaskId } from './mesh-work-queue.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
@@ -438,6 +440,158 @@ export function classifyStaleDirectForPrune(
     if (record.terminal === true) return opts.includeTerminal ? 'prunable_terminal' : 'preserve_active';
     if (record.staleReason && PRUNABLE_ORPHAN_STALE_REASONS.has(record.staleReason)) return 'prunable_orphan';
     return 'preserve_active';
+}
+
+/**
+ * Outcome of one staleDirect prune pass. Pure data — callers (the MCP tool, the
+ * daemon reconcile loop) format/log this however they need. The MCP tool wraps it in
+ * its JSON response; the reconcile loop logs prunedCount when > 0.
+ */
+export interface StaleDirectPruneResult {
+    mode: 'execute' | 'dry_run';
+    includeTerminal: boolean;
+    /** Total staleDirect (+terminal when included) candidates surfaced this pass. */
+    candidateCount: number;
+    /** Records classified prunable AND (when minAgeMs > 0) old enough to auto-prune. */
+    prunable: MeshActiveWorkRecord[];
+    prunedCount: number;
+    /** Prunable by classification but younger than the age gate — only populated when minAgeMs > 0. */
+    skippedTooYoung: MeshActiveWorkRecord[];
+    preservedUnacknowledged: MeshActiveWorkRecord[];
+    /** Prunable orphans/terminals with no store-backed row to delete (ledger-only audit). */
+    preservedLedgerOnly: MeshActiveWorkRecord[];
+    preservedNotOrphan: MeshActiveWorkRecord[];
+}
+
+export interface PruneStaleDirectDispatchesOptions {
+    meshId: string;
+    /** Active direct dispatches from MeshRuntimeStore (getActiveDirectDispatches). */
+    directDispatches: DirectDispatchRecord[];
+    /** Ledger tail used to attribute remote/terminal dispatches (readLedgerEntries). */
+    ledgerEntries?: MeshLedgerEntry[];
+    queue?: MeshWorkQueueEntry[];
+    /** Live mesh nodes (decorated with live session details) — drives orphan detection. */
+    nodes?: any[];
+    /** When true, actually delete + append the audit ledger entry. Default false (dry run). */
+    execute?: boolean;
+    /** Include terminal (idle/failed) direct rows as prune candidates. Default false. */
+    includeTerminal?: boolean;
+    /**
+     * Minimum age (ms, measured from createdAt/dispatchedAt) before a prunable orphan is
+     * eligible. 0 (default) prunes immediately regardless of age — the manual prune behavior.
+     * The daemon auto-prune passes a conservative threshold so a node/session that is only
+     * transiently invisible is never pruned on the spot.
+     */
+    minAgeMs?: number;
+    /** Audit source string written into the direct_dispatch_pruned ledger payload. */
+    source?: string;
+    now?: number;
+}
+
+/**
+ * Shared staleDirect prune core. Single source of truth for the prune decision + the
+ * mutation (store-row delete + audit-ledger append) used by BOTH the manual MCP tool
+ * (mesh_prune_stale_direct, minAgeMs=0) and the daemon reconcile loop's auto-prune
+ * PHASE (minAgeMs > 0). Pure decision logic via buildMeshActiveWork + classifyStaleDirectForPrune;
+ * the only side effects (on execute) are deleteDirectDispatchesByTaskId and a single
+ * direct_dispatch_pruned ledger entry — never touching the append-only audit history of the
+ * pruned dispatches themselves.
+ *
+ * Safety rules (identical for manual + auto):
+ *  - Only records classified as staleDirectWork against the CURRENT live mesh are eligible.
+ *  - Of those, only orphans (node/session gone) — and terminals when includeTerminal — are prunable.
+ *    Fresh unacknowledged dispatch failures (node/session still live) are always preserved.
+ *  - Only store-backed rows (taskId present in MeshRuntimeStore) are deleted; ledger-only remote
+ *    entries are preserved.
+ *  - When minAgeMs > 0, a prunable orphan younger than the gate is held back (skippedTooYoung).
+ *    This applies ONLY to the auto path; the manual path passes minAgeMs=0 (immediate).
+ *
+ * Idempotent: a deleted row no longer appears in getActiveDirectDispatches, so a second pass
+ * over the same orphan finds nothing to prune.
+ */
+export function pruneStaleDirectDispatches(opts: PruneStaleDirectDispatchesOptions): StaleDirectPruneResult {
+    const now = opts.now ?? Date.now();
+    const includeTerminal = opts.includeTerminal === true;
+    const execute = opts.execute === true;
+    const minAgeMs = Math.max(0, opts.minAgeMs ?? 0);
+
+    const activeWorkEvidence = buildMeshActiveWork({
+        meshId: opts.meshId,
+        queue: opts.queue,
+        ledgerEntries: opts.ledgerEntries,
+        directDispatches: opts.directDispatches,
+        nodes: opts.nodes,
+        now,
+        includeTerminalDirect: includeTerminal,
+    });
+
+    const candidates = [
+        ...activeWorkEvidence.staleDirectWork,
+        ...(includeTerminal ? activeWorkEvidence.terminalDirectWork : []),
+    ];
+    // Only prune store-backed dispatch rows (taskIds present in MeshRuntimeStore). Ledger-only
+    // remote entries have no store row to delete and are pure audit history — leave them alone.
+    const storeTaskIds = new Set(opts.directDispatches.map(d => d.taskId));
+
+    const prunable: MeshActiveWorkRecord[] = [];
+    const skippedTooYoung: MeshActiveWorkRecord[] = [];
+    const preservedUnacknowledged: MeshActiveWorkRecord[] = [];
+    const preservedLedgerOnly: MeshActiveWorkRecord[] = [];
+    const preservedNotOrphan: MeshActiveWorkRecord[] = [];
+    for (const record of candidates) {
+        const classification = classifyStaleDirectForPrune(record, { includeTerminal });
+        if (classification === 'preserve_unacknowledged') {
+            preservedUnacknowledged.push(record);
+            continue;
+        }
+        if (classification === 'preserve_active') {
+            preservedNotOrphan.push(record);
+            continue;
+        }
+        // prunable_orphan | prunable_terminal — only delete store-backed rows; ledger-only remote
+        // entries have no store row to delete and are pure audit history.
+        if (!storeTaskIds.has(record.taskId)) {
+            preservedLedgerOnly.push(record);
+            continue;
+        }
+        // Age gate (auto path only): hold back orphans that are too fresh — a node/session that is
+        // only transiently invisible must not be pruned the instant it disappears.
+        if (minAgeMs > 0) {
+            const ageRef = record.dispatchedAt || record.createdAt;
+            const ageMs = elapsedSince(ageRef, now);
+            if (ageMs < minAgeMs) {
+                skippedTooYoung.push(record);
+                continue;
+            }
+        }
+        prunable.push(record);
+    }
+
+    let prunedCount = 0;
+    if (execute && prunable.length) {
+        prunedCount = deleteDirectDispatchesByTaskId(opts.meshId, prunable.map(r => r.taskId));
+        appendLedgerEntry(opts.meshId, {
+            kind: 'direct_dispatch_pruned',
+            payload: {
+                source: opts.source || 'prune_stale_direct',
+                prunedCount,
+                taskIds: prunable.map(r => r.taskId),
+                reasons: Array.from(new Set(prunable.map(r => r.staleReason || (r.terminal ? 'terminal' : 'unknown')))),
+            },
+        });
+    }
+
+    return {
+        mode: execute ? 'execute' : 'dry_run',
+        includeTerminal,
+        candidateCount: candidates.length,
+        prunable,
+        prunedCount,
+        skippedTooYoung,
+        preservedUnacknowledged,
+        preservedLedgerOnly,
+        preservedNotOrphan,
+    };
 }
 
 export function buildCompactStaleDirectWorkSummary(

@@ -55,7 +55,9 @@ import {
     expireStaleUnresolvedDelegateForwards,
 } from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { getActiveDirectDispatches } from './mesh-work-queue.js';
+import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
+import { readLedgerEntries } from './mesh-ledger.js';
+import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence } from '../providers/chat-message-normalization.js';
 import type { ChatMessage } from '../types.js';
@@ -63,6 +65,25 @@ import type { ChatMessage } from '../types.js';
 // Default reconcile cadence. approval/completion notifications to a live CLI
 // coordinator land within at most one interval. Overridable via env for tuning.
 const DEFAULT_RECONCILE_INTERVAL_MS = 4_000;
+
+// PHASE 5 (auto-prune) conservative age gate. A direct dispatch whose node/session is
+// orphaned (no longer in the live mesh) is only auto-pruned once it is at least this old,
+// measured from its dispatch time. This protects against a node/session that is only
+// *transiently* invisible (a momentary probe failure, a daemon restart) being pruned the
+// instant it disappears. The MANUAL prune (mesh_prune_stale_direct) has no age gate — an
+// operator pruning explicitly wants the orphan gone now. Overridable via env for tuning.
+const DEFAULT_AUTO_PRUNE_MIN_AGE_MS = 24 * 60 * 60_000; // 24h
+
+function resolveAutoPruneMinAgeMs(): number {
+    const raw = readNonEmptyString(process.env.MESH_AUTO_PRUNE_MIN_AGE_MS);
+    if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        // Clamp to [1h, 30d] so a mis-set env can't make the gate pathologically aggressive
+        // (prune the moment something blinks) or effectively disable it forever.
+        if (Number.isFinite(parsed) && parsed >= 60 * 60_000 && parsed <= 30 * 24 * 60 * 60_000) return parsed;
+    }
+    return DEFAULT_AUTO_PRUNE_MIN_AGE_MS;
+}
 
 function resolveReconcileIntervalMs(): number {
     const raw = readNonEmptyString(process.env.MESH_RECONCILE_INTERVAL_MS);
@@ -307,6 +328,36 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             await reconcileUnterminatedDirectDispatches(components, mesh, selfIds, localDaemonId);
         } catch (e: any) {
             LOG.warn('MeshReconcile', `Completion reconcile failed for mesh ${mesh.id}: ${e?.message || e}`);
+        }
+    }
+
+    // ── PHASE 5: auto-prune orphaned direct dispatch records ───────────────────
+    // staleDirectWork (orphaned direct-dispatch rows whose node/session is no longer in the
+    // live mesh) otherwise accumulates indefinitely: a removed worktree node or a cleanly
+    // terminated session leaves its direct-dispatch row behind, stuck in a non-terminal status
+    // (e.g. generating) for days. This is NOT a false-idle bug — it is the separate problem of
+    // orphaned records that the only existing cleanup path (manual MCP mesh_prune_stale_direct)
+    // never reaches unless an operator runs it by hand.
+    //
+    // This phase runs the SAME prune core the manual tool calls (pruneStaleDirectDispatches),
+    // in execute mode, on the daemon timer. The only difference from the manual path is a
+    // conservative age gate (DEFAULT_AUTO_PRUNE_MIN_AGE_MS): a freshly-orphaned record is held
+    // back until it is provably stale, so a transient probe miss never auto-prunes live work.
+    // Every other safety rule is inherited unchanged from the core — active/pending/generating
+    // work and fresh unacknowledged dispatch failures are never pruned, ledger-only audit entries
+    // are preserved, and the prune itself is recorded with a direct_dispatch_pruned ledger entry.
+    // Idempotent: a pruned row is gone from getActiveDirectDispatches, so the next tick finds
+    // nothing to re-prune. Isolated in its own try/catch per mesh so it can never kill the tick.
+    {
+        const minAgeMs = resolveAutoPruneMinAgeMs();
+        for (const mesh of listMeshes()) {
+            const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+            if (!daemonHostsMesh(mesh, selfIds)) continue;
+            try {
+                await autoPruneStaleDirectDispatches(components, mesh, selfIds, localDaemonId, minAgeMs);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Auto-prune stale direct failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
         }
     }
 
@@ -590,6 +641,98 @@ async function reconcileUnterminatedDirectDispatches(
             LOG.warn('MeshReconcile', `Transcript completion reconcile threw for task ${taskId}: ${e?.message || e}`);
         }
     }
+}
+
+// PHASE 5 helper. Build the live-node view (mesh.nodes decorated with each node's live
+// session list) and run the shared prune core in execute mode with the conservative age gate.
+//
+// Orphan detection needs the SAME live-session evidence the manual MCP prune uses: a node still
+// in mesh.nodes whose session list no longer contains the dispatched sessionId is "session not
+// present" (prunable); a node missing from mesh.nodes entirely is "node no longer in live mesh"
+// (prunable). We obtain live sessions per node via get_status_metadata — local nodes through the
+// local commandHandler, remote nodes over P2P (dispatchMeshCommand) — exactly the transports
+// PHASE 4 already uses. A node we cannot probe (offline) keeps an empty session list; combined
+// with the age gate that only matters once the orphan is genuinely old.
+//
+// O(1) fast exit: when there are no active direct dispatches at all there is nothing to prune,
+// so we skip the (per-node) status probes entirely — an idle mesh costs one indexed query.
+async function autoPruneStaleDirectDispatches(
+    components: DaemonComponents,
+    mesh: LocalMeshEntry,
+    selfIds: string[],
+    localDaemonId: string | undefined,
+    minAgeMs: number,
+): Promise<void> {
+    const directDispatches = getActiveDirectDispatches(mesh.id);
+    if (directDispatches.length === 0) return; // nothing dispatched → nothing to prune
+
+    const liveNodes = await collectLiveNodesWithSessions(components, mesh, selfIds, localDaemonId);
+
+    const result = pruneStaleDirectDispatches({
+        meshId: mesh.id,
+        queue: getQueue(mesh.id),
+        ledgerEntries: readLedgerEntries(mesh.id, { tail: 500 }),
+        directDispatches,
+        nodes: liveNodes,
+        execute: true,
+        minAgeMs,
+        source: 'daemon_reconcile_auto_prune',
+    });
+
+    // Log only when something was actually pruned — silence on the common no-op tick.
+    if (result.prunedCount > 0) {
+        LOG.info('MeshReconcile', `Auto-pruned ${result.prunedCount} orphaned direct dispatch record(s) for mesh ${mesh.id}`);
+    }
+}
+
+// Probe each node for its live session list (get_status_metadata) and return mesh.nodes
+// decorated with a `sessions` array — the shape buildMeshActiveWork / sessionStatusFromNodes
+// consume to decide whether a dispatched session is still present. Best-effort: an unreachable
+// node yields an empty session list rather than throwing.
+async function collectLiveNodesWithSessions(
+    components: DaemonComponents,
+    mesh: LocalMeshEntry,
+    selfIds: string[],
+    localDaemonId: string | undefined,
+): Promise<any[]> {
+    const dispatchMeshCommand = components.dispatchMeshCommand;
+    return Promise.all(mesh.nodes.map(async (node) => {
+        const nodeDaemonId = readNonEmptyString(node.daemonId);
+        const isLocalNode = !nodeDaemonId
+            || selfIds.includes(nodeDaemonId)
+            || (localDaemonId !== undefined && nodeDaemonId === localDaemonId);
+        let statusResult: unknown;
+        try {
+            if (isLocalNode) {
+                statusResult = await components.commandHandler.handle('get_status_metadata', {});
+            } else if (dispatchMeshCommand) {
+                statusResult = await dispatchMeshCommand(nodeDaemonId, 'get_status_metadata', {});
+            } else {
+                return node; // remote node, no P2P transport — leave undecorated
+            }
+        } catch {
+            return node; // unreachable — leave undecorated (empty session list)
+        }
+        const sessions = extractStatusMetadataSessions(statusResult);
+        return sessions.length > 0 ? { ...node, sessions } : node;
+    }));
+}
+
+// Pull the live session list out of a get_status_metadata result, tolerating the same
+// envelope shapes unwrapReadChatPayload handles (direct CommandResult or { payload }/{ result }).
+function extractStatusMetadataSessions(raw: unknown): any[] {
+    let cursor: unknown = raw;
+    for (let depth = 0; depth < 4 && cursor && typeof cursor === 'object'; depth++) {
+        const record = cursor as Record<string, unknown>;
+        const status = record.status && typeof record.status === 'object' ? record.status as Record<string, unknown> : undefined;
+        if (status && Array.isArray(status.sessions)) return status.sessions;
+        if (Array.isArray(record.sessions)) return record.sessions;
+        if (record.payload && typeof record.payload === 'object') { cursor = record.payload; continue; }
+        if (record.result && typeof record.result === 'object') { cursor = record.result; continue; }
+        if (record.data && typeof record.data === 'object') { cursor = record.data; continue; }
+        break;
+    }
+    return [];
 }
 
 function extractPendingEvents(raw: unknown): any[] {

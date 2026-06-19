@@ -809,11 +809,19 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: {
-            handle: vi.fn(async () => ({
-              success: true,
-              status: 'generating', // mid-turn — must not be completed
-              messages: [{ role: 'assistant', content: 'still working…', timestamp: 1_700_000_000_000 - 5_000 }],
-            })),
+            handle: vi.fn(async (cmd: string) => {
+              // PHASE 5's live-session probe: a generating session is present in the live
+              // status — so PHASE 5 sees it as live (not an orphan) and never prunes it.
+              if (cmd === 'get_status_metadata') {
+                return { success: true, status: { sessions: [{ id: sessionId, status: 'generating' }] } }
+              }
+              // PHASE 4's read_chat: mid-turn, must not be completed.
+              return {
+                success: true,
+                status: 'generating',
+                messages: [{ role: 'assistant', content: 'still working…', timestamp: 1_700_000_000_000 - 5_000 }],
+              }
+            }),
           },
         } as any
 
@@ -821,8 +829,204 @@ describe('runMeshReconcileTick', () => {
 
         const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')
         expect(completed).toBeFalsy()
-        // The dispatch stays active (non-terminal) for a future reconcile.
+        // The dispatch stays active (non-terminal) for a future reconcile — and PHASE 5 must
+        // not prune a session that is still live + generating, even though it is old.
         expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+  })
+
+  // ── PHASE 5: auto-prune orphaned direct dispatch records ────────────────────
+  // staleDirectWork (orphaned direct-dispatch rows whose node/session is no longer in
+  // the live mesh) otherwise accumulates for days. PHASE 5 runs the shared prune core
+  // (the same one mesh_prune_stale_direct uses) on the daemon timer, in execute mode,
+  // gated by a conservative age threshold so transiently-invisible work is never pruned.
+  describe('PHASE 5 — auto-prune orphaned direct dispatches', () => {
+    function ageIso(ms: number): string {
+      return new Date(Date.now() - ms).toISOString()
+    }
+    const HOUR = 60 * 60_000
+    const DAY = 24 * HOUR
+
+    // A components surface with no live coordinators and no remote transport — PHASE 5 only
+    // needs commandHandler.handle('get_status_metadata') for live-session probing.
+    function makeAutoPruneComponents(statusSessions: any[] = []) {
+      const handle = vi.fn(async (cmd: string) => {
+        if (cmd === 'get_status_metadata') return { success: true, status: { sessions: statusSessions } }
+        return { success: true }
+      })
+      return {
+        components: {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle },
+        } as any,
+        handle,
+      }
+    }
+
+    function seedDispatch(meshId: string, taskId: string, nodeId: string, sessionId: string, ageMs: number) {
+      insertDirectDispatch(meshId, {
+        taskId,
+        nodeId,
+        sessionId,
+        providerType: 'claude-cli',
+        message: `work for ${taskId}`,
+        via: 'local_direct',
+        dispatchedAt: ageIso(ageMs),
+      })
+    }
+
+    it('orphan (node no longer in mesh) past the age threshold → auto-pruned + ledger entry', async () => {
+      const meshId = `mesh_reconcile_phase5_orphan_old_${Date.now()}`
+      try {
+        const taskId = 'task_orphan_old'
+        // Dispatch targets a node that is NOT in the live mesh → "node no longer in live mesh" orphan.
+        seedDispatch(meshId, taskId, 'node_gone', 'sess-gone', 2 * DAY)
+        // The live mesh has a different node only — node_gone is absent.
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_present', workspace: '/repo/present' }] },
+        ])
+
+        const { components } = makeAutoPruneComponents()
+        await runMeshReconcileTick(components)
+
+        // The orphaned row is gone from the active surface...
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(false)
+        // ...and a direct_dispatch_pruned ledger entry records the prune (audit-only).
+        const pruned = readLedgerEntries(meshId).find(e => e.kind === 'direct_dispatch_pruned')
+        expect(pruned).toBeTruthy()
+        expect((pruned?.payload as any)?.source).toBe('daemon_reconcile_auto_prune')
+        expect((pruned?.payload as any)?.taskIds).toContain(taskId)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('orphan younger than the age threshold → preserved (transient-invisibility protection)', async () => {
+      const meshId = `mesh_reconcile_phase5_orphan_young_${Date.now()}`
+      try {
+        const taskId = 'task_orphan_young'
+        // Same orphan shape (node absent) but dispatched only 1h ago — under the 24h gate.
+        seedDispatch(meshId, taskId, 'node_gone', 'sess-gone', 1 * HOUR)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_present', workspace: '/repo/present' }] },
+        ])
+
+        const { components } = makeAutoPruneComponents()
+        await runMeshReconcileTick(components)
+
+        // Held back: still active, and no prune ledger entry written.
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'direct_dispatch_pruned')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('active work (node + session live, generating) → never pruned even when old', async () => {
+      const meshId = `mesh_reconcile_phase5_active_${Date.now()}`
+      try {
+        const taskId = 'task_active'
+        const nodeId = 'node_live'
+        const sessionId = 'sess-live'
+        // Old dispatch, but the node IS in the mesh and the session IS live + generating.
+        seedDispatch(meshId, taskId, nodeId, sessionId, 3 * DAY)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/live' }] },
+        ])
+
+        // get_status_metadata reports the session as live + generating → not stale at all.
+        const { components } = makeAutoPruneComponents([
+          { id: sessionId, status: 'generating' },
+        ])
+        await runMeshReconcileTick(components)
+
+        // Active work is never an orphan → preserved, no prune.
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'direct_dispatch_pruned')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('idempotent: a second tick prunes nothing more (one prune ledger entry only)', async () => {
+      const meshId = `mesh_reconcile_phase5_idempotent_${Date.now()}`
+      try {
+        const taskId = 'task_idem'
+        seedDispatch(meshId, taskId, 'node_gone', 'sess-gone', 2 * DAY)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_present', workspace: '/repo/present' }] },
+        ])
+
+        const { components } = makeAutoPruneComponents()
+        // First tick prunes the orphan.
+        await runMeshReconcileTick(components)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(false)
+
+        // Second tick: the row is already gone → nothing to prune, no extra ledger entry.
+        await runMeshReconcileTick(components)
+        const pruneEntries = readLedgerEntries(meshId).filter(e => e.kind === 'direct_dispatch_pruned')
+        expect(pruneEntries).toHaveLength(1)
+        expect((pruneEntries[0].payload as any)?.prunedCount).toBe(1)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('prune preserves the original task_dispatched audit entry (only the store row is removed)', async () => {
+      const meshId = `mesh_reconcile_phase5_audit_${Date.now()}`
+      try {
+        const taskId = 'task_audit'
+        const sessionId = 'sess-gone'
+        // Record both the audit ledger entry AND the store row for an orphaned dispatch.
+        appendLedgerEntry(meshId, {
+          kind: 'task_dispatched',
+          nodeId: 'node_gone',
+          sessionId,
+          providerType: 'claude-cli',
+          payload: { source: 'direct', via: 'local_direct', taskId, message: 'work for audit' },
+        } as any)
+        seedDispatch(meshId, taskId, 'node_gone', sessionId, 2 * DAY)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_present', workspace: '/repo/present' }] },
+        ])
+
+        const { components } = makeAutoPruneComponents()
+        await runMeshReconcileTick(components)
+
+        // Store row pruned...
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(false)
+        // ...but the append-only audit history (task_dispatched) is intact, and the prune is recorded.
+        const entries = readLedgerEntries(meshId)
+        expect(entries.some(e => e.kind === 'task_dispatched' && (e.payload as any)?.taskId === taskId)).toBe(true)
+        expect(entries.some(e => e.kind === 'direct_dispatch_pruned')).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('does not auto-prune for a mesh this daemon does not host', async () => {
+      const meshId = `mesh_reconcile_phase5_nothost_${Date.now()}`
+      try {
+        const taskId = 'task_nothost'
+        seedDispatch(meshId, taskId, 'node_gone', 'sess-gone', 2 * DAY)
+        // Hosted by a different daemon → daemonHostsMesh is false → PHASE 5 must skip it.
+        meshConfigMocks.listMeshes.mockReturnValue([
+          {
+            id: meshId,
+            meshHost: { role: 'host', hostDaemonId: 'other-daemon' },
+            nodes: [{ id: 'node_present', workspace: '/repo/present', daemonId: 'other-daemon' }],
+          },
+        ])
+
+        const { components } = makeAutoPruneComponents()
+        await runMeshReconcileTick(components)
+
+        // Not our mesh → the orphan is left untouched.
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'direct_dispatch_pruned')).toBe(false)
       } finally {
         cleanup(meshId)
       }

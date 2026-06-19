@@ -35,8 +35,7 @@ import {
     buildP2pRelayFailurePayload,
     cancelTask,
     classifyP2pRelayFailure,
-    classifyStaleDirectForPrune,
-    deleteDirectDispatchesByTaskId,
+    pruneStaleDirectDispatches,
     describeTaskDependencyState,
     drainPendingMeshCoordinatorEvents,
     enqueueTask,
@@ -3905,47 +3904,24 @@ export async function meshPruneStaleDirect(
     const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
     const ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 500 });
     const directDispatches = getActiveDirectDispatches(ctx.mesh.id);
-    const activeWorkEvidence = buildMeshActiveWork({
+
+    // Manual prune is immediate (minAgeMs omitted → 0). The same prune core powers the daemon
+    // reconcile-loop auto-prune, which passes a conservative age gate. Keeping a single core
+    // means the safety classification + audit-ledger behavior can never drift between the two.
+    const result = pruneStaleDirectDispatches({
         meshId: ctx.mesh.id,
         queue: getQueue(ctx.mesh.id),
         ledgerEntries,
         directDispatches,
         nodes: liveNodes,
-        includeTerminalDirect: includeTerminal,
+        execute,
+        includeTerminal,
+        source: 'mesh_prune_stale_direct',
     });
 
-    const candidates = [
-        ...activeWorkEvidence.staleDirectWork,
-        ...(includeTerminal ? activeWorkEvidence.terminalDirectWork : []),
-    ];
-    // Only prune store-backed dispatch rows (taskIds present in MeshRuntimeStore). Ledger-only
-    // remote entries have no store row to delete and are pure audit history — leave them alone.
-    const storeTaskIds = new Set(directDispatches.map(d => d.taskId));
+    const { prunable, prunedCount, preservedUnacknowledged, preservedLedgerOnly, preservedNotOrphan } = result;
 
-    const prunable: typeof candidates = [];
-    const preservedUnacknowledged: typeof candidates = [];
-    const preservedLedgerOnly: typeof candidates = [];
-    const preservedNotOrphan: typeof candidates = [];
-    for (const record of candidates) {
-        const classification = classifyStaleDirectForPrune(record, { includeTerminal });
-        if (classification === 'preserve_unacknowledged') {
-            preservedUnacknowledged.push(record);
-            continue;
-        }
-        if (classification === 'preserve_active') {
-            preservedNotOrphan.push(record);
-            continue;
-        }
-        // prunable_orphan | prunable_terminal — only delete store-backed rows; ledger-only remote
-        // entries have no store row to delete and are pure audit history.
-        if (!storeTaskIds.has(record.taskId)) {
-            preservedLedgerOnly.push(record);
-            continue;
-        }
-        prunable.push(record);
-    }
-
-    const summarize = (records: typeof candidates) => records.map(r => ({
+    const summarize = (records: typeof prunable) => records.map(r => ({
         taskId: r.taskId,
         nodeId: r.nodeId,
         sessionId: r.sessionId,
@@ -3956,26 +3932,12 @@ export async function meshPruneStaleDirect(
         createdAt: r.createdAt,
     }));
 
-    let prunedCount = 0;
-    if (execute && prunable.length) {
-        prunedCount = deleteDirectDispatchesByTaskId(ctx.mesh.id, prunable.map(r => r.taskId));
-        appendLedgerEntry(ctx.mesh.id, {
-            kind: 'direct_dispatch_pruned',
-            payload: {
-                source: 'mesh_prune_stale_direct',
-                prunedCount,
-                taskIds: prunable.map(r => r.taskId),
-                reasons: Array.from(new Set(prunable.map(r => r.staleReason || (r.terminal ? 'terminal' : 'unknown')))),
-            },
-        });
-    }
-
     return JSON.stringify({
         success: true,
-        mode: execute ? 'execute' : 'dry_run',
+        mode: result.mode,
         meshId: ctx.mesh.id,
         includeTerminal,
-        candidateCount: candidates.length,
+        candidateCount: result.candidateCount,
         prunableCount: prunable.length,
         prunedCount,
         prunable: summarize(prunable),
