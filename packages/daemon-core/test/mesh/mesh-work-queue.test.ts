@@ -772,3 +772,73 @@ describe('validateMeshTaskModeRequest — live_debug_readonly git guardrail', ()
         expect(result.violations).not.toContain('git_mutation');
     });
 });
+
+describe('validateMeshTaskModeRequest — prose/negation vs command context', () => {
+    const expectClean = (message: string) => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', message);
+        expect(result.violations).toEqual([]);
+        expect(result.valid).toBe(true);
+    };
+    const expectViolation = (message: string, label: string) => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', message);
+        expect(result.violations).toContain(label);
+        expect(result.valid).toBe(false);
+    };
+
+    describe('read-only investigation prose is allowed (no false positive)', () => {
+        const allowed = [
+            'READ-ONLY. grep/read만. git reset 하지 마세요',
+            'no deploy, read-only',
+            'just grep and read — do not modify or patch anything',
+            'inspect the diff but do not commit; never push',
+            'this is a patch review, only read the patch file and report findings',
+            'we will not run npm install here, only inspect node_modules',
+            '절대 git push 금지 — 그냥 로그만 보세요',
+            'avoid rm -rf; just list the dist directory',
+            'do not edit any source file, only read them',
+            'no longer deploy from this node, read-only audit',
+        ];
+        for (const msg of allowed) {
+            it(`allows: ${msg}`, () => expectClean(msg));
+        }
+    });
+
+    describe('real command-context mutations are still blocked', () => {
+        it('blocks line-start git reset --hard', () => {
+            expectViolation('git reset --hard', 'git_mutation');
+        });
+        it('blocks fenced code block git commit', () => {
+            expectViolation('run this:\n```\ngit commit -m x\n```', 'git_mutation');
+        });
+        it('blocks shell-prompt npm publish', () => {
+            expectViolation('$ npm publish', 'deploy_or_version_bump');
+        });
+        it('blocks rm -rf dist at line start', () => {
+            expectViolation('rm -rf dist', 'destructive_shell');
+        });
+        it('blocks inline-backtick mutation command', () => {
+            expectViolation('then run `git push origin main`', 'git_mutation');
+        });
+        it('blocks npm install in a fenced block', () => {
+            expectViolation('```\nnpm install\n```', 'package_install');
+        });
+    });
+
+    describe('negation suppresses even backtick/code mentions', () => {
+        it('allows negated inline-backtick command (do not run `npm publish`)', () => {
+            expectClean('do not run `npm publish`');
+        });
+        it('allows Korean-negated inline-backtick git reset', () => {
+            expectClean('`git reset --hard` 하지 마세요');
+        });
+    });
+
+    describe('prose mentions without command form are ignored', () => {
+        it('ignores mid-sentence "patch" prose mention', () => {
+            expectClean('please review the patch and summarize what it modifies');
+        });
+        it('ignores mid-sentence "deploy" prose mention', () => {
+            expectClean('explain how the deploy pipeline works without changing anything');
+        });
+    });
+});

@@ -31,6 +31,170 @@ const LIVE_DEBUG_READONLY_FORBIDDEN: Array<{ label: string; pattern: RegExp }> =
 ];
 
 /**
+ * Negation cues that, when they appear shortly before a mutation keyword inside
+ * the same clause, mean the keyword is being *forbidden* or described rather
+ * than invoked (e.g. "do not git reset", "절대 push 하지 마세요"). Matched
+ * case-insensitively. The Korean cues intentionally include sub-string forms
+ * ("않", "금지", "말 것") so conjugated variants are caught.
+ */
+const NEGATION_CUES: string[] = [
+    "don't", 'do not', 'never', 'avoid', 'without', 'no longer', 'not', 'forbidden',
+    '하지 마', '하지 마세요', '말 것', '금지', '없음', '않',
+];
+
+/** How many whitespace-delimited tokens before a keyword we scan for negation. */
+const NEGATION_WINDOW_TOKENS = 6;
+
+/**
+ * Returns true if a negation cue appears within {@link NEGATION_WINDOW_TOKENS}
+ * tokens before `matchIndex`, staying inside the same clause — we stop at
+ * sentence/line/clause boundaries (newline, `.`/`!`/`?`, `;`) so a negation in a
+ * previous sentence does not suppress a real command in the next one.
+ */
+function hasNegationBefore(text: string, matchIndex: number): boolean {
+    const before = text.slice(0, matchIndex);
+    // Restrict to the current clause: cut at the last clause/sentence/line break.
+    const clauseStart = Math.max(
+        before.lastIndexOf('\n'),
+        before.lastIndexOf('. '),
+        before.lastIndexOf('! '),
+        before.lastIndexOf('? '),
+        before.lastIndexOf(';'),
+    );
+    const clause = before.slice(clauseStart + 1);
+    const lower = clause.toLowerCase();
+    // Whitespace tokens immediately preceding the keyword, within the window.
+    const tokens = clause.split(/\s+/).filter(Boolean);
+    const windowTokens = tokens.slice(Math.max(0, tokens.length - NEGATION_WINDOW_TOKENS));
+    const windowText = windowTokens.join(' ').toLowerCase();
+    for (const cue of NEGATION_CUES) {
+        const c = cue.toLowerCase();
+        // ASCII cues are word-ish phrases — match in the bounded window only.
+        // CJK cues have no spaces, so the window-join can miss them; for those
+        // fall back to scanning the whole clause (still clause-bounded).
+        if (/[^\x00-\x7f]/.test(c)) {
+            if (lower.includes(c)) return true;
+        } else if (windowText.includes(c)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Korean (and other) negation often trails the verb it negates ("git reset 하지
+ * 마세요" = "do not git reset"). Returns true if a CJK negation cue appears
+ * shortly after `matchEnd`, within the same clause. Scoped to CJK cues only —
+ * trailing ASCII words rarely negate a preceding command and would over-match.
+ */
+function hasTrailingNegation(text: string, matchEnd: number): boolean {
+    const after = text.slice(matchEnd);
+    // Clause-bound the lookahead: stop at the next clause/line break.
+    const clauseEnd = (() => {
+        const stops = [after.indexOf('\n'), after.indexOf('. '), after.indexOf('; ')]
+            .filter(i => i >= 0);
+        return stops.length ? Math.min(...stops) : after.length;
+    })();
+    const clause = after.slice(0, clauseEnd).toLowerCase();
+    for (const cue of NEGATION_CUES) {
+        const c = cue.toLowerCase();
+        if (/[^\x00-\x7f]/.test(c) && clause.includes(c)) return true;
+    }
+    return false;
+}
+
+/**
+ * Returns true when the keyword at [matchStart, matchEnd) looks like an actual
+ * command invocation rather than a plain-prose mention. Command context is:
+ *   - inside a fenced code block (``` ... ```) or inline backticks (`...`)
+ *   - on a shell-prompt line (starts with `$ ` or `> `)
+ *   - at a command-call position: line start (leading whitespace allowed) or
+ *     right after a shell connective (`&&`, `||`, `|`, `;`) or an imperative
+ *     connective ("then"/"run"/"," ) that introduces a command.
+ * Plain mid-sentence prose mentions (no backticks, no command position) are not
+ * command context and are excluded from violations.
+ */
+function isMutationKeywordInCommandContext(text: string, matchStart: number, matchEnd: number): boolean {
+    if (isInsideBackticksOrFence(text, matchStart, matchEnd)) return true;
+
+    // The line containing the match, and the portion of it before the keyword.
+    const lineStart = text.lastIndexOf('\n', matchStart - 1) + 1;
+    const linePrefix = text.slice(lineStart, matchStart);
+
+    // Shell-prompt line: "$ ..." or "> ..." (leading whitespace allowed).
+    if (/^\s*[$>]\s/.test(text.slice(lineStart))) return true;
+
+    // Line start (only whitespace before the keyword on this line).
+    if (/^\s*$/.test(linePrefix)) return true;
+
+    // After a shell connective or imperative connective introducing a command.
+    // We look at what immediately precedes the keyword on the same line.
+    if (/(?:&&|\|\||\||;)\s*$/.test(linePrefix)) return true;
+    if (/(?:^|[\s,])(?:then|run|first)\s+$/i.test(linePrefix)) return true;
+    if (/,\s*$/.test(linePrefix)) return true;
+
+    return false;
+}
+
+/**
+ * True if [matchStart, matchEnd) lies inside an inline-backtick span or a fenced
+ * code block. Fenced blocks (```...```) take precedence; otherwise we count
+ * inline backticks before the match — an odd count means we are inside a span.
+ */
+function isInsideBackticksOrFence(text: string, matchStart: number, matchEnd: number): boolean {
+    // Fenced code blocks: count ``` fences before the match.
+    const fenceRe = /```/g;
+    let fenceCount = 0;
+    let m: RegExpExecArray | null;
+    while ((m = fenceRe.exec(text)) !== null) {
+        if (m.index >= matchStart) break;
+        fenceCount++;
+    }
+    if (fenceCount % 2 === 1) return true;
+
+    // Inline backticks: count single backticks before the match start, ignoring
+    // those that are part of a ``` fence (handled above). An odd count → inside.
+    let inlineCount = 0;
+    for (let i = 0; i < matchStart; i++) {
+        if (text[i] === '`') {
+            // Skip triple-fence backticks.
+            if (text[i + 1] === '`' && text[i + 2] === '`') {
+                i += 2;
+                continue;
+            }
+            inlineCount++;
+        }
+    }
+    return inlineCount % 2 === 1;
+}
+
+/**
+ * Decides whether a forbidden keyword match at [matchStart, matchEnd) should
+ * count as a real violation. A match counts only when it is in command context
+ * and not negated. Negation always wins (even inside a code block), per the
+ * conservative rule: code-block + negation → exclude; other code-block → keep.
+ */
+function isRealMutationMatch(text: string, matchStart: number, matchEnd: number): boolean {
+    if (hasNegationBefore(text, matchStart)) return false;
+    if (hasTrailingNegation(text, matchEnd)) return false;
+    return isMutationKeywordInCommandContext(text, matchStart, matchEnd);
+}
+
+/**
+ * Runs a global regex over `text` and returns true if any match is a real
+ * mutation (command context, not negated).
+ */
+function patternHasRealMutation(pattern: RegExp, text: string): boolean {
+    const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(text)) !== null) {
+        if (isRealMutationMatch(text, match.index, match.index + match[0].length)) return true;
+        if (match.index === re.lastIndex) re.lastIndex++; // avoid zero-width loop
+    }
+    return false;
+}
+
+/**
  * Git subcommands that mutate the working tree, index, refs, or remote.
  * `stash` and `checkout` are intentionally absent here: they have read-only
  * variants (`git stash list`/`show`, `git checkout-index`) and are classified
@@ -59,25 +223,32 @@ function detectGitMutation(message: string): boolean {
     let match: RegExpExecArray | null;
     while ((match = re.exec(message)) !== null) {
         const sub = match[1].toLowerCase();
-        if (GIT_MUTATION_SUBCOMMANDS.has(sub)) return true;
+        // Only treat a mutating `git <sub>` as a real violation when it appears
+        // as an actual command (code/command context) and is not negated. Plain
+        // prose mentions ("don't git reset", "we won't push") are ignored.
+        const isReal = () => isRealMutationMatch(message, match!.index, match!.index + match![0].length);
+        if (GIT_MUTATION_SUBCOMMANDS.has(sub)) {
+            if (isReal()) return true;
+            continue;
+        }
         if (sub === 'stash') {
             // Token following `git stash`; read-only only for list/show.
             const after = message.slice(re.lastIndex).match(/^\s+([a-z][a-z0-9-]*)/i);
             const next = after ? after[1].toLowerCase() : '';
-            if (!GIT_STASH_READONLY_SUBCOMMANDS.has(next)) return true; // bare stash = push, or pop/apply/drop/...
+            if (!GIT_STASH_READONLY_SUBCOMMANDS.has(next) && isReal()) return true; // bare stash = push, or pop/apply/drop/...
         } else if (sub === 'checkout') {
             // `git checkout <ref/path>` mutates; `git checkout-index` is matched
             // as its own token by the regex (sub === 'checkout-index') and is read-only.
-            return true;
+            if (isReal()) return true;
         } else if (sub === 'submodule') {
             // `git submodule update` mutates; `git submodule status` is read-only.
             const after = message.slice(re.lastIndex).match(/^\s+([a-z][a-z0-9-]*)/i);
             const next = after ? after[1].toLowerCase() : '';
-            if (next === 'update' || next === 'add' || next === 'sync' || next === 'deinit') return true;
+            if ((next === 'update' || next === 'add' || next === 'sync' || next === 'deinit') && isReal()) return true;
         } else if (sub === 'worktree') {
             const after = message.slice(re.lastIndex).match(/^\s+([a-z][a-z0-9-]*)/i);
             const next = after ? after[1].toLowerCase() : '';
-            if (next === 'add' || next === 'remove' || next === 'move' || next === 'prune') return true;
+            if ((next === 'add' || next === 'remove' || next === 'move' || next === 'prune') && isReal()) return true;
         }
         // checkout-index, stash-with-no-next-already-handled, status/diff/log/show/
         // rev-parse/branch/submodule status fall through as read-only.
@@ -100,8 +271,11 @@ export function validateMeshTaskModeRequest(mode: unknown, message: string): Mes
         return { valid: true, taskMode, violations: [] };
     }
     const text = message || '';
+    // Only flag keywords that look like real commands (code/command context) and
+    // are not negated — descriptive/prohibitive prose ("don't run `npm publish`",
+    // "read-only, no deploy") must not trip the guardrail.
     const violations = LIVE_DEBUG_READONLY_FORBIDDEN
-        .filter(rule => rule.pattern.test(text))
+        .filter(rule => patternHasRealMutation(rule.pattern, text))
         .map(rule => rule.label);
     if (detectGitMutation(text)) {
         violations.push('git_mutation');
