@@ -52,7 +52,7 @@ describe('ChatInputBar send-state copy', () => {
         panelLabel: 'Codex CLI',
         isSending: false,
         isBusy: false,
-        statusMessage: 'Agent is generating. Send queues your message; Force sends it immediately.',
+        statusMessage: 'Agent is generating.',
         onSend: vi.fn(async () => true),
         onForceSend: vi.fn(async () => true),
         canForceSend: true,
@@ -60,7 +60,7 @@ describe('ChatInputBar send-state copy', () => {
       }),
     )
 
-    expect(html).toContain('Agent is generating. Send queues your message; Force sends it immediately.')
+    expect(html).toContain('Agent is generating.')
     expect(html).toContain('aria-label="Force send message now"')
     expect(html).toContain('title="Force send message now"')
   })

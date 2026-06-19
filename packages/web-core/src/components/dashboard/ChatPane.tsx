@@ -63,10 +63,10 @@ const LIVE_MESSAGE_PAGE_SIZE = 60;
 
 export function buildBusyChatInputStatusMessage(conversation: Pick<ActiveConversation, 'status' | 'modalButtons'>): string | null {
     if (conversation.status === 'no_progress' || conversation.status === 'long_generating') {
-        return 'Agent shows no progress. Send queues your message; Force sends it immediately.'
+        return 'Agent shows no progress.'
     }
     if (conversation.status === 'generating' || conversation.status === 'streaming') {
-        return 'Agent is generating. Send queues your message; Force sends it immediately.'
+        return 'Agent is generating.'
     }
     if (conversation.status === 'waiting_approval' && (!conversation.modalButtons || conversation.modalButtons.length === 0)) {
         return 'Agent is waiting for approval. Approval controls will appear when available.'
