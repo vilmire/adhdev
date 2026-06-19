@@ -31,11 +31,13 @@ export {
   CHANGE_IMPACT_CONFIG_SCHEMA,
   globToRegExp,
   loadChangeImpactConfig,
+  suggestChangeImpactConfig,
   validateChangeImpactConfig,
 } from './change-impact-config.js';
 export type {
   ChangeImpactConfig,
   ChangeImpactConfigLoadResult,
+  ChangeImpactConfigSuggestion,
   ChangeImpactKind,
   ChangeImpactTarget,
 } from './change-impact-config.js';

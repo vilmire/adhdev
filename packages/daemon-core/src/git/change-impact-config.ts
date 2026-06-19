@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import * as yaml from 'js-yaml';
 
@@ -265,4 +265,90 @@ export function globToRegExp(pattern: string): RegExp {
         }
     }
     return new RegExp(`^${out}$`);
+}
+
+export interface ChangeImpactConfigSuggestion {
+    /** A non-executable, declarative config draft a human can save verbatim. */
+    suggestedConfig: ChangeImpactConfig;
+    /** Per-field human-facing rationale for the proposed classification. */
+    notes: string[];
+    /** Package directories discovered under `packages/` (and `oss/packages/`). */
+    discoveredPackages: { daemon: string[]; web: string[]; unclassified: string[] };
+}
+
+function listPackageDirs(packagesRoot: string): string[] {
+    try {
+        return readdirSync(packagesRoot, { withFileTypes: true })
+            .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
+            .map(entry => entry.name);
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Inspect a repo's package layout and propose a reasonable, declarative Change
+ * Impact config draft. This is heuristic scaffold ONLY — it never executes
+ * anything and the draft must be reviewed/saved by a human before it takes
+ * effect. The heuristic mirrors ADHDev's own conventions:
+ *   - `web-*` / `*-web` packages → web-only (web redeploy, no daemon restart)
+ *   - everything else under packages/ → daemon-runtime (rebuild + restart)
+ *   - docs/license/marker root files → non-runtime
+ * Callers are expected to prune the draft to their actual runtime topology.
+ */
+export function suggestChangeImpactConfig(repoRoot: string): ChangeImpactConfigSuggestion {
+    const notes: string[] = [];
+    const daemon = new Set<string>();
+    const web = new Set<string>();
+    const unclassified: string[] = [];
+
+    const roots = ['packages', join('oss', 'packages')];
+    for (const rel of roots) {
+        const packagesRoot = join(repoRoot, rel);
+        if (!existsSync(packagesRoot)) continue;
+        for (const name of listPackageDirs(packagesRoot)) {
+            if (/(^web[-.]|[-.]web$)/i.test(name) || /dashboard|frontend|ui$/i.test(name)) {
+                web.add(name);
+            } else {
+                daemon.add(name);
+            }
+        }
+    }
+
+    const daemonRuntimePackages = [...daemon].sort();
+    const webOnlyPackages = [...web].sort();
+
+    if (!daemonRuntimePackages.length && !webOnlyPackages.length) {
+        notes.push('No packages/ or oss/packages/ directories found — defaulting to an empty draft you should fill in by hand.');
+    } else {
+        if (daemonRuntimePackages.length) notes.push(`Classified ${daemonRuntimePackages.length} package(s) as daemon-runtime (change → rebuild/redeploy + restart).`);
+        if (webOnlyPackages.length) notes.push(`Classified ${webOnlyPackages.length} web-* package(s) as web-only (change → web redeploy, no daemon restart).`);
+        notes.push('Heuristic only: confirm each package actually matches its bucket before saving.');
+    }
+
+    const nonRuntimeRootFilePatterns = [
+        '*.md',
+        'docs/**',
+        'LICENSE',
+        'LICENSE.*',
+        '.gitignore',
+    ];
+    notes.push('nonRuntimeRootFilePatterns lists root files that demonstrably cannot change daemon runtime behavior; extend with your repo markers.');
+
+    const suggestedConfig: ChangeImpactConfig = {
+        ...(daemonRuntimePackages.length ? { daemonRuntimePackages } : {}),
+        ...(webOnlyPackages.length ? { webOnlyPackages } : {}),
+        nonRuntimeRootFilePatterns,
+        impactTargets: {
+            daemon: { recommendedCommand: 'rebuild + redeploy the daemon, then restart it' },
+            web: { recommendedCommand: 'redeploy the web app (no daemon restart required)' },
+            none: { recommendedCommand: 'no action required' },
+        },
+    };
+
+    return {
+        suggestedConfig,
+        notes,
+        discoveredPackages: { daemon: daemonRuntimePackages, web: webOnlyPackages, unclassified },
+    };
 }

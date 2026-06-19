@@ -3153,6 +3153,35 @@ export const MESH_SUGGEST_REFINE_CONFIG_TOOL = {
     },
 };
 
+export const MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL = {
+    name: 'mesh_change_impact_config_schema',
+    description: 'Return the Change Impact config JSON schema and supported repo-local config locations. Change Impact config declaratively classifies which package/file changes between the live daemon build and workspace HEAD require a daemon rebuild/restart vs. a web-only redeploy vs. nothing. Declarative only — config is parsed, never executed.',
+    inputSchema: { type: 'object' as const, properties: {} },
+};
+
+export const MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL = {
+    name: 'mesh_validate_change_impact_config',
+    description: 'Validate a Change Impact config for a node/workspace and report valid/errors. Loads .adhdev/change-impact.{json,yaml,yml} (or repo-mesh-change-impact.* alias) from the repo unless an inline config is provided.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Optional node/workspace whose change-impact config should be loaded. Defaults to the first mesh node.' },
+            config: { type: 'object', description: 'Optional inline config object to validate instead of loading from the repo.' },
+        },
+    },
+};
+
+export const MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL = {
+    name: 'mesh_suggest_change_impact_config',
+    description: 'Suggest a Change Impact config scaffold from the repo package layout (web-* → web-only, others → daemon-runtime, plus docs/license markers as non-runtime). Heuristic scaffold only — the draft must be reviewed and saved before it takes effect; nothing is executed.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Optional node/workspace used for suggestions. Defaults to the first mesh node.' },
+        },
+    },
+};
+
 export const MESH_INIT_TOOL = {
     name: 'mesh_init',
     description: 'One-click mesh onboarding for an existing git project. Detects installed CLI providers, suggests Refinery (.adhdev/refine.json) and worktree bootstrap (.adhdev/worktree_bootstrap.json) configs, optionally writes them to disk, and recommends a node providerPriority from the detected providers. Suggestions are scaffold only and never execute until saved; providerPriority is a recommendation to apply to node policy, not auto-applied. Defaults to dry-run (no files written) and never overwrites an existing config unless overwrite=true.',
@@ -3213,6 +3242,9 @@ export const ALL_MESH_TOOLS = [
     MESH_REFINE_CONFIG_SCHEMA_TOOL,
     MESH_VALIDATE_REFINE_CONFIG_TOOL,
     MESH_SUGGEST_REFINE_CONFIG_TOOL,
+    MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL,
+    MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL,
+    MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL,
     MESH_INIT_TOOL,
     MESH_REFINE_PLAN_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
@@ -5326,6 +5358,35 @@ export async function meshSuggestRefineConfig(
     const result = await commandForNode(ctx, node, 'suggest_mesh_refine_config', {
         workspace: node.workspace,
         inlineMesh: ctx.mesh,
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+export async function meshChangeImpactConfigSchema(ctx: MeshContext): Promise<string> {
+    const node = resolveRefineConfigNode(ctx);
+    const result = await commandForNode(ctx, node, 'get_mesh_change_impact_config_schema', {});
+    return JSON.stringify(result, null, 2);
+}
+
+export async function meshValidateChangeImpactConfig(
+    ctx: MeshContext,
+    args: { node_id?: string; config?: Record<string, unknown> },
+): Promise<string> {
+    const node = resolveRefineConfigNode(ctx, args.node_id);
+    const result = await commandForNode(ctx, node, 'validate_mesh_change_impact_config', {
+        workspace: node.workspace,
+        ...(args.config ? { config: args.config } : {}),
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+export async function meshSuggestChangeImpactConfig(
+    ctx: MeshContext,
+    args: { node_id?: string },
+): Promise<string> {
+    const node = resolveRefineConfigNode(ctx, args.node_id);
+    const result = await commandForNode(ctx, node, 'suggest_mesh_change_impact_config', {
+        workspace: node.workspace,
     });
     return JSON.stringify(result, null, 2);
 }

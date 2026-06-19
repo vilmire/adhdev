@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   globToRegExp,
   loadChangeImpactConfig,
+  suggestChangeImpactConfig,
   validateChangeImpactConfig,
 } from '../../src/git/change-impact-config.js';
 
@@ -153,5 +154,56 @@ describe('globToRegExp', () => {
     const re = globToRegExp('a.b+c');
     expect(re.test('a.b+c')).toBe(true);
     expect(re.test('axbxc')).toBe(false);
+  });
+});
+
+describe('suggestChangeImpactConfig', () => {
+  const roots: string[] = [];
+
+  function tempDir(name: string): string {
+    const dir = mkdtempSync(join(tmpdir(), `adhdev-cisuggest-${name}-`));
+    roots.push(dir);
+    return dir;
+  }
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it('classifies web-* packages as web-only and the rest as daemon-runtime', () => {
+    const dir = tempDir('layout');
+    for (const pkg of ['daemon-core', 'server', 'web-cloud', 'web-standalone']) {
+      mkdirSync(join(dir, 'packages', pkg), { recursive: true });
+    }
+    const { suggestedConfig, discoveredPackages } = suggestChangeImpactConfig(dir);
+    expect(discoveredPackages.web.sort()).toEqual(['web-cloud', 'web-standalone']);
+    expect(discoveredPackages.daemon.sort()).toEqual(['daemon-core', 'server']);
+    expect(suggestedConfig.webOnlyPackages?.sort()).toEqual(['web-cloud', 'web-standalone']);
+    expect(suggestedConfig.daemonRuntimePackages?.sort()).toEqual(['daemon-core', 'server']);
+    // impactTargets cover all three classification kinds.
+    expect(Object.keys(suggestedConfig.impactTargets ?? {}).sort()).toEqual(['daemon', 'none', 'web']);
+  });
+
+  it('also scans oss/packages and produces a config that round-trips through validation', () => {
+    const dir = tempDir('oss');
+    mkdirSync(join(dir, 'oss', 'packages', 'daemon-core'), { recursive: true });
+    mkdirSync(join(dir, 'oss', 'packages', 'web-core'), { recursive: true });
+    const { suggestedConfig } = suggestChangeImpactConfig(dir);
+    expect(suggestedConfig.daemonRuntimePackages).toContain('daemon-core');
+    expect(suggestedConfig.webOnlyPackages).toContain('web-core');
+    const validation = validateChangeImpactConfig(suggestedConfig, 'suggested');
+    expect(validation.valid).toBe(true);
+    expect(validation.errors).toEqual([]);
+  });
+
+  it('returns a usable empty-ish draft when no packages exist', () => {
+    const dir = tempDir('empty');
+    const { suggestedConfig, notes } = suggestChangeImpactConfig(dir);
+    expect(suggestedConfig.daemonRuntimePackages).toBeUndefined();
+    expect(suggestedConfig.webOnlyPackages).toBeUndefined();
+    expect(suggestedConfig.nonRuntimeRootFilePatterns?.length).toBeGreaterThan(0);
+    expect(notes.some(n => /No packages/.test(n))).toBe(true);
+    // Even the empty draft must validate.
+    expect(validateChangeImpactConfig(suggestedConfig, 'suggested').valid).toBe(true);
   });
 });

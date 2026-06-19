@@ -28,6 +28,13 @@ import { detectIDEs } from '../detection/ide-detector.js';
 import { detectCLI, detectCLIs } from '../detection/cli-detector.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import {
+    CHANGE_IMPACT_CONFIG_LOCATIONS,
+    CHANGE_IMPACT_CONFIG_SCHEMA,
+    loadChangeImpactConfig,
+    suggestChangeImpactConfig,
+    validateChangeImpactConfig,
+} from '../git/change-impact-config.js';
+import {
     normalizeGitStatus as sharedNormalizeGitStatus,
     pickBestTransitGitStatus as sharedPickBestTransitGitStatus,
     summarizeGitShape as sharedSummarizeGitShape,
@@ -7690,6 +7697,45 @@ export class DaemonCommandRouter {
                     success: true,
                     ...suggestMeshRefineConfig(mesh, workspace),
                     note: 'Suggestions are heuristic scaffold only; Refinery will not execute them until saved into repo mesh/refine config.',
+                };
+            }
+
+            case 'get_mesh_change_impact_config_schema': {
+                return {
+                    success: true,
+                    schema: CHANGE_IMPACT_CONFIG_SCHEMA,
+                    locations: CHANGE_IMPACT_CONFIG_LOCATIONS,
+                    sourceOfTruth: 'repo change-impact config',
+                    heuristicRole: 'suggestions_only_not_execution_path',
+                    note: 'Declarative config only — JSON/YAML are parsed but never executed. Defines which package/file changes require a daemon rebuild/restart vs. a web-only redeploy vs. nothing.',
+                };
+            }
+
+            case 'validate_mesh_change_impact_config': {
+                const workspace = typeof args?.workspace === 'string' ? args.workspace : process.cwd();
+                if (args?.config !== undefined) {
+                    const validation = validateChangeImpactConfig(args.config, 'inline');
+                    return { success: validation.valid, source: 'inline', sourceType: 'mesh_policy', ...validation };
+                }
+                const loaded = loadChangeImpactConfig(workspace);
+                if (loaded.sourceType === 'repo_file') {
+                    const validation = validateChangeImpactConfig(loaded.config, loaded.source);
+                    return { success: validation.valid, ...loaded, ...validation };
+                }
+                return {
+                    success: false,
+                    ...loaded,
+                    valid: false,
+                    errors: [loaded.error || 'repo change-impact config unavailable'],
+                };
+            }
+
+            case 'suggest_mesh_change_impact_config': {
+                const workspace = typeof args?.workspace === 'string' ? args.workspace : process.cwd();
+                return {
+                    success: true,
+                    ...suggestChangeImpactConfig(workspace),
+                    note: 'Suggestions are heuristic scaffold only; the draft must be reviewed and saved into repo change-impact config before it takes effect. Nothing is executed.',
                 };
             }
 
