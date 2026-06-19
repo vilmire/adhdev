@@ -161,6 +161,22 @@ export interface CliSpecV4 {
     /** Delay (ms) after spawn before writing `send_on_spawn`. Default 250. */
     send_on_spawn_delay_ms?: number;
     /**
+     * Opt-in stall recovery for focus-gated TUIs. The same CLIs that need
+     * `send_on_spawn` (focus-event TUIs like antigravity's `agy`) also stop
+     * rendering / flushing output the moment they believe they have lost focus
+     * MID-TURN — the screen freezes and only repaints once the user presses a
+     * key, which the daemon never does on its own. When this field is set and
+     * the machine is in a `generating`-status state whose screen has not changed
+     * for `refocus_when_stalled_ms`, the engine re-injects the `send_on_spawn`
+     * prime (the focus-in event) once to wake the render loop, then waits for the
+     * screen to change or for the stall window to lapse again before re-priming
+     * (a cooldown that prevents a tight re-prime loop). Requires `send_on_spawn`
+     * to carry the wake sequence; with no `send_on_spawn` there is nothing to
+     * re-inject and the engine does nothing. Omitted by every non-focus-gated
+     * CLI spec, so the engine stays CLI-agnostic.
+     */
+    refocus_when_stalled_ms?: number;
+    /**
      * Optional pre-spawn folder-trust step. When present, the engine adds the
      * launch workspace path to the declared trusted-folders array before
      * spawning, so a CLI that gates first run on a "trust this folder?" prompt

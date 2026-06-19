@@ -201,6 +201,14 @@ export class FsmDriver implements ISpecDriver {
     /** Timer that re-runs evaluate() when a time-condition would flip true
      *  with no PTY frame to trigger it. */
     private wakeTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Timer driving the focus-gated stall watchdog (refocus_when_stalled_ms).
+     *  Re-arms itself while the machine is generating so a re-prime can fire
+     *  even when the PTY has gone completely quiet. */
+    private stallTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Wall-clock time the last stall re-prime was injected. The cooldown gate:
+     *  after a re-prime we don't re-inject until the screen changes (which
+     *  resets the stall reference) or another full stall window lapses. */
+    private lastRefocusAt = 0;
 
     private currentEval: CurrentEval | null = null;
     private stateHistory: HistoryEntry[] = [];
@@ -268,11 +276,19 @@ export class FsmDriver implements ISpecDriver {
         const seqs = this.spec.send_on_spawn;
         if (!Array.isArray(seqs) || seqs.length === 0) return;
         const delay = Math.max(0, this.spec.send_on_spawn_delay_ms ?? 250);
-        setTimeout(() => {
-            for (const seq of seqs) {
-                if (typeof seq === 'string' && seq.length > 0) this.adapter.send_keys(seq);
-            }
-        }, delay);
+        setTimeout(() => this.sendSpawnPrime(), delay);
+    }
+
+    /** Write the declared `send_on_spawn` sequences to the PTY once. Used both
+     *  at spawn (scheduleSpawnPrime) and, for focus-gated TUIs, by the stall
+     *  watchdog to re-inject the focus-in wake mid-turn. No-op when the spec
+     *  declares no prime, so non-focus-gated CLIs are never poked. */
+    private sendSpawnPrime(): void {
+        const seqs = this.spec.send_on_spawn;
+        if (!Array.isArray(seqs) || seqs.length === 0) return;
+        for (const seq of seqs) {
+            if (typeof seq === 'string' && seq.length > 0) this.adapter.send_keys(seq);
+        }
     }
 
     dispatch(cmd: DashboardCommand): void {
@@ -309,6 +325,7 @@ export class FsmDriver implements ISpecDriver {
         for (const t of this.delegateTimers.values()) clearTimeout(t);
         this.delegateTimers.clear();
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
+        if (this.stallTimer) { clearTimeout(this.stallTimer); this.stallTimer = null; }
         this.specWatcher?.close();
         this.adapter.kill();
     }
@@ -484,6 +501,7 @@ export class FsmDriver implements ISpecDriver {
             // that's already satisfied doesn't wait for the next PTY frame.
             this.emitStateChanged(forceEmit);
             this.scheduleWakeForState();
+            this.scheduleStallWatchdog();
             // Drain queued sends on the SAME frame the machine reaches "ready".
             // The first delegated message is queued in pendingSends until the
             // FSM first enters a non-initial idle state (the prompt is drawn).
@@ -504,6 +522,7 @@ export class FsmDriver implements ISpecDriver {
         this.emitStateChanged(forceEmit);
         // Schedule a wake for the soonest pending time-condition.
         this.scheduleWakeForState();
+        this.scheduleStallWatchdog();
         // Drain queued sends once we first reach a "ready" state.
         this.maybeMarkReady();
     }
@@ -683,6 +702,71 @@ export class FsmDriver implements ISpecDriver {
         }
         if (!Number.isFinite(soonest)) return;
         this.wakeTimer = setTimeout(() => { this.wakeTimer = null; this.reevaluate(); }, Math.max(soonest + 30, 50));
+    }
+
+    // ── Focus-gated stall watchdog (refocus_when_stalled_ms) ──────────────────
+    //
+    // A focus-event TUI (antigravity's `agy`) freezes its render loop the moment
+    // it thinks it has lost focus mid-turn: the screen stops updating and only
+    // repaints on the next keypress, which the daemon never sends. The output
+    // pump is wired entirely to PTY onData (no PTY data → no reevaluate, no
+    // on_screen_changed), so a normal time-wake that only re-reads the screen
+    // can't help — there is nothing new to read. The fix is to re-inject the
+    // focus-in wake (`send_on_spawn`) so the CLI flushes the held output itself.
+
+    /** True when this spec opts into stall recovery (declares a positive
+     *  refocus window AND a wake sequence to re-inject). */
+    private stallRecoveryEnabled(): boolean {
+        const ms = this.spec.refocus_when_stalled_ms;
+        return typeof ms === 'number' && ms > 0
+            && Array.isArray(this.spec.send_on_spawn) && this.spec.send_on_spawn.length > 0;
+    }
+
+    /** Wall-clock time the screen last changed in the current state, falling
+     *  back to state entry when it has not changed since (i.e. fully stalled
+     *  from the start of the state). */
+    private lastScreenChangeAt(): number {
+        return this.regionLastChangedAt.get(-1) ?? this.stateEnteredAt;
+    }
+
+    /** Arm a timer to re-inject the focus-in prime if the screen stays frozen
+     *  through a `generating` state. Only active for opted-in focus-gated specs;
+     *  a no-op (and cleared) for every other CLI and every non-generating state.
+     *  Re-arms itself so it keeps watching while the PTY is quiet. */
+    private scheduleStallWatchdog(): void {
+        if (this.stallTimer) { clearTimeout(this.stallTimer); this.stallTimer = null; }
+        if (!this.stallRecoveryEnabled()) return;
+        const st = stateById(this.spec, this.currentStateId);
+        if (!st || statusForState(st) !== 'generating') return;
+        const windowMs = this.spec.refocus_when_stalled_ms as number;
+        // Cooldown reference: a re-prime defers the next one by a full window,
+        // even if the screen has not yet repainted, so we don't tight-loop.
+        const since = Math.max(this.lastScreenChangeAt(), this.lastRefocusAt);
+        const remaining = windowMs - (Date.now() - since);
+        this.stallTimer = setTimeout(
+            () => { this.stallTimer = null; this.onStallTick(); },
+            Math.max(remaining + 30, 50),
+        );
+    }
+
+    /** Fire when the stall window elapses: if the screen is still frozen and we
+     *  are still generating, re-inject the focus-in wake once, then re-arm. */
+    private onStallTick(): void {
+        if (!this.stallRecoveryEnabled()) return;
+        const st = stateById(this.spec, this.currentStateId);
+        if (!st || statusForState(st) !== 'generating') return;
+        const windowMs = this.spec.refocus_when_stalled_ms as number;
+        const now = Date.now();
+        const stalledFor = now - this.lastScreenChangeAt();
+        const sinceLastRefocus = now - this.lastRefocusAt;
+        if (stalledFor >= windowMs && sinceLastRefocus >= windowMs) {
+            LOG.info('FsmDriver', `[${this.specTag()}] stall detected (${stalledFor}ms quiet, generating) — re-injecting focus-in`);
+            this.sendSpawnPrime();
+            this.lastRefocusAt = now;
+        }
+        // Keep watching: the re-prime may not flush instantly, and a still-quiet
+        // screen needs the next window to come around.
+        this.scheduleStallWatchdog();
     }
 
     private maybeMarkReady(): void {

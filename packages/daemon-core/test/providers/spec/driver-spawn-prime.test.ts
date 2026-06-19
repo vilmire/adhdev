@@ -114,4 +114,71 @@ describe('FsmDriver -- send_on_spawn input prime', () => {
         // so the first programmatic message lands without a manual keystroke.
         expect(spec.send_on_spawn).toContain(FOCUS_IN);
     });
+
+    it('antigravity-cli spec opts into stall refocus', () => {
+        const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
+        const specPath = path.join(REPO_ROOT, 'adhdev-providers/cli/antigravity-cli/specs/4.0.json');
+        const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+        // The focus-gated TUI also freezes output mid-turn on focus loss; the
+        // refocus window re-injects the focus-in wake to flush it.
+        expect(typeof spec.refocus_when_stalled_ms).toBe('number');
+        expect(spec.refocus_when_stalled_ms).toBeGreaterThan(0);
+    });
+});
+
+describe('FsmDriver -- refocus_when_stalled_ms stall recovery', () => {
+    // An initial state with generating status and no outgoing transitions: the
+    // machine sits in it and the screen never changes (RecordingPty emits no
+    // data), which is exactly the focus-gated stall the watchdog must recover.
+    function generatingStallSpec(overrides: Record<string, unknown>): Record<string, unknown> {
+        return baseSpec({
+            states: [{ id: 'busy', label: 'Working', initial: true, status: 'generating' }],
+            transitions: [],
+            send_on_spawn: [FOCUS_IN],
+            send_on_spawn_delay_ms: 10,
+            ...overrides,
+        });
+    }
+
+    it('re-injects focus-in while a generating screen stays frozen', async () => {
+        const factory = new RecordingFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(generatingStallSpec({ refocus_when_stalled_ms: 50 })),
+            workingDir: os.tmpdir(),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        driver.start();
+        const pty = factory.last!;
+        try {
+            // Spawn prime (1) plus at least one stall re-prime within a few
+            // windows. Each write is the focus-in event.
+            await sleep(220);
+            const focusInWrites = pty.writes.filter(w => w === FOCUS_IN).length;
+            expect(focusInWrites).toBeGreaterThanOrEqual(2);
+            expect(pty.writes.every(w => w === FOCUS_IN)).toBe(true);
+        } finally {
+            driver.shutdown();
+        }
+    });
+
+    it('does not re-inject when refocus_when_stalled_ms is absent', async () => {
+        const factory = new RecordingFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(generatingStallSpec({})),
+            workingDir: os.tmpdir(),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        driver.start();
+        const pty = factory.last!;
+        try {
+            await sleep(220);
+            // Only the one spawn prime -- no stall watchdog without the opt-in.
+            const focusInWrites = pty.writes.filter(w => w === FOCUS_IN).length;
+            expect(focusInWrites).toBe(1);
+        } finally {
+            driver.shutdown();
+        }
+    });
 });

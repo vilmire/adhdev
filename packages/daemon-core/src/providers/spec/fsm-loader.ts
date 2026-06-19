@@ -46,6 +46,14 @@ export function validateFsmSpec(raw: unknown): string[] {
         }
     }
 
+    if (spec.refocus_when_stalled_ms !== undefined) {
+        if (typeof spec.refocus_when_stalled_ms !== 'number' || !(spec.refocus_when_stalled_ms > 0)) {
+            errs.push('refocus_when_stalled_ms must be a positive number');
+        } else if (!Array.isArray(spec.send_on_spawn) || spec.send_on_spawn.length === 0) {
+            errs.push('refocus_when_stalled_ms requires send_on_spawn (the wake sequence to re-inject)');
+        }
+    }
+
     if (!Array.isArray(spec.states) || spec.states.length === 0) {
         errs.push('states[] must be a non-empty array');
         return errs;
