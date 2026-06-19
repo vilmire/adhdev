@@ -4,7 +4,7 @@
  * Layer 1: Global ON/OFF — master toggle for ALL notifications
  * Layer 2: Daemon disconnect alert
  * Layer 3: Per-provider (managed via daemon provider settings)
- * Layer 4: Sub-category (completion, approval, long-generating)
+ * Layer 4: Sub-category (completion, approval, no-progress)
  *
  * Persisted to localStorage. Server sync can be added later.
  */

@@ -137,8 +137,8 @@ export function buildMeshSystemMessage(args: {
 }): string {
     const metadata = formatCompletionMetadata(args.metadataEvent);
     if (args.event === 'agent:generating_completed') {
-        if (args.metadataEvent.source === 'long_generating_reconciliation') {
-            return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The long-generating monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
+        if (args.metadataEvent.source === 'no_progress_reconciliation') {
+            return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The no-progress monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
         }
         const reviewNote = args.metadataEvent.reviewRecommended === true
             ? ' Completion evidence is insufficient — verify via git status or provider_session_id before assuming the task is done. Use mesh_read_chat once if needed, but do not poll repeatedly.'
@@ -173,7 +173,7 @@ export function buildMeshSystemMessage(args: {
         }
         return `[System] ${args.nodeLabel} has stopped${metadata}. Use mesh_read_chat once if you need to inspect its last output.`;
     }
-    if (args.event === 'monitor:long_generating') {
+    if (args.event === 'monitor:no_progress') {
         return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for pendingCoordinatorEvents or a completion/status event; if the user explicitly asks for status, make one bounded status check and then wait again.`;
     }
     if (args.event === 'worktree_bootstrap_complete') {

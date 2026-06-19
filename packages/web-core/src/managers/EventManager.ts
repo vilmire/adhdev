@@ -273,18 +273,18 @@ class EventManager {
                 msg = '' // skip default toast
             }
 
-        // ── monitor:long_generating ──
-        } else if (payload.event === 'monitor:long_generating') {
+        // ── monitor:no_progress (legacy event name: monitor:long_generating) ──
+        } else if (payload.event === 'monitor:no_progress' || payload.event === 'monitor:long_generating') {
             const dur = payload.elapsedSec ? ` (${Math.round(payload.elapsedSec / 60)}m)` : ''
-            msg = `⚠️ ${ideLabel} agent is taking a long time${dur}`
+            msg = `⚠️ ${ideLabel} agent shows no progress${dur}`
             type = 'warning'
 
             // Browser desktop notification (only if unfocused)
             if (shouldNotify('browser') && !document.hasFocus()) {
                 notify(
-                    `⚠️ ${ideLabel} — Long Running`,
-                    `Agent has been generating for over ${dur.replace(/[()]/g, '')}`,
-                    `long-${payload.targetSessionId || payload.daemonId || 'daemon'}`,
+                    `⚠️ ${ideLabel} — No Progress`,
+                    `Agent has shown no progress for over ${dur.replace(/[()]/g, '')}`,
+                    `no-progress-${payload.targetSessionId || payload.daemonId || 'daemon'}`,
                 )
             }
 

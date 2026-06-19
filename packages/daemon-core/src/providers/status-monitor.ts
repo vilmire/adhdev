@@ -3,26 +3,26 @@
  *
  * Common across all Provider categories (IDE/Extension/CLI/ACP).
  * - Approval waiting (waiting_approval) notification
- * - Notification when generating persists for extended duration
+ * - No-progress watchdog: alert when an active turn makes no progress for a while
  * - All config toggleable via Provider Settings
  */
 
 export interface MonitorConfig {
  /** Enable awaiting-approval notification */
     approvalAlert: boolean;
- /** Prolonged generating notification enabled */
-    longGeneratingAlert: boolean;
- /** Prolonged threshold (seconds) */
-    longGeneratingThresholdSec: number;
+ /** No-progress watchdog notification enabled */
+    noProgressAlert: boolean;
+ /** No-progress threshold (seconds) */
+    noProgressThresholdSec: number;
  /** Repeat notification cooldown (seconds) */
     alertCooldownSec: number;
 }
 
 export const DEFAULT_MONITOR_CONFIG: MonitorConfig = {
     approvalAlert: true,
-    longGeneratingAlert: true,
-    longGeneratingThresholdSec: 180,   // 3 minutes
-    alertCooldownSec: 60,              // 1 minute cooldown
+    noProgressAlert: true,
+    noProgressThresholdSec: 180,   // 3 minutes
+    alertCooldownSec: 60,          // 1 minute cooldown
 };
 
 export interface MonitorEvent {
@@ -37,7 +37,7 @@ export class StatusMonitor {
     private config: MonitorConfig;
     private lastAlertTime = new Map<string, number>();
     private generatingStartTimes = new Map<string, number>();
-    private longGeneratingAlerted = new Map<string, boolean>();
+    private noProgressAlerted = new Map<string, boolean>();
     private lastProgressFingerprint = new Map<string, string>();
     private lastProgressChangeAt = new Map<string, number>();
 
@@ -74,7 +74,7 @@ export class StatusMonitor {
             }
         }
 
- // 2. Detect prolonged generating (identical for IDE/Extension/CLI/ACP)
+ // 2. No-progress watchdog (identical for IDE/Extension/CLI/ACP)
         if (status === 'generating' || status === 'streaming') {
             // While an approval modal is pending we must NOT count the wait as
             // no-progress. The assistant emits no tokens and the screen is frozen
@@ -88,12 +88,12 @@ export class StatusMonitor {
                 this.generatingStartTimes.set(agentKey, now);
                 this.lastProgressFingerprint.set(agentKey, progressFingerprint ?? '');
                 this.lastProgressChangeAt.set(agentKey, now);
-                this.longGeneratingAlerted.set(agentKey, false);
+                this.noProgressAlerted.set(agentKey, false);
                 return events;
             }
             if (!this.generatingStartTimes.has(agentKey)) {
                 this.generatingStartTimes.set(agentKey, now);
-                this.longGeneratingAlerted.set(agentKey, false);
+                this.noProgressAlerted.set(agentKey, false);
                 const initialFingerprint = progressFingerprint ?? '';
                 this.lastProgressFingerprint.set(agentKey, initialFingerprint);
                 this.lastProgressChangeAt.set(agentKey, now);
@@ -103,17 +103,17 @@ export class StatusMonitor {
             if (previousFingerprint !== currentFingerprint) {
                 this.lastProgressFingerprint.set(agentKey, currentFingerprint);
                 this.lastProgressChangeAt.set(agentKey, now);
-                this.longGeneratingAlerted.set(agentKey, false);
+                this.noProgressAlerted.set(agentKey, false);
             }
-            if (this.config.longGeneratingAlert) {
+            if (this.config.noProgressAlert) {
                 const progressChangedAt = this.lastProgressChangeAt.get(agentKey) || this.generatingStartTimes.get(agentKey)!;
                 const elapsedSec = Math.round((now - progressChangedAt) / 1000);
-                const alreadyAlerted = this.longGeneratingAlerted.get(agentKey) === true;
-                if (elapsedSec > this.config.longGeneratingThresholdSec && !alreadyAlerted) {
-                    if (this.shouldAlert(agentKey + ':long_gen', now)) {
-                        this.longGeneratingAlerted.set(agentKey, true);
+                const alreadyAlerted = this.noProgressAlerted.get(agentKey) === true;
+                if (elapsedSec > this.config.noProgressThresholdSec && !alreadyAlerted) {
+                    if (this.shouldAlert(agentKey + ':no_progress', now)) {
+                        this.noProgressAlerted.set(agentKey, true);
                         events.push({
-                            type: 'monitor:long_generating',
+                            type: 'monitor:no_progress',
                             agentKey,
                             elapsedSec,
                             timestamp: now,
@@ -125,7 +125,7 @@ export class StatusMonitor {
         } else {
  // Reset timer when switching to non-generating status
             this.generatingStartTimes.delete(agentKey);
-            this.longGeneratingAlerted.delete(agentKey);
+            this.noProgressAlerted.delete(agentKey);
             this.lastProgressFingerprint.delete(agentKey);
             this.lastProgressChangeAt.delete(agentKey);
         }
@@ -147,7 +147,7 @@ export class StatusMonitor {
     reset(agentKey?: string): void {
         if (agentKey) {
             this.generatingStartTimes.delete(agentKey);
-            this.longGeneratingAlerted.delete(agentKey);
+            this.noProgressAlerted.delete(agentKey);
             this.lastProgressFingerprint.delete(agentKey);
             this.lastProgressChangeAt.delete(agentKey);
  // Delete all cooldowns for this key
@@ -156,7 +156,7 @@ export class StatusMonitor {
             }
         } else {
             this.generatingStartTimes.clear();
-            this.longGeneratingAlerted.clear();
+            this.noProgressAlerted.clear();
             this.lastProgressFingerprint.clear();
             this.lastProgressChangeAt.clear();
             this.lastAlertTime.clear();

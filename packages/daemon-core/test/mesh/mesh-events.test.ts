@@ -680,8 +680,8 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('does not force-inject non-terminal long-generating alerts into the coordinator', async () => {
-    // long_generating is informational — the coordinator should receive it through the
+  it('does not force-inject non-terminal no-progress alerts into the coordinator', async () => {
+    // no_progress is informational — the coordinator should receive it through the
     // normal (queueable) path, not force-written into a generating PTY as noise.
     const meshId = `mesh_no_force_long_gen_${Date.now()}`
     try {
@@ -691,7 +691,7 @@ describe('setupMeshEventForwarding', () => {
       setupMeshEventForwarding(components)
 
       emit({
-        event: 'monitor:long_generating',
+        event: 'monitor:no_progress',
         instanceId: 'runtime-session-1',
         targetSessionId: 'runtime-session-1',
         providerType: 'codex-cli',
@@ -1496,7 +1496,7 @@ describe('setupMeshEventForwarding', () => {
     expect(coordinator.onEvent).not.toHaveBeenCalled()
   })
 
-  it('injects forwarded stopped and long-generating coordinator hints from remote worker daemons', async () => {
+  it('injects forwarded stopped and no-progress coordinator hints from remote worker daemons', async () => {
     const meshId = `mesh_long_gen_plain_${Date.now()}`
     const { components, coordinator } = createComponents(meshId)
 
@@ -1507,8 +1507,8 @@ describe('setupMeshEventForwarding', () => {
       targetSessionId: 'runtime-session-1',
       providerType: 'hermes-cli',
     })
-    const longGenerating = handleMeshForwardEvent(components, {
-      event: 'monitor:long_generating',
+    const noProgress = handleMeshForwardEvent(components, {
+      event: 'monitor:no_progress',
       meshId,
       nodeId: 'node_child_1',
       targetSessionId: 'runtime-session-long',
@@ -1518,7 +1518,7 @@ describe('setupMeshEventForwarding', () => {
     // Queue-only: handleMeshForwardEvent persists to the queue (forwarded: 0); the
     // reconcile tick injects into the live coordinator.
     expect(stopped).toEqual({ success: true, forwarded: 0 })
-    expect(longGenerating).toEqual({ success: true, forwarded: 0 })
+    expect(noProgress).toEqual({ success: true, forwarded: 0 })
     await runMeshReconcileTick(components)
     expect(coordinator.onEvent).toHaveBeenCalledTimes(2)
     expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('has stopped')
@@ -1568,7 +1568,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('reconciles a long-generating monitor to completion when final summary evidence exists', async () => {
+  it('reconciles a no-progress monitor to completion when final summary evidence exists', async () => {
     const meshId = `mesh_long_gen_reconcile_${Date.now()}`
     try {
       const { components, coordinator } = createComponents(meshId)
@@ -1576,7 +1576,7 @@ describe('setupMeshEventForwarding', () => {
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
 
       const result = handleMeshForwardEvent(components, {
-        event: 'monitor:long_generating',
+        event: 'monitor:no_progress',
         meshId,
         nodeId: 'node_child_1',
         targetSessionId: 'runtime-session-1',
@@ -1602,7 +1602,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('suppresses long-generating alert when terminal ledger evidence already exists', () => {
+  it('suppresses no-progress alert when terminal ledger evidence already exists', () => {
     const meshId = `mesh_long_gen_terminal_${Date.now()}`
     try {
       const { components, coordinator } = createComponents(meshId)
@@ -1619,7 +1619,7 @@ describe('setupMeshEventForwarding', () => {
       })
 
       const result = handleMeshForwardEvent(components, {
-        event: 'monitor:long_generating',
+        event: 'monitor:no_progress',
         meshId,
         nodeId: 'node_child_1',
         targetSessionId: 'runtime-session-1',
@@ -1810,7 +1810,7 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('suppresses cleanup-requested stop and stale long-generating events from failure/recovery ledgers', () => {
+  it('suppresses cleanup-requested stop and stale no-progress events from failure/recovery ledgers', () => {
     const meshId = `mesh_cleanup_stop_${Date.now()}`
     try {
       const { components, coordinator } = createComponents(meshId)
@@ -1841,8 +1841,8 @@ describe('setupMeshEventForwarding', () => {
         targetSessionId: 'runtime-session-1',
         providerType: 'hermes-cli',
       })
-      const longGenerating = handleMeshForwardEvent(components, {
-        event: 'monitor:long_generating',
+      const noProgress = handleMeshForwardEvent(components, {
+        event: 'monitor:no_progress',
         meshId,
         nodeId: 'node_child_1',
         targetSessionId: 'runtime-session-1',
@@ -1850,7 +1850,7 @@ describe('setupMeshEventForwarding', () => {
       })
 
       expect(stopped).toMatchObject({ success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true })
-      expect(longGenerating).toMatchObject({ success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true })
+      expect(noProgress).toMatchObject({ success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true })
       expect(coordinator.onEvent).not.toHaveBeenCalled()
       expect(getQueue(meshId)[0].status).toBe('assigned')
       const kinds = readLedgerEntries(meshId).map(entry => entry.kind)

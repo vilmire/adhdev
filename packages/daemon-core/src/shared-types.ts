@@ -740,6 +740,9 @@ export type DaemonStatusEventName =
     | 'agent:waiting_approval'
     | 'agent:generating_completed'
     | 'agent:stopped'
+    | 'monitor:no_progress'
+    // Legacy alias for 'monitor:no_progress' — kept so older daemons that still
+    // emit it remain type-compatible with consumers during rollout.
     | 'monitor:long_generating';
 
 /** Minimal daemon-originated event payload relayed through the server. */

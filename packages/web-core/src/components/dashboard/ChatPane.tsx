@@ -62,8 +62,8 @@ export interface ChatPaneProps {
 const LIVE_MESSAGE_PAGE_SIZE = 60;
 
 export function buildBusyChatInputStatusMessage(conversation: Pick<ActiveConversation, 'status' | 'modalButtons'>): string | null {
-    if (conversation.status === 'long_generating') {
-        return 'Agent has been generating for a long time. Send queues your message; Force sends it immediately.'
+    if (conversation.status === 'no_progress' || conversation.status === 'long_generating') {
+        return 'Agent shows no progress. Send queues your message; Force sends it immediately.'
     }
     if (conversation.status === 'generating' || conversation.status === 'streaming') {
         return 'Agent is generating. Send queues your message; Force sends it immediately.'

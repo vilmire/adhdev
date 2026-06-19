@@ -183,7 +183,7 @@ function hasNonEmptyCliModalButtons(activeModal: unknown): boolean {
 }
 
 function isCliGeneratingLikeStatus(status: unknown): boolean {
-    return status === 'generating' || status === 'streaming' || status === 'long_generating' || status === 'starting';
+    return status === 'generating' || status === 'streaming' || status === 'no_progress' || status === 'long_generating' || status === 'starting';
 }
 
 export function buildCliStructuredInputPrompt(
@@ -479,8 +479,8 @@ export class CliProviderInstance implements ProviderInstance {
         this.adapter.updateRuntimeSettings?.(this.settings);
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
-            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
-            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+            noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
+            noProgressThresholdSec: this.settings.noProgressThresholdSec ?? this.settings.longGeneratingThresholdSec ?? 180,
         });
 
  // Server connection
@@ -698,7 +698,7 @@ export class CliProviderInstance implements ProviderInstance {
                 && adapterStatus.status === 'idle'
                 && parsedStatus?.status === 'idle';
             let messagesToSave = parsedMessages;
-            if (!suppressStaleParsedBusyStatus && (parsedChatStatus === 'generating' || parsedChatStatus === 'long_generating')) {
+            if (!suppressStaleParsedBusyStatus && (parsedChatStatus === 'generating' || parsedChatStatus === 'no_progress' || parsedChatStatus === 'long_generating')) {
                 const lastIdx = messagesToSave.length - 1;
                 if (lastIdx >= 0 && messagesToSave[lastIdx]?.role === 'assistant') {
                     messagesToSave = messagesToSave.slice(0, lastIdx);
@@ -866,8 +866,8 @@ export class CliProviderInstance implements ProviderInstance {
         this.adapter.updateRuntimeSettings?.(this.settings);
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
-            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
-            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+            noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
+            noProgressThresholdSec: this.settings.noProgressThresholdSec ?? this.settings.longGeneratingThresholdSec ?? 180,
         });
     }
 
@@ -1545,7 +1545,7 @@ export class CliProviderInstance implements ProviderInstance {
         const dirName = workingDirBasename(this.workingDir);
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const partial = this.adapter.getPartialResponse();
-        // Liveness fingerprint for the long-generating watchdog. The parsed
+        // Liveness fingerprint for the no-progress watchdog. The parsed
         // assistant buffer (`partial`) alone goes static while a tool/build runs
         // — the assistant emits no tokens even though the PTY is actively
         // printing tool output — which made the watchdog false-fire a "stuck"
@@ -1772,7 +1772,7 @@ export class CliProviderInstance implements ProviderInstance {
         const monitorParsedStatus: any = parsedStatus;
         for (const me of monitorEvents) {
             if (
-                me.type === 'monitor:long_generating'
+                me.type === 'monitor:no_progress'
                 && this.completionHasFinalAssistantMessage(monitorParsedStatus?.messages)
                 && !this.hasAdapterPendingResponse()
                 && !hasNonEmptyCliModalButtons(monitorParsedStatus?.activeModal ?? monitorParsedStatus?.modal)
@@ -1787,7 +1787,7 @@ export class CliProviderInstance implements ProviderInstance {
                         providerType: this.type,
                         sessionId: this.instanceId,
                         providerSessionId: this.providerSessionId || null,
-                        reconciliationReason: 'long_generating_monitor_final_summary',
+                        reconciliationReason: 'no_progress_monitor_final_summary',
                         finalAssistantPresent: true,
                     },
                 });

@@ -125,7 +125,7 @@ function queueCompletion(meshId: string, jobSuffix: string) {
 // coordinator (only force-inject terminal events bypass the busy send-guard).
 function queueProgress(meshId: string, jobSuffix: string) {
   return queuePendingMeshCoordinatorEvent({
-    event: 'monitor:long_generating',
+    event: 'monitor:no_progress',
     meshId,
     nodeLabel: "Node 'node_child_1'",
     nodeId: 'node_child_1',
@@ -222,7 +222,7 @@ describe('runMeshReconcileTick', () => {
       // Only the non-force progress event remains queued.
       const remaining = getPendingMeshCoordinatorEvents(meshId)
       expect(remaining).toHaveLength(1)
-      expect(remaining[0].event).toBe('monitor:long_generating')
+      expect(remaining[0].event).toBe('monitor:no_progress')
     } finally {
       cleanup(meshId)
     }

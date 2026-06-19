@@ -14,11 +14,11 @@ describe('StatusMonitor no-progress watchdog approval suppression', () => {
   const KEY = 'cli:claude'
 
   function longGen(events: ReturnType<StatusMonitor['check']>): boolean {
-    return events.some(e => e.type === 'monitor:long_generating')
+    return events.some(e => e.type === 'monitor:no_progress')
   }
 
   it('does NOT fire while approval is pending, even though the fingerprint is frozen', () => {
-    const monitor = new StatusMonitor({ longGeneratingThresholdSec: THRESHOLD, alertCooldownSec: 0 })
+    const monitor = new StatusMonitor({ noProgressThresholdSec: THRESHOLD, alertCooldownSec: 0 })
     const start = 1_000_000
     const frozen = 'awaiting approval'
     // Status synthesized to 'generating' (auto-approve path) but approvalPending=true.
@@ -30,7 +30,7 @@ describe('StatusMonitor no-progress watchdog approval suppression', () => {
   })
 
   it('DOES fire after approval clears when generating then genuinely stalls', () => {
-    const monitor = new StatusMonitor({ longGeneratingThresholdSec: THRESHOLD, alertCooldownSec: 0 })
+    const monitor = new StatusMonitor({ noProgressThresholdSec: THRESHOLD, alertCooldownSec: 0 })
     const start = 2_000_000
     // Hold in approval for a long time.
     for (let i = 0; i <= THRESHOLD + 3; i++) {
@@ -50,7 +50,7 @@ describe('StatusMonitor no-progress watchdog approval suppression', () => {
   })
 
   it('restarts the timer from the moment approval clears (approval wait does not accrue)', () => {
-    const monitor = new StatusMonitor({ longGeneratingThresholdSec: THRESHOLD, alertCooldownSec: 0 })
+    const monitor = new StatusMonitor({ noProgressThresholdSec: THRESHOLD, alertCooldownSec: 0 })
     const start = 3_000_000
     // Generate normally for a couple seconds, then enter a long approval wait.
     monitor.check(KEY, 'generating', start, 'fp-a', false)

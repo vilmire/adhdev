@@ -105,8 +105,8 @@ export class IdeProviderInstance implements ProviderInstance {
  // Sync Monitor config
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
-            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
-            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+            noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
+            noProgressThresholdSec: this.settings.noProgressThresholdSec ?? this.settings.longGeneratingThresholdSec ?? 180,
         });
     }
 
@@ -267,8 +267,8 @@ export class IdeProviderInstance implements ProviderInstance {
         this.settings = { ...this.settings, ...newSettings };
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
-            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
-            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+            noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
+            noProgressThresholdSec: this.settings.noProgressThresholdSec ?? this.settings.longGeneratingThresholdSec ?? 180,
         });
     }
 
@@ -417,7 +417,7 @@ export class IdeProviderInstance implements ProviderInstance {
             const persistedMessages = chat.messages || messages;
             if (persistedMessages.length > 0) {
                 let toSave = persistedMessages;
-                if (chat.status === 'generating' || chat.status === 'long_generating') {
+                if (chat.status === 'generating' || chat.status === 'no_progress' || chat.status === 'long_generating') {
  // Find and exclude last assistant message
                     const lastIdx = toSave.length - 1;
                     if (lastIdx >= 0 && toSave[lastIdx].role === 'assistant') {

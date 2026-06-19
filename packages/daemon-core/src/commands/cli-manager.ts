@@ -81,7 +81,7 @@ export interface CliManagerDeps {
 
 type CommandResult = { success: boolean;[key: string]: unknown };
 
-const BUSY_AGENT_STATUSES = new Set(['generating', 'running', 'streaming', 'starting', 'busy', 'waiting', 'waiting_approval', 'long_generating']);
+const BUSY_AGENT_STATUSES = new Set(['generating', 'running', 'streaming', 'starting', 'busy', 'waiting', 'waiting_approval', 'no_progress', 'long_generating']);
 const ZERO_MESSAGE_STARTING_SEND_WAIT_MS = 2_000;
 
 function normalizeAgentStatus(value: unknown): string {

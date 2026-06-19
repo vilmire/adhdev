@@ -1372,7 +1372,7 @@ function normalizeReadChatCommandStatus(status: unknown, activeModal: unknown): 
 }
 
 function isGeneratingLikeStatus(status: unknown): boolean {
-    return status === 'generating' || status === 'streaming' || status === 'long_generating' || status === 'starting';
+    return status === 'generating' || status === 'streaming' || status === 'no_progress' || status === 'long_generating' || status === 'starting';
 }
 
 function hasVisibleAssistantMessage(messages: unknown[] | undefined): boolean {

@@ -3,7 +3,7 @@
  *
  * Combines:
  *  1. Global master / browser notification toggles (from Settings)
- *  2. Provider-level alert settings (autoApprove, approvalAlert, longGeneratingAlert)
+ *  2. Provider-level alert settings (autoApprove, approvalAlert, noProgressAlert)
  *     grouped by category with bulk "Apply to All" controls.
  *
  * This replaces the scattered notification UI across Settings and ProvidersTab.
@@ -31,7 +31,9 @@ interface DaemonMachine {
     providers?: ProviderInfo[]
 }
 
-const NOTIFICATION_SETTING_KEYS = new Set(['autoApprove', 'approvalAlert', 'longGeneratingAlert', 'longGeneratingThresholdSec'])
+// 'longGeneratingAlert'/'longGeneratingThresholdSec' are legacy aliases for the renamed
+// 'noProgressAlert'/'noProgressThresholdSec' keys; both are recognized for backward compat.
+const NOTIFICATION_SETTING_KEYS = new Set(['autoApprove', 'approvalAlert', 'noProgressAlert', 'noProgressThresholdSec', 'longGeneratingAlert', 'longGeneratingThresholdSec'])
 
 function filterNotificationSettings(schema: ProviderSettingsEntry['schema']): ProviderSettingsEntry['schema'] {
     return schema.filter((setting) => NOTIFICATION_SETTING_KEYS.has(setting.key))
@@ -310,11 +312,12 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                             {categories.map(({ category, entries }) => {
                                 const color = CAT_COLORS[category] || CAT_COLORS.cli
                                 // Find common boolean alert keys across all entries in this category
-                                const alertKeys = ['autoApprove', 'approvalAlert', 'longGeneratingAlert'] as const
+                                // 'longGeneratingAlert' is the legacy alias for 'noProgressAlert'; both map to the same label.
+                                const alertKeys = ['autoApprove', 'approvalAlert', 'noProgressAlert', 'longGeneratingAlert'] as const
                                 const keyStats = alertKeys.map(key => {
                                     const withKey = entries.filter(e => e.schema.some(s => s.key === key))
                                     const onCount = withKey.filter(e => !!(e.values[key] ?? e.schema.find(s => s.key === key)?.default)).length
-                                    return { key, label: key === 'autoApprove' ? 'Auto Approve' : key === 'approvalAlert' ? 'Approval Alert' : 'Long Gen Alert', total: withKey.length, onCount }
+                                    return { key, label: key === 'autoApprove' ? 'Auto Approve' : key === 'approvalAlert' ? 'Approval Alert' : 'No Progress Alert', total: withKey.length, onCount }
                                 }).filter(k => k.total > 0)
 
                                 return (

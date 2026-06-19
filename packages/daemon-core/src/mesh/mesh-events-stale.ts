@@ -235,7 +235,7 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
     return { reconciled: true, kind, workerResult, ledgerEntryId: entry.id };
 }
 
-export function buildLongGeneratingCompletionReconciliation(args: {
+export function buildNoProgressCompletionReconciliation(args: {
     meshId: string;
     nodeId?: string;
     nodeLabel: string;
@@ -265,8 +265,8 @@ export function buildLongGeneratingCompletionReconciliation(args: {
             providerType,
             providerSessionId,
             finalSummary,
-            source: 'long_generating_reconciliation',
-            reconciledFromEvent: 'monitor:long_generating',
+            source: 'no_progress_reconciliation',
+            reconciledFromEvent: 'monitor:no_progress',
             timestamp: args.metadataEvent.timestamp ?? Date.now(),
             completionDiagnostic: {
                 ...(completionDiagnostic || {}),
@@ -283,7 +283,7 @@ export function buildLongGeneratingCompletionReconciliation(args: {
     if (!terminal) return null;
     return {
         ...args.metadataEvent,
-        source: 'long_generating_terminal_ledger_suppression',
+        source: 'no_progress_terminal_ledger_suppression',
         terminalLedgerKind: terminal.kind,
         terminalLedgerAt: terminal.timestamp,
     };

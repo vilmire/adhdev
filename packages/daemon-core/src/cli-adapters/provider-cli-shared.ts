@@ -62,7 +62,7 @@ export interface CliSessionStatus {
      * Timestamp (ms) of the most recent *visible* terminal screen change.
      * Stricter than lastOutputAt — only advances when the rendered screen
      * content actually differs, so repeated keepalive bytes do not register as
-     * progress. Preferred liveness signal for the long-generating watchdog.
+     * progress. Preferred liveness signal for the no-progress watchdog.
      */
     lastScreenChangeAt?: number;
     bufferState?: {

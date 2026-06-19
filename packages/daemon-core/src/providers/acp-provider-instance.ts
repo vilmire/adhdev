@@ -329,8 +329,8 @@ export class AcpProviderInstance implements ProviderInstance {
         this.settings = context.settings || {};
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
-            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
-            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+            noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
+            noProgressThresholdSec: this.settings.noProgressThresholdSec ?? this.settings.longGeneratingThresholdSec ?? 180,
         });
 
         await this.spawnAgent();
@@ -674,8 +674,8 @@ export class AcpProviderInstance implements ProviderInstance {
         this.settings = { ...this.settings, ...newSettings };
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
-            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
-            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+            noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
+            noProgressThresholdSec: this.settings.noProgressThresholdSec ?? this.settings.longGeneratingThresholdSec ?? 180,
         });
         this.log.info(`[${this.type}] Settings updated: ${Object.keys(newSettings).join(', ')}`);
     }

@@ -256,7 +256,7 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
             }
             const validated = validateReadChatResultPayload(data, `${this.agentType} readChat`);
             const validatedStatus = (validated as any).status as string;
-            const streamStatus = validatedStatus === 'generating' || validatedStatus === 'long_generating'
+            const streamStatus = validatedStatus === 'generating' || validatedStatus === 'no_progress' || validatedStatus === 'long_generating'
                 ? 'streaming'
                 : validatedStatus;
             const state: AgentStreamState = {

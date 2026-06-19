@@ -151,7 +151,7 @@ function isTransientNonSubstantiveTail(messages: DashboardMessage[]): boolean {
 
 function isBusyChatTailStatus(status: unknown): boolean {
   const value = typeof status === 'string' ? status.toLowerCase() : ''
-  return value === 'generating' || value === 'long_generating' || value === 'streaming' || value === 'working' || value === 'starting'
+  return value === 'generating' || value === 'no_progress' || value === 'long_generating' || value === 'streaming' || value === 'working' || value === 'starting'
 }
 
 function getExistingVisibleMessageCount(snapshot: SessionChatTailSnapshot, fallbackRecentCount: number): number {

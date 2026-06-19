@@ -3,16 +3,16 @@
  *
  * Common across all Provider categories (IDE/Extension/CLI/ACP).
  * - Approval waiting (waiting_approval) notification
- * - Notification when generating persists for extended duration
+ * - No-progress watchdog: alert when an active turn makes no progress for a while
  * - All config toggleable via Provider Settings
  */
 export interface MonitorConfig {
     /** Enable awaiting-approval notification */
     approvalAlert: boolean;
-    /** Prolonged generating notification enabled */
-    longGeneratingAlert: boolean;
-    /** Prolonged threshold (seconds) */
-    longGeneratingThresholdSec: number;
+    /** No-progress watchdog notification enabled */
+    noProgressAlert: boolean;
+    /** No-progress threshold (seconds) */
+    noProgressThresholdSec: number;
     /** Repeat notification cooldown (seconds) */
     alertCooldownSec: number;
 }
@@ -28,7 +28,7 @@ export declare class StatusMonitor {
     private config;
     private lastAlertTime;
     private generatingStartTimes;
-    private longGeneratingAlerted;
+    private noProgressAlerted;
     private lastProgressFingerprint;
     private lastProgressChangeAt;
     constructor(config?: Partial<MonitorConfig>);

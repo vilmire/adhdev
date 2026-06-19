@@ -21,7 +21,7 @@ import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
     hasUnterminalDirectDispatchLedgerEntry,
-    buildLongGeneratingCompletionReconciliation,
+    buildNoProgressCompletionReconciliation,
 } from './mesh-events-stale.js';
 import {
     buildMeshSystemMessage,
@@ -125,7 +125,7 @@ function shouldSuppressIntentionalCleanupStop(args: {
     sessionId?: string;
     nodeId?: string;
 }): boolean {
-    if (args.event !== 'agent:stopped' && args.event !== 'monitor:long_generating') return false;
+    if (args.event !== 'agent:stopped' && args.event !== 'monitor:no_progress') return false;
     if (isIntentionalCleanupStopMetadata(args.metadataEvent)) return true;
     return hasRecentIntentionalCleanupStop(args.meshId, args.sessionId, args.nodeId);
 }
@@ -453,7 +453,8 @@ function resolveAutoFastForwardPolicy(mesh: any): { enabled: boolean; maxBehind?
 function sessionStateLooksActive(state: any): boolean {
     const status = readNonEmptyString(state?.status).toLowerCase();
     const chatStatus = readNonEmptyString(state?.activeChat?.status).toLowerCase();
-    const active = new Set(['generating', 'streaming', 'long_generating', 'working', 'starting', 'waiting_approval']);
+    // 'long_generating' is retained as a legacy alias for the renamed 'no_progress' busy status.
+    const active = new Set(['generating', 'streaming', 'no_progress', 'long_generating', 'working', 'starting', 'waiting_approval']);
     return active.has(status) || active.has(chatStatus);
 }
 
@@ -1329,7 +1330,7 @@ const MESH_COORDINATOR_EVENTS = new Set([
     'agent:waiting_approval',
     'agent:stopped',
     'agent:ready',
-    'monitor:long_generating',
+    'monitor:no_progress',
     'refine:accepted',
     'refine:completed',
     'refine:failed',
@@ -1341,7 +1342,7 @@ const EVENT_TO_LEDGER_KIND: Record<string, MeshLedgerKind> = {
     'agent:generating_completed': 'task_completed',
     'agent:waiting_approval': 'task_approval_needed',
     'agent:stopped': 'task_failed',
-    'monitor:long_generating': 'task_stalled',
+    'monitor:no_progress': 'task_stalled',
 };
 
 export function isMeshCoordinatorEvent(eventName: unknown): eventName is string {
@@ -1419,24 +1420,24 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return { success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true };
     }
 
-    if (args.event === 'monitor:long_generating') {
-        const reconciledCompletion = buildLongGeneratingCompletionReconciliation({
+    if (args.event === 'monitor:no_progress') {
+        const reconciledCompletion = buildNoProgressCompletionReconciliation({
             meshId: args.meshId,
             nodeId: args.nodeId,
             nodeLabel: args.nodeLabel,
             metadataEvent: args.metadataEvent,
             sourceInstanceId: args.sourceInstanceId,
         });
-        if (reconciledCompletion?.source === 'long_generating_reconciliation') {
-            LOG.info('MeshEvents', `Reconciled long-generating monitor to completion for session ${eventSessionId || '(unknown session)'}`);
+        if (reconciledCompletion?.source === 'no_progress_reconciliation') {
+            LOG.info('MeshEvents', `Reconciled no-progress monitor to completion for session ${eventSessionId || '(unknown session)'}`);
             return injectMeshSystemMessage(components, {
                 ...args,
                 event: 'agent:generating_completed',
                 metadataEvent: reconciledCompletion,
             });
         }
-        if (reconciledCompletion?.source === 'long_generating_terminal_ledger_suppression') {
-            LOG.info('MeshEvents', `Suppressed long-generating monitor because terminal ledger evidence already exists for session ${eventSessionId || '(unknown session)'}`);
+        if (reconciledCompletion?.source === 'no_progress_terminal_ledger_suppression') {
+            LOG.info('MeshEvents', `Suppressed no-progress monitor because terminal ledger evidence already exists for session ${eventSessionId || '(unknown session)'}`);
             return {
                 success: true,
                 forwarded: 0,
@@ -1483,7 +1484,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 if (
                     (terminalProviderSessionId && terminalProviderSessionId === eventProviderSessionId)
                     || (terminalFinalSummary && terminalFinalSummary === eventFinalSummary)
-                    || args.metadataEvent.source === 'long_generating_reconciliation'
+                    || args.metadataEvent.source === 'no_progress_reconciliation'
                 ) {
                     LOG.info('MeshEvents', `Suppressed duplicate completion with existing terminal ledger evidence for mesh ${args.meshId} session ${eventSessionId}`);
                     return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true, terminalLedgerEvidence: true };

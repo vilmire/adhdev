@@ -63,8 +63,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
         this.settings = context.settings || {};
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
-            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
-            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+            noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
+            noProgressThresholdSec: this.settings.noProgressThresholdSec ?? this.settings.longGeneratingThresholdSec ?? 180,
         });
     }
 
@@ -178,8 +178,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
         this.settings = { ...this.settings, ...newSettings };
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
-            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
-            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+            noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
+            noProgressThresholdSec: this.settings.noProgressThresholdSec ?? this.settings.longGeneratingThresholdSec ?? 180,
         });
     }
 
@@ -251,7 +251,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
                 : 'immediate',
         });
 
- // Monitor check (cooldown based notification) — keep monitor events (long_generating etc)
+ // Monitor check (cooldown based notification) — keep monitor events (no_progress etc)
         const agentKey = `${this.type}:ext`;
         const approvalPending = agentStatus === 'waiting_approval';
         const monitorEvents = this.monitor.check(agentKey, agentStatus, now, progressFingerprint, approvalPending);

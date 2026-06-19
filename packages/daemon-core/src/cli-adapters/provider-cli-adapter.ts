@@ -1321,7 +1321,7 @@ export class ProviderCliAdapter implements CliAdapter {
         };
         if (parsedSessionStatus === 'idle' && hasFinalAssistant(parsedStatusBeforeSend)) return null;
         if (this.engine.currentStatus === 'generating') return 'current_status_generating';
-        if (parsedSessionStatus === 'generating' || parsedSessionStatus === 'long_generating') {
+        if (parsedSessionStatus === 'generating' || parsedSessionStatus === 'no_progress' || parsedSessionStatus === 'long_generating') {
             const parsedModal = parsedStatusBeforeSend?.activeModal ?? parsedStatusBeforeSend?.modal ?? null;
             const parsedHasActionableModal = Boolean(
                 parsedModal
@@ -1414,7 +1414,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const parsedSessionStatus = typeof parsedStatusBeforeSend?.status === 'string'
             ? String(parsedStatusBeforeSend.status)
             : '';
-        if (!allowInputDuringGeneration && (parsedSessionStatus === 'generating' || parsedSessionStatus === 'long_generating')) {
+        if (!allowInputDuringGeneration && (parsedSessionStatus === 'generating' || parsedSessionStatus === 'no_progress' || parsedSessionStatus === 'long_generating')) {
             const parsedModal = parsedStatusBeforeSend?.activeModal ?? parsedStatusBeforeSend?.modal ?? null;
             const parsedHasActionableModal = Boolean(
                 parsedModal

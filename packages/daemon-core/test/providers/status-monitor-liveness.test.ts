@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { StatusMonitor } from '../../src/providers/status-monitor.js'
 
-// [G] long-generating watchdog false-stall regression.
+// [G] no-progress watchdog false-stall regression.
 //
 // The watchdog must fire only when the worker is genuinely stalled — no progress
 // of ANY kind for longerGeneratingThresholdSec. The CLI fingerprint is built from
@@ -9,7 +9,7 @@ import { StatusMonitor } from '../../src/providers/status-monitor.js'
 // (lastScreenChangeAt / lastOutputAt). While a tool/build runs the assistant emits
 // no tokens, so the assistant buffer is static — but the screen/raw timestamps keep
 // advancing, which must keep the fingerprint moving and suppress the alert.
-describe('StatusMonitor long-generating liveness watchdog', () => {
+describe('StatusMonitor no-progress liveness watchdog', () => {
   const THRESHOLD = 5 // seconds
 
   function fingerprint(partial: string, scr: number, out: number): string {
@@ -18,7 +18,7 @@ describe('StatusMonitor long-generating liveness watchdog', () => {
   }
 
   it('does NOT fire while raw PTY activity advances even though the assistant buffer is static (tool/build running)', () => {
-    const monitor = new StatusMonitor({ longGeneratingThresholdSec: THRESHOLD, alertCooldownSec: 0 })
+    const monitor = new StatusMonitor({ noProgressThresholdSec: THRESHOLD, alertCooldownSec: 0 })
     const start = 1_000_000
     // Assistant buffer never grows (no assistant tokens during tool execution),
     // but the terminal screen keeps changing as the build prints output.
@@ -36,7 +36,7 @@ describe('StatusMonitor long-generating liveness watchdog', () => {
   })
 
   it('DOES fire when nothing changes at all — a genuine stall (no assistant tokens, no raw output)', () => {
-    const monitor = new StatusMonitor({ longGeneratingThresholdSec: THRESHOLD, alertCooldownSec: 0 })
+    const monitor = new StatusMonitor({ noProgressThresholdSec: THRESHOLD, alertCooldownSec: 0 })
     const start = 2_000_000
     // Frozen everything: assistant buffer, screen, and raw output timestamps are all
     // pinned to the start. This is the only case the watchdog should survive.
@@ -47,13 +47,13 @@ describe('StatusMonitor long-generating liveness watchdog', () => {
     for (let i = 1; i <= THRESHOLD + 2; i++) {
       const now = start + i * 1000
       const events = monitor.check('cli:claude', 'generating', now, frozen)
-      if (events.some(e => e.type === 'monitor:long_generating')) { fired = events; break }
+      if (events.some(e => e.type === 'monitor:no_progress')) { fired = events; break }
     }
-    expect(fired.some(e => e.type === 'monitor:long_generating')).toBe(true)
+    expect(fired.some(e => e.type === 'monitor:no_progress')).toBe(true)
   })
 
   it('resets the stall timer whenever the fingerprint changes, so progress defers the alert', () => {
-    const monitor = new StatusMonitor({ longGeneratingThresholdSec: THRESHOLD, alertCooldownSec: 0 })
+    const monitor = new StatusMonitor({ noProgressThresholdSec: THRESHOLD, alertCooldownSec: 0 })
     const start = 3_000_000
     monitor.check('cli:claude', 'generating', start, fingerprint('a', start, start))
 
@@ -67,6 +67,6 @@ describe('StatusMonitor long-generating liveness watchdog', () => {
     expect(monitor.check('cli:claude', 'generating', beforeThreshold + 1000, frozen)).toHaveLength(0)
     expect(monitor.check('cli:claude', 'generating', beforeThreshold + (THRESHOLD - 1) * 1000, frozen)).toHaveLength(0)
     const late = monitor.check('cli:claude', 'generating', beforeThreshold + (THRESHOLD + 1) * 1000, frozen)
-    expect(late.some(e => e.type === 'monitor:long_generating')).toBe(true)
+    expect(late.some(e => e.type === 'monitor:no_progress')).toBe(true)
   })
 })

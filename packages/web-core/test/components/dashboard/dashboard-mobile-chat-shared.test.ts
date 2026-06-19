@@ -75,7 +75,8 @@ describe('DashboardMobileChatShared', () => {
     expect(surfaceState.inboxBucket).toBe('idle')
   })
 
-  it('treats long-generating and streaming statuses as working states', () => {
+  it('treats no_progress (and legacy long_generating) and streaming statuses as working states', () => {
+    expect(getConversationViewStates({ status: 'no_progress' }).isGenerating).toBe(true)
     expect(getConversationViewStates({ status: 'long_generating' }).isGenerating).toBe(true)
     expect(getConversationViewStates({ status: 'streaming' }).isGenerating).toBe(true)
   })

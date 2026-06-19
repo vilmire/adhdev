@@ -7,9 +7,14 @@ describe('ChatPane busy input status copy', () => {
       .toBe('Agent is generating. Send queues your message; Force sends it immediately.')
   })
 
-  it('surfaces long-running context for long-generating sessions', () => {
+  it('surfaces no-progress context for no_progress sessions', () => {
+    expect(buildBusyChatInputStatusMessage({ status: 'no_progress' } as any))
+      .toBe('Agent shows no progress. Send queues your message; Force sends it immediately.')
+  })
+
+  it('still recognizes the legacy long_generating status alias', () => {
     expect(buildBusyChatInputStatusMessage({ status: 'long_generating' } as any))
-      .toBe('Agent has been generating for a long time. Send queues your message; Force sends it immediately.')
+      .toBe('Agent shows no progress. Send queues your message; Force sends it immediately.')
   })
 
   it('shows waiting context when approval buttons are not available yet', () => {

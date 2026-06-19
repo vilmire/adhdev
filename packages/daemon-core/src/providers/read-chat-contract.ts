@@ -10,7 +10,7 @@ import {
   type ReadChatResultV2,
 } from './transcript-v2.js'
 
-const VALID_STATUSES = ['idle', 'generating', 'waiting_approval', 'error', 'panel_hidden', 'starting', 'streaming', 'long_generating'] as const
+const VALID_STATUSES = ['idle', 'generating', 'waiting_approval', 'error', 'panel_hidden', 'starting', 'streaming', 'no_progress', 'long_generating'] as const
 const VALID_ROLES = ['user', 'assistant', 'system', 'human'] as const
 const VALID_BUBBLE_STATES = ['draft', 'streaming', 'final', 'removed'] as const
 const VALID_TURN_STATUSES = ['open', 'waiting_approval', 'complete', 'error'] as const

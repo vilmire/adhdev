@@ -120,7 +120,7 @@ export class DaemonStatusReporter {
             case 'agent:waiting_approval':
             case 'agent:generating_completed':
             case 'agent:stopped':
-            case 'monitor:long_generating':
+            case 'monitor:no_progress':
                 return value;
             default:
                 return null;
