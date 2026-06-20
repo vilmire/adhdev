@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
-import { IconMesh, IconX } from '../Icons'
+import { IconInfo, IconMesh, IconX } from '../Icons'
 import { MeshObservabilitySurface, MeshSurfaceTabControls, type MeshSurfaceTab } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import { useTransport } from '../../context/TransportContext'
@@ -87,6 +87,13 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const [meshStatus, setMeshStatus] = useState<RepoMeshStatus | null>(initialMeshStatus)
     const [loading, setLoading] = useState(false)
     const [refreshing, setRefreshing] = useState(false)
+    // On mobile the header otherwise stacks 5 rows (title, repo path, tabs,
+    // status chips, Refresh) and pushes the Missions/Ledger content far down.
+    // Collapse the secondary metadata (repo path + status chips) behind a
+    // disclosure toggle by default; the core actions (tabs/Refresh/close)
+    // stay pinned in the sticky header. Desktop ignores this and always
+    // shows everything (md: utilities below).
+    const [showHeaderMeta, setShowHeaderMeta] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(initialMeshStatus?.refreshedAt ?? null)
     const hasUsableGraphRef = useRef(initialMeshStatus !== null)
@@ -286,7 +293,12 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                         Mesh observability
                                     </span>
                                 </div>
-                                <p className={meshTheme.dialogSubtitleClass}>
+                                {/* Repo path is secondary detail — collapsed on mobile
+                                    unless the user expands the metadata disclosure;
+                                    always visible on desktop where space allows. */}
+                                <p
+                                    className={`${meshTheme.dialogSubtitleClass} ${showHeaderMeta ? 'block' : 'hidden'} md:block`}
+                                >
                                     {getConversationTitle(activeConv)}
                                     {activeConv.workspaceName ? ` · ${activeConv.workspaceName}` : ''}
                                     {meshStatus?.repoIdentity ? ` · ${meshStatus.repoIdentity}` : ''}
@@ -295,6 +307,8 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                         </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 md:justify-end md:pr-12">
+                        {/* Core actions — always pinned in the sticky shrink-0 header so
+                            they stay reachable no matter how long the body content is. */}
                         <MeshSurfaceTabControls
                             meshTheme={meshTheme}
                             activeTab={activeTab}
@@ -302,16 +316,35 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             helpOpen={helpOpen}
                             onHelpOpenChange={setHelpOpen}
                         />
+                        {/* Secondary status chips — collapsed on mobile behind the
+                            disclosure toggle, always shown inline on desktop. */}
                         {lastLoadedLabel && (
-                            <span className={meshTheme.dialogRefreshedChipClass}>
+                            <span
+                                className={`${meshTheme.dialogRefreshedChipClass} ${showHeaderMeta ? 'inline-flex' : 'hidden'} md:inline-flex`}
+                            >
                                 {`Refreshed ${lastLoadedLabel}`}
                             </span>
                         )}
                         {!refreshing && meshStatus && (
-                            <span className={meshTheme.dialogRefreshedChipClass}>
+                            <span
+                                className={`${meshTheme.dialogRefreshedChipClass} ${showHeaderMeta ? 'inline-flex' : 'hidden'} md:inline-flex`}
+                            >
                                 {sendData && !error ? 'Live daemon metadata' : 'Metadata subscription unavailable'}
                             </span>
                         )}
+                        {/* Mobile-only disclosure toggle for the secondary metadata
+                            (repo path + status chips). Hidden on desktop where the
+                            header has room to show everything. */}
+                        <button
+                            type="button"
+                            onClick={() => setShowHeaderMeta(prev => !prev)}
+                            aria-expanded={showHeaderMeta}
+                            aria-label={showHeaderMeta ? 'Hide mesh details' : 'Show mesh details'}
+                            className="btn btn-secondary btn-sm rounded-xl px-2.5 md:hidden"
+                            title={showHeaderMeta ? 'Hide mesh details' : 'Show mesh details'}
+                        >
+                            <IconInfo size={16} />
+                        </button>
                         <button
                             type="button"
                             onClick={() => {
