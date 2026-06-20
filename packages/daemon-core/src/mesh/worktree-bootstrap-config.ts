@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import * as yaml from 'js-yaml';
+import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import {
     isMeshConfigRecord,
     normalizeMeshCommandConfig,
@@ -268,8 +269,12 @@ export async function runMeshWorktreeBootstrap(mesh: any, workspace: string): Pr
         const cwd = command.cwd ? pathResolve(workspace, command.cwd) : workspace;
         const startedAt = Date.now();
         state.lastCommand = command.displayCommand;
+        // On win32 a bare npm/npx/tsc is a .cmd shim that libuv's spawn search
+        // (which appends only .com/.exe) cannot resolve → spawn ENOENT. Resolve
+        // to an absolute path first (no-op on non-win32 / already-absolute).
+        const resolvedCommand = resolveWin32Executable(command.command);
         try {
-            const result = await execFileAsync(command.command, command.args, {
+            const result = await execFileAsync(resolvedCommand, command.args, {
                 cwd,
                 encoding: 'utf8',
                 timeout: command.timeoutMs || DEFAULT_TIMEOUT_MS,

@@ -164,15 +164,35 @@ export function isMeshConfigRecord(value: unknown): value is Record<string, unkn
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function tokenizeCommandString(command: string): string[] | null {
+// True shell metacharacters — never allowed anywhere in a config command, on
+// any platform. Note: backslash is deliberately NOT in this set; it is handled
+// separately (allowed only in the win32 executable token).
+const SHELL_METACHAR_RE = /[;&|<>`$\n\r'"]/;
+// Per-token allowlist for argument tokens and non-win32 executable tokens.
+const SAFE_TOKEN_RE = /^[A-Za-z0-9_@./:=+-]+$/;
+// Executable token on win32: same as SAFE_TOKEN_RE but also permits backslash so
+// an absolute path like C:\Users\me\AppData\Roaming\npm\npm.cmd is accepted.
+const SAFE_WIN32_EXEC_TOKEN_RE = /^[A-Za-z0-9_@./:=+\\-]+$/;
+
+export function tokenizeCommandString(command: string): string[] | null {
     const trimmed = command.trim();
     if (!trimmed) return null;
     // Explicit config may name any executable, but the Refinery never invokes a shell.
     // Reject shell syntax, quotes and substitutions so config cannot smuggle a compound command.
-    if (/[;&|<>`$\\\n\r'\"]/.test(trimmed)) return null;
+    // Backslash is the one exception (handled per-token below): rejecting it here
+    // would block legitimate win32 absolute .cmd paths, but it is never a shell
+    // metacharacter in the no-shell execFile boundary we run under.
+    if (SHELL_METACHAR_RE.test(trimmed)) return null;
     const tokens = trimmed.split(/\s+/).filter(Boolean);
     if (!tokens.length) return null;
-    if (tokens.some(token => !/^[A-Za-z0-9_@./:=+-]+$/.test(token))) return null;
+    const isWin32 = process.platform === 'win32';
+    for (let i = 0; i < tokens.length; i++) {
+        // Backslash is permitted ONLY in the executable (first) token, ONLY on
+        // win32. Every other token (and all tokens off win32) uses the strict
+        // allowlist with no backslash.
+        const re = (isWin32 && i === 0) ? SAFE_WIN32_EXEC_TOKEN_RE : SAFE_TOKEN_RE;
+        if (!re.test(tokens[i])) return null;
+    }
     return tokens;
 }
 

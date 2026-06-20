@@ -93,6 +93,7 @@ import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
 import { normalizeInteractivePromptResponse } from '../providers/types/interactive-prompt.js';
 import { workingDirBasename } from '../providers/working-dir.js';
+import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 
 type ReleaseChannel = 'stable' | 'preview';
 const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
@@ -1675,6 +1676,8 @@ type MeshRefineValidationSummary = {
     skippedReason?: string;
     failureKind?: string;
     failureCode?: string;
+    /** Human-readable cause when failureKind === 'spawn_resolution_failed' (win32 .cmd shim, etc). */
+    spawnResolutionError?: string;
     timeoutMs: number;
     outputLimitBytes: number;
     configSource?: string;
@@ -1893,6 +1896,32 @@ function truncateValidationOutput(value: unknown): string {
     const text = typeof value === 'string' ? value : value == null ? '' : String(value);
     if (text.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text;
     return `${text.slice(0, REFINE_VALIDATION_SUMMARY_CHARS)}\n[truncated ${text.length - REFINE_VALIDATION_SUMMARY_CHARS} chars]`;
+}
+
+/**
+ * A spawn-resolution failure is when the executable itself could not be found by
+ * the OS spawn boundary — `spawn <cmd> ENOENT` — as opposed to the command
+ * running and exiting non-zero. On win32 this is the .cmd-shim case: libuv's
+ * spawn search appends only .com/.exe, so a bare `npm`/`npx`/`tsc` (which are
+ * .cmd shims) ENOENTs even though it is installed. It carries no stderr, so it
+ * must be detected by error.code/syscall, not by string-matching output.
+ */
+export function isSpawnResolutionError(error: any): boolean {
+    if (!error) return false;
+    if (error.code === 'ENOENT' && typeof error.syscall === 'string' && error.syscall.startsWith('spawn')) return true;
+    // Fall back to code alone: execFile sets syscall on the spawn boundary error,
+    // but guard for environments/mocks that only surface the code.
+    return error.code === 'ENOENT' && (error.syscall === undefined || String(error.syscall).startsWith('spawn'));
+}
+
+export function describeSpawnError(error: any, command: string, spawnResolutionFailed: boolean): string {
+    if (spawnResolutionFailed) {
+        const hint = process.platform === 'win32'
+            ? ' On Windows, npm-family commands (npm/npx/tsc/vitest) are .cmd shims that the bare-command spawn search does not resolve; configure an absolute path or ensure the command is on PATH.'
+            : '';
+        return `Could not resolve executable "${command}" (spawn ENOENT).${hint}`;
+    }
+    return String(error?.message || error);
 }
 
 function recordMeshRefineStage(
@@ -3119,8 +3148,13 @@ async function runMeshRefineValidationGate(
             const startedAt = Date.now();
             const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
             const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
+            // On win32, libuv's spawn search only appends .com/.exe (not .cmd/.bat),
+            // so a bare `npm`/`npx`/`tsc` (which are .cmd shims) throws spawn ENOENT.
+            // Resolve to an absolute path via the same helper the PTY path uses
+            // (no-op on non-win32 and when the command is already absolute).
+            const resolvedCommand = resolveWin32Executable(candidate.command);
             try {
-                const result = await execFileAsync(candidate.command, candidate.args, {
+                const result = await execFileAsync(resolvedCommand, candidate.args, {
                     cwd,
                     encoding: 'utf8',
                     timeout,
@@ -3129,16 +3163,19 @@ async function runMeshRefineValidationGate(
                 });
                 summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
             } catch (error: any) {
+                const spawnResolutionFailed = isSpawnResolutionError(error);
                 summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, error, false, {
                     exitCode: typeof error?.code === 'number' ? error.code : null,
                     signal: typeof error?.signal === 'string' ? error.signal : null,
                     timedOut: error?.killed === true || /timed out/i.test(String(error?.message || '')),
-                    failureKind: 'dependency_bootstrap_failed',
+                    ...(spawnResolutionFailed
+                        ? { failureKind: 'spawn_resolution_failed', resolvedCommand }
+                        : { failureKind: 'dependency_bootstrap_failed' }),
                 }));
-                summary.bootstrap = { stage: 'failed', error: String(error?.message || error) };
+                summary.bootstrap = { stage: 'failed', error: describeSpawnError(error, candidate.command, spawnResolutionFailed) };
                 summary.status = 'failed';
-                summary.failureKind = 'dependency_bootstrap_failed';
-                summary.failureCode = 'dependency_bootstrap_failed';
+                summary.failureKind = spawnResolutionFailed ? 'spawn_resolution_failed' : 'dependency_bootstrap_failed';
+                summary.failureCode = spawnResolutionFailed ? 'spawn_resolution_failed' : 'dependency_bootstrap_failed';
                 return summary;
             }
         }
@@ -3162,8 +3199,11 @@ async function runMeshRefineValidationGate(
             summary.failureCode = 'missing_dependencies';
             return summary;
         }
+        // See the bootstrap loop above: resolve the win32 .cmd shim to an
+        // absolute path before handing it to the spawn boundary.
+        const resolvedCommand = resolveWin32Executable(candidate.command);
         try {
-            const result = await execFileAsync(candidate.command, candidate.args, {
+            const result = await execFileAsync(resolvedCommand, candidate.args, {
                 cwd,
                 encoding: 'utf8',
                 timeout,
@@ -3172,16 +3212,28 @@ async function runMeshRefineValidationGate(
             });
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
         } catch (error: any) {
+            // ENOENT check first: a spawn-resolution failure ("spawn npm ENOENT")
+            // carries no stderr and would otherwise fall through to an
+            // unclassified generic failure. Classify it distinctly so the
+            // coordinator surfaces the real cause (win32 .cmd resolution).
+            const spawnResolutionFailed = isSpawnResolutionError(error);
             const stderr = truncateValidationOutput(error?.stderr || error?.message);
-            const missingDependencyFailure = /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
+            const missingDependencyFailure = !spawnResolutionFailed
+                && /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, error, false, {
                 exitCode: typeof error?.code === 'number' ? error.code : null,
                 signal: typeof error?.signal === 'string' ? error.signal : null,
                 timedOut: error?.killed === true || /timed out/i.test(String(error?.message || '')),
-                ...(missingDependencyFailure ? { failureKind: 'missing_dependencies' } : {}),
+                ...(spawnResolutionFailed
+                    ? { failureKind: 'spawn_resolution_failed', resolvedCommand }
+                    : missingDependencyFailure ? { failureKind: 'missing_dependencies' } : {}),
             }));
             summary.status = 'failed';
-            if (missingDependencyFailure) {
+            if (spawnResolutionFailed) {
+                summary.failureKind = 'spawn_resolution_failed';
+                summary.failureCode = 'spawn_resolution_failed';
+                summary.spawnResolutionError = describeSpawnError(error, candidate.command, true);
+            } else if (missingDependencyFailure) {
                 summary.failureKind = 'missing_dependencies';
                 summary.failureCode = 'missing_dependencies';
             }
@@ -4776,7 +4828,10 @@ export class DaemonCommandRouter {
                         ? 'Refinery validation dependencies are missing; merge/refine was not attempted. Configure validation.bootstrapCommands if Refinery should bootstrap dependencies before validation.'
                         : validationSummary.failureCode === 'dependency_bootstrap_failed'
                             ? 'Refinery dependency/bootstrap command failed; merge/refine was not attempted.'
-                            : 'Refinery validation gate failed; merge/refine was not attempted.';
+                            : validationSummary.failureCode === 'spawn_resolution_failed'
+                                ? (validationSummary.spawnResolutionError
+                                    || 'Refinery validation command could not be spawned (executable not found); merge/refine was not attempted.')
+                                : 'Refinery validation gate failed; merge/refine was not attempted.';
                     if (!firstFailedCmd) return base;
                     const cmdName = typeof firstFailedCmd.displayCommand === 'string' ? firstFailedCmd.displayCommand
                         : typeof firstFailedCmd.command === 'string'
