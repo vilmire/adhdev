@@ -754,6 +754,7 @@ export default function CliTerminalPane({
                 isSending={isSendingChat}
                 isBusy={!!sendBlockMessage}
                 statusMessage={inputStatusMessage}
+                inlineStatusMessage={inputStatusMessage}
                 onSend={async (message) => {
                     if (sendBlockMessage) return false;
                     return handleSendChat(message);

@@ -20,7 +20,15 @@ interface ChatInputBarProps {
     panelLabel: string;
     isSending: boolean;
     isBusy?: boolean;
+    /** Shown as the textarea placeholder (visible only while the draft is empty). */
     statusMessage?: string | null;
+    /**
+     * Shown on a dedicated line below the input, persistently (even while the
+     * user is typing). Use for messages the user must keep seeing — send
+     * errors, blocked-input reasons. Busy/generating status belongs in
+     * `statusMessage` only, to avoid duplicating it under the placeholder.
+     */
+    inlineStatusMessage?: string | null;
     onSend: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
     onForceSend?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
     canForceSend?: boolean;
@@ -77,6 +85,7 @@ const ChatInputBar = memo(function ChatInputBar({
     isSending: _isSending,
     isBusy = false,
     statusMessage = null,
+    inlineStatusMessage = null,
     onSend,
     onForceSend,
     canForceSend = false,
@@ -372,9 +381,9 @@ const ChatInputBar = memo(function ChatInputBar({
                     {attachError || 'Drop image here'}
                 </div>
             )}
-            {statusMessage && !attachError && (
+            {inlineStatusMessage && !attachError && (
                 <div className="pt-2 px-1 text-[11px] text-text-muted opacity-80">
-                    {statusMessage}
+                    {inlineStatusMessage}
                 </div>
             )}
         </div>

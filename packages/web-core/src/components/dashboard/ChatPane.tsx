@@ -157,7 +157,12 @@ export default function ChatPane({
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
     const sendBlockMessage = getConversationSendBlockMessage(activeConv)
     const busyStatusMessage = buildBusyChatInputStatusMessage(activeConv)
-    const chatInputStatusMessage = sendFeedbackMessage || sendBlockMessage || busyStatusMessage
+    // Messages the user must keep seeing while typing (send errors, blocked
+    // input) render on a dedicated line below the input. The busy/generating
+    // status is shown only in the placeholder to avoid a duplicate line right
+    // under it — the placeholder already surfaces it while the draft is empty.
+    const inlineStatusMessage = sendFeedbackMessage || sendBlockMessage
+    const chatInputStatusMessage = inlineStatusMessage || busyStatusMessage
     const isChatInputBlocked = !!sendBlockMessage
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -444,6 +449,7 @@ export default function ChatPane({
                     isSending={isSendingChat}
                     isBusy={isChatInputBlocked}
                     statusMessage={chatInputStatusMessage}
+                    inlineStatusMessage={inlineStatusMessage}
                     onSend={handleSendChat}
                     onForceSend={handleForceSendChat}
                     canForceSend={!!handleForceSendChat && viewStates.isGenerating && !isChatInputBlocked}
