@@ -955,15 +955,25 @@ function isIdleSessionRecord(session: any): boolean {
     return status === 'idle' || chatStatus === 'waiting_input';
 }
 
-function isMeshOwnedDelegateSession(session: any, meshId: string, nodeId: string): boolean {
+export function isMeshOwnedDelegateSession(session: any, meshId: string, nodeId: string): boolean {
     const settings = session?.settings;
     const sessionMeshId = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
     const sessionNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
     // meshNodeFor is the primary ownership signal. Relay safety is checked separately
     // for remote dispatch because older local delegates may not carry coordinator
     // daemon metadata.
-    if (sessionMeshId !== meshId) return false;
-    return !sessionNodeId || sessionNodeId === nodeId;
+    if (sessionMeshId) {
+        if (sessionMeshId !== meshId) return false;
+        return !sessionNodeId || sessionNodeId === nodeId;
+    }
+    // Post-detach: detachMeshAssignment intentionally clears meshNodeFor / meshNodeId /
+    // meshActiveTaskId after a relay-safe completion, but preserves the coordinator
+    // markers (launchedByCoordinator / meshCoordinatorDaemonId). Without recognizing
+    // those, a follow-up dispatch to the SAME session would be misclassified as an
+    // unrelated alias and rejected — even though the router self-heals meshNodeFor /
+    // meshNodeId at dispatch time (buildMeshWorkerRelayStamp). Treat the preserved
+    // coordinator markers as ownership evidence so the dispatch-time restamp can run.
+    return settings?.launchedByCoordinator === true || Boolean(readString(settings?.meshCoordinatorDaemonId));
 }
 
 function hasRemoteRelayMetadata(session: any): boolean {
@@ -1003,7 +1013,7 @@ function isRelaySafeRemoteDelegateSession(session: any, meshId: string, nodeId: 
  *                      session). Dispatching risks aliasing an unrelated transcript
  *                      and orphaning completion events → block.
  */
-function classifyRemoteDelegateRelaySafety(
+export function classifyRemoteDelegateRelaySafety(
     session: any,
     meshId: string,
     nodeId: string,
@@ -1667,7 +1677,14 @@ async function ipcDispatchToRemoteAgent(
                 error: `P2P dispatch failed: ${errorMessage}`,
             };
         }
-        return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType, providerType: resolvedProviderType };
+        // Do NOT fall back to resolvedProviderType for sessionId: a sessionless
+        // dispatch (no targetSessionId above) lets the worker pick/create the real
+        // session, so the provider type ('claude-cli', …) is NOT a session id.
+        // Returning it here used to poison assigned_session_id downstream, breaking
+        // findAssignedBySession (provider type vs real session id) and orphaning the
+        // task_completed match. Leave it empty so completion matching falls back to
+        // taskId via the meshContext.taskId carried in the dispatch.
+        return { success: true, dispatched: true, sessionId: sessionId || '', providerType: resolvedProviderType };
     } catch (e: any) {
         const errorMessage = e?.message || String(e);
         return {
@@ -4566,8 +4583,18 @@ export async function meshSendTask(
                 },
             });
             if (result.success) {
-                // Record dispatch in ledger so task_history is accurate
-                const dispatchedSessionId = args.session_id || result.sessionId;
+                // Record dispatch in ledger so task_history is accurate.
+                // Defensive guard: a sessionless dispatch must not record the
+                // provider type as a session id (an older ipcDispatch fallback
+                // returned resolvedProviderType in result.sessionId). If the
+                // returned sessionId equals the provider type, treat it as
+                // sessionless so completion matching falls back to taskId.
+                const resultSessionId = result.sessionId
+                    && result.providerType
+                    && result.sessionId === result.providerType
+                    ? ''
+                    : result.sessionId;
+                const dispatchedSessionId = args.session_id || resultSessionId;
                 const dispatchedAt = new Date().toISOString();
                 try {
                     const providerType = result.providerType || cached?.providerType;
@@ -4605,10 +4632,15 @@ export async function meshSendTask(
                     }
                 } catch { /* best-effort */ }
             }
+            const returnedSessionId = result.sessionId
+                && result.providerType
+                && result.sessionId === result.providerType
+                ? ''
+                : result.sessionId;
             return JSON.stringify({
                 ...result,
                 nodeId: args.node_id,
-                sessionId: result.success ? (args.session_id || result.sessionId) : args.session_id,
+                sessionId: result.success ? (args.session_id || returnedSessionId) : args.session_id,
                 ...(result.success ? { source: 'direct', taskId } : {}),
                 taskMode,
                 ...(result.success && result.providerType ? { providerType: result.providerType } : {}),
