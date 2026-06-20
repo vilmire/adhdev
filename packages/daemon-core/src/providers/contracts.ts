@@ -1156,4 +1156,13 @@ export interface ProviderControlDef {
   order?: number;
  /** Hide this control when condition not met */
   hidden?: boolean;
+ /**
+  * FSM state ids in which this control should be visible (mirrors the spec's
+  * `control_bar[].visible_when_state`). When omitted the control is always
+  * visible. The daemon enforces this on click (FsmDriver.handleClickControl),
+  * so the web bar must mirror the same gating to avoid showing a button that
+  * the daemon would silently drop. Uses raw FSM state ids (e.g. 'idle',
+  * 'busy'), not the derived dashboard status.
+  */
+  visibleWhenState?: string[];
 }

@@ -718,6 +718,9 @@ describe('ProviderLoader spec control_bar → web controls translation', () => {
       listScript: 'set_model',
       setScript: 'set_model',
       order: 1,
+      // visible_when_state must survive synthesis so the web bar can mirror the
+      // daemon's click-time gating (FsmDriver.handleClickControl).
+      visibleWhenState: ['idle'],
     });
 
     const stop = controls.find((c) => c.id === 'stop');
@@ -727,10 +730,39 @@ describe('ProviderLoader spec control_bar → web controls translation', () => {
       placement: 'bar',
       invokeScript: 'stop',
       order: 0,
+      visibleWhenState: ['busy'],
     });
+
+    // A control_bar entry without visible_when_state stays ungated.
+    const cycleMode = controls.find((c) => c.id === 'cycle_mode');
+    expect(cycleMode).toMatchObject({ id: 'cycle_mode', type: 'action' });
+    expect(cycleMode?.visibleWhenState).toEqual(['idle']);
 
     // The invoke-gate stub still exists alongside the web controls.
     expect(typeof (resolved?.scripts as any)?.set_model).toBe('function');
+  });
+
+  it('omits visibleWhenState when the control_bar entry does not declare visible_when_state', () => {
+    writeProvider(userDir, 'cli', 'codex', {
+      type: 'codex',
+      name: 'Codex',
+      displayName: 'Codex',
+      category: 'cli',
+      spawn: { command: 'codex' },
+    });
+    writeSpecJson(userDir, 'cli', 'codex', {
+      control_bar: [
+        // No visible_when_state — must stay always-visible (regression guard).
+        { id: 'set_model', label: 'Model', action: { type: 'open_picker', trigger_keys: '/model\r', wait_for: { section: 'modal', regex: 'x' }, extract_choices: { section: 'modal', pattern: 'x' }, submit_key: '{index}\r' } },
+      ],
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    const model = loader.resolve('codex')?.controls?.find((c) => c.id === 'set_model');
+    expect(model).toBeDefined();
+    expect(model?.visibleWhenState).toBeUndefined();
   });
 
   it('does not overwrite controls a provider already declares in provider.json', () => {

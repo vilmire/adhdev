@@ -16,11 +16,13 @@ export default function ChatControlsSection({
     displayLabel,
     controls,
     controlValues,
+    currentStatus,
 }: ChatControlsSectionProps) {
     const { isVisible } = useControlsBarVisibility()
     const visibleBarControls = getVisibleBarControls(controls, {
         hostIdeType,
         providerType,
+        currentStatus,
     })
 
     if (!isActive || isCliTerminal || visibleBarControls.length === 0 || !isVisible) {
@@ -37,6 +39,7 @@ export default function ChatControlsSection({
                 displayLabel={displayLabel}
                 controls={visibleBarControls}
                 controlValues={controlValues}
+                currentStatus={currentStatus}
             />
         </div>
     )

@@ -439,6 +439,7 @@ export default function ChatPane({
                 displayLabel={controlsContext.displayLabel}
                 controls={controlsContext.targetEntry?.providerControls}
                 controlValues={controlsContext.targetEntry?.controlValues}
+                currentStatus={activeConv.status}
                 isActive={isInputActive}
                 isCliTerminal={controlsContext.isCliTerminal}
             />

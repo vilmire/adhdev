@@ -124,6 +124,12 @@ function synthesizeControlsFromControlBar(specControls: any[]): ProviderControlD
     const actionType = ctl?.action?.type;
     if (!id || !actionType) return;
     const label = typeof ctl?.label === 'string' && ctl.label.trim() ? ctl.label : id;
+    // Preserve the spec's state gating so the web bar can mirror the daemon's
+    // FsmDriver.handleClickControl enforcement (otherwise the button renders in
+    // states where the daemon would silently drop the click).
+    const visibleWhenState = Array.isArray(ctl?.visible_when_state)
+      ? ctl.visible_when_state.filter((s: unknown): s is string => typeof s === 'string')
+      : undefined;
     if (actionType === 'open_picker') {
       out.push({
         id,
@@ -135,6 +141,7 @@ function synthesizeControlsFromControlBar(specControls: any[]): ProviderControlD
         setScript: id,
         readFrom: id,
         order: index,
+        ...(visibleWhenState && visibleWhenState.length > 0 ? { visibleWhenState } : {}),
       });
     } else if (actionType === 'send_keys') {
       out.push({
@@ -145,6 +152,7 @@ function synthesizeControlsFromControlBar(specControls: any[]): ProviderControlD
         invokeScript: id,
         resultDisplay: 'none',
         order: index,
+        ...(visibleWhenState && visibleWhenState.length > 0 ? { visibleWhenState } : {}),
       });
     }
     // attach_image intentionally skipped — see fn doc.

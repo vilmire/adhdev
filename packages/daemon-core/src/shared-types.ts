@@ -635,6 +635,13 @@ export interface ProviderControlSchema {
     order?: number;
     /** Hide this control even if it would otherwise render */
     hidden?: boolean;
+    /**
+     * FSM state ids in which this control should be visible. When omitted the
+     * control is always visible. Mirrors the daemon's click-time enforcement so
+     * the bar hides controls the daemon would silently drop. Uses raw FSM state
+     * ids (e.g. 'idle', 'busy'), not the derived dashboard status.
+     */
+    visibleWhenState?: string[];
 }
 
 // ─── Common Sub-Types (used across StatusReportPayload, BaseDaemonData, etc.) ──

@@ -101,6 +101,24 @@ function getMutationValue(result: ControlMutationResult | null, optimisticValue:
     return result && isControlScalarValue(result.currentValue) ? result.currentValue : optimisticValue;
 }
 
+/**
+ * After the optimistic override window expires, drop only the local entries that
+ * the server now reports authoritatively in `controlValues`. Entries the server
+ * never reports (controls without a daemon-side readback, e.g. claude-cli's
+ * model picker) are kept so a committed selection does not revert to stale.
+ * Returns the same reference when nothing changes to avoid a needless re-render.
+ */
+export function pruneServerReportedLocalValues(
+    localValues: Record<string, ControlScalarValue>,
+    controlValues: Record<string, string | number | boolean>,
+): Record<string, ControlScalarValue> {
+    const reportedIds = Object.keys(localValues).filter(id => controlValues[id] !== undefined);
+    if (reportedIds.length === 0) return localValues;
+    const next = { ...localValues };
+    for (const id of reportedIds) delete next[id];
+    return next;
+}
+
 export function shouldAdoptListedCurrentValue(
     authoritativeValue: unknown,
     listedCurrentValue: unknown,
@@ -164,15 +182,69 @@ export function shouldHideBarControl(
     return HIDE_BAR_CONTROL_IDS_BY_PROVIDER[providerType]?.has(ctrl.id) === true;
 }
 
+/**
+ * Map the derived dashboard status onto the raw FSM state ids that a control's
+ * `visibleWhenState` is expressed in. The daemon enforces `visible_when_state`
+ * against the raw FSM state id (FsmDriver.handleClickControl), but the web only
+ * receives the derived status (statusForState collapses 'busy' → 'generating',
+ * the modal/approval state → 'waiting_approval', etc.). This re-expands the
+ * status into the set of FSM state ids it could correspond to, so the web bar
+ * gates the same way the daemon does. A control is shown when ANY of these ids
+ * is listed in its `visibleWhenState`.
+ */
+function fsmStateIdsForStatus(status: string | undefined): string[] | undefined {
+    if (!status) return undefined;
+    switch (status) {
+        case 'idle':
+            return ['idle'];
+        // statusForState maps the 'busy'/'generating' FSM state → 'generating'.
+        // The dashboard surfaces several generating-flavoured statuses; all of
+        // them mean the agent is mid-turn (FSM 'busy').
+        case 'generating':
+        case 'streaming':
+        case 'working':
+        case 'starting':
+        case 'no_progress':
+        case 'long_generating':
+            return ['busy', 'generating', 'starting'];
+        case 'waiting_approval':
+        case 'approval':
+            return ['approval'];
+        case 'waiting_choice':
+            return ['picker'];
+        default:
+            return undefined;
+    }
+}
+
+export function isControlVisibleForState(
+    ctrl: ProviderControlSchema,
+    currentStatus: string | undefined,
+): boolean {
+    const gate = ctrl.visibleWhenState;
+    // No gating declared → always visible (regression-safe for codex/antigravity/
+    // hermes controls and any provider that omits the field).
+    if (!gate || gate.length === 0) return true;
+    const stateIds = fsmStateIdsForStatus(currentStatus);
+    // Current state unknown → show conservatively (avoid hiding a usable control
+    // just because the status didn't map; the daemon still enforces on click).
+    if (!stateIds) return true;
+    return stateIds.some(id => gate.includes(id));
+}
+
 export function getVisibleBarControls(
     controls: ProviderControlSchema[] | undefined,
     options: {
         hostIdeType?: string;
         providerType: string;
+        currentStatus?: string;
     },
 ): ProviderControlSchema[] {
     return (controls || [])
-        .filter(c => c.placement === 'bar' && c.hidden !== true && !shouldHideBarControl(options.hostIdeType, options.providerType, c))
+        .filter(c => c.placement === 'bar'
+            && c.hidden !== true
+            && !shouldHideBarControl(options.hostIdeType, options.providerType, c)
+            && isControlVisibleForState(c, options.currentStatus))
         .sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
 }
 
@@ -201,6 +273,9 @@ export interface ControlsBarProps {
     displayLabel: string;
     controls?: ProviderControlSchema[];
     controlValues?: Record<string, string | number | boolean>;
+    /** Current dashboard status of the session (idle/generating/...). Used to
+     *  gate controls by their `visibleWhenState`. */
+    currentStatus?: string;
 }
 
 const AGENT_COLORS: Record<string, string> = {
@@ -211,7 +286,7 @@ const AGENT_COLORS: Record<string, string> = {
 
 export default function ControlsBar({
     routeId, sessionId, hostIdeType, providerType, displayLabel,
-    controls, controlValues,
+    controls, controlValues, currentStatus,
 }: ControlsBarProps) {
     const { sendCommand } = useTransport();
     const cacheKey = `${routeId}:${sessionId || providerType}`;
@@ -238,10 +313,16 @@ export default function ControlsBar({
         ...(Date.now() < localOverrideUntil.current ? localValues : {}),
     };
 
-    // Sync from server when not in local override window
+    // Sync from server when not in local override window.
+    // We do NOT wholesale-clear localValues: for controls whose value the daemon
+    // never reads back (e.g. claude-cli's model picker has no readChat readback,
+    // so controlValues.<id> is always absent), clearing would revert a freshly
+    // selected value to stale/empty once the 5s optimistic window expires.
+    // Instead, drop only the entries the server now authoritatively reports —
+    // committed-but-unreported selections stay sticky.
     useEffect(() => {
         if (controlValues && Date.now() > localOverrideUntil.current) {
-            setLocalValues({});
+            setLocalValues(prev => pruneServerReportedLocalValues(prev, controlValues));
         }
     }, [controlValues]);
 
@@ -304,6 +385,7 @@ export default function ControlsBar({
     const barControls = getVisibleBarControls(controls, {
         hostIdeType,
         providerType,
+        currentStatus,
     });
 
     if (barControls.length === 0) {
