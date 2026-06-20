@@ -15,7 +15,7 @@ import type {
 import { canonicalizeRepoMeshStatus, repoMeshNodeHasLiveGitEvidence } from './repo-mesh-status'
 
 export type MeshGraphNodeType = 'defaultBranchNode' | 'worktreeNode' | 'orphanNode' | 'submoduleNode'
-export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink' | 'cloneLink' | 'coordinatorLink'
+export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink' | 'cloneLink'
 
 type MeshGraphSubmoduleStatus = NonNullable<GitRepoStatus['submodules']>[number]
 
@@ -262,6 +262,21 @@ export function formatMeshConnectionSummary(
         return `${label} · ${Math.round(node.connectionRttMs)}ms`
     }
     return label
+}
+
+/**
+ * Round-trip latency label for the per-node RTT chip, e.g. "18ms". Returns null
+ * for the local coordinator, for nodes that have not reported a usable transport,
+ * or when no RTT measurement is available (older daemons omit it).
+ */
+export function formatMeshConnectionRtt(
+    node: Pick<MeshGraphNode, 'connectionTransport' | 'connectionState' | 'connectionRttMs'>,
+): string | null {
+    if (node.connectionTransport === 'local' || node.connectionState === 'self') return null
+    const transport = formatMeshConnectionTransport(node)
+    if (!transport || transport === 'local') return null
+    if (typeof node.connectionRttMs !== 'number' || !Number.isFinite(node.connectionRttMs)) return null
+    return `${Math.round(node.connectionRttMs)}ms`
 }
 
 function hasLiveGitEvidence(node: RepoMeshNodeStatus): boolean {
@@ -965,27 +980,12 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         })
     }
 
-    // Coordinator transport edges: the selected coordinator (the `self` node) reaches
-    // each remote daemon over a direct or TURN-relayed P2P link. Draw one directed
-    // edge per remote node so the topology (who the coordinator talks to) stays
-    // visible. The transport/RTT itself is no longer drawn inline on the canvas —
-    // it is surfaced in the node detail panel instead (see formatMeshConnectionSummary).
-    const coordinatorNode = nodes.find(node => node.type !== 'submoduleNode' && node.connectionState === 'self')
-    if (coordinatorNode) {
-        for (const node of nodes) {
-            if (node.id === coordinatorNode.id) continue
-            if (node.type === 'submoduleNode' || node.type === 'defaultBranchNode') continue
-            if (!node.connectionReported && node.connectionTransport === null) continue
-            if (node.connectionState === 'self') continue
-            edges.push({
-                id: `coord_${coordinatorNode.id}--${node.id}`,
-                source: coordinatorNode.id,
-                target: node.id,
-                type: 'coordinatorLink',
-                direction: 'directed',
-            })
-        }
-    }
+    // The coordinator↔node P2P link is no longer drawn as a graph edge. P2P
+    // connectivity (direct vs TURN-relay transport and round-trip latency) is a
+    // per-node property, not a parent-child topology relationship, so it is
+    // surfaced on each node as transport/RTT chips (see
+    // formatMeshConnectionTransport / formatMeshConnectionRtt) and in the node
+    // detail panel (see formatMeshConnectionSummary) instead of an edge.
 
     const visibleGraphNodes = nodes.filter(node => node.type !== 'defaultBranchNode')
     const orphanCount = visibleGraphNodes.filter(node => node.isOrphan).length

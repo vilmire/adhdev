@@ -42,10 +42,10 @@ const MESH_HELP_SECTIONS: HelpSection[] = [
         term: 'P2P connection',
         summary: 'How the selected coordinator reaches each remote node over WebRTC.',
         details: [
-            'direct (green) — a direct host/STUN path; lowest latency.',
-            'relay (amber, dashed link) — TURN-relayed; works through restrictive networks but is slower.',
-            'disconnected / failed (red) — no live P2P link from the coordinator right now.',
-            'The coordinator→node link edge and the node chip both carry the transport (and RTT when measured).',
+            'direct — a direct host/STUN path; lowest latency.',
+            'relay — TURN-relayed; works through restrictive networks but is slower.',
+            'disconnected / failed — no live P2P link from the coordinator right now.',
+            'P2P connectivity is shown as transport and RTT chips on each node card (and in the node detail panel), not as a graph edge.',
         ],
     },
     {

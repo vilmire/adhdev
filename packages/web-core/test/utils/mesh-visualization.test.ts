@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshGraph, formatMeshConnectionSummary, formatMeshConnectionTransport, isMeshGraphStructurallyComplete } from '../../src/utils/mesh-visualization'
+import { buildMeshGraph, formatMeshConnectionRtt, formatMeshConnectionSummary, formatMeshConnectionTransport, isMeshGraphStructurallyComplete } from '../../src/utils/mesh-visualization'
 
 /** Minimal two-node mesh: a self coordinator + one remote peer with the given connection. */
 function buildConnectionGraph(remoteConnection: Record<string, unknown> | undefined) {
@@ -100,7 +100,7 @@ describe('mesh graph P2P connection projection', () => {
         expect(remote.connectionRttMs).toBeCloseTo(18.4)
     })
 
-    it('marks the coordinator node as local/self and never draws a self link', () => {
+    it('marks the coordinator node as local/self', () => {
         const graph = buildConnectionGraph({
             perspective: 'selected_coordinator',
             source: 'mesh_peer_status',
@@ -111,11 +111,9 @@ describe('mesh graph P2P connection projection', () => {
         const coordinator = graph.nodes.find(n => n.id === 'node_coordinator')!
         expect(coordinator.connectionState).toBe('self')
         expect(coordinator.connectionTransport).toBe('local')
-        const selfLink = graph.edges.find(e => e.type === 'coordinatorLink' && e.target === 'node_coordinator')
-        expect(selfLink).toBeUndefined()
     })
 
-    it('creates a directed, label-less coordinatorLink edge and exposes transport via the connection summary', () => {
+    it('never draws a coordinatorLink edge — P2P connectivity is surfaced via node chips, not a graph edge', () => {
         const graph = buildConnectionGraph({
             perspective: 'selected_coordinator',
             source: 'mesh_peer_status',
@@ -124,27 +122,58 @@ describe('mesh graph P2P connection projection', () => {
             reported: true,
             rttMs: 240,
         })
-        const link = graph.edges.find(e => e.type === 'coordinatorLink' && e.target === 'node_remote')
-        expect(link).toBeDefined()
-        expect(link!.source).toBe('node_coordinator')
-        expect(link!.direction).toBe('directed')
-        // Transport/RTT is no longer drawn inline on the canvas — the edge carries no label.
-        expect(link!.label).toBeUndefined()
-        // The transport detail is surfaced in the node detail panel instead.
+        // The coordinator→node link is no longer a graph edge in any form.
+        expect(graph.edges.some(e => (e.type as string) === 'coordinatorLink')).toBe(false)
+        // Transport + RTT are exposed as per-node chip values instead.
         const remote = graph.nodes.find(n => n.id === 'node_remote')!
+        expect(formatMeshConnectionTransport(remote)).toBe('relay')
+        expect(formatMeshConnectionRtt(remote)).toBe('240ms')
+        // The node detail panel still gets the combined summary.
         expect(formatMeshConnectionSummary(remote)).toBe('relay (TURN, slower path) · 240ms')
     })
 
-    it('does not draw a coordinatorLink for a node with no reported connection', () => {
+    it('exposes a direct transport chip with RTT for a healthy peer', () => {
+        const graph = buildConnectionGraph({
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'connected',
+            transport: 'direct',
+            reported: true,
+            rttMs: 18.4,
+        })
+        const remote = graph.nodes.find(n => n.id === 'node_remote')!
+        expect(formatMeshConnectionTransport(remote)).toBe('direct')
+        expect(formatMeshConnectionRtt(remote)).toBe('18ms')
+    })
+
+    it('renders no transport/RTT chip for a node with no reported connection', () => {
         const graph = buildConnectionGraph(undefined)
         const remote = graph.nodes.find(n => n.id === 'node_remote')!
         expect(remote.connectionTransport).toBeNull()
         expect(remote.connectionReported).toBe(false)
-        const link = graph.edges.find(e => e.type === 'coordinatorLink')
-        expect(link).toBeUndefined()
+        expect(formatMeshConnectionTransport(remote)).toBeNull()
+        expect(formatMeshConnectionRtt(remote)).toBeNull()
     })
 
-    it('still draws a coordinatorLink (down state) when telemetry is reported but disconnected', () => {
+    it('reports a "local" transport but no RTT chip value for the local coordinator (self) node', () => {
+        const graph = buildConnectionGraph({
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'connected',
+            transport: 'direct',
+            reported: true,
+            rttMs: 5,
+        })
+        const coordinator = graph.nodes.find(n => n.id === 'node_coordinator')!
+        // The self node's transport is 'local'; the card suppresses the chip for
+        // this value (and for the self state), so no transport chip is drawn.
+        expect(coordinator.connectionState).toBe('self')
+        expect(formatMeshConnectionTransport(coordinator)).toBe('local')
+        // No meaningful RTT chip for the coordinator's own node.
+        expect(formatMeshConnectionRtt(coordinator)).toBeNull()
+    })
+
+    it('shows the transport chip but no RTT chip when telemetry is reported but disconnected', () => {
         const graph = buildConnectionGraph({
             perspective: 'selected_coordinator',
             source: 'mesh_peer_status',
@@ -155,14 +184,14 @@ describe('mesh graph P2P connection projection', () => {
         })
         const remote = graph.nodes.find(n => n.id === 'node_remote')!
         expect(formatMeshConnectionTransport(remote)).toBe('disconnected')
-        const link = graph.edges.find(e => e.type === 'coordinatorLink' && e.target === 'node_remote')
-        expect(link).toBeDefined()
-        // Edge stays label-less; the down state is conveyed via the connection summary.
-        expect(link!.label).toBeUndefined()
+        // No RTT chip for a down link — there is no meaningful latency to show.
+        expect(formatMeshConnectionRtt(remote)).toBeNull()
         expect(formatMeshConnectionSummary(remote)).toBe('disconnected')
+        // And still no graph edge.
+        expect(graph.edges.some(e => (e.type as string) === 'coordinatorLink')).toBe(false)
     })
 
-    it('inherits parent transport onto synthetic submodule child nodes but draws no submodule coordinatorLink', () => {
+    it('inherits parent transport onto synthetic submodule child nodes but draws no coordinatorLink edge', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_sub_conn',
             meshName: 'Sub Conn',
@@ -202,10 +231,8 @@ describe('mesh graph P2P connection projection', () => {
         } as any)
         const submoduleNode = graph.nodes.find(n => n.type === 'submoduleNode')!
         expect(submoduleNode.connectionTransport).toBe('relay')
-        const coordinatorLinks = graph.edges.filter(e => e.type === 'coordinatorLink')
-        // Only one coordinatorLink — to the remote worktree node, not its submodule child.
-        expect(coordinatorLinks).toHaveLength(1)
-        expect(coordinatorLinks[0].target).toBe('node_remote')
+        // P2P connectivity is never drawn as a graph edge anymore.
+        expect(graph.edges.some(e => (e.type as string) === 'coordinatorLink')).toBe(false)
     })
 })
 

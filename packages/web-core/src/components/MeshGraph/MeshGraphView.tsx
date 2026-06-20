@@ -49,6 +49,7 @@ import {
     type MeshGraphLayoutEdgePoint,
 } from './meshGraphLayout'
 import { getMeshGraphDataFingerprint, getMeshGraphLayoutFingerprint } from './meshGraphMemo'
+import { formatMeshConnectionRtt, formatMeshConnectionTransport } from '../../utils/mesh-visualization'
 
 /** Dense graph threshold: above this node count, switch to compact card mode */
 const COMPACT_NODE_THRESHOLD = 7
@@ -336,6 +337,14 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             ? node.submodulePath || 'submodule checkout'
             : [node.machineLabel, formatLocality(node.locality)].filter(Boolean).join(' · ') || node.workspace
     const shortCommit = node.submoduleCommit ? node.submoduleCommit.slice(0, 7) : null
+    // P2P connectivity is shown as per-node chips (transport: direct/relay, RTT),
+    // not as a coordinator→node graph edge. Both are null for the local
+    // coordinator (self/local transport) and for nodes that have not reported a
+    // transport yet, so no chip renders in those cases.
+    const isConnectionChipEligible = !isSubmoduleNode && !isDefaultBranchNode && node.connectionState !== 'self'
+    const transportLabel = isConnectionChipEligible ? formatMeshConnectionTransport(node) : null
+    const connectionTransport = transportLabel === 'local' ? null : transportLabel
+    const connectionRtt = isConnectionChipEligible ? formatMeshConnectionRtt(node) : null
     const attentionBadge = getMeshGraphAttentionBadge(node)
     const calloutText = getMeshGraphCalloutText(node)
     const hasActiveSession = isNodeActive(node)
@@ -559,6 +568,22 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     {!isDefaultBranchNode && (node.health !== 'unknown' || node.locality) && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses(getLocalityBadgeKind(node), meshTheme.isDark)}`}>
                             {formatLocality(node.locality)}
+                        </span>
+                    )}
+                    {connectionTransport && (
+                        <span
+                            className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('meta', meshTheme.isDark)}`}
+                            title={connectionTransport === 'relay' ? 'P2P link relayed through TURN (slower path)' : `P2P transport: ${connectionTransport}`}
+                        >
+                            {connectionTransport}
+                        </span>
+                    )}
+                    {connectionRtt && (
+                        <span
+                            className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('meta', meshTheme.isDark)}`}
+                            title="P2P round-trip latency"
+                        >
+                            {connectionRtt}
                         </span>
                     )}
                     {shortCommit && isSubmoduleNode && (
@@ -875,7 +900,7 @@ function buildFlowLayout(
             : undefined,
         style: {
             stroke: edgeColor(edge),
-            strokeWidth: edge.type === 'orphanLink' ? 2.25 : edge.type === 'submoduleLink' ? 1.7 : edge.type === 'worktreeLink' ? 1.8 : edge.type === 'cloneLink' ? 1.6 : edge.type === 'coordinatorLink' ? 2.25 : 2,
+            strokeWidth: edge.type === 'orphanLink' ? 2.25 : edge.type === 'submoduleLink' ? 1.7 : edge.type === 'worktreeLink' ? 1.8 : edge.type === 'cloneLink' ? 1.6 : 2,
             strokeDasharray: edge.type === 'orphanLink' ? '5 4' : edge.type === 'submoduleLink' ? '4 3' : edge.type === 'cloneLink' ? '6 3' : undefined,
         },
         labelStyle: {
@@ -900,7 +925,6 @@ const EDGE_LABEL_VISIBLE_PER_SOURCE = 2
 
 function edgeLabelPriority(edge: MeshGraphEdge): number {
     switch (edge.type) {
-        case 'coordinatorLink': return 6
         case 'orphanLink': return 5
         case 'parentBranch': return 4
         case 'submoduleLink': return 3
@@ -951,9 +975,6 @@ function edgeColor(edge: MeshGraphEdge): string {
             return '#c084fc'
         case 'cloneLink':
             return '#2dd4bf'
-        case 'coordinatorLink':
-            // Neutral topology link — transport/RTT is shown in the node detail panel, not on the canvas.
-            return '#64748b'
         default:
             return '#64748b'
     }
