@@ -116,6 +116,66 @@ describe('dedupeChatIdes', () => {
         // The richer coordinator-reported entry survives, retaining owner attribution.
         expect(deduped[0]?.ownerDaemonId).toBe('worker-daemon')
     })
+
+    it('does not let a newer preview-less copy clobber a copy that has a preview', () => {
+        // T: the inbox preview was sticking on the first dispatched user task because a
+        // newer-timestamp coordinator-mirrored copy (no preview) replaced the
+        // worker-reported copy that carried the assistant preview. The copy with a
+        // preview must survive even when the preview-less copy is newer.
+        const withPreview = createCliEntry({
+            id: 'worker-daemon:cli:remote-session',
+            daemonId: 'worker-daemon',
+            sessionId: 'remote-session',
+            ownerDaemonId: 'worker-daemon',
+            activeChat: null,
+            workspace: undefined,
+            lastMessagePreview: 'assistant: 응 보인다. 사진 잘 받았어.',
+            lastMessageRole: 'assistant',
+            timestamp: 1,
+        })
+        const newerNoPreview = createCliEntry({
+            id: 'coord-daemon:cli:remote-session',
+            daemonId: 'coord-daemon',
+            sessionId: 'remote-session',
+            ownerDaemonId: 'worker-daemon',
+            activeChat: null,
+            workspace: undefined,
+            lastMessagePreview: undefined,
+            timestamp: 99,
+        })
+
+        const deduped = dedupeChatIdes([withPreview, newerNoPreview])
+        expect(deduped).toHaveLength(1)
+        expect(deduped[0]?.lastMessagePreview).toBe('assistant: 응 보인다. 사진 잘 받았어.')
+        expect(deduped[0]?.lastMessageRole).toBe('assistant')
+    })
+
+    it('still prefers the newer copy when both copies carry a preview (recency tiebreak)', () => {
+        const older = createCliEntry({
+            id: 'worker-daemon:cli:remote-session',
+            daemonId: 'worker-daemon',
+            sessionId: 'remote-session',
+            ownerDaemonId: 'worker-daemon',
+            activeChat: null,
+            workspace: undefined,
+            lastMessagePreview: 'assistant: first reply',
+            timestamp: 1,
+        })
+        const newer = createCliEntry({
+            id: 'coord-daemon:cli:remote-session',
+            daemonId: 'coord-daemon',
+            sessionId: 'remote-session',
+            ownerDaemonId: 'worker-daemon',
+            activeChat: null,
+            workspace: undefined,
+            lastMessagePreview: 'assistant: latest reply',
+            timestamp: 2,
+        })
+
+        const deduped = dedupeChatIdes([older, newer])
+        expect(deduped).toHaveLength(1)
+        expect(deduped[0]?.lastMessagePreview).toBe('assistant: latest reply')
+    })
 })
 
 describe('mesh ghost-tab dedup → build pipeline', () => {

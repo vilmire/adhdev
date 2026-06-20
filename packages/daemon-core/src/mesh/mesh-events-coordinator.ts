@@ -30,6 +30,7 @@ import {
     resolveEventSessionId,
     readRefineJobId,
     readWorkerResultMetadata,
+    resolveMeshSurfacedSessionPreview,
 } from './mesh-events-utils.js';
 
 // The set of coordinator-daemon ids this daemon answers to when draining the
@@ -1394,6 +1395,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // across standalone and cloud.
     if (components.onMeshCoordinatorEventForwarded) {
         try {
+            // T: the coordinator surfaces a remote worker's session but holds no local
+            // instance for it, so the status snapshot can't derive a preview and the
+            // mirror would stay stuck on the first dispatched user task. Resolve the
+            // worker's latest assistant reply (carried on the completion event's
+            // finalSummary / workerResult) into a preview the mirror can stamp, so the
+            // mobile inbox reflects the assistant response. Only completion-style events
+            // carry assistant text; for everything else this is undefined and the prior
+            // surfaced preview is preserved downstream (no clobber).
+            const surfacedPreview = resolveMeshSurfacedSessionPreview(args.metadataEvent);
             components.onMeshCoordinatorEventForwarded({
                 event: args.event,
                 meshId: args.meshId,
@@ -1405,6 +1415,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 workspace: readNonEmptyString(args.metadataEvent.workspace)
                     || readNonEmptyString(args.metadataEvent.workspaceName)
                     || undefined,
+                ...(surfacedPreview ? {
+                    meshSessionLastMessagePreview: surfacedPreview.preview,
+                    meshSessionLastMessageRole: surfacedPreview.role,
+                    meshSessionLastMessageAt: surfacedPreview.receivedAt || undefined,
+                } : {}),
             });
         } catch { /* dashboard metadata sync is best-effort */ }
     }

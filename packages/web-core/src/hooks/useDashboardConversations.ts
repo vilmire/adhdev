@@ -84,9 +84,21 @@ export function dedupeChatIdes(ides: DaemonData[]) {
             continue
         }
 
-        const existingRichness = (existing.workspace ? 1 : 0) + (existing.activeChat ? 1 : 0)
-        const incomingRichness = (ide.workspace ? 1 : 0) + (ide.activeChat ? 1 : 0)
-        const winner = (incomingRichness > existingRichness || (ide.timestamp || 0) > (existing.timestamp || 0))
+        // A mesh delegated session arrives as two copies: the worker-reported copy carries
+        // the live transcript / assistant preview, while the coordinator-mirrored copy is
+        // metadata-only. Count `lastMessagePreview` toward richness so the copy that
+        // actually has a preview wins — and, crucially, so a newer-timestamp preview-less
+        // copy can't clobber an older copy that DOES have a preview (the bug where the
+        // inbox preview reverted to the first dispatched user task / went blank). The
+        // timestamp tiebreak still applies, but only when neither copy is strictly richer.
+        const richness = (entry: DaemonData) =>
+            (entry.workspace ? 1 : 0) + (entry.activeChat ? 1 : 0) + (entry.lastMessagePreview ? 1 : 0)
+        const existingRichness = richness(existing)
+        const incomingRichness = richness(ide)
+        const winner = (
+            incomingRichness > existingRichness
+            || (incomingRichness === existingRichness && (ide.timestamp || 0) > (existing.timestamp || 0))
+        )
             ? ide
             : existing
         // The winning copy may be the worker's own report (richer chat) while only the

@@ -107,6 +107,52 @@ export function readWorkerResultMetadata(event: Record<string, unknown>): Record
     return readRecord(event.workerResult) || readRecord(event.meshWorkerResult) || readRecord(event.structuredResult);
 }
 
+const MESH_SURFACED_PREVIEW_MAX_CHARS = 512;
+
+/**
+ * A coordinator that surfaces a REMOTE worker's mesh session has no local instance for
+ * it, so the status snapshot's getLastDisplayMessage has nothing to read and the only
+ * preview the coordinator-mirrored copy could ever carry comes from the worker's
+ * completion event. The worker's latest assistant reply rides on that event as
+ * `finalSummary` (and as `workerResult.summary` / `result.summary` on some paths).
+ *
+ * This resolves that assistant text into a preview the coordinator can stamp onto its
+ * mirror entry so the mobile inbox shows the worker's latest assistant response instead
+ * of being stuck on the first dispatched user task (which is the only message the
+ * coordinator-side transcript ever holds). Returns undefined when the event carries no
+ * assistant text — non-completion lifecycle events (generating_started / ready without a
+ * summary) must NOT clobber a previously surfaced preview.
+ */
+export function resolveMeshSurfacedSessionPreview(
+    metadataEvent: Record<string, unknown>,
+): { preview: string; role: 'assistant'; receivedAt: number } | undefined {
+    const workerResult = readWorkerResultMetadata(metadataEvent);
+    const resultRecord = readRecord(metadataEvent.result);
+    const summaryText = readNonEmptyString(metadataEvent.finalSummary)
+        || readNonEmptyString(workerResult?.summary)
+        || readNonEmptyString(workerResult?.finalSummary)
+        || readNonEmptyString(resultRecord?.summary)
+        || readNonEmptyString(resultRecord?.finalSummary);
+    if (!summaryText) return undefined;
+    const truncationSuffix = '...[truncated]';
+    const preview = summaryText.length > MESH_SURFACED_PREVIEW_MAX_CHARS
+        ? `${summaryText.slice(0, MESH_SURFACED_PREVIEW_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}`
+        : summaryText;
+    const timestamp = readEventTimestampValue(metadataEvent.timestamp);
+    return { preview, role: 'assistant', receivedAt: timestamp };
+}
+
+function readEventTimestampValue(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+        const dateMs = Date.parse(value);
+        if (Number.isFinite(dateMs)) return dateMs;
+    }
+    return 0;
+}
+
 function formatCompletionMetadata(event: Record<string, unknown>): string {
     const completionDiagnostic = event.completionDiagnostic && typeof event.completionDiagnostic === 'object'
         ? event.completionDiagnostic as Record<string, unknown>
