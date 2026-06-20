@@ -262,8 +262,19 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 className={meshTheme.dialogShellClass}
                 onClick={event => event.stopPropagation()}
             >
-                <div className={meshTheme.dialogHeaderClass}>
-                    <div className="min-w-0 flex-1">
+                <div className={`relative ${meshTheme.dialogHeaderClass}`}>
+                    {/* Close — anchored to the header's top-right corner so it never
+                        wraps below the chip row on mobile (where the row flex-wraps).
+                        On desktop it sits at the far-right, vertically centered. */}
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className={`absolute right-4 top-[calc(16px+env(safe-area-inset-top,0px))] z-10 md:right-5 md:top-1/2 md:-translate-y-1/2 ${meshTheme.dialogCloseButtonClass}`}
+                        aria-label="Close mesh graph"
+                    >
+                        <IconX size={16} />
+                    </button>
+                    <div className="min-w-0 flex-1 pr-12 md:pr-0">
                         <div className="flex items-center gap-3">
                             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-500/12 text-sky-200 shadow-[0_12px_30px_rgba(14,165,233,0.18)]">
                                 <IconMesh size={18} />
@@ -283,7 +294,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             </div>
                         </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                    <div className="flex flex-wrap items-center gap-2 md:justify-end md:pr-12">
                         <MeshSurfaceTabControls
                             meshTheme={meshTheme}
                             activeTab={activeTab}
@@ -311,14 +322,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             title="Refresh live mesh graph"
                         >
                             {loading || refreshing ? 'Refreshing…' : 'Refresh'}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className={meshTheme.dialogCloseButtonClass}
-                            aria-label="Close mesh graph"
-                        >
-                            <IconX size={16} />
                         </button>
                     </div>
                 </div>

@@ -42,18 +42,22 @@ describe('MeshObservabilitySurface', () => {
     expect(html).toContain('0 recent failures')
   })
 
-  it('keeps mobile graph status badges as an in-graph floating overlay instead of a layout-blocking header', () => {
+  it('keeps the mobile graph status header in normal flow so it pushes the canvas down instead of overlaying it', () => {
     const source = fs.readFileSync(
       path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface.tsx'),
       'utf8',
     )
 
     expect(source).toContain('relative flex min-h-0 flex-1 flex-col rounded-[28px]')
-    expect(source).toContain('absolute inset-x-4 top-4 z-30')
-    expect(source).toContain('max-h-[42dvh]')
-    expect(source).toContain('overflow-y-auto')
-    expect(source).toContain('sm:static sm:mb-3')
+    // The header must NOT float as an absolute overlay on mobile — that overlay
+    // both clipped the canvas top and created a touch dead-zone over the graph.
+    expect(source).not.toContain('absolute inset-x-4 top-4 z-30')
+    // Normal-flow header: relative + shrink-0 so the badge column pushes the
+    // canvas down; capped height with internal scroll for extreme badge counts.
+    expect(source).toContain('relative z-30 max-h-[42dvh] overflow-y-auto')
+    expect(source).toContain('sm:max-h-none sm:mb-3')
     expect(source).toContain('sm:overflow-visible')
+    expect(source).toContain('shrink-0')
   })
 
   it('renders upstream unverified when a node only has stale remote-tracking refs', () => {

@@ -1005,8 +1005,10 @@ export default function MeshObservabilitySurface({
             {/* ── Card: header + graph + detail panel ── */}
             <div className={`${meshTheme.cardClass} relative flex min-h-0 flex-1 flex-col rounded-[28px]`} style={{ minHeight: 480 }}>
 
-                {/* Header — floats as overlay on mobile, static on sm+ */}
-                <div className={`absolute inset-x-4 top-4 z-30 max-h-[42dvh] overflow-y-auto sm:static sm:mb-3 sm:overflow-visible shrink-0 flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2.5 border-b ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                {/* Header — stays in normal flow on every breakpoint so the badge
+                    column pushes the canvas down instead of floating over it (and
+                    intercepting the top band of graph touches on mobile). */}
+                <div className={`relative z-30 max-h-[42dvh] overflow-y-auto sm:max-h-none sm:mb-3 sm:overflow-visible shrink-0 flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2.5 border-b ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
                     <div className={`flex min-w-0 flex-1 flex-wrap gap-2 text-xs ${meshTheme.textSecondary}`}>
                         <Badge label={headlineLabel} tone={headlineTone} />
                         {canonicalGraph.stats.blockedReviewNodes > 0 && (
