@@ -1568,6 +1568,81 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('handleMeshForwardEvent carries workspace/title/settings from relay payload into the forwarded coordinator metadata', async () => {
+    const meshId = `mesh_workspace_carry_${Date.now()}`
+    try {
+      const { components } = createComponents(meshId)
+      const forwarded: any[] = []
+      components.onMeshCoordinatorEventForwarded = (payload: any) => { forwarded.push(payload) }
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:waiting_approval',
+        meshId,
+        nodeId: 'node_remote',
+        targetSessionId: 'remote-session-1',
+        providerType: 'claude-cli',
+        providerName: 'Claude Code',
+        workspace: '/repo/remote-worktree',
+        workspaceName: '/repo/remote-worktree',
+        sessionTitle: 'Fix mesh forward workspace flap',
+        sessionStatus: 'awaiting_approval',
+        sessionChatStatus: 'streaming',
+        sessionSettings: { meshNodeFor: meshId, meshNodeId: 'node_remote', launchedByCoordinator: true },
+        modalMessage: 'Approve?',
+        modalButtons: ['Yes', 'No'],
+        timestamp: 1710000006000,
+      })
+
+      expect(result).toEqual({ success: true, forwarded: 0 })
+      expect(forwarded).toHaveLength(1)
+      const payload = forwarded[0]
+      // The remote-relay reconstruction must not drop the session identity fields, else
+      // the dashboard flaps to the generic "Terminal (Mesh Node)" title.
+      expect(payload.workspace).toBe('/repo/remote-worktree')
+      expect(payload.workspaceName).toBe('/repo/remote-worktree')
+      expect(payload.sessionTitle).toBe('Fix mesh forward workspace flap')
+      expect(payload.sessionStatus).toBe('awaiting_approval')
+      expect(payload.sessionChatStatus).toBe('streaming')
+      expect(payload.providerName).toBe('Claude Code')
+      expect(payload.sessionSettings).toMatchObject({
+        meshNodeFor: meshId,
+        meshNodeId: 'node_remote',
+        launchedByCoordinator: true,
+      })
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('handleMeshForwardEvent recovers workspace into the forwarded metadata even when only workspaceName is present', async () => {
+    const meshId = `mesh_workspace_name_only_${Date.now()}`
+    try {
+      const { components } = createComponents(meshId)
+      const forwarded: any[] = []
+      components.onMeshCoordinatorEventForwarded = (payload: any) => { forwarded.push(payload) }
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:waiting_approval',
+        meshId,
+        nodeId: 'node_remote',
+        targetSessionId: 'remote-session-2',
+        providerType: 'claude-cli',
+        workspaceName: '/repo/name-only-worktree',
+        modalMessage: 'Approve?',
+        modalButtons: ['Yes', 'No'],
+        timestamp: 1710000007000,
+      })
+
+      expect(result).toEqual({ success: true, forwarded: 0 })
+      expect(forwarded).toHaveLength(1)
+      // workspace mirrors workspaceName when the worker only emitted the latter.
+      expect(forwarded[0].workspace).toBe('/repo/name-only-worktree')
+      expect(forwarded[0].workspaceName).toBe('/repo/name-only-worktree')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('reconciles a no-progress monitor to completion when final summary evidence exists', async () => {
     const meshId = `mesh_long_gen_reconcile_${Date.now()}`
     try {

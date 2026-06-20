@@ -1870,6 +1870,21 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
             providerType: readNonEmptyString(payload.providerType),
             providerSessionId: readNonEmptyString(payload.providerSessionId),
+            // Carry the session identity fields the worker provider event emits so the
+            // coordinator's mirror (updateMeshOwnedSession) gets a real workspace/title/
+            // settings. Without these the remote-relay hop reconstructs metadataEvent with
+            // an empty workspace, and the dashboard flaps to the generic
+            // "Terminal (Mesh Node)" title (and degrades the provider label) between live
+            // events and the periodic get_status_metadata snapshot. The local in-process
+            // forward path (onMeshCoordinatorEventForwarded) already preserves these; this
+            // mirrors them for the remote-only relay path.
+            workspace: readNonEmptyString(payload.workspace) || readNonEmptyString(payload.workspaceName),
+            workspaceName: readNonEmptyString(payload.workspaceName) || readNonEmptyString(payload.workspace),
+            sessionTitle: readNonEmptyString(payload.sessionTitle),
+            sessionStatus: readNonEmptyString(payload.sessionStatus),
+            sessionChatStatus: readNonEmptyString(payload.sessionChatStatus),
+            providerName: readNonEmptyString(payload.providerName),
+            ...(payload.sessionSettings && typeof payload.sessionSettings === 'object' && !Array.isArray(payload.sessionSettings) ? { sessionSettings: payload.sessionSettings } : {}),
             finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
             jobId: readNonEmptyString(payload.jobId),
             interactionId: readNonEmptyString(payload.interactionId),
