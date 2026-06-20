@@ -831,6 +831,28 @@ export class FsmDriver implements ISpecDriver {
         const sm = this.spec.send_message;
         const perChar = sm.delay_ms_per_char ?? 0;
         const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text);
+
+        // win32 ConPTY swallows a lone submit key (CR) that arrives in its own
+        // PTY chunk after a delay: ConPTY does not treat a delayed, standalone
+        // CR as a submit, so the prompt sits typed-but-unsent until the user
+        // hits Enter manually. mac/linux PTYs do recognise the split write, so
+        // this asymmetry is win32-only. The fix mirrors the legacy
+        // ProviderCliAdapter.forceSendMessage fix: honour the settle delay so
+        // the TUI input handler is ready, then write `text + submit_key` as ONE
+        // PTY write — keeping the submit key in the same write unit as the text
+        // is the invariant ConPTY needs to recognise the submit. perChar typing
+        // simulation is skipped on win32 (a per-char loop necessarily ends with a
+        // separate trailing CR); correctness of submission wins over the typing
+        // visual there.
+        if (process.platform === 'win32') {
+            if (beforeSubmit > 0) {
+                setTimeout(() => this.adapter.send_keys(text + sm.submit_key), beforeSubmit);
+            } else {
+                this.adapter.send_keys(text + sm.submit_key);
+            }
+            return;
+        }
+
         if (perChar === 0) {
             this.adapter.send_keys(text);
             if (beforeSubmit > 0) setTimeout(() => this.adapter.send_keys(sm.submit_key), beforeSubmit);
