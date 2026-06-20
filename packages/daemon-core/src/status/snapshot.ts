@@ -283,7 +283,17 @@ function simplePreviewHash(value: string): string {
     return h.toString(16);
 }
 
-function getLastDisplayMessage(session: {
+/**
+ * Resolve the last user-visible (non-system) message for a session as a preview.
+ *
+ * Exported so the cloud coordinator can derive a preview for a LOCAL mesh-owned
+ * worktree session directly from the real provider instance it hosts. A REMOTE
+ * worker session has no local instance (its preview rides the completion event's
+ * finalSummary — see resolveMeshSurfacedSessionPreview), but a LOCAL coordinator
+ * IS the worker, so its hosted instance's transcript holds the assistant reply and
+ * this is the source of truth for that case.
+ */
+export function getLastDisplayMessage(session: {
     activeChat?: {
         messages?: Array<{
             role?: string;

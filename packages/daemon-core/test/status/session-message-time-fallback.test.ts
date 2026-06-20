@@ -2,7 +2,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildStatusSnapshot, getSessionCompletionMarker } from '../../src/status/snapshot.js'
+import { buildStatusSnapshot, getSessionCompletionMarker, getLastDisplayMessage } from '../../src/status/snapshot.js'
 import { markSessionSeen } from '../../src/config/recent-activity.js'
 import { saveState } from '../../src/config/state-store.js'
 import {
@@ -114,6 +114,32 @@ describe('status snapshot message time fallbacks', () => {
     const session = snapshot.sessions.find((entry) => entry.id === 'cli-1')
     expect(session?.lastMessageAt).toBe(ts)
     expect(session?.lastMessageRole).toBe('assistant')
+  })
+
+  // getLastDisplayMessage is the source of truth the cloud coordinator reads from a LOCAL
+  // mesh worktree session's hosted instance to stamp the inbox preview (coordinator == worker).
+  // It must return the LATEST assistant reply, not stick on the dispatched user task.
+  it('getLastDisplayMessage returns the trailing assistant reply over an earlier user task', () => {
+    const last = getLastDisplayMessage({
+      activeChat: {
+        messages: [
+          { role: 'user', content: 'dispatched task: fix the mesh inbox', timestamp: 10 },
+          { role: 'assistant', content: 'Done — inbox preview now reflects the reply.', timestamp: 20 },
+        ],
+      },
+    } as any)
+    expect(last?.role).toBe('assistant')
+    expect(last?.preview).toBe('Done — inbox preview now reflects the reply.')
+    expect(last?.receivedAt).toBe(20)
+  })
+
+  it('getLastDisplayMessage returns null when no displayable message exists (genuinely remote — no local transcript)', () => {
+    expect(getLastDisplayMessage({ activeChat: { messages: [] } } as any)).toBe(null)
+    expect(getLastDisplayMessage({ activeChat: null } as any)).toBe(null)
+    // System-only transcript yields nothing to surface.
+    expect(getLastDisplayMessage({
+      activeChat: { messages: [{ role: 'system', content: 'boot', timestamp: 1 }] },
+    } as any)).toBe(null)
   })
 
   it('falls back to timestamp for completion markers when ids are missing', () => {

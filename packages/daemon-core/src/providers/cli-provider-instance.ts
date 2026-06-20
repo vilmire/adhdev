@@ -1425,8 +1425,15 @@ export class CliProviderInstance implements ProviderInstance {
                 chatTitle: pending.chatTitle,
                 duration: pending.duration,
                 timestamp: pending.timestamp,
+                // When finalization is forced past the timeout on a `parsed_status:` block
+                // (the parser never confirmed a final assistant turn) we previously rode an
+                // empty `finalSummary` unconditionally. That empty value propagates to the
+                // mesh coordinator's mirror preview (meshSessionLastMessagePreview), leaving a
+                // delegated session's inbox preview blank — or, for a LOCAL worktree session,
+                // stuck on the dispatched user task. If the parser DID surface assistant text,
+                // prefer it; only fall back to '' when no assistant summary can be derived.
                 finalSummary: blockReason.startsWith('parsed_status:')
-                    ? ''
+                    ? (this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages) ?? '')
                     : this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
                 completionDiagnostic,
             });
