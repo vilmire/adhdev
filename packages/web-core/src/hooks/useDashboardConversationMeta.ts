@@ -26,6 +26,13 @@ export function useDashboardConversationMeta({
             name: getConversationNotificationLabel(c),
             status: c.status,
             activeModal: c.modalMessage ? { message: c.modalMessage, buttons: c.modalButtons } : null,
+            // Carry conversation identity so muted sessions skip the desktop notification.
+            target: {
+                providerSessionId: c.providerSessionId,
+                sessionId: c.sessionId,
+                tabKey: c.tabKey,
+                routeId: c.routeId,
+            },
         })),
     [visibleConversations])
 

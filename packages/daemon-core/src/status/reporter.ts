@@ -319,6 +319,9 @@ export class DaemonStatusReporter {
                 cdpConnected: session.cdpConnected,
                 summaryMetadata: session.summaryMetadata,
                 settings: session.settings,
+                // Forward surfaceHidden so the server can gate push notifications for
+                // coordinator-hidden sessions (the WS path is the only one the server sees).
+                surfaceHidden: session.surfaceHidden,
             })),
             p2p: payload.p2p,
             timestamp: now,

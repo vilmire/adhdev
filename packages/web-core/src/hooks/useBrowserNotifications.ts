@@ -11,6 +11,8 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { shouldNotify } from './useNotificationPrefs'
+import { isConversationMutedNow } from './useMutedConversations'
+import type { ConversationTarget } from '../components/dashboard/conversation-identity'
 
 interface NotificationOptions {
     /** Enable/disable notifications globally */
@@ -30,6 +32,12 @@ interface AgentState {
     name?: string
     status?: string
     activeModal?: { message?: string; buttons?: string[] } | null
+    /**
+     * Conversation identity used to honour device-local mute state. When the
+     * conversation is muted (e.g. a coordinator-spawned mesh session), we still
+     * track its status transitions but skip the desktop notification.
+     */
+    target?: ConversationTarget
 }
 
 const DEFAULT_OPTS: Required<NotificationOptions> = {
@@ -152,6 +160,12 @@ export function useBrowserNotifications(
             const prev = prevStates.current.get(agent.id)
             const curr = normalizeManagedStatus(agent.status, { activeModal: agent.activeModal })
             const name = agent.name || agent.id
+
+            // Muted conversation: track the transition but stay silent.
+            if (agent.target && isConversationMutedNow(agent.target)) {
+                prevStates.current.set(agent.id, curr)
+                continue
+            }
 
             // Approval request
             if (opts.onApproval && shouldNotify('approval') && curr === 'waiting_approval' && prev !== 'waiting_approval') {

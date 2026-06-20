@@ -13,6 +13,7 @@
 import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
+import { isConversationMutedNow } from '../hooks/useMutedConversations'
 import type { DaemonData, DashboardStatusEventPayload } from '../types'
 import {
     buildApprovalToastDescriptors,
@@ -198,6 +199,20 @@ class EventManager {
         return null
     }
 
+    /**
+     * Is the conversation this event targets device-muted? Only conversation-scoped
+     * events (those carrying a session identity) can be muted — daemon/team-level
+     * events without a session id are never suppressed here. Mirrors the lookup-key
+     * matching used by the inbox mute filter so a coordinator session muted on the
+     * dashboard also goes silent on the toast/audio/browser-notification channels.
+     */
+    private isConversationEventMuted(payload: StatusEventPayload): boolean {
+        const providerSessionId = payload.providerSessionId
+        const sessionId = payload.targetSessionId
+        if (!providerSessionId && !sessionId) return false
+        return isConversationMutedNow({ providerSessionId, sessionId })
+    }
+
     // ─── Main entry point ─────────────────────────
 
     handleRawEvent(payload: StatusEventPayload, _source: 'ws' | 'p2p'): void {
@@ -211,6 +226,12 @@ class EventManager {
         for (const callback of this.statusEventCallbacks) {
             callback(payload)
         }
+
+        // Device-muted conversations (e.g. coordinator-spawned mesh sessions) stay
+        // silent on the user-facing notification channels — toast, audio, browser
+        // notification. Status callbacks above still run so inbox/unread state stays
+        // correct; only the attention-grabbing side effects are suppressed.
+        const conversationMuted = this.isConversationEventMuted(payload)
 
         const owningEntry = payload.targetSessionId
             ? this.findOwningSession(payload.targetSessionId)
@@ -234,10 +255,12 @@ class EventManager {
             msg = `✅ ${ideLabel} agent task completed${dur}`
             type = 'success'
 
-            // Sound
-            try {
-                new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAAB/f39/').play().catch(() => {})
-            } catch {}
+            // Sound (suppressed for muted conversations)
+            if (!conversationMuted) {
+                try {
+                    new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAAB/f39/').play().catch(() => {})
+                } catch {}
+            }
 
         // ── agent:generating_started ──
         } else if (payload.event === 'agent:generating_started') {
@@ -245,8 +268,11 @@ class EventManager {
             msg = `⚡ ${ideLabel} approval needed`
             type = 'warning'
 
-            // Inline action toast with modal buttons
-            if (payload.modalButtons?.length && this.resolveActionFn) {
+            // Inline action toast with modal buttons (skipped for muted conversations —
+            // e.g. coordinator sessions that auto-approve and shouldn't ping the user)
+            if (conversationMuted) {
+                msg = '' // skip default toast too
+            } else if (payload.modalButtons?.length && this.resolveActionFn) {
                 const routeId = this.resolveActionRouteTarget(payload)
                 if (!routeId) return
                 const resolveAction = this.resolveActionFn
@@ -279,8 +305,8 @@ class EventManager {
             msg = `⚠️ ${ideLabel} agent shows no progress${dur}`
             type = 'warning'
 
-            // Browser desktop notification (only if unfocused)
-            if (shouldNotify('browser') && !document.hasFocus()) {
+            // Browser desktop notification (only if unfocused, and not muted)
+            if (!conversationMuted && shouldNotify('browser') && !document.hasFocus()) {
                 notify(
                     `⚠️ ${ideLabel} — No Progress`,
                     `Agent has shown no progress for over ${dur.replace(/[()]/g, '')}`,
@@ -334,8 +360,8 @@ class EventManager {
             type = 'warning'
         }
 
-        // Default toast (if msg was set and not overridden)
-        if (msg) {
+        // Default toast (if msg was set and not overridden, and not muted)
+        if (msg && !conversationMuted) {
             const toastId = Date.now()
             this.emitToast({
                 id: toastId, message: msg, type, timestamp: toastId,
