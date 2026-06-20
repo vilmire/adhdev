@@ -17,8 +17,19 @@ interface UseDashboardConversationsOptions {
 function getChatIdeDedupeKey(ide: DaemonData) {
     const daemonId = String(ide.daemonId || '').trim()
     const id = String(ide.id || '').trim()
-    if (!daemonId || id.startsWith(`${daemonId}:`)) return id
-    return `${daemonId}:${id}`
+    // Mesh delegated sessions arrive through two sources for the SAME underlying session:
+    //  - coordinator-reported: id='<coordDaemon>:<rest>', daemonId='<coordDaemon>', ownerDaemonId='<workerDaemon>'
+    //  - worker-reported:      id='<workerDaemon>:<rest>', daemonId='<workerDaemon>', ownerDaemonId=undefined
+    // Keying on the reporting daemon yields two distinct keys and a duplicate "ghost" tab. Normalize
+    // to the OWNING daemon: strip the reporting-daemon prefix from id, then prepend the effective owner
+    // (ownerDaemonId || daemonId). Both arrivals collapse to '<workerDaemon>:<rest>' so dedupeChatIdes
+    // merges them. Non-mesh sessions (no ownerDaemonId) keep their reporting daemon and stay distinct.
+    const ownerDaemonId = String(ide.ownerDaemonId || '').trim() || daemonId
+    const sessionSuffix = daemonId && id.startsWith(`${daemonId}:`)
+        ? id.slice(daemonId.length + 1)
+        : id
+    if (!ownerDaemonId) return id
+    return sessionSuffix ? `${ownerDaemonId}:${sessionSuffix}` : ownerDaemonId
 }
 
 export function dedupeChatIdes(ides: DaemonData[]) {

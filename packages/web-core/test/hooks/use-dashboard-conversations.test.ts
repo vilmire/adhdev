@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildConversationSourceSignature, buildConversationTargetMap, dedupeChatIdes } from '../../src/hooks/useDashboardConversations'
-import { buildScopedIdeConversations } from '../../src/components/dashboard/buildConversations'
+import { buildMachineNameMap, buildScopedIdeConversations } from '../../src/components/dashboard/buildConversations'
 import type { ActiveConversation } from '../../src/components/dashboard/types'
 import type { DaemonData } from '../../src/types'
 
@@ -55,6 +55,102 @@ describe('dedupeChatIdes', () => {
             'machine-1:cli:shared-session',
             'machine-2:cli:shared-session',
         ])
+    })
+
+    it('collapses the two arrivals of a single mesh-owned session into one entry', () => {
+        // The SAME worker session arrives twice: coordinator-reported (prefixed with the
+        // coordinator daemon, but owned by the worker) and worker-reported (prefixed with
+        // the worker daemon, no owner attribution). They must dedupe to a single entry,
+        // otherwise the dashboard renders a duplicate "ghost" tab.
+        const coordinatorReported = createCliEntry({
+            id: 'coord-daemon:cli:remote-session',
+            daemonId: 'coord-daemon',
+            sessionId: 'remote-session',
+            ownerDaemonId: 'worker-daemon',
+            workspace: '/repo',
+            timestamp: 2,
+        })
+        const workerReported = createCliEntry({
+            id: 'worker-daemon:cli:remote-session',
+            daemonId: 'worker-daemon',
+            sessionId: 'remote-session',
+            activeChat: null,
+            workspace: undefined,
+            timestamp: 1,
+        })
+
+        const deduped = dedupeChatIdes([coordinatorReported, workerReported])
+        expect(deduped).toHaveLength(1)
+        // The richer coordinator-reported entry survives, retaining owner attribution.
+        expect(deduped[0]?.ownerDaemonId).toBe('worker-daemon')
+    })
+})
+
+describe('mesh ghost-tab dedup → build pipeline', () => {
+    const machineDaemons: DaemonData[] = [
+        { id: 'coord-daemon', daemonId: 'coord-daemon', type: 'adhdev-daemon', machineNickname: 'vilmireui-MacBookAir-4' } as unknown as DaemonData,
+        { id: 'worker-daemon', daemonId: 'worker-daemon', type: 'adhdev-daemon', machineNickname: 'M1-Server' } as unknown as DaemonData,
+    ]
+
+    it('renders exactly one tab labeled with the remote worker machine for a duplicated mesh session', () => {
+        const coordinatorReported = createCliEntry({
+            id: 'coord-daemon:cli:d9363213',
+            daemonId: 'coord-daemon',
+            sessionId: 'd9363213',
+            type: 'antigravity-cli',
+            cliName: 'Antigravity',
+            ownerDaemonId: 'worker-daemon',
+            settings: { meshNodeFor: 'mesh-x', launchedByCoordinator: true },
+            workspace: '/repo',
+            timestamp: 2,
+        })
+        const workerReported = createCliEntry({
+            id: 'worker-daemon:cli:d9363213',
+            daemonId: 'worker-daemon',
+            sessionId: 'd9363213',
+            type: 'antigravity-cli',
+            cliName: 'Antigravity',
+            activeChat: null,
+            workspace: undefined,
+            timestamp: 1,
+        })
+
+        const machineNames = buildMachineNameMap([...machineDaemons, coordinatorReported, workerReported])
+        const deduped = dedupeChatIdes([coordinatorReported, workerReported])
+        const conversations = deduped.flatMap(ide => buildScopedIdeConversations(ide, { machineNames }))
+
+        // Exactly one tab — no ghost duplicate.
+        expect(conversations).toHaveLength(1)
+        // Labeled with the REMOTE worker machine, never the coordinator's local machine.
+        expect(conversations[0]?.machineName).toBe('M1-Server')
+        expect(conversations[0]?.machineName).not.toBe('vilmireui-MacBookAir-4')
+    })
+
+    it('keeps a genuine local session labeled with its own machine and as its own tab', () => {
+        // Two distinct local sessions on two daemons sharing only the raw session id must
+        // remain two tabs, each with its own machine name.
+        const localOnCoordinator = createCliEntry({
+            id: 'coord-daemon:cli:local-x',
+            daemonId: 'coord-daemon',
+            sessionId: 'local-x',
+            type: 'claude-cli',
+            cliName: 'Claude Cli',
+        })
+        const localOnWorker = createCliEntry({
+            id: 'worker-daemon:cli:local-x',
+            daemonId: 'worker-daemon',
+            sessionId: 'local-x',
+            type: 'claude-cli',
+            cliName: 'Claude Cli',
+        })
+
+        const machineNames = buildMachineNameMap([...machineDaemons, localOnCoordinator, localOnWorker])
+        const deduped = dedupeChatIdes([localOnCoordinator, localOnWorker])
+        const conversations = deduped.flatMap(ide => buildScopedIdeConversations(ide, { machineNames }))
+
+        expect(conversations).toHaveLength(2)
+        const byMachine = conversations.map(c => c.machineName).sort()
+        expect(byMachine).toEqual(['M1-Server', 'vilmireui-MacBookAir-4'])
     })
 })
 
