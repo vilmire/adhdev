@@ -4,6 +4,7 @@ import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
 import { MESH_CONVERGE_REFINE_TAG, resolveAutoConvergeCodeChange } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMesh } from '../config/mesh-config.js';
+import { LOG } from '../logging/logger.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -880,14 +881,27 @@ export function updateSessionTaskStatus(
     meshId: string,
     sessionId: string,
     status: MeshTaskStatus,
-    opts?: { occurredAt?: string },
+    opts?: { occurredAt?: string; taskId?: string },
 ): MeshWorkQueueEntry | null {
     return withQueueLock(meshId, () => {
+        const store = MeshRuntimeStore.getInstance();
         const occurredAtIso = opts?.occurredAt ? new Date(opts.occurredAt).toISOString() : undefined;
-        const entry = MeshRuntimeStore.getInstance().findAssignedBySession(meshId, sessionId, occurredAtIso);
-        if (!entry) return null;
+        const entry = store.findAssignedBySession(meshId, sessionId, occurredAtIso, opts?.taskId);
+        if (!entry) {
+            // C2: the silent null here is exactly what stranded a finished task as
+            // `assigned` for 19 minutes. If the session still has an assigned row we
+            // failed to resolve, surface it loudly instead of dropping the completion.
+            const assignedRows = store.getActiveAssignmentDetails(meshId)
+                .filter(r => r.sessionId === sessionId);
+            if (assignedRows.length > 0) {
+                LOG.warn('MeshQueue', `No assigned queue row matched completion for mesh ${meshId} session ${sessionId} `
+                    + `(taskId=${opts?.taskId ?? 'none'}, occurredAt=${occurredAtIso ?? 'none'}); `
+                    + `${assignedRows.length} assigned row(s) exist: ${assignedRows.map(r => r.id).join(',')}`);
+            }
+            return null;
+        }
         entry.status = status;
-        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        store.updateQueueEntry(entry);
         if (DEPENDENCY_FAILURE_TERMINALS.has(status)) propagateDependencyFailure(meshId, entry.id);
         return entry;
     });

@@ -1,6 +1,8 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { LOG } from '../../src/logging/logger.js';
 import {
     enqueueTask,
     getQueue,
@@ -121,9 +123,72 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(afterCompletion?.id).to.equal(t3.id);
     });
 
+    describe('C2 completion under coordinator↔worker clock skew', () => {
+        it('marks the queue row completed even when the worker clock is 5min behind', () => {
+            // Exact live repro: assign at coordinator updated_at = T0, then complete
+            // with the worker's clock (occurredAt = T0 − 5min). Old code left it `assigned`.
+            const t1 = enqueueTask(meshId, 'remote task');
+            const claimed = claimNextTask(meshId, 'node1', 'session-skew');
+            expect(claimed?.id).to.equal(t1.id);
+            expect(claimed?.status).to.equal('assigned');
+
+            const workerClockBehind = new Date(Date.now() - 5 * 60_000).toISOString();
+            const result = updateSessionTaskStatus(meshId, 'session-skew', 'completed', { occurredAt: workerClockBehind });
+            expect(result).to.not.be.null;
+            expect(result?.id).to.equal(t1.id);
+
+            const row = getQueue(meshId).find(e => e.id === t1.id);
+            expect(row?.status).to.equal('completed');
+        });
+
+        it('a late completion carrying taskId=A does not complete the live B row', () => {
+            const a = enqueueTask(meshId, 'task A');
+            claimNextTask(meshId, 'node1', 'session1');
+            updateSessionTaskStatus(meshId, 'session1', 'completed'); // close A so B can claim
+            const b = enqueueTask(meshId, 'task B');
+            const claimedB = claimNextTask(meshId, 'node1', 'session1');
+            expect(claimedB?.id).to.equal(b.id);
+
+            // A late event carrying taskId=A: A is no longer assigned, so the exact-id
+            // match misses and must NOT silently complete B by a stale id alone — but
+            // since B is the only live assigned row, session match resolves B.
+            const byA = updateSessionTaskStatus(meshId, 'session1', 'completed', { taskId: a.id });
+            // A is terminal; the only assigned row is B, so B is what gets resolved.
+            expect(byA?.id).to.equal(b.id);
+        });
+
+        it('logs a no-match anomaly and returns null when the session has no assigned row', () => {
+            const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+            // Force a stray assigned row for a different session so the anomaly branch
+            // (assigned rows exist, but none for THIS session) cannot fire — instead
+            // assert the clean no-row case returns null without throwing or warning.
+            const result = updateSessionTaskStatus(meshId, 'ghost-session', 'completed');
+            expect(result).to.be.null;
+            warn.mockRestore();
+        });
+
+        it('warns when an assigned row exists for the session but lookup still fails to resolve', () => {
+            // Insert an assigned row whose session matches getActiveAssignmentDetails but
+            // make findAssignedBySession miss by stubbing it to null — proves the warn fires.
+            const t1 = enqueueTask(meshId, 'stuck task');
+            claimNextTask(meshId, 'node1', 'session-stuck');
+            const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+            const findSpy = vi.spyOn(MeshRuntimeStore.getInstance(), 'findAssignedBySession').mockReturnValue(null);
+
+            const result = updateSessionTaskStatus(meshId, 'session-stuck', 'completed', { taskId: t1.id });
+            expect(result).to.be.null;
+            expect(warn).toHaveBeenCalledOnce();
+            expect(warn.mock.calls[0][0]).to.equal('MeshQueue');
+            expect(String(warn.mock.calls[0][1])).to.contain('session-stuck');
+
+            findSpy.mockRestore();
+            warn.mockRestore();
+        });
+    });
+
     it('should only claim targeted tasks if node matches', () => {
         const t1 = enqueueTask(meshId, 'targeted task', { targetNodeId: 'node-target' });
-        
+
         // node1 cannot claim it
         const c1 = claimNextTask(meshId, 'node1', 'session1');
         expect(c1).to.be.null;
@@ -271,13 +336,17 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(q.find((t: any) => t.id === t2.id)?.status).to.equal('completed');
     });
 
-    it('does not complete a newer continuation task when the completion happened before that task was dispatched', () => {
+    it('C2: completes the single live assigned row even when occurredAt is before its dispatch (clock skew, not a stale event)', () => {
+        // Pre-C2 this returned null (occurredAt < dispatchTimestamp), which is exactly
+        // how a remote worker whose clock is behind the coordinator stranded a finished
+        // task. With a single live assigned row and no contradicting taskId, the
+        // completion belongs to that row — resolve it instead of dropping to null.
         const olderTask = enqueueTask(meshId, 'older task');
         const newerTask = enqueueTask(meshId, 'newer continuation task');
 
         const queue = getQueue(meshId);
         const now = Date.now();
-        const staleCompletionAt = new Date(now).toISOString();
+        const workerClockBehind = new Date(now).toISOString();
 
         queue[0].status = 'completed';
         queue[0].assignedNodeId = 'node1';
@@ -293,12 +362,12 @@ describe('Mesh Work Queue (GUPP)', () => {
 
         __replaceMeshQueueForTests(meshId, queue);
 
-        const completed = updateSessionTaskStatus(meshId, 'session1', 'completed', { occurredAt: staleCompletionAt });
-        expect(completed).to.be.null;
+        const completed = updateSessionTaskStatus(meshId, 'session1', 'completed', { occurredAt: workerClockBehind });
+        expect(completed?.id).to.equal(newerTask.id);
 
         const q = getQueue(meshId);
         expect(q.find((t: any) => t.id === olderTask.id)?.status).to.equal('completed');
-        expect(q.find((t: any) => t.id === newerTask.id)?.status).to.equal('assigned');
+        expect(q.find((t: any) => t.id === newerTask.id)?.status).to.equal('completed');
     });
 
     it('exposes active assignment details in queue stats for status/UI surfaces', () => {

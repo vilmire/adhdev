@@ -657,25 +657,74 @@ describe('mesh-runtime-store', () => {
             __clearMeshQueueForTests(meshId);
         });
 
-        it('respects occurredAt filter — ignores entries updated after occurredAt cutoff', () => {
-            const meshId = `mesh-assigned-cutoff-${randomUUID().slice(0, 8)}`;
-            const sessionId = `sess-cutoff-${randomUUID().slice(0, 8)}`;
+        it('C2 clock skew: still resolves the assigned row when occurredAt is behind updated_at', () => {
+            // Live bug repro: a remote worker's completion event carries the WORKER's
+            // clock; updated_at carries the COORDINATOR's clock. Coordinator-ahead skew
+            // makes occurredAt < updated_at. The old `updated_at <= occurredAt` filter
+            // returned null here and stranded the finished task as `assigned` forever.
+            const meshId = `mesh-assigned-skew-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-skew-${randomUUID().slice(0, 8)}`;
             const db = MeshRuntimeStore.getInstance();
-            db.insertQueueEntry({ id: 'task-cutoff-1', meshId, message: 'cutoff task', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+            db.insertQueueEntry({ id: 'task-skew-1', meshId, message: 'skew task', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
-            // Claim just now — updatedAt is current time
+            // Claim just now — updatedAt (coordinator clock) = current time
             db.claimNextQueueTask(meshId, 'node1', sessionId);
 
-            // Requesting entries updated BEFORE 10 seconds ago — should return null
-            // because the task was just claimed (updated_at = now, not 10 seconds ago)
-            const farPastIso = new Date(Date.now() - 10_000).toISOString();
-            const notFound = db.findAssignedBySession(meshId, sessionId, farPastIso);
-            expect(notFound).toBeNull();
-
-            // Without occurredAt — should return the assigned entry
-            const found = db.findAssignedBySession(meshId, sessionId);
+            // Worker clock 5 minutes behind the coordinator.
+            const workerClockIso = new Date(Date.now() - 5 * 60_000).toISOString();
+            const found = db.findAssignedBySession(meshId, sessionId, workerClockIso);
             expect(found).not.toBeNull();
             expect(found?.status).toBe('assigned');
+            expect(found?.id).toBe('task-skew-1');
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('taskId exact match resolves the right row regardless of clock or order', () => {
+            const meshId = `mesh-assigned-taskid-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-taskid-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+
+            // Two sequential tasks A then B claimed on the same session. (After A's row
+            // is forced terminal, B can be claimed onto the same session.)
+            db.insertQueueEntry({ id: 'task-A', meshId, message: 'task A', status: 'pending', createdAt: new Date(Date.now() - 2000).toISOString(), updatedAt: new Date(Date.now() - 2000).toISOString() });
+            db.claimNextQueueTask(meshId, 'node1', sessionId);
+            const a = db.findQueueEntryById(meshId, 'task-A')!;
+            a.status = 'completed';
+            db.updateQueueEntry(a);
+
+            db.insertQueueEntry({ id: 'task-B', meshId, message: 'task B', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+            db.claimNextQueueTask(meshId, 'node1', sessionId);
+
+            // A late completion carrying taskId=A must NOT match B's assigned row.
+            // A is no longer assigned, so the exact-id match yields null and falls
+            // through; only B remains assigned so session match would resolve B.
+            const byA = db.findAssignedBySession(meshId, sessionId, undefined, 'task-A');
+            expect(byA?.id).toBe('task-B'); // A not assigned → fall through to the live assigned row
+            const byB = db.findAssignedBySession(meshId, sessionId, undefined, 'task-B');
+            expect(byB?.id).toBe('task-B');
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('disambiguates multiple assigned rows for one session by immutable dispatchTimestamp', () => {
+            const meshId = `mesh-assigned-multi-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-multi-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+
+            // Force two assigned rows on the same session (abnormal but defensive).
+            const older = new Date(Date.now() - 60_000).toISOString();
+            const newer = new Date().toISOString();
+            db.insertQueueEntry({ id: 'multi-old', meshId, message: 'old', status: 'assigned', assignedSessionId: sessionId, assignedNodeId: 'node1', dispatchTimestamp: older, createdAt: older, updatedAt: older });
+            db.insertQueueEntry({ id: 'multi-new', meshId, message: 'new', status: 'assigned', assignedSessionId: sessionId, assignedNodeId: 'node1', dispatchTimestamp: newer, createdAt: newer, updatedAt: newer });
+
+            // occurredAt between the two dispatches → latest dispatchTimestamp <= occurredAt = old.
+            const between = new Date(Date.now() - 30_000).toISOString();
+            expect(db.findAssignedBySession(meshId, sessionId, between)?.id).toBe('multi-old');
+
+            // occurredAt before BOTH dispatches (severe skew) → fall back to most-recent dispatch.
+            const beforeBoth = new Date(Date.now() - 120_000).toISOString();
+            expect(db.findAssignedBySession(meshId, sessionId, beforeBoth)?.id).toBe('multi-new');
 
             __clearMeshQueueForTests(meshId);
         });

@@ -1534,8 +1534,12 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     }
 
     function markSessionTerminal(sessionId: string, outcome: 'completed' | 'failed', occurredAtMs?: number | null): { id?: string } | null {
+        // C2: prefer an exact taskId match when the completion event carries one —
+        // it's immune to coordinator↔worker clock skew that can hide the assigned row.
+        const eventTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
         const task = updateSessionTaskStatus(args.meshId, sessionId, outcome, {
             occurredAt: occurredAtMs != null ? new Date(occurredAtMs).toISOString() : undefined,
+            taskId: eventTaskId,
         });
         updateDirectDispatchStatus(args.meshId, sessionId, outcome);
         markSessionDeliveriesTerminal(args.meshId, sessionId, outcome);

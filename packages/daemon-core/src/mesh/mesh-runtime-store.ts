@@ -698,15 +698,66 @@ export class MeshRuntimeStore {
         });
     }
 
-    findAssignedBySession(meshId: string, sessionId: string, occurredAtIso?: string): MeshWorkQueueEntry | null {
+    /**
+     * Resolve the `assigned` queue row a completion event belongs to.
+     *
+     * Clock-skew safety (C2): a completion event's `occurredAtIso` carries the
+     * REMOTE WORKER's clock, while `updated_at` carries the COORDINATOR's clock
+     * (set at assignment and re-bumped on every mutation). For a remote node,
+     * coordinator-clock > worker-clock skew used to make an `updated_at <= occurredAt`
+     * filter return nothing, stranding the finished task as `assigned` forever.
+     *
+     * We therefore NEVER filter completion-matching on the mutable `updated_at`:
+     *  1. If `taskId` is given, match the exact `assigned` row by id (no time filter).
+     *  2. Otherwise a session holds at most one `assigned` task — match it without a
+     *     time filter. If several exist (shouldn't normally), disambiguate by the
+     *     IMMUTABLE `dispatchTimestamp`: latest `dispatchTimestamp <= occurredAt`,
+     *     and if skew makes ALL of them later than `occurredAt`, fall back to the
+     *     most-recent `dispatchTimestamp` rather than returning null.
+     */
+    findAssignedBySession(
+        meshId: string,
+        sessionId: string,
+        occurredAtIso?: string,
+        taskId?: string,
+    ): MeshWorkQueueEntry | null {
         this.ensureLegacyQueueMigrated(meshId);
-        // Use updated_at (≈ dispatchTimestamp when status='assigned') for the occurredAt filter.
-        const sql = occurredAtIso
-            ? `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND assigned_session_id = ? AND status = 'assigned' AND updated_at <= ? ORDER BY updated_at DESC LIMIT 1`
-            : `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND assigned_session_id = ? AND status = 'assigned' ORDER BY updated_at DESC LIMIT 1`;
-        const args: string[] = occurredAtIso ? [meshId, sessionId, occurredAtIso] : [meshId, sessionId];
-        const row = this.db.prepare(sql).get(...args as [string, string, string?]) as { payload: string } | undefined;
-        return row ? JSON.parse(row.payload) as MeshWorkQueueEntry : null;
+
+        // 1. Exact taskId match — robust against clock skew and stale rows.
+        if (taskId) {
+            const row = this.db.prepare(
+                `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND assigned_session_id = ? AND status = 'assigned' AND id = ? LIMIT 1`
+            ).get(meshId, sessionId, taskId) as { payload: string } | undefined;
+            if (row) return JSON.parse(row.payload) as MeshWorkQueueEntry;
+            // Fall through to session-based matching if the id didn't line up
+            // (e.g. event carried a stale/foreign taskId).
+        }
+
+        // 2. Session-based match WITHOUT the mutable updated_at filter.
+        const rows = this.db.prepare(
+            `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND assigned_session_id = ? AND status = 'assigned'`
+        ).all(meshId, sessionId) as Array<{ payload: string }>;
+        if (rows.length === 0) return null;
+
+        const entries = rows
+            .map(r => { try { return JSON.parse(r.payload) as MeshWorkQueueEntry; } catch { return null; } })
+            .filter((e): e is MeshWorkQueueEntry => e !== null);
+        if (entries.length === 0) return null;
+        if (entries.length === 1) return entries[0];
+
+        // Multiple assigned rows for one session: disambiguate by the immutable
+        // dispatchTimestamp (falling back to updated_at only for legacy rows that
+        // predate dispatchTimestamp). We use these to ORDER, never to FILTER —
+        // so a skewed occurredAt can never drop the live row to null.
+        const orderKey = (e: MeshWorkQueueEntry) => e.dispatchTimestamp ?? e.updatedAt ?? '';
+        const byDispatchDesc = [...entries].sort((a, b) => orderKey(b).localeCompare(orderKey(a)));
+        if (occurredAtIso) {
+            const atOrBefore = byDispatchDesc.find(e => orderKey(e) <= occurredAtIso);
+            if (atOrBefore) return atOrBefore;
+        }
+        // Skew made every dispatch later than occurredAt — fall back to the
+        // most-recently dispatched row rather than stranding the completion.
+        return byDispatchDesc[0];
     }
 
     private toRow(entry: MeshWorkQueueEntry): Record<string, unknown> {
