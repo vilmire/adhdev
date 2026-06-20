@@ -118,6 +118,20 @@ export function appendBoundedText(current: string, chunk: string, maxChars: numb
     return current.slice(-keepFromCurrent) + chunk;
 }
 
+// Force-send (mesh coordinator dispatch / reconcile redelivery) writes raw
+// keystrokes straight into the PTY, bypassing the normal echo-wait submit
+// pipeline. Historically it wrote `text + sendKey` in a single PTY write with
+// zero settle time. On TUI input boxes that re-render the pasted text, the
+// trailing submit key could arrive before the input line had stabilized and be
+// swallowed by the input handler — leaving the prompt typed but never submitted
+// ("text injected, Enter not pressed"). We now split inject from submit and let
+// the input settle first. FORCE_SUBMIT_SETTLE_MS is the minimum gap after the
+// text write before the submit key is sent; FORCE_SUBMIT_MAX_WAIT_MS caps the
+// echo-gated wait so the submit always fires even if the echo never appears.
+const FORCE_SUBMIT_SETTLE_MS = 150;
+const FORCE_SUBMIT_MAX_WAIT_MS = 1500;
+const FORCE_SUBMIT_POLL_MS = 50;
+
 // ─── Adapter ────────────────────────────────────────
 
 export class ProviderCliAdapter implements CliAdapter {
@@ -1298,8 +1312,34 @@ export class ProviderCliAdapter implements CliAdapter {
             return;
         }
         LOG.info('CLI', `[${this.cliType}] force-sending prompt while status=${this.engine.currentStatus}`);
-        await this.writeToPty(content + this.sendKey);
+        // Split inject from submit. Writing `content + sendKey` in one PTY write
+        // can race a TUI input box that is still absorbing/redrawing the pasted
+        // text, so the trailing submit key gets eaten and the prompt sits typed
+        // but unsent. Write the text first, let the input line settle (echo-gated
+        // when we can verify it, otherwise a fixed minimum gap), then write the
+        // submit key separately so it lands as a clean Enter on a stable prompt.
+        await this.writeToPty(content);
+        await this.waitForForceSubmitSettle(content);
+        await this.writeToPty(this.sendKey);
         this.onStatusChange?.();
+    }
+
+    private async waitForForceSubmitSettle(content: string): Promise<void> {
+        const startedAt = Date.now();
+        const normalizedPromptSnippet = normalizePromptText(extractPromptRetrySnippet(content));
+        // Always honor a minimum settle so the input handler has time to finish
+        // ingesting the pasted text before the submit key arrives.
+        await new Promise<void>(resolve => setTimeout(resolve, FORCE_SUBMIT_SETTLE_MS));
+        if (!normalizedPromptSnippet) return;
+        // Beyond the minimum gap, keep waiting (up to the cap) until the prompt
+        // echo is visible on screen — that is the strongest signal the input line
+        // has stabilized and the Enter will be applied to the typed prompt.
+        while (Date.now() - startedAt < FORCE_SUBMIT_MAX_WAIT_MS) {
+            if (!this.ptyProcess) return;
+            const screenText = this.terminalScreen.getText();
+            if (promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
+            await new Promise<void>(resolve => setTimeout(resolve, FORCE_SUBMIT_POLL_MS));
+        }
     }
 
     private enqueuePendingOutboundMessage(text: string, reason: string): void {

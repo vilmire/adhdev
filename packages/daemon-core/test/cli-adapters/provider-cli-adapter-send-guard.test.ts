@@ -264,10 +264,54 @@ describe('ProviderCliAdapter sendMessage guard', () => {
   it('force-sends immediately while generating instead of adding to the pending queue', async () => {
     const adapter = buildAdapter()
 
-    await expect(adapter.sendMessage('send now', { force: true })).resolves.toBeUndefined()
+    const sendPromise = adapter.sendMessage('send now', { force: true })
+    await vi.advanceTimersByTimeAsync(1600)
+    await expect(sendPromise).resolves.toBeUndefined()
 
     expect(adapter.pendingOutboundQueue).toHaveLength(0)
-    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('send now\r')
+    // Text and submit key now land as separate writes (split inject→submit),
+    // so the prompt is injected and the Enter follows after the settle delay.
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('send now')
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
+  })
+
+  it('force-sends the prompt and submit key as separate writes after a settle delay (no inject/submit race)', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    // No prompt echo on screen, so the settle falls back to the fixed minimum gap.
+    adapter.terminalScreen = { getText: () => '' }
+
+    const writePromise = adapter.forceSendMessage('forced prompt')
+
+    // Before the settle delay elapses, only the text has been injected — the
+    // submit key must NOT have been written yet (this is the race the split fixes).
+    await vi.advanceTimersByTimeAsync(50)
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('forced prompt')
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('\r')
+
+    // With no prompt echo ever appearing on screen, the submit still fires once
+    // the max echo wait elapses — the prompt is never left typed-but-unsent.
+    await vi.advanceTimersByTimeAsync(1600)
+    await expect(writePromise).resolves.toBeUndefined()
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
+    // The text and the Enter are never concatenated into a single PTY write.
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('forced prompt\r')
+  })
+
+  it('force-send submits as soon as the prompt echo becomes visible', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.terminalScreen = { getText: () => '❯ echoed force prompt that is long enough to verify\n' }
+
+    const writePromise = adapter.forceSendMessage('echoed force prompt that is long enough to verify')
+
+    await vi.advanceTimersByTimeAsync(300)
+    await expect(writePromise).resolves.toBeUndefined()
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('echoed force prompt that is long enough to verify')
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('echoed force prompt that is long enough to verify\r')
   })
 
   it('surfaces async PTY write failures instead of reporting sendMessage success', async () => {
