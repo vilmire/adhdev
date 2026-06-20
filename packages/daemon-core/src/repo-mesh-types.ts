@@ -342,7 +342,10 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     requireApprovalForDestructiveGit: true,
     dirtyWorkspaceBehavior: 'warn',
     maxParallelTasks: 2,
-    spawnedSessionVisibility: 'visible',
+    // Coordinator-spawned worker sessions default to hidden so the dashboard is not
+    // flooded with mesh noise tabs/notifications. Users can still surface or unmute
+    // any specific session manually; that override is preserved per-device.
+    spawnedSessionVisibility: 'hidden',
     delegatedWorkerAutoApprove: true,
     sessionCleanupOnNodeRemove: 'preserve',
     autoFastForward: { enabled: true },

@@ -175,7 +175,7 @@ function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMe
         policy.sessionCleanupOnNodeRemove = 'preserve';
     }
     if (!SPAWNED_SESSION_VISIBILITY_MODES.has(String(policy.spawnedSessionVisibility))) {
-        policy.spawnedSessionVisibility = 'visible';
+        policy.spawnedSessionVisibility = DEFAULT_MESH_POLICY.spawnedSessionVisibility;
     }
     // Load-balancing: normalize the scheduling strategy so an invalid/blank value
     // falls back to 'first_eligible' (strict no-change). Only persist the field when
