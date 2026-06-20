@@ -144,9 +144,13 @@ function getControlOptions(
 // they stay hidden from the bar — use the native `/compact` command or the
 // dedicated New action instead. Other entries hide a declared `new_session`
 // control that the upstream provider.json defines but duplicates a native action.
+// `stop` is hidden for claude-cli because the spec's control_bar declares it with
+// `visible_when_state: ['busy']`, but synthesizeControlsFromControlBar drops that
+// gating so the bar would otherwise show Stop even while idle — easy to mis-click.
+// The header Stop (session end) is unaffected.
 const HIDE_BAR_CONTROL_IDS_BY_PROVIDER: Record<string, Set<string>> = {
     antigravity: new Set(['new_session']),
-    'claude-cli': new Set(['compact', 'new_session']),
+    'claude-cli': new Set(['compact', 'new_session', 'stop']),
     'claude-code-vscode': new Set(['new_session']),
     codex: new Set(['new_session']),
 };

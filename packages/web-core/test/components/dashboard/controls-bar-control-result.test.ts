@@ -139,6 +139,13 @@ describe('ControlsBar typed controlResult consumption', () => {
       placement: 'bar',
       setScript: 'setCompact',
     } satisfies ProviderControlSchema
+    const stopControl = {
+      id: 'stop',
+      type: 'action',
+      label: 'Stop',
+      placement: 'bar',
+      invokeScript: 'stop',
+    } satisfies ProviderControlSchema
 
     expect(shouldHideBarControl(undefined, 'antigravity', newControl)).toBe(true)
     expect(shouldHideBarControl(undefined, 'claude-code-vscode', newControl)).toBe(true)
@@ -146,6 +153,11 @@ describe('ControlsBar typed controlResult consumption', () => {
     expect(shouldHideBarControl(undefined, 'roo-code', newControl)).toBe(false)
     expect(shouldHideBarControl(undefined, 'claude-cli', newControl)).toBe(true)
     expect(shouldHideBarControl(undefined, 'claude-cli', compactControl)).toBe(true)
+    // claude-cli hides the control_bar Stop button (the header Stop is separate);
+    // other providers keep their own Stop control.
+    expect(shouldHideBarControl(undefined, 'claude-cli', stopControl)).toBe(true)
+    expect(shouldHideBarControl(undefined, 'codex', stopControl)).toBe(false)
+    expect(shouldHideBarControl(undefined, 'antigravity', stopControl)).toBe(false)
   })
 
   it('treats shouldHideBarControl as host-agnostic so provider rules apply regardless of hostIdeType', () => {
