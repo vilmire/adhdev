@@ -57,6 +57,38 @@ describe('dedupeChatIdes', () => {
         ])
     })
 
+    it('collapses the two arrivals even when coordinator attribution failed (no ownerDaemonId)', () => {
+        // The intermittent ghost-tab: when the coordinator could NOT resolve the owning daemon
+        // (owning node not yet probed), the coordinator copy carries mesh markers but no
+        // ownerDaemonId — only its mesh `settings`. The marker-less worker copy must still merge
+        // with it via the shared session suffix, attributed to the worker daemon.
+        const coordinatorReported = createCliEntry({
+            id: 'coord-daemon:cli:remote-session',
+            daemonId: 'coord-daemon',
+            sessionId: 'remote-session',
+            ownerDaemonId: undefined,
+            settings: { meshNodeFor: 'mesh-x', meshNodeId: 'node-7', launchedByCoordinator: true, _remoteOwnedSession: true },
+            workspace: '/repo',
+            activeChat: null,
+            timestamp: 2,
+        })
+        const workerReported = createCliEntry({
+            id: 'worker-daemon:cli:remote-session',
+            daemonId: 'worker-daemon',
+            sessionId: 'remote-session',
+            // The worker copy is richer (carries the live chat) so it WINS the richness tiebreak,
+            // yet must still surface the worker-owned attribution grafted from its mesh sibling.
+            timestamp: 1,
+        })
+
+        const deduped = dedupeChatIdes([coordinatorReported, workerReported])
+        expect(deduped).toHaveLength(1)
+        // Attribution resolves to the worker daemon even though the coordinator copy never knew it.
+        expect(deduped[0]?.ownerDaemonId).toBe('worker-daemon')
+        // The merged survivor still carries the mesh markers so the dashboard treats it as a mesh node.
+        expect(deduped[0]?.settings?.meshNodeFor).toBe('mesh-x')
+    })
+
     it('collapses the two arrivals of a single mesh-owned session into one entry', () => {
         // The SAME worker session arrives twice: coordinator-reported (prefixed with the
         // coordinator daemon, but owned by the worker) and worker-reported (prefixed with
@@ -122,6 +154,40 @@ describe('mesh ghost-tab dedup → build pipeline', () => {
         // Exactly one tab — no ghost duplicate.
         expect(conversations).toHaveLength(1)
         // Labeled with the REMOTE worker machine, never the coordinator's local machine.
+        expect(conversations[0]?.machineName).toBe('M1-Server')
+        expect(conversations[0]?.machineName).not.toBe('vilmireui-MacBookAir-4')
+    })
+
+    it('labels the single tab with the worker machine even when coordinator attribution failed', () => {
+        // Same as above but with NO ownerDaemonId on the coordinator copy (attribution race lost).
+        // The merge must recover the worker daemon from the marker-less worker copy so the tab is
+        // labeled with the remote worker machine, never the coordinator's local machine.
+        const coordinatorReported = createCliEntry({
+            id: 'coord-daemon:cli:d9363213',
+            daemonId: 'coord-daemon',
+            sessionId: 'd9363213',
+            type: 'antigravity-cli',
+            cliName: 'Antigravity',
+            ownerDaemonId: undefined,
+            settings: { meshNodeFor: 'mesh-x', meshNodeId: 'node-7', launchedByCoordinator: true, _remoteOwnedSession: true },
+            workspace: '/repo',
+            activeChat: null,
+            timestamp: 2,
+        })
+        const workerReported = createCliEntry({
+            id: 'worker-daemon:cli:d9363213',
+            daemonId: 'worker-daemon',
+            sessionId: 'd9363213',
+            type: 'antigravity-cli',
+            cliName: 'Antigravity',
+            timestamp: 1,
+        })
+
+        const machineNames = buildMachineNameMap([...machineDaemons, coordinatorReported, workerReported])
+        const deduped = dedupeChatIdes([coordinatorReported, workerReported])
+        const conversations = deduped.flatMap(ide => buildScopedIdeConversations(ide, { machineNames }))
+
+        expect(conversations).toHaveLength(1)
         expect(conversations[0]?.machineName).toBe('M1-Server')
         expect(conversations[0]?.machineName).not.toBe('vilmireui-MacBookAir-4')
     })

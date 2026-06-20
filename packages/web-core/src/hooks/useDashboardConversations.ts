@@ -14,30 +14,70 @@ interface UseDashboardConversationsOptions {
     hiddenTabs: Set<string>
 }
 
-function getChatIdeDedupeKey(ide: DaemonData) {
+/** Strip the reporting-daemon prefix from `id`, yielding the raw session id shared
+ *  across the coordinator-reported and worker-reported copies of one mesh session. */
+function getSessionSuffix(ide: DaemonData): string {
     const daemonId = String(ide.daemonId || '').trim()
     const id = String(ide.id || '').trim()
+    return daemonId && id.startsWith(`${daemonId}:`) ? id.slice(daemonId.length + 1) : id
+}
+
+/** True when this entry is a coordinator-synthesised mesh-owned session copy. The
+ *  coordinator stamps any of these markers; a worker's own session report carries none. */
+function isMeshOwnedSessionCopy(ide: DaemonData): boolean {
+    if (String(ide.ownerDaemonId || '').trim()) return true
+    const settings = ide.settings as Record<string, unknown> | undefined
+    if (!settings) return false
+    return Boolean(settings.meshNodeFor) || Boolean(settings.meshNodeId)
+        || settings.launchedByCoordinator === true || settings._remoteOwnedSession === true
+}
+
+function getChatIdeDedupeKey(ide: DaemonData, meshSessionSuffixes: Set<string>) {
+    const daemonId = String(ide.daemonId || '').trim()
+    const id = String(ide.id || '').trim()
+    const sessionSuffix = getSessionSuffix(ide)
     // Mesh delegated sessions arrive through two sources for the SAME underlying session:
     //  - coordinator-reported: id='<coordDaemon>:<rest>', daemonId='<coordDaemon>', ownerDaemonId='<workerDaemon>'
     //  - worker-reported:      id='<workerDaemon>:<rest>', daemonId='<workerDaemon>', ownerDaemonId=undefined
-    // Keying on the reporting daemon yields two distinct keys and a duplicate "ghost" tab. Normalize
-    // to the OWNING daemon: strip the reporting-daemon prefix from id, then prepend the effective owner
-    // (ownerDaemonId || daemonId). Both arrivals collapse to '<workerDaemon>:<rest>' so dedupeChatIdes
-    // merges them. Non-mesh sessions (no ownerDaemonId) keep their reporting daemon and stay distinct.
+    // Keying on the reporting daemon yields two distinct keys and a duplicate "ghost" tab.
+    //
+    // When the coordinator successfully resolved owner attribution it carries
+    // ownerDaemonId='<workerDaemon>', so normalizing to (ownerDaemonId || daemonId) collapses both
+    // arrivals to '<workerDaemon>:<rest>'. But attribution resolution is racy — the owning node may
+    // not be probed yet — and when it fails the coordinator copy has NO ownerDaemonId (or a
+    // node-scoped fallback that does NOT equal the worker daemonId). The reporting-daemon
+    // normalization then can't merge it with the worker copy and the ghost tab reappears.
+    //
+    // Defense: any session that is mesh-owned (coordinator copy carries a mesh marker) is keyed on
+    // the session SUFFIX alone — a value both the coordinator copy and the marker-less worker copy
+    // share — so the two collapse regardless of whether attribution resolved. `meshSessionSuffixes`
+    // is the set of suffixes seen on a mesh-owned copy, so the marker-less worker copy is pulled in too.
+    if (sessionSuffix && meshSessionSuffixes.has(sessionSuffix)) {
+        return `mesh:${sessionSuffix}`
+    }
+    // Non-mesh sessions keep their reporting daemon and stay distinct (two unrelated local sessions
+    // on different daemons that happen to share a raw session id must remain separate tabs).
     const ownerDaemonId = String(ide.ownerDaemonId || '').trim() || daemonId
-    const sessionSuffix = daemonId && id.startsWith(`${daemonId}:`)
-        ? id.slice(daemonId.length + 1)
-        : id
     if (!ownerDaemonId) return id
     return sessionSuffix ? `${ownerDaemonId}:${sessionSuffix}` : ownerDaemonId
 }
 
 export function dedupeChatIdes(ides: DaemonData[]) {
     const filtered = ides.filter(ide => ide.type !== 'adhdev-daemon')
+    // First pass: collect the session suffixes of every mesh-owned copy. A worker's own session
+    // report carries no mesh marker, so it can only be matched to its coordinator sibling by the
+    // shared suffix — gather the suffixes here so the keying pass can recognise both copies.
+    const meshSessionSuffixes = new Set<string>()
+    for (const ide of filtered) {
+        if (!isMeshOwnedSessionCopy(ide)) continue
+        const suffix = getSessionSuffix(ide)
+        if (suffix) meshSessionSuffixes.add(suffix)
+    }
+
     const seen = new Map<string, DaemonData>()
 
     for (const ide of filtered) {
-        const dedupeKey = getChatIdeDedupeKey(ide)
+        const dedupeKey = getChatIdeDedupeKey(ide, meshSessionSuffixes)
         const existing = seen.get(dedupeKey)
         if (!existing) {
             seen.set(dedupeKey, ide)
@@ -46,12 +86,49 @@ export function dedupeChatIdes(ides: DaemonData[]) {
 
         const existingRichness = (existing.workspace ? 1 : 0) + (existing.activeChat ? 1 : 0)
         const incomingRichness = (ide.workspace ? 1 : 0) + (ide.activeChat ? 1 : 0)
-        if (incomingRichness > existingRichness || (ide.timestamp || 0) > (existing.timestamp || 0)) {
-            seen.set(dedupeKey, ide)
-        }
+        const winner = (incomingRichness > existingRichness || (ide.timestamp || 0) > (existing.timestamp || 0))
+            ? ide
+            : existing
+        // The winning copy may be the worker's own report (richer chat) while only the
+        // coordinator copy carried owner attribution / mesh settings. Carry that attribution
+        // forward onto the winner so the merged tab is still labeled with the worker machine
+        // and recognised as a mesh node, regardless of which copy was richer.
+        seen.set(dedupeKey, mergeMeshAttribution(winner, winner === ide ? existing : ide))
     }
 
     return Array.from(seen.values())
+}
+
+/** Carry owner attribution + mesh settings across the two copies of a merged mesh session so
+ *  the surviving tab keeps its worker-machine attribution and mesh-node identity, regardless of
+ *  which copy was richer. Returns the winner unchanged when there is nothing to graft (the
+ *  common non-mesh path). */
+function mergeMeshAttribution(winner: DaemonData, other: DaemonData): DaemonData {
+    const otherIsMesh = isMeshOwnedSessionCopy(other)
+    const winnerIsMesh = isMeshOwnedSessionCopy(winner)
+    if (!otherIsMesh && !winnerIsMesh) return winner
+
+    // The TRUE owning daemon of a mesh session is the WORKER copy's own reporting daemonId — the
+    // worker reports its own real session, so its `daemonId` always resolves to the worker machine
+    // in machineNames. The coordinator copy's `ownerDaemonId` only resolves when attribution
+    // succeeded; when it didn't it is a node-scoped id (or absent) that does NOT map to a machine.
+    // Identify the worker copy as the marker-less sibling and prefer its daemonId for attribution.
+    const workerCopy = !winnerIsMesh ? winner : (!otherIsMesh ? other : undefined)
+    const meshCopy = winnerIsMesh ? winner : (otherIsMesh ? other : undefined)
+    const ownerDaemonId = (workerCopy && String(workerCopy.daemonId || '').trim())
+        || String(winner.ownerDaemonId || '').trim()
+        || String(other.ownerDaemonId || '').trim()
+        || undefined
+    const ownerMachineName = String(winner.ownerMachineName || '').trim()
+        || String(other.ownerMachineName || '').trim()
+        || undefined
+    const meshSettings = meshCopy?.settings
+    return {
+        ...winner,
+        ...(ownerDaemonId && { ownerDaemonId }),
+        ...(ownerMachineName && !winner.ownerMachineName && { ownerMachineName }),
+        ...(meshSettings && !winnerIsMesh && { settings: { ...meshSettings, ...(winner.settings ?? {}) } }),
+    }
 }
 
 function sameArrayRefs<T>(prev: T[], next: T[]) {
