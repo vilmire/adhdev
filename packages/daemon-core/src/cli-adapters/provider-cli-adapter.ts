@@ -120,17 +120,29 @@ export function appendBoundedText(current: string, chunk: string, maxChars: numb
 
 // Force-send (mesh coordinator dispatch / reconcile redelivery) writes raw
 // keystrokes straight into the PTY, bypassing the normal echo-wait submit
-// pipeline. Historically it wrote `text + sendKey` in a single PTY write with
-// zero settle time. On TUI input boxes that re-render the pasted text, the
-// trailing submit key could arrive before the input line had stabilized and be
-// swallowed by the input handler — leaving the prompt typed but never submitted
-// ("text injected, Enter not pressed"). We now split inject from submit and let
-// the input settle first. FORCE_SUBMIT_SETTLE_MS is the minimum gap after the
-// text write before the submit key is sent; FORCE_SUBMIT_MAX_WAIT_MS caps the
-// echo-gated wait so the submit always fires even if the echo never appears.
+// pipeline.
+//
+// History of this path's failure modes:
+//   1. Originally it wrote `text + sendKey` in a single PTY write with zero
+//      settle time. Injected into an idle TUI input box that was still entering
+//      its input-accepting state, the trailing submit key could be swallowed —
+//      prompt typed but never submitted ("text injected, Enter not pressed").
+//   2. The first fix split inject from submit: write(text) → echo-gated settle →
+//      write(sendKey) as a *separate* PTY write. That broke win32: ConPTY/TUI
+//      does not recognize a lone '\r' that arrives in its own PTY chunk
+//      150ms+ after the text as a submit key, and the win32 echo gate never
+//      matched (ConPTY echo/parsing differences), so the cap was burned and the
+//      same detached lone CR was emitted — adding latency while the Enter still
+//      got swallowed.
+//
+// Current behavior: keep a fixed settle gap so the input handler is in its
+// input-accepting state, then write `content + sendKey` as a SINGLE atomic PTY
+// write — the same verified mechanism the normal `immediate` submit strategy
+// uses (submitImmediatePrompt). With the Enter in the same write unit as the
+// text, win32 ConPTY always sees it as a submit and the race that the split was
+// trying to solve cannot happen (the Enter can never be separated from the
+// text). FORCE_SUBMIT_SETTLE_MS is that minimum pre-submit gap.
 const FORCE_SUBMIT_SETTLE_MS = 150;
-const FORCE_SUBMIT_MAX_WAIT_MS = 1500;
-const FORCE_SUBMIT_POLL_MS = 50;
 
 // ─── Adapter ────────────────────────────────────────
 
@@ -1312,34 +1324,31 @@ export class ProviderCliAdapter implements CliAdapter {
             return;
         }
         LOG.info('CLI', `[${this.cliType}] force-sending prompt while status=${this.engine.currentStatus}`);
-        // Split inject from submit. Writing `content + sendKey` in one PTY write
-        // can race a TUI input box that is still absorbing/redrawing the pasted
-        // text, so the trailing submit key gets eaten and the prompt sits typed
-        // but unsent. Write the text first, let the input line settle (echo-gated
-        // when we can verify it, otherwise a fixed minimum gap), then write the
-        // submit key separately so it lands as a clean Enter on a stable prompt.
-        await this.writeToPty(content);
-        await this.waitForForceSubmitSettle(content);
-        await this.writeToPty(this.sendKey);
+        // Settle, then submit atomically. The previous split-write fix
+        // (write text → settle → write a separate '\r') regressed win32:
+        // ConPTY does not treat a lone CR arriving in its own PTY chunk after a
+        // delay as a submit key, so the Enter was swallowed and the prompt sat
+        // typed-but-unsent. Instead, honor a fixed settle gap so the TUI input
+        // handler is in its input-accepting state, then write `content + sendKey`
+        // as ONE PTY write — the same atomic submit the normal `immediate`
+        // strategy uses. Keeping the Enter in the same write unit as the text is
+        // the invariant that makes win32 ConPTY recognize the submit, and it
+        // also makes the original inject↔submit race impossible (the Enter can
+        // never be separated from the text it submits). The settle still guards
+        // the original concern — that a force-dispatch injected into a freshly
+        // idle session lands before the TUI is ready to accept input.
+        await this.waitForForceSubmitSettle();
+        await this.writeToPty(content + this.sendKey);
         this.onStatusChange?.();
     }
 
-    private async waitForForceSubmitSettle(content: string): Promise<void> {
-        const startedAt = Date.now();
-        const normalizedPromptSnippet = normalizePromptText(extractPromptRetrySnippet(content));
-        // Always honor a minimum settle so the input handler has time to finish
-        // ingesting the pasted text before the submit key arrives.
+    private async waitForForceSubmitSettle(): Promise<void> {
+        // A fixed minimum gap so the input handler is ready to accept the paste.
+        // We deliberately do NOT echo-gate here: the submit key is written in the
+        // same atomic PTY write as the text (forceSendMessage), so there is no
+        // separate Enter that could race the echo, and on win32 the echo gate
+        // never reliably matched anyway.
         await new Promise<void>(resolve => setTimeout(resolve, FORCE_SUBMIT_SETTLE_MS));
-        if (!normalizedPromptSnippet) return;
-        // Beyond the minimum gap, keep waiting (up to the cap) until the prompt
-        // echo is visible on screen — that is the strongest signal the input line
-        // has stabilized and the Enter will be applied to the typed prompt.
-        while (Date.now() - startedAt < FORCE_SUBMIT_MAX_WAIT_MS) {
-            if (!this.ptyProcess) return;
-            const screenText = this.terminalScreen.getText();
-            if (promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
-            await new Promise<void>(resolve => setTimeout(resolve, FORCE_SUBMIT_POLL_MS));
-        }
     }
 
     private enqueuePendingOutboundMessage(text: string, reason: string): void {

@@ -269,37 +269,36 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     await expect(sendPromise).resolves.toBeUndefined()
 
     expect(adapter.pendingOutboundQueue).toHaveLength(0)
-    // Text and submit key now land as separate writes (split inject→submit),
-    // so the prompt is injected and the Enter follows after the settle delay.
-    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('send now')
-    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
+    // The text and the submit key now land as a single atomic PTY write after
+    // the settle delay, so win32 ConPTY always sees the Enter in the same write
+    // unit as the text (no detached lone-CR that ConPTY would swallow).
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('send now\r')
   })
 
-  it('force-sends the prompt and submit key as separate writes after a settle delay (no inject/submit race)', async () => {
+  it('force-sends the prompt and submit key as ONE atomic write after a settle delay (win32 lone-CR regression guard)', async () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'generating'
     adapter.isWaitingForResponse = true
-    // No prompt echo on screen, so the settle falls back to the fixed minimum gap.
     adapter.terminalScreen = { getText: () => '' }
 
     const writePromise = adapter.forceSendMessage('forced prompt')
 
-    // Before the settle delay elapses, only the text has been injected — the
-    // submit key must NOT have been written yet (this is the race the split fixes).
+    // Before the settle delay elapses, NOTHING is written — neither the text nor
+    // a separate Enter. The submit key must never be sent as its own detached PTY
+    // write (the win32 ConPTY lone-CR regression the previous split-write caused).
     await vi.advanceTimersByTimeAsync(50)
-    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('forced prompt')
-    expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('\r')
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalled()
 
-    // With no prompt echo ever appearing on screen, the submit still fires once
-    // the max echo wait elapses — the prompt is never left typed-but-unsent.
+    // After the settle gap, the text and Enter land together as a single write.
     await vi.advanceTimersByTimeAsync(1600)
     await expect(writePromise).resolves.toBeUndefined()
-    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
-    // The text and the Enter are never concatenated into a single PTY write.
-    expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('forced prompt\r')
+    expect(adapter.ptyProcess.write).toHaveBeenCalledTimes(1)
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('forced prompt\r')
+    // The submit key is never written on its own (no lone detached '\r').
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('\r')
   })
 
-  it('force-send submits as soon as the prompt echo becomes visible', async () => {
+  it('force-send never splits the submit key into a separate write even when the prompt echo is already visible', async () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'generating'
     adapter.isWaitingForResponse = true
@@ -309,9 +308,9 @@ describe('ProviderCliAdapter sendMessage guard', () => {
 
     await vi.advanceTimersByTimeAsync(300)
     await expect(writePromise).resolves.toBeUndefined()
-    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('echoed force prompt that is long enough to verify')
-    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
-    expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('echoed force prompt that is long enough to verify\r')
+    expect(adapter.ptyProcess.write).toHaveBeenCalledTimes(1)
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('echoed force prompt that is long enough to verify\r')
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('\r')
   })
 
   it('surfaces async PTY write failures instead of reporting sendMessage success', async () => {
