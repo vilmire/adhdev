@@ -54,6 +54,13 @@ import { formatMeshConnectionRtt, formatMeshConnectionTransport } from '../../ut
 /** Dense graph threshold: above this node count, switch to compact card mode */
 const COMPACT_NODE_THRESHOLD = 7
 
+/**
+ * Surface width (px) below which the graph is treated as mobile: vertical (TB)
+ * default layout + compact cards, so a wide LR pipeline doesn't fit-zoom into
+ * illegible overlap on narrow viewports. Tailwind `sm` breakpoint.
+ */
+const MOBILE_GRAPH_WIDTH = 640
+
 interface MeshGraphViewProps {
     data: MeshGraphData
     selectedNodeId?: string | null
@@ -1066,17 +1073,29 @@ export default function MeshGraphView({
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const dataFingerprint = useMemo(() => getMeshGraphDataFingerprint(data), [data])
     const layoutFingerprint = useMemo(() => getMeshGraphLayoutFingerprint(data), [data])
-    const compact = data.nodes.length >= COMPACT_NODE_THRESHOLD
+    const surfaceRef = useRef<HTMLDivElement | null>(null)
+    const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 })
+    // Narrow viewports (mobile) must fall back to a vertical, compact layout so the
+    // wide LR pipeline of 256px cards does not get fit-zoomed into illegible overlap.
+    // width === 0 means the surface has not measured yet — treat as desktop until known.
+    const isNarrowViewport = surfaceSize.width > 0 && surfaceSize.width < MOBILE_GRAPH_WIDTH
+    const compact = data.nodes.length >= COMPACT_NODE_THRESHOLD || isNarrowViewport
+    // Default ('LR') only reacts to viewport; an explicit prop/toggle is honored as-is.
     const [directionPrefInternal] = useState<DirectionPref>('LR')
     const directionPref: DirectionPref = directionPrefProp ?? directionPrefInternal
     const direction: MeshGraphDirection = useMemo(
-        () => (directionPref === 'auto' ? pickMeshGraphDirection(data) : directionPref),
-        [directionPref, dataFingerprint, data],
+        () => {
+            // Honor an explicit direction (user toggle / caller override) on every viewport.
+            if (directionPrefProp === 'LR' || directionPrefProp === 'TB') return directionPrefProp
+            // No explicit choice: vertical on narrow viewports so the wide LR pipeline
+            // doesn't fit-zoom into overlap; desktop keeps its existing behavior.
+            if (isNarrowViewport) return 'TB'
+            return directionPref === 'auto' ? pickMeshGraphDirection(data) : directionPref
+        },
+        [directionPref, directionPrefProp, dataFingerprint, data, isNarrowViewport],
     )
     const showMinimap = data.nodes.length >= MINIMAP_NODE_THRESHOLD
     const [layout, setLayout] = useState<{ nodes: FlowNode[]; edges: FlowEdge[] }>({ nodes: [], edges: [] })
-    const surfaceRef = useRef<HTMLDivElement | null>(null)
-    const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 })
     const viewportKey = useMemo(
         () => `${getMeshGraphViewportKey(data, surfaceSize.width, surfaceSize.height)}::${direction}`,
         [dataFingerprint, data, surfaceSize.height, surfaceSize.width, direction],
@@ -1154,7 +1173,7 @@ export default function MeshGraphView({
                     edges={layout.edges}
                     nodeTypes={nodeTypes}
                     edgeTypes={edgeTypes}
-                    minZoom={0.18}
+                    minZoom={isNarrowViewport ? 0.3 : 0.18}
                     maxZoom={1.35}
                     nodesDraggable={false}
                     nodesConnectable={false}
