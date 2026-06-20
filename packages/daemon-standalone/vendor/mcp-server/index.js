@@ -1055,8 +1055,11 @@ function isMeshOwnedDelegateSession(session, meshId, nodeId) {
   const settings = session?.settings;
   const sessionMeshId = typeof settings?.meshNodeFor === "string" ? settings.meshNodeFor.trim() : "";
   const sessionNodeId = typeof settings?.meshNodeId === "string" ? settings.meshNodeId.trim() : "";
-  if (sessionMeshId !== meshId) return false;
-  return !sessionNodeId || sessionNodeId === nodeId;
+  if (sessionMeshId) {
+    if (sessionMeshId !== meshId) return false;
+    return !sessionNodeId || sessionNodeId === nodeId;
+  }
+  return settings?.launchedByCoordinator === true || Boolean(readString(settings?.meshCoordinatorDaemonId));
 }
 function hasRemoteRelayMetadata(session) {
   return Boolean(
@@ -1217,6 +1220,7 @@ function compactMeshStatusNode(entry) {
       seeStaleDaemonBuilds: true
     };
   }
+  delete next.capabilityTagsByProvider;
   for (const k of Object.keys(next)) {
     if (k === "git" || k === "machine" || k === "branchConvergence" || k === "staleDaemonBuild" || k === "sessions") continue;
     next[k] = elideLargeNestedValue(k, next[k]);
@@ -1265,6 +1269,9 @@ function minimalCompactNode(entry) {
     branch: entry.branch,
     launchReady: entry.launchReady,
     ...entry.providerPriority !== void 0 ? { providerPriority: entry.providerPriority } : {},
+    // Keep the routable tag set on quiet/folded nodes — a coordinator planning
+    // required_tags routing needs it even for nodes with nothing to converge.
+    ...entry.capabilityTags !== void 0 ? { capabilityTags: entry.capabilityTags } : {},
     ...entry.launchBlockedReason !== void 0 ? { launchBlockedReason: entry.launchBlockedReason } : {},
     ...bc ? { branchConvergence: bc } : {},
     ...entry.sessionSummary ? { sessionSummary: entry.sessionSummary } : {},
@@ -1534,7 +1541,7 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
         error: `P2P dispatch failed: ${errorMessage}`
       };
     }
-    return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType, providerType: resolvedProviderType };
+    return { success: true, dispatched: true, sessionId: sessionId || "", providerType: resolvedProviderType };
   } catch (e) {
     const errorMessage = e?.message || String(e);
     return {
@@ -1882,6 +1889,21 @@ async function collectRelatedRepoStatuses(ctx, node) {
 function readProviderPriority(policy) {
   const raw = policy?.providerPriority;
   return Array.isArray(raw) ? raw.map((type) => typeof type === "string" ? type.trim() : "").filter(Boolean) : [];
+}
+function buildNodeCapabilityExposure(node) {
+  const providers = readProviderPriority(node.policy);
+  const capabilityTags = (0, import_daemon_core.buildMeshNodeCapabilityTags)(node);
+  const exposure = { capabilityTags };
+  if (providers.length) {
+    const byProvider = {};
+    for (const provider of providers) {
+      byProvider[provider] = (0, import_daemon_core.buildMeshNodeCapabilityTags)(node, provider);
+    }
+    exposure.capabilityTagsByProvider = byProvider;
+  }
+  const capabilities = Array.isArray(node.capabilities) ? node.capabilities.filter((tag) => typeof tag === "string" && !!tag.trim()) : [];
+  if (capabilities.length) exposure.capabilities = capabilities;
+  return exposure;
 }
 function readSpawnedSessionVisibility(policy) {
   return policy?.spawnedSessionVisibility === "hidden" ? "hidden" : "visible";
@@ -2637,6 +2659,32 @@ var MESH_SUGGEST_REFINE_CONFIG_TOOL = {
     }
   }
 };
+var MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL = {
+  name: "mesh_change_impact_config_schema",
+  description: "Return the Change Impact config JSON schema and supported repo-local config locations. Change Impact config declaratively classifies which package/file changes between the live daemon build and workspace HEAD require a daemon rebuild/restart vs. a web-only redeploy vs. nothing. Declarative only \u2014 config is parsed, never executed.",
+  inputSchema: { type: "object", properties: {} }
+};
+var MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL = {
+  name: "mesh_validate_change_impact_config",
+  description: "Validate a Change Impact config for a node/workspace and report valid/errors. Loads .adhdev/change-impact.{json,yaml,yml} (or repo-mesh-change-impact.* alias) from the repo unless an inline config is provided.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Optional node/workspace whose change-impact config should be loaded. Defaults to the first mesh node." },
+      config: { type: "object", description: "Optional inline config object to validate instead of loading from the repo." }
+    }
+  }
+};
+var MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL = {
+  name: "mesh_suggest_change_impact_config",
+  description: "Suggest a Change Impact config scaffold from the repo package layout (web-* \u2192 web-only, others \u2192 daemon-runtime, plus docs/license markers as non-runtime). Heuristic scaffold only \u2014 the draft must be reviewed and saved before it takes effect; nothing is executed.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Optional node/workspace used for suggestions. Defaults to the first mesh node." }
+    }
+  }
+};
 var MESH_INIT_TOOL = {
   name: "mesh_init",
   description: "One-click mesh onboarding for an existing git project. Detects installed CLI providers, suggests Refinery (.adhdev/refine.json) and worktree bootstrap (.adhdev/worktree_bootstrap.json) configs, optionally writes them to disk, and recommends a node providerPriority from the detected providers. Suggestions are scaffold only and never execute until saved; providerPriority is a recommendation to apply to node policy, not auto-applied. Defaults to dry-run (no files written) and never overwrites an existing config unless overwrite=true.",
@@ -2694,6 +2742,9 @@ var ALL_MESH_TOOLS = [
   MESH_REFINE_CONFIG_SCHEMA_TOOL,
   MESH_VALIDATE_REFINE_CONFIG_TOOL,
   MESH_SUGGEST_REFINE_CONFIG_TOOL,
+  MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL,
+  MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL,
+  MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL,
   MESH_INIT_TOOL,
   MESH_REFINE_PLAN_TOOL,
   MESH_CLEANUP_SESSIONS_TOOL,
@@ -2717,7 +2768,8 @@ async function meshStatus(ctx, args = {}) {
       machine: buildNodeMachineIdentity(ctx, node),
       daemonId: readNodeDaemonId(node),
       machineId: readNodeMachineId(node),
-      ...getNodeLaunchReadiness(node)
+      ...getNodeLaunchReadiness(node),
+      ...buildNodeCapabilityExposure(node)
     };
     try {
       const autoDiscover = node.policy?.autoDiscoverSubmodules !== false;
@@ -3183,39 +3235,17 @@ async function meshPruneStaleDirect(ctx, args = {}) {
   const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
   const ledgerEntries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
   const directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(ctx.mesh.id);
-  const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
+  const result = (0, import_daemon_core.pruneStaleDirectDispatches)({
     meshId: ctx.mesh.id,
     queue: (0, import_daemon_core.getQueue)(ctx.mesh.id),
     ledgerEntries,
     directDispatches,
     nodes: liveNodes,
-    includeTerminalDirect: includeTerminal
+    execute,
+    includeTerminal,
+    source: "mesh_prune_stale_direct"
   });
-  const candidates = [
-    ...activeWorkEvidence.staleDirectWork,
-    ...includeTerminal ? activeWorkEvidence.terminalDirectWork : []
-  ];
-  const storeTaskIds = new Set(directDispatches.map((d) => d.taskId));
-  const prunable = [];
-  const preservedUnacknowledged = [];
-  const preservedLedgerOnly = [];
-  const preservedNotOrphan = [];
-  for (const record of candidates) {
-    const classification = (0, import_daemon_core.classifyStaleDirectForPrune)(record, { includeTerminal });
-    if (classification === "preserve_unacknowledged") {
-      preservedUnacknowledged.push(record);
-      continue;
-    }
-    if (classification === "preserve_active") {
-      preservedNotOrphan.push(record);
-      continue;
-    }
-    if (!storeTaskIds.has(record.taskId)) {
-      preservedLedgerOnly.push(record);
-      continue;
-    }
-    prunable.push(record);
-  }
+  const { prunable, prunedCount, preservedUnacknowledged, preservedLedgerOnly, preservedNotOrphan } = result;
   const summarize = (records) => records.map((r) => ({
     taskId: r.taskId,
     nodeId: r.nodeId,
@@ -3226,25 +3256,12 @@ async function meshPruneStaleDirect(ctx, args = {}) {
     taskTitle: r.taskTitle,
     createdAt: r.createdAt
   }));
-  let prunedCount = 0;
-  if (execute && prunable.length) {
-    prunedCount = (0, import_daemon_core.deleteDirectDispatchesByTaskId)(ctx.mesh.id, prunable.map((r) => r.taskId));
-    (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
-      kind: "direct_dispatch_pruned",
-      payload: {
-        source: "mesh_prune_stale_direct",
-        prunedCount,
-        taskIds: prunable.map((r) => r.taskId),
-        reasons: Array.from(new Set(prunable.map((r) => r.staleReason || (r.terminal ? "terminal" : "unknown"))))
-      }
-    });
-  }
   return JSON.stringify({
     success: true,
-    mode: execute ? "execute" : "dry_run",
+    mode: result.mode,
     meshId: ctx.mesh.id,
     includeTerminal,
-    candidateCount: candidates.length,
+    candidateCount: result.candidateCount,
     prunableCount: prunable.length,
     prunedCount,
     prunable: summarize(prunable),
@@ -3276,6 +3293,7 @@ async function meshListNodes(ctx) {
       policy: n.policy,
       relatedRepos: readRelatedRepos(n),
       ...getNodeLaunchReadiness(n),
+      ...buildNodeCapabilityExposure(n),
       userOverrides: n.userOverrides
     }))
   }, null, 2);
@@ -3701,7 +3719,8 @@ async function meshSendTask(ctx, args) {
         }
       });
       if (result2.success) {
-        const dispatchedSessionId = args.session_id || result2.sessionId;
+        const resultSessionId = result2.sessionId && result2.providerType && result2.sessionId === result2.providerType ? "" : result2.sessionId;
+        const dispatchedSessionId = args.session_id || resultSessionId;
         const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
         try {
           const providerType = result2.providerType || cached?.providerType;
@@ -3740,10 +3759,11 @@ async function meshSendTask(ctx, args) {
         } catch {
         }
       }
+      const returnedSessionId = result2.sessionId && result2.providerType && result2.sessionId === result2.providerType ? "" : result2.sessionId;
       return JSON.stringify({
         ...result2,
         nodeId: args.node_id,
-        sessionId: result2.success ? args.session_id || result2.sessionId : args.session_id,
+        sessionId: result2.success ? args.session_id || returnedSessionId : args.session_id,
         ...result2.success ? { source: "direct", taskId } : {},
         taskMode,
         ...result2.success && result2.providerType ? { providerType: result2.providerType } : {},
@@ -4364,6 +4384,26 @@ async function meshSuggestRefineConfig(ctx, args) {
   const result = await commandForNode(ctx, node, "suggest_mesh_refine_config", {
     workspace: node.workspace,
     inlineMesh: ctx.mesh
+  });
+  return JSON.stringify(result, null, 2);
+}
+async function meshChangeImpactConfigSchema(ctx) {
+  const node = resolveRefineConfigNode(ctx);
+  const result = await commandForNode(ctx, node, "get_mesh_change_impact_config_schema", {});
+  return JSON.stringify(result, null, 2);
+}
+async function meshValidateChangeImpactConfig(ctx, args) {
+  const node = resolveRefineConfigNode(ctx, args.node_id);
+  const result = await commandForNode(ctx, node, "validate_mesh_change_impact_config", {
+    workspace: node.workspace,
+    ...args.config ? { config: args.config } : {}
+  });
+  return JSON.stringify(result, null, 2);
+}
+async function meshSuggestChangeImpactConfig(ctx, args) {
+  const node = resolveRefineConfigNode(ctx, args.node_id);
+  const result = await commandForNode(ctx, node, "suggest_mesh_change_impact_config", {
+    workspace: node.workspace
   });
   return JSON.stringify(result, null, 2);
 }
@@ -5631,6 +5671,15 @@ async function startMcpServer(opts) {
             break;
           case "mesh_suggest_refine_config":
             text = await meshSuggestRefineConfig(meshCtx, a);
+            break;
+          case "mesh_change_impact_config_schema":
+            text = await meshChangeImpactConfigSchema(meshCtx);
+            break;
+          case "mesh_validate_change_impact_config":
+            text = await meshValidateChangeImpactConfig(meshCtx, a);
+            break;
+          case "mesh_suggest_change_impact_config":
+            text = await meshSuggestChangeImpactConfig(meshCtx, a);
             break;
           case "mesh_init":
             text = await meshInit(meshCtx, a);
