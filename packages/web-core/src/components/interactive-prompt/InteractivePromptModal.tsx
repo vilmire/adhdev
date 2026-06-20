@@ -67,7 +67,7 @@ function OptionButton({
         </span>
         <span className="min-w-0">
           <span className="block text-sm font-semibold leading-5">{label}</span>
-          {description && <span className="mt-0.5 block text-xs leading-5 text-text-muted">{description}</span>}
+          {description && <span className="mt-0.5 line-clamp-3 block text-xs leading-5 text-text-muted">{description}</span>}
         </span>
       </span>
     </button>
@@ -150,10 +150,10 @@ export default function InteractivePromptModal({
   const answerPreview = buildInteractivePromptResponse(promptSession.prompt, selection)
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 px-4 py-6">
-      <div className="w-full max-w-2xl overflow-hidden rounded-lg border border-border-primary bg-surface-primary shadow-2xl">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 px-4 pt-[calc(24px+env(safe-area-inset-top,0px))] pb-[calc(24px+env(safe-area-inset-bottom,0px))]">
+      <div className="flex max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border-primary bg-surface-primary shadow-2xl">
         {/* Header */}
-        <div className="flex items-start justify-between gap-4 border-b border-border-primary px-5 py-4">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border-primary px-5 py-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-normal text-status-warning">
               <IconWarning size={15} /> Action Required
@@ -181,7 +181,7 @@ export default function InteractivePromptModal({
 
         {/* Step indicator dots for multi-question */}
         {!isSingleQuestion && (
-          <div className="flex gap-1.5 px-5 pt-3">
+          <div className="flex shrink-0 gap-1.5 px-5 pt-3">
             {questions.map((q, i) => (
               <div
                 key={q.questionId}
@@ -197,8 +197,8 @@ export default function InteractivePromptModal({
           </div>
         )}
 
-        {/* Question body */}
-        <div className="space-y-4 px-5 py-4">
+        {/* Question body — scrolls independently so the header and footer stay pinned. */}
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
           {currentQuestion && (
             <section className="space-y-3">
               <div>
@@ -255,7 +255,7 @@ export default function InteractivePromptModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-2 border-t border-border-primary px-5 py-4">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border-primary px-5 pt-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
           <div>
             {!isSingleQuestion && currentStep > 0 && (
               <button type="button" className="btn btn-ghost btn-sm" onClick={handleBack} disabled={isSubmitting}>
