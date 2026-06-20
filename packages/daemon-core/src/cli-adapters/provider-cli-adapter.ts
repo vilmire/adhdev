@@ -1285,6 +1285,18 @@ export class ProviderCliAdapter implements CliAdapter {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
         const content = String(text || '');
         if (!content.trim()) return;
+        // Modal-park guard (defense-in-depth — the primary guard is at the
+        // cli-provider-instance force-forward chokepoint). A force-write writes raw
+        // keystrokes into the PTY, bypassing the busy send-guard. If the session is
+        // parked on a tool-consent modal, the modal's key handler eats those bytes
+        // and silently resolves an approval the user never made. Hold the write and
+        // let the mesh reconcile loop redeliver once the modal is resolved. We only
+        // hold for an actionable approval modal; plain generating is still force-written
+        // (that is the deadlock the force path exists to break).
+        if (this.engine.currentStatus === 'waiting_approval' || this.engine.hasActionableApproval()) {
+            LOG.info('CLI', `[${this.cliType}] force-send held — session parked on approval modal (status=${this.engine.currentStatus})`);
+            return;
+        }
         LOG.info('CLI', `[${this.cliType}] force-sending prompt while status=${this.engine.currentStatus}`);
         await this.writeToPty(content + this.sendKey);
         this.onStatusChange?.();

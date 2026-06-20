@@ -905,6 +905,37 @@ export class CliProviderInstance implements ProviderInstance {
         this.adapter.updateRuntimeSettings?.(this.settings);
     }
 
+    /**
+     * The resolved modal-park status of this session, or null when it is not
+     * parked on a modal awaiting a human answer. Mirrors the overlay logic in
+     * getState(): an active AskUserQuestion interactive prompt resolves to
+     * waiting_choice; otherwise the adapter's waiting_approval (tool consent)
+     * counts — UNLESS auto-approve will dismiss it, in which case the session is
+     * effectively generating and is NOT modal-parked. This is the single signal
+     * the mesh force-inject guard consults, and the same status string the
+     * reconcile loop reads off get_status_metadata. Lowercase literals only —
+     * the SessionStatus enum is forked across modules and waiting_choice is
+     * absent from some of them.
+     */
+    resolveModalParkStatus(): 'waiting_choice' | 'waiting_approval' | null {
+        if (this.activeInteractivePrompt) return 'waiting_choice';
+        let adapterStatus: { status?: string };
+        try {
+            adapterStatus = this.adapter.getStatus({ allowParse: false });
+        } catch {
+            return null;
+        }
+        if (adapterStatus.status === 'waiting_approval' && !this.shouldAutoApprove()) {
+            return 'waiting_approval';
+        }
+        return null;
+    }
+
+    /** True when this session is parked on a modal awaiting a human answer. */
+    isModalParked(): boolean {
+        return this.resolveModalParkStatus() !== null;
+    }
+
     onEvent(event: string, data?: any): void {
         if (event === 'send_message') {
             const input = normalizeInputEnvelope(data);
@@ -917,6 +948,20 @@ export class CliProviderInstance implements ProviderInstance {
                 // Without it the message is queued and only flushed on the coordinator's
                 // own idle transition — which never happens until it receives the message.
                 const force = data?.force === true;
+                // Modal guard: a force-inject still writes raw keystrokes into the PTY,
+                // bypassing the busy send-guard. If the coordinator is parked on a
+                // harness modal (claude-cli AskUserQuestion → waiting_choice, or a
+                // tool-consent waiting_approval), those keystrokes are consumed by the
+                // modal's key handler and silently select a choice the user never made
+                // (data corruption). Hold the force-inject in that narrow window —
+                // the event stays queued and the reconcile loop redelivers it on the
+                // next tick once the modal is resolved. We ONLY hold for the two modal
+                // states; generating is still force-injected (that is the deadlock the
+                // force path exists to break — see mesh-events-coordinator).
+                if (force && this.isModalParked()) {
+                    LOG.info('CLI', `[${this.type}] force send_message held — coordinator parked on modal (${this.resolveModalParkStatus()})`);
+                    return;
+                }
                 void this.adapter.sendMessage(promptText, force ? { force: true } : {}).catch((e: any) => {
                     LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);
                 });

@@ -98,6 +98,13 @@ interface LiveCoordinator {
     meshId: string;
     instance: ReturnType<DaemonComponents['instanceManager']['getInstance']>;
     idle: boolean;
+    // True when the coordinator session is parked on a harness modal awaiting a
+    // human answer — claude-cli AskUserQuestion (waiting_choice) or a tool-consent
+    // prompt (waiting_approval). A force-inject into such a session would write raw
+    // keystrokes the modal key handler consumes, silently selecting a choice the
+    // user never made (data corruption). PHASE 2 excludes these from force-inject
+    // and leaves the event queued for a later (modal-resolved) tick.
+    modalParked: boolean;
 }
 
 // The set of coordinator-daemon ids THIS daemon answers to when draining the
@@ -193,7 +200,12 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
         const meshId = readNonEmptyString(settings.meshCoordinatorFor);
         if (!meshId) continue;
         const status = readNonEmptyString(state.status).toLowerCase();
-        out.push({ meshId, instance: inst, idle: status === 'idle' });
+        // getState() overlays the modal-park statuses: an active AskUserQuestion
+        // prompt surfaces as waiting_choice, a tool-consent prompt as waiting_approval.
+        // Lowercase literal compare — the SessionStatus enum is forked across modules
+        // and waiting_choice is absent from some of them (see cli-provider-instance).
+        const modalParked = status === 'waiting_choice' || status === 'waiting_approval';
+        out.push({ meshId, instance: inst, idle: status === 'idle', modalParked });
     }
     return out;
 }
@@ -390,9 +402,33 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         //       tick — injecting them would be noise mid-generation. Both drains mark the
         //       consumed rows drained=1 atomically, so the pull path can't re-deliver.
         const idleCoordinators = meshCoordinators.filter(c => c.idle);
-        const generatingCoordinators = meshCoordinators.filter(c => !c.idle);
+        // A coordinator parked on a harness modal (waiting_choice / waiting_approval)
+        // is non-idle, so it would otherwise be treated as a force-inject target. It
+        // must NOT be: a force-inject writes raw keystrokes into the PTY, which the
+        // modal's key handler consumes and silently resolves to a choice the user
+        // never made. Force-inject is only safe into a coordinator parked in plain
+        // `generating` (the deadlock the force path exists to break). So generating
+        // targets are the non-idle, non-modal-parked coordinators.
+        const generatingCoordinators = meshCoordinators.filter(c => !c.idle && !c.modalParked);
+        const modalParkedCoordinators = meshCoordinators.filter(c => !c.idle && c.modalParked);
         const targetCoordinators = idleCoordinators.length > 0 ? idleCoordinators : generatingCoordinators;
         const forceOnly = idleCoordinators.length === 0;
+
+        // ── modal-blocked short-circuit (MUST precede the drain) ──────────────────
+        // When the ONLY coordinators for this mesh are modal-parked (no idle, no plain
+        // generating target), there is nowhere safe to deliver. We skip-and-requeue:
+        // by NOT draining we leave the events at drained=0 in the queue, so a later tick
+        // (once the modal is resolved and the coordinator returns to idle/generating)
+        // delivers them. This short-circuit MUST run BEFORE drainPendingMeshCoordinatorEvents
+        // — the drain marks rows drained=1 atomically, which would lose the events for a
+        // coordinator that is only transiently blocked. (Note: generating is still
+        // force-injected via generatingCoordinators — we never block the deadlock-break.)
+        if (targetCoordinators.length === 0) {
+            if (modalParkedCoordinators.length > 0) {
+                LOG.info('MeshReconcile', `Reconcile skip → modal-parked: holding pending event(s) for mesh ${meshId} (${modalParkedCoordinators.length} coordinator(s) awaiting a modal answer; events left queued)`);
+            }
+            continue;
+        }
 
         // O(1) guard: skip the drain entirely when the queue is empty.
         if (store) {

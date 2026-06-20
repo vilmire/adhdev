@@ -74,7 +74,10 @@ function makeIdleWorkerComponents(meshId: string, nodeId: string, sessionId: str
 }
 
 // A live CLI coordinator instance on THIS daemon for `meshId`, with the given status.
-function makeCoordinator(meshId: string, status: 'idle' | 'generating', sink: any[]) {
+// `waiting_choice`/`waiting_approval` model a coordinator parked on a harness modal
+// (claude-cli AskUserQuestion / tool-consent) awaiting a human answer — getState()
+// overlays exactly those status strings.
+function makeCoordinator(meshId: string, status: 'idle' | 'generating' | 'waiting_choice' | 'waiting_approval', sink: any[]) {
   return {
     category: 'cli',
     getState: () => ({ instanceId: `coord-${status}`, status, settings: { meshCoordinatorFor: meshId } }),
@@ -264,6 +267,86 @@ describe('runMeshReconcileTick', () => {
       // Simulate the coordinator's own pull (MCP drain) racing afterwards — the
       // force-drained completion was atomically consumed, so it must not reappear.
       expect(drainPendingMeshCoordinatorEvents(meshId, 'test-machine')).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // ── modal-park guard ([I]): a coordinator parked on a harness modal (AskUserQuestion
+  // → waiting_choice, or tool-consent → waiting_approval) must NOT be force-injected.
+  // A force-inject writes raw keystrokes into the PTY, which the modal key handler eats
+  // and silently resolves a choice the user never made (data corruption). The event is
+  // held — left queued (drained=0) — for a later tick once the modal is resolved.
+  for (const modalStatus of ['waiting_choice', 'waiting_approval'] as const) {
+    it(`does NOT force-inject into a ${modalStatus} coordinator — event stays queued (no drain)`, async () => {
+      const meshId = `mesh_reconcile_modal_${modalStatus}_${Date.now()}`
+      try {
+        const sink: any[] = []
+        const coordinator = makeCoordinator(meshId, modalStatus, sink)
+        const components = makeComponents([coordinator])
+        queueCompletion(meshId, 'modal')
+
+        await runMeshReconcileTick(components)
+
+        // No keystrokes injected while the user is mid-modal.
+        expect(coordinator.onEvent).not.toHaveBeenCalled()
+        // The completion is preserved (drained=0) for redelivery once the modal clears —
+        // a subsequent drain still returns it intact.
+        expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+        expect(drainPendingMeshCoordinatorEvents(meshId, 'test-machine')).toHaveLength(1)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+  }
+
+  it('modal-parked coordinator clears → the held event is delivered on the next tick', async () => {
+    const meshId = `mesh_reconcile_modal_then_clear_${Date.now()}`
+    try {
+      const sink: any[] = []
+      // First tick: the (only) coordinator is parked on a modal → event is held.
+      let status: 'waiting_choice' | 'generating' = 'waiting_choice'
+      const coordinator = {
+        category: 'cli',
+        getState: () => ({ instanceId: 'coord-modal', status, settings: { meshCoordinatorFor: meshId } }),
+        onEvent: vi.fn((_event: string, payload: any) => sink.push(payload)),
+      }
+      const components = makeComponents([coordinator])
+      queueCompletion(meshId, 'held')
+
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+
+      // The user answers the modal; the coordinator returns to generating. The next tick
+      // force-injects the still-queued completion (the deadlock the force path exists for).
+      status = 'generating'
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('idle coordinator alongside a modal-parked one: idle gets the event, modal-parked is skipped', async () => {
+    const meshId = `mesh_reconcile_modal_plus_idle_${Date.now()}`
+    try {
+      const idleSink: any[] = []
+      const modalSink: any[] = []
+      const idleCoordinator = makeCoordinator(meshId, 'idle', idleSink)
+      const modalCoordinator = makeCoordinator(meshId, 'waiting_choice', modalSink)
+      const components = makeComponents([idleCoordinator, modalCoordinator])
+      queueCompletion(meshId, 'mixed-modal')
+
+      await runMeshReconcileTick(components)
+
+      // The idle coordinator receives the completion; the modal-parked one is never written to.
+      expect(idleCoordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(modalCoordinator.onEvent).not.toHaveBeenCalled()
+      // Consumed via the idle path (atomic drain) — nothing left queued.
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
     } finally {
       cleanup(meshId)
     }
