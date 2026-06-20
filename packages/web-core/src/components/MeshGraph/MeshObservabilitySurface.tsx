@@ -124,9 +124,9 @@ const EMPTY_LEDGER_SUMMARY: RepoMeshLedgerSummaryStatus = {
 
 const MeshGraphThemeContext = createContext(getMeshGraphTheme('dark'))
 
-function Badge({ label, tone = 'default' }: { label: string; tone?: 'default' | 'good' | 'warn' | 'danger' | 'info' }) {
+function Badge({ label, tone = 'default', className, title }: { label: string; tone?: 'default' | 'good' | 'warn' | 'danger' | 'info'; className?: string; title?: string }) {
     const meshTheme = useContext(MeshGraphThemeContext)
-    return <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] ${meshTheme.badge(tone)}`}>{label}</span>
+    return <span title={title} className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] ${meshTheme.badge(tone)}${className ? ` ${className}` : ''}`}>{label}</span>
 }
 
 function Row({ label, value }: { label: string; value: ReactNode }) {
@@ -1009,41 +1009,41 @@ export default function MeshObservabilitySurface({
                     column pushes the canvas down instead of floating over it (and
                     intercepting the top band of graph touches on mobile). */}
                 <div className={`relative z-30 max-h-[42dvh] overflow-y-auto sm:max-h-none sm:mb-3 sm:overflow-visible shrink-0 flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2.5 border-b ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                    <div className={`flex min-w-0 flex-1 flex-wrap gap-2 text-xs ${meshTheme.textSecondary}`}>
-                        <Badge label={headlineLabel} tone={headlineTone} />
+                    <div className={`flex min-w-0 flex-1 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible gap-2 text-xs ${meshTheme.textSecondary}`}>
+                        <Badge label={headlineLabel} tone={headlineTone} className="shrink-0" />
                         {canonicalGraph.stats.blockedReviewNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.blockedReviewNodes} blocked review`} tone="danger" />
+                            <Badge label={`${canonicalGraph.stats.blockedReviewNodes} blocked`} title={`${canonicalGraph.stats.blockedReviewNodes} blocked review`} tone="danger" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.notMergeableNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.notMergeableNodes} not mergeable`} tone="danger" />
+                            <Badge label={`${canonicalGraph.stats.notMergeableNodes} not mergeable`} tone="danger" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.mergeReadyNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.mergeReadyNodes} need merge`} tone="warn" />
+                            <Badge label={`${canonicalGraph.stats.mergeReadyNodes} need merge`} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.cleanupCandidateNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.cleanupCandidateNodes} refine/cleanup`} tone="info" />
+                            <Badge label={`${canonicalGraph.stats.cleanupCandidateNodes} cleanup`} title={`${canonicalGraph.stats.cleanupCandidateNodes} refine/cleanup`} tone="info" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.offlineNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.offlineNodes} offline`} tone="danger" />
+                            <Badge label={`${canonicalGraph.stats.offlineNodes} offline`} tone="danger" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.incompleteSnapshotNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.incompleteSnapshotNodes} incomplete peer snapshot`} tone="warn" />
+                            <Badge label={`${canonicalGraph.stats.incompleteSnapshotNodes} incomplete`} title={`${canonicalGraph.stats.incompleteSnapshotNodes} incomplete peer snapshot`} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.missingGitSnapshotNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.missingGitSnapshotNodes} no git snapshot`} tone="warn" />
+                            <Badge label={`${canonicalGraph.stats.missingGitSnapshotNodes} no-git`} title={`${canonicalGraph.stats.missingGitSnapshotNodes} no git snapshot`} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.missingSubmoduleSnapshotNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.missingSubmoduleSnapshotNodes} missing submodule visibility`} tone="warn" />
+                            <Badge label={`${canonicalGraph.stats.missingSubmoduleSnapshotNodes} no-submod`} title={`${canonicalGraph.stats.missingSubmoduleSnapshotNodes} missing submodule visibility`} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.staleGitSnapshotNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.staleGitSnapshotNodes} stale peer snapshot`} tone="warn" />
+                            <Badge label={`${canonicalGraph.stats.staleGitSnapshotNodes} stale`} title={`${canonicalGraph.stats.staleGitSnapshotNodes} stale peer snapshot`} tone="warn" className="shrink-0" />
                         )}
                         {(queueSummary?.active ?? 0) > 0 && (
-                            <Badge label={`${queueSummary?.active ?? 0} active queue`} tone="info" />
+                            <Badge label={`${queueSummary?.active ?? 0} active queue`} tone="info" className="shrink-0 hidden sm:inline-flex" />
                         )}
-                        <Badge label={`${canonicalGraph.stats.totalNodes} nodes`} tone="default" />
+                        <Badge label={`${canonicalGraph.stats.totalNodes} nodes`} tone="default" className="shrink-0 hidden sm:inline-flex" />
                         {canonicalGraph.stats.totalActiveSessions > 0 && (
-                            <Badge label={`${canonicalGraph.stats.totalActiveSessions} attached chats`} tone="info" />
+                            <Badge label={`${canonicalGraph.stats.totalActiveSessions} attached chats`} tone="info" className="shrink-0 hidden sm:inline-flex" />
                         )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
