@@ -292,6 +292,20 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                     <span className={meshTheme.dialogKickerClass}>
                                         Mesh observability
                                     </span>
+                                    {/* Mobile-only disclosure toggle for the secondary
+                                        metadata (repo path + status chips). Sits right
+                                        beside the observability badge; hidden on desktop
+                                        where the header has room to show everything. */}
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowHeaderMeta(prev => !prev)}
+                                        aria-expanded={showHeaderMeta}
+                                        aria-label={showHeaderMeta ? 'Hide mesh details' : 'Show mesh details'}
+                                        className="btn btn-secondary btn-sm rounded-lg px-1.5 py-1 md:hidden"
+                                        title={showHeaderMeta ? 'Hide mesh details' : 'Show mesh details'}
+                                    >
+                                        <IconInfo size={14} />
+                                    </button>
                                 </div>
                                 {/* Repo path is secondary detail — collapsed on mobile
                                     unless the user expands the metadata disclosure;
@@ -332,19 +346,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                 {sendData && !error ? 'Live daemon metadata' : 'Metadata subscription unavailable'}
                             </span>
                         )}
-                        {/* Mobile-only disclosure toggle for the secondary metadata
-                            (repo path + status chips). Hidden on desktop where the
-                            header has room to show everything. */}
-                        <button
-                            type="button"
-                            onClick={() => setShowHeaderMeta(prev => !prev)}
-                            aria-expanded={showHeaderMeta}
-                            aria-label={showHeaderMeta ? 'Hide mesh details' : 'Show mesh details'}
-                            className="btn btn-secondary btn-sm rounded-xl px-2.5 md:hidden"
-                            title={showHeaderMeta ? 'Hide mesh details' : 'Show mesh details'}
-                        >
-                            <IconInfo size={16} />
-                        </button>
                         <button
                             type="button"
                             onClick={() => {
