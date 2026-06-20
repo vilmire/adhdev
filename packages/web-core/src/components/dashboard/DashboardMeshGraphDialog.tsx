@@ -304,7 +304,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                         />
                         {lastLoadedLabel && (
                             <span className={meshTheme.dialogRefreshedChipClass}>
-                                {refreshing ? 'Refreshing mesh...' : `Refreshed ${lastLoadedLabel}`}
+                                {`Refreshed ${lastLoadedLabel}`}
                             </span>
                         )}
                         {!refreshing && meshStatus && (
