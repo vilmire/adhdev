@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'fs';
 import { dirname, join } from 'path';
-import { createRequire } from 'module';
+import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getLedgerDir } from './mesh-ledger.js';
 import { nodeSatisfiesRequiredTags } from './mesh-work-queue.js';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -11,10 +11,7 @@ let DatabaseCtor: typeof BetterSqlite3 | undefined;
 
 function loadDatabaseCtor(): typeof BetterSqlite3 {
     if (DatabaseCtor) return DatabaseCtor;
-    const runtimeRequire = typeof require === 'function'
-        ? require
-        : createRequire(import.meta.url);
-    DatabaseCtor = runtimeRequire('better-sqlite3') as typeof BetterSqlite3;
+    DatabaseCtor = loadBetterSqlite3() as typeof BetterSqlite3;
     return DatabaseCtor;
 }
 

@@ -19,6 +19,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
 
 export interface NativeHistoryMessage {
     id: string;
@@ -61,8 +62,7 @@ function statMtimeMs(p: string): number {
 function openDb(): any | null {
     if (!fs.existsSync(HERMES_STATE_DB)) return null;
     try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const Database = require('better-sqlite3');
+        const Database = loadBetterSqlite3();
         return new Database(HERMES_STATE_DB, { readonly: true, fileMustExist: true });
     } catch {
         return null;

@@ -22,6 +22,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { LOG } from '../../logging/logger.js';
+import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
 import type {
     NativeHistoryConfig,
     NativeHistoryJsonlSource,
@@ -253,8 +254,7 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
 
     let Database: any;
     try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        Database = require('better-sqlite3');
+        Database = loadBetterSqlite3();
     } catch { return null; }
 
     let db: any;
