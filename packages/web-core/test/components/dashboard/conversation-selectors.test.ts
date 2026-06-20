@@ -4,6 +4,7 @@ import {
     getConversationControlsContext,
     getConversationDaemonRouteId,
     getConversationIdeChipLabel,
+    getConversationLastMessagePreview,
     getConversationMachineLabel,
     getConversationMetaParts,
     getConversationNativeTargetSessionId,
@@ -105,6 +106,31 @@ describe('conversation selectors', () => {
             providerType: 'codex-cli',
             displayLabel: 'Codex CLI',
         })
+    })
+
+    it('prefers the daemon summary for mesh worker sessions whose transcript ends with the user task', () => {
+        const conversation = createConversation({
+            messages: [
+                { role: 'user', content: 'Run the converge task' },
+            ],
+            lastMessagePreview: 'Converge complete — all checks pass',
+            lastMessageRole: 'assistant',
+        })
+
+        expect(getConversationLastMessagePreview(conversation)).toBe('Converge complete — all checks pass')
+    })
+
+    it('keeps preferring local messages for normal chats ending with an assistant reply', () => {
+        const conversation = createConversation({
+            messages: [
+                { role: 'user', content: 'Run the converge task' },
+                { role: 'assistant', content: 'On it — running now' },
+            ],
+            lastMessagePreview: 'Stale daemon summary',
+            lastMessageRole: 'assistant',
+        })
+
+        expect(getConversationLastMessagePreview(conversation)).toBe('On it — running now')
     })
 
     it('resolves controls context against the matching child session', () => {

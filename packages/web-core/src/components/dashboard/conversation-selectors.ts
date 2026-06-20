@@ -60,6 +60,18 @@ export function getConversationLastMessagePreview(conversation: ActiveConversati
     const messagePreview = normalizeTextContent(lastMessage?.content)
     const summaryPreview = normalizeTextContent(conversation.lastMessagePreview)
 
+    // Mesh worker sessions: the coordinator-side transcript ends with the user task,
+    // but the daemon derives the worker's latest assistant reply into lastMessagePreview
+    // (with lastMessageRole === 'assistant'). Prefer the daemon summary in that case so the
+    // inbox shows the assistant response instead of getting stuck on the user message.
+    if (
+        summaryPreview &&
+        conversation.lastMessageRole === 'assistant' &&
+        lastMessage?.role === 'user'
+    ) {
+        return summaryPreview
+    }
+
     // Inbox/card/notification previews must describe the same transcript that
     // ChatPane can render. Compact summaries are metadata-only and may be newer
     // than the local transcript, but showing them while the opened chat still
