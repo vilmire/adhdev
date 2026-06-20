@@ -1008,6 +1008,19 @@ export function readCachedInlineMeshActiveSessionDetails(node: any): Array<Recor
         startedAt: readStringValue(fallbackSession.startedAt, fallbackSession.started_at) ?? null,
         lastActivityAt: readStringValue(fallbackSession.lastActivityAt, fallbackSession.last_activity_at) ?? null,
         recoveryState: readStringValue(fallbackSession.recoveryState, fallbackSession.recovery_state) ?? null,
+        // [T2] Carry the worker-computed last-message preview through the cached inline-mesh
+        // active-session entry. The worker's get_status_metadata slim now ships these
+        // (mesh-tools.ts), and this is the surface the coordinator's inbox-preview path reads
+        // (buildDaemonMetadataUpdateForSubscription → stampLocalAssistantPreviewOnCachedEntry).
+        // Without carrying them here, the coordinator could only derive the preview from a live
+        // in-process instance it doesn't host for a remote worker, so the inbox stuck on the
+        // dispatched user task. Only present when the worker reported them.
+        ...(readStringValue(fallbackSession.lastMessagePreview, fallbackSession.last_message_preview)
+            ? { lastMessagePreview: readStringValue(fallbackSession.lastMessagePreview, fallbackSession.last_message_preview) } : {}),
+        ...(readStringValue(fallbackSession.lastMessageRole, fallbackSession.last_message_role)
+            ? { lastMessageRole: readStringValue(fallbackSession.lastMessageRole, fallbackSession.last_message_role) } : {}),
+        ...(readNumberValue(fallbackSession.lastMessageAt, fallbackSession.last_message_at) !== undefined
+            ? { lastMessageAt: readNumberValue(fallbackSession.lastMessageAt, fallbackSession.last_message_at) } : {}),
         isCached: true,
     }];
 }
@@ -3384,6 +3397,23 @@ const CHAT_COMMANDS = [
     'send_chat', 'new_chat', 'switch_chat', 'set_mode',
     'change_model',
 ];
+
+// [Z] Session-scoped commands that must be forwarded to the owning REMOTE worker daemon
+// when their target session is not hosted on this coordinator. These are the interactive
+// controlbar / modal mutations the dashboard issues against a specific session:
+//   - invoke_provider_script: controlbar Model/Mode selectors run a provider script
+//   - resolve_action:         approve/reject a modal prompt
+//   - set_mode / change_model / set_thought_level: direct control mutations
+// send_chat is intentionally NOT here — it already reaches the worker by its own route and
+// double-forwarding would be redundant. read_chat is also excluded: it can serve historical
+// transcript data locally and has its own inactive-session fallback in the CommandHandler.
+const MESH_FORWARDABLE_SESSION_COMMANDS = new Set([
+    'invoke_provider_script',
+    'resolve_action',
+    'set_mode',
+    'change_model',
+    'set_thought_level',
+]);
 const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
 
 function normalizeCommandSource(source: string): CommandLogEntry['source'] {
@@ -3780,6 +3810,41 @@ export class DaemonCommandRouter {
             }
         }
         return nodes;
+    }
+
+    /**
+     * Resolve the REMOTE worker daemonId that owns a given session, when the session
+     * belongs to a mesh node hosted on a DIFFERENT daemon than this coordinator.
+     *
+     * The coordinator does not host remote-worker session instances in its own
+     * instanceManager/sessionRegistry — only their cached mesh-node metadata. A
+     * dashboard-issued session-scoped command (invoke_provider_script / resolve_action /
+     * set_mode / …) lands on the coordinator with a targetSessionId the coordinator can't
+     * find locally, and without forwarding it dies as "Live session not found". send_chat
+     * happens to survive (its target resolves to the worker by another route), but the
+     * controlbar commands do not — so the controlbar buttons appear to do nothing.
+     *
+     * Mirror the existing node-level remote-forward pattern (fast_forward_mesh_node etc.):
+     * scan the cached inline-mesh nodes for the one whose active session matches the
+     * targetSessionId, and return its daemonId when that daemonId is a remote daemon (i.e.
+     * not this coordinator's own statusInstanceId). Returns undefined for a locally-hosted
+     * session (no forward — execute locally as before) or when ownership can't be resolved.
+     */
+    public resolveRemoteMeshSessionOwnerDaemonId(sessionId: string): string | undefined {
+        const trimmed = typeof sessionId === 'string' ? sessionId.trim() : '';
+        if (!trimmed) return undefined;
+        const selfDaemonId = this.deps.statusInstanceId;
+        for (const node of this.getCachedInlineMeshNodes()) {
+            const nodeSessions = readCachedInlineMeshActiveSessions(node);
+            if (!nodeSessions.includes(trimmed)) continue;
+            const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
+            if (!nodeDaemonId) return undefined;
+            // Only forward to a genuinely remote daemon. When the owning node is this
+            // coordinator itself (locally hosted worker), fall through to local handling.
+            if (selfDaemonId && nodeDaemonId === selfDaemonId) return undefined;
+            return nodeDaemonId;
+        }
+        return undefined;
     }
 
     public getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
@@ -6115,6 +6180,38 @@ export class DaemonCommandRouter {
      * Returns null if not handled at this level → caller delegates to CommandHandler.
      */
     private async executeDaemonCommand(cmd: string, args: any): Promise<CommandRouterResult | null> {
+        // [Z] Remote mesh worker session-scoped command forward.
+        //
+        // Session-scoped commands issued from the dashboard (the controlbar Model/Mode
+        // selectors → invoke_provider_script, and modal approval → resolve_action, plus the
+        // direct set_mode/change_model/set_thought_level mutations) target a session by
+        // targetSessionId. When that session is a mesh worker hosted on a REMOTE daemon, this
+        // coordinator never holds its live instance, so the CommandHandler delegation would
+        // fail with "Live session not found". Forward to the owning worker daemon — the same
+        // daemon that already executes send_chat for that session — so the controlbar acts on
+        // the real worker. _meshDirectDispatch prevents re-forwarding once the call lands on
+        // the owning daemon (it then handles the session locally). A locally-hosted worker (or
+        // any session this coordinator owns) resolves to undefined below and falls through to
+        // normal local handling — no regression.
+        if (MESH_FORWARDABLE_SESSION_COMMANDS.has(cmd) && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
+            const targetSessionId = readStringValue(args?.targetSessionId, args?.sessionId, args?.instanceId);
+            if (targetSessionId) {
+                const localInstance = this.deps.instanceManager?.getInstance(targetSessionId);
+                const localRegistry = this.deps.sessionRegistry?.get?.(targetSessionId);
+                if (!localInstance && !localRegistry) {
+                    const ownerDaemonId = this.resolveRemoteMeshSessionOwnerDaemonId(targetSessionId);
+                    if (ownerDaemonId) {
+                        LOG.info('Mesh', `[Mesh] Forwarding session-scoped '${cmd}' for remote worker session ${targetSessionId.split('_')[0]} → daemon ${ownerDaemonId.slice(0, 12)}`);
+                        const forwarded = await this.deps.dispatchMeshCommand(ownerDaemonId, cmd, {
+                            ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+                            _meshDirectDispatch: true,
+                        });
+                        return (forwarded ?? { success: false, error: 'no response from remote worker daemon' }) as CommandRouterResult;
+                    }
+                }
+            }
+        }
+
         switch (cmd) {
             // ─── CLI / ACP commands ───
             case 'mesh_forward_event': {
