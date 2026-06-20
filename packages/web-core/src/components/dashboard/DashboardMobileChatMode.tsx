@@ -197,11 +197,10 @@ export default function DashboardMobileChatMode({
     // anything else manually.
     const { isMuted: isConversationMuted, autoMuteIfCoordinator, toggleTarget: toggleMute } = useMutedConversations()
     useEffect(() => {
-        if (!isStandalone) return
         for (const item of items) {
             autoMuteIfCoordinator(item.conversation)
         }
-    }, [items, isStandalone, autoMuteIfCoordinator])
+    }, [items, autoMuteIfCoordinator])
 
     const attentionItems = useMemo(
         () => sortMobileInboxItems(items.filter(item => item.requiresAction && !isConversationMuted(item.conversation))),
@@ -357,8 +356,8 @@ export default function DashboardMobileChatMode({
                     wsStatus={wsStatus}
                     isConnected={isConnected}
                     isStandalone={isStandalone}
-                    isConversationMuted={isStandalone ? isConversationMuted : undefined}
-                    onToggleMuteConversation={isStandalone ? toggleMute : undefined}
+                    isConversationMuted={isConversationMuted}
+                    onToggleMuteConversation={toggleMute}
                 />
             )}
         </div>

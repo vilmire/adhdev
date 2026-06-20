@@ -13,6 +13,7 @@ import {
 } from '../components/dashboard/cliViewModeOverrides'
 import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
 import { useHiddenTabs, isConversationHidden, getAutoHiddenConversationTargets } from '../hooks/useHiddenTabs'
+import { useMutedConversations } from '../hooks/useMutedConversations'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
 import { useDashboardActiveTabRequests } from '../hooks/useDashboardActiveTabRequests'
@@ -167,6 +168,17 @@ export default function Dashboard() {
             autoHideConversation(conversation)
         }
     }, [autoHiddenConversationTargets, autoHideConversation])
+    // ─── Auto-mute (coordinator sessions) ───
+    // Mirror the auto-hide pass: coordinator-spawned mesh sessions are muted on
+    // first sight so their notification channels (toast/audio/browser/push) stay
+    // silent. Works on desktop and cloud, not just standalone mobile. Idempotent
+    // and skips non-coordinator conversations; a manual unmute is never re-applied.
+    const { autoMuteIfCoordinator } = useMutedConversations()
+    useEffect(() => {
+        for (const conversation of conversations) {
+            autoMuteIfCoordinator(conversation)
+        }
+    }, [conversations, autoMuteIfCoordinator])
     useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return
