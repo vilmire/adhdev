@@ -350,6 +350,14 @@ export interface MeshWorkQueueEntry {
     };
     /** ISO timestamp when the task was dispatched (assigned) to a node/session. Used for precise matching on completion. */
     dispatchTimestamp?: string;
+    /**
+     * (3) The ORIGINATING coordinator session that enqueued this task. Stamped onto the
+     * worker at dispatch (meshCoordinatorSessionId) so the task's completion routes back to
+     * the exact coordinator session — even when several coordinator sessions share one
+     * daemon. Rides in the queue payload JSON (no column migration); absent on legacy rows
+     * → daemon-level routing fallback (backward + version-skew safe).
+     */
+    sourceCoordinatorSessionId?: string;
     createdAt: string;
     updatedAt: string;
 }
@@ -566,6 +574,8 @@ export function enqueueTask(
         missionId?: string;
         /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
         id?: string;
+        /** (3) Originating coordinator session id (for session-anchored completion routing). */
+        sourceCoordinatorSessionId?: string;
     } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry {
     requireMeshHostQueueOwner(opts);
@@ -603,6 +613,9 @@ export function enqueueTask(
             requiredTags: resolvedRequiredTags,
             ...(dependsOn.length > 0 ? { dependsOn } : {}),
             ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
+            ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
+                ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }
+                : {}),
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
         };

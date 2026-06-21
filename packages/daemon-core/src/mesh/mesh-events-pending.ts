@@ -2,9 +2,9 @@ import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkS
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
-import { getLedgerDir, readLedgerEntries } from './mesh-ledger.js';
+import { getLedgerDir, readLedgerEntries, appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId } from './mesh-events-utils.js';
+import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary } from './mesh-events-utils.js';
 
 // ---------------------------------------------------------------------------
 // MCP coordinator pending-event queue — FILE-BASED PERSISTENCE
@@ -33,6 +33,16 @@ export interface PendingMeshCoordinatorEvent {
      * Absent on legacy events — treated as broadcast to any coordinator.
      */
     targetCoordinatorDaemonId?: string;
+    /**
+     * When set, this event is intended for a specific coordinator SESSION on the
+     * target daemon (the session that originally dispatched the work). PHASE 2 inject
+     * strict-matches the live coordinator by this session id so a sibling coordinator
+     * session on the same daemon does not receive another coordinator's completion.
+     * Absent on legacy / version-skewed events → daemon-level broadcast (no regression).
+     * Rides inside the event payload, so it survives the SQLite payload round-trip and
+     * the JSONL file without a dedicated column; it is NOT a drain-scoping key.
+     */
+    targetCoordinatorSessionId?: string;
 }
 
 const REFINE_TERMINAL_EVENTS = new Set(['refine:completed', 'refine:failed']);
@@ -239,6 +249,42 @@ function trimPendingEventsIfNeeded(path: string): void {
         if (statSync(path).size <= MAX_PENDING_EVENTS_BYTES) return;
         const lines = readFileSync(path, 'utf-8').split('\n').filter(Boolean);
         if (lines.length <= MAX_PENDING_EVENTS_KEEP) return;
+        // C1 (data safety): this trim discards the OLDEST queued lines to keep the file
+        // bounded. An undelivered terminal completion among them would otherwise lose its
+        // worker summary silently (the JSONL is the only copy when the SQLite dual-write
+        // failed). Before dropping, mirror any meaningful (coordinator-facing / summary-
+        // bearing) dropped event into the ledger so it stays auditable and recoverable,
+        // and LOG.warn so the drop is observable instead of silent.
+        const dropped = lines.slice(0, lines.length - MAX_PENDING_EVENTS_KEEP);
+        for (const line of dropped) {
+            let event: PendingMeshCoordinatorEvent | undefined;
+            try { event = JSON.parse(line) as PendingMeshCoordinatorEvent; } catch { continue; }
+            if (!event || !event.meshId) continue;
+            const finalSummary = readMeshCompletionSummary(event.metadataEvent || {});
+            // "Meaningful" = would have been delivered to a coordinator (carries a message)
+            // or carries worker output worth preserving. Silent lifecycle events are not
+            // logged — losing them on trim is harmless (they re-drive nothing once stale).
+            if (!readNonEmptyString(event.coordinatorMessage) && !finalSummary) continue;
+            try {
+                appendLedgerEntry(event.meshId, {
+                    kind: 'event_held',
+                    ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+                    payload: {
+                        event: event.event,
+                        reason: 'pending_trim_dropped',
+                        recoverable: true,
+                        nodeLabel: event.nodeLabel,
+                        ...(event.workspace ? { workspace: event.workspace } : {}),
+                        targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+                        queuedAt: event.queuedAt,
+                        ...(finalSummary ? { finalSummary } : {}),
+                    },
+                });
+                LOG.warn('MeshEvents', `Pending-events trim dropping undelivered ${event.event} for mesh ${event.meshId} — recorded to ledger (recoverable)`);
+            } catch (e: any) {
+                LOG.warn('MeshEvents', `Failed to ledger-record trim-dropped ${event.event} for mesh ${event.meshId}: ${e?.message || e}`);
+            }
+        }
         writeFileSync(path, lines.slice(-MAX_PENDING_EVENTS_KEEP).join('\n') + '\n', 'utf-8');
     } catch { /* best-effort; if trim fails, append still proceeds */ }
 }

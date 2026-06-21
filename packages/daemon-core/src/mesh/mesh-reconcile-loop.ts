@@ -45,8 +45,9 @@ import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { loadConfig } from '../config/config.js';
 import { listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
-import { drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
+import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, buildPendingEventFingerprint, queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { handleMeshForwardEvent, shouldForceInjectMeshEvent, MESH_FORCE_INJECT_EVENTS, triggerMeshQueue } from './mesh-events-coordinator.js';
 import {
@@ -54,7 +55,7 @@ import {
     ackUnresolvedDelegateForward,
     expireStaleUnresolvedDelegateForwards,
 } from './mesh-unresolved-forward-outbox.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { readNonEmptyString, readMeshCompletionSummary } from './mesh-events-utils.js';
 import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
@@ -97,6 +98,11 @@ function resolveReconcileIntervalMs(): number {
 interface LiveCoordinator {
     meshId: string;
     instance: ReturnType<DaemonComponents['instanceManager']['getInstance']>;
+    // Runtime session id of this coordinator instance (getState().instanceId). PHASE 2
+    // strict-matches an event's targetCoordinatorSessionId against this so a completion
+    // routes back to the exact originating coordinator session, not a sibling on the same
+    // daemon (the multi-coordinator misroute).
+    sessionId: string;
     idle: boolean;
     // True when the coordinator session is parked on a harness modal awaiting a
     // human answer — claude-cli AskUserQuestion (waiting_choice) or a tool-consent
@@ -205,7 +211,8 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
         // Lowercase literal compare — the SessionStatus enum is forked across modules
         // and waiting_choice is absent from some of them (see cli-provider-instance).
         const modalParked = status === 'waiting_choice' || status === 'waiting_approval';
-        out.push({ meshId, instance: inst, idle: status === 'idle', modalParked });
+        const sessionId = readNonEmptyString(state.instanceId);
+        out.push({ meshId, instance: inst, sessionId, idle: status === 'idle', modalParked });
     }
     return out;
 }
@@ -223,6 +230,71 @@ function injectPendingIntoCoordinator(
         input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage },
         ...(force ? { force: true } : {}),
     });
+}
+
+// Held-event ledger dedup: fingerprints of held terminal events already written as an
+// `event_held` ledger audit record in THIS process. Prevents the 4s reconcile tick from
+// re-logging the same held event every interval while a coordinator stays modal-parked.
+// Per-process only (not persisted) — if the daemon restarts while an event is still held
+// it is re-logged once, which is desirable: it re-confirms the event is still undelivered.
+const heldEventLedgerRecorded = new Set<string>();
+
+// C1 (data safety): when a terminal completion/approval/bootstrap event cannot be
+// delivered because the only coordinators are modal-parked, the event is held at
+// drained=0 in the pending queue (SQLite + JSONL) for a later tick. That queue is
+// disk-persisted but carries no operator-visible audit trail and can be silently
+// dropped by the pending-file trim (100 KB / 50-entry cap). To guarantee a held
+// completion's worker summary is never silently lost, mirror each held terminal event
+// into the coordinator's mesh ledger as an `event_held` entry — auditable and
+// recoverable (the finalSummary survives even if the pending copy is later trimmed or
+// the coordinator session is force-resolved before re-drain). Idempotent per process
+// via heldEventLedgerRecorded so a long modal park does not spam the ledger.
+function recordHeldTerminalEventsToLedger(
+    meshId: string,
+    drainDaemonIds: string[],
+    reason: string,
+    heldForCoordinatorCount: number,
+): void {
+    let pending: readonly PendingMeshCoordinatorEvent[];
+    try {
+        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : undefined);
+    } catch {
+        return; // best-effort audit — never let a peek failure break the tick
+    }
+    for (const event of pending) {
+        // Only audit terminal/force-inject events (completion / approval / stop / refine·
+        // bootstrap). Silent lifecycle events (agent:ready / generating_started) carry no
+        // worker output to preserve and re-drain harmlessly, so they need no audit trail.
+        if (!shouldForceInjectMeshEvent(event.event)) continue;
+        const fingerprint = buildPendingEventFingerprint(event);
+        const key = `${meshId}::${fingerprint || `${event.event}::${event.nodeId || ''}::${event.queuedAt}`}`;
+        if (heldEventLedgerRecorded.has(key)) continue;
+        heldEventLedgerRecorded.add(key);
+        const finalSummary = readMeshCompletionSummary(event.metadataEvent);
+        try {
+            appendLedgerEntry(meshId, {
+                kind: 'event_held',
+                ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+                payload: {
+                    event: event.event,
+                    reason,
+                    recoverable: true,
+                    heldForCoordinators: heldForCoordinatorCount,
+                    nodeLabel: event.nodeLabel,
+                    ...(event.workspace ? { workspace: event.workspace } : {}),
+                    targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+                    queuedAt: event.queuedAt,
+                    ...(fingerprint ? { fingerprint } : {}),
+                    ...(finalSummary ? { finalSummary } : {}),
+                },
+            });
+            LOG.info('MeshReconcile', `Ledger-recorded held ${event.event} for mesh ${meshId} (reason ${reason}) — recoverable from ledger`);
+        } catch (e: any) {
+            // Failed to persist — drop the dedup marker so the next tick retries.
+            heldEventLedgerRecorded.delete(key);
+            LOG.warn('MeshReconcile', `Failed to ledger-record held ${event.event} for mesh ${meshId}: ${e?.message || e}`);
+        }
+    }
 }
 
 // One reconcile tick. Two independent phases:
@@ -426,6 +498,24 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         if (targetCoordinators.length === 0) {
             if (modalParkedCoordinators.length > 0) {
                 LOG.info('MeshReconcile', `Reconcile skip → modal-parked: holding pending event(s) for mesh ${meshId} (${modalParkedCoordinators.length} coordinator(s) awaiting a modal answer; events left queued)`);
+                // C1: mirror held terminal events into the ledger so a held completion's
+                // worker summary is auditable/recoverable even if the modal is never
+                // resolved, the coordinator restarts, or the pending file is later trimmed.
+                // The events stay queued (drained=0) for re-drain on a later tick; this only
+                // adds the durable audit copy. Idempotent per process — only newly-held
+                // events are logged. O(1)-gated: skip the peek when the queue is empty.
+                let hasPending = true;
+                if (store) {
+                    try { hasPending = store.pendingEventCount(meshId) > 0; } catch { /* peek below */ }
+                }
+                if (hasPending) {
+                    recordHeldTerminalEventsToLedger(
+                        meshId,
+                        drainDaemonIds.length > 0 ? drainDaemonIds : (localDaemonId ? [localDaemonId] : []),
+                        'modal_parked',
+                        modalParkedCoordinators.length,
+                    );
+                }
             }
             continue;
         }
@@ -453,10 +543,80 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         const mode = forceOnly ? 'force-drain → generating' : 'inject → idle';
         LOG.info('MeshReconcile', `Reconcile ${mode}: ${pendingEvents.length} pending event(s) → ${targetCoordinators.length} coordinator(s) for mesh ${meshId}`);
         for (const pending of pendingEvents) {
+            // Strict session routing (multi-coordinator): when the event names an
+            // originating coordinator session, deliver ONLY to the live coordinator whose
+            // session id matches — a sibling coordinator on the same daemon must NOT receive
+            // another coordinator's completion. When the event carries no session id (legacy /
+            // version-skewed / single-coordinator), fall back to the daemon-level set
+            // (unchanged behaviour — regression-0 for the common case).
+            const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
+            if (wantSession) {
+                const matched = targetCoordinators.filter(c => c.sessionId === wantSession);
+                if (matched.length === 0) {
+                    // The originating coordinator session is not deliverable on this daemon
+                    // right now (gone, or modal-parked and excluded from targets). Strict mode
+                    // does NOT broadcast to siblings — hold the event for a later tick, and
+                    // ledger-expire it past a TTL so it can never wedge forever.
+                    holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId);
+                    continue;
+                }
+                for (const c of matched) injectPendingIntoCoordinator(c.instance, pending);
+                continue;
+            }
             for (const c of targetCoordinators) {
                 injectPendingIntoCoordinator(c.instance, pending);
             }
         }
+    }
+}
+
+// Strict-routing TTL: how long a drained completion whose originating coordinator session
+// is not currently deliverable is held (re-queued for re-drain) before it is ledger-
+// expired. Bounded so a coordinator session that never returns cannot wedge the event
+// forever; broad enough to ride out a transient modal-park / brief restart.
+const STRICT_SESSION_MATCH_TTL_MS = 60_000;
+
+// Re-queue (hold) a strict-routed event whose coordinator session is not live, or — once it
+// has aged past STRICT_SESSION_MATCH_TTL_MS — ledger-expire it (recoverable) and drop it.
+// We deliberately do NOT broadcast an aged-out event to sibling coordinators: that is the
+// very misroute strict routing exists to prevent. The drain already marked the row drained=1,
+// so re-queuing re-persists a fresh undrained copy (dedup keys on drained=0 only); queuedAt is
+// preserved so the TTL measures the event's true age across re-queues.
+function holdOrExpireStrictUnmatchedEvent(
+    pending: PendingMeshCoordinatorEvent,
+    wantSession: string,
+    meshId: string,
+): void {
+    const queuedAt = typeof pending.queuedAt === 'number' ? pending.queuedAt : Date.now();
+    if (Date.now() - queuedAt <= STRICT_SESSION_MATCH_TTL_MS) {
+        try {
+            queuePendingMeshCoordinatorEvent(pending); // preserves queuedAt → true age retained
+            LOG.info('MeshReconcile', `Strict route hold: coordinator session ${wantSession} not live on mesh ${meshId} — re-queued (${pending.event})`);
+        } catch (e: any) {
+            LOG.warn('MeshReconcile', `Strict route re-queue failed for ${pending.event} on mesh ${meshId}: ${e?.message || e}`);
+        }
+        return;
+    }
+    const finalSummary = readMeshCompletionSummary(pending.metadataEvent || {});
+    try {
+        appendLedgerEntry(meshId, {
+            kind: 'event_held',
+            ...(pending.nodeId ? { nodeId: pending.nodeId } : {}),
+            payload: {
+                event: pending.event,
+                reason: 'strict_route_expired',
+                recoverable: true,
+                targetCoordinatorSessionId: wantSession,
+                targetCoordinatorDaemonId: pending.targetCoordinatorDaemonId ?? null,
+                nodeLabel: pending.nodeLabel,
+                ...(pending.workspace ? { workspace: pending.workspace } : {}),
+                queuedAt,
+                ...(finalSummary ? { finalSummary } : {}),
+            },
+        });
+        LOG.warn('MeshReconcile', `Strict route expire: coordinator session ${wantSession} never returned for mesh ${meshId} — recorded to ledger (recoverable), dropped (${pending.event})`);
+    } catch (e: any) {
+        LOG.warn('MeshReconcile', `Failed to ledger-expire strict-unmatched ${pending.event} for mesh ${meshId}: ${e?.message || e}`);
     }
 }
 
@@ -791,6 +951,13 @@ function buildForwardPayloadFromPending(event: any): Record<string, unknown> {
         meshId: readNonEmptyString(event?.meshId),
         nodeId: readNonEmptyString(event?.nodeId) || readNonEmptyString(metadata.meshNodeId),
         workspace: readNonEmptyString(event?.workspace) || readNonEmptyString(metadata.workspace),
+        // Preserve the originating coordinator session id across the relay. It is normally
+        // carried inside metadataEvent.meshCoordinatorSessionId (spread below), but pass the
+        // top-level field through explicitly too so the handleMeshForwardEvent whitelist
+        // recovers it regardless of which carrier the producing daemon used.
+        ...(readNonEmptyString(event?.targetCoordinatorSessionId)
+            ? { targetCoordinatorSessionId: readNonEmptyString(event.targetCoordinatorSessionId) }
+            : {}),
         ...metadata,
     };
 }

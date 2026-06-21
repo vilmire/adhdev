@@ -42,6 +42,7 @@ export type MeshLedgerKind =
     | 'direct_fast_forward'
     | 'delivery_unroutable'
     | 'direct_dispatch_pruned'
+    | 'event_held'
     ;
 
 export interface MeshLedgerEntry {

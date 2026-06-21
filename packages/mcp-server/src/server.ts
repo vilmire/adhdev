@@ -155,7 +155,15 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       } catch { /* best-effort metadata for remote completion forwarding */ }
     }
 
-    const meshCtx: MeshContext = { mesh, transport, ...(localDaemonId ? { localDaemonId } : {}), ...(localMachineId ? { localMachineId } : {}), ...(coordinatorHostname ? { coordinatorHostname } : {}) };
+    // (3) Session-anchored routing: the daemon injects this coordinator CLI session's own
+    // runtime id via ADHDEV_COORDINATOR_SESSION_ID at launch. Carrying it on MeshContext lets
+    // every dispatch stamp the originating coordinator session so the worker's completion
+    // routes back to the right session (multi-coordinator). Absent → daemon-level fallback.
+    const coordinatorSessionId = typeof process.env.ADHDEV_COORDINATOR_SESSION_ID === 'string' && process.env.ADHDEV_COORDINATOR_SESSION_ID.trim()
+      ? process.env.ADHDEV_COORDINATOR_SESSION_ID.trim()
+      : undefined;
+
+    const meshCtx: MeshContext = { mesh, transport, ...(localDaemonId ? { localDaemonId } : {}), ...(localMachineId ? { localMachineId } : {}), ...(coordinatorHostname ? { coordinatorHostname } : {}), ...(coordinatorSessionId ? { coordinatorSessionId } : {}) };
 
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
 

@@ -6305,6 +6305,9 @@ export class DaemonCommandRouter {
                                         meshId: dispatchMeshContext.meshId,
                                         nodeId: dispatchMeshContext.nodeId,
                                         coordinatorDaemonId: dispatchMeshContext.coordinatorDaemonId,
+                                        // Session-level anchor: preserved across the P2P dispatch to a
+                                        // remote worker so its completion echoes back to the right session.
+                                        coordinatorSessionId: dispatchMeshContext.coordinatorSessionId,
                                     },
                                 );
                                 if (stamp) inst.updateSettings(stamp);

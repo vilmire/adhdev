@@ -75,6 +75,15 @@ export interface MeshContext {
     localMachineId?: string;
     /** Hostname of the daemon/MCP coordinator machine. */
     coordinatorHostname?: string;
+    /**
+     * Runtime session id of THIS coordinator's CLI session, injected by the daemon at
+     * coordinator launch via ADHDEV_COORDINATOR_SESSION_ID. Stamped onto dispatched
+     * workers (meshContext.coordinatorSessionId) so a worker's completion event routes
+     * back to the exact originating coordinator session — even when several coordinator
+     * sessions share one daemon. Absent for non-coordinator / legacy launches → routing
+     * falls back to the daemon-level anchor.
+     */
+    coordinatorSessionId?: string;
 }
 
 type MeshSessionProviderMetadata = {
@@ -4135,7 +4144,7 @@ export async function meshEnqueueTask(
     const targetNodeId = explicitTarget
         || (preferWorktree ? resolvePreferredWorktreeNodeId(ctx) : undefined);
     try {
-        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId });
+        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}) });
 
         // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
         if (!(ctx.transport instanceof IpcTransport)) {
@@ -4599,6 +4608,10 @@ export async function meshSendTask(
                     nodeId: args.node_id,
                     taskId,
                     ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
+                    // (3) Stamp the originating coordinator session so the worker's completion
+                    // routes back to THIS coordinator session (multi-coordinator). Survives the
+                    // P2P dispatch to the remote worker, which echoes it on its completion event.
+                    ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
                 },
             });
             if (result.success) {
@@ -4812,6 +4825,8 @@ export async function meshSendTask(
                     nodeId: args.node_id,
                     taskId,
                     ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
+                    // (3) Originating coordinator session anchor — see the remote-dispatch path above.
+                    ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
                 },
             });
             const dispatchPayload = unwrapCommandPayload(dispatchResult);
@@ -5065,6 +5080,10 @@ export async function meshLaunchSession(
                     // Lands in settingsOverride and beats the global per-provider autoApprove.
                     autoApprove: delegatedWorkerAutoApprove,
                     ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
+                    // (3) Stamp the originating coordinator SESSION at launch too, so a worker
+                    // launched via mesh_launch_session routes its completions back to the exact
+                    // coordinator session (multi-coordinator). Absent → daemon-level fallback.
+                    ...(ctx.coordinatorSessionId ? { meshCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
                     ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
                     launchedByCoordinator: true,
                 }

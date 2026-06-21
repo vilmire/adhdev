@@ -879,7 +879,7 @@ export class CliProviderInstance implements ProviderInstance {
      * completion events silently drop because the forwarder has nothing to
      * match against.
      */
-    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string }): void {
+    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
         if (!assignment?.meshId) return;
         this.settings = {
             ...this.settings,
@@ -887,6 +887,9 @@ export class CliProviderInstance implements ProviderInstance {
             ...(assignment.nodeId ? { meshNodeId: assignment.nodeId } : {}),
             ...(assignment.taskId ? { meshActiveTaskId: assignment.taskId } : {}),
             ...(assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {}),
+            // Session-level routing anchor: the originating coordinator session, so this
+            // worker's completion events route back to the exact session that dispatched it.
+            ...(assignment.coordinatorSessionId ? { meshCoordinatorSessionId: assignment.coordinatorSessionId } : {}),
         };
         this.adapter.updateRuntimeSettings?.(this.settings);
     }

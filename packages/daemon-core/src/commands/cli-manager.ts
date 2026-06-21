@@ -725,6 +725,24 @@ export class DaemonCliManager {
 
  // Create UUID-based key (allows separate instances even for same type+dir)
         const key = crypto.randomUUID();
+
+        // (3) Session-anchored mesh routing: when launching a mesh COORDINATOR session
+        // (settings.meshCoordinatorFor set), expose this session's OWN runtime id to its MCP
+        // server via env. The MCP server is spawned by the CLI as a child and inherits this
+        // env, so the MCP layer can stamp ADHDEV_COORDINATOR_SESSION_ID as the originating
+        // coordinator on every dispatch (→ MeshContext.coordinatorSessionId → worker
+        // meshCoordinatorSessionId → completion targetCoordinatorSessionId → strict route).
+        // `key` IS the instance id findLiveCoordinators matches on, so the stamp and the live
+        // session agree. Re-applied on every (re)launch, so it always reflects the current id;
+        // a stale value only survives if the CLI process outlives a daemon restart, in which
+        // case routing falls back to the daemon level (no wedge — see mesh-reconcile-loop).
+        {
+            const coordinatorMeshId = (options?.settingsOverride as Record<string, unknown> | undefined)?.meshCoordinatorFor;
+            if (typeof coordinatorMeshId === 'string' && coordinatorMeshId.trim()) {
+                options = { ...options, extraEnv: { ...(options?.extraEnv || {}), ADHDEV_COORDINATOR_SESSION_ID: key } };
+            }
+        }
+
         const sessionRegistry = this.deps.getSessionRegistry?.() || null;
 
  // ─── ACP category handle ───

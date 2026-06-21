@@ -282,6 +282,11 @@ export function tryAssignQueueTask(
     if (node?.daemonId && components.dispatchMeshCommand) {
         const isLocalNode = components.cliManager.adapters.has(sessionId);
         if (!isLocalNode) {
+            const localDaemonIdForDispatch = readNonEmptyString(loadConfig().machineId) || undefined;
+            // (3) Originating coordinator session that enqueued this task — route its
+            // completion back to that exact session (multi-coordinator). Carried over P2P
+            // to the remote worker, which echoes it on its completion event.
+            const sourceCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId) || undefined;
             const delivery = createSessionDelivery({
                 meshId,
                 nodeId,
@@ -291,8 +296,9 @@ export function tryAssignQueueTask(
                 kind: 'task',
                 message: task.message,
                 status: 'delivering',
+                ...(sourceCoordinatorSessionId ? { sourceCoordinatorSessionId } : {}),
+                ...(localDaemonIdForDispatch ? { sourceCoordinatorDaemonId: localDaemonIdForDispatch } : {}),
             });
-            const localDaemonIdForDispatch = readNonEmptyString(loadConfig().machineId) || undefined;
             components.dispatchMeshCommand(node.daemonId, 'agent_command', {
                 targetSessionId: sessionId,
                 cliType: providerType,
@@ -303,6 +309,7 @@ export function tryAssignQueueTask(
                     nodeId,
                     taskId: task.id,
                     ...(localDaemonIdForDispatch ? { coordinatorDaemonId: localDaemonIdForDispatch } : {}),
+                    ...(sourceCoordinatorSessionId ? { coordinatorSessionId: sourceCoordinatorSessionId } : {}),
                 },
             }).then(() => {
                 updateSessionDeliveryStatus(delivery.id, 'delivered');
@@ -341,12 +348,16 @@ export function tryAssignQueueTask(
             // the node identity so the session is fully relay-safe (meshCoordinatorDaemonId is
             // the anchor the forwarder keys on), matching what mesh_launch_session stamps.
             const localDaemonId = readNonEmptyString(loadConfig().machineId);
+            const localSourceCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId);
             inst.updateSettings({
                 meshNodeFor: meshId,
                 meshNodeId: nodeId,
                 launchedByCoordinator: true,
                 autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
                 ...(localDaemonId ? { meshCoordinatorDaemonId: localDaemonId } : {}),
+                // (3) Stamp the originating coordinator session for session-anchored routing
+                // of this co-located worker's completion. Absent → daemon-level fallback.
+                ...(localSourceCoordinatorSessionId ? { meshCoordinatorSessionId: localSourceCoordinatorSessionId } : {}),
             });
         }
     } catch { /* best-effort — dispatch still proceeds */ }
@@ -360,6 +371,8 @@ export function tryAssignQueueTask(
         kind: 'task',
         message: task.message,
         status: 'delivering',
+        ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { sourceCoordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
+        ...(readNonEmptyString(loadConfig().machineId) ? { sourceCoordinatorDaemonId: readNonEmptyString(loadConfig().machineId) } : {}),
     });
     components.cliManager.handleCliCommand('agent_command', {
         targetSessionId: sessionId,
@@ -1402,6 +1415,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     const workerCoordinatorDaemonId = readNonEmptyString(
         (sourceSession?.getState()?.settings as Record<string, unknown>)?.meshCoordinatorDaemonId,
     );
+    // Session-level routing anchor (multi-coordinator). Prefer the LIVE worker session's
+    // stamp; fall back to a relayed value carried in metadataEvent.meshCoordinatorSessionId
+    // (a remote worker's completion arrives via handleMeshForwardEvent with no local
+    // sourceSession, so the stamp can only ride in the relayed metadata). Empty on legacy /
+    // version-skewed dispatches → the event stays daemon-broadcast (no regression).
+    const workerCoordinatorSessionId = readNonEmptyString(
+        (sourceSession?.getState()?.settings as Record<string, unknown>)?.meshCoordinatorSessionId,
+    ) || readNonEmptyString(args.metadataEvent.meshCoordinatorSessionId);
 
     // R2: cloud P2P dashboard metadata sync. The cloud daemon used to do this from its own
     // relay listener; now the single core forwarder invokes the injected hook (no-op on
@@ -1858,6 +1879,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         metadataEvent: {
             ...args.metadataEvent,
             ...(recoveryContext ? { recoveryContext } : {}),
+            // Stash the coordinator session id INSIDE metadataEvent too, so it survives the
+            // P2P relay serialization (buildForwardPayloadFromPending spreads metadata; the
+            // handleMeshForwardEvent whitelist reads it back) — a top-level field alone would
+            // be dropped when the event crosses a machine boundary.
+            ...(workerCoordinatorSessionId ? { meshCoordinatorSessionId: workerCoordinatorSessionId } : {}),
         },
         // Silent lifecycle events (agent:ready / agent:generating_started) carry no
         // coordinator message; they are queued only so the coordinator re-runs the
@@ -1866,9 +1892,12 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         ...(messageText ? { coordinatorMessage: messageText } : {}),
         queuedAt: Date.now(),
         ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
+        // Top-level session anchor for the local PHASE 2 strict-match on the coordinator
+        // daemon. Absent → daemon-level broadcast (legacy / single-coordinator path).
+        ...(workerCoordinatorSessionId ? { targetCoordinatorSessionId: workerCoordinatorSessionId } : {}),
     };
     if (queuePendingMeshCoordinatorEvent(pendingEvent)) {
-        LOG.info('MeshEvents', `Queued ${args.event} for coordinator (mesh ${args.meshId}${workerCoordinatorDaemonId ? `, coordinator daemon ${workerCoordinatorDaemonId}` : ''})`);
+        LOG.info('MeshEvents', `Queued ${args.event} for coordinator (mesh ${args.meshId}${workerCoordinatorDaemonId ? `, coordinator daemon ${workerCoordinatorDaemonId}` : ''}${workerCoordinatorSessionId ? `, coordinator session ${workerCoordinatorSessionId}` : ''})`);
     }
     return { success: true, forwarded: 0 };
 }
@@ -1903,6 +1932,13 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
             providerType: readNonEmptyString(payload.providerType),
             providerSessionId: readNonEmptyString(payload.providerSessionId),
+            // Preserve the originating coordinator SESSION id across the machine boundary so
+            // the completion routes back to the exact coordinator session (multi-coordinator).
+            // buildForwardPayloadFromPending spreads the worker event's metadata, so the id
+            // arrives as payload.meshCoordinatorSessionId; the top-level targetCoordinatorSessionId
+            // is also accepted as a fallback. injectMeshSystemMessage re-derives the routing
+            // anchors from this. Absent → daemon-level fallback (version-skew safe).
+            meshCoordinatorSessionId: readNonEmptyString(payload.meshCoordinatorSessionId) || readNonEmptyString(payload.targetCoordinatorSessionId),
             // Carry the session identity fields the worker provider event emits so the
             // coordinator's mirror (updateMeshOwnedSession) gets a real workspace/title/
             // settings. Without these the remote-relay hop reconstructs metadataEvent with
