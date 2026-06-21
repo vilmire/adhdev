@@ -145,13 +145,23 @@ function countNewlines(s: string): number {
 
 const SUBMIT_DELAY_FLOOR_MS = 200;
 
-// win32 ConPTY submit reliability: after the text settles we write the submit
-// key (CR) as its OWN keystroke, then repeat it once after a short gap. The
-// repeat is the safety net for the case where ConPTY drops/coalesces the first
-// lone CR; on an already-submitted prompt the second CR lands on an empty input
-// and is a harmless no-op. The gap must be long enough that the TUI has redrawn
-// after the first CR before the second arrives.
-const WIN32_SUBMIT_REPEAT_GAP_MS = 300;
+// win32 ConPTY submit reliability. A MULTILINE message creates an Ink
+// paste/newline-accumulation window during which a lone CR is absorbed as a
+// literal newline instead of submitting; the window's length is
+// nondeterministic (observed 0–~2s, driven by ConPTY byte timing), so neither a
+// fixed delay nor a fixed CR count reliably submits. (A/B PTY testing on win32
+// ConPTY: single-line submits on the FIRST CR; multiline needs a *variable*
+// number of CRs as the window expires — a fixed double-CR fails outright, and
+// bracketed-paste wrapping does NOT help.) So we VERIFY instead of guessing:
+// write the text, then resend the submit key on a fixed cadence until the FSM
+// observes the agent has actually left the idle composer (status flips away from
+// 'idle' — i.e. it submitted and is generating / showing a modal), bounded by a
+// retry budget. Once submission is observed we stop so we don't spam Enter into
+// the next turn. Single-line messages satisfy the check after the first CR, so
+// their behaviour is unchanged. CRs absorbed as newlines during the window are
+// trimmed by the TUI on submit.
+const WIN32_SUBMIT_RESEND_GAP_MS = 350;
+const WIN32_SUBMIT_MAX_RESENDS = 14;
 
 export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text: string): number {
     const lines = countNewlines(text);
@@ -217,6 +227,10 @@ export class FsmDriver implements ISpecDriver {
      *  after a re-prime we don't re-inject until the screen changes (which
      *  resets the stall reference) or another full stall window lapses. */
     private lastRefocusAt = 0;
+    /** Timer driving the win32 verification-based submit resend loop (see
+     *  WIN32_SUBMIT_* and scheduleWin32Submit). Re-arms itself until the FSM
+     *  leaves idle (submitted) or the resend budget is spent. */
+    private win32SubmitTimer: ReturnType<typeof setTimeout> | null = null;
 
     private currentEval: CurrentEval | null = null;
     private stateHistory: HistoryEntry[] = [];
@@ -334,6 +348,7 @@ export class FsmDriver implements ISpecDriver {
         this.delegateTimers.clear();
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
         if (this.stallTimer) { clearTimeout(this.stallTimer); this.stallTimer = null; }
+        if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         this.specWatcher?.close();
         this.adapter.kill();
     }
@@ -841,25 +856,19 @@ export class FsmDriver implements ISpecDriver {
         const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text);
 
         // win32 ConPTY submit: the text and the submit key (CR) must NOT be
-        // combined into one PTY write. Ink-based TUIs (claude-cli) treat a single
-        // write that carries text + a trailing CR as a bracketed/multi-line paste
-        // and absorb the CR as a literal newline in the input box instead of a
-        // submit keystroke — the prompt sits typed-but-unsent until the user hits
-        // Enter manually. (A previous "atomic write" attempt regressed exactly
-        // this way.) Instead, write the text, let it settle so the TUI leaves any
-        // paste-accumulation state, then deliver the CR as its OWN keystroke. We
-        // send the CR twice with a short gap: ConPTY can drop/coalesce the first
-        // lone CR, and a second CR on an already-submitted (now empty) prompt is a
-        // harmless no-op. perChar typing simulation is skipped on win32;
-        // correctness of submission wins over the typing visual there.
+        // combined into one PTY write — Ink-based TUIs (claude-cli) treat a
+        // single write that carries text + a trailing CR as a bracketed/multi-line
+        // paste and absorb the CR as a literal newline. So we write the text on
+        // its own, then resend the submit key on a fixed cadence, VERIFYING after
+        // each that the agent actually left the idle composer (status flipped away
+        // from 'idle'). This handles the nondeterministic multiline
+        // paste-accumulation window where a variable number of CRs is needed; a
+        // fixed double-CR fails for multiline (see WIN32_SUBMIT_* above). perChar
+        // typing simulation is skipped on win32; correctness of submission wins
+        // over the typing visual there.
         if (process.platform === 'win32') {
-            const submitTwice = (): void => {
-                this.adapter.send_keys(sm.submit_key);
-                setTimeout(() => this.adapter.send_keys(sm.submit_key), WIN32_SUBMIT_REPEAT_GAP_MS);
-            };
             this.adapter.send_keys(text);
-            if (beforeSubmit > 0) setTimeout(submitTwice, beforeSubmit);
-            else submitTwice();
+            this.scheduleWin32Submit(sm.submit_key, beforeSubmit);
             return;
         }
 
@@ -879,6 +888,37 @@ export class FsmDriver implements ISpecDriver {
             this.adapter.send_keys(text[i]);
             i += 1;
         }, perChar);
+    }
+
+    /** The agent's current coarse status, derived from the FSM node we're in. */
+    private currentStatus(): 'idle' | 'generating' | 'approval' {
+        const st = stateById(this.spec, this.currentStateId);
+        return st ? statusForState(st) : 'idle';
+    }
+
+    /**
+     * win32 verification-based submit. Sends the submit key, waits a gap, and if
+     * the FSM is still 'idle' (the prompt did not submit — the CR was absorbed as
+     * a multiline-paste newline) resends, up to WIN32_SUBMIT_MAX_RESENDS. The
+     * first CR always fires (so a stale/edge status never suppresses the submit);
+     * subsequent resends are gated on still being idle, and stop the instant the
+     * agent leaves idle (submitted → generating / approval). This converges the
+     * nondeterministic multiline window without spamming Enter into the next turn.
+     */
+    private scheduleWin32Submit(submitKey: string, initialDelayMs: number): void {
+        if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
+        const fire = (attempt: number): void => {
+            this.win32SubmitTimer = null;
+            this.adapter.send_keys(submitKey);
+            if (attempt + 1 >= WIN32_SUBMIT_MAX_RESENDS) return;
+            this.win32SubmitTimer = setTimeout(() => {
+                // Left the idle composer → it submitted; stop resending.
+                if (this.currentStatus() !== 'idle') { this.win32SubmitTimer = null; return; }
+                fire(attempt + 1);
+            }, WIN32_SUBMIT_RESEND_GAP_MS);
+        };
+        if (initialDelayMs > 0) this.win32SubmitTimer = setTimeout(() => fire(0), initialDelayMs);
+        else fire(0);
     }
 
     private handleClickControl(controlId: string, payload?: unknown): void {

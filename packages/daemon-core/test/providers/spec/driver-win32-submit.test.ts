@@ -2,20 +2,24 @@
  * Regression coverage for win32 ConPTY submit on the FSM/spec path.
  *
  * claude-cli (and other spec CLIs: codex, gemini, …) route through
- * FsmDriver.actuallySendMessage. An earlier "atomic write" attempt combined the
- * prompt text and the submit key (`\r`) into ONE PTY write on win32. That
- * regressed: Ink-based TUIs treat a single write carrying text + a trailing CR
- * as a bracketed/multi-line paste and absorb the CR as a literal newline, so the
- * prompt sat typed-but-unsent until the user hit Enter manually.
+ * FsmDriver.actuallySendMessage. The text and the submit key (`\r`) must NEVER
+ * be fused into one PTY write on win32: Ink-based TUIs treat a single write
+ * carrying text + a trailing CR as a bracketed/multi-line paste and absorb the
+ * CR as a literal newline, so the prompt sits typed-but-unsent.
  *
- * The correct fix: on win32 write the text first, let it settle, then deliver the
- * CR as its OWN keystroke — twice, with a short gap, because ConPTY can drop or
- * coalesce a lone CR and a second CR on an already-submitted (empty) prompt is a
- * harmless no-op. mac/linux keep the historical single split CR (those PTYs
- * recognise it fine), so the win32 double-CR is contained to win32.
+ * Beyond that, A/B PTY testing on real win32 ConPTY established that a MULTILINE
+ * message opens a nondeterministic Ink paste/newline-accumulation window during
+ * which a lone CR is absorbed as a newline rather than a submit. Single-line
+ * messages submit on the first CR; multiline needs a *variable* number of CRs as
+ * the window expires — a fixed double-CR fails, and bracketed-paste wrapping does
+ * not help. So the driver VERIFIES: it writes the text, then resends the submit
+ * key on a fixed cadence until the FSM observes the agent has left the idle
+ * composer (status flips away from 'idle'), bounded by a retry budget, and stops
+ * the instant submission is observed. mac/linux keep the historical single CR.
  *
- * These tests drive the FSM to readiness, dispatch a message, and assert the
- * exact PTY write shape under each simulated platform.
+ * These tests drive the FSM to readiness, dispatch a message, optionally simulate
+ * the agent transitioning to 'generating' (= it submitted), and assert the PTY
+ * write shape under each simulated platform.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
@@ -48,8 +52,9 @@ class DrivableFactory implements PtyTransportFactory {
     }
 }
 
-// Minimal spec: starting → idle once the prompt footer is drawn. submit_key
-// is the CR that win32 swallows when sent on its own.
+// Minimal spec: starting → idle once the prompt footer is drawn, and idle →
+// generating once the footer shows the interrupt hint (= the agent submitted and
+// is now generating). submit_key is the CR that win32 swallows on multiline.
 function submitSpec(): Record<string, unknown> {
     return {
         $schema: 'adhdev:cli/spec@4',
@@ -61,6 +66,7 @@ function submitSpec(): Record<string, unknown> {
         states: [
             { id: 'starting', label: 'Starting', initial: true, status: 'idle' },
             { id: 'idle', label: 'Ready', status: 'idle' },
+            { id: 'generating', label: 'Generating', status: 'generating' },
         ],
         transitions: [
             {
@@ -68,6 +74,12 @@ function submitSpec(): Record<string, unknown> {
                 from: 'starting',
                 to: 'idle',
                 when: { section: 'footer', matches: '\\? for shortcuts' },
+            },
+            {
+                label: 'idle→generating',
+                from: 'idle',
+                to: 'generating',
+                when: { section: 'footer', matches: 'esc to interrupt' },
             },
         ],
     };
@@ -87,7 +99,16 @@ function setPlatform(p: NodeJS.Platform): void {
     Object.defineProperty(process, 'platform', { value: p, configurable: true });
 }
 
-async function sendAndCollect(): Promise<string[]> {
+interface CollectOpts {
+    text?: string;
+    /** ms after dispatch to feed a 'generating' screen (simulating submission). */
+    submitAfterMs?: number;
+    /** ms after dispatch to stop collecting. */
+    totalWaitMs?: number;
+}
+
+async function sendAndCollect(opts: CollectOpts = {}): Promise<string[]> {
+    const { text = 'hello world', submitAfterMs, totalWaitMs = 700 } = opts;
     const factory = new DrivableFactory();
     const driver = new FsmDriver({
         specPath: writeSpec(submitSpec()),
@@ -102,41 +123,68 @@ async function sendAndCollect(): Promise<string[]> {
         pty.feed('\n>\n? for shortcuts');
         await sleep(200);
         const before = pty.writes.length;
-        driver.dispatch({ kind: 'send_message', text: 'hello world' });
-        // submit delay floor is 200ms, then on win32 a second CR follows after
-        // the 300ms repeat gap; wait past both.
-        await sleep(700);
+        driver.dispatch({ kind: 'send_message', text });
+        const start = Date.now();
+        if (submitAfterMs != null) {
+            await sleep(submitAfterMs);
+            // Simulate the agent having submitted: footer now shows the interrupt
+            // hint → FSM transitions idle→generating → resend loop stops.
+            pty.feed('\n\nesc to interrupt');
+        }
+        await sleep(Math.max(0, totalWaitMs - (Date.now() - start)));
         return pty.writes.slice(before);
     } finally {
         driver.shutdown();
     }
 }
 
+const MULTILINE = 'line one\nline two\nline three';
+
 describe('FsmDriver -- win32 submit', () => {
     afterEach(() => setPlatform(ORIGINAL_PLATFORM));
 
-    it('win32: writes text first, then the submit key as TWO separate CRs (never combined)', async () => {
+    it('win32: writes text on its own — never fused with a trailing CR', async () => {
         setPlatform('win32');
-        const writes = await sendAndCollect();
-        // Text is written on its own — never fused with a trailing CR (the fused
-        // write is what Ink absorbs as a multi-line paste newline).
-        expect(writes).toContain('hello world');
-        expect(writes).not.toContain('hello world\r');
-        // The submit key arrives as its own keystroke, repeated once.
-        const loneCrCount = writes.filter(w => w === '\r').length;
-        expect(loneCrCount).toBe(2);
+        const writes = await sendAndCollect({ text: MULTILINE, submitAfterMs: 480, totalWaitMs: 1100 });
+        expect(writes).toContain(MULTILINE);
+        expect(writes).not.toContain(`${MULTILINE}\r`);
+        expect(writes).not.toContain('line three\r');
     });
+
+    it('win32 multiline: resends CR but STOPS once the agent leaves idle (submitted)', async () => {
+        setPlatform('win32');
+        const writes = await sendAndCollect({ text: MULTILINE, submitAfterMs: 480, totalWaitMs: 1400 });
+        const loneCr = writes.filter(w => w === '\r').length;
+        // It submitted (FSM saw generating) within the first cadence tick, so the
+        // resend loop halts — far below the budget, not a runaway.
+        expect(loneCr).toBeGreaterThanOrEqual(1);
+        expect(loneCr).toBeLessThanOrEqual(2);
+    });
+
+    it('win32 single-line: first CR submits, loop stops immediately', async () => {
+        setPlatform('win32');
+        const writes = await sendAndCollect({ text: 'hello world', submitAfterMs: 320, totalWaitMs: 900 });
+        expect(writes).toContain('hello world');
+        const loneCr = writes.filter(w => w === '\r').length;
+        expect(loneCr).toBe(1);
+    });
+
+    it('win32: if the prompt never submits, resends are bounded by the budget (no runaway)', async () => {
+        setPlatform('win32');
+        // Never feed a generating screen → status stays idle → loop exhausts its
+        // budget (WIN32_SUBMIT_MAX_RESENDS = 14) and then stops.
+        const writes = await sendAndCollect({ text: MULTILINE, totalWaitMs: 5600 });
+        const loneCr = writes.filter(w => w === '\r').length;
+        expect(loneCr).toBe(14);
+    }, 12000);
 
     it('non-win32: keeps the historical split write (text, then a single separate CR)', async () => {
         setPlatform('darwin');
-        const writes = await sendAndCollect();
-        // Historical behavior: text and submit key arrive as separate writes.
+        const writes = await sendAndCollect({ text: 'hello world', totalWaitMs: 700 });
         expect(writes).toContain('hello world');
         expect(writes).toContain('\r');
-        // It must NOT use a combined form on mac/linux.
         expect(writes).not.toContain('hello world\r');
-        // mac/linux submit only once (no win32 double-CR safety net).
-        const loneCrCount = writes.filter(w => w === '\r').length;
-        expect(loneCrCount).toBe(1);
+        const loneCr = writes.filter(w => w === '\r').length;
+        expect(loneCr).toBe(1);
     });
 });
