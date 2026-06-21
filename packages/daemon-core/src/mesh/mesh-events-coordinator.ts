@@ -1402,6 +1402,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     const workerCoordinatorDaemonId = readNonEmptyString(
         (sourceSession?.getState()?.settings as Record<string, unknown>)?.meshCoordinatorDaemonId,
     );
+    // Session-level routing anchor (multi-coordinator). Prefer the LIVE worker session's
+    // stamp; fall back to a relayed value carried in metadataEvent.meshCoordinatorSessionId
+    // (a remote worker's completion arrives via handleMeshForwardEvent with no local
+    // sourceSession, so the stamp can only ride in the relayed metadata). Empty on legacy /
+    // version-skewed dispatches → the event stays daemon-broadcast (no regression).
+    const workerCoordinatorSessionId = readNonEmptyString(
+        (sourceSession?.getState()?.settings as Record<string, unknown>)?.meshCoordinatorSessionId,
+    ) || readNonEmptyString(args.metadataEvent.meshCoordinatorSessionId);
 
     // R2: cloud P2P dashboard metadata sync. The cloud daemon used to do this from its own
     // relay listener; now the single core forwarder invokes the injected hook (no-op on
@@ -1858,6 +1866,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         metadataEvent: {
             ...args.metadataEvent,
             ...(recoveryContext ? { recoveryContext } : {}),
+            // Stash the coordinator session id INSIDE metadataEvent too, so it survives the
+            // P2P relay serialization (buildForwardPayloadFromPending spreads metadata; the
+            // handleMeshForwardEvent whitelist reads it back) — a top-level field alone would
+            // be dropped when the event crosses a machine boundary.
+            ...(workerCoordinatorSessionId ? { meshCoordinatorSessionId: workerCoordinatorSessionId } : {}),
         },
         // Silent lifecycle events (agent:ready / agent:generating_started) carry no
         // coordinator message; they are queued only so the coordinator re-runs the
@@ -1866,9 +1879,12 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         ...(messageText ? { coordinatorMessage: messageText } : {}),
         queuedAt: Date.now(),
         ...(workerCoordinatorDaemonId ? { targetCoordinatorDaemonId: workerCoordinatorDaemonId } : {}),
+        // Top-level session anchor for the local PHASE 2 strict-match on the coordinator
+        // daemon. Absent → daemon-level broadcast (legacy / single-coordinator path).
+        ...(workerCoordinatorSessionId ? { targetCoordinatorSessionId: workerCoordinatorSessionId } : {}),
     };
     if (queuePendingMeshCoordinatorEvent(pendingEvent)) {
-        LOG.info('MeshEvents', `Queued ${args.event} for coordinator (mesh ${args.meshId}${workerCoordinatorDaemonId ? `, coordinator daemon ${workerCoordinatorDaemonId}` : ''})`);
+        LOG.info('MeshEvents', `Queued ${args.event} for coordinator (mesh ${args.meshId}${workerCoordinatorDaemonId ? `, coordinator daemon ${workerCoordinatorDaemonId}` : ''}${workerCoordinatorSessionId ? `, coordinator session ${workerCoordinatorSessionId}` : ''})`);
     }
     return { success: true, forwarded: 0 };
 }
@@ -1903,6 +1919,13 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
             providerType: readNonEmptyString(payload.providerType),
             providerSessionId: readNonEmptyString(payload.providerSessionId),
+            // Preserve the originating coordinator SESSION id across the machine boundary so
+            // the completion routes back to the exact coordinator session (multi-coordinator).
+            // buildForwardPayloadFromPending spreads the worker event's metadata, so the id
+            // arrives as payload.meshCoordinatorSessionId; the top-level targetCoordinatorSessionId
+            // is also accepted as a fallback. injectMeshSystemMessage re-derives the routing
+            // anchors from this. Absent → daemon-level fallback (version-skew safe).
+            meshCoordinatorSessionId: readNonEmptyString(payload.meshCoordinatorSessionId) || readNonEmptyString(payload.targetCoordinatorSessionId),
             // Carry the session identity fields the worker provider event emits so the
             // coordinator's mirror (updateMeshOwnedSession) gets a real workspace/title/
             // settings. Without these the remote-relay hop reconstructs metadataEvent with

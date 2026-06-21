@@ -310,7 +310,7 @@ export class ProviderInstanceManager {
      *  --direct so the worker's completion event has a coordinator routing
      *  marker in state.settings). Returns true if the instance existed and
      *  the stamp was applied. */
-    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string }): boolean {
+    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): boolean {
         const inst = this.instances.get(instanceId);
         if (!inst || typeof inst.attachMeshAssignment !== 'function') {
             try {

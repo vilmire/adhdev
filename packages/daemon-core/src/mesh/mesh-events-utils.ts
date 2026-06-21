@@ -42,6 +42,12 @@ export interface MeshWorkerRelayStamp {
     meshNodeFor?: string;
     meshNodeId?: string;
     meshCoordinatorDaemonId?: string;
+    // The ORIGINATING coordinator SESSION (not just its daemon). Carried so a worker's
+    // completion event can be routed back to the exact coordinator session that
+    // dispatched the work, even when several coordinator sessions share one daemon
+    // (the multi-coordinator misroute). Optional + absent on legacy dispatches, in
+    // which case routing falls back to the daemon-level anchor (current behaviour).
+    meshCoordinatorSessionId?: string;
     launchedByCoordinator?: boolean;
 }
 
@@ -63,6 +69,7 @@ export function buildMeshWorkerRelayStamp(
         meshId?: unknown;
         nodeId?: unknown;
         coordinatorDaemonId?: unknown;
+        coordinatorSessionId?: unknown;
     } | undefined,
 ): MeshWorkerRelayStamp | undefined {
     if (!meshContext) return undefined;
@@ -80,9 +87,17 @@ export function buildMeshWorkerRelayStamp(
         stamp.meshCoordinatorDaemonId = coordinatorDaemonId;
     }
 
+    // Session-level anchor (multi-coordinator routing): stamp the originating
+    // coordinator session id so the completion event can target the exact session.
+    // Carried over P2P to remote workers so a remote worker's echo returns it.
+    const coordinatorSessionId = readNonEmptyString(meshContext.coordinatorSessionId);
+    if (coordinatorSessionId && !readNonEmptyString(settings.meshCoordinatorSessionId)) {
+        stamp.meshCoordinatorSessionId = coordinatorSessionId;
+    }
+
     // A dispatch from a coordinator is itself proof of delegation; stamp it when the
     // session is being given any mesh routing context but has no marker yet.
-    if ((meshId || nodeId || coordinatorDaemonId) && settings.launchedByCoordinator !== true) {
+    if ((meshId || nodeId || coordinatorDaemonId || coordinatorSessionId) && settings.launchedByCoordinator !== true) {
         stamp.launchedByCoordinator = true;
     }
 

@@ -33,6 +33,16 @@ export interface PendingMeshCoordinatorEvent {
      * Absent on legacy events — treated as broadcast to any coordinator.
      */
     targetCoordinatorDaemonId?: string;
+    /**
+     * When set, this event is intended for a specific coordinator SESSION on the
+     * target daemon (the session that originally dispatched the work). PHASE 2 inject
+     * strict-matches the live coordinator by this session id so a sibling coordinator
+     * session on the same daemon does not receive another coordinator's completion.
+     * Absent on legacy / version-skewed events → daemon-level broadcast (no regression).
+     * Rides inside the event payload, so it survives the SQLite payload round-trip and
+     * the JSONL file without a dedicated column; it is NOT a drain-scoping key.
+     */
+    targetCoordinatorSessionId?: string;
 }
 
 const REFINE_TERMINAL_EVENTS = new Set(['refine:completed', 'refine:failed']);

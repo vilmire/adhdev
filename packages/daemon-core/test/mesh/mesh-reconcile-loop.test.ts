@@ -397,6 +397,95 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
+  // ── (3) strict session routing — multi-coordinator misroute fix ──────────────
+  // A completion event that names an originating coordinator session must reach ONLY
+  // that session, never a sibling coordinator on the same daemon.
+  function makeCoordinatorWithSession(meshId: string, sessionId: string, status: 'idle' | 'generating', sink: any[]) {
+    return {
+      category: 'cli',
+      getState: () => ({ instanceId: sessionId, status, settings: { meshCoordinatorFor: meshId } }),
+      onEvent: vi.fn((_event: string, payload: any) => sink.push(payload)),
+    }
+  }
+
+  it('(3) strict route: a session-targeted completion is delivered ONLY to that session, not a sibling', async () => {
+    const meshId = `mesh_strict_${Date.now()}`
+    try {
+      const sinkA: any[] = []
+      const sinkB: any[] = []
+      const coordA = makeCoordinatorWithSession(meshId, 'coord-A', 'idle', sinkA)
+      const coordB = makeCoordinatorWithSession(meshId, 'coord-B', 'idle', sinkB)
+      const components = makeComponents([coordA, coordB])
+      queuePendingMeshCoordinatorEvent({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: "Node 'n'",
+        nodeId: 'n',
+        metadataEvent: { sessionId: 'worker-1', timestamp: Date.now() },
+        coordinatorMessage: 'Node done.',
+        queuedAt: Date.now(),
+        targetCoordinatorSessionId: 'coord-A',
+      })
+
+      await runMeshReconcileTick(components)
+
+      // Only the originating coordinator session receives it; the sibling is untouched.
+      expect(coordA.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordB.onEvent).not.toHaveBeenCalled()
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('(3) strict route: an event whose coordinator session is not live is held (re-queued), never broadcast to a sibling', async () => {
+    const meshId = `mesh_strict_nomatch_${Date.now()}`
+    try {
+      const sinkB: any[] = []
+      const coordB = makeCoordinatorWithSession(meshId, 'coord-B', 'idle', sinkB)
+      const components = makeComponents([coordB])
+      queuePendingMeshCoordinatorEvent({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: "Node 'n'",
+        nodeId: 'n',
+        metadataEvent: { sessionId: 'worker-1', timestamp: Date.now() },
+        coordinatorMessage: 'Node done.',
+        queuedAt: Date.now(),
+        targetCoordinatorSessionId: 'coord-GONE',
+      })
+
+      await runMeshReconcileTick(components)
+
+      // The sibling is NOT written to (the misroute we prevent) …
+      expect(coordB.onEvent).not.toHaveBeenCalled()
+      // … and the event is held for re-drain once the originating session returns.
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('(3) legacy fallback: an event with NO target session is broadcast to all coordinators (regression-0)', async () => {
+    const meshId = `mesh_legacy_broadcast_${Date.now()}`
+    try {
+      const sinkA: any[] = []
+      const sinkB: any[] = []
+      const coordA = makeCoordinatorWithSession(meshId, 'coord-A', 'idle', sinkA)
+      const coordB = makeCoordinatorWithSession(meshId, 'coord-B', 'idle', sinkB)
+      const components = makeComponents([coordA, coordB])
+      // No targetCoordinatorSessionId → legacy/single-coordinator broadcast path.
+      queueCompletion(meshId, 'legacy')
+
+      await runMeshReconcileTick(components)
+
+      expect(coordA.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordB.onEvent).toHaveBeenCalledTimes(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('idle coordinator alongside a modal-parked one: idle gets the event, modal-parked is skipped', async () => {
     const meshId = `mesh_reconcile_modal_plus_idle_${Date.now()}`
     try {
