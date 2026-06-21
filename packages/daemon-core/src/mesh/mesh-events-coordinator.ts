@@ -282,6 +282,11 @@ export function tryAssignQueueTask(
     if (node?.daemonId && components.dispatchMeshCommand) {
         const isLocalNode = components.cliManager.adapters.has(sessionId);
         if (!isLocalNode) {
+            const localDaemonIdForDispatch = readNonEmptyString(loadConfig().machineId) || undefined;
+            // (3) Originating coordinator session that enqueued this task — route its
+            // completion back to that exact session (multi-coordinator). Carried over P2P
+            // to the remote worker, which echoes it on its completion event.
+            const sourceCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId) || undefined;
             const delivery = createSessionDelivery({
                 meshId,
                 nodeId,
@@ -291,8 +296,9 @@ export function tryAssignQueueTask(
                 kind: 'task',
                 message: task.message,
                 status: 'delivering',
+                ...(sourceCoordinatorSessionId ? { sourceCoordinatorSessionId } : {}),
+                ...(localDaemonIdForDispatch ? { sourceCoordinatorDaemonId: localDaemonIdForDispatch } : {}),
             });
-            const localDaemonIdForDispatch = readNonEmptyString(loadConfig().machineId) || undefined;
             components.dispatchMeshCommand(node.daemonId, 'agent_command', {
                 targetSessionId: sessionId,
                 cliType: providerType,
@@ -303,6 +309,7 @@ export function tryAssignQueueTask(
                     nodeId,
                     taskId: task.id,
                     ...(localDaemonIdForDispatch ? { coordinatorDaemonId: localDaemonIdForDispatch } : {}),
+                    ...(sourceCoordinatorSessionId ? { coordinatorSessionId: sourceCoordinatorSessionId } : {}),
                 },
             }).then(() => {
                 updateSessionDeliveryStatus(delivery.id, 'delivered');
@@ -341,12 +348,16 @@ export function tryAssignQueueTask(
             // the node identity so the session is fully relay-safe (meshCoordinatorDaemonId is
             // the anchor the forwarder keys on), matching what mesh_launch_session stamps.
             const localDaemonId = readNonEmptyString(loadConfig().machineId);
+            const localSourceCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId);
             inst.updateSettings({
                 meshNodeFor: meshId,
                 meshNodeId: nodeId,
                 launchedByCoordinator: true,
                 autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
                 ...(localDaemonId ? { meshCoordinatorDaemonId: localDaemonId } : {}),
+                // (3) Stamp the originating coordinator session for session-anchored routing
+                // of this co-located worker's completion. Absent → daemon-level fallback.
+                ...(localSourceCoordinatorSessionId ? { meshCoordinatorSessionId: localSourceCoordinatorSessionId } : {}),
             });
         }
     } catch { /* best-effort — dispatch still proceeds */ }
@@ -360,6 +371,8 @@ export function tryAssignQueueTask(
         kind: 'task',
         message: task.message,
         status: 'delivering',
+        ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { sourceCoordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
+        ...(readNonEmptyString(loadConfig().machineId) ? { sourceCoordinatorDaemonId: readNonEmptyString(loadConfig().machineId) } : {}),
     });
     components.cliManager.handleCliCommand('agent_command', {
         targetSessionId: sessionId,

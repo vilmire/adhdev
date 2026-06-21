@@ -42,6 +42,17 @@ describe('Mesh Work Queue (GUPP)', () => {
         }
     });
 
+    it('(3) persists sourceCoordinatorSessionId in the queue payload (round-trips; legacy omit is undefined)', () => {
+        const task = enqueueTask(meshId, 'session-anchored task', { sourceCoordinatorSessionId: 'coord-A' });
+        expect(task.sourceCoordinatorSessionId).to.equal('coord-A');
+        // Round-trips through the SQLite payload JSON (no column migration).
+        const fromQueue = getQueue(meshId).find(t => t.id === task.id);
+        expect(fromQueue?.sourceCoordinatorSessionId).to.equal('coord-A');
+        // Omitted → undefined (legacy / single-coordinator → daemon-level routing fallback).
+        const legacy = enqueueTask(meshId, 'legacy task');
+        expect(legacy.sourceCoordinatorSessionId).to.equal(undefined);
+    });
+
     it('should enqueue tasks and list them', () => {
         const task = enqueueTask(meshId, 'test task 1');
         expect(task.status).to.equal('pending');

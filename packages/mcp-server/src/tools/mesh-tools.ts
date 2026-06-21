@@ -4144,7 +4144,7 @@ export async function meshEnqueueTask(
     const targetNodeId = explicitTarget
         || (preferWorktree ? resolvePreferredWorktreeNodeId(ctx) : undefined);
     try {
-        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId });
+        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}) });
 
         // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
         if (!(ctx.transport instanceof IpcTransport)) {
