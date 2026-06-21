@@ -465,8 +465,15 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
 
     // 2nd pass: managed IDEs/CLIs → assign to parent machine
     for (const daemon of daemons) {
-        if (!daemon.daemonId || daemon.type === 'adhdev-daemon') continue
-        const parent = machines.find(m => m.machineId === daemon.daemonId)
+        if (daemon.type === 'adhdev-daemon') continue
+        // Mesh-delegated sessions a coordinator synthesises into its own snapshot carry the
+        // true owning (worker) daemon id in ownerDaemonId, while daemonId points at the
+        // coordinator daemon that reported the snapshot. Attribute the session to the worker
+        // machine, not the coordinator hosting the snapshot. Non-mesh sessions have no
+        // ownerDaemonId and fall back to daemonId, so their grouping is unchanged.
+        const ownerKey = daemon.ownerDaemonId || daemon.daemonId
+        if (!ownerKey) continue
+        const parent = machines.find(m => m.machineId === ownerKey)
         if (!parent) continue
 
         if (isAcpEntry(daemon)) {
