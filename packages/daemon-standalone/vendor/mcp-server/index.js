@@ -2870,7 +2870,17 @@ async function meshStatus(ctx, args = {}) {
           status: s.status ?? s.lifecycle ?? s.state,
           providerType: s.providerType ?? s.cliType ?? s.type,
           ...s.activeChat?.status ? { chatStatus: s.activeChat.status } : {},
-          ...isSelfCoordinator ? { isSelfCoordinator: true, role: "coordinator" } : {}
+          ...isSelfCoordinator ? { isSelfCoordinator: true, role: "coordinator" } : {},
+          // [T2] Carry the worker-computed last-message preview through the slim so
+          // the coordinator's inbox can show the worker's latest ASSISTANT reply
+          // without re-deriving it from a live in-process instance it doesn't host.
+          // The worker's get_status_metadata snapshot already computes these
+          // (status/snapshot.ts) from its real transcript; dropping them here forced
+          // the coordinator down a derive path that fails for genuinely remote
+          // workers, leaving the mobile inbox stuck on the dispatched user task.
+          ...typeof s.lastMessagePreview === "string" && s.lastMessagePreview ? { lastMessagePreview: s.lastMessagePreview } : {},
+          ...typeof s.lastMessageRole === "string" && s.lastMessageRole ? { lastMessageRole: s.lastMessageRole } : {},
+          ...typeof s.lastMessageAt === "number" && Number.isFinite(s.lastMessageAt) ? { lastMessageAt: s.lastMessageAt } : {}
         };
       }).filter((s) => s.id);
     }
