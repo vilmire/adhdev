@@ -44,6 +44,27 @@ export function readStringArray(value: unknown): string[] {
 }
 
 /**
+ * Coerce a value that is either an already-parsed plain object or a JSON string
+ * into a plain object record. Arrays, primitives, parse failures and empty
+ * strings all collapse to {} — callers treat the result as a best-effort record.
+ *
+ * This is the single source of truth for the `parseJsonRecord`/`parseJsonObject`
+ * coercion that cloud mesh normalizers previously hand-redefined per file.
+ */
+export function parseJsonRecord(value: unknown): JsonRecord {
+    if (!value) return {}
+    if (typeof value === 'object') return readRecord(value)
+    if (typeof value !== 'string') return {}
+    const trimmed = value.trim()
+    if (!trimmed) return {}
+    try {
+        return readRecord(JSON.parse(trimmed))
+    } catch {
+        return {}
+    }
+}
+
+/**
  * Join a (possibly absent) repo root with a relative submodule path. Returns the
  * path unchanged when it is already absolute, and undefined when nothing usable
  * can be derived — callers must treat the result as optional.
