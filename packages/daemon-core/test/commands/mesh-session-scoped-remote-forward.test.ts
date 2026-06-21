@@ -162,3 +162,88 @@ describe('session-scoped command — remote mesh worker forward ([Z])', () => {
         expect(dispatch).not.toHaveBeenCalled();
     });
 });
+
+// [Z] Multi-session worker: the inline cache reliably retains only the node's single PRIMARY
+// session (cachedStatus.activeSession). A worker hosting more than one session exposes the
+// non-primary ones only through the plural live-session arrays (activeSessions /
+// activeSessionDetails). A controlbar/modal command targeting a non-primary remote session must
+// still resolve its owner daemon via the wider plural-shape scan.
+const PRIMARY_SESSION_ID = 'sess_remote_worker_primary';
+const SECONDARY_SESSION_ID = 'sess_remote_worker_secondary';
+
+function meshWithMultiSessionWorker(daemonId: string, shape: 'plural_strings' | 'plural_details') {
+    const node: Record<string, unknown> = {
+        id: 'node-remote-worker',
+        workspace: '/remote/machine/.adhdev-worktrees/m/feat-x',
+        daemonId,
+        isLocalWorktree: true,
+        // Singular cache only ever retains ONE (primary) session.
+        cachedStatus: {
+            activeSession: { id: PRIMARY_SESSION_ID, providerType: 'claude-cli', status: 'idle' },
+        },
+    };
+    if (shape === 'plural_strings') {
+        node.activeSessions = [PRIMARY_SESSION_ID, SECONDARY_SESSION_ID];
+    } else {
+        node.activeSessionDetails = [
+            { sessionId: PRIMARY_SESSION_ID, providerType: 'claude-cli', state: 'idle' },
+            { sessionId: SECONDARY_SESSION_ID, providerType: 'codex-cli', state: 'generating' },
+        ];
+    }
+    return {
+        id: 'mesh-session-forward',
+        name: 'Session Forward Mesh',
+        repoIdentity: 'example/repo',
+        defaultBranch: 'main',
+        policy: {},
+        coordinator: {},
+        nodes: [node],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+}
+
+describe('session-scoped command — multi-session worker owner resolution ([Z])', () => {
+    for (const shape of ['plural_strings', 'plural_details'] as const) {
+        it(`forwards a command for a NON-primary remote session carried in ${shape}`, async () => {
+            const dispatch = vi.fn(async () => ({ success: true, forwarded: true }));
+            const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });
+            router.getCachedInlineMesh('mesh-session-forward', meshWithMultiSessionWorker('daemon-remote-worker', shape));
+
+            // The non-primary session id is NOT in cachedStatus.activeSession — only in the plural array.
+            const result: any = await router.execute('resolve_action', {
+                targetSessionId: SECONDARY_SESSION_ID,
+                actionId: 'approve',
+            });
+
+            expect(dispatch).toHaveBeenCalledTimes(1);
+            const [daemonId, forwardedCmd, args] = dispatch.mock.calls[0];
+            expect(daemonId).toBe('daemon-remote-worker');
+            expect(forwardedCmd).toBe('resolve_action');
+            expect(args._meshDirectDispatch).toBe(true);
+            expect(args.targetSessionId).toBe(SECONDARY_SESSION_ID);
+            expect(result).toMatchObject({ success: true, forwarded: true });
+        });
+    }
+
+    it('still resolves the PRIMARY session from the singular cache (regression guard)', async () => {
+        const dispatch = vi.fn(async () => ({ success: true, forwarded: true }));
+        const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });
+        router.getCachedInlineMesh('mesh-session-forward', meshWithMultiSessionWorker('daemon-remote-worker', 'plural_strings'));
+
+        await router.execute('invoke_provider_script', { targetSessionId: PRIMARY_SESSION_ID, scriptName: 'setModel' });
+
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0][0]).toBe('daemon-remote-worker');
+    });
+
+    it('does NOT forward a non-primary session hosted by THIS coordinator (locally-hosted worker)', async () => {
+        const dispatch = vi.fn(async () => ({ success: true }));
+        const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });
+        router.getCachedInlineMesh('mesh-session-forward', meshWithMultiSessionWorker('daemon-coordinator', 'plural_details'));
+
+        await router.execute('resolve_action', { targetSessionId: SECONDARY_SESSION_ID, actionId: 'approve' });
+
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+});
