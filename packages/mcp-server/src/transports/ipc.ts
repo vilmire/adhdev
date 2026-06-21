@@ -13,6 +13,13 @@
 const DEFAULT_IPC_PORT = 19222;
 const DEFAULT_IPC_PATH = '/ipc';
 const DEFAULT_IPC_COMMAND_TIMEOUT_MS = 15_000;
+// IPC (layer-1) is the OUTERMOST deadline. For a REMOTE node the coordinator wraps
+// the verb in `mesh_relay_command` (120s here), so getTimeoutMs() already covers the
+// relay/responder budget. But for a LOCAL node commandForNode() sends the BARE verb
+// (transport.command), so the only deadline is this table — and any heavy verb missing
+// an entry fell back to the 15s default and false-timed-out while the responder was
+// still working (e.g. a local `clone_mesh_node` worktree create). Entries below keep
+// IPC ≥ the relay budget (daemon-cloud resultTimeoutForCommand) ≥ the responder budget.
 const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   mesh_relay_command: 120_000,
   agent_command: 30_000,
@@ -20,6 +27,22 @@ const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   git_diff_summary: 45_000,
   fast_forward_mesh_node: 120_000,
   mesh_status: 120_000,
+  // Heavy repo-mutating worktree ops (relay budgets: clone 90s, remove 60s). A local
+  // clone synchronously creates a worktree (~30s) plus a bounded setup-wait (~14s);
+  // 120s leaves headroom and matches the relay-wrapped remote path.
+  clone_mesh_node: 120_000,
+  remove_mesh_node: 60_000,
+  // A5: plan_mesh_refine_node is the SYNCHRONOUS refine dry-run — it runs several git
+  // probes (status/merge-tree/submodule) inline before replying, which can approach the
+  // 15s default on a slow (Windows) host. 45s defensively, matching git_status/diff.
+  plan_mesh_refine_node: 45_000,
+  // A2: refine_mesh_node / batch_refine_mesh_nodes are async-job-ack (the responder
+  // returns { async:true, status:'accepted' } immediately and works in the background),
+  // so 15s already suffices. 30s is a defensive floor guarding a future sync-dry-run
+  // regression; it is intentionally BELOW the relay 90s budget because the synchronous
+  // ack reply is sub-second and never bounded by the relay deadline.
+  refine_mesh_node: 30_000,
+  batch_refine_mesh_nodes: 30_000,
 };
 
 // WS readyState constants (same as browser)
@@ -50,7 +73,7 @@ function buildRequestId(): string {
   return `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function getTimeoutMs(type: string, nestedCommand: string): number {
+export function getTimeoutMs(type: string, nestedCommand: string): number {
   return Math.max(
     IPC_COMMAND_TIMEOUTS_MS[type] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
     IPC_COMMAND_TIMEOUTS_MS[nestedCommand] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
