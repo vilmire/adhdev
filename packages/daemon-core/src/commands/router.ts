@@ -955,6 +955,55 @@ function readCachedInlineMeshActiveSessions(node: any): string[] {
 }
 
 /**
+ * Wider session-ownership scan used ONLY by resolveRemoteMeshSessionOwnerDaemonId: collect
+ * EVERY session id a mesh node currently hosts. readCachedInlineMeshActiveSessions above only
+ * surfaces the node's single primary session (cachedStatus.activeSession) — other consumers
+ * depend on that one-session semantics, so it is left untouched. A worker hosting more than one
+ * session exposes its non-primary sessions only through the plural live-session arrays the
+ * coordinator carries: status.activeSessions / activeSessionDetails (built from live records on
+ * the aggregate snapshot, see get_mesh_status), or a worker's merged session report. A
+ * controlbar/modal command (invoke_provider_script / resolve_action / set_mode / …) targeting a
+ * non-primary remote session resolves its owner daemon only when those plural shapes are scanned
+ * too. Mirrors sessionStatusFromNodes' shape tolerance (mesh-active-work.ts): plural arrays of
+ * string ids OR objects keyed by id/sessionId/session_id/runtimeSessionId/instanceId, on both
+ * camelCase and snake_case, at the node root and under cachedStatus / lastProbe.
+ */
+function collectMeshNodeHostedSessionIds(node: any): Set<string> {
+    const ids = new Set<string>();
+    for (const id of readCachedInlineMeshActiveSessions(node)) ids.add(id);
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    for (const value of [
+        node?.activeSessions,
+        node?.active_sessions,
+        node?.activeSessionDetails,
+        node?.active_session_details,
+        node?.sessions,
+        node?.sessionDetails,
+        node?.session_details,
+        readObjectRecord(node?.lastProbe).sessions,
+        readObjectRecord(node?.last_probe).sessions,
+        cachedStatus.activeSessions,
+        cachedStatus.active_sessions,
+        cachedStatus.activeSessionDetails,
+        cachedStatus.active_session_details,
+        cachedStatus.sessions,
+    ]) {
+        if (!Array.isArray(value)) continue;
+        for (const item of value) {
+            if (typeof item === 'string') {
+                const id = readStringValue(item);
+                if (id) ids.add(id);
+                continue;
+            }
+            const record = readObjectRecord(item);
+            const id = readStringValue(record.id, record.sessionId, record.session_id, record.runtimeSessionId, record.instanceId);
+            if (id) ids.add(id);
+        }
+    }
+    return ids;
+}
+
+/**
  * Resolve the owning-node attribution for a mesh node record so a coordinator can
  * stamp the TRUE owner onto a synthetic session entry instead of letting the
  * dashboard fall back to the coordinator's own daemonId. Returns whichever of the
@@ -3825,26 +3874,52 @@ export class DaemonCommandRouter {
      * controlbar commands do not — so the controlbar buttons appear to do nothing.
      *
      * Mirror the existing node-level remote-forward pattern (fast_forward_mesh_node etc.):
-     * scan the cached inline-mesh nodes for the one whose active session matches the
-     * targetSessionId, and return its daemonId when that daemonId is a remote daemon (i.e.
-     * not this coordinator's own statusInstanceId). Returns undefined for a locally-hosted
-     * session (no forward — execute locally as before) or when ownership can't be resolved.
+     * scan the candidate mesh nodes for the one hosting the targetSessionId, and return its
+     * daemonId when that daemonId is a remote daemon (i.e. not this coordinator's own
+     * statusInstanceId). Returns undefined for a locally-hosted session (no forward — execute
+     * locally as before) or when ownership can't be resolved.
+     *
+     * The candidate set spans BOTH the cached inline-mesh nodes and the live aggregate
+     * mesh-status snapshots. The inline cache reliably carries only each node's single primary
+     * session (cachedStatus.activeSession), so a worker hosting more than one session exposes its
+     * non-primary sessions only on the aggregate snapshot nodes (status.activeSessions /
+     * activeSessionDetails, built from live session records). collectMeshNodeHostedSessionIds does
+     * the wider plural-shape scan so a controlbar/modal command targeting a non-primary remote
+     * session still resolves its owner — the singular readCachedInlineMeshActiveSessions semantics
+     * other consumers depend on stay untouched.
      */
     public resolveRemoteMeshSessionOwnerDaemonId(sessionId: string): string | undefined {
         const trimmed = typeof sessionId === 'string' ? sessionId.trim() : '';
         if (!trimmed) return undefined;
         const selfDaemonId = this.deps.statusInstanceId;
-        for (const node of this.getCachedInlineMeshNodes()) {
-            const nodeSessions = readCachedInlineMeshActiveSessions(node);
-            if (!nodeSessions.includes(trimmed)) continue;
+        for (const node of this.collectMeshSessionOwnerCandidateNodes()) {
+            if (!collectMeshNodeHostedSessionIds(node).has(trimmed)) continue;
             const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
-            if (!nodeDaemonId) return undefined;
+            // A matching node with no readable daemonId can't be attributed — keep scanning
+            // the remaining candidates (e.g. the same session on an aggregate node that does
+            // carry the daemonId) rather than bailing on the whole resolution.
+            if (!nodeDaemonId) continue;
             // Only forward to a genuinely remote daemon. When the owning node is this
             // coordinator itself (locally hosted worker), fall through to local handling.
             if (selfDaemonId && nodeDaemonId === selfDaemonId) return undefined;
             return nodeDaemonId;
         }
         return undefined;
+    }
+
+    /**
+     * Candidate nodes for remote-session owner resolution: the cached inline-mesh nodes (which
+     * carry each node's primary session) plus the nodes from every cached aggregate mesh-status
+     * snapshot (which carry each node's full live session list). getCachedInlineMeshNodes()
+     * returns a fresh array, so appending the aggregate nodes never mutates cached state.
+     */
+    private collectMeshSessionOwnerCandidateNodes(): any[] {
+        const nodes: any[] = this.getCachedInlineMeshNodes();
+        for (const cached of this.aggregateMeshStatusCache.values()) {
+            const snapshotNodes = cached?.snapshot?.nodes;
+            if (Array.isArray(snapshotNodes)) nodes.push(...snapshotNodes);
+        }
+        return nodes;
     }
 
     public getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
