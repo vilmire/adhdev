@@ -74,6 +74,14 @@ export interface MeshMissionSlimSummary extends Omit<MeshMissionSummary, 'goal'>
 /** Max chars of goal text retained in the slim (compact) mission summary. */
 export const GOAL_PREVIEW_MAX = 120;
 
+/**
+ * Shorter goal preview used by the mesh_status compact (LLM coordinator) surface.
+ * The coordinator only needs to recognize a mission, not read its full goal, and
+ * mesh_status repeats every live mission on every poll — so the status preview is
+ * tighter than the dashboard / mesh_mission_list preview (GOAL_PREVIEW_MAX).
+ */
+export const COMPACT_STATUS_GOAL_PREVIEW_MAX = 80;
+
 function normalizeMissionStatus(value: unknown): MeshMissionStatus {
     return MESH_MISSION_STATUSES.includes(value as MeshMissionStatus)
         ? value as MeshMissionStatus
@@ -153,13 +161,13 @@ export function getActiveMeshMissionSummaries(meshId: string): MeshMissionSummar
 }
 
 /** Project a full mission summary down to the slim (goal-elided) shape. */
-function slimMissionSummary(summary: MeshMissionSummary): MeshMissionSlimSummary {
+function slimMissionSummary(summary: MeshMissionSummary, previewMax: number = GOAL_PREVIEW_MAX): MeshMissionSlimSummary {
     const goal = typeof summary.goal === 'string' ? summary.goal : '';
-    const goalTruncated = goal.length > GOAL_PREVIEW_MAX;
+    const goalTruncated = goal.length > previewMax;
     const { goal: _omitGoal, ...rest } = summary;
     return {
         ...rest,
-        goalPreview: goalTruncated ? goal.slice(0, GOAL_PREVIEW_MAX) : goal,
+        goalPreview: goalTruncated ? goal.slice(0, previewMax) : goal,
         goalTruncated,
     };
 }
@@ -197,7 +205,73 @@ export function getMeshStatusMissionSummaries(
     if (options?.withStats) {
         full = full.map(summary => ({ ...summary, stats: computeMeshMissionStats(meshId, summary.id) }));
     }
-    return options?.verbose ? full : full.map(slimMissionSummary);
+    return options?.verbose ? full : full.map(summary => slimMissionSummary(summary));
+}
+
+/** Folded completed/abandoned history for the mesh_status compact surface. */
+export interface MeshStatusMissionsHistoryFold {
+    /** Total completed + abandoned missions. */
+    count: number;
+    /** Count by lifecycle status (e.g. { completed, abandoned }). */
+    byStatus: Record<string, number>;
+    /** Newest-first id list (capped) so each folded mission stays addressable. */
+    missionIds: string[];
+    note: string;
+}
+
+/** Compact mesh_status mission projection: live detail + folded history. */
+export interface MeshStatusMissionsCompact {
+    /**
+     * Active + paused missions, goal-elided to COMPACT_STATUS_GOAL_PREVIEW_MAX and
+     * WITHOUT the operational `stats` rollup — the `tasks` aggregate already carries
+     * progress, and stats (durations/retries) is a verbose/dashboard concern.
+     */
+    live: MeshMissionSlimSummary[];
+    /** Completed + abandoned missions folded to counts + ids; null when none. */
+    historyFold: MeshStatusMissionsHistoryFold | null;
+}
+
+/**
+ * Mission projection for the mesh_status COMPACT (LLM coordinator) surface.
+ *
+ * Unlike getMeshStatusMissionSummaries (which emits every live mission plus a
+ * capped slice of full-detail history, each carrying a stats rollup), this keeps
+ * per-mission detail ONLY for live (active/paused) missions and folds the whole
+ * completed/abandoned history into a counts + id-list summary. Combined with the
+ * tighter goal preview and dropped stats, this is what keeps the compact
+ * mesh_status payload bounded as a mesh accumulates missions — the missions
+ * section previously dominated the payload (full goalPreview + tasks + stats per
+ * mission, for every live mission and up to 10 history missions, on every poll).
+ *
+ * The stored missions are untouched; this is an output-only projection. Full
+ * mission detail (goal text + stats + history) stays available via
+ * mesh_status verbose=true or mesh_mission_list.
+ */
+export function getMeshStatusMissionsCompact(
+    meshId: string,
+    options?: { previewMax?: number; historyIdLimit?: number },
+): MeshStatusMissionsCompact {
+    const previewMax = Math.max(0, options?.previewMax ?? COMPACT_STATUS_GOAL_PREVIEW_MAX);
+    const historyIdLimit = Math.max(0, options?.historyIdLimit ?? 20);
+    const all = getMeshMissions(meshId);
+    const live = all
+        .filter(m => m.status === 'active' || m.status === 'paused')
+        .map(mission => slimMissionSummary(summarizeMeshMission(meshId, mission), previewMax));
+    const history = all
+        .filter(m => m.status === 'completed' || m.status === 'abandoned')
+        .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    let historyFold: MeshStatusMissionsHistoryFold | null = null;
+    if (history.length > 0) {
+        const byStatus: Record<string, number> = {};
+        for (const m of history) byStatus[m.status] = (byStatus[m.status] ?? 0) + 1;
+        historyFold = {
+            count: history.length,
+            byStatus,
+            missionIds: history.slice(0, historyIdLimit).map(m => m.id),
+            note: 'Completed/abandoned missions are folded to counts + ids in compact mesh_status. Use mesh_mission_list or mesh_status verbose=true for their goal/task detail.',
+        };
+    }
+    return { live, historyFold };
 }
 
 /**
@@ -219,7 +293,7 @@ export function listMeshMissionSummaries(
     const missions = getMeshMissions(meshId, statuses)
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
     const full = missions.map(mission => summarizeMeshMission(meshId, mission));
-    return options?.verbose ? full : full.map(slimMissionSummary);
+    return options?.verbose ? full : full.map(summary => slimMissionSummary(summary));
 }
 
 /**

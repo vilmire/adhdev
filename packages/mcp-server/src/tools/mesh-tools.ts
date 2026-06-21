@@ -43,6 +43,7 @@ import {
     computeMeshTaskStats,
     getActiveMeshMissionSummaries,
     getMeshStatusMissionSummaries,
+    getMeshStatusMissionsCompact,
     listMeshMissionSummaries,
     MESH_MISSION_STATUSES,
     upsertMeshMission,
@@ -1288,6 +1289,13 @@ const COMPACT_DETAILED_NODES_BYTE_BUDGET = 9000;
 // the array stays bounded on pathologically large meshes; every node id is still
 // listed in foldedNodes.nodeIds, so nothing becomes undiscoverable.
 const COMPACT_NODES_TOTAL_BYTE_BUDGET = 13000;
+
+// Byte budget for the whole compact `missions` array (live active/paused missions).
+// Completed/abandoned history is already folded to a counts+id summary upstream;
+// this bounds the LIVE-mission detail so the section can't grow unbounded with the
+// number of active/paused missions. Newest-active first; overflow is folded into
+// `foldedMissions` (id list) so every live mission id stays addressable.
+const COMPACT_MISSIONS_BYTE_BUDGET = 6000;
 
 // Rough severity ranking so that when the byte budget forces a downgrade, the most
 // urgent nodes (errors/degraded/blocked launches) are the ones kept in detail.
@@ -3754,22 +3762,62 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     // M3-2: mission summaries — goal + live task aggregates (derived, not stored).
     // M7: each mission also carries time/attempt stats derived from the ledger.
     //
-    // Visibility: surface ALL live missions (active AND paused) plus a capped slice
-    // of completed/abandoned history — getActiveMeshMissionSummaries (active-only)
-    // hid paused missions from the coordinator entirely. Compact mode (the default)
-    // elides each mission's full goal to a capped goalPreview + goalTruncated flag;
-    // verbose returns the full goal text. Identity/status/task aggregates are kept
-    // in both modes so a coordinator can always answer "what missions exist".
+    // The missions section previously dominated the compact payload: every live
+    // mission AND up to 10 history missions were emitted in full (goalPreview +
+    // tasks + a per-mission stats rollup) on every poll, so a mesh with many
+    // missions pushed mesh_status past the MCP token cap. Compact mode now folds
+    // missions like it folds nodes/sessions:
+    //   • live (active/paused) missions keep detail, goal-elided to a tight preview
+    //     and WITHOUT the stats rollup (the tasks aggregate already carries
+    //     progress; stats is a verbose/dashboard concern);
+    //   • completed/abandoned history is folded to a counts + id summary
+    //     (missionsHistory) instead of full per-mission detail;
+    //   • a byte budget bounds the live array — overflow folds into foldedMissions
+    //     (id list), so even a mesh of many active missions can't blow the cap.
+    // verbose=true restores the full dashboard-grade missions (full goal text, the
+    // stats rollup, and full-detail history) — the backward-compatible escape hatch.
     try {
-        const missions = getMeshStatusMissionSummaries(mesh.id, { verbose: !compact });
-        if (missions.length > 0) {
-            response.missions = missions.map(mission => {
-                try {
-                    return { ...mission, stats: computeMeshMissionStats(mesh.id, mission.id) };
-                } catch {
-                    return mission;
+        if (compact) {
+            const { live, historyFold } = getMeshStatusMissionsCompact(mesh.id);
+            // Bound the live-mission detail by byte budget, newest-active first.
+            // Overflow folds into foldedMissions so every live id stays addressable.
+            const ranked = [...live].sort((a, b) =>
+                String((b as any).tasks?.lastActivityAt ?? '').localeCompare(String((a as any).tasks?.lastActivityAt ?? '')));
+            const kept: any[] = [];
+            const overflow: any[] = [];
+            let spent = 0;
+            for (const m of ranked) {
+                const cost = JSON.stringify(m).length + 1;
+                if (kept.length === 0 || spent + cost <= COMPACT_MISSIONS_BYTE_BUDGET) {
+                    kept.push(m);
+                    spent += cost;
+                } else {
+                    overflow.push(m);
                 }
-            });
+            }
+            if (kept.length > 0) response.missions = kept;
+            if (overflow.length > 0) {
+                const byStatus: Record<string, number> = {};
+                for (const m of overflow) byStatus[String(m.status)] = (byStatus[String(m.status)] ?? 0) + 1;
+                response.foldedMissions = {
+                    count: overflow.length,
+                    note: 'Live-mission byte budget reached: these active/paused missions are listed by id only. Use mesh_mission_list or mesh_status verbose=true for their detail.',
+                    byStatus,
+                    missionIds: overflow.map(m => String(m.id)),
+                };
+            }
+            if (historyFold) response.missionsHistory = historyFold;
+        } else {
+            const missions = getMeshStatusMissionSummaries(mesh.id, { verbose: true });
+            if (missions.length > 0) {
+                response.missions = missions.map(mission => {
+                    try {
+                        return { ...mission, stats: computeMeshMissionStats(mesh.id, mission.id) };
+                    } catch {
+                        return mission;
+                    }
+                });
+            }
         }
     } catch { /* mission read is best-effort */ }
 

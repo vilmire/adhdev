@@ -188,8 +188,8 @@ export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './con
 
 // ── Mesh Coordinator ──
 export { buildCoordinatorSystemPrompt } from './mesh/coordinator-prompt.js';
-export { upsertMeshMission, getMeshMissions, getMeshMission, summarizeMissionTasks, summarizeMeshMission, getActiveMeshMissionSummaries, getMeshStatusMissionSummaries, listMeshMissionSummaries, buildMissionPromptSection, GOAL_PREVIEW_MAX, MESH_MISSION_STATUSES } from './mesh/mesh-missions.js';
-export type { MeshMissionRecord, MeshMissionStatus, MeshMissionSummary, MeshMissionSlimSummary, MeshMissionTaskAggregate } from './mesh/mesh-missions.js';
+export { upsertMeshMission, getMeshMissions, getMeshMission, summarizeMissionTasks, summarizeMeshMission, getActiveMeshMissionSummaries, getMeshStatusMissionSummaries, getMeshStatusMissionsCompact, listMeshMissionSummaries, buildMissionPromptSection, GOAL_PREVIEW_MAX, COMPACT_STATUS_GOAL_PREVIEW_MAX, MESH_MISSION_STATUSES } from './mesh/mesh-missions.js';
+export type { MeshMissionRecord, MeshMissionStatus, MeshMissionSummary, MeshMissionSlimSummary, MeshMissionTaskAggregate, MeshStatusMissionsCompact, MeshStatusMissionsHistoryFold } from './mesh/mesh-missions.js';
 export { computeMeshTaskStats, computeMeshMissionStats } from './mesh/mesh-task-stats.js';
 export type { MeshTaskStats, MeshMissionStats } from './mesh/mesh-task-stats.js';
 export { deriveMeshReviewInboxItems } from './mesh/mesh-review-inbox.js';
