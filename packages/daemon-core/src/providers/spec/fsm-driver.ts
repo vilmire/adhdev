@@ -145,6 +145,14 @@ function countNewlines(s: string): number {
 
 const SUBMIT_DELAY_FLOOR_MS = 200;
 
+// win32 ConPTY submit reliability: after the text settles we write the submit
+// key (CR) as its OWN keystroke, then repeat it once after a short gap. The
+// repeat is the safety net for the case where ConPTY drops/coalesces the first
+// lone CR; on an already-submitted prompt the second CR lands on an empty input
+// and is a harmless no-op. The gap must be long enough that the TUI has redrawn
+// after the first CR before the second arrives.
+const WIN32_SUBMIT_REPEAT_GAP_MS = 300;
+
 export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text: string): number {
     const lines = countNewlines(text);
     const linesBonus = Math.min(800, lines * 80);
@@ -832,24 +840,26 @@ export class FsmDriver implements ISpecDriver {
         const perChar = sm.delay_ms_per_char ?? 0;
         const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text);
 
-        // win32 ConPTY swallows a lone submit key (CR) that arrives in its own
-        // PTY chunk after a delay: ConPTY does not treat a delayed, standalone
-        // CR as a submit, so the prompt sits typed-but-unsent until the user
-        // hits Enter manually. mac/linux PTYs do recognise the split write, so
-        // this asymmetry is win32-only. The fix mirrors the legacy
-        // ProviderCliAdapter.forceSendMessage fix: honour the settle delay so
-        // the TUI input handler is ready, then write `text + submit_key` as ONE
-        // PTY write — keeping the submit key in the same write unit as the text
-        // is the invariant ConPTY needs to recognise the submit. perChar typing
-        // simulation is skipped on win32 (a per-char loop necessarily ends with a
-        // separate trailing CR); correctness of submission wins over the typing
-        // visual there.
+        // win32 ConPTY submit: the text and the submit key (CR) must NOT be
+        // combined into one PTY write. Ink-based TUIs (claude-cli) treat a single
+        // write that carries text + a trailing CR as a bracketed/multi-line paste
+        // and absorb the CR as a literal newline in the input box instead of a
+        // submit keystroke — the prompt sits typed-but-unsent until the user hits
+        // Enter manually. (A previous "atomic write" attempt regressed exactly
+        // this way.) Instead, write the text, let it settle so the TUI leaves any
+        // paste-accumulation state, then deliver the CR as its OWN keystroke. We
+        // send the CR twice with a short gap: ConPTY can drop/coalesce the first
+        // lone CR, and a second CR on an already-submitted (now empty) prompt is a
+        // harmless no-op. perChar typing simulation is skipped on win32;
+        // correctness of submission wins over the typing visual there.
         if (process.platform === 'win32') {
-            if (beforeSubmit > 0) {
-                setTimeout(() => this.adapter.send_keys(text + sm.submit_key), beforeSubmit);
-            } else {
-                this.adapter.send_keys(text + sm.submit_key);
-            }
+            const submitTwice = (): void => {
+                this.adapter.send_keys(sm.submit_key);
+                setTimeout(() => this.adapter.send_keys(sm.submit_key), WIN32_SUBMIT_REPEAT_GAP_MS);
+            };
+            this.adapter.send_keys(text);
+            if (beforeSubmit > 0) setTimeout(submitTwice, beforeSubmit);
+            else submitTwice();
             return;
         }
 

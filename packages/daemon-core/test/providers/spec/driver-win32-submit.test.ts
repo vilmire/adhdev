@@ -1,19 +1,18 @@
 /**
- * Regression coverage for the win32 ConPTY lone-CR submit swallow.
+ * Regression coverage for win32 ConPTY submit on the FSM/spec path.
  *
  * claude-cli (and other spec CLIs: codex, gemini, …) route through
- * FsmDriver.actuallySendMessage. Its default path writes the prompt text, then
- * — after the submit delay floor (>=200ms) — writes the submit key (`\r`) as a
- * SEPARATE, delayed PTY write. On win32, ConPTY does not treat a lone CR that
- * arrives in its own chunk after a delay as a submit key: it swallows the CR and
- * the prompt sits typed-but-unsent until the user presses Enter manually. This
- * is the same lone-CR swallow the legacy ProviderCliAdapter.forceSendMessage fix
- * addressed for the legacy code path, but the FSM/spec path was left uncovered.
+ * FsmDriver.actuallySendMessage. An earlier "atomic write" attempt combined the
+ * prompt text and the submit key (`\r`) into ONE PTY write on win32. That
+ * regressed: Ink-based TUIs treat a single write carrying text + a trailing CR
+ * as a bracketed/multi-line paste and absorb the CR as a literal newline, so the
+ * prompt sat typed-but-unsent until the user hit Enter manually.
  *
- * The fix: on win32 only, honour the settle delay but write `text + submit_key`
- * as ONE PTY write so the CR can never be separated from the text it submits.
- * mac/linux keep the historical split write (those PTYs recognise it fine), so
- * the asymmetry is contained to win32.
+ * The correct fix: on win32 write the text first, let it settle, then deliver the
+ * CR as its OWN keystroke — twice, with a short gap, because ConPTY can drop or
+ * coalesce a lone CR and a second CR on an already-submitted (empty) prompt is a
+ * harmless no-op. mac/linux keep the historical single split CR (those PTYs
+ * recognise it fine), so the win32 double-CR is contained to win32.
  *
  * These tests drive the FSM to readiness, dispatch a message, and assert the
  * exact PTY write shape under each simulated platform.
@@ -104,36 +103,40 @@ async function sendAndCollect(): Promise<string[]> {
         await sleep(200);
         const before = pty.writes.length;
         driver.dispatch({ kind: 'send_message', text: 'hello world' });
-        // submit delay floor is 200ms; wait past it.
-        await sleep(450);
+        // submit delay floor is 200ms, then on win32 a second CR follows after
+        // the 300ms repeat gap; wait past both.
+        await sleep(700);
         return pty.writes.slice(before);
     } finally {
         driver.shutdown();
     }
 }
 
-describe('FsmDriver -- win32 atomic submit', () => {
+describe('FsmDriver -- win32 submit', () => {
     afterEach(() => setPlatform(ORIGINAL_PLATFORM));
 
-    it('win32: writes text and submit key as ONE PTY write (no lone delayed CR)', async () => {
+    it('win32: writes text first, then the submit key as TWO separate CRs (never combined)', async () => {
         setPlatform('win32');
         const writes = await sendAndCollect();
-        // The atomic write contains the text immediately followed by the CR.
-        expect(writes).toContain('hello world\r');
-        // And there must be NO standalone CR write — that is exactly the chunk
-        // ConPTY swallows.
-        expect(writes).not.toContain('\r');
-        // Text must never be written without its trailing CR either.
-        expect(writes).not.toContain('hello world');
+        // Text is written on its own — never fused with a trailing CR (the fused
+        // write is what Ink absorbs as a multi-line paste newline).
+        expect(writes).toContain('hello world');
+        expect(writes).not.toContain('hello world\r');
+        // The submit key arrives as its own keystroke, repeated once.
+        const loneCrCount = writes.filter(w => w === '\r').length;
+        expect(loneCrCount).toBe(2);
     });
 
-    it('non-win32: keeps the historical split write (text, then a separate CR)', async () => {
+    it('non-win32: keeps the historical split write (text, then a single separate CR)', async () => {
         setPlatform('darwin');
         const writes = await sendAndCollect();
         // Historical behavior: text and submit key arrive as separate writes.
         expect(writes).toContain('hello world');
         expect(writes).toContain('\r');
-        // It must NOT use the combined win32 form on mac/linux.
+        // It must NOT use a combined form on mac/linux.
         expect(writes).not.toContain('hello world\r');
+        // mac/linux submit only once (no win32 double-CR safety net).
+        const loneCrCount = writes.filter(w => w === '\r').length;
+        expect(loneCrCount).toBe(1);
     });
 });
