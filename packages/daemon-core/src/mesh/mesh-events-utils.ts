@@ -162,17 +162,46 @@ export function readMeshCompletionSummary(metadataEvent: Record<string, unknown>
  * assistant text — non-completion lifecycle events (generating_started / ready without a
  * summary) must NOT clobber a previously surfaced preview.
  */
+function truncateSurfacedPreview(text: string): string {
+    const truncationSuffix = '...[truncated]';
+    return text.length > MESH_SURFACED_PREVIEW_MAX_CHARS
+        ? `${text.slice(0, MESH_SURFACED_PREVIEW_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}`
+        : text;
+}
+
 export function resolveMeshSurfacedSessionPreview(
     metadataEvent: Record<string, unknown>,
 ): { preview: string; role: 'assistant'; receivedAt: number } | undefined {
+    // 1) Completion summary — the worker's final assistant text rides a completion event
+    //    as finalSummary / workerResult.summary / result.summary.
     const summaryText = readMeshCompletionSummary(metadataEvent);
-    if (!summaryText) return undefined;
-    const truncationSuffix = '...[truncated]';
-    const preview = summaryText.length > MESH_SURFACED_PREVIEW_MAX_CHARS
-        ? `${summaryText.slice(0, MESH_SURFACED_PREVIEW_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}`
-        : summaryText;
-    const timestamp = readEventTimestampValue(metadataEvent.timestamp);
-    return { preview, role: 'assistant', receivedAt: timestamp };
+    if (summaryText) {
+        return {
+            preview: truncateSurfacedPreview(summaryText),
+            role: 'assistant',
+            receivedAt: readEventTimestampValue(metadataEvent.timestamp),
+        };
+    }
+    // 2) Status-snapshot fallback — a completion that carried NO summary (and any later
+    //    status-sync event) still ships the worker's latest display message on the event as
+    //    lastMessagePreview/lastMessageRole/lastMessageAt (computed by getLastDisplayMessage
+    //    on the worker, attached in injectMeshSystemMessage and carried over the relay).
+    //    Surface it ONLY when it is an assistant reply: a user-role last message means the
+    //    turn is still mid-flight (the dispatched task is the only message), and surfacing it
+    //    would both re-introduce the "inbox stuck on the user task" bug and clobber a
+    //    previously surfaced assistant preview. The web inbox guard renders only an
+    //    assistant-role preview anyway, so a user-role one would be inert there.
+    const lastPreview = readNonEmptyString(metadataEvent.lastMessagePreview);
+    const lastRole = readNonEmptyString(metadataEvent.lastMessageRole);
+    if (lastPreview && lastRole === 'assistant') {
+        return {
+            preview: truncateSurfacedPreview(lastPreview),
+            role: 'assistant',
+            receivedAt: readEventTimestampValue(metadataEvent.lastMessageAt)
+                || readEventTimestampValue(metadataEvent.timestamp),
+        };
+    }
+    return undefined;
 }
 
 function readEventTimestampValue(value: unknown): number {

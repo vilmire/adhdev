@@ -51,4 +51,54 @@ describe('resolveMeshSurfacedSessionPreview', () => {
     expect(result!.preview.length).toBeLessThanOrEqual(512)
     expect(result!.preview.endsWith('...[truncated]')).toBe(true)
   })
+
+  // T2 status-snapshot fallback: a summary-less completion (and any later status sync) ships
+  // the worker's latest display message on the event as lastMessage*. The coordinator surfaces
+  // it ONLY when it's an assistant reply so the inbox stops sticking on the first user task,
+  // without clobbering a surfaced preview during a mid-turn (user-only) event.
+  it('falls back to an assistant-role status-snapshot lastMessage when no summary is present', () => {
+    const result = resolveMeshSurfacedSessionPreview({
+      event: 'agent:generating_completed',
+      // summary-less completion — the only carrier left is the snapshot last message
+      lastMessagePreview: '빌드 통과했고 변경 3개 커밋했어.',
+      lastMessageRole: 'assistant',
+      lastMessageAt: 555,
+      timestamp: 999,
+    })
+    expect(result).toEqual({
+      preview: '빌드 통과했고 변경 3개 커밋했어.',
+      role: 'assistant',
+      receivedAt: 555,
+    })
+  })
+
+  it('prefers the completion summary over the status-snapshot lastMessage', () => {
+    const result = resolveMeshSurfacedSessionPreview({
+      finalSummary: 'final assistant summary',
+      lastMessagePreview: 'stale snapshot line',
+      lastMessageRole: 'assistant',
+      timestamp: 10,
+    })
+    expect(result?.preview).toBe('final assistant summary')
+  })
+
+  it('ignores a user-role status-snapshot lastMessage so a mid-turn task does not clobber', () => {
+    // generating_started carrying only the just-dispatched user task must NOT surface — that
+    // is the exact "inbox stuck on the user task" regression we are guarding against, and the
+    // web inbox guard renders assistant-role previews only.
+    expect(resolveMeshSurfacedSessionPreview({
+      event: 'agent:generating_started',
+      lastMessagePreview: '이 워크스페이스 빌드해줘',
+      lastMessageRole: 'user',
+      lastMessageAt: 200,
+    })).toBeUndefined()
+  })
+
+  it('falls back to the event timestamp when the snapshot lastMessageAt is absent', () => {
+    expect(resolveMeshSurfacedSessionPreview({
+      lastMessagePreview: 'done',
+      lastMessageRole: 'assistant',
+      timestamp: 4242,
+    })?.receivedAt).toBe(4242)
+  })
 })

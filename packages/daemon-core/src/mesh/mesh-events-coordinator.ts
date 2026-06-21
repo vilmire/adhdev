@@ -14,6 +14,7 @@ import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } f
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
+import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared';
@@ -1424,6 +1425,26 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         (sourceSession?.getState()?.settings as Record<string, unknown>)?.meshCoordinatorSessionId,
     ) || readNonEmptyString(args.metadataEvent.meshCoordinatorSessionId);
 
+    // T2: a summary-less completion (and any non-completion status-sync event) carries no
+    // assistant text on the event, so resolveMeshSurfacedSessionPreview had nothing to surface
+    // and the coordinator's inbox mirror stayed stuck on the first dispatched user task. When
+    // THIS daemon hosts the live worker instance (sourceSession present), derive the worker's
+    // latest display message straight from its transcript and attach it to the event as
+    // lastMessagePreview/lastMessageRole/lastMessageAt. resolveMeshSurfacedSessionPreview reads
+    // these as an assistant-only fallback; they also ride the pending-queue + P2P relay
+    // (handleMeshForwardEvent whitelist) so a remote coordinator can surface them. A remote
+    // coordinator has no local instance and keeps relying on the relayed fields — unchanged.
+    const enrichedMetadataEvent = ((): Record<string, unknown> => {
+        const last = sourceSession ? getLastDisplayMessage(sourceSession.getState()) : null;
+        if (!last || !last.preview) return args.metadataEvent;
+        return {
+            ...args.metadataEvent,
+            lastMessagePreview: last.preview,
+            lastMessageRole: last.role,
+            ...(last.receivedAt > 0 ? { lastMessageAt: last.receivedAt } : {}),
+        };
+    })();
+
     // R2: cloud P2P dashboard metadata sync. The cloud daemon used to do this from its own
     // relay listener; now the single core forwarder invokes the injected hook (no-op on
     // standalone) so the event path stays single-listener and the local code path is identical
@@ -1435,15 +1456,17 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // mirror would stay stuck on the first dispatched user task. Resolve the
             // worker's latest assistant reply (carried on the completion event's
             // finalSummary / workerResult) into a preview the mirror can stamp, so the
-            // mobile inbox reflects the assistant response. Only completion-style events
-            // carry assistant text; for everything else this is undefined and the prior
-            // surfaced preview is preserved downstream (no clobber).
-            const surfacedPreview = resolveMeshSurfacedSessionPreview(args.metadataEvent);
+            // mobile inbox reflects the assistant response. Completion events carry assistant
+            // text as finalSummary; a summary-less completion / status sync falls back to the
+            // worker's latest assistant display message (enrichedMetadataEvent.lastMessage*).
+            // For a mid-turn user-only event this is undefined and the prior surfaced preview
+            // is preserved downstream (no clobber).
+            const surfacedPreview = resolveMeshSurfacedSessionPreview(enrichedMetadataEvent);
             components.onMeshCoordinatorEventForwarded({
                 event: args.event,
                 meshId: args.meshId,
                 nodeId: eventNodeId || undefined,
-                ...args.metadataEvent,
+                ...enrichedMetadataEvent,
                 // Ensure a `workspace` field reaches updateMeshOwnedSession even when the
                 // worker provider event only carried `workspaceName`. The merge spread of
                 // metadataEvent above wins when it already has a non-empty `workspace`.
@@ -1877,7 +1900,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         workspace: readNonEmptyString(args.metadataEvent.workspace)
             || readNonEmptyString(args.metadataEvent.workspaceName),
         metadataEvent: {
-            ...args.metadataEvent,
+            ...enrichedMetadataEvent,
             ...(recoveryContext ? { recoveryContext } : {}),
             // Stash the coordinator session id INSIDE metadataEvent too, so it survives the
             // P2P relay serialization (buildForwardPayloadFromPending spreads metadata; the
@@ -1955,6 +1978,13 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             providerName: readNonEmptyString(payload.providerName),
             ...(payload.sessionSettings && typeof payload.sessionSettings === 'object' && !Array.isArray(payload.sessionSettings) ? { sessionSettings: payload.sessionSettings } : {}),
             finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
+            // T2: carry the worker's status-snapshot last-message preview across the machine
+            // boundary so a summary-less completion still surfaces the assistant reply in the
+            // coordinator's inbox mirror. resolveMeshSurfacedSessionPreview reads these
+            // (assistant-role only) when finalSummary is absent.
+            lastMessagePreview: readNonEmptyString(payload.lastMessagePreview),
+            lastMessageRole: readNonEmptyString(payload.lastMessageRole),
+            ...(payload.lastMessageAt !== undefined ? { lastMessageAt: payload.lastMessageAt } : {}),
             jobId: readNonEmptyString(payload.jobId),
             interactionId: readNonEmptyString(payload.interactionId),
             status: readNonEmptyString(payload.status),
