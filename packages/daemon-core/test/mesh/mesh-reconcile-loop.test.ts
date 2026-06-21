@@ -330,6 +330,73 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
+  it('C1: a held modal-parked completion is mirrored into the ledger as event_held (recoverable, idempotent)', async () => {
+    const meshId = `mesh_reconcile_held_ledger_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'waiting_choice', sink)
+      const components = makeComponents([coordinator])
+      const finalSummary = 'Worker completed: refactored auth module, 3 files changed, tests pass.'
+      queuePendingMeshCoordinatorEvent({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: "Node 'node_child_1'",
+        nodeId: 'node_child_1',
+        metadataEvent: { sessionId: 'sess-held', timestamp: Date.now(), finalSummary },
+        coordinatorMessage: `Node 'node_child_1' has completed its task.`,
+        queuedAt: Date.now(),
+      })
+
+      await runMeshReconcileTick(components)
+
+      // Held (no inject, still queued for re-drain) but mirrored into the ledger so the
+      // worker summary is recoverable even if the modal is never resolved / file trimmed.
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+      const held = readLedgerEntries(meshId).filter(e => e.kind === 'event_held')
+      expect(held).toHaveLength(1)
+      expect(held[0].payload.reason).toBe('modal_parked')
+      expect(held[0].payload.recoverable).toBe(true)
+      expect(held[0].payload.finalSummary).toBe(finalSummary)
+      expect(held[0].nodeId).toBe('node_child_1')
+
+      // Idempotent: a second tick while still parked does not duplicate the audit record.
+      await runMeshReconcileTick(components)
+      expect(readLedgerEntries(meshId).filter(e => e.kind === 'event_held')).toHaveLength(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('C1: pending-file trim records dropped undelivered completions to the ledger (no silent loss)', () => {
+    const meshId = `mesh_trim_drop_${Date.now()}`
+    try {
+      // Each event carries a ~4KB finalSummary; 60 unique events push the per-mesh pending
+      // JSONL well past the 100KB / 50-entry trim threshold, so the oldest are dropped on a
+      // later queue call. The trim must mirror each dropped (coordinator-facing) event into
+      // the ledger rather than discarding it silently.
+      const bigSummary = 'S'.repeat(4096)
+      for (let i = 0; i < 60; i++) {
+        queuePendingMeshCoordinatorEvent({
+          event: 'agent:generating_completed',
+          meshId,
+          nodeLabel: "Node 'n'",
+          nodeId: 'n',
+          metadataEvent: { sessionId: `sess-${i}`, timestamp: 1000 + i, finalSummary: bigSummary },
+          coordinatorMessage: `completion ${i}`,
+          queuedAt: 1000 + i,
+        })
+      }
+      const dropped = readLedgerEntries(meshId)
+        .filter(e => e.kind === 'event_held' && (e.payload as any).reason === 'pending_trim_dropped')
+      expect(dropped.length).toBeGreaterThan(0)
+      expect((dropped[0].payload as any).recoverable).toBe(true)
+      expect((dropped[0].payload as any).finalSummary).toBe(bigSummary)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('idle coordinator alongside a modal-parked one: idle gets the event, modal-parked is skipped', async () => {
     const meshId = `mesh_reconcile_modal_plus_idle_${Date.now()}`
     try {

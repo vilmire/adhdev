@@ -45,8 +45,9 @@ import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { loadConfig } from '../config/config.js';
 import { listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
-import { drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
+import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, buildPendingEventFingerprint } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { handleMeshForwardEvent, shouldForceInjectMeshEvent, MESH_FORCE_INJECT_EVENTS, triggerMeshQueue } from './mesh-events-coordinator.js';
 import {
@@ -54,7 +55,7 @@ import {
     ackUnresolvedDelegateForward,
     expireStaleUnresolvedDelegateForwards,
 } from './mesh-unresolved-forward-outbox.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { readNonEmptyString, readMeshCompletionSummary } from './mesh-events-utils.js';
 import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
@@ -223,6 +224,71 @@ function injectPendingIntoCoordinator(
         input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage },
         ...(force ? { force: true } : {}),
     });
+}
+
+// Held-event ledger dedup: fingerprints of held terminal events already written as an
+// `event_held` ledger audit record in THIS process. Prevents the 4s reconcile tick from
+// re-logging the same held event every interval while a coordinator stays modal-parked.
+// Per-process only (not persisted) — if the daemon restarts while an event is still held
+// it is re-logged once, which is desirable: it re-confirms the event is still undelivered.
+const heldEventLedgerRecorded = new Set<string>();
+
+// C1 (data safety): when a terminal completion/approval/bootstrap event cannot be
+// delivered because the only coordinators are modal-parked, the event is held at
+// drained=0 in the pending queue (SQLite + JSONL) for a later tick. That queue is
+// disk-persisted but carries no operator-visible audit trail and can be silently
+// dropped by the pending-file trim (100 KB / 50-entry cap). To guarantee a held
+// completion's worker summary is never silently lost, mirror each held terminal event
+// into the coordinator's mesh ledger as an `event_held` entry — auditable and
+// recoverable (the finalSummary survives even if the pending copy is later trimmed or
+// the coordinator session is force-resolved before re-drain). Idempotent per process
+// via heldEventLedgerRecorded so a long modal park does not spam the ledger.
+function recordHeldTerminalEventsToLedger(
+    meshId: string,
+    drainDaemonIds: string[],
+    reason: string,
+    heldForCoordinatorCount: number,
+): void {
+    let pending: readonly PendingMeshCoordinatorEvent[];
+    try {
+        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : undefined);
+    } catch {
+        return; // best-effort audit — never let a peek failure break the tick
+    }
+    for (const event of pending) {
+        // Only audit terminal/force-inject events (completion / approval / stop / refine·
+        // bootstrap). Silent lifecycle events (agent:ready / generating_started) carry no
+        // worker output to preserve and re-drain harmlessly, so they need no audit trail.
+        if (!shouldForceInjectMeshEvent(event.event)) continue;
+        const fingerprint = buildPendingEventFingerprint(event);
+        const key = `${meshId}::${fingerprint || `${event.event}::${event.nodeId || ''}::${event.queuedAt}`}`;
+        if (heldEventLedgerRecorded.has(key)) continue;
+        heldEventLedgerRecorded.add(key);
+        const finalSummary = readMeshCompletionSummary(event.metadataEvent);
+        try {
+            appendLedgerEntry(meshId, {
+                kind: 'event_held',
+                ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+                payload: {
+                    event: event.event,
+                    reason,
+                    recoverable: true,
+                    heldForCoordinators: heldForCoordinatorCount,
+                    nodeLabel: event.nodeLabel,
+                    ...(event.workspace ? { workspace: event.workspace } : {}),
+                    targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+                    queuedAt: event.queuedAt,
+                    ...(fingerprint ? { fingerprint } : {}),
+                    ...(finalSummary ? { finalSummary } : {}),
+                },
+            });
+            LOG.info('MeshReconcile', `Ledger-recorded held ${event.event} for mesh ${meshId} (reason ${reason}) — recoverable from ledger`);
+        } catch (e: any) {
+            // Failed to persist — drop the dedup marker so the next tick retries.
+            heldEventLedgerRecorded.delete(key);
+            LOG.warn('MeshReconcile', `Failed to ledger-record held ${event.event} for mesh ${meshId}: ${e?.message || e}`);
+        }
+    }
 }
 
 // One reconcile tick. Two independent phases:
@@ -426,6 +492,24 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         if (targetCoordinators.length === 0) {
             if (modalParkedCoordinators.length > 0) {
                 LOG.info('MeshReconcile', `Reconcile skip → modal-parked: holding pending event(s) for mesh ${meshId} (${modalParkedCoordinators.length} coordinator(s) awaiting a modal answer; events left queued)`);
+                // C1: mirror held terminal events into the ledger so a held completion's
+                // worker summary is auditable/recoverable even if the modal is never
+                // resolved, the coordinator restarts, or the pending file is later trimmed.
+                // The events stay queued (drained=0) for re-drain on a later tick; this only
+                // adds the durable audit copy. Idempotent per process — only newly-held
+                // events are logged. O(1)-gated: skip the peek when the queue is empty.
+                let hasPending = true;
+                if (store) {
+                    try { hasPending = store.pendingEventCount(meshId) > 0; } catch { /* peek below */ }
+                }
+                if (hasPending) {
+                    recordHeldTerminalEventsToLedger(
+                        meshId,
+                        drainDaemonIds.length > 0 ? drainDaemonIds : (localDaemonId ? [localDaemonId] : []),
+                        'modal_parked',
+                        modalParkedCoordinators.length,
+                    );
+                }
             }
             continue;
         }

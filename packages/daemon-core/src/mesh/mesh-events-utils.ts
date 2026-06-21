@@ -109,6 +109,30 @@ export function readWorkerResultMetadata(event: Record<string, unknown>): Record
 
 const MESH_SURFACED_PREVIEW_MAX_CHARS = 512;
 
+// Cap for the worker final summary surfaced INLINE into the coordinator's chat
+// (buildMeshSystemMessage). Larger than the mirror preview cap because this is the
+// coordinator-facing payload that replaces a "go call mesh_read_chat" instruction —
+// it should carry enough of the worker's result to act on without a second round-trip,
+// while still bounding what is written into the coordinator PTY.
+const MESH_COMPLETION_SURFACE_MAX_CHARS = 4000;
+
+/**
+ * The worker's final assistant text carried on a completion event — read from
+ * `finalSummary` (and the `workerResult.summary` / `result.summary` fallbacks some
+ * paths use). Returns '' when the event carries no assistant text (lifecycle events
+ * without a summary). Shared by the coordinator chat surface (buildMeshSystemMessage)
+ * and the held-event ledger audit record so both read the summary the same way.
+ */
+export function readMeshCompletionSummary(metadataEvent: Record<string, unknown>): string {
+    const workerResult = readWorkerResultMetadata(metadataEvent);
+    const resultRecord = readRecord(metadataEvent.result);
+    return readNonEmptyString(metadataEvent.finalSummary)
+        || readNonEmptyString(workerResult?.summary)
+        || readNonEmptyString(workerResult?.finalSummary)
+        || readNonEmptyString(resultRecord?.summary)
+        || readNonEmptyString(resultRecord?.finalSummary);
+}
+
 /**
  * A coordinator that surfaces a REMOTE worker's mesh session has no local instance for
  * it, so the status snapshot's getLastDisplayMessage has nothing to read and the only
@@ -126,13 +150,7 @@ const MESH_SURFACED_PREVIEW_MAX_CHARS = 512;
 export function resolveMeshSurfacedSessionPreview(
     metadataEvent: Record<string, unknown>,
 ): { preview: string; role: 'assistant'; receivedAt: number } | undefined {
-    const workerResult = readWorkerResultMetadata(metadataEvent);
-    const resultRecord = readRecord(metadataEvent.result);
-    const summaryText = readNonEmptyString(metadataEvent.finalSummary)
-        || readNonEmptyString(workerResult?.summary)
-        || readNonEmptyString(workerResult?.finalSummary)
-        || readNonEmptyString(resultRecord?.summary)
-        || readNonEmptyString(resultRecord?.finalSummary);
+    const summaryText = readMeshCompletionSummary(metadataEvent);
     if (!summaryText) return undefined;
     const truncationSuffix = '...[truncated]';
     const preview = summaryText.length > MESH_SURFACED_PREVIEW_MAX_CHARS
@@ -186,7 +204,26 @@ export function buildMeshSystemMessage(args: {
         if (args.metadataEvent.source === 'no_progress_reconciliation') {
             return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The no-progress monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
         }
-        const reviewNote = args.metadataEvent.reviewRecommended === true
+        const reviewRecommended = args.metadataEvent.reviewRecommended === true;
+        // Auto-surface the worker's final summary directly into the coordinator chat so it
+        // does not have to call mesh_read_chat just to see the result. The summary IS the
+        // worker's final assistant message; embedding it here replaces the previous
+        // "go call mesh_read_chat" instruction with the answer itself. This rides the
+        // existing (non-modal) coordinator delivery channel — it does not write into a
+        // parked harness modal. Falls back to the read_chat instruction only when the event
+        // genuinely carries no summary (so behaviour is unchanged for summary-less events).
+        const completionSummary = readMeshCompletionSummary(args.metadataEvent);
+        if (completionSummary) {
+            const truncationSuffix = '\n…[truncated — call mesh_read_chat once for the full transcript]';
+            const surfaced = completionSummary.length > MESH_COMPLETION_SURFACE_MAX_CHARS
+                ? `${completionSummary.slice(0, MESH_COMPLETION_SURFACE_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}`
+                : completionSummary;
+            const verifyNote = reviewRecommended
+                ? ' Completion evidence is insufficient — verify via git status or provider_session_id before assuming the task is done.'
+                : '';
+            return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. Its final summary is included below — read it directly and only call mesh_read_chat if you need the full transcript.${verifyNote}\n\n--- ${args.nodeLabel} final summary ---\n${surfaced}`;
+        }
+        const reviewNote = reviewRecommended
             ? ' Completion evidence is insufficient — verify via git status or provider_session_id before assuming the task is done. Use mesh_read_chat once if needed, but do not poll repeatedly.'
             : ' Use mesh_read_chat once to review its final progress, but do not poll repeatedly.';
         return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. This completion came from the agent status event path;${reviewNote}`;
