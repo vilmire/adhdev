@@ -1024,7 +1024,7 @@ export function classifyRemoteDelegateRelaySafety(
     return coordinatorDaemonId ? 'self_heal' : 'missing_anchor';
 }
 
-function chooseDispatchableSession(sessions: any[], providerType: string, meshId: string, nodeId: string, coordinatorDaemonId: string): any | undefined {
+export function chooseDispatchableSession(sessions: any[], providerType: string, meshId: string, nodeId: string, coordinatorDaemonId: string): any | undefined {
     const live = sessions.filter(session => !isTerminalSessionRecord(session));
     const matchingProvider = (session: any) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
     // Accept mesh-owned sessions whose relay anchor is either already present or
@@ -1035,8 +1035,14 @@ function chooseDispatchableSession(sessions: any[], providerType: string, meshId
         const safety = classifyRemoteDelegateRelaySafety(session, meshId, nodeId, coordinatorDaemonId);
         return safety === 'safe' || safety === 'self_heal';
     });
+    // Only auto-pick an IDLE matching session. The previous
+    // `|| meshSessions.find(matchingProvider)` fallback accepted a generating/busy
+    // session, injecting a new task into a session mid-generation — the exact case
+    // the explicit-session path guards against via resolveDeliveryDecision (queue or
+    // reject when !idle). When no idle session exists, return undefined so the caller
+    // dispatches sessionless and lets the worker pick/create a session (or the task
+    // queues), instead of clobbering an in-flight one.
     return meshSessions.find(session => isIdleSessionRecord(session) && matchingProvider(session))
-        || meshSessions.find(matchingProvider)
         || undefined;
 }
 
