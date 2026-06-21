@@ -50,7 +50,7 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
   fastForwardMeshNode: fastForwardMocks.fastForwardMeshNode,
 }))
 
-import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
@@ -1192,6 +1192,58 @@ describe('setupMeshEventForwarding', () => {
       expect(secondCoordinatorMessage).toContain('completion_diagnostic=missing_final_assistant')
       expect(secondCoordinatorMessage).toContain('final_assistant=false')
       expect(getQueue(meshId).map(task => task.status)).toEqual(['completed', 'completed'])
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('D1: a transient LOCAL dispatch rejection returns the task to pending with a retryable dispatch_failed ledger entry (not terminal failed)', async () => {
+    // Regression: the local-dispatch catch in tryAssignQueueTask used to mark the task
+    // terminal 'failed' with no ledger and no retry, while the remote-dispatch catch
+    // returned the task to 'pending' + a retryable dispatch_failed ledger entry. A
+    // transient local refusal (e.g. the adapter rejected send_chat mid-generation)
+    // therefore permanently killed a task the next reconcile tick would have delivered.
+    // The local catch must now mirror the remote one: pending + retryable ledger.
+    const meshId = `mesh_local_dispatch_retry_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        // No daemonId on the node → tryAssignQueueTask takes the local-dispatch branch.
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'local task that transiently fails to dispatch')
+
+      const components = {
+        instanceManager: {
+          // Skip the best-effort updateSettings stamping; not relevant to this path.
+          getInstance: vi.fn(() => undefined),
+        },
+        cliManager: {
+          adapters: new Map(),
+          handleCliCommand: vi.fn(async () => {
+            throw new Error('adapter busy: send_chat rejected mid-generation')
+          }),
+        },
+      } as any
+
+      const assigned = tryAssignQueueTask(components, meshId, 'node_child_1', 'runtime-session-1', 'codex-cli')
+      expect(assigned).toBe(true)
+
+      // The dispatch failure is handled in an async .catch; wait for it to settle and
+      // assert the task was returned to 'pending' (retryable) rather than 'failed'.
+      await vi.waitFor(() => {
+        const task = getQueue(meshId).find(t => t.id === queued.id)
+        expect(task?.status).toBe('pending')
+      })
+      expect(getQueue(meshId).find(t => t.id === queued.id)?.status).not.toBe('failed')
+
+      const dispatchFailed = readLedgerEntries(meshId).filter(entry => entry.kind === 'dispatch_failed')
+      expect(dispatchFailed).toHaveLength(1)
+      expect(dispatchFailed[0].payload).toMatchObject({ taskId: queued.id, retryable: true })
+      expect((dispatchFailed[0].payload as any).error).toContain('adapter busy')
     } finally {
       cleanupMeshFiles(meshId)
     }

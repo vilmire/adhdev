@@ -369,9 +369,23 @@ export function tryAssignQueueTask(
     }).then(() => {
         updateSessionDeliveryStatus(delivery.id, 'delivered');
     }).catch((e: any) => {
+        // Mirror the remote-dispatch catch above: a local dispatch failure is most often a
+        // transient busy/refusal (e.g. the adapter rejected send_chat while mid-generation),
+        // not a permanent task failure. Marking the task terminal 'failed' here with no ledger
+        // and no retry permanently killed tasks that a later tick would have delivered fine.
+        // Return the task to 'pending' and record a retryable dispatch_failed ledger entry so
+        // the reconcile loop re-dispatches it, exactly as the remote branch does.
         LOG.error('MeshQueue', `Failed to dispatch task locally to node ${nodeId}: ${e?.message}`);
         updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
-        updateTaskStatus(meshId, task.id, 'failed');
+        updateTaskStatus(meshId, task.id, 'pending');
+        try {
+            appendLedgerEntry(meshId, {
+                kind: 'dispatch_failed' as any,
+                nodeId,
+                sessionId,
+                payload: { taskId: task.id, deliveryId: delivery.id, error: e?.message, retryable: true },
+            });
+        } catch { /* ledger write is best-effort */ }
     });
 
     return true;
