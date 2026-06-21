@@ -449,8 +449,12 @@ export function drainPendingMeshCoordinatorEvents(
                 if (event) pushUnique(event);
             }
         }
-    } catch {
-        // SQLite drain failed — JSONL below still drains
+    } catch (e: any) {
+        // SQLite drain failed — JSONL below still drains. Surface it: a silent
+        // failure here means the JSONL copy is emptied while the SQLite rows
+        // survive undrained, so the next drain re-delivers the same events to the
+        // coordinator (duplicate refine:completed etc.) with no diagnostic trail.
+        LOG.warn('MeshEvents', `SQLite pending-event drain failed for mesh ${meshId}; JSONL fallback only: ${e?.message || e}`);
     }
 
     // JSONL (legacy / migration path) — always drained alongside SQLite.
