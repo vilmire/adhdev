@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'fs';
 import { dirname, join } from 'path';
+import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getLedgerDir } from './mesh-ledger.js';
 import { nodeSatisfiesRequiredTags } from './mesh-work-queue.js';
@@ -23,6 +24,8 @@ function legacyQueuePath(meshId: string): string {
     return join(getLedgerDir(), `${safeMeshId(meshId)}.queue.json`);
 }
 
+let loggedMigrationFailure = false;
+
 function meshRuntimeStorePath(): string {
     const dir = getLedgerDir();
     const nextPath = join(dir, 'mesh-runtime.db');
@@ -39,9 +42,23 @@ function meshRuntimeStorePath(): string {
                 renameSync(legacyCompanion, `${nextPath}${suffix}`);
             }
         }
-    } catch {
-        // Best-effort compatibility for existing installs. If migration fails,
-        // opening the new store will create a clean DB instead of blocking boot.
+    } catch (err: any) {
+        // Migration failed — most commonly win32 EPERM when a handle to the
+        // legacy DB is still open. Do NOT fall through to opening `nextPath`:
+        // that would create a fresh EMPTY store while the existing data stays
+        // stranded in the legacy file (split-brain / silent data loss). Instead
+        // keep using whichever file actually holds the data in-place — the next
+        // boot retries the rename. If the main rename already landed (only a
+        // companion file failed), the data is at nextPath; otherwise it is still
+        // at legacyPath.
+        if (!loggedMigrationFailure) {
+            loggedMigrationFailure = true;
+            LOG.warn(
+                'MeshRuntimeStore',
+                `Legacy beads.db→mesh-runtime.db migration failed; using existing DB in-place to avoid data loss: ${err?.message || err}`,
+            );
+        }
+        return existsSync(nextPath) ? nextPath : legacyPath;
     }
     return nextPath;
 }
@@ -69,9 +86,26 @@ export class MeshRuntimeStore {
         this.migrate();
     }
 
+    private static loggedGetInstanceFailure = false;
+
     static getInstance(): MeshRuntimeStore {
         if (!this.instance) {
-            this.instance = new MeshRuntimeStore(meshRuntimeStorePath());
+            try {
+                this.instance = new MeshRuntimeStore(meshRuntimeStorePath());
+            } catch (err: any) {
+                // SQLite store could not be opened (e.g. better-sqlite3 native
+                // load failure, locked/corrupt DB). Callers wrap getInstance in
+                // try/catch and silently degrade to JSONL-only — surface ONE warn
+                // so that degraded mode is diagnosable, then re-throw unchanged.
+                if (!MeshRuntimeStore.loggedGetInstanceFailure) {
+                    MeshRuntimeStore.loggedGetInstanceFailure = true;
+                    LOG.warn(
+                        'MeshRuntimeStore',
+                        `getInstance failed; callers will degrade to JSONL-only: ${err?.message || err}`,
+                    );
+                }
+                throw err;
+            }
         }
         return this.instance;
     }
