@@ -50,9 +50,10 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
   fastForwardMeshNode: fastForwardMocks.fastForwardMeshNode,
 }))
 
-import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
+import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch, getActiveDirectDispatches } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
+import { computeMeshTaskStats } from '../../src/mesh/mesh-task-stats.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
 
@@ -3697,6 +3698,234 @@ describe('reconcile tick — autonomous remote queue pull (no live CLI coordinat
       const components = hostComponents({})
       await expect(runMeshReconcileTick(components)).resolves.toBeUndefined()
       expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+})
+
+// ─── EVT: re-dispatch 2nd-completion event recovery ───────────────────────────
+// Root mechanism (ledger-confirmed): a worker's 1st turn drops to a FALSE idle (no
+// confirmed final assistant — a "scheduled fallback" idle). That prematurely marked the
+// direct-dispatch task terminal (task_completed, insufficient evidence). A coordinator
+// nudge (direct re-dispatch) then drove a real 2nd turn that genuinely finished — but the
+// 2nd completion was lost: it shared the (stable) providerSessionId of the false-idle
+// terminal and had no live dispatch row, so the suppression dedup swallowed it, and direct
+// dispatches were never attributed in the ledger / task-stats (status=unknown,
+// terminalKind=null). These tests encode the fix set A/B/C.
+describe('EVT — re-dispatch 2nd-completion event recovery', () => {
+  it('Fix A: a false-idle completion of a direct dispatch is kept tentative (dispatch row stays active for reconcile)', () => {
+    const meshId = `mesh_false_idle_tentative_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      insertDirectDispatch(meshId, {
+        taskId: 'task_redispatch_1',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        message: 'build and commit',
+        via: 'local_direct',
+        dispatchedAt: new Date().toISOString(),
+      })
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      // FALSE idle: the provider dropped to idle without a confirmed final assistant message.
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-session-1',
+        timestamp: Date.now(),
+        completionDiagnostic: { finalAssistantPresent: false, blockReason: 'missing_final_assistant' },
+      })
+
+      // The direct-dispatch row must remain ACTIVE — not flipped terminal — so the reconcile
+      // loop (PHASE 4) can later confirm the genuine completion from the transcript.
+      expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).toContain('task_redispatch_1')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('Fix A control: a GENUINE direct-dispatch completion still flips the dispatch row terminal', () => {
+    const meshId = `mesh_genuine_terminal_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      insertDirectDispatch(meshId, {
+        taskId: 'task_genuine_1',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        message: 'do work',
+        via: 'local_direct',
+        dispatchedAt: new Date().toISOString(),
+      })
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-session-1',
+        finalSummary: 'work done',
+        timestamp: Date.now(),
+      })
+
+      // Genuine completion → row marked terminal (no longer active). Regression guard for Fix A.
+      expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).not.toContain('task_genuine_1')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('Fix B: a genuine 2nd completion supersedes a prior weak (false-idle) terminal instead of being deduped by stable providerSessionId', () => {
+    const meshId = `mesh_supersede_weak_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // Prior WEAK terminal for the session (the false idle that prematurely terminated taskId-A).
+      // No active direct dispatch and no queue task → sessionHasActiveAssignment is false, so the
+      // suppression dedup below would normally fire on the matching (stable) providerSessionId.
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        payload: {
+          event: 'agent:generating_completed',
+          taskId: 'task_A',
+          providerSessionId: 'provider-session-stable',
+          evidenceLevel: 'insufficient',
+          reviewRecommended: true,
+          completionDiagnostic: { finalAssistantPresent: false, blockReason: 'missing_final_assistant' },
+        },
+      })
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      // The genuine 2nd-turn completion (after a coordinator nudge) — SAME providerSessionId,
+      // but real final-assistant evidence this time.
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-session-stable',
+        finalSummary: 'build succeeded and committed',
+        timestamp: Date.now() + 5_000,
+      })
+
+      // Must NOT be suppressed: exactly one pending coordinator event for the genuine completion.
+      const pending = getPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('agent:generating_completed')
+      // And a fresh (non-weak) task_completed ledger entry recorded for the genuine completion.
+      const genuine = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed' && e.payload.finalSummary === 'build succeeded and committed')
+      expect(genuine).toHaveLength(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('Fix B: a direct-dispatch completion attributes its taskId to the terminal ledger so task-stats report it (not status=unknown / terminalKind=null)', () => {
+    const meshId = `mesh_direct_attribution_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // Direct dispatch row + its task_dispatched ledger entry (as the dispatch path records).
+      insertDirectDispatch(meshId, {
+        taskId: 'task_direct_X',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        message: 'run validation',
+        via: 'local_direct',
+        dispatchedAt: new Date(Date.now() - 60_000).toISOString(),
+      })
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        payload: { taskId: 'task_direct_X', source: 'direct' },
+      })
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-session-1',
+        finalSummary: 'validation passed',
+        timestamp: Date.now(),
+      })
+
+      // The terminal ledger entry must carry the direct-dispatch taskId (was undefined).
+      const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.payload.finalSummary === 'validation passed')
+      expect(completed?.payload.taskId).toBe('task_direct_X')
+
+      // task-stats now reports the direct task as completed with a terminal kind (was unknown/null).
+      const [stats] = computeMeshTaskStats(meshId, { taskIds: ['task_direct_X'] })
+      expect(stats.status).toBe('completed')
+      expect(stats.terminalKind).toBe('task_completed')
+      expect(stats.dispatchCount).toBe(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('Fix C: transcript reconcile ignores a prior WEAK terminal and synthesizes the genuine completion', () => {
+    const meshId = `mesh_reconcile_weak_${Date.now()}`
+    try {
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        payload: { taskId: 'task_C', source: 'direct' },
+      })
+      // A prior WEAK terminal for the same task — the false idle that prematurely "completed" it.
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        payload: {
+          taskId: 'task_C',
+          evidenceLevel: 'insufficient',
+          reviewRecommended: true,
+          completionDiagnostic: { finalAssistantPresent: false, blockReason: 'missing_final_assistant' },
+        },
+      })
+
+      const result = reconcileDirectDispatchCompletionFromTranscript({
+        meshId,
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        taskId: 'task_C',
+        finalSummary: 'genuine final assistant: build + commit done',
+        transcriptMessageAt: new Date(Date.now() + 10_000).toISOString(),
+        source: 'daemon_reconcile_transcript_completion',
+      })
+
+      // The weak terminal must NOT count as alreadyTerminal — reconcile synthesizes the real one.
+      expect(result.reconciled).toBe(true)
+      expect(result.kind).toBe('task_completed')
+      const synthesized = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed' && e.payload.finalSummary === 'genuine final assistant: build + commit done')
+      expect(synthesized).toHaveLength(1)
     } finally {
       cleanupMeshFiles(meshId)
     }

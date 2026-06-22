@@ -74,6 +74,17 @@ export function hasUnterminalDirectDispatchLedgerEntry(meshId: string, sessionId
     return false;
 }
 
+// True when a terminal ledger payload was recorded from WEAK completion evidence (a false
+// idle): insufficient evidence level, review-recommended, or a missing-final-assistant
+// completion diagnostic. Mirrors isWeakTerminalLedgerPayload in mesh-events-coordinator —
+// a weak terminal is non-authoritative and may be superseded by a genuine completion.
+function isWeakCompletionLedgerPayload(payload: Record<string, unknown> | undefined): boolean {
+    if (!payload) return false;
+    if (payload.evidenceLevel === 'insufficient' || payload.reviewRecommended === true) return true;
+    const diag = readRecord(payload.completionDiagnostic);
+    return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
+}
+
 function findDirectDispatchLedgerEntry(args: {
     meshId: string;
     taskId: string;
@@ -121,6 +132,12 @@ function hasTerminalLedgerAfterDispatch(args: {
             if (!afterDispatch) continue;
         }
         if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
+        // Fix C (reconcile fallback expansion): a task_completed recorded from a FALSE idle
+        // (weak evidence / no confirmed final assistant) is NOT authoritative terminal
+        // evidence. Skip it so the transcript reconcile can still synthesize the GENUINE
+        // completion for a re-dispatched / prematurely-terminated direct task instead of
+        // bailing with alreadyTerminal.
+        if (entry.kind === 'task_completed' && isWeakCompletionLedgerPayload(entry.payload)) continue;
         const terminalTaskId = readNonEmptyString(entry.payload?.taskId);
         if (terminalTaskId && terminalTaskId === args.taskId) return true;
         if (terminalTaskId && terminalTaskId !== args.taskId) continue;

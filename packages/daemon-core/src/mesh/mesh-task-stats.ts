@@ -91,9 +91,16 @@ export function computeMeshTaskStats(meshId: string, opts?: { taskIds?: string[]
 
     return targetIds.map(taskId => {
         const queueEntry = queueById.get(taskId);
-        const status = queueEntry?.status ?? 'unknown';
         const dispatch = dispatches.get(taskId);
         const terminal = terminals.get(taskId);
+        // Direct dispatches (mesh_send_task) have no work-queue row, so queueEntry is undefined.
+        // Derive a terminal status from the attributed terminal ledger entry instead of reporting
+        // status='unknown' — without this a completed direct task showed unknown + terminalKind=null
+        // even though its task_completed event fired (see mesh-events-coordinator Fix B attribution).
+        const status = queueEntry?.status
+            ?? (terminal
+                ? (terminal.kind === 'task_completed' ? 'completed' : 'failed')
+                : 'unknown');
         const isTerminalStatus = status === 'completed' || status === 'failed' || status === 'cancelled';
         const dispatchTime = parseTime(dispatch?.first ?? queueEntry?.dispatchTimestamp);
         const terminalTime = parseTime(terminal?.at);

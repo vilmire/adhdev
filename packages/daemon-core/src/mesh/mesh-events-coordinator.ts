@@ -251,6 +251,55 @@ function isDuplicateRefineTerminalEvent(meshId: string, eventName: string, metad
     return false;
 }
 
+// A worker/coordinator "false idle": the provider dropped to idle WITHOUT a confirmed
+// final assistant message for the turn (a finalization timeout, or a "scheduled fallback"
+// idle). This is the signal cli-provider-instance emits as
+// completionDiagnostic.blockReason='missing_final_assistant' / finalAssistantPresent=false.
+// Such a completion is NOT trustworthy terminal evidence: it must neither permanently
+// terminate a direct-dispatch task nor suppress the genuine completion a later turn
+// (commonly driven by a coordinator nudge / re-dispatch) produces.
+function isFalseIdleCompletion(metadataEvent: Record<string, unknown>): boolean {
+    const diag = readRecord(metadataEvent.completionDiagnostic);
+    if (!diag) return false;
+    return diag.finalAssistantPresent === false || diag.blockReason === 'missing_final_assistant';
+}
+
+// The genuine-completion counterpart: a real final summary / worker result is present and
+// the completion is not flagged as a missing-final-assistant false idle. Used to decide
+// whether a new completion may supersede a prior WEAK (false-idle) terminal.
+function isGenuineCompletionEvidence(metadataEvent: Record<string, unknown>): boolean {
+    if (isFalseIdleCompletion(metadataEvent)) return false;
+    return !!readWorkerResultMetadata(metadataEvent) || !!readNonEmptyString(metadataEvent.finalSummary);
+}
+
+// True when a terminal ledger payload was recorded from WEAK completion evidence (a false
+// idle): insufficient evidence level, review-recommended, or a missing-final-assistant
+// completion diagnostic. A weak terminal is non-authoritative — a later genuine completion
+// (live path) or a transcript reconcile (fallback path) may supersede it.
+function isWeakTerminalLedgerPayload(payload: Record<string, unknown> | undefined): boolean {
+    if (!payload) return false;
+    if (payload.evidenceLevel === 'insufficient' || payload.reviewRecommended === true) return true;
+    const diag = readRecord(payload.completionDiagnostic);
+    return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
+}
+
+// The latest still-active direct-dispatch taskId for a session, resolved BEFORE the
+// completion flips the dispatch row terminal. Direct dispatches (mesh_send_task) have no
+// work-queue row, so this is the only taskId available to attribute the terminal ledger
+// entry (and thus mesh task-stats) to — without it the terminal carries no taskId and the
+// task surfaces as status='unknown' / terminalKind=null in computeMeshTaskStats.
+function resolveActiveDirectDispatchTaskId(meshId: string, sessionId: string): string | undefined {
+    try {
+        const matches = getActiveDirectDispatches(meshId).filter(d => d.sessionId === sessionId);
+        if (!matches.length) return undefined;
+        // getActiveDirectDispatches returns rows ordered by dispatched_at ASC; the last is
+        // the most recent dispatch (the re-dispatch / nudge whose completion this is).
+        return readNonEmptyString(matches[matches.length - 1].taskId) || undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Queue assignment
 // ---------------------------------------------------------------------------
@@ -1555,7 +1604,17 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         });
         if (terminal?.kind === 'task_completed' && !sessionHasActiveAssignment(args.meshId, eventSessionId)) {
             const newDispatchAfterTerminal = hasDispatchAfterTerminal(args.meshId, eventSessionId, terminal.id);
-            if (!newDispatchAfterTerminal) {
+            // Fix B (re-dispatch 2nd-completion routing): a prior terminal recorded from a FALSE
+            // idle (weak evidence / no confirmed final assistant) must NOT permanently suppress a
+            // later GENUINE completion of the same session. providerSessionId is stable across a
+            // session's turns, so the providerSessionId/finalSummary dedup below would otherwise
+            // swallow the real 2nd-turn completion that a coordinator nudge (direct re-dispatch)
+            // drove — exactly the missed-event bug. When the prior terminal was weak and the new
+            // event carries genuine completion evidence, let it through so it is recorded and
+            // re-attributed to the latest task (the normal task_completed path below).
+            const supersedesWeakTerminal = isWeakTerminalLedgerPayload(terminal.payload)
+                && isGenuineCompletionEvidence(args.metadataEvent);
+            if (!newDispatchAfterTerminal && !supersedesWeakTerminal) {
                 const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
                 const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);
                 const eventProviderSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);
@@ -1606,7 +1665,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
     }
 
-    function markSessionTerminal(sessionId: string, outcome: 'completed' | 'failed', occurredAtMs?: number | null): { id?: string } | null {
+    function markSessionTerminal(sessionId: string, outcome: 'completed' | 'failed', occurredAtMs?: number | null, opts?: { tentativeIfDirect?: boolean }): { id?: string } | null {
         // C2: prefer an exact taskId match when the completion event carries one —
         // it's immune to coordinator↔worker clock skew that can hide the assigned row.
         const eventTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
@@ -1614,20 +1673,36 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             occurredAt: occurredAtMs != null ? new Date(occurredAtMs).toISOString() : undefined,
             taskId: eventTaskId,
         });
-        updateDirectDispatchStatus(args.meshId, sessionId, outcome);
+        // Fix A (early-terminal prevention): a false-idle completion (no confirmed final
+        // assistant) for a DIRECT dispatch — i.e. no work-queue row matched — must not flip the
+        // dispatch row terminal. Leaving it active lets the reconcile loop (PHASE 4) re-read the
+        // transcript and record the genuine completion once the worker truly finishes (commonly
+        // after a coordinator nudge / re-dispatch). A matched queue task, or a completion with
+        // genuine evidence, is marked terminal as before.
+        const leaveDirectDispatchActive = !task && opts?.tentativeIfDirect === true;
+        if (!leaveDirectDispatchActive) {
+            updateDirectDispatchStatus(args.meshId, sessionId, outcome);
+        }
         markSessionDeliveriesTerminal(args.meshId, sessionId, outcome);
         setImmediate(() => cleanupTerminalDirectDispatches());
         return task ? { id: task.id } : null;
     }
 
     let completedTaskForLedger: { id?: string } | null = null;
+    // Fix B: direct-dispatch taskId used to attribute the terminal ledger entry when no
+    // work-queue row matches (resolved BEFORE markSessionTerminal flips the dispatch terminal).
+    let directDispatchTaskIdForLedger: string | undefined;
     if (args.event === 'agent:generating_completed') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
 
         if (sessionId) {
-            completedTaskForLedger = markSessionTerminal(sessionId, 'completed', eventTimestamp);
+            directDispatchTaskIdForLedger = resolveActiveDirectDispatchTaskId(args.meshId, sessionId);
+            // A false-idle completion of a direct dispatch is recorded but kept tentative (the
+            // dispatch row stays active for the reconcile fallback); a genuine completion is terminal.
+            const isFalseIdle = isFalseIdleCompletion(args.metadataEvent);
+            completedTaskForLedger = markSessionTerminal(sessionId, 'completed', eventTimestamp, { tentativeIfDirect: isFalseIdle });
             if (nodeId && providerType) {
                 runIdleMaintenanceThenAssignQueue(components, { meshId: args.meshId, nodeId, sessionId, providerType });
             }
@@ -1729,6 +1804,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             } catch { /* best-effort */ }
         }
         if (sessionId) {
+            directDispatchTaskIdForLedger = resolveActiveDirectDispatchTaskId(args.meshId, sessionId);
             completedTaskForLedger = markSessionTerminal(sessionId, 'failed');
         }
     }
@@ -1761,7 +1837,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 payload: {
                     event: args.event,
                     nodeLabel: args.nodeLabel,
-                    taskId: completedTaskForLedger?.id || undefined,
+                    // Fix B: fall back to the direct-dispatch taskId when no work-queue row
+                    // matched, so the terminal entry is attributable in mesh task-stats
+                    // (otherwise the direct task shows status='unknown' / terminalKind=null).
+                    taskId: completedTaskForLedger?.id || directDispatchTaskIdForLedger || undefined,
                     providerSessionId,
                     finalSummary,
                     workerResult,
