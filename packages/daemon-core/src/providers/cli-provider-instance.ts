@@ -1433,8 +1433,26 @@ export class CliProviderInstance implements ProviderInstance {
         if (block) {
             const blockReason = block.reason;
             const waitedMs = Date.now() - pending.firstObservedAt;
-            LOG.debug('CLI', `[${this.type}] finalization block: reason=${blockReason} terminal=${block.terminal} waitedMs=${waitedMs} maxWait=${COMPLETED_FINALIZATION_MAX_WAIT_MS}`);
-            if ((block.terminal && !block.allowTimeout) || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS) {
+            // CANON-C (completion-gate decouple): a block carrying `allowTimeout` is the
+            // transcript-evidence gate — the worker FSM has ALREADY reached idle and the only
+            // thing missing is the append-only transcript's final assistant turn (a native-source
+            // race: claude-cli owns its history externally and the file write trails the idle
+            // transition). `allowTimeout` is set ONLY on the missing_final_assistant block, and
+            // ONLY for mesh worker sessions (meshNodeFor / meshActiveTaskId / launchedByCoordinator).
+            // The coordinator's sole path to learn this session is idle is agent:generating_completed,
+            // so holding it up to COMPLETED_FINALIZATION_MAX_WAIT_MS (30s) leaves the coordinator
+            // false-generating while the worker is done. Decouple the idle NOTIFICATION from the
+            // transcript evidence: emit the completion immediately, marked weak
+            // (completionDiagnostic.blockReason=missing_final_assistant, finalAssistantPresent=false).
+            // The finalSummary is enriched on a SEPARATE path — the mesh reconcile loop reads the
+            // transcript once written and re-emits a GENUINE completion (CANON-B weak→genuine
+            // upgrade; buildPendingEventFingerprint keeps weak and genuine distinct so the enriched
+            // one still surfaces, and isFalseIdleCompletion keeps the direct dispatch active until
+            // then). All OTHER blocks (genuinely-busy adapter/partial/parsed states, transient
+            // parse_error) keep the existing terminal-hold / 30s-retry behavior unchanged.
+            const isTranscriptEvidenceGate = block.allowTimeout === true;
+            LOG.debug('CLI', `[${this.type}] finalization block: reason=${blockReason} terminal=${block.terminal} allowTimeout=${isTranscriptEvidenceGate} waitedMs=${waitedMs} maxWait=${COMPLETED_FINALIZATION_MAX_WAIT_MS}`);
+            if (!isTranscriptEvidenceGate && (block.terminal || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS)) {
                 if (pending.loggedBlockReason !== blockReason) {
                     LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
                     pending.loggedBlockReason = blockReason;
@@ -1442,15 +1460,19 @@ export class CliProviderInstance implements ProviderInstance {
                 this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
                 return;
             }
+            const emittedAfterFinalizationTimeout = waitedMs >= COMPLETED_FINALIZATION_MAX_WAIT_MS;
             const completionDiagnostic = this.buildCompletedFinalizationDiagnostic({
                 blockReason,
                 latestStatus,
                 latestVisibleStatus,
                 waitedMs,
                 pending,
-                emittedAfterFinalizationTimeout: true,
+                emittedAfterFinalizationTimeout,
             });
-            LOG.warn('CLI', `[${this.type}] emitting completed event after ${waitedMs}ms without finalized assistant turn (${blockReason})`);
+            // Surface the CANON-C immediate-emit path distinctly so a delegated worker's idle
+            // notification (transcript still pending) is not mistaken for a 30s-timeout fallback.
+            (completionDiagnostic as Record<string, unknown>).decoupledImmediateEmit = isTranscriptEvidenceGate && !emittedAfterFinalizationTimeout;
+            LOG.warn('CLI', `[${this.type}] emitting completed event (${isTranscriptEvidenceGate && !emittedAfterFinalizationTimeout ? 'CANON-C decoupled-immediate, transcript pending' : `after ${waitedMs}ms`}) without finalized assistant turn (${blockReason})`);
             this.pushEvent({
                 event: 'agent:generating_completed',
                 chatTitle: pending.chatTitle,
