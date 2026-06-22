@@ -1762,7 +1762,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // genuine evidence, is marked terminal as before.
         const leaveDirectDispatchActive = !task && opts?.tentativeIfDirect === true;
         if (!leaveDirectDispatchActive) {
-            updateDirectDispatchStatus(args.meshId, sessionId, outcome);
+            // CANON-B: flip the exact dispatch row the completion echoed its taskId for; the
+            // session_id fallback (no echoed taskId) still covers legacy/relayed workers.
+            updateDirectDispatchStatus(args.meshId, sessionId, outcome, eventTaskId);
         }
         markSessionDeliveriesTerminal(args.meshId, sessionId, outcome);
         setImmediate(() => cleanupTerminalDirectDispatches());
@@ -1779,7 +1781,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
 
         if (sessionId) {
-            directDispatchTaskIdForLedger = resolveActiveDirectDispatchTaskId(args.meshId, sessionId);
+            // CANON-B: trust the taskId the completion echoed; only fall back to the
+            // most-recent-by-session heuristic when the worker carried none.
+            directDispatchTaskIdForLedger = readNonEmptyString(args.metadataEvent.taskId)
+                || resolveActiveDirectDispatchTaskId(args.meshId, sessionId);
             // A false-idle completion of a direct dispatch is recorded but kept tentative (the
             // dispatch row stays active for the reconcile fallback); a genuine completion is terminal.
             const isFalseIdle = isFalseIdleCompletion(args.metadataEvent);
@@ -1867,12 +1872,21 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             } catch { /* best-effort */ }
         }
         if (sessionId) {
-            updateDirectDispatchStatus(args.meshId, sessionId, 'acked');
-            const activeDeliveries = ((): { id: string }[] => {
+            // CANON-B: a generating_started that echoes its taskId acks exactly the dispatch
+            // and the delivery for THAT task — not every in-flight dispatch/delivery on the
+            // session. A session that already holds a freshly-dispatched (still 'dispatched')
+            // sibling must keep that row 'dispatched' so its own confirm can match it; acking
+            // by session would mark it 'acked' prematurely and hide a genuine non-delivery.
+            const startedTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
+            updateDirectDispatchStatus(args.meshId, sessionId, 'acked', startedTaskId);
+            const activeDeliveries = ((): { id: string; taskId: string | null }[] => {
                 try { return MeshRuntimeStore.getInstance().getActiveSessionDeliveries(args.meshId, sessionId); }
                 catch { return []; }
             })();
-            for (const d of activeDeliveries) {
+            const deliveriesToAck = startedTaskId
+                ? activeDeliveries.filter(d => d.taskId === startedTaskId)
+                : activeDeliveries;
+            for (const d of deliveriesToAck) {
                 updateSessionDeliveryStatus(d.id, 'acked');
             }
         }
@@ -1885,7 +1899,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             } catch { /* best-effort */ }
         }
         if (sessionId) {
-            directDispatchTaskIdForLedger = resolveActiveDirectDispatchTaskId(args.meshId, sessionId);
+            // CANON-B: prefer the echoed taskId; session heuristic is the fallback.
+            directDispatchTaskIdForLedger = readNonEmptyString(args.metadataEvent.taskId)
+                || resolveActiveDirectDispatchTaskId(args.meshId, sessionId);
             completedTaskForLedger = markSessionTerminal(sessionId, 'failed');
         }
     }

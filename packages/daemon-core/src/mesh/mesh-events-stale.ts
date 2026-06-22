@@ -223,7 +223,9 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
             evidence,
         },
     });
-    updateDirectDispatchStatus(args.meshId, args.sessionId, kind === 'task_completed' ? 'completed' : 'failed');
+    // CANON-B: this reconcile path always knows the exact taskId — flip that dispatch row, not
+    // whichever sibling the session_id happens to match.
+    updateDirectDispatchStatus(args.meshId, args.sessionId, kind === 'task_completed' ? 'completed' : 'failed', args.taskId);
     markSessionDeliveriesTerminal(args.meshId, args.sessionId, kind === 'task_completed' ? 'completed' : 'failed');
     setImmediate(() => cleanupTerminalDirectDispatches());
     queuePendingMeshCoordinatorEvent({

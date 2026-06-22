@@ -88,6 +88,25 @@ function hasPendingRefineTerminalEventDuplicate(event: PendingMeshCoordinatorEve
     );
 }
 
+// CANON-B / DUPNOTIF: terminal completion events that the coordinator surfaces as a
+// notification. The native completion path (handleMeshCoordinatorEvent) and the transcript
+// reconciliation fallback (reconcileDirectDispatchCompletionFromTranscript) BOTH queue one of
+// these for the same finished task — with DIFFERENT timestamps — so a timestamp-bearing
+// fingerprint lets both surface and the coordinator notifies twice. When the event carries a
+// taskId we anchor the fingerprint on the taskId (dropping the timestamp), collapsing the two
+// paths into a single surface. A weakness marker keeps a tentative false-idle completion
+// distinct from the genuine completion that supersedes it, so the genuine one is never
+// swallowed by the earlier weak one.
+const TERMINAL_COMPLETION_EVENTS = new Set(['agent:generating_completed', 'agent:stopped']);
+
+function isWeakCompletionMetadata(metadata: Record<string, unknown>): boolean {
+    const evidenceLevel = readNonEmptyString(metadata.evidenceLevel);
+    if (evidenceLevel === 'insufficient' || evidenceLevel === 'weak') return true;
+    if (metadata.reviewRecommended === true) return true;
+    const diag = readRecord(metadata.completionDiagnostic);
+    return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
+}
+
 export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent): string {
     const metadata = readRecord(event.metadataEvent) || {};
     // Bootstrap events are node-scoped: dedup by meshId+event+nodeId only.
@@ -95,6 +114,20 @@ export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent)
     // an empty fingerprint that defeats dedup entirely.
     if (event.event === 'worktree_bootstrap_complete' || event.event === 'worktree_bootstrap_failed') {
         return [event.meshId, event.event, event.nodeId || ''].join('::');
+    }
+    // DUPNOTIF: a terminal completion carrying a taskId is deduped by taskId (+ weakness),
+    // NOT by timestamp — the native and transcript-reconciliation paths timestamp the same
+    // completion differently, and only taskId is stable across both.
+    if (TERMINAL_COMPLETION_EVENTS.has(event.event)) {
+        const terminalTaskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord(metadata.payload)?.taskId);
+        if (terminalTaskId) {
+            return [
+                event.meshId,
+                event.event,
+                terminalTaskId,
+                isWeakCompletionMetadata(metadata) ? 'weak' : 'genuine',
+            ].join('::');
+        }
     }
     const sessionId = resolveEventSessionId(metadata);
     const providerSessionId = readNonEmptyString(metadata.providerSessionId);

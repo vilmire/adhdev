@@ -1140,9 +1140,16 @@ export function updateDirectDispatchStatus(
     meshId: string,
     sessionId: string,
     status: 'acked' | 'completed' | 'failed' | 'stale',
+    taskId?: string,
 ): void {
     try {
-        MeshRuntimeStore.getInstance().updateDirectDispatchStatus(meshId, sessionId, status);
+        // CANON-B: prefer the exact task_id row; fall back to the session_id match only when
+        // the firing event carried no taskId (a legacy/relayed event). Warn on the fallback so
+        // the residual PK-substitute path is observable when it strands a sibling dispatch.
+        if (!taskId) {
+            LOG.warn('MeshQueue', `updateDirectDispatchStatus(${status}) for mesh ${meshId} session ${sessionId} has no taskId — falling back to session_id match (may flip a sibling dispatch row)`);
+        }
+        MeshRuntimeStore.getInstance().updateDirectDispatchStatus(meshId, sessionId, status, taskId);
     } catch { /* best-effort */ }
 }
 

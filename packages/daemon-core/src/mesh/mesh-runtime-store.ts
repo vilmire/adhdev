@@ -887,9 +887,25 @@ export class MeshRuntimeStore {
         }));
     }
 
-    updateDirectDispatchStatus(meshId: string, sessionId: string, status: 'acked' | 'completed' | 'failed' | 'stale'): void {
-        if (!sessionId) return; // never update rows without a session binding
+    // CANON-B (dispatch identity): mesh_direct_dispatches is keyed by task_id (PK), but a
+    // single session can host several sequential direct dispatches (re-dispatch / nudge), so
+    // matching a status flip by session_id alone hits EVERY non-terminal row for that session
+    // — flipping a sibling task's row and stranding the one whose event actually fired (the
+    // assigned-stranded watchdog then requeues a task that is really still generating). When
+    // the firing event carries a taskId, target the single PK row; the session_id match is the
+    // legacy fallback only for events that arrive without a taskId.
+    updateDirectDispatchStatus(meshId: string, sessionId: string, status: 'acked' | 'completed' | 'failed' | 'stale', taskId?: string): void {
         const now = new Date().toISOString();
+        if (taskId) {
+            this.db.prepare(`
+                UPDATE mesh_direct_dispatches
+                SET status = @status, updated_at = @updatedAt
+                WHERE mesh_id = @meshId AND task_id = @taskId
+                  AND status NOT IN ('completed', 'failed')
+            `).run({ status, meshId, taskId, updatedAt: now });
+            return;
+        }
+        if (!sessionId) return; // never update rows without a session binding
         this.db.prepare(`
             UPDATE mesh_direct_dispatches
             SET status = @status, updated_at = @updatedAt

@@ -151,6 +151,66 @@ describe('mesh-runtime-store', () => {
         });
     });
 
+    describe('CANON-B: updateDirectDispatchStatus taskId-targeted status flips', () => {
+        // A single session can host several sequential direct dispatches (re-dispatch / nudge).
+        // mesh_direct_dispatches is keyed by task_id (PK), but flipping status by session_id
+        // alone hits EVERY non-terminal row for the session — flipping a sibling's row and
+        // stranding the task whose event actually fired. Targeting by taskId fixes that.
+        it('flips only the matching task_id row when a taskId is given, leaving the sibling active', () => {
+            const meshId = `mesh-canonb-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-shared-${randomUUID()}`;
+            const taskA = `task-a-${randomUUID()}`;
+            const taskB = `task-b-${randomUUID()}`;
+
+            // Two dispatches to the SAME session: A dispatched earlier, B the re-dispatch.
+            insertDirectDispatch(meshId, { taskId: taskA, sessionId, message: 'task-a', via: 'p2p', dispatchedAt: new Date(Date.now() - 1000).toISOString() });
+            insertDirectDispatch(meshId, { taskId: taskB, sessionId, message: 'task-b', via: 'p2p', dispatchedAt: new Date().toISOString() });
+
+            // B's generating_started acks ONLY B; A must stay 'dispatched'.
+            updateDirectDispatchStatus(meshId, sessionId, 'acked', taskB);
+
+            const db = MeshRuntimeStore.getInstance();
+            const all = db.getActiveDirectDispatches(meshId);
+            const rowA = all.find(d => d.taskId === taskA);
+            const rowB = all.find(d => d.taskId === taskB);
+            expect(rowA?.status).toBe('dispatched');
+            expect(rowB?.status).toBe('acked');
+        });
+
+        it('completing one task_id leaves a sibling dispatch on the same session active (no collateral terminal)', () => {
+            const meshId = `mesh-canonb-complete-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-shared-${randomUUID()}`;
+            const taskA = `task-a-${randomUUID()}`;
+            const taskB = `task-b-${randomUUID()}`;
+
+            insertDirectDispatch(meshId, { taskId: taskA, sessionId, message: 'task-a', via: 'p2p', dispatchedAt: new Date(Date.now() - 1000).toISOString() });
+            insertDirectDispatch(meshId, { taskId: taskB, sessionId, message: 'task-b', via: 'p2p', dispatchedAt: new Date().toISOString() });
+
+            // A completes (echoing taskA). B is still a live dispatch and must remain active.
+            updateDirectDispatchStatus(meshId, sessionId, 'completed', taskA);
+
+            const active = getActiveDirectDispatches(meshId);
+            expect(active.map(d => d.taskId)).toContain(taskB);
+            expect(active.find(d => d.taskId === taskA)).toBeUndefined();
+        });
+
+        it('documents the bug-prone legacy path: a session-only flip (no taskId) terminates every active dispatch on the session', () => {
+            const meshId = `mesh-canonb-legacy-${randomUUID().slice(0, 8)}`;
+            const sessionId = `sess-shared-${randomUUID()}`;
+            const taskA = `task-a-${randomUUID()}`;
+            const taskB = `task-b-${randomUUID()}`;
+
+            insertDirectDispatch(meshId, { taskId: taskA, sessionId, message: 'task-a', via: 'p2p', dispatchedAt: new Date(Date.now() - 1000).toISOString() });
+            insertDirectDispatch(meshId, { taskId: taskB, sessionId, message: 'task-b', via: 'p2p', dispatchedAt: new Date().toISOString() });
+
+            // Legacy/relayed event with no taskId — session_id fallback flips BOTH rows. This is
+            // the hazard CANON-B avoids whenever the firing event carries a taskId.
+            updateDirectDispatchStatus(meshId, sessionId, 'completed');
+
+            expect(getActiveDirectDispatches(meshId)).toHaveLength(0);
+        });
+    });
+
     describe('markStaleDirectDispatches', () => {
         it('default threshold is 60 minutes: marks 61-min-old dispatched entries as stale', () => {
             const meshId = `mesh-stale-default-${randomUUID().slice(0, 8)}`;
