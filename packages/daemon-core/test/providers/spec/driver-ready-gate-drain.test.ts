@@ -105,8 +105,9 @@ describe('FsmDriver -- ready-gated queue drain', () => {
             pty.feed('\n>\n? for shortcuts');
             // adapter coalesces screen changes (~80ms debounce) + maybeMarkReady
             // flush setTimeout(50ms) + the submit-key delay floor (~200ms after
-            // the text write).
-            await sleep(600);
+            // the text write) + the win32 submit settle-gate (~500ms quiet before
+            // the first CR — see scheduleWin32Submit). Allow margin past all of it.
+            await sleep(1000);
 
             const all = pty.writes.join('');
             expect(all).toContain('hello agy');

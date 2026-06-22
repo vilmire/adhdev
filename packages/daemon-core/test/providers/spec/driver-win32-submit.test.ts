@@ -25,7 +25,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
+import { FsmDriver, chunkPreservingSurrogates } from '../../../src/providers/spec/fsm-driver.js';
 import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../../src/cli-adapters/pty-transport.js';
@@ -145,7 +145,9 @@ describe('FsmDriver -- win32 submit', () => {
 
     it('win32: writes text on its own — never fused with a trailing CR', async () => {
         setPlatform('win32');
-        const writes = await sendAndCollect({ text: MULTILINE, submitAfterMs: 480, totalWaitMs: 1100 });
+        // The settle-gate holds the first CR until PTY output goes quiet (~500ms
+        // after the last echo), so totalWaitMs must clear that window.
+        const writes = await sendAndCollect({ text: MULTILINE, submitAfterMs: 480, totalWaitMs: 1300 });
         expect(writes).toContain(MULTILINE);
         expect(writes).not.toContain(`${MULTILINE}\r`);
         expect(writes).not.toContain('line three\r');
@@ -163,7 +165,7 @@ describe('FsmDriver -- win32 submit', () => {
 
     it('win32 single-line: first CR submits, loop stops immediately', async () => {
         setPlatform('win32');
-        const writes = await sendAndCollect({ text: 'hello world', submitAfterMs: 320, totalWaitMs: 900 });
+        const writes = await sendAndCollect({ text: 'hello world', submitAfterMs: 320, totalWaitMs: 1200 });
         expect(writes).toContain('hello world');
         const loneCr = writes.filter(w => w === '\r').length;
         expect(loneCr).toBe(1);
@@ -186,5 +188,94 @@ describe('FsmDriver -- win32 submit', () => {
         expect(writes).not.toContain('hello world\r');
         const loneCr = writes.filter(w => w === '\r').length;
         expect(loneCr).toBe(1);
+    });
+
+    // ── DISPATCHTRUNC regression: long-message front-truncation ──────────────
+    //
+    // A long multi-step instruction was arriving front-truncated at remote
+    // workers: the win32 path wrote the whole body in one unbounded ConPTY write
+    // and fired the submit CR on a blind fixed delay, so for a long body the CR
+    // submitted a half-arrived prompt (leading lines lost). The fix paces the body
+    // into bounded chunks and holds the first CR until the PTY output settles.
+
+    it('win32 long body: written in bounded chunks that reassemble to the full text (no front loss)', async () => {
+        setPlatform('win32');
+        // 60 lines, > WIN32_PTY_WRITE_CHUNK_CHARS (1024) → must be chunked.
+        const text = Array.from({ length: 60 }, (_, i) => `step ${i}: do the thing carefully and report`).join('\n');
+        expect(text.length).toBeGreaterThan(1024);
+        const writes = await sendAndCollect({ text, submitAfterMs: 1100, totalWaitMs: 1900 });
+        const bodyWrites = writes.filter(w => w !== '\r');
+        // Chunked into ≥2 writes, and the chunks reassemble to EXACTLY the original
+        // body — the leading content is fully present, nothing dropped.
+        expect(bodyWrites.length).toBeGreaterThanOrEqual(2);
+        expect(bodyWrites.join('')).toBe(text);
+        // No chunk fused a trailing CR; the body submitted (a lone CR was sent).
+        expect(writes.some(w => w === '\r')).toBe(true);
+        expect(writes.some(w => w.endsWith('\r'))).toBe(true); // the lone CR itself
+        expect(bodyWrites.some(w => w.includes('\r'))).toBe(false);
+    });
+
+    it('win32: settle-gate holds the first CR while PTY output is still arriving, then submits once quiet', async () => {
+        setPlatform('win32');
+        const factory = new DrivableFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(submitSpec()),
+            workingDir: os.tmpdir(),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        driver.start();
+        const pty = factory.last!;
+        try {
+            pty.feed('\n>\n? for shortcuts');
+            await sleep(200);
+            const before = pty.writes.length;
+            driver.dispatch({ kind: 'send_message', text: 'go' });
+            // Keep the PTY "noisy" well past the spec's initial submit delay (200ms)
+            // with benign repaints that do NOT trigger a state transition (stay
+            // idle). The old fixed-delay path would have fired a CR at ~200ms; the
+            // settle-gate must hold it while output keeps arriving.
+            for (let i = 0; i < 8; i += 1) {
+                pty.feed(`repaint ${i}`);
+                await sleep(100);
+            }
+            const midWrites = pty.writes.slice(before);
+            expect(midWrites.filter(w => w === '\r').length).toBe(0);
+            // Go quiet → the 500ms settle window elapses → the first CR fires.
+            await sleep(800);
+            const finalWrites = pty.writes.slice(before);
+            expect(finalWrites.filter(w => w === '\r').length).toBeGreaterThanOrEqual(1);
+        } finally {
+            driver.shutdown();
+        }
+    }, 5000);
+});
+
+describe('chunkPreservingSurrogates', () => {
+    it('reassembles to the original and never exceeds the size', () => {
+        const text = 'a'.repeat(2500) + 'b'.repeat(700);
+        const chunks = chunkPreservingSurrogates(text, 1024);
+        expect(chunks.join('')).toBe(text);
+        for (const c of chunks) expect(c.length).toBeLessThanOrEqual(1024);
+        expect(chunks.length).toBeGreaterThan(1);
+    });
+
+    it('never splits a UTF-16 surrogate pair', () => {
+        // Astral chars (😀 = 2 UTF-16 units) packed so a naive boundary would land
+        // mid-pair. Every chunk must contain only whole code points.
+        const text = '😀'.repeat(100);
+        const chunks = chunkPreservingSurrogates(text, 5); // 5 units = 2.5 emoji
+        expect(chunks.join('')).toBe(text);
+        for (const c of chunks) {
+            // A well-formed string round-trips through code-point iteration with no
+            // lone surrogate (which would appear as � on re-encode).
+            expect([...c].every(cp => cp.codePointAt(0) !== 0xfffd)).toBe(true);
+            const last = c.charCodeAt(c.length - 1);
+            expect(last >= 0xd800 && last <= 0xdbff).toBe(false); // no trailing high surrogate
+        }
+    });
+
+    it('passes short text through as a single chunk', () => {
+        expect(chunkPreservingSurrogates('hi', 1024)).toEqual(['hi']);
     });
 });

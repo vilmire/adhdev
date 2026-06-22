@@ -163,12 +163,50 @@ const SUBMIT_DELAY_FLOOR_MS = 200;
 // trimmed by the TUI on submit.
 const WIN32_SUBMIT_RESEND_GAP_MS = 350;
 const WIN32_SUBMIT_MAX_RESENDS = 14;
+// Settle-gate for the win32 FIRST submit CR. Hold the CR until the PTY output has
+// gone quiet for WIN32_SUBMIT_SETTLE_MS after the last input write — i.e. the full
+// (possibly multi-KB / multiline) message body has finished arriving in the
+// composer and echoing back. A long message waits until it actually lands; a short
+// one settles almost immediately. WIN32_SUBMIT_MAX_SETTLE_WAIT_MS bounds the wait
+// so a perpetually-noisy screen can never hang the submit. This is what stops a
+// blind fixed-delay CR from submitting a half-arrived prompt and dropping its
+// leading lines. The phase-2 verified-resend loop (below) is unchanged.
+const WIN32_SUBMIT_SETTLE_MS = 500;
+const WIN32_SUBMIT_MAX_SETTLE_WAIT_MS = 10_000;
+const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
+// Defensive paced PTY write. A single unbounded ConPTY write can overflow the
+// input pipe and drop leading bytes; split a large body into bounded chunks with a
+// short inter-chunk gap so the console input buffer keeps up. Small bodies still
+// write in one shot.
+const WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
+const WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
 
 export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text: string): number {
     const lines = countNewlines(text);
     const linesBonus = Math.min(800, lines * 80);
     const spec = typeof specBeforeSubmit === 'number' && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
     return Math.max(spec, SUBMIT_DELAY_FLOOR_MS + linesBonus);
+}
+
+/** Split `text` into chunks of at most `size` UTF-16 units without ever cutting
+ *  between a high and low surrogate (which would corrupt an astral char — emoji,
+ *  etc. — on the UTF-8 PTY write). */
+export function chunkPreservingSurrogates(text: string, size: number): string[] {
+    const chunks: string[] = [];
+    let offset = 0;
+    while (offset < text.length) {
+        let end = Math.min(text.length, offset + size);
+        if (end < text.length) {
+            const code = text.charCodeAt(end - 1);
+            // Boundary lands on a high surrogate → pull back one so the pair stays
+            // together in the next chunk.
+            if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+        }
+        if (end <= offset) end = Math.min(text.length, offset + size); // size 1 on a lone surrogate
+        chunks.push(text.slice(offset, end));
+        offset = end;
+    }
+    return chunks;
 }
 
 export function guessExt(mime: string): string {
@@ -232,6 +270,16 @@ export class FsmDriver implements ISpecDriver {
      *  WIN32_SUBMIT_* and scheduleWin32Submit). Re-arms itself until the FSM
      *  leaves idle (submitted) or the resend budget is spent. */
     private win32SubmitTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Wall-clock (ms) of the most recent raw PTY output chunk. Advances on every
+     *  on_pty_data — including the echo of text written into the composer — so the
+     *  win32 submit settle-gate can tell when input has finished landing. */
+    private lastPtyDataAt = 0;
+    /** Wall-clock (ms) of the most recent win32 message-body input write. Bridges
+     *  the gap between writing a chunk and its echo so the settle-gate does not
+     *  declare "quiet" mid-write. */
+    private lastWin32WriteAt = 0;
+    /** Pending paced chunk-write timer for a large win32 body (see writeWin32Body). */
+    private win32WriteTimer: ReturnType<typeof setTimeout> | null = null;
 
     private currentEval: CurrentEval | null = null;
     private stateHistory: HistoryEntry[] = [];
@@ -258,7 +306,7 @@ export class FsmDriver implements ISpecDriver {
             this.buildAdapterOpts(),
             {
                 init: () => this.emitInitialState(),
-                on_pty_data: (chunk) => this.emit({ kind: 'pty_data', chunk }),
+                on_pty_data: (chunk) => { this.lastPtyDataAt = Date.now(); this.emit({ kind: 'pty_data', chunk }); },
                 on_screen_changed: () => this.reevaluate(),
                 on_exit: ({ exitCode }) => this.handleExit(exitCode),
             },
@@ -350,6 +398,7 @@ export class FsmDriver implements ISpecDriver {
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
         if (this.stallTimer) { clearTimeout(this.stallTimer); this.stallTimer = null; }
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
+        if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
         this.specWatcher?.close();
         this.adapter.kill();
     }
@@ -872,7 +921,7 @@ export class FsmDriver implements ISpecDriver {
         // typing simulation is skipped on win32; correctness of submission wins
         // over the typing visual there.
         if (process.platform === 'win32') {
-            this.adapter.send_keys(text);
+            this.writeWin32Body(text);
             this.scheduleWin32Submit(sm.submit_key, beforeSubmit);
             return;
         }
@@ -901,17 +950,70 @@ export class FsmDriver implements ISpecDriver {
         return st ? statusForState(st) : 'idle';
     }
 
+    /** Record a win32 body write so the settle-gate counts it as input activity
+     *  even before the echo arrives. */
+    private markWin32Write(): void {
+        this.lastWin32WriteAt = Date.now();
+    }
+
+    /** Most recent win32 input activity — a write we issued OR a PTY output chunk
+     *  (echo). The submit settle-gate waits for this to go quiet. */
+    private lastWin32InputActivityAt(): number {
+        return Math.max(this.lastPtyDataAt, this.lastWin32WriteAt);
+    }
+
     /**
-     * win32 verification-based submit. Sends the submit key, waits a gap, and if
-     * the FSM is still 'idle' (the prompt did not submit — the CR was absorbed as
-     * a multiline-paste newline) resends, up to WIN32_SUBMIT_MAX_RESENDS. The
-     * first CR always fires (so a stale/edge status never suppresses the submit);
-     * subsequent resends are gated on still being idle, and stop the instant the
-     * agent leaves idle (submitted → generating / approval). This converges the
-     * nondeterministic multiline window without spamming Enter into the next turn.
+     * Write the message body to the PTY for win32, paced into bounded chunks. A
+     * single unbounded ConPTY write can overflow the input pipe and drop leading
+     * bytes; splitting it with a short inter-chunk gap keeps the console input
+     * buffer from overflowing. Small bodies still go out in a single write. Each
+     * chunk advances lastWin32WriteAt so the submit settle-gate keeps waiting until
+     * the final chunk is out and echoed.
+     */
+    private writeWin32Body(text: string): void {
+        if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
+        if (text.length <= WIN32_PTY_WRITE_CHUNK_CHARS) {
+            this.markWin32Write();
+            this.adapter.send_keys(text);
+            return;
+        }
+        const chunks = chunkPreservingSurrogates(text, WIN32_PTY_WRITE_CHUNK_CHARS);
+        let idx = 0;
+        const writeNext = (): void => {
+            this.win32WriteTimer = null;
+            if (idx >= chunks.length) return;
+            this.markWin32Write();
+            this.adapter.send_keys(chunks[idx]);
+            idx += 1;
+            if (idx < chunks.length) {
+                this.win32WriteTimer = setTimeout(writeNext, WIN32_PTY_WRITE_CHUNK_GAP_MS);
+            }
+        };
+        writeNext();
+    }
+
+    /**
+     * win32 submit. Two phases:
+     *
+     *  Phase 1 (settle-gate): hold the first CR until the PTY output has been quiet
+     *  for WIN32_SUBMIT_SETTLE_MS after the last input write — i.e. the full
+     *  (possibly multi-KB / multiline) body has finished arriving in the composer
+     *  and echoing. Honors an initial minimum delay and is bounded by
+     *  WIN32_SUBMIT_MAX_SETTLE_WAIT_MS so a noisy screen can never hang the submit.
+     *  This is what stops a long message from being submitted half-arrived (its
+     *  leading lines lost). A short message settles almost immediately.
+     *
+     *  Phase 2 (verified resend — unchanged): send the submit key, wait a gap, and
+     *  if the FSM is still 'idle' (the CR was absorbed as a multiline-paste
+     *  newline) resend, up to WIN32_SUBMIT_MAX_RESENDS. The first CR always fires
+     *  (a stale/edge status never suppresses it); resends are gated on still being
+     *  idle and stop the instant the agent leaves idle (submitted → generating /
+     *  approval). This preserves the win32 lone-CR-swallow handling.
      */
     private scheduleWin32Submit(submitKey: string, initialDelayMs: number): void {
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
+        const startedAt = Date.now();
+
         const fire = (attempt: number): void => {
             this.win32SubmitTimer = null;
             this.adapter.send_keys(submitKey);
@@ -922,8 +1024,22 @@ export class FsmDriver implements ISpecDriver {
                 fire(attempt + 1);
             }, WIN32_SUBMIT_RESEND_GAP_MS);
         };
-        if (initialDelayMs > 0) this.win32SubmitTimer = setTimeout(() => fire(0), initialDelayMs);
-        else fire(0);
+
+        const waitForSettle = (): void => {
+            this.win32SubmitTimer = null;
+            const now = Date.now();
+            const quietFor = now - this.lastWin32InputActivityAt();
+            const waited = now - startedAt;
+            if (quietFor >= WIN32_SUBMIT_SETTLE_MS || waited >= WIN32_SUBMIT_MAX_SETTLE_WAIT_MS) {
+                fire(0);
+                return;
+            }
+            const recheckIn = Math.min(WIN32_SUBMIT_SETTLE_MS - quietFor, WIN32_SUBMIT_SETTLE_POLL_MS);
+            this.win32SubmitTimer = setTimeout(waitForSettle, Math.max(recheckIn, 30));
+        };
+
+        if (initialDelayMs > 0) this.win32SubmitTimer = setTimeout(waitForSettle, initialDelayMs);
+        else waitForSettle();
     }
 
     private handleClickControl(controlId: string, payload?: unknown): void {
