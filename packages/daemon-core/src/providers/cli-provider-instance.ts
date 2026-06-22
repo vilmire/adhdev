@@ -376,6 +376,21 @@ export class CliProviderInstance implements ProviderInstance {
      */
     private static readonly AUTO_APPROVE_SETTLE_MS = 600;
 
+    /**
+     * Busy-side hysteresis for the settle gate. A momentary `generating` flip
+     * while the SAME approval modal's button block is still on screen (its
+     * question line scrolled out of the captured frame, only the buttons + a
+     * residual `esc to interrupt` spinner remain) briefly reports
+     * status!=waiting_approval. Without hysteresis that flip wipes the settle
+     * clock, and the modal→generating→modal flap restarts the 600ms window
+     * every time so auto-approve never fires. We keep the in-progress settle
+     * gate warm across an inactive blip up to this bound; only once the modal
+     * has genuinely stayed gone this long (a real resolution → idle) is the
+     * gate cleared. Bounded so a genuinely new, later approval still re-settles
+     * from scratch rather than firing on a stale timestamp.
+     */
+    private static readonly AUTO_APPROVE_GATE_HYSTERESIS_MS = 1500;
+
     private adapter: ProviderCliAdapter;
     private context: InstanceContext | null = null;
     private events: ProviderEvent[] = [];
@@ -397,6 +412,10 @@ export class CliProviderInstance implements ProviderInstance {
     private pendingAutoApprovalSignature = '';
     private pendingAutoApprovalSince = 0;
     private autoApproveSettleTimer: NodeJS.Timeout | null = null;
+    // Wall-clock when auto-approve first observed status!=waiting_approval while
+    // a settle gate was in progress. Drives AUTO_APPROVE_GATE_HYSTERESIS_MS so a
+    // brief generating flip does not immediately wipe the settle clock.
+    private autoApproveInactiveSince = 0;
     private controlValues: Record<string, string | number | boolean> = {};
     private summaryMetadata: unknown = undefined;
     private appliedEffectKeys = new Set<string>();
@@ -1471,13 +1490,37 @@ export class CliProviderInstance implements ProviderInstance {
         // still inside the short busy window.
         if (!autoApproveActive) {
             this.lastAutoApprovalSignature = '';
+            // Hysteresis: if a settle gate is mid-progress, a momentary
+            // status!=waiting_approval blip (a generating flip while the same
+            // modal's button block is still on screen) must NOT wipe the settle
+            // clock — otherwise the modal→generating→modal flap restarts the
+            // 600ms window every time and auto-approve never fires. Keep the
+            // gate warm for AUTO_APPROVE_GATE_HYSTERESIS_MS; re-arm a timer so
+            // that if the modal does NOT come back the gate is cleared on the
+            // re-check (a genuine resolution → idle frees the gate normally).
+            if (this.pendingAutoApprovalSince) {
+                if (!this.autoApproveInactiveSince) this.autoApproveInactiveSince = now;
+                const goneForMs = now - this.autoApproveInactiveSince;
+                if (goneForMs < CliProviderInstance.AUTO_APPROVE_GATE_HYSTERESIS_MS) {
+                    if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
+                    this.autoApproveSettleTimer = setTimeout(() => {
+                        this.autoApproveSettleTimer = null;
+                        this.recheckAutoApproveSettled();
+                    }, CliProviderInstance.AUTO_APPROVE_GATE_HYSTERESIS_MS - goneForMs + 20);
+                    return autoApproveActive;
+                }
+            }
             // Clear the settle gate so the next approval starts its own quiet
             // window from scratch (a stale timestamp would let it fire instantly).
             this.pendingAutoApprovalSignature = '';
             this.pendingAutoApprovalSince = 0;
+            this.autoApproveInactiveSince = 0;
             if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
             return autoApproveActive;
         }
+        // Active approval observed — reset the inactivity tracker so a later
+        // blip starts its hysteresis window fresh.
+        this.autoApproveInactiveSince = 0;
         const modal = adapterStatus.activeModal;
         // (fix) Do not auto-approve when no concrete modal/buttons are present.
         // Claude TUI flaps between paints; without this guard adapterStatus
@@ -1497,34 +1540,44 @@ export class CliProviderInstance implements ProviderInstance {
             // surface the modal so the user can decide.
             return autoApproveActive;
         }
-        // Include the FSM's approval entry seq: two distinct back-to-back
-        // approvals can carry identical message/buttons (common with
-        // claude-cli). Without the seq their signatures collide and the 5s
-        // busy-window re-entry guard below swallows the second auto-approve,
-        // leaving it stuck. The seq is bumped by the FSM on every fresh
-        // waiting_approval entry, so a new approval always yields a new
-        // signature and fires through.
-        const approvalEntrySeq = typeof adapterStatus?.approvalEntrySeq === 'number'
-            ? adapterStatus.approvalEntrySeq
-            : 0;
-        const signature = [
-            approvalEntrySeq,
+        // Modal *identity* signature — the question/button set only, NO volatile
+        // counters. This is what the settle gate tracks: the FSM bumps
+        // approvalEntrySeq on every fresh waiting_approval entry, and a
+        // modal→generating→modal flap (the question line scrolled out of the
+        // captured frame while the button block stays) re-enters and bumps it
+        // again. Folding that seq into the settle signature made the 600ms
+        // settle clock restart on every flap, so the modal never stayed stable
+        // long enough to fire — the gate was never satisfied. Identity excludes
+        // the seq so button/seq flap of the SAME modal keeps one settle clock.
+        const modalSignature = [
             typeof modal?.message === 'string' ? modal.message.trim() : '',
             buttons.join('|'),
             buttonIndex,
         ].join('::');
-        // Already fired for this exact modal and still inside the busy window —
-        // nothing to do (re-entry guard for repeated snapshots of one modal).
-        if (this.autoApproveBusy && signature === this.lastAutoApprovalSignature) {
+        // Busy-window re-entry guard still needs the seq: two DISTINCT
+        // back-to-back approvals can carry identical message/buttons (common
+        // with claude-cli). Without the seq their busy signatures collide and
+        // the 5s busy-window guard below would swallow the second auto-approve,
+        // leaving it stuck. The seq is bumped by the FSM on every fresh
+        // waiting_approval entry, so a new approval always yields a new busy
+        // signature and fires through.
+        const approvalEntrySeq = typeof adapterStatus?.approvalEntrySeq === 'number'
+            ? adapterStatus.approvalEntrySeq
+            : 0;
+        const busySignature = `${approvalEntrySeq}::${modalSignature}`;
+        // Already fired for this exact modal entry and still inside the busy
+        // window — nothing to do (re-entry guard for repeated snapshots of one
+        // modal).
+        if (this.autoApproveBusy && busySignature === this.lastAutoApprovalSignature) {
             return autoApproveActive;
         }
 
-        // Settle gate: only fire once this exact signature has been stable for
+        // Settle gate: only fire once this modal identity has been stable for
         // AUTO_APPROVE_SETTLE_MS. A still-streaming prompt mutates its
-        // message/buttons each frame → new signature → clock restarts, so we
+        // message/buttons each frame → new identity → clock restarts, so we
         // never approve a half-rendered prompt (the "resolves too fast" bug).
-        if (signature !== this.pendingAutoApprovalSignature) {
-            this.pendingAutoApprovalSignature = signature;
+        if (modalSignature !== this.pendingAutoApprovalSignature) {
+            this.pendingAutoApprovalSignature = modalSignature;
             this.pendingAutoApprovalSince = now;
         }
         const settledForMs = now - this.pendingAutoApprovalSince;
@@ -1543,9 +1596,10 @@ export class CliProviderInstance implements ProviderInstance {
         // Settled — fire the approve key.
         if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
         this.autoApproveBusy = true;
-        this.lastAutoApprovalSignature = signature;
+        this.lastAutoApprovalSignature = busySignature;
         this.pendingAutoApprovalSignature = '';
         this.pendingAutoApprovalSince = 0;
+        this.autoApproveInactiveSince = 0;
         if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
         this.autoApproveBusyTimer = setTimeout(() => {
             this.autoApproveBusy = false;

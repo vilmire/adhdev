@@ -152,6 +152,47 @@ describe('buildDetectStatusFromTui — claude-cli-shaped spec (braille spinner)'
   });
 });
 
+describe('buildDetectStatusFromTui — fixB ① button-block cue with a GENERIC buttonPattern', () => {
+  // codex-shaped: buttonPattern matches ANY numbered line. The cue's approval-
+  // verb anchor (affirmative + decline required) must keep generic menus from
+  // being mis-detected as modals while still catching real approvals after the
+  // question line scrolls out. Modal-first dispatch so the cue can win.
+  const spec: DetectStatusTuiSpec = {
+    spinner: {
+      $schema: 'adhdev:tui/spinner@1',
+      patterns: [{ regex: 'esc to (?:cancel|interrupt|stop)', flags: 'i' }],
+      scope: 'live-frame-tail',
+      scopeWindowLines: 12,
+    },
+    modal: {
+      $schema: 'adhdev:tui/modal@1',
+      questionPattern: 'Do you want to (?:proceed|allow|run)',
+      buttonPattern: '^[\\s❯>]*\\d+\\.\\s+(.+)$',
+    },
+    dispatchOrder: {
+      $schema: 'adhdev:tui/dispatch-order@1',
+      order: ['modal', 'spinner', 'settled-prompt'],
+      onNoMatch: 'idle',
+    },
+  };
+  const detect = buildDetectStatusFromTui(spec);
+
+  it('fires waiting_approval on a genuine approval block (Yes/No) with the question scrolled out', () => {
+    const screen = ['  earlier tool output', '❯ 1. Yes', '  2. No', 'esc to interrupt'].join('\n');
+    expect(detect(statusInput(screen))).toBe('waiting_approval');
+  });
+
+  it('does NOT mis-detect a generic numbered file menu as a modal', () => {
+    const screen = ['Pick a file:', '1. index.ts', '2. main.ts', '3. utils.ts', 'esc to interrupt'].join('\n');
+    expect(detect(statusInput(screen))).toBe('generating');
+  });
+
+  it('does NOT fire when only an affirmative option is present (no decline)', () => {
+    const screen = ['1. Continue', '2. Continue anyway', 'esc to interrupt'].join('\n');
+    expect(detect(statusInput(screen))).toBe('generating');
+  });
+});
+
 describe('buildDetectStatusFromTui — spec validation', () => {
   it('rejects an invalid spinner regex with a helpful error', () => {
     const spec: DetectStatusTuiSpec = {

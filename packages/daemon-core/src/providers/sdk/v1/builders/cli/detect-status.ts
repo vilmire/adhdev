@@ -28,6 +28,10 @@ import {
   applyVisibleRegion,
   type VisibleRegionSpec,
 } from './visible-region.js';
+import {
+  pickApprovalButton,
+  hasNegativeApprovalOption,
+} from '../../../../approval-utils.js';
 
 // ─── Primitive spec shapes (mirror the JSON schemas) ───────────────────
 
@@ -69,6 +73,7 @@ interface ModalSpec {
   questionVariants?: Array<{ regex: string; flags?: string; label?: string }>;
   buttonPattern: string;
   buttonFlags?: string;
+  buttonLabelGroup?: number;
 }
 
 export type DispatchGroup =
@@ -163,6 +168,48 @@ function settledPromptMatches(spec: SettledPromptSpec, input: CliStatusInput): b
   return footers.every((f) => f.test(text));
 }
 
+/**
+ * Extract approval-button labels from every line matching the modal spec's
+ * `buttonPattern`. Mirrors buildParseApprovalFromTui's per-line extraction but
+ * scans the whole screen with no question-line anchor, so the cue survives the
+ * question line scrolling out of the captured frame during long runs of
+ * consecutive approvals.
+ */
+function extractButtonLabels(spec: ModalSpec, text: string): string[] {
+  if (!text) return [];
+  const flags = spec.buttonFlags && spec.buttonFlags.includes('m')
+    ? spec.buttonFlags
+    : `${spec.buttonFlags ?? ''}m`;
+  const buttonRe = compile(spec.buttonPattern, flags);
+  const labelGroup = Number.isInteger(spec.buttonLabelGroup) && (spec.buttonLabelGroup ?? 0) > 0
+    ? spec.buttonLabelGroup!
+    : 1;
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    buttonRe.lastIndex = 0;
+    const m = buttonRe.exec(line);
+    if (!m) continue;
+    const captured = m[labelGroup] ?? (labelGroup === 1 && m.length > 2 ? m[m.length - 1] : undefined);
+    if (captured && captured.trim()) out.push(captured.trim());
+  }
+  return out;
+}
+
+/**
+ * (fixB ①) The approval's selectable button block is itself a modal cue.
+ * Anchored on approval *verbs* so it generalizes across CLIs without trusting
+ * any single spec's `buttonPattern` specificity: a real approval modal offers
+ * BOTH an affirmative option (Yes/Allow/Continue/…) and a decline (No/Deny/
+ * Cancel/Skip/…). A generic numbered menu, a single prose "1. Yes …" line, or
+ * an assistant enumeration lacks that pair and does not fire the cue.
+ */
+function buttonBlockApprovalCue(spec: ModalSpec, text: string): boolean {
+  const labels = extractButtonLabels(spec, text);
+  if (labels.length < 2) return false;
+  if (pickApprovalButton(labels).index < 0) return false;
+  return hasNegativeApprovalOption(labels);
+}
+
 function modalMatches(spec: ModalSpec, input: CliStatusInput): boolean {
   // Status-level modal detection is cue-only — does the question appear at all?
   // Button extraction lives in buildParseApprovalFromTui.
@@ -173,6 +220,10 @@ function modalMatches(spec: ModalSpec, input: CliStatusInput): boolean {
     const re = compile(variant.regex, variant.flags ?? 'i');
     if (re.test(text)) return true;
   }
+  // The question line can scroll out of the captured frame while the button
+  // block (and a residual spinner) remain. Hold the modal cue on the button
+  // block alone so waiting_approval does not flap to generating mid-approval.
+  if (buttonBlockApprovalCue(spec, text)) return true;
   return false;
 }
 

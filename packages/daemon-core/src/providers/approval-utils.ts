@@ -31,6 +31,16 @@ function isNegativeApprovalLabel(value: string): boolean {
         || /\bdo not\b/.test(label);
 }
 
+/**
+ * True when any of the given button labels reads as a decline/negative option
+ * (No / Deny / Cancel / Skip / …). Used as the second half of an approval-modal
+ * structural anchor: a real approval modal offers BOTH an affirmative and a
+ * decline, which distinguishes it from a generic numbered menu or prose list.
+ */
+export function hasNegativeApprovalOption(buttons: string[] | null | undefined): boolean {
+    return (buttons || []).some((button) => isNegativeApprovalLabel(String(button || '')));
+}
+
 export function getApprovalPositiveHints(provider?: Pick<ProviderModule, 'approvalPositiveHints'> | null): string[] {
     const customHints = Array.isArray(provider?.approvalPositiveHints)
         ? provider.approvalPositiveHints

@@ -8,4 +8,5 @@ export declare function pickAutoApprovalButton(buttons: string[] | null | undefi
     index: number;
     label: string;
 };
+export declare function hasNegativeApprovalOption(buttons: string[] | null | undefined): boolean;
 export declare function formatAutoApprovalMessage(modalMessage?: string, buttonLabel?: string): string;

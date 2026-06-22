@@ -234,3 +234,66 @@ describe('claude-cli v1 manifest — declarative detect_status', () => {
     expect(detect(statusInput('totally unrelated output\nnothing matches'))).toBe(null);
   });
 });
+
+// ── fixB ① — button-block modal cue (question line scrolled out) ──────────
+//
+// During long runs of consecutive Bash approvals the question line scrolls out
+// of the captured frame while the selectable button block (and a residual
+// `esc to interrupt` spinner) remain. The modal cue must survive on the button
+// block alone so waiting_approval does not flap to generating mid-approval —
+// otherwise the FSM disposes the held modal and the auto-approve settle gate
+// never satisfies. Production dispatch order is modal-first, so the cue wins
+// over the residual spinner.
+describe('claude-cli v1 manifest — fixB ① button-block cue', () => {
+  if (!existsSync(MANIFEST_PATH)) {
+    it.skip('manifest not found — skipping', () => undefined);
+    return;
+  }
+  const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf-8'));
+  const spec: DetectStatusTuiSpec = {
+    spinner: manifest.tui.spinner,
+    settledPrompt: manifest.tui.settledPrompt,
+    modal: manifest.tui.modal,
+    dispatchOrder: manifest.tui.dispatchOrder, // production order: modal-first
+  };
+  const detect = buildDetectStatusFromTui(spec);
+
+  it('holds waiting_approval on the button block when the question scrolled out, even with a live spinner', () => {
+    const screen = [
+      '⎿  Running…',
+      '❯ 1. Yes',
+      '  2. No, and tell Claude what to do differently',
+      'esc to interrupt',
+    ].join('\n');
+    // No question text on screen; the verb-anchored button block + the
+    // modal-first dispatch order keep this at waiting_approval.
+    expect(detect(statusInput(screen))).toBe('waiting_approval');
+  });
+
+  it('does NOT mis-detect a generic numbered menu (no approval verbs) as a modal', () => {
+    const screen = [
+      '⏺ Here are your options:',
+      '1. Open the config file',
+      '2. Close the editor',
+      'esc to interrupt',
+    ].join('\n');
+    // None of the lines carry an approval verb → no button cue → spinner wins.
+    expect(detect(statusInput(screen))).toBe('generating');
+  });
+
+  it('does NOT fire on a single affirmative prose line (no decline option, <2 buttons)', () => {
+    const screen = [
+      '⏺ Plan:',
+      '1. Yes, I will refactor the parser next.',
+      'esc to interrupt',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('generating');
+  });
+
+  it('still returns idle when a genuine modal fully resolves and only the prompt remains', () => {
+    // Regression guard: once the approval completes the button block is gone,
+    // so the cue releases and the settled prompt is reported (never stuck WA).
+    const screen = ['Previous turn output', '', '❯', '? for shortcuts'].join('\n');
+    expect(detect(statusInput(screen))).toBe('idle');
+  });
+});
