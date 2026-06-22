@@ -5,6 +5,7 @@ import { LOG } from '../logging/logger.js';
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary } from './mesh-events-utils.js';
+import { expandDaemonIdForms } from '@adhdev/mesh-shared';
 
 // ---------------------------------------------------------------------------
 // MCP coordinator pending-event queue — FILE-BASED PERSISTENCE
@@ -48,24 +49,22 @@ export interface PendingMeshCoordinatorEvent {
 const REFINE_TERMINAL_EVENTS = new Set(['refine:completed', 'refine:failed']);
 
 /** Normalise a coordinator-daemon-id argument (single id, list, or undefined) into a
- *  de-duplicated list of non-empty strings. The first entry is treated as primary for
- *  per-daemon JSONL file naming; all entries are accepted by drain/peek targeting. */
+ *  de-duplicated list of non-empty strings, EXPANDED to every equivalent daemon-id
+ *  form (bare `mach_X` ≡ `daemon_mach_X` ≡ `standalone_mach_X`).
+ *
+ *  A coordinator resolves its own id through one path (status instanceId, the config-
+ *  form node daemonId, or the bare machineId) but a worker stamps a completion's
+ *  `coordinator_daemon_id` through another, so the two are routinely in DIFFERENT
+ *  forms of the SAME machine. The scope filter is an exact-string match, so without
+ *  expansion a `daemon_mach_X`-scoped completion is silently skipped by a coordinator
+ *  that only knows itself as bare `mach_X` (the base-node completion-surface bug).
+ *  Expanding here fixes every drain/peek/surface caller uniformly. The first ORIGINAL
+ *  id stays at [0] so per-daemon JSONL file naming keeps its primary; expansion stays
+ *  within one machine core so a different coordinator's events are never claimed. */
 function normalizeCoordinatorDaemonIds(
     coordinatorDaemonId?: string | null | ReadonlyArray<string>,
 ): string[] {
-    const raw = Array.isArray(coordinatorDaemonId)
-        ? coordinatorDaemonId
-        : coordinatorDaemonId != null ? [coordinatorDaemonId] : [];
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const id of raw) {
-        if (typeof id !== 'string') continue;
-        const trimmed = id.trim();
-        if (!trimmed || seen.has(trimmed)) continue;
-        seen.add(trimmed);
-        out.push(trimmed);
-    }
-    return out;
+    return expandDaemonIdForms(coordinatorDaemonId);
 }
 
 export function readRefineJobId(event: { metadataEvent?: Record<string, unknown> } | Record<string, unknown>): string {

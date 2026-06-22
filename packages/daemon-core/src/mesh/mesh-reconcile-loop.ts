@@ -56,6 +56,7 @@ import {
     expireStaleUnresolvedDelegateForwards,
 } from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString, readMeshCompletionSummary } from './mesh-events-utils.js';
+import { expandDaemonIdForms } from '@adhdev/mesh-shared';
 import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
@@ -119,16 +120,19 @@ interface LiveCoordinator {
 //   - the daemon's canonical status id (`standalone_<machineId>` / `daemon_<machineId>`),
 //     stamped by the MCP layer via ctx.localDaemonId (= getStatus().status.instanceId), or
 //   - the bare machineId, stamped by the local queue-assignment path (loadConfig().machineId).
+//   - the config-form node daemonId (`daemon_<machineId>`), which the MCP layer's
+//     resolveCoordinatorDaemonId prefers and stamps onto direct-dispatch workers.
 // Draining with only one of these silently misses events stamped with the other —
-// the exact reason a generating coordinator never self-received local completions.
-// We accept BOTH so the drain matches regardless of which path stamped the event.
+// the exact reason a generating coordinator never self-received local completions,
+// and the base-node completion-surface bug (base completions land full-form
+// `daemon_<machineId>` while a coordinator that only knows itself as bare
+// `<machineId>` never matches them). We expand to EVERY equivalent form so the
+// scope match (host gate, self-node detection, and the drain IN-filter downstream)
+// succeeds regardless of which path stamped the event.
 function resolveCoordinatorDaemonIds(components: DaemonComponents): string[] {
-    const ids = new Set<string>();
     const statusInstanceId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
-    if (statusInstanceId) ids.add(statusInstanceId);
     const machineId = readNonEmptyString(loadConfig().machineId);
-    if (machineId) ids.add(machineId);
-    return [...ids];
+    return expandDaemonIdForms([statusInstanceId, machineId]);
 }
 
 // Whether THIS daemon is the coordinator/host for a mesh — i.e. the daemon that

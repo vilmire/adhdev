@@ -17,7 +17,7 @@ import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUn
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, expandDaemonIdForms, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -35,16 +35,16 @@ import {
 } from './mesh-events-utils.js';
 
 // The set of coordinator-daemon ids this daemon answers to when draining the
-// pending-events queue (canonical status id + bare machineId). Mirrors
-// resolveCoordinatorDaemonIds in mesh-reconcile-loop — a unicast event may be
-// stamped with either id depending on which dispatch path created the worker.
+// pending-events queue. Mirrors resolveCoordinatorDaemonIds in mesh-reconcile-loop:
+// a unicast event may be stamped with the status id, the bare machineId, OR the
+// config-form node daemonId (`daemon_<machineId>`) depending on which dispatch path
+// created the worker. We expand to EVERY equivalent form so a `daemon_<machineId>`
+// completion matches a coordinator that knows itself as bare `<machineId>` (the
+// base-node completion-surface bug) and vice versa.
 function resolveCoordinatorDrainDaemonIds(components: DaemonComponents): string[] {
-    const ids = new Set<string>();
     const statusInstanceId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
-    if (statusInstanceId) ids.add(statusInstanceId);
     const machineId = readNonEmptyString(loadConfig().machineId);
-    if (machineId) ids.add(machineId);
-    return [...ids];
+    return expandDaemonIdForms([statusInstanceId, machineId]);
 }
 
 // ---------------------------------------------------------------------------
