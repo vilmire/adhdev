@@ -168,6 +168,46 @@ function statusFromTerminal(entry: MeshLedgerEntry): MeshActiveWorkStatus {
     return 'failed';
 }
 
+const LEDGER_ONLY_STALE_REASON =
+    'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition';
+
+/**
+ * Single source of truth for classifying whether a direct dispatch is ledger-only
+ * stale (dispatched but never acknowledged: no provider ack, no transcript append,
+ * no runtime transition) and whether that staleness is "fresh unacknowledged"
+ * (target session still live) vs. an orphaned historical record.
+ *
+ * Previously this predicate was inlined in all three dispatch-classification blocks
+ * (MeshRuntimeStore path, remote-ledger path, full-ledger path) and had drifted —
+ * e.g. one block gated `isIdleUnacknowledged` on `!isTerminal` and another did not.
+ * Extracting it keeps the three callers byte-for-byte consistent. Status derivation
+ * stays per-block: it genuinely differs by data source and is passed in via `status`.
+ */
+function classifyDirectDispatch(params: {
+    /** Final classified status of the dispatch. */
+    status: MeshActiveWorkStatus;
+    /** True when a real terminal row applies (completed/failed/stale); excludes approval_needed. Gates the stale verdict. */
+    isTerminalRow: boolean;
+    /** True when any terminal-derived status exists (incl. approval_needed). Used to detect "no transition". */
+    hasTerminalStatus: boolean;
+    /** Live session status from the mesh nodes, if any. */
+    liveStatus?: string;
+    /** Live stale reason from the mesh nodes, if any. */
+    liveStaleReason?: string;
+    /** Whether the dispatch targeted an already-idle session. */
+    dispatchedToIdleSession: boolean;
+}): { ledgerOnlyStaleReason: string | undefined; isFreshUnacknowledged: boolean } {
+    const { status, isTerminalRow, hasTerminalStatus, liveStatus, liveStaleReason, dispatchedToIdleSession } = params;
+    const isNoTransition = !hasTerminalStatus && !liveStatus;
+    const isIdleUnacknowledged = status === 'idle';
+    const ledgerOnlyStaleReason =
+        !isTerminalRow && (isIdleUnacknowledged || isNoTransition || (dispatchedToIdleSession && isIdleUnacknowledged))
+            ? LEDGER_ONLY_STALE_REASON
+            : undefined;
+    const isFreshUnacknowledged = Boolean(ledgerOnlyStaleReason && !liveStaleReason);
+    return { ledgerOnlyStaleReason, isFreshUnacknowledged };
+}
+
 export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): MeshActiveWorkSummary {
     const statusCounts: Record<MeshActiveWorkStatus, number> = {
         pending: 0,
@@ -239,12 +279,14 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             const status: MeshActiveWorkStatus = isTerminal
                 ? (dbStatus === 'completed' ? 'idle' : 'failed')
                 : live.status || (dbStatus === 'acked' ? 'generating' : 'assigned');
-            const isNoTransition = !isTerminal && !live.status;
-            const isIdleUnacknowledged = status === 'idle' && !isTerminal;
-            const ledgerOnlyStaleReason = !isTerminal && (isIdleUnacknowledged || isNoTransition || (dispatch.dispatchedToIdleSession && isIdleUnacknowledged))
-                ? 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition'
-                : undefined;
-            const isFreshUnacknowledged = Boolean(ledgerOnlyStaleReason && !live.staleReason);
+            const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
+                status,
+                isTerminalRow: isTerminal,
+                hasTerminalStatus: isTerminal,
+                liveStatus: live.status,
+                liveStaleReason: live.staleReason,
+                dispatchedToIdleSession: dispatch.dispatchedToIdleSession === true,
+            });
             const { title, summary } = summarizeMessage(dispatch.message || '');
             const record: MeshActiveWorkRecord = {
                 taskId: dispatch.taskId,
@@ -291,15 +333,16 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
             const status = terminalStatus || live.status || 'assigned';
             const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
-            const dispatchedToIdleSession = dispatch.payload?.dispatchedToIdleSession === true;
-            const isNoTransition = !terminalStatus && !live.status;
-            const isIdleUnacknowledged = status === 'idle';
-            const ledgerOnlyStaleReason = !terminalRow && (isIdleUnacknowledged || isNoTransition || (dispatchedToIdleSession && isIdleUnacknowledged))
-                ? 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition'
-                : undefined;
+            const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
+                status,
+                isTerminalRow: terminalRow,
+                hasTerminalStatus: Boolean(terminalStatus),
+                liveStatus: live.status,
+                liveStaleReason: live.staleReason,
+                dispatchedToIdleSession: dispatch.payload?.dispatchedToIdleSession === true,
+            });
             const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
             const { title, summary } = summarizeMessage(message);
-            const isFreshUnacknowledged = Boolean(ledgerOnlyStaleReason && !live.staleReason);
             const record: MeshActiveWorkRecord = {
                 taskId,
                 source: 'direct',
@@ -344,15 +387,16 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
             const status = terminalStatus || live.status || 'assigned';
             const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
-            const dispatchedToIdleSession = dispatch.payload?.dispatchedToIdleSession === true;
-            const isNoTransition = !terminalStatus && !live.status;
-            const isIdleUnacknowledged = status === 'idle';
-            const ledgerOnlyStaleReason = !terminalRow && (isIdleUnacknowledged || isNoTransition || (dispatchedToIdleSession && isIdleUnacknowledged))
-                ? 'direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition'
-                : undefined;
+            const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
+                status,
+                isTerminalRow: terminalRow,
+                hasTerminalStatus: Boolean(terminalStatus),
+                liveStatus: live.status,
+                liveStaleReason: live.staleReason,
+                dispatchedToIdleSession: dispatch.payload?.dispatchedToIdleSession === true,
+            });
             const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
             const { title, summary } = summarizeMessage(message);
-            const isFreshUnacknowledged = Boolean(ledgerOnlyStaleReason && !live.staleReason);
             const record: MeshActiveWorkRecord = {
                 taskId,
                 source: 'direct',

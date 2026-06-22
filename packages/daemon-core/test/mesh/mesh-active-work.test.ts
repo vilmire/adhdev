@@ -500,3 +500,78 @@ describe('classifyStaleDirectForPrune — staleDirect prune safety', () => {
         )).toBe('preserve_unacknowledged');
     });
 });
+
+// ─── F5: classifyDirectDispatch parity across the MeshRuntimeStore and ledger paths ──
+// The stale/unacknowledged predicate was inlined in all three dispatch-classification
+// blocks and had drifted. After extracting classifyDirectDispatch(), the previously
+// UNTESTED MeshRuntimeStore (directDispatches) path must classify an equivalent dispatch
+// identically to the ledger path. These tests pin that parity.
+describe('buildMeshActiveWork directDispatches path — classifier parity (F5)', () => {
+    function directDispatch(overrides: Record<string, unknown> = {}) {
+        return {
+            taskId: 'task-1',
+            meshId: 'mesh-1',
+            nodeId: 'node-1',
+            sessionId: 'session-1',
+            providerType: 'codex-cli',
+            message: 'do the work',
+            taskMode: null,
+            via: 'mesh_send_task',
+            status: 'dispatched',
+            dispatchedToIdleSession: false,
+            dispatchedAt: '2026-05-26T00:00:00.000Z',
+            updatedAt: '2026-05-26T00:00:00.000Z',
+            ...overrides,
+        } as any;
+    }
+
+    it('an acked dispatch to a live generating session is active (generating)', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [],
+            directDispatches: [directDispatch({ status: 'acked' })],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', providerType: 'codex-cli', status: 'generating' }] }],
+        });
+        expect(result.activeWork).toHaveLength(1);
+        expect(result.activeWork[0]).toMatchObject({ taskId: 'task-1', source: 'direct', status: 'generating' });
+        expect(result.staleDirectWork).toHaveLength(0);
+    });
+
+    it('a dispatched task to a live idle session is stale + unacknowledged (parity with ledger path)', () => {
+        const nodes = [{ id: 'node-1', sessions: [{ id: 'session-1', providerType: 'codex-cli', status: 'idle' }] }];
+
+        const viaStore = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [],
+            directDispatches: [directDispatch()],
+            nodes,
+        });
+        const viaLedger = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch()],
+            nodes,
+        });
+
+        // Both data sources must reach the same verdict via the shared classifier.
+        for (const result of [viaStore, viaLedger]) {
+            expect(result.activeWork).toHaveLength(0);
+            expect(result.staleDirectWork).toHaveLength(1);
+            expect(result.staleDirectWork[0].status).toBe('idle');
+            expect(result.staleDirectWork[0].staleReason).toBeTruthy();
+            expect(result.staleDirectWork[0].staleDispatchUnacknowledged).toBe(true);
+        }
+    });
+
+    it('a completed direct dispatch is terminal (not active, not stale)', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [],
+            directDispatches: [directDispatch({ status: 'completed' })],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', status: 'idle' }] }],
+        });
+        expect(result.activeWork).toHaveLength(0);
+        expect(result.staleDirectWork).toHaveLength(0);
+        expect(result.terminalDirectWork).toHaveLength(1);
+        expect(result.terminalDirectWork[0]).toMatchObject({ taskId: 'task-1', status: 'idle', terminal: true });
+    });
+});

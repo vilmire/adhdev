@@ -1292,4 +1292,28 @@ describe('mesh-runtime-store', () => {
             expect(db.pendingEventCount(meshId)).toBe(0);
         });
     });
+
+    describe('counter independence (F3) — WAL checkpoint vs tool-call-log sweep', () => {
+        // Regression guard: these two periodic chores ran off ONE shared counter, so
+        // each one's write volume advanced the other's threshold and the cadences drifted.
+        // They must increment fully independent counters.
+        it('recordMeshToolCall advances only toolCallLogCounter, never walWriteCounter', () => {
+            const db = MeshRuntimeStore.getInstance() as any;
+            const walBefore = db.walWriteCounter;
+            const toolBefore = db.toolCallLogCounter;
+            db.recordMeshToolCall({ meshId: 'mesh-f3', tool: 'mesh_status' });
+            db.recordMeshToolCall({ meshId: 'mesh-f3', tool: 'mesh_status' });
+            expect(db.toolCallLogCounter).toBe(toolBefore + 2); // dedicated counter advanced
+            expect(db.walWriteCounter).toBe(walBefore);          // WAL cadence untouched
+        });
+
+        it('a WAL-checkpointing write advances only walWriteCounter, never toolCallLogCounter', () => {
+            const db = MeshRuntimeStore.getInstance() as any;
+            const walBefore = db.walWriteCounter;
+            const toolBefore = db.toolCallLogCounter;
+            db.recordCompletionFingerprint(`fp-f3-${randomUUID()}`, 60_000); // calls maybeCheckpointWal
+            expect(db.walWriteCounter).toBe(walBefore + 1);      // WAL counter advanced
+            expect(db.toolCallLogCounter).toBe(toolBefore);      // tool-log cadence untouched
+        });
+    });
 });

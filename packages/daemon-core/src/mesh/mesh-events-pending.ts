@@ -303,6 +303,7 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
         const fingerprint = buildPendingEventFingerprint(event);
 
         // G3: Write to SQLite inbox (primary path going forward)
+        let sqliteOk = false;
         try {
             MeshRuntimeStore.getInstance().insertPendingEvent({
                 id: randomUUID(),
@@ -313,14 +314,22 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
                 fingerprint: fingerprint || null,
                 queuedAt: event.queuedAt,
             });
+            sqliteOk = true;
         } catch {
             // SQLite write failure is non-fatal; JSONL fallback below still works.
         }
 
-        // Also write to JSONL (retained as legacy/export artifact)
-        const path = getPendingEventsPath(event.meshId, event.targetCoordinatorDaemonId);
-        trimPendingEventsIfNeeded(path);
-        appendFileSync(path, JSON.stringify(event) + '\n', 'utf-8');
+        // Also write to JSONL (retained as legacy/export artifact). Best-effort once
+        // SQLite (the primary store) has the event: a JSONL append failure (disk full,
+        // permissions) must NOT report the whole persist as failed when SQLite holds it.
+        try {
+            const path = getPendingEventsPath(event.meshId, event.targetCoordinatorDaemonId);
+            trimPendingEventsIfNeeded(path);
+            appendFileSync(path, JSON.stringify(event) + '\n', 'utf-8');
+        } catch (e: any) {
+            if (!sqliteOk) throw e; // neither store has it — surface as a real failure
+            LOG.warn('MeshEvents', `JSONL append failed for mesh ${event.meshId}; SQLite holds the event: ${e?.message || e}`);
+        }
         return true;
     } catch (e: any) {
         LOG.warn('MeshEvents', `Failed to persist pending coordinator event: ${e?.message || e}`);

@@ -70,6 +70,10 @@ export class MeshRuntimeStore {
     private readonly migratedMeshIds = new Set<string>();
     private fingerprintSweepCounter = 0;
     private walWriteCounter = 0;
+    // Independent cadence for the tool-call-log sweep. Must NOT share walWriteCounter:
+    // sharing makes each store's threshold drift by the other's write volume (WAL
+    // checkpoint at 500 vs tool-log sweep at 200 would interfere arbitrarily).
+    private toolCallLogCounter = 0;
     private static readonly WAL_CHECK_INTERVAL = 500;
     private static readonly WAL_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
 
@@ -1171,7 +1175,7 @@ export class MeshRuntimeStore {
         const callsInWindow = row?.cnt ?? 0;
 
         // Sweep old entries periodically to keep the table lean (every 200 calls across all tools).
-        if (++this.walWriteCounter % 200 === 0) {
+        if (++this.toolCallLogCounter % 200 === 0) {
             this.db.prepare(
                 'DELETE FROM mesh_tool_call_log WHERE called_at < ?'
             ).run(now - Math.max(windowMs * 10, 60_000));
