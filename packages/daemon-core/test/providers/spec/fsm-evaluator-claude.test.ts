@@ -611,7 +611,11 @@ describe('claude-cli v4 FSM — FALSEIDLE2 ellipsis-less spinner + whole-screen 
         const m = (l: string) => spec.transitions.find(t => t.label === l)!.when as any;
         const i2b = m('idle→busy').matches;
         const b2i = m('busy→idle').all[0].not.matches;
-        const a2b = m('approval→busy').matches;
+        // approval→busy was restructured by the AUTOAPPROVE fix into all:[{not: footer ❯ 1.},
+        // {section: body, matches: <spinner>}] (sticky-approval footer guard). The spinner
+        // regex now lives in that body clause, not a flat .matches — read it from there so the
+        // "all four spinner clauses use the identical regex" invariant still holds post-merge.
+        const a2b = m('approval→busy').all.find((c: any) => c.section === 'body').matches;
         const a2i = m('approval→idle').all.find((c: any) => c.not && c.not.matches && c.not.matches.includes('2800')).not.matches;
         expect(b2i).toBe(i2b);
         expect(a2b).toBe(i2b);
