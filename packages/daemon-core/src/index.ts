@@ -252,6 +252,11 @@ export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHost
 // ── Mesh Events ──
 export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript } from './mesh/mesh-events.js';
 export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
+// The coordinator-side preview surfaced from a worker's completion/status event
+// (finalSummary / workerResult.summary / lastMessagePreview). Same data the mobile
+// inbox is fed; reused by mesh_read_chat's cache fallback when the live P2P read path
+// is unavailable (saturated/unreachable peer).
+export { resolveMeshSurfacedSessionPreview, readMeshCompletionSummary } from './mesh/mesh-events-utils.js';
 
 // ── Mesh Delivery Policy ──
 export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, markSessionDeliveriesTerminal, recordCompletionConflict, getRecentCompletionConflicts } from './mesh/mesh-delivery-policy.js';

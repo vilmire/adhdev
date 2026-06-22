@@ -63,6 +63,7 @@ import {
     reconcileDirectDispatchCompletionFromTranscript,
     recordMeshToolCall,
     requeueTask,
+    resolveMeshSurfacedSessionPreview,
     resolveDelegatedWorkerAutoApprove,
     validateMeshTaskModeRequest,
 } from '@adhdev/daemon-core';
@@ -4999,6 +5000,141 @@ export async function meshSendTask(
     }
 }
 
+/**
+ * Distinguish a P2P read_chat transport failure between "the peer is reachable but
+ * saturated/slow" (REQUEST_TIMEOUT — acked, result deadline elapsed) and "the peer was
+ * never connected / the request never reached a working handler" (CONNECT_TIMEOUT,
+ * ACK_TIMEOUT delivery failure, NO_PEER, datachannel closed, …). Both still warrant the
+ * cached-summary fallback, but the advisory wording differs so the coordinator knows
+ * whether a quick retry is plausible (saturated) or the daemon is simply offline.
+ *
+ * The transport-layer code (meshCode) is lost crossing IPC — only the error message
+ * string survives — so classification is by message text.
+ */
+function classifyReadChatTransportCause(error: unknown): 'not_connected' | 'saturated' {
+    const message = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
+    if (/not acknowledged|delivery failure|channel never opened|connect timed out|not connected|datachannel|disconnected|\bclosed\b|offline|no route|failed to initiate p2p|p2p mesh is not available|connect queue full/.test(message)) {
+        return 'not_connected';
+    }
+    // Acked but the result deadline elapsed (REQUEST_TIMEOUT) — peer reachable but
+    // saturated / still working and could not return the transcript in time.
+    return 'saturated';
+}
+
+/**
+ * The coordinator already holds the worker's latest assistant text from the completion /
+ * status events it surfaced into the ledger (finalSummary / workerResult.summary — the
+ * same fields resolveMeshSurfacedSessionPreview reads off a live event, and the same
+ * data the mobile inbox is fed). When the live P2P read_chat path is unavailable this
+ * resolves that cached preview so mesh_read_chat can degrade to a stale-but-present
+ * summary instead of a hard 30s timeout. Scans the most recent matching ledger entry for
+ * the node+session.
+ */
+function resolveCachedMeshSessionPreviewFromLedger(
+    ctx: MeshContext,
+    nodeId: string,
+    sessionId: string,
+): { preview: string; role: 'assistant'; receivedAt: number; ledgerKind: string; timestamp: string } | undefined {
+    const entries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const entry = entries[i];
+        const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
+            ? entry.payload as Record<string, unknown>
+            : {};
+        const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
+        if (entryNodeId && entryNodeId !== nodeId) continue;
+        const entrySessionId = readString(entry.sessionId)
+            || readString(payload.targetSessionId)
+            || readString(payload.sessionId)
+            || readString(payload.instanceId);
+        if (entrySessionId !== sessionId) continue;
+        // Prefer a nested metadataEvent when present, else read the entry payload itself
+        // (task_completed / task_failed entries carry finalSummary + workerResult inline).
+        const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === 'object' && !Array.isArray(payload.metadataEvent)
+            ? payload.metadataEvent as Record<string, unknown>
+            : payload;
+        const preview = resolveMeshSurfacedSessionPreview(metadataEvent);
+        if (preview) {
+            return { ...preview, ledgerKind: entry.kind, timestamp: entry.timestamp };
+        }
+    }
+    return undefined;
+}
+
+/**
+ * mesh_read_chat fallback for a REMOTE P2P read that failed at the transport layer.
+ *
+ * Mirrors mesh_status's collectLiveStatusProbe graceful-degrade pattern: rather than
+ * hard-failing on a 30s P2P timeout to a saturated/unreachable worker, surface the
+ * cached coordinator-side summary (the same finalSummary/lastMessagePreview the mobile
+ * dashboard renders). This is a READ/meta-plane degrade — status & preview already flow
+ * over the WS/event plane — NOT a data-plane command WS fallback (which stays P2P-only
+ * by policy). The full transcript still requires a live P2P read_chat; the fallback is
+ * explicitly a stale point-in-time summary only.
+ */
+function buildMeshReadChatCacheFallback(
+    ctx: MeshContext,
+    args: { node_id: string; session_id: string },
+    node: LocalMeshNodeEntry,
+    error: unknown,
+): string {
+    const classification = classifyP2pRelayFailure(error, { command: 'read_chat', targetDaemonId: node.daemonId });
+    const cause = classifyReadChatTransportCause(error);
+    const errorMessage = error instanceof Error ? error.message : String(error ?? '');
+    const causeNote = cause === 'not_connected'
+        ? 'the worker daemon is not currently connected over P2P (no live channel)'
+        : 'the worker daemon is connected but saturated — it acknowledged the request but did not return the transcript within the deadline';
+
+    const cached = resolveCachedMeshSessionPreviewFromLedger(ctx, args.node_id, args.session_id);
+    if (cached) {
+        return JSON.stringify({
+            success: true,
+            source: 'coordinator_cache_fallback',
+            fallback: true,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            transport: 'p2p',
+            transportFailure: {
+                code: classification.code,
+                reason: classification.reason,
+                cause,
+                error: errorMessage,
+            },
+            advisory: `Live transcript unavailable (${causeNote}). Showing the cached coordinator-side summary surfaced from the worker's last completion/status event — a stale point-in-time summary, NOT the live transcript. The full transcript requires a live P2P read_chat once the peer is reachable.`,
+            fullTranscriptRequiresP2p: true,
+            summary: cached.preview,
+            messages: [{
+                role: cached.role,
+                content: cached.preview,
+                cached: true,
+                ...(cached.receivedAt ? { receivedAt: cached.receivedAt } : {}),
+            }],
+            cachedPreview: {
+                role: cached.role,
+                ledgerKind: cached.ledgerKind,
+                ledgerTimestamp: cached.timestamp,
+                ...(cached.receivedAt ? { receivedAt: cached.receivedAt } : {}),
+            },
+        }, null, 2);
+    }
+
+    // No cached summary either — return the structured relay failure with a clear reason,
+    // and make explicit that even a fallback summary is unavailable.
+    const failure = buildCoordinatorP2pRelayFailure(error, {
+        command: 'read_chat',
+        targetDaemonId: node.daemonId,
+        nodeId: args.node_id,
+        sessionId: args.session_id,
+    });
+    return JSON.stringify({
+        ...failure,
+        cause,
+        cachedSummaryAvailable: false,
+        fullTranscriptRequiresP2p: true,
+        advisory: `Live transcript unavailable (${causeNote}) and no cached coordinator-side summary exists for this session yet (no completion/status event has been surfaced). The full transcript requires a live P2P read_chat once the peer is reachable.`,
+    }, null, 2);
+}
+
 export async function meshReadChat(
     ctx: MeshContext,
     args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean },
@@ -5014,14 +5150,27 @@ export async function meshReadChat(
     const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
         ? args.provider_session_id.trim()
         : cached?.providerSessionId;
-    const result = await commandForNode(ctx, node, 'read_chat', {
-        sessionId: args.session_id,
-        targetSessionId: args.session_id,
-        workspace: node.workspace,
-        ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
-        ...(providerSessionId ? { providerSessionId } : {}),
-        tailLimit: args.tail ?? 10,
-    });
+    const isLocalNode = isLocalControlPlaneNode(ctx, node);
+    let result: any;
+    try {
+        result = await commandForNode(ctx, node, 'read_chat', {
+            sessionId: args.session_id,
+            targetSessionId: args.session_id,
+            workspace: node.workspace,
+            ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
+            ...(providerSessionId ? { providerSessionId } : {}),
+            tailLimit: args.tail ?? 10,
+        });
+    } catch (e: any) {
+        // Local read_chat and non-transport (provider/logic) failures keep the existing
+        // throw so genuine errors still surface. The cache fallback covers ONLY a remote
+        // P2P transport failure (saturated/unreachable peer): mesh_status already degrades
+        // its P2P probe gracefully (collectLiveStatusProbe) — read_chat had no catch and
+        // hard-failed at the 30s timeout instead of surfacing the coordinator's cached
+        // summary. See buildMeshReadChatCacheFallback.
+        if (isLocalNode || !isP2pRelayTransportFailure(e)) throw e;
+        return buildMeshReadChatCacheFallback(ctx, args, node, e);
+    }
     const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result) as Record<string, any>, {
         key: `mesh:${args.node_id}:${args.session_id}`,
         toolName: 'mesh_read_chat',
