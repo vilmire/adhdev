@@ -51,6 +51,7 @@ import { normalizeContent, flattenContent, normalizeInputEnvelope } from './cont
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext, SessionModalState } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
+import { ManualAttendanceTracker } from './manual-attendance.js';
 import { buildLegacyModelModeSummaryMetadata } from './summary-metadata.js';
 import { workingDirBasename } from './working-dir.js';
 import {
@@ -845,7 +846,12 @@ export class AcpProviderInstance implements ProviderInstance {
                 }
 
                 // ─── Auto-approve: skip user confirmation ───
-                if (this.settings.autoApprove !== false) {
+                // Held while a human is actively attending this session (manual
+                // attendance) so they can decide the permission themselves; falls
+                // through to the waiting_approval manual path below. A background
+                // worker is never attended, so its delegated auto-approve fires
+                // as before.
+                if (this.settings.autoApprove !== false && !this.manualAttendance.isAttended()) {
                     const toolTitle = tc.title || tc.toolCallId || 'tool call';
                     this.log.info(`[${this.type}] Auto-approving: ${toolTitle}`);
                     this.appendSystemMessage(`Auto-approved: ${toolTitle}`);
@@ -1127,6 +1133,17 @@ export class AcpProviderInstance implements ProviderInstance {
     }
 
     private permissionResolvers: ((approved: boolean) => void)[] = [];
+
+    // Provider-common manual-attendance signal: while a human is actively driving
+    // this session from the dashboard, auto-approve holds so they can decide on
+    // the permission request themselves. Background workers are never attended →
+    // delegated auto-approve is unaffected.
+    private readonly manualAttendance = new ManualAttendanceTracker();
+
+    /** @see ProviderInstance.noteManualInteraction */
+    noteManualInteraction(now = Date.now()): void {
+        this.manualAttendance.note(now);
+    }
 
     async resolvePermission(approved: boolean): Promise<void> {
         const resolver = this.permissionResolvers.shift();

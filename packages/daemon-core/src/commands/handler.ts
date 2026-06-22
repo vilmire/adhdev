@@ -25,6 +25,7 @@ import type { SessionRegistry, SessionRuntimeTarget } from '../sessions/registry
 import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
 import { resolveLegacyProviderScript, type LegacyStringScript } from './provider-script-resolver.js';
+import { MANUAL_ATTENDANCE_COMMANDS } from '../providers/manual-attendance.js';
 
 // Sub-module imports
 import * as Chat from './chat-commands.js';
@@ -375,6 +376,36 @@ export class DaemonCommandHandler implements CommandHelpers {
         this._agentStream = manager;
     }
 
+    /**
+     * When a command in the manual-attendance set arrives for a session this
+     * daemon hosts, stamp the live instance so auto-approve holds while the user
+     * drives the session by hand. Provider-common: the signal is the command
+     * (foreground select_session / open_panel, controlbar invoke_provider_script
+     * / set_mode / change_model / set_thought_level, manual resolve_action,
+     * pty_input), never any CLI-specific modal text — so it works identically for
+     * every CLI/ACP provider. send_chat is deliberately excluded because a
+     * coordinator delegating a task to a worker also uses send_chat; counting it
+     * would wrongly suppress the worker's delegated auto-approve. For a remote
+     * mesh worker session the controlbar commands are forwarded to the owning
+     * worker daemon, which runs this same hook there, so attendance is recorded
+     * on the daemon that actually hosts the instance.
+     */
+    private noteManualAttendanceIfApplicable(cmd: string, args: any): void {
+        if (!MANUAL_ATTENDANCE_COMMANDS.has(cmd)) return;
+        const sessionId = this._currentRoute.session?.sessionId
+            || (typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '');
+        if (!sessionId) return;
+        const session = this._ctx.sessionRegistry?.get(sessionId);
+        const instanceKey = session?.adapterKey || session?.instanceKey || sessionId;
+        const instance = this._ctx.instanceManager?.getInstance(instanceKey) as
+            { noteManualInteraction?: (now?: number) => void } | undefined;
+        try {
+            instance?.noteManualInteraction?.();
+        } catch {
+            // attendance is best-effort — never block command dispatch
+        }
+    }
+
     // ─── Command Dispatcher ──────────────────────────
 
     async handle(cmd: string, args: any): Promise<CommandResult> {
@@ -382,6 +413,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         this._currentRoute = this.resolveRoute(args);
         const startedAt = Date.now();
         this.logCommandStart(cmd, args);
+        this.noteManualAttendanceIfApplicable(cmd, args);
         let result: CommandResult;
 
         if (isGitCommandName(cmd)) {

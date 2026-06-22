@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.js'
 
 // [I] Force-inject modal guard. The mesh reconcile loop force-injects terminal
 // events (completion/approval) into a coordinator parked in `generating` so it is
@@ -39,6 +40,8 @@ function makeStubInstance(opts: {
   }
   instance.activeInteractivePrompt = opts.activeInteractivePrompt ?? null
   instance.settings = { autoApprove: opts.autoApprove === true }
+  // Not attended in these tests — resolveModalParkStatus consults the tracker.
+  ;(instance as any).manualAttendance = new ManualAttendanceTracker()
   return { instance, sendMessage }
 }
 

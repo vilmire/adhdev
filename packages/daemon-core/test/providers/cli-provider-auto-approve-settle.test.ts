@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.js'
 
 // fixB ②③ — settle-gate stabilization for claude-cli auto-approve.
 //
@@ -48,6 +49,8 @@ function makeHarness(): Harness {
   instance.pendingAutoApprovalSignature = ''
   instance.pendingAutoApprovalSince = 0
   instance.autoApproveInactiveSince = 0
+  // Not attended in these tests — they exercise the unattended (worker) fire path.
+  instance.manualAttendance = new ManualAttendanceTracker()
   instance.adapter = {
     resolveModal: (i: number) => resolves.push(i),
     getStatus: () => ({ status: 'idle' }),

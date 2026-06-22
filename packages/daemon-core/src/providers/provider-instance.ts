@@ -226,6 +226,15 @@ export interface ProviderInstance {
     /** Refresh static provider definition/scripts without restarting the live runtime. */
     refreshProviderDefinition?(provider: ProviderModule): void;
 
+    /**
+     * Record that a human is actively attending this session by hand right now
+     * (foreground tab selection, controlbar use, manual approval, terminal
+     * input). Provider-common signal that suppresses auto-approve for a short
+     * window so the user can drive the session manually; background mesh worker
+     * sessions never receive it, so their delegated auto-approve is unaffected.
+     */
+    noteManualInteraction?(now?: number): void;
+
  /** cleanup */
     dispose(): void;
 }

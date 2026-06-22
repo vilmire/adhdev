@@ -29,6 +29,7 @@ import { mergeProviderPatchState, resolveProviderStateSurface } from './provider
 import { normalizeProviderSessionId } from './provider-session-id.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { workingDirBasename } from './working-dir.js';
+import { ManualAttendanceTracker } from './manual-attendance.js';
 
 type PersistableCliHistoryMessage = {
     role: string;
@@ -416,6 +417,11 @@ export class CliProviderInstance implements ProviderInstance {
     // a settle gate was in progress. Drives AUTO_APPROVE_GATE_HYSTERESIS_MS so a
     // brief generating flip does not immediately wipe the settle clock.
     private autoApproveInactiveSince = 0;
+    // Provider-common manual-attendance signal: while a human is actively driving
+    // this session from the dashboard, auto-approve holds so they can take manual
+    // control. Background mesh workers are never attended → delegated auto-approve
+    // is unaffected.
+    private readonly manualAttendance = new ManualAttendanceTracker();
     private controlValues: Record<string, string | number | boolean> = {};
     private summaryMetadata: unknown = undefined;
     private appliedEffectKeys = new Set<string>();
@@ -828,7 +834,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     getHotChatSessionState(): HotChatSessionState {
         const adapterStatus = this.adapter.getStatus({ allowParse: false });
-        const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
+        const autoApproveActive = this.autoApproveEffectivelyActive(adapterStatus.status);
         const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
         const visibleStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status;
         const runtime = this.adapter.getRuntimeMetadata();
@@ -844,7 +850,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     getSessionModalState(sessionId?: string): SessionModalState {
         const adapterStatus = this.adapter.getStatus({ allowParse: true });
-        const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
+        const autoApproveActive = this.autoApproveEffectivelyActive(adapterStatus.status);
         const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
         const visibleStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status;
         const dirName = workingDirBasename(this.workingDir);
@@ -947,7 +953,10 @@ export class CliProviderInstance implements ProviderInstance {
         } catch {
             return null;
         }
-        if (adapterStatus.status === 'waiting_approval' && !this.shouldAutoApprove()) {
+        // A session whose auto-approve is held by manual attendance IS parked on a
+        // modal awaiting the human — autoApproveEffectivelyActive folds that in, so
+        // the mesh force-inject guard correctly treats it as modal-parked.
+        if (adapterStatus.status === 'waiting_approval' && !this.autoApproveEffectivelyActive(adapterStatus.status)) {
             return 'waiting_approval';
         }
         return null;
@@ -1481,6 +1490,29 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private maybeAutoApproveStatus(adapterStatus: any, now = Date.now()): boolean {
+        // Manual-attendance suppression (provider-common): when a human is
+        // actively driving this session from the dashboard, hold auto-approve so
+        // the modal stays visible and they can pick a button / use the controlbar
+        // themselves. Return false (NOT auto-approving) so getState keeps the
+        // modal surfaced. Clear any in-progress settle gate — a genuine fire
+        // after the window lapses must re-settle from scratch — and arm a
+        // re-check for the lapse moment, because the PTY may have gone silent and
+        // would otherwise never re-drive this decision. Background mesh workers
+        // are never attended, so their delegated auto-approve is untouched.
+        if (adapterStatus?.status === 'waiting_approval'
+            && this.shouldAutoApprove()
+            && this.manualAttendance.isAttended(now)) {
+            this.lastAutoApprovalSignature = '';
+            this.pendingAutoApprovalSignature = '';
+            this.pendingAutoApprovalSince = 0;
+            this.autoApproveInactiveSince = 0;
+            if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
+            this.autoApproveSettleTimer = setTimeout(() => {
+                this.autoApproveSettleTimer = null;
+                this.recheckAutoApproveSettled();
+            }, this.manualAttendance.remainingMs(now) + 20);
+            return false;
+        }
         const autoApproveActive = adapterStatus?.status === 'waiting_approval' && this.shouldAutoApprove();
         // Guard re-entry: onStatusChange/getState can observe the same modal multiple
         // times while the PTY absorbs the approval key. Without this flag, repeated
@@ -2094,6 +2126,25 @@ export class CliProviderInstance implements ProviderInstance {
             return providerDefault;
         }
         return false;
+    }
+
+    /** @see ProviderInstance.noteManualInteraction */
+    noteManualInteraction(now = Date.now()): void {
+        this.manualAttendance.note(now);
+    }
+
+    /**
+     * Whether auto-approve should be treated as active *right now* for display
+     * and firing decisions: the configured intent AND the user is not currently
+     * attending this session by hand. When a human is attending, auto-approve is
+     * held so the modal stays visible and they can drive it via the controlbar.
+     * Provider-agnostic — the attendance signal is the command set, never any
+     * CLI-specific modal text.
+     */
+    private autoApproveEffectivelyActive(status: string | undefined, now = Date.now()): boolean {
+        return status === 'waiting_approval'
+            && this.shouldAutoApprove()
+            && !this.manualAttendance.isAttended(now);
     }
 
     private recordAutoApproval(modalMessage?: string, buttonLabel?: string, now = Date.now()): void {
