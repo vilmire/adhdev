@@ -106,8 +106,51 @@ function sweepExpiredRemoteIdleSessions(): void {
 
 function getMeshWithCache(components: DaemonComponents, meshId: string): any | undefined {
     const localMesh = getMesh(meshId);
-    if (localMesh) return localMesh;
-    return components.router?.getCachedInlineMesh(meshId);
+    const cachedMesh = components.router?.getCachedInlineMesh(meshId);
+    if (!localMesh) return cachedMesh;
+    if (!cachedMesh) return localMesh;
+    return mergeInlineCacheOnlyNodes(localMesh, cachedMesh);
+}
+
+/**
+ * Claim-time membership view unification (CLAIMSTALL fix).
+ *
+ * The coordinator's claim path — triggerMeshQueue → autoLaunch candidate filter
+ * and the local/remote idle-session drain — reads mesh membership through
+ * getMeshWithCache, which historically returned the local-config mesh verbatim
+ * whenever one existed. A freshly cloned worktree node is registered ONLY into the
+ * router's inline mesh cache: clone_mesh_node's `meshRecord.inline` branch calls
+ * updateInlineMeshNode, NOT addNode, so the worktree node never reaches local
+ * config (meshes.json). The config-first view therefore omits the worktree node,
+ * while send_task — which resolves membership through getMeshForCommand(preferInline)
+ * over the same inline cache — sees it. That view asymmetry is the stall: a queue
+ * task pinned to the worktree node reports `target_node_id_unmatched` (autoLaunch
+ * candidate filter / targetPinUnmatched check) and the node's idle session is
+ * dropped from the drain pool (mesh.nodes.find miss), so claim never fires and the
+ * task is stranded pending — even though nodeId matching itself is correct.
+ *
+ * Fix: union the local-config nodes with any inline-cache-ONLY nodes, so the claim
+ * view matches the command (send_task) view. Base (non-worktree) nodes present in
+ * local config stay config-authoritative — their entry is taken verbatim from
+ * localMesh, so base node claim/matching is byte-for-byte unchanged. Only nodes
+ * that exist solely in the inline cache (the cloned worktree nodes) are appended.
+ * Identity comparison uses the shared 3-form normalizer (id / nodeId / node_id),
+ * identical to every other claim-path consumer — the matching logic is untouched,
+ * only which nodes are visible.
+ */
+function mergeInlineCacheOnlyNodes(localMesh: any, cachedMesh: any): any {
+    const localNodes = Array.isArray(localMesh?.nodes) ? localMesh.nodes : [];
+    const cachedNodes = Array.isArray(cachedMesh?.nodes) ? cachedMesh.nodes : [];
+    if (!cachedNodes.length) return localMesh;
+    const cacheOnly = cachedNodes.filter((cachedNode: any) => {
+        const cachedId = readMeshNodeId(cachedNode);
+        // Unidentifiable cache entries can never be a claim/route target — skip them
+        // rather than appending junk that no consumer can address.
+        if (!cachedId) return false;
+        return !localNodes.some((localNode: any) => meshNodeIdMatches(localNode, cachedId));
+    });
+    if (!cacheOnly.length) return localMesh;
+    return { ...localMesh, nodes: [...localNodes, ...cacheOnly] };
 }
 
 const INTENTIONAL_CLEANUP_STOP_SUPPRESSION_MS = 30 * 60 * 1000;
