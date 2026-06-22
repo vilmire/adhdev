@@ -34,6 +34,21 @@ export type ControlAction =
           wait_for: WaitForCondition;
           extract_choices: SectionPattern;
           submit_key: string;
+          /**
+           * How a parsed choice is committed once the picker is open.
+           *   'index' (default) — type the on-screen number then `submit_key`
+           *     (`{index}\r`). Correct for CLIs whose picker is number-selectable
+           *     (codex-cli, hermes-cli).
+           *   'arrow_keys' — the picker is a cursor list that ignores number keys
+           *     (claude-cli /model): move the cursor from its current row to the
+           *     target row with up/down arrows, then confirm with the `submit_key`
+           *     tail (the `\r` left after stripping `{index}`). Requires the
+           *     extracted choices to flag the current cursor row.
+           */
+          select_mode?: 'index' | 'arrow_keys';
+          /** Arrow byte sequences for `select_mode: 'arrow_keys'`. Defaults to
+           *  ANSI cursor up/down (`[A` / `[B`) when omitted. */
+          cursor_keys?: { up: string; down: string };
       }
     | {
           type: 'attach_image';

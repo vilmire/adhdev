@@ -413,11 +413,18 @@ export class SpecCliAdapter implements CliAdapter {
         choiceLabel: string | undefined,
     ): Promise<unknown> {
         // Open + wait so the choice list is on screen before we resolve the
-        // label → index mapping (a fresh invoke may arrive with the picker
-        // closed; re-opening an open picker is a no-op on these CLIs).
-        this.driver.dispatch({ kind: 'click_control', control_id: ctl.id });
-        await this.waitForPickerRendered(action);
-        const options = this.extractPickerChoices(action);
+        // label → index mapping. The picker is normally ALREADY open here (a
+        // preceding list invoke leaves it rendered), so only send the trigger
+        // when it is not on screen. Re-sending the trigger to an open picker is
+        // NOT a harmless no-op on claude-cli: the trailing CR of `/model\r`
+        // lands as Enter on the cursor's current row and commits the wrong
+        // model before we navigate. De-dup the open to avoid that.
+        let options = this.extractPickerChoicesIfRendered(action);
+        if (!options) {
+            this.driver.dispatch({ kind: 'click_control', control_id: ctl.id });
+            await this.waitForPickerRendered(action);
+            options = this.extractPickerChoices(action);
+        }
 
         let index = choiceIndex;
         if ((index == null || !Number.isFinite(index)) && choiceLabel) {
@@ -432,8 +439,34 @@ export class SpecCliAdapter implements CliAdapter {
             return { ok: false, error: 'choiceIndex or choiceLabel required to select' };
         }
 
-        const keys = (action.submit_key || '{index}\r').replace(/\{index\}/g, String(index));
-        this.driver.dispatch({ kind: 'pty_write', data: keys });
+        if (action.select_mode === 'arrow_keys') {
+            // Cursor-list picker (claude-cli /model): number keys are ignored.
+            // The cursor starts on the active row (extract flags it `current`);
+            // step it to the target row with arrows, then confirm.
+            const current = options.find(o => o.current);
+            if (current == null) {
+                // Without a known cursor position a blind Enter would commit
+                // whatever row the cursor sits on — fail loud instead.
+                return {
+                    ok: false,
+                    error: 'arrow-nav picker: current cursor row not detected on screen',
+                    controlResult: { options: options.map(o => ({ value: o.label, label: o.label, current: o.current })) },
+                };
+            }
+            const up = action.cursor_keys?.up ?? '[A';
+            const down = action.cursor_keys?.down ?? '[B';
+            const delta = index - current.index;
+            const step = delta >= 0 ? down : up;
+            const nav = step.repeat(Math.abs(delta));
+            // Confirm key = submit_key with the (unused) {index} placeholder
+            // stripped — e.g. `{index}\r` → `\r`.
+            const confirm = (action.submit_key || '\r').replace(/\{index\}/g, '') || '\r';
+            if (nav) this.driver.dispatch({ kind: 'pty_write', data: nav });
+            this.driver.dispatch({ kind: 'pty_write', data: confirm });
+        } else {
+            const keys = (action.submit_key || '{index}\r').replace(/\{index\}/g, String(index));
+            this.driver.dispatch({ kind: 'pty_write', data: keys });
+        }
         const selected = options.find(o => o.index === index);
         return {
             ok: true,
@@ -444,6 +477,23 @@ export class SpecCliAdapter implements CliAdapter {
                 selectedIndex: index,
             },
         };
+    }
+
+    /** Parse the picker choices only if the picker already appears rendered on
+     *  the live screen (its `wait_for` condition currently matches and at least
+     *  one choice parses). Returns the parsed choices when open, else null so
+     *  the caller knows it must send the trigger to open it. Used to de-dup the
+     *  picker open in {@link selectPickerChoice}. */
+    private extractPickerChoicesIfRendered(
+        action: Extract<ControlAction, { type: 'open_picker' }>,
+    ): Array<{ index: number; label: string; current: boolean }> | null {
+        const wf = action.wait_for;
+        if (wf?.regex) {
+            const re = new RegExp(wf.regex, wf.flags ?? 'i');
+            if (!re.test(this.readScreenSectionText(wf.section))) return null;
+        }
+        const options = this.extractPickerChoices(action);
+        return options.length > 0 ? options : null;
     }
 
     /** Poll the live screen until the picker's `wait_for` condition matches,
