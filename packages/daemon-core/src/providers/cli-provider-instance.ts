@@ -2034,6 +2034,23 @@ export class CliProviderInstance implements ProviderInstance {
                 ? event.providerSessionId
                 : this.providerSessionId,
         };
+        // TASKIDLESS: stamp the mesh task primary key on lifecycle events emitted by
+        // a mesh worker session. The consumer (updateDirectDispatchStatus) was switched
+        // to key on task_id (CANON-B), but the producer never carried it — so every
+        // forwarded metadataEvent.taskId arrived undefined and the coordinator fell back
+        // to a session_id match, which can flip a sibling dispatch row. The session
+        // already knows its own taskId via attachMeshAssignment (settings.meshActiveTaskId);
+        // surface it here so updateDirectDispatchStatus hits the exact PK row and the
+        // session_id fallback is never exercised. Non-mesh sessions get no taskId
+        // (regression guard) — isMeshWorkerSession() gates the injection.
+        if (this.isMeshWorkerSession() && this.settings.meshActiveTaskId) {
+            const existingTaskId = typeof enrichedEvent.taskId === 'string' && enrichedEvent.taskId.trim()
+                ? enrichedEvent.taskId
+                : undefined;
+            if (!existingTaskId) {
+                enrichedEvent.taskId = this.settings.meshActiveTaskId;
+            }
+        }
         if (this.context?.emitProviderEvent) {
             this.context.emitProviderEvent(enrichedEvent);
         } else {
