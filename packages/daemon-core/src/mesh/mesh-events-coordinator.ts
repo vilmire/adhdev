@@ -7,6 +7,7 @@ import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents } from './mesh-work-queue.js';
+import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -304,6 +305,95 @@ function resolveActiveDirectDispatchTaskId(meshId: string, sessionId: string): s
 // Queue assignment
 // ---------------------------------------------------------------------------
 
+// Per-dispatch confirmation timeout (Bug B). A dispatch promise that never settles —
+// a saturated remote P2P relay that hangs, or a transport that resolves only after
+// the worker acks — would otherwise leave the just-claimed queue row 'assigned' with
+// its delivery stuck 'delivering' forever: the .catch that requeues never fires, and
+// PHASE 3 reconcile skips the row (it counts 0 pending). Racing the dispatch against
+// this timeout guarantees a hung dispatch deterministically returns the task to
+// 'pending' for re-dispatch. Generous so a merely-slow-but-live dispatch (a cold
+// remote relay) is never reclaimed early; the reconcile assigned-stranded watchdog is
+// the durable cross-restart backstop for a timer lost to a daemon restart.
+const DISPATCH_CONFIRM_TIMEOUT_MS = 120_000;
+
+interface DeliverTaskContext {
+    meshId: string;
+    nodeId: string;
+    sessionId: string;
+    providerType: string;
+    task: MeshWorkQueueEntry;
+    transport: 'remote' | 'local';
+    sourceCoordinatorSessionId?: string;
+    sourceCoordinatorDaemonId?: string;
+}
+
+// CONS scope 3: the SINGLE source of truth for dispatching a claimed task to its
+// session. The remote (P2P dispatchMeshCommand) and local (cliManager.handleCliCommand)
+// branches differ ONLY in the transport call — the delivery record, the delivered/failed
+// transitions, the pending-requeue-on-failure, the dispatch_failed ledger entry, AND the
+// Bug B hang timeout are identical and live here once so a future change to the dispatch
+// lifecycle cannot drift between the two paths. The caller passes a `dispatchThunk` that
+// performs only the transport-specific send and returns its promise.
+function deliverTaskToSession(dispatchThunk: () => Promise<unknown>, ctx: DeliverTaskContext): void {
+    const delivery = createSessionDelivery({
+        meshId: ctx.meshId,
+        nodeId: ctx.nodeId,
+        sessionId: ctx.sessionId,
+        providerType: ctx.providerType,
+        taskId: ctx.task.id,
+        kind: 'task',
+        message: ctx.task.message,
+        status: 'delivering',
+        ...(ctx.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: ctx.sourceCoordinatorSessionId } : {}),
+        ...(ctx.sourceCoordinatorDaemonId ? { sourceCoordinatorDaemonId: ctx.sourceCoordinatorDaemonId } : {}),
+    });
+
+    // Invoke the transport synchronously (preserves the prior fire-and-forget timing,
+    // and lets a synchronous throw fall into the same failure path as a rejection).
+    let dispatchPromise: Promise<unknown>;
+    try {
+        dispatchPromise = Promise.resolve(dispatchThunk());
+    } catch (e) {
+        dispatchPromise = Promise.reject(e);
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const guarded = Promise.race([
+        dispatchPromise,
+        new Promise<never>((_, reject) => {
+            timer = setTimeout(
+                () => reject(new Error(`dispatch_confirm_timeout after ${DISPATCH_CONFIRM_TIMEOUT_MS}ms`)),
+                DISPATCH_CONFIRM_TIMEOUT_MS,
+            );
+            // Never keep the process alive solely for this confirm-timeout timer.
+            if (typeof (timer as { unref?: () => void })?.unref === 'function') (timer as { unref: () => void }).unref();
+        }),
+    ]);
+
+    guarded.then(() => {
+        if (timer) clearTimeout(timer);
+        updateSessionDeliveryStatus(delivery.id, 'delivered');
+    }).catch((e: any) => {
+        if (timer) clearTimeout(timer);
+        // A dispatch failure (transport reject OR hang timeout) is most often transient —
+        // a busy/refusing adapter, or a relay that never acked — not a permanent task
+        // failure. Marking the task terminal here would permanently kill tasks a later
+        // tick delivers fine. Return it to 'pending' and record a retryable dispatch_failed
+        // ledger entry so the reconcile loop re-dispatches it. Identical for both transports.
+        LOG.error('MeshQueue', `Failed to dispatch task via ${ctx.transport} to node ${ctx.nodeId}: ${e?.message}`);
+        updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
+        updateTaskStatus(ctx.meshId, ctx.task.id, 'pending');
+        try {
+            appendLedgerEntry(ctx.meshId, {
+                kind: 'dispatch_failed' as any,
+                nodeId: ctx.nodeId,
+                sessionId: ctx.sessionId,
+                payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable: true, transport: ctx.transport },
+            });
+        } catch { /* ledger write is best-effort */ }
+    });
+}
+
 export function tryAssignQueueTask(
     components: DaemonComponents,
     meshId: string,
@@ -337,45 +427,36 @@ export function tryAssignQueueTask(
             // completion back to that exact session (multi-coordinator). Carried over P2P
             // to the remote worker, which echoes it on its completion event.
             const sourceCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId) || undefined;
-            const delivery = createSessionDelivery({
-                meshId,
-                nodeId,
-                sessionId,
-                providerType,
-                taskId: task.id,
-                kind: 'task',
-                message: task.message,
-                status: 'delivering',
-                ...(sourceCoordinatorSessionId ? { sourceCoordinatorSessionId } : {}),
-                ...(localDaemonIdForDispatch ? { sourceCoordinatorDaemonId: localDaemonIdForDispatch } : {}),
-            });
-            components.dispatchMeshCommand(node.daemonId, 'agent_command', {
-                targetSessionId: sessionId,
-                cliType: providerType,
-                action: 'send_chat',
-                message: task.message,
-                meshContext: {
+            const dispatchMeshCommand = components.dispatchMeshCommand;
+            const remoteDaemonId = node.daemonId;
+            // CONS3: only the transport call differs — everything else (delivery record,
+            // status transitions, requeue-on-failure, ledger, Bug B hang timeout) is in
+            // the shared deliverTaskToSession helper.
+            deliverTaskToSession(
+                () => dispatchMeshCommand(remoteDaemonId, 'agent_command', {
+                    targetSessionId: sessionId,
+                    cliType: providerType,
+                    action: 'send_chat',
+                    message: task.message,
+                    meshContext: {
+                        meshId,
+                        nodeId,
+                        taskId: task.id,
+                        ...(localDaemonIdForDispatch ? { coordinatorDaemonId: localDaemonIdForDispatch } : {}),
+                        ...(sourceCoordinatorSessionId ? { coordinatorSessionId: sourceCoordinatorSessionId } : {}),
+                    },
+                }),
+                {
                     meshId,
                     nodeId,
-                    taskId: task.id,
-                    ...(localDaemonIdForDispatch ? { coordinatorDaemonId: localDaemonIdForDispatch } : {}),
-                    ...(sourceCoordinatorSessionId ? { coordinatorSessionId: sourceCoordinatorSessionId } : {}),
+                    sessionId,
+                    providerType,
+                    task,
+                    transport: 'remote',
+                    ...(sourceCoordinatorSessionId ? { sourceCoordinatorSessionId } : {}),
+                    ...(localDaemonIdForDispatch ? { sourceCoordinatorDaemonId: localDaemonIdForDispatch } : {}),
                 },
-            }).then(() => {
-                updateSessionDeliveryStatus(delivery.id, 'delivered');
-            }).catch((e: any) => {
-                LOG.error('MeshQueue', `Failed to dispatch task via P2P to remote node ${nodeId}: ${e?.message}`);
-                updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
-                updateTaskStatus(meshId, task.id, 'pending');
-                try {
-                    appendLedgerEntry(meshId, {
-                        kind: 'dispatch_failed' as any,
-                        nodeId,
-                        sessionId,
-                        payload: { taskId: task.id, deliveryId: delivery.id, error: e?.message, retryable: true },
-                    });
-                } catch { /* ledger write is best-effort */ }
-            });
+            );
             return true;
         }
     }
@@ -412,44 +493,26 @@ export function tryAssignQueueTask(
         }
     } catch { /* best-effort — dispatch still proceeds */ }
 
-    const delivery = createSessionDelivery({
-        meshId,
-        nodeId,
-        sessionId,
-        providerType,
-        taskId: task.id,
-        kind: 'task',
-        message: task.message,
-        status: 'delivering',
-        ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { sourceCoordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
-        ...(readNonEmptyString(loadConfig().machineId) ? { sourceCoordinatorDaemonId: readNonEmptyString(loadConfig().machineId) } : {}),
-    });
-    components.cliManager.handleCliCommand('agent_command', {
-        targetSessionId: sessionId,
-        cliType: providerType,
-        action: 'send_chat',
-        message: task.message,
-    }).then(() => {
-        updateSessionDeliveryStatus(delivery.id, 'delivered');
-    }).catch((e: any) => {
-        // Mirror the remote-dispatch catch above: a local dispatch failure is most often a
-        // transient busy/refusal (e.g. the adapter rejected send_chat while mid-generation),
-        // not a permanent task failure. Marking the task terminal 'failed' here with no ledger
-        // and no retry permanently killed tasks that a later tick would have delivered fine.
-        // Return the task to 'pending' and record a retryable dispatch_failed ledger entry so
-        // the reconcile loop re-dispatches it, exactly as the remote branch does.
-        LOG.error('MeshQueue', `Failed to dispatch task locally to node ${nodeId}: ${e?.message}`);
-        updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
-        updateTaskStatus(meshId, task.id, 'pending');
-        try {
-            appendLedgerEntry(meshId, {
-                kind: 'dispatch_failed' as any,
-                nodeId,
-                sessionId,
-                payload: { taskId: task.id, deliveryId: delivery.id, error: e?.message, retryable: true },
-            });
-        } catch { /* ledger write is best-effort */ }
-    });
+    // CONS3: same shared dispatch lifecycle as the remote branch — only the transport
+    // (cliManager.handleCliCommand) differs.
+    deliverTaskToSession(
+        () => components.cliManager.handleCliCommand('agent_command', {
+            targetSessionId: sessionId,
+            cliType: providerType,
+            action: 'send_chat',
+            message: task.message,
+        }),
+        {
+            meshId,
+            nodeId,
+            sessionId,
+            providerType,
+            task,
+            transport: 'local',
+            ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { sourceCoordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
+            ...(readNonEmptyString(loadConfig().machineId) ? { sourceCoordinatorDaemonId: readNonEmptyString(loadConfig().machineId) } : {}),
+        },
+    );
 
     return true;
 }
@@ -929,7 +992,12 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
 
         const candidateNodes = Array.isArray(mesh?.nodes)
             ? mesh.nodes.filter((node: any) => {
-                if (task.targetNodeId && readMeshNodeId(node) !== task.targetNodeId) return false;
+                // Bug A: match the target pin with the shared 3-form (id / nodeId / node_id)
+                // normalizer, mirroring the remote-idle drain (meshNodeIdMatches at the
+                // getRemoteIdleSessions filter). A strict `readMeshNodeId(node) !== targetNodeId`
+                // dropped a target node whose identity arrived under a different form (a freshly
+                // mesh_clone_node'd worktree), emptying candidateNodes and mislabelling the skip.
+                if (task.targetNodeId && !meshNodeIdMatches(node, task.targetNodeId)) return false;
                 // Skip nodes that can never satisfy requiredTags regardless of which provider
                 // from providerPriority is selected. A node satisfies tags if at least one
                 // provider in its priority list would produce matching capability tags.
@@ -944,7 +1012,20 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             })
             : [];
         if (!candidateNodes.length) {
-            markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'no_node_satisfies_required_tags', nodeId: task.targetNodeId });
+            // Bug A: distinguish the two ways the candidate set empties. A task pinned to a
+            // targetNodeId whose node is absent from the mesh (or whose id arrived under a
+            // different form) is a ROUTING miss — report it as `target_node_id_unmatched`, not
+            // the hard-coded `no_node_satisfies_required_tags`, which mislabelled a 3-form
+            // node-id mismatch as a capability failure and sent diagnosis down the wrong path.
+            // Only fall back to the tag reason when no target pin is in play, or the pin DID
+            // match a node but its tags excluded it (a genuine capability miss).
+            const targetPinUnmatched = !!task.targetNodeId
+                && !(Array.isArray(mesh?.nodes) && mesh.nodes.some((n: any) => meshNodeIdMatches(n, task.targetNodeId)));
+            markAutoLaunch(meshId, task.id, {
+                status: 'skipped',
+                reason: targetPinUnmatched ? 'target_node_id_unmatched' : 'no_node_satisfies_required_tags',
+                nodeId: task.targetNodeId,
+            });
             continue;
         }
 

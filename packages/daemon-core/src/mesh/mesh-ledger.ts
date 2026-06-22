@@ -43,6 +43,7 @@ export type MeshLedgerKind =
     | 'delivery_unroutable'
     | 'direct_dispatch_pruned'
     | 'event_held'
+    | 'task_reclaimed'
     ;
 
 export interface MeshLedgerEntry {

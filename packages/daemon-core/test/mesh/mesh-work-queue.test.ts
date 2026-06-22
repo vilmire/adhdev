@@ -11,6 +11,7 @@ import {
     updateSessionTaskStatus,
     cancelTask,
     requeueTask,
+    reclaimStrandedAssignedTask,
     getMeshQueueStats,
     buildMeshNodeCapabilityTags,
     nodeSatisfiesRequiredTags,
@@ -21,7 +22,7 @@ import {
     __replaceMeshQueueForTests,
     __resetMeshRuntimeStoreForTests
 } from '../../src/mesh/mesh-work-queue.js';
-import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
+import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 
 describe('Mesh Work Queue (GUPP)', () => {
     const meshId = `test_mesh_${Date.now()}`;
@@ -979,5 +980,53 @@ describe('validateMeshTaskModeRequest — prose/negation vs command context', ()
         it('ignores mid-sentence "deploy" prose mention', () => {
             expectClean('explain how the deploy pipeline works without changing anything');
         });
+    });
+});
+
+describe('reclaimStrandedAssignedTask (Bug B)', () => {
+    const meshId = `test_reclaim_${Date.now()}`;
+    beforeEach(() => { __clearMeshQueueForTests(meshId); });
+    afterEach(() => { __clearMeshQueueForTests(meshId); __resetMeshRuntimeStoreForTests(); });
+
+    it('returns an assigned row to pending, clears ownership, and records a task_reclaimed ledger entry', () => {
+        enqueueTask(meshId, 'work', { targetNodeId: 'n' });
+        const claimed = claimNextTask(meshId, 'n', 'sess-x', [], { providerType: 'claude-cli' })!;
+        expect(claimed.status).toBe('assigned');
+
+        const result = reclaimStrandedAssignedTask(meshId, claimed.id, { reason: 'assigned_stranded_dispatch_unconfirmed', ageMs: 999_000 });
+        expect(result).not.toBeNull();
+        expect(result!.status).toBe('pending');
+        expect(result!.assignedNodeId).toBeUndefined();
+        expect(result!.assignedSessionId).toBeUndefined();
+        expect(result!.assignedProviderType).toBeUndefined();
+        expect(result!.dispatchTimestamp).toBeUndefined();
+        expect(result!.strandedReclaimCount).toBe(1);
+
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed');
+        expect(reclaimed).toHaveLength(1);
+        expect((reclaimed[0].payload as any).taskId).toBe(claimed.id);
+        expect((reclaimed[0].payload as any).reclaimCount).toBe(1);
+        expect((reclaimed[0].payload as any).ageMs).toBe(999_000);
+    });
+
+    it('is a no-op on a non-assigned (pending) row — never resurrects a terminal/idle row', () => {
+        const entry = enqueueTask(meshId, 'work');
+        expect(reclaimStrandedAssignedTask(meshId, entry.id, {})).toBeNull();
+        expect(getQueue(meshId)[0].status).toBe('pending');
+    });
+
+    it('is bounded: after MAX_STRANDED_RECLAIMS reclaims the task is failed, not requeued forever', () => {
+        enqueueTask(meshId, 'work', { targetNodeId: 'n' });
+        let outcome: any = null;
+        // Each iteration: claim (→ assigned) then reclaim. The 4th reclaim crosses the
+        // cap (MAX_STRANDED_RECLAIMS=3) and fails the task instead of cycling.
+        for (let i = 0; i < 4; i++) {
+            const c = claimNextTask(meshId, 'n', `sess-${i}`, [])!;
+            expect(c.status).toBe('assigned');
+            outcome = reclaimStrandedAssignedTask(meshId, c.id, { reason: 'test' });
+        }
+        expect(outcome.status).toBe('failed');
+        expect(outcome.strandedReclaimCount).toBe(4);
+        expect(String(outcome.cancelReason)).toContain('stranded_dispatch_unrecovered');
     });
 });

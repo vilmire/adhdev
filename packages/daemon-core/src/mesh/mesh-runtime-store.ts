@@ -1075,6 +1075,23 @@ export class MeshRuntimeStore {
         }));
     }
 
+    /**
+     * Bug B watchdog support: true when at least one delivery record for the task has
+     * reached a confirmed-handed-off status (delivered / acked / completed). The
+     * assigned-stranded watchdog uses this to distinguish a dispatch that was never
+     * confirmed (reclaimable) from one that WAS handed to the worker (a genuinely
+     * in-flight or completion-lost task, which is PHASE 4's responsibility, not this
+     * watchdog's). Indexed by (mesh_id, task_id).
+     */
+    taskHasConfirmedDelivery(meshId: string, taskId: string): boolean {
+        const row = this.db.prepare(`
+            SELECT 1 FROM mesh_session_delivery
+            WHERE mesh_id = ? AND task_id = ? AND status IN ('delivered','acked','completed')
+            LIMIT 1
+        `).get(meshId, taskId) as { 1: number } | undefined;
+        return !!row;
+    }
+
     expireStaleSessionDeliveries(meshId: string): void {
         const now = new Date().toISOString();
         this.db.prepare(`

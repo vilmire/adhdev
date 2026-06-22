@@ -5,6 +5,8 @@ import { MESH_CONVERGE_REFINE_TAG, resolveAutoConvergeCodeChange } from '../repo
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMesh } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
+import { appendLedgerEntry } from './mesh-ledger.js';
+import type { MeshLedgerKind } from './mesh-ledger.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -339,6 +341,14 @@ export interface MeshWorkQueueEntry {
     requeueCount?: number;
     /** Max automatic requeue attempts. When requeueCount reaches this, task is auto-failed. */
     maxRetries?: number;
+    /**
+     * Bug B: number of times the reconcile assigned-stranded watchdog has reclaimed this
+     * row from 'assigned' back to 'pending' because its dispatch was never confirmed
+     * delivered. Separate from requeueCount (operator/execution retries) and bounded by
+     * MAX_STRANDED_RECLAIMS so a permanently-undeliverable target auto-fails rather than
+     * cycling reclaim→re-dispatch→strand forever.
+     */
+    strandedReclaimCount?: number;
     /** Last automatic queue session spin-up attempt, for mesh_view_queue/debug visibility. */
     autoLaunch?: {
         status: 'skipped' | 'started' | 'failed' | 'completed';
@@ -883,6 +893,85 @@ export function requeueTask(
         entry.requeueCount = currentCount + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        return entry;
+    });
+}
+
+/**
+ * Max times the assigned-stranded watchdog will reclaim a single task before giving
+ * up and failing it. Bounds the reclaim→re-dispatch→strand cycle so a permanently
+ * undeliverable target (e.g. a node whose transport is wedged) eventually fails and
+ * unblocks its dependents instead of looping every reconcile tick.
+ */
+const MAX_STRANDED_RECLAIMS = 3;
+
+/**
+ * Bug B: reclaim a task stuck in 'assigned' because its dispatch was never confirmed.
+ *
+ * claimNextTask atomically marks a row 'assigned' BEFORE the fire-and-forget dispatch
+ * runs. If that dispatch neither rejects (→ no .catch requeue) nor is confirmed
+ * delivered — a relay that hangs without acking, or a confirm timer lost across a
+ * daemon restart — the row stays 'assigned' forever, contributing 0 pending so PHASE 3
+ * reconcile never re-examines it. This returns such a row to 'pending' and clears its
+ * dead assignment ownership (node / session / provider / dispatchTimestamp) — the same
+ * ownership-clear requeueTask applies — so PHASE 3 can re-dispatch it onto a fresh idle
+ * session.
+ *
+ * Guarded to 'assigned' rows only (a completion/cancel that already moved the row off
+ * 'assigned' must never be resurrected) and bounded by MAX_STRANDED_RECLAIMS (beyond
+ * which the task is failed so dependents unblock).
+ */
+export function reclaimStrandedAssignedTask(
+    meshId: string,
+    taskId: string,
+    opts?: { reason?: string; ageMs?: number } & MeshQueueMutationOptions,
+): MeshWorkQueueEntry | null {
+    requireMeshHostQueueOwner(opts);
+    return withQueueLock(meshId, () => {
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
+        // Only a still-assigned row is stranded. If a completion/cancel already moved it
+        // off 'assigned', there is nothing to reclaim — never resurrect a terminal row.
+        if (entry.status !== 'assigned') return null;
+        const now = new Date().toISOString();
+        const reason = opts?.reason || 'assigned_stranded_dispatch_unconfirmed';
+        const reclaims = (entry.strandedReclaimCount || 0) + 1;
+        const prevNode = entry.assignedNodeId;
+        const prevSession = entry.assignedSessionId;
+        // Always clear the dead assignment ownership so a re-claim starts clean and the
+        // assigned-counters (which filter status==='assigned') stop counting this row.
+        delete entry.assignedNodeId;
+        delete entry.assignedSessionId;
+        delete entry.assignedProviderType;
+        delete entry.dispatchTimestamp;
+        entry.strandedReclaimCount = reclaims;
+        entry.updatedAt = now;
+        if (reclaims > MAX_STRANDED_RECLAIMS) {
+            // Repeatedly undeliverable — stop cycling and fail it so dependents unblock.
+            entry.status = 'failed';
+            entry.cancelReason = `stranded_dispatch_unrecovered: reclaimed ${reclaims - 1} time(s) without a confirmed dispatch`;
+            MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+            propagateDependencyFailure(meshId, taskId);
+        } else {
+            entry.status = 'pending';
+            entry.requeuedAt = now;
+            entry.requeueReason = reason;
+            MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        }
+        try {
+            appendLedgerEntry(meshId, {
+                kind: 'task_reclaimed' as MeshLedgerKind,
+                nodeId: prevNode,
+                sessionId: prevSession,
+                payload: {
+                    taskId,
+                    reason,
+                    ...(typeof opts?.ageMs === 'number' ? { ageMs: opts.ageMs } : {}),
+                    reclaimCount: reclaims,
+                    outcome: entry.status,
+                },
+            });
+        } catch { /* ledger write is best-effort */ }
         return entry;
     });
 }

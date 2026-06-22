@@ -30,8 +30,10 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { runMeshReconcileTick } from '../../src/mesh/mesh-reconcile-loop.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
-import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches } from '../../src/mesh/mesh-work-queue.js'
+import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, claimNextTask, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
+import { createSessionDelivery } from '../../src/mesh/mesh-delivery-policy.js'
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
@@ -1266,6 +1268,138 @@ describe('runMeshReconcileTick', () => {
         // Not our mesh → the orphan is left untouched.
         expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
         expect(readLedgerEntries(meshId).some(e => e.kind === 'direct_dispatch_pruned')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+  })
+
+  // ── PHASE 2.5: assigned-stranded dispatch watchdog (Bug B) ──────────────────
+  // claimNextTask atomically marks a row 'assigned' BEFORE its fire-and-forget
+  // dispatch runs. A dispatch that neither rejects nor is confirmed delivered (a
+  // relay that hangs without acking, or a confirm timer lost to a daemon restart)
+  // would leave the row 'assigned' forever — PHASE 3 skips it (0 pending). This
+  // watchdog returns such a row to 'pending' with ownership cleared.
+  describe('PHASE 2.5 — assigned-stranded dispatch watchdog', () => {
+    // > ASSIGNED_STRANDED_DEADLINE_MS (5 min) so the row is provably past the window.
+    const STRANDED_MS = 6 * 60_000
+
+    function backdateDispatch(meshId: string, taskId: string, ageMs: number) {
+      const store = MeshRuntimeStore.getInstance()
+      const entry = store.findQueueEntryById(meshId, taskId)!
+      entry.dispatchTimestamp = new Date(Date.now() - ageMs).toISOString()
+      store.updateQueueEntry(entry)
+    }
+
+    // A local mesh (node has no daemonId → hosted by this daemon) with NO idle session
+    // and no launchable provider, so PHASE 3 cannot re-dispatch — the reclaimed row stays
+    // pending and the watchdog's effect is observable in isolation.
+    function makeNoWorkerComponents() {
+      return { instanceManager: { getByCategory: () => [], getInstance: () => undefined } } as any
+    }
+    function hostMesh(meshId: string, nodeId: string) {
+      const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+      meshConfigMocks.getMesh.mockReturnValue(mesh)
+    }
+
+    it('reclaims an assigned row whose dispatch was never confirmed, once past the deadline', async () => {
+      const meshId = `mesh_phase25_strand_${Date.now()}`
+      const nodeId = 'node_w'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, 'sess-hung', [])
+        expect(claimed).not.toBeNull()
+        backdateDispatch(meshId, claimed!.id, STRANDED_MS)
+        hostMesh(meshId, nodeId)
+
+        await runMeshReconcileTick(makeNoWorkerComponents())
+
+        const row = getQueue(meshId).find(t => t.id === claimed!.id)!
+        expect(row.status).toBe('pending')
+        expect(row.assignedNodeId).toBeUndefined()
+        expect(row.assignedSessionId).toBeUndefined()
+        expect(row.dispatchTimestamp).toBeUndefined()
+        expect(row.strandedReclaimCount).toBe(1)
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+        expect(reclaimed).toHaveLength(1)
+        expect((reclaimed[0].payload as any).taskId).toBe(claimed!.id)
+        expect((reclaimed[0].payload as any).outcome).toBe('pending')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('does NOT reclaim an assigned row whose dispatch WAS confirmed delivered (genuine in-flight)', async () => {
+      const meshId = `mesh_phase25_confirmed_${Date.now()}`
+      const nodeId = 'node_w'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, 'sess-live', [])!
+        backdateDispatch(meshId, claimed.id, STRANDED_MS)
+        // A confirmed delivery for this task → genuinely dispatched (or completion-lost):
+        // PHASE 4's responsibility, never the dispatch watchdog's.
+        createSessionDelivery({ meshId, nodeId, sessionId: 'sess-live', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+        hostMesh(meshId, nodeId)
+
+        await runMeshReconcileTick(makeNoWorkerComponents())
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe('sess-live')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('does NOT reclaim an assigned row still inside the dispatch-confirm window (no premature requeue)', async () => {
+      const meshId = `mesh_phase25_fresh_${Date.now()}`
+      const nodeId = 'node_w'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, 'sess-fresh', [])!
+        // dispatchTimestamp is "now" (just claimed) — well under the deadline.
+        hostMesh(meshId, nodeId)
+
+        await runMeshReconcileTick(makeNoWorkerComponents())
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe('sess-fresh')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('reclaimed task is re-dispatched the same tick onto a now-idle local worker (PHASE 2.5 → PHASE 3)', async () => {
+      const meshId = `mesh_phase25_redispatch_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-idle-worker'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        // Stranded on a (now gone) session; an idle worker session is available to re-claim.
+        const claimed = claimNextTask(meshId, nodeId, 'sess-dead', [])!
+        backdateDispatch(meshId, claimed.id, STRANDED_MS)
+
+        const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/worker', daemonId: 'test-machine' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        // PHASE 2.5 returned it to pending + cleared ownership; PHASE 3 re-dispatched it
+        // onto the idle worker in the same tick.
+        expect(handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
+          targetSessionId: sessionId,
+          action: 'send_chat',
+        }))
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe(sessionId)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(true)
       } finally {
         cleanup(meshId)
       }

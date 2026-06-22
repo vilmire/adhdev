@@ -2190,6 +2190,58 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('Bug A: a target_node_id task whose node is ABSENT is labelled target_node_id_unmatched, not a tag failure', async () => {
+    // A task pinned to a targetNodeId that matches NO mesh node is a ROUTING miss, not a
+    // capability miss. The auto-launch candidate filter previously hard-coded the empty-
+    // candidate skip reason to `no_node_satisfies_required_tags`, conflating a target-id
+    // mismatch with a tag failure and sending diagnosis down the wrong path.
+    const meshId = `mesh_bugA_unmatched_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_present', workspace: '/repo/present', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 2 },
+      })
+      enqueueTask(meshId, 'task for a missing node', { targetNodeId: 'node_MISSING', requiredTags: [] })
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      const entry = getQueue(meshId)[0]
+      expect(entry.status).toBe('pending')
+      expect(entry.autoLaunch?.reason).toBe('target_node_id_unmatched')
+      expect(entry.autoLaunch?.reason).not.toBe('no_node_satisfies_required_tags')
+      // Nothing was launched — the target simply doesn't exist.
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('Bug A guard: a genuine capability miss (target matches, tags unsatisfiable) still reports no_node_satisfies_required_tags', async () => {
+    // The distinct target_node_id_unmatched reason must NOT swallow a real tag failure:
+    // when the target pin DOES match a node but its tags exclude it, the tag reason stands.
+    const meshId = `mesh_bugA_tagmiss_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_x', workspace: '/repo/x', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 2 },
+      })
+      // Target node_x exists, but no provider on it can produce os=plan9 → tag miss.
+      enqueueTask(meshId, 'tag-impossible task', { targetNodeId: 'node_x', requiredTags: ['os=plan9'] })
+      const { components } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      const entry = getQueue(meshId)[0]
+      expect(entry.status).toBe('pending')
+      expect(entry.autoLaunch?.reason).toBe('no_node_satisfies_required_tags')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('claims a pending task for a REMOTE idle session whose node is keyed by nodeId (not id) — normalizer match', async () => {
     // Regression: triggerMeshQueue matched remote idle-session candidates with raw
     // `n.id === idle.nodeId`, but an inline-cached worktree node carries its id under

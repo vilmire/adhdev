@@ -57,7 +57,7 @@ import {
 } from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString, readMeshCompletionSummary } from './mesh-events-utils.js';
 import { expandDaemonIdForms } from '@adhdev/mesh-shared';
-import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
+import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
@@ -320,6 +320,47 @@ function recordHeldTerminalEventsToLedger(
 //   PHASE 2 — Live CLI inject. For each mesh that has a live CLI coordinator on
 //     THIS daemon, drain the local queue and inject pending events into the PTY.
 //     Unchanged from before.
+// Bug B: how long a row may sit 'assigned' with an unconfirmed dispatch before the
+// watchdog reclaims it. Must be comfortably larger than the per-dispatch confirm
+// timeout (DISPATCH_CONFIRM_TIMEOUT_MS in mesh-events-coordinator) so a slow-but-live
+// dispatch still inside its normal confirm window is never reclaimed early — this is
+// the durable backstop for the case the in-process confirm timer can't cover (a timer
+// lost to a daemon restart between claim and confirm).
+const ASSIGNED_STRANDED_DEADLINE_MS = 5 * 60_000;
+
+// PHASE 2.5 — assigned-stranded dispatch watchdog (Bug B). claimNextTask atomically
+// flips a row to 'assigned' BEFORE the fire-and-forget dispatch runs. If that dispatch
+// neither rejects (→ no .catch requeue) nor is confirmed delivered — a relay that hangs
+// without acking, or a confirm timer lost across a restart — the row stays 'assigned'
+// forever: it contributes 0 pending, so PHASE 3 (gated on pendingQueueTaskCount>0) never
+// re-examines it, and nothing but a manual requeue clears it. This is that missing net.
+//
+// Regression guard: a row whose delivery IS confirmed (delivered/acked/completed) is a
+// genuinely in-flight (or completion-lost) task — left to PHASE 4's completion reconcile,
+// never reclaimed here. And the deadline is generous so a slow-but-live dispatch still in
+// its normal confirm window is never reclaimed early. Reclaimed rows return to 'pending'
+// with ownership cleared, so the PHASE 3 trigger below re-dispatches them this same tick.
+function recoverStrandedAssignedDispatches(meshId: string, store: MeshRuntimeStore): void {
+    const assigned = getQueue(meshId, { status: ['assigned'] });
+    if (!assigned.length) return;
+    const nowMs = Date.now();
+    for (const row of assigned) {
+        const dispatchedAtMs = Date.parse(row.dispatchTimestamp ?? '');
+        if (!Number.isFinite(dispatchedAtMs)) continue;              // no dispatch ts → can't age it
+        if (nowMs - dispatchedAtMs < ASSIGNED_STRANDED_DEADLINE_MS) continue;  // still in confirm window
+        if (store.taskHasConfirmedDelivery(meshId, row.id)) continue;          // dispatched → PHASE 4's job
+        const reclaimed = reclaimStrandedAssignedTask(meshId, row.id, {
+            reason: 'assigned_stranded_dispatch_unconfirmed',
+            ageMs: nowMs - dispatchedAtMs,
+        });
+        if (reclaimed) {
+            LOG.warn('MeshReconcile', `Reclaimed stranded assigned task ${row.id} on mesh ${meshId} `
+                + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}, dispatched `
+                + `${Math.round((nowMs - dispatchedAtMs) / 1000)}s ago, never confirmed delivered → ${reclaimed.status})`);
+        }
+    }
+}
+
 export async function runMeshReconcileTick(components: DaemonComponents): Promise<void> {
     const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
     // The id-set used to scope the local queue drain (status id + machineId). See
@@ -360,6 +401,21 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                 await pullRemoteNodeQueues(components, mesh, localDaemonId, selfIds);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Remote node pull failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+        }
+    }
+
+    // ── PHASE 2.5: assigned-stranded dispatch watchdog (Bug B) ─────────────────
+    // Runs before PHASE 3 so any row it returns to 'pending' is re-dispatched by the
+    // PHASE 3 trigger in this same tick. See recoverStrandedAssignedDispatches.
+    if (store) {
+        for (const mesh of listMeshes()) {
+            const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+            if (!daemonHostsMesh(mesh, selfIds)) continue;
+            try {
+                recoverStrandedAssignedDispatches(mesh.id, store);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Assigned-stranded watchdog failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
         }
     }
