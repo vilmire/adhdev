@@ -465,3 +465,133 @@ describe('claude-cli v4 FSM — footer-anchored spinner false-idle guard', () =>
         expect(stable.stable_ms).toBe(8000);
     });
 });
+
+// ── FALSEIDLE2: ellipsis-less spinner + whole-screen stable gate ──────────────
+// Live re-occurrence (rc.354 / 5d100a17): busy→idle's all(3) read TRUE while the
+// agent was actively generating, firing a false idle (→ early completion notif,
+// then a second on the real idle = double completion notification). Root causes
+// the prior fixes (a63485a position-guard, fix#3 whole-screen not-spinner) did
+// NOT close:
+//
+//   (Gap B) the not-spinner clause REQUIRED a trailing ellipsis (…|...), so an
+//           ellipsis-less progress frame — claude's newer format
+//           `✽ Ebbing (3m · ↑10k tokens)` — slipped through (not-spinner TRUE)
+//           even though the glyph IS in the spinner set. Whole-screen scope (fix
+//           #3) didn't help because the regex itself didn't match the frame.
+//   (Gap A) the stable clause keyed on `cursor_above: 4` — the 4 lines ABOVE the
+//           composer cursor. But claude draws the active spinner + ticking
+//           elapsed timer BELOW the cursor (footer/input chrome), so the watched
+//           region was static during generation → stable trivially satisfied.
+//
+// Fix (spec-only): (1) relax the spinner regex to match glyph+word with EITHER
+// ellipsis OR an elapsed-time (`\d+[smh]`) / token-counter (`↑/↓ N tokens`)
+// trailer OR the esc-to-interrupt cue — ellipsis no longer required. The same
+// regex is shared by idle→busy / busy→idle / approval→busy / approval→idle
+// (unify maintained). (2) drop `cursor_above` from the busy→idle stable clause so
+// it measures WHOLE-SCREEN quiet — the below-cursor spinner tick now resets the
+// 8s timer every second, making a false idle during generation structurally
+// impossible regardless of the spinner frame's exact format.
+
+describe('claude-cli v4 FSM — FALSEIDLE2 ellipsis-less spinner + whole-screen stable', () => {
+    const spec = loadSpec();
+
+    // The exact live false-idle layout: an active spinner with NO trailing
+    // ellipsis and NO esc cue sits below the prompt (footer section); a stale
+    // completion footer from the prior turn sits in body. Only the relaxed
+    // not-spinner clause (matching the glyph + token trailer) can hold it busy.
+    const footerSpinnerEllipsisLessNoEsc = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+        '  ▘▘ ▝▝    ~/Work/adhdev',
+        '',
+        '⏺ Earlier output line',
+        '',
+        '✻ Baked for 7s',                  // STALE completion footer, in `body`
+        '',
+        '────────────────────────────────────────────────────────────────',
+        '❯ ',
+        '────────────────────────────────────────────────────────────────',
+        '✽ Ebbing (3m · ↑10k tokens)',     // active spinner below prompt, NO ellipsis, NO esc
+    ].join('\n');
+
+    // A genuine completion: spinner/timer gone, only the duration footer remains.
+    const genuineCompletion = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+        '  ▘▘ ▝▝    ~/Work/adhdev',
+        '',
+        '⏺ Done.',
+        '',
+        '✻ Worked for 8s',                 // duration completion footer, in `body`
+        '',
+        '────────────────────────────────────────────────────────────────',
+        '❯ ',
+        '────────────────────────────────────────────────────────────────',
+        '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    ].join('\n');
+
+    it('(a) ellipsis-less active spinner keeps busy (not-spinner now FALSE)', () => {
+        // Clock is well past every time gate (stable 8s, hold 800ms), so only the
+        // relaxed not-spinner clause can hold busy. Pre-fix (ellipsis required)
+        // → not-spinner TRUE → false idle. Post-fix → matches via token trailer.
+        const ev = evaluateFsm(spec, 'busy', footerSpinnerEllipsisLessNoEsc, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('(a/unit) the relaxed spinner regex matches an ellipsis-less progress frame', () => {
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const notSpinner = (busyToIdle.when as any).all.find(
+            (c: any) => c.not && c.not.matches && c.not.matches.includes('2800'));
+        const re = new RegExp(notSpinner.not.matches, 'i');
+        expect(re.test('✽ Ebbing (3m · ↑10k tokens)')).toBe(true);   // ellipsis-less, token trailer
+        expect(re.test('✢ Spelunking (1m 37s · ↓ 6.1k tokens)')).toBe(true);
+        expect(re.test('✽ Ebbing… (3m 29s · ↑ 10.1k tokens)')).toBe(true); // ellipsis still works
+        // completion footer (✻ ∉ spinner set) must NOT be read as a spinner.
+        expect(re.test('✻ Worked for 8s')).toBe(false);
+        expect(re.test('✻ Compacting conversation for 12s')).toBe(false);
+    });
+
+    it('(b) busy→idle stable clause is whole-screen (no cursor_above key)', () => {
+        // With cursor_above dropped the stable region keys -1 (whole screen), so a
+        // below-cursor spinner tick (tracked by the driver into region -1) resets
+        // the timer — the structural fix for Gap A.
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const stable = (busyToIdle.when as any).all.find((c: any) => typeof c.stable_ms === 'number');
+        expect(stable.stable_ms).toBe(8000);
+        expect(stable.cursor_above).toBeUndefined();
+    });
+
+    it('(b) a recent whole-screen change holds busy even on a completion-looking frame', () => {
+        // genuineCompletion looks idle (not-spinner TRUE, footer TRUE) but the
+        // whole screen changed 1s ago (regionLastChangedAt[-1]) — the spinner tick
+        // analog. Whole-screen stable is unsatisfied → stays busy. Pre-fix the
+        // gate watched cursor_above=4 (above the cursor, static) and would have
+        // gone idle here.
+        const ev = evaluateFsm(spec, 'busy', genuineCompletion, undefined, undefined, clk(30000, 0, [[-1, 29000]]));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('(c) genuine completion (screen quiet ≥8s) → idle', () => {
+        // No recent whole-screen change (regionLastChangedAt empty → measured from
+        // stateEnteredAt=0): quiet 30s ≥ 8s, not-spinner TRUE, footer TRUE → idle.
+        const ev = evaluateFsm(spec, 'busy', genuineCompletion, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('(d) completion footer "✻ Worked for 8s" stays idle-eligible (glyph outside spinner set)', () => {
+        const idleToBusy = spec.transitions.find(t => t.label === 'idle→busy')!;
+        const re = new RegExp((idleToBusy.when as any).matches, 'i');
+        // ✻ is not in the spinner glyph set even with the relaxed trailer, so a
+        // duration completion footer never re-arms idle→busy as a spinner.
+        expect(re.test('✻ Worked for 8s')).toBe(false);
+    });
+
+    it('(unify) all four spinner-detecting clauses use the identical regex', () => {
+        const m = (l: string) => spec.transitions.find(t => t.label === l)!.when as any;
+        const i2b = m('idle→busy').matches;
+        const b2i = m('busy→idle').all[0].not.matches;
+        const a2b = m('approval→busy').matches;
+        const a2i = m('approval→idle').all.find((c: any) => c.not && c.not.matches && c.not.matches.includes('2800')).not.matches;
+        expect(b2i).toBe(i2b);
+        expect(a2b).toBe(i2b);
+        expect(a2i).toBe(i2b);
+    });
+});
