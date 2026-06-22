@@ -18,7 +18,7 @@ import { loadConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
-import { unregisterMeshCoordinator } from '../mesh/coordinator-registry.js';
+import { unregisterMeshCoordinator, getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
@@ -1042,6 +1042,24 @@ export class DaemonCliManager {
                 );
                 continue;
             }
+            // Re-establish the launch-time settings a fresh launch applies. startSession
+            // seeds every new instance with { ...providerLoader.getSettings(type), ...override };
+            // passing a bare {} here on restart silently dropped TWO launch settings, so a
+            // restored session diverged from a freshly-launched one:
+            //   - autoApprove (a provider/machine setting from getSettings) → a restored
+            //     coordinator self-session lost auto-approve and re-prompted on every tool call.
+            //   - meshCoordinatorFor (the coordinator launch's settingsOverride) → the restored
+            //     session was no longer recognized as this daemon's live CLI coordinator by
+            //     findLiveCoordinators (so pending mesh events stopped draining into its PTY) nor
+            //     surfaced with the coordinator badge via settings. The persisted coordinator
+            //     registry (loaded on boot) is the source of truth to rebuild that mark.
+            // Both restores are provider-agnostic — getSettings is keyed by provider type and the
+            // registry mark is type-independent.
+            const restoredSettings: Record<string, any> = { ...this.providerLoader.getSettings(normalizedType) };
+            const coordinatorEntry = getCoordinatorForSession(record.runtimeId);
+            if (coordinatorEntry?.meshId) {
+                restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
+            }
             try {
                 await this.registerCliInstance(
                     record.runtimeId,
@@ -1050,7 +1068,7 @@ export class DaemonCliManager {
                     record.workspace,
                     record.cliArgs,
                     resolvedProvider,
-                    {},
+                    restoredSettings,
                     true,
                     {
                         providerSessionId: sessionBinding.providerSessionId,
