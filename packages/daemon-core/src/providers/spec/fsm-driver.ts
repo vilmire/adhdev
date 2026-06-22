@@ -221,7 +221,7 @@ export function guessExt(mime: string): string {
 
 interface ModalSnapshot {
     title: string | null;
-    buttons: { index: number; label: string; key: string }[];
+    buttons: { index: number; label: string; key: string; current: boolean }[];
 }
 
 interface VisibleControl {
@@ -1079,6 +1079,28 @@ export class FsmDriver implements ISpecDriver {
         if (!m) return;
         const btn = m.buttons.find(b => b.index === index);
         if (!btn) return;
+
+        const rule = stateById(this.spec, this.currentStateId)?.extract?.buttons;
+        if (rule?.select_mode === 'arrow_keys') {
+            // Cursor-list approval modal (claude-cli new TUI): number keys are
+            // IGNORED — sending `btn.key` ("1\r") types a literal "1" into the
+            // composer and the trailing CR submits it as a chat message. Drive
+            // the cursor from its current row to the target row with arrows,
+            // then confirm. The cursor opens on the first option, so when the
+            // marker isn't detected we step down from row 1 (index - 1).
+            const from = m.buttons.find(b => b.current)?.index ?? 1;
+            const up = rule.cursor_keys?.up ?? '\x1b[A';
+            const down = rule.cursor_keys?.down ?? '\x1b[B';
+            const delta = btn.index - from;
+            const step = delta >= 0 ? down : up;
+            const nav = step.repeat(Math.abs(delta));
+            // Confirm = key_for_index with the (now unused) {index} stripped:
+            // `{index}\r` → `\r`.
+            const confirm = (rule.key_for_index || '\r').replace(/\{index\}/g, '') || '\r';
+            if (nav) this.adapter.send_keys(nav);
+            this.adapter.send_keys(confirm);
+            return;
+        }
         this.adapter.send_keys(btn.key);
     }
 

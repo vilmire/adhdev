@@ -314,10 +314,10 @@ function compileLinePattern(ref: { pattern: string; flags?: string }): RegExp {
 export function extractButtonsFromRule(
     rule: ExtractButtons,
     hay: string,
-): { index: number; label: string; key: string }[] {
+): { index: number; label: string; key: string; current: boolean }[] {
     const keyTemplate = rule.key_for_index;
     const continuationLines = rule.continuation_lines ?? false;
-    const buttons: { index: number; label: string; key: string }[] = [];
+    const buttons: { index: number; label: string; key: string; current: boolean }[] = [];
 
     if (continuationLines) {
         const re = compileLinePattern(rule);
@@ -328,6 +328,7 @@ export function extractButtonsFromRule(
             const idx = Number(m[1]);
             let label = String(m[2] ?? '').trim();
             if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
+            const current = hasCursorMarker(lines[i]);
             let j = i + 1;
             while (j < lines.length) {
                 const next = lines[j];
@@ -339,7 +340,7 @@ export function extractButtonsFromRule(
             }
             if (buttons.some(b => b.index === idx)) continue;
             const key = keyTemplate.replace(/\{index\}/g, String(idx));
-            buttons.push({ index: idx, label, key });
+            buttons.push({ index: idx, label, key, current });
             i = j - 1;
         }
     } else {
@@ -351,10 +352,19 @@ export function extractButtonsFromRule(
             if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
             if (buttons.some(b => b.index === idx)) continue;
             const key = keyTemplate.replace(/\{index\}/g, String(idx));
-            buttons.push({ index: idx, label, key });
+            // The matched text begins at the cursor marker (the pattern's
+            // optional `[❯›>]` prefix); flag this row as the cursor's current
+            // position so `select_mode: 'arrow_keys'` can step from it.
+            buttons.push({ index: idx, label, key, current: hasCursorMarker(m[0]) });
         }
     }
 
     buttons.sort((a, b) => a.index - b.index);
     return buttons;
+}
+
+/** True when a button line carries a TUI cursor marker (`❯`, `›`, `>`) before
+ *  its number — i.e. the cursor currently sits on that row. */
+function hasCursorMarker(text: string): boolean {
+    return /^\s*[❯›>]/.test(text);
 }

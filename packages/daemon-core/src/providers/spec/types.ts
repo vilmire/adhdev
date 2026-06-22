@@ -242,4 +242,21 @@ export interface ExtractButtons {
     key_for_index: string;
     min_count?: number;
     continuation_lines?: boolean;
+    /**
+     * How a button is committed when its modal is resolved (auto-approve or an
+     * explicit dashboard click).
+     *   'index' (default) — send `key_for_index` with `{index}` filled in
+     *     (`{index}\r` → `1\r`). Correct for modals whose buttons are
+     *     number-selectable (codex, hermes, antigravity number rows).
+     *   'arrow_keys' — the modal is a cursor list that IGNORES number keys
+     *     (claude-cli's new TUI approval modal): a typed `1` leaks into the
+     *     composer as literal text and `\r` submits it. Instead move the cursor
+     *     from its current row to the target row with up/down arrows, then
+     *     confirm with the `key_for_index` tail (the `\r` left after stripping
+     *     `{index}`). Mirrors the `open_picker` `select_mode` of the same name.
+     */
+    select_mode?: 'index' | 'arrow_keys';
+    /** Arrow byte sequences for `select_mode: 'arrow_keys'`. Defaults to ANSI
+     *  cursor up/down (`[A` / `[B`) when omitted. */
+    cursor_keys?: { up: string; down: string };
 }
