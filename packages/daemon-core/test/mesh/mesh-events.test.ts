@@ -3983,3 +3983,109 @@ describe('EVT — re-dispatch 2nd-completion event recovery', () => {
     }
   })
 })
+
+// CANON-D: an unresolved-mesh worker (forwardUnresolvedDelegateEvent) forwards its
+// completion with nodeId + workspace but NO meshId — it cannot resolve the mesh id
+// locally. The coordinator must recover the id. Workspace recovery alone was
+// unreliable (worktree clone repoIdentity divergence / transient cache miss), which
+// left the reconcile retry permanently rejected with "meshId required" so the
+// completion never surfaced. nodeId is a stable coordinator-side fact and recovers
+// the mesh deterministically.
+describe('handleMeshForwardEvent — meshId recovery by nodeId (CANON-D)', () => {
+  it('recovers meshId by nodeId when the forward carries no meshId and workspace recovery fails', () => {
+    const meshId = `mesh_nodeid_recover_${Date.now()}`
+    try {
+      const { components } = createComponents(meshId)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined) // workspace recovery misses
+      meshConfigMocks.listMeshes.mockReturnValue([
+        { id: meshId, nodes: [{ id: 'node_child_1' }] },
+      ])
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        // meshId intentionally absent — the worker was in the mesh_unresolved fallback.
+        nodeId: 'node_child_1',
+        workspace: '/repo/worktree-a',
+        targetSessionId: 'worker-session-1',
+        providerType: 'claude-cli',
+        timestamp: 1710000010000,
+      })
+
+      expect(result).toEqual({ success: true, forwarded: 0 })
+      // Queued under the recovered meshId — the completion now reaches the coordinator.
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('matches the node under any of the 3 id forms (id / nodeId / node_id)', () => {
+    const meshId = `mesh_nodeid_3form_${Date.now()}`
+    try {
+      const { components } = createComponents(meshId)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      meshConfigMocks.listMeshes.mockReturnValue([
+        { id: meshId, nodes: [{ node_id: 'node_child_1' }] }, // node_id form only
+      ])
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        nodeId: 'node_child_1',
+        targetSessionId: 'worker-session-1',
+        providerType: 'claude-cli',
+        timestamp: 1710000011000,
+      })
+
+      expect(result).toEqual({ success: true, forwarded: 0 })
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('still rejects when meshId is absent AND the nodeId belongs to no hosted mesh', () => {
+    const meshId = `mesh_unknown_node_${Date.now()}`
+    try {
+      const { components } = createComponents(meshId)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      meshConfigMocks.listMeshes.mockReturnValue([
+        { id: meshId, nodes: [{ id: 'node_child_1' }] },
+      ])
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        nodeId: 'node_not_in_any_mesh',
+        targetSessionId: 'worker-session-x',
+        providerType: 'claude-cli',
+        timestamp: 1710000012000,
+      })
+
+      expect(result).toEqual({ success: false, error: 'meshId required' })
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('keeps the workspace recovery fast-path (no meshId/nodeId but workspace resolves)', () => {
+    const meshId = `mesh_ws_fallback_${Date.now()}`
+    try {
+      const { components } = createComponents(meshId)
+      meshConfigMocks.getMeshByRepo.mockReturnValue({ id: meshId }) // workspace resolves
+      meshConfigMocks.listMeshes.mockReturnValue([]) // nodeId path unavailable
+
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        workspace: '/repo/worktree-a',
+        targetSessionId: 'worker-session-2',
+        providerType: 'claude-cli',
+        timestamp: 1710000013000,
+      })
+
+      expect(result).toEqual({ success: true, forwarded: 0 })
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+})

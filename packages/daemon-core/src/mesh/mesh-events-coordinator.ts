@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
-import { getMesh, getMeshByRepo } from '../config/mesh-config.js';
+import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
@@ -68,6 +68,25 @@ function getCachedMeshByWorkspace(workspace: string): any {
     const mesh = getMeshByRepo(workspace);
     meshByWorkspaceCache.set(workspace, { mesh, cachedAt: now });
     return mesh;
+}
+
+// Deterministic meshId recovery for a forwarded worker event that carries no meshId.
+// An unresolved-mesh worker (forwardUnresolvedDelegateEvent) cannot resolve its own
+// meshId locally, so it pushes the event with nodeId + workspace only and relies on
+// the coordinator — which hosts the mesh — to recover the id. Workspace recovery
+// (getCachedMeshByWorkspace → getMeshByRepo) is the fast path but can miss (a worktree
+// clone whose repoIdentity differs, or a transient cache state), which left the retry
+// permanently rejected with "meshId required". The node-id IS a stable, coordinator-side
+// fact: scan the hosted meshes for the one whose node matches the forwarded nodeId
+// (3-form normalizer). This is timing-independent and never depends on repo lookup.
+function recoverMeshIdByNodeId(nodeId: string): string {
+    if (!nodeId) return '';
+    for (const mesh of listMeshes()) {
+        if (Array.isArray(mesh.nodes) && mesh.nodes.some((n: any) => meshNodeIdMatches(n, nodeId))) {
+            return readNonEmptyString(mesh.id);
+        }
+    }
+    return '';
 }
 
 export function __resetIdleAutoFastForwardForTests(): void {
@@ -2110,11 +2129,18 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
     const workspace = readNonEmptyString(payload.workspace);
 
     // The fallback worker-forward path (forwardUnresolvedDelegateEvent) cannot resolve a
-    // mesh id locally on the remote worker, so it forwards the event with workspace only.
-    // The coordinator hosting the mesh CAN resolve it: recover the mesh id by workspace
-    // when the payload doesn't carry one.
+    // mesh id locally on the remote worker, so it forwards the event with nodeId +
+    // workspace only. The coordinator hosting the mesh CAN resolve it. Two recovery
+    // paths, in order:
+    //   1) workspace → mesh (fast path; cached repoIdentity lookup), then
+    //   2) nodeId → mesh (deterministic backstop; scans hosted meshes for the node).
+    // Workspace recovery alone was unreliable — a worktree clone whose repoIdentity
+    // differs, or a transient cache miss, left the reconcile retry permanently rejected
+    // ("meshId required") so the worker's completion never surfaced to the coordinator.
+    // The nodeId is a stable coordinator-side fact and resolves timing-independently.
     const meshId = readNonEmptyString(payload.meshId)
-        || (workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '');
+        || (workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '')
+        || recoverMeshIdByNodeId(nodeId);
     if (!meshId) return { success: false, error: 'meshId required' };
     const nodeLabel = nodeId ? `Node '${nodeId}'` : workspace ? `Agent at ${workspace}` : 'Remote agent';
     const relayModalMessage = readNonEmptyString(payload.modalMessage);
