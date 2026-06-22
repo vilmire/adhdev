@@ -2143,6 +2143,88 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     return { success: true, forwarded: 0 };
 }
 
+// Reconstruct the metadataEvent that injectMeshSystemMessage consumes from a forwarded
+// (cross-machine) mesh event. The remote relay hop arrives as a flat payload, NOT the
+// original provider event object, so this whitelists the fields the coordinator-side
+// pipeline reads and re-projects them. Kept pure + exported so the relay-path field
+// preservation (esp. taskId) is unit-testable without driving injectMeshSystemMessage.
+//
+// IMPORTANT asymmetry: the LOCAL in-process forward path (onMeshCoordinatorEventForwarded)
+// passes the whole event through as metadataEvent, so every field on the event survives
+// there for free. This remote-only path must explicitly mirror each field it needs.
+export function buildRelayMetadataEvent(payload: Record<string, unknown>): Record<string, unknown> {
+    const relayModalMessage = readNonEmptyString(payload.modalMessage);
+    const relayModalButtons = Array.isArray(payload.modalButtons)
+        ? (payload.modalButtons as unknown[]).filter((b): b is string => typeof b === 'string' && b.trim().length > 0)
+        : null;
+    return {
+        // Preserve the dispatch task id across the machine boundary. The `received` trace
+        // stage reads payload.taskId; without mirroring it here the rebuilt metadataEvent
+        // loses it, so injectMeshSystemMessage's traceCtx.taskId and the
+        // updateDirectDispatchStatus(eventTaskId) call go undefined — the EvtTrace
+        // queued/surfaced stages show task=- and the direct-dispatch ledger falls back to a
+        // session_id match (which can flip a sibling row). The local in-process forward path
+        // keeps event.taskId/meshActiveTaskId for free; this mirrors it for the remote relay.
+        // Same taskId/meshActiveTaskId ordering the local unroutable trace uses.
+        taskId: readNonEmptyString(payload.taskId) || readNonEmptyString(payload.meshActiveTaskId),
+        targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
+        providerType: readNonEmptyString(payload.providerType),
+        providerSessionId: readNonEmptyString(payload.providerSessionId),
+        // Preserve the originating coordinator SESSION id across the machine boundary so
+        // the completion routes back to the exact coordinator session (multi-coordinator).
+        // buildForwardPayloadFromPending spreads the worker event's metadata, so the id
+        // arrives as payload.meshCoordinatorSessionId; the top-level targetCoordinatorSessionId
+        // is also accepted as a fallback. injectMeshSystemMessage re-derives the routing
+        // anchors from this. Absent → daemon-level fallback (version-skew safe).
+        meshCoordinatorSessionId: readNonEmptyString(payload.meshCoordinatorSessionId) || readNonEmptyString(payload.targetCoordinatorSessionId),
+        // Carry the session identity fields the worker provider event emits so the
+        // coordinator's mirror (updateMeshOwnedSession) gets a real workspace/title/
+        // settings. Without these the remote-relay hop reconstructs metadataEvent with
+        // an empty workspace, and the dashboard flaps to the generic
+        // "Terminal (Mesh Node)" title (and degrades the provider label) between live
+        // events and the periodic get_status_metadata snapshot. The local in-process
+        // forward path (onMeshCoordinatorEventForwarded) already preserves these; this
+        // mirrors them for the remote-only relay path.
+        workspace: readNonEmptyString(payload.workspace) || readNonEmptyString(payload.workspaceName),
+        workspaceName: readNonEmptyString(payload.workspaceName) || readNonEmptyString(payload.workspace),
+        sessionTitle: readNonEmptyString(payload.sessionTitle),
+        sessionStatus: readNonEmptyString(payload.sessionStatus),
+        sessionChatStatus: readNonEmptyString(payload.sessionChatStatus),
+        providerName: readNonEmptyString(payload.providerName),
+        ...(payload.sessionSettings && typeof payload.sessionSettings === 'object' && !Array.isArray(payload.sessionSettings) ? { sessionSettings: payload.sessionSettings } : {}),
+        finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
+        // T2: carry the worker's status-snapshot last-message preview across the machine
+        // boundary so a summary-less completion still surfaces the assistant reply in the
+        // coordinator's inbox mirror. resolveMeshSurfacedSessionPreview reads these
+        // (assistant-role only) when finalSummary is absent.
+        lastMessagePreview: readNonEmptyString(payload.lastMessagePreview),
+        lastMessageRole: readNonEmptyString(payload.lastMessageRole),
+        ...(payload.lastMessageAt !== undefined ? { lastMessageAt: payload.lastMessageAt } : {}),
+        jobId: readNonEmptyString(payload.jobId),
+        interactionId: readNonEmptyString(payload.interactionId),
+        status: readNonEmptyString(payload.status),
+        targetDaemonId: readNonEmptyString(payload.targetDaemonId),
+        startedAt: readNonEmptyString(payload.startedAt),
+        completedAt: readNonEmptyString(payload.completedAt),
+        retryOfJobId: readNonEmptyString(payload.retryOfJobId),
+        ...(relayModalMessage ? { modalMessage: relayModalMessage } : {}),
+        ...(relayModalButtons && relayModalButtons.length > 0 ? { modalButtons: relayModalButtons } : {}),
+        ...(payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result) ? { result: payload.result } : {}),
+        ...(payload.completionDiagnostic && typeof payload.completionDiagnostic === 'object' && !Array.isArray(payload.completionDiagnostic) ? { completionDiagnostic: payload.completionDiagnostic } : {}),
+        ...(payload.workerResult && typeof payload.workerResult === 'object' && !Array.isArray(payload.workerResult) ? { workerResult: payload.workerResult } : {}),
+        ...(payload.meshWorkerResult && typeof payload.meshWorkerResult === 'object' && !Array.isArray(payload.meshWorkerResult) ? { meshWorkerResult: payload.meshWorkerResult } : {}),
+        ...(payload.structuredResult && typeof payload.structuredResult === 'object' && !Array.isArray(payload.structuredResult) ? { structuredResult: payload.structuredResult } : {}),
+        ...(payload.timestamp !== undefined ? { timestamp: payload.timestamp } : {}),
+        intentional: payload.intentional === true,
+        intentionalStop: payload.intentionalStop === true,
+        operatorCleanup: payload.operatorCleanup === true,
+        reason: readNonEmptyString(payload.reason),
+        stopReason: readNonEmptyString(payload.stopReason),
+        cleanupReason: readNonEmptyString(payload.cleanupReason),
+        source: readNonEmptyString(payload.source),
+    };
+}
+
 export function handleMeshForwardEvent(components: DaemonComponents, payload: Record<string, unknown>) {
     const eventName = readNonEmptyString(payload.event);
     if (!isMeshCoordinatorEvent(eventName)) {
@@ -2184,73 +2266,13 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
         event: eventName,
     });
     const nodeLabel = nodeId ? `Node '${nodeId}'` : workspace ? `Agent at ${workspace}` : 'Remote agent';
-    const relayModalMessage = readNonEmptyString(payload.modalMessage);
-    const relayModalButtons = Array.isArray(payload.modalButtons)
-        ? (payload.modalButtons as unknown[]).filter((b): b is string => typeof b === 'string' && b.trim().length > 0)
-        : null;
 
     return injectMeshSystemMessage(components, {
         meshId,
         nodeId,
         nodeLabel,
         event: eventName,
-        metadataEvent: {
-            targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
-            providerType: readNonEmptyString(payload.providerType),
-            providerSessionId: readNonEmptyString(payload.providerSessionId),
-            // Preserve the originating coordinator SESSION id across the machine boundary so
-            // the completion routes back to the exact coordinator session (multi-coordinator).
-            // buildForwardPayloadFromPending spreads the worker event's metadata, so the id
-            // arrives as payload.meshCoordinatorSessionId; the top-level targetCoordinatorSessionId
-            // is also accepted as a fallback. injectMeshSystemMessage re-derives the routing
-            // anchors from this. Absent → daemon-level fallback (version-skew safe).
-            meshCoordinatorSessionId: readNonEmptyString(payload.meshCoordinatorSessionId) || readNonEmptyString(payload.targetCoordinatorSessionId),
-            // Carry the session identity fields the worker provider event emits so the
-            // coordinator's mirror (updateMeshOwnedSession) gets a real workspace/title/
-            // settings. Without these the remote-relay hop reconstructs metadataEvent with
-            // an empty workspace, and the dashboard flaps to the generic
-            // "Terminal (Mesh Node)" title (and degrades the provider label) between live
-            // events and the periodic get_status_metadata snapshot. The local in-process
-            // forward path (onMeshCoordinatorEventForwarded) already preserves these; this
-            // mirrors them for the remote-only relay path.
-            workspace: readNonEmptyString(payload.workspace) || readNonEmptyString(payload.workspaceName),
-            workspaceName: readNonEmptyString(payload.workspaceName) || readNonEmptyString(payload.workspace),
-            sessionTitle: readNonEmptyString(payload.sessionTitle),
-            sessionStatus: readNonEmptyString(payload.sessionStatus),
-            sessionChatStatus: readNonEmptyString(payload.sessionChatStatus),
-            providerName: readNonEmptyString(payload.providerName),
-            ...(payload.sessionSettings && typeof payload.sessionSettings === 'object' && !Array.isArray(payload.sessionSettings) ? { sessionSettings: payload.sessionSettings } : {}),
-            finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
-            // T2: carry the worker's status-snapshot last-message preview across the machine
-            // boundary so a summary-less completion still surfaces the assistant reply in the
-            // coordinator's inbox mirror. resolveMeshSurfacedSessionPreview reads these
-            // (assistant-role only) when finalSummary is absent.
-            lastMessagePreview: readNonEmptyString(payload.lastMessagePreview),
-            lastMessageRole: readNonEmptyString(payload.lastMessageRole),
-            ...(payload.lastMessageAt !== undefined ? { lastMessageAt: payload.lastMessageAt } : {}),
-            jobId: readNonEmptyString(payload.jobId),
-            interactionId: readNonEmptyString(payload.interactionId),
-            status: readNonEmptyString(payload.status),
-            targetDaemonId: readNonEmptyString(payload.targetDaemonId),
-            startedAt: readNonEmptyString(payload.startedAt),
-            completedAt: readNonEmptyString(payload.completedAt),
-            retryOfJobId: readNonEmptyString(payload.retryOfJobId),
-            ...(relayModalMessage ? { modalMessage: relayModalMessage } : {}),
-            ...(relayModalButtons && relayModalButtons.length > 0 ? { modalButtons: relayModalButtons } : {}),
-            ...(payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result) ? { result: payload.result } : {}),
-            ...(payload.completionDiagnostic && typeof payload.completionDiagnostic === 'object' && !Array.isArray(payload.completionDiagnostic) ? { completionDiagnostic: payload.completionDiagnostic } : {}),
-            ...(payload.workerResult && typeof payload.workerResult === 'object' && !Array.isArray(payload.workerResult) ? { workerResult: payload.workerResult } : {}),
-            ...(payload.meshWorkerResult && typeof payload.meshWorkerResult === 'object' && !Array.isArray(payload.meshWorkerResult) ? { meshWorkerResult: payload.meshWorkerResult } : {}),
-            ...(payload.structuredResult && typeof payload.structuredResult === 'object' && !Array.isArray(payload.structuredResult) ? { structuredResult: payload.structuredResult } : {}),
-            ...(payload.timestamp !== undefined ? { timestamp: payload.timestamp } : {}),
-            intentional: payload.intentional === true,
-            intentionalStop: payload.intentionalStop === true,
-            operatorCleanup: payload.operatorCleanup === true,
-            reason: readNonEmptyString(payload.reason),
-            stopReason: readNonEmptyString(payload.stopReason),
-            cleanupReason: readNonEmptyString(payload.cleanupReason),
-            source: readNonEmptyString(payload.source),
-        },
+        metadataEvent: buildRelayMetadataEvent(payload),
     });
 }
 
