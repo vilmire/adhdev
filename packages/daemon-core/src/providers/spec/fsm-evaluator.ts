@@ -16,7 +16,7 @@
 
 import type { Condition, SectionDef } from './types.js';
 import {
-    resolveSections, evaluateCondition, type ResolvedSection, type TraceEntry,
+    resolveSections, evaluateCondition, sectionText, type ResolvedSection, type TraceEntry,
 } from './evaluator.js';
 import {
     type CliSpecV4, type FsmCondition, type FsmTransition,
@@ -42,6 +42,10 @@ export interface CondResult {
     /** Remaining ms until a time-based condition would flip to true. 0 if
      *  already true or not applicable. Lets the UI show a countdown. */
     remainingMs?: number;
+    /** Debug-only: the actual substring a TRUE regex condition matched, so the
+     *  snapshot shows WHAT text the rule fired on — not just which regex. Never
+     *  read by the FSM; purely for the Spec Debug Snapshot. */
+    matchedText?: string;
     children?: CondResult[];
 }
 
@@ -164,7 +168,20 @@ function evalCond(
         const detail = isRegex(cond)
             ? `${(cond as any).section ?? '*'}~/${(cond as any).matches}/`
             : `cursor_above=${(cond as any).cursor_above} changed=${(cond as any).changed}`;
-        return { kind, result, detail };
+        // Debug-only: when a regex condition is TRUE, also capture the substring
+        // it matched so the snapshot can show the exact text the rule fired on.
+        // This re-runs the regex (read-only) and CANNOT change `result` above —
+        // the FSM decision is still entirely owned by evaluateCondition().
+        let matchedText: string | undefined;
+        if (result && isRegex(cond)) {
+            try {
+                const hay = sectionText(sections, (cond as any).section, fullScreen);
+                const re = new RegExp((cond as any).matches, (cond as any).flags ?? 'i');
+                const m = re.exec(hay);
+                if (m && m[0]) matchedText = m[0].replace(/\s+/g, ' ').trim().slice(0, 160);
+            } catch { /* capture is best-effort; never affects result */ }
+        }
+        return matchedText ? { kind, result, detail, matchedText } : { kind, result, detail };
     }
     return { kind: 'all', result: false, detail: 'unknown condition' };
 }

@@ -584,6 +584,29 @@ describe('claude-cli v4 FSM — FALSEIDLE2 ellipsis-less spinner + whole-screen 
         expect(re.test('✻ Worked for 8s')).toBe(false);
     });
 
+    it('(obs) a fired regex transition carries matchedText without changing the decision (SPECDBG)', () => {
+        // SPECDBG debug-only enrichment: evalCond captures the substring a TRUE
+        // regex matched, purely for the Spec Debug Snapshot. The transition
+        // decision must be unchanged (still fires to busy).
+        const ev = evaluateFsm(spec, 'idle', richSpinnerBusy, undefined, undefined, clk(5000, 0));
+        expect(ev.fired?.to).toBe('busy');           // decision unchanged
+        expect(ev.fired?.cond?.result).toBe(true);
+        expect(typeof ev.fired?.cond?.matchedText).toBe('string');
+        expect(ev.fired?.cond?.matchedText).toMatch(/Running the test suite|esc to interrupt/);
+    });
+
+    it('(obs) a FALSE regex leaf carries no matchedText; the TRUE footer leaf does (SPECDBG)', () => {
+        // genuineCompletion has no spinner → the not-clause's inner regex is
+        // FALSE (no snippet captured); the TRUE footer regex captures one.
+        const ev = evaluateFsm(spec, 'busy', genuineCompletion, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+        const all = ev.fired?.cond?.children ?? [];
+        const notSpinner = all.find(c => c.kind === 'not');
+        const footer = all.find(c => c.kind === 'regex' && c.result);
+        expect(notSpinner?.children?.[0]?.matchedText).toBeUndefined();
+        expect(typeof footer?.matchedText).toBe('string');
+    });
+
     it('(unify) all four spinner-detecting clauses use the identical regex', () => {
         const m = (l: string) => spec.transitions.find(t => t.label === l)!.when as any;
         const i2b = m('idle→busy').matches;

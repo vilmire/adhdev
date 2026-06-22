@@ -552,6 +552,10 @@ export class SpecCliAdapter implements CliAdapter {
             // answers "why did this rule fire" after the fact, unlike the live
             // `fsm` field which only reflects the current instant.
             fsmHistory: this.driver.getFsmSnapshotHistory?.() ?? null,
+            // PTY input/output/resize/cursor event timeline (debug-only) so the
+            // snapshot shows what we typed / what the PTY printed around each
+            // status transition. Null for drivers without the timeline.
+            eventTimeline: this.driver.getEventTimeline?.() ?? null,
             // Extended fields
             name: this.cliName,
             status: this.getStatus().status,
@@ -962,6 +966,8 @@ export class SpecCliAdapter implements CliAdapter {
             // v4 FSM transition snapshot history — the captured pre-transition
             // evaluation table at each transition (null for v3 specs).
             fsmHistory: this.driver.getFsmSnapshotHistory?.() ?? null,
+            // PTY input/output/resize/cursor event timeline (debug-only).
+            eventTimeline: this.driver.getEventTimeline?.() ?? null,
             messages,
             committedMessages: messages,
         };

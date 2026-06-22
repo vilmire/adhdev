@@ -21,7 +21,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { TerminalAdapter, type TerminalAdapterOpts } from './adapter.js';
+import { TerminalAdapter, type TerminalAdapterOpts, type SpecPtyEvent } from './adapter.js';
 import { resolveCliSpawnPlanFromParts } from '../../cli-adapters/provider-cli-runtime.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
@@ -123,6 +123,7 @@ export interface ISpecDriver {
     getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null;
     getFsmDebug?(): unknown;
     getFsmSnapshotHistory?(): ReadonlyArray<FsmSnapshotEntry>;
+    getEventTimeline?(limit?: number): ReadonlyArray<SpecPtyEvent>;
 }
 
 export interface SpecDriverOpts {
@@ -385,6 +386,10 @@ export class FsmDriver implements ISpecDriver {
 
     getStateHistory(): ReadonlyArray<HistoryEntry> { return this.stateHistory; }
     getFsmSnapshotHistory(): ReadonlyArray<FsmSnapshotEntry> { return this.fsmSnapshotHistory; }
+    /** Debug-only PTY input/output/resize/cursor timeline from the adapter. */
+    getEventTimeline(limit?: number): ReadonlyArray<SpecPtyEvent> {
+        return this.adapter.getEventTimeline(limit);
+    }
     getSections(): Array<{ id: string; text: string }> | null {
         try {
             const screen = this.adapter.snapshot();
@@ -1039,7 +1044,8 @@ function summarizeTransition(t: TransitionEval): string[] {
 }
 
 function flattenCond(c: import('./fsm-evaluator.js').CondResult, out: string[], depth: number): void {
-    out.push(`${'  '.repeat(depth)}${c.kind} ${c.detail} = ${c.result}${c.remainingMs ? ` (${c.remainingMs}ms left)` : ''}`);
+    const matched = c.matchedText ? ` matched=${JSON.stringify(c.matchedText)}` : '';
+    out.push(`${'  '.repeat(depth)}${c.kind} ${c.detail} = ${c.result}${c.remainingMs ? ` (${c.remainingMs}ms left)` : ''}${matched}`);
     for (const child of c.children ?? []) flattenCond(child, out, depth + 1);
 }
 

@@ -68,27 +68,61 @@ export function formatSpecDebugResult(
     lines.push(`current_modal: ${JSON.stringify(snap.current_modal)}`);
   }
 
-  // Sections
+  // Sections — full raw text (this is a debugging surface; do NOT truncate or
+  // collapse newlines, so the exact text the FSM regexes match against is
+  // visible). Each section is fenced and prefixed with its line count.
   if (snap.sections && typeof snap.sections === 'object') {
     lines.push('');
-    lines.push('── sections ──');
+    lines.push('## Sections');
     for (const [id, text] of Object.entries(snap.sections as Record<string, string>)) {
-      const preview = String(text || '').replace(/\n/g, '↵').slice(0, 120);
-      lines.push(`  ${id}: ${preview}`);
+      const raw = String(text ?? '');
+      const lineCount = raw.length === 0 ? 0 : raw.split('\n').length;
+      lines.push('');
+      lines.push(`### section: ${id} (${lineCount} lines, ${raw.length} chars)`);
+      lines.push('```');
+      lines.push(raw);
+      lines.push('```');
     }
   }
 
-  // State history (most recent first)
+  // State history (most recent first) — now includes the fired transition
+  // (`via`) and the per-condition rule evaluation (`matchedRules`), so you can
+  // see WHICH regex/time-gate fired and, for regex rules, the matched text.
   const history = Array.isArray(snap.stateHistory) ? snap.stateHistory : [];
   if (history.length > 0) {
     lines.push('');
-    lines.push('── state history (newest first) ──');
+    lines.push('## State History (newest first)');
     const now = Date.now();
     for (const entry of [...history].reverse().slice(0, 20)) {
       const agoMs = now - entry.at;
       const ago = agoMs < 2000 ? `${agoMs}ms ago` : `${(agoMs / 1000).toFixed(1)}s ago`;
       const dur = entry.durationMs > 0 ? `  held ${entry.durationMs}ms` : '';
-      lines.push(`  ${String(entry.stateId).padEnd(18)} ${ago}${dur}`);
+      const via = entry.via ? `  via ${entry.via}` : '';
+      lines.push(`  ${String(entry.stateId).padEnd(18)} ${ago}${dur}${via}`);
+      const rules = Array.isArray(entry.matchedRules) ? entry.matchedRules : [];
+      for (const rule of rules) {
+        lines.push(`      ${String(rule)}`);
+      }
+    }
+  }
+
+  // PTY event timeline (input we injected / output the PTY printed / resize /
+  // cursor moves) — correlate by timestamp with the State History above to see
+  // what input/output preceded each status transition.
+  const timeline = Array.isArray(snap.eventTimeline) ? snap.eventTimeline : [];
+  if (timeline.length > 0) {
+    lines.push('');
+    lines.push('## Event Timeline (oldest first)');
+    const now = Date.now();
+    const arrow: Record<string, string> = {
+      input: '→ in ', output: '← out', resize: '⇲ size', cursor: '⌖ cur', spawn: '⏻ spawn', exit: '⏹ exit',
+    };
+    for (const ev of timeline.slice(-120)) {
+      const agoMs = now - (ev.ts ?? now);
+      const ago = agoMs < 2000 ? `${agoMs}ms` : `${(agoMs / 1000).toFixed(1)}s`;
+      const tag = arrow[String(ev.kind)] ?? String(ev.kind);
+      const bytes = typeof ev.bytes === 'number' ? ` [${ev.bytes}b]` : '';
+      lines.push(`  -${ago.padStart(6)}  ${tag}${bytes}  ${String(ev.content ?? '')}`);
     }
   }
 

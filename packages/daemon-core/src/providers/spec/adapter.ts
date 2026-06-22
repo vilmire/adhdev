@@ -51,6 +51,43 @@ export interface TerminalAdapterHandlers {
     tick?(): void;
 }
 
+/**
+ * One entry in the PTY input/output event timeline (debug-only). Captured at
+ * the single common point every spec@4 provider funnels through — this adapter
+ * — so the Spec Debug Snapshot can answer "what input / output preceded a status
+ * transition?". Observation only; nothing here feeds the FSM decision.
+ */
+export interface SpecPtyEvent {
+    /** Wall-clock ms. */
+    ts: number;
+    kind: 'spawn' | 'input' | 'output' | 'resize' | 'cursor' | 'exit';
+    /** Human-readable, control-char-escaped, length-capped preview. */
+    content: string;
+    /** Raw byte length before truncation (output/input only). */
+    bytes?: number;
+}
+
+const MAX_PTY_EVENTS = 300;
+const EVENT_CONTENT_CAP = 240;
+
+/** Escape control characters into a visible form so the timeline is readable
+ *  (CR/LF/ESC/tab become \r \n \x1b \t; other C0 controls become \xNN). */
+function escapeControl(text: string): string {
+    // eslint-disable-next-line no-control-regex
+    return String(text).replace(/[\x00-\x1f\x7f]/g, (ch) => {
+        const code = ch.charCodeAt(0);
+        if (ch === '\r') return '\\r';
+        if (ch === '\n') return '\\n';
+        if (ch === '\t') return '\\t';
+        if (code === 0x1b) return '\\x1b';
+        return '\\x' + code.toString(16).padStart(2, '0');
+    });
+}
+
+function capPreview(text: string): string {
+    return text.length > EVENT_CONTENT_CAP ? text.slice(0, EVENT_CONTENT_CAP) + `…(+${text.length - EVENT_CONTENT_CAP})` : text;
+}
+
 export class TerminalAdapter {
     private rows: number;
     private cols: number;
@@ -62,6 +99,9 @@ export class TerminalAdapter {
     private screenTimer: ReturnType<typeof setTimeout> | null = null;
     private tickTimer: ReturnType<typeof setInterval> | null = null;
     private lastScreen = '';
+    /** Debug-only ring buffer of PTY input/output/resize/cursor events. */
+    private events: SpecPtyEvent[] = [];
+    private lastCursorKey = '';
 
     constructor(
         private readonly opts: TerminalAdapterOpts,
@@ -95,10 +135,12 @@ export class TerminalAdapter {
             cols: this.cols,
             rows: this.rows,
         });
+        this.recordEvent('spawn', `${this.opts.binary} (${this.cols}x${this.rows})`);
         this.handlers.init?.({ pid: this.pty.pid });
         this.pty.onData((chunk) => this.onChunk(chunk));
         this.pty.onExit((info) => {
             this.stopTimers();
+            this.recordEvent('exit', `exitCode=${typeof info.exitCode === 'number' ? info.exitCode : 0}`);
             this.handlers.on_exit?.({ exitCode: typeof info.exitCode === 'number' ? info.exitCode : 0 });
             this.pty = null;
         });
@@ -109,6 +151,7 @@ export class TerminalAdapter {
 
     resize(cols: number, rows: number): void {
         this.cols = cols; this.rows = rows;
+        this.recordEvent('resize', `${cols}x${rows}`);
         this.pty?.resize(cols, rows);
         this.screen.resize(rows, cols);
     }
@@ -133,7 +176,22 @@ export class TerminalAdapter {
     }
 
     send_keys(text: string): void {
+        this.recordEvent('input', capPreview(escapeControl(text)), text.length);
         this.pty?.write(text);
+    }
+
+    /** Debug-only: most-recent PTY input/output/resize/cursor events, oldest
+     *  first. Pure observation — never consulted by the FSM. */
+    getEventTimeline(limit = MAX_PTY_EVENTS): SpecPtyEvent[] {
+        const n = Math.max(0, Math.min(limit, this.events.length));
+        return this.events.slice(this.events.length - n);
+    }
+
+    private recordEvent(kind: SpecPtyEvent['kind'], content: string, bytes?: number): void {
+        const ev: SpecPtyEvent = { ts: Date.now(), kind, content };
+        if (typeof bytes === 'number') ev.bytes = bytes;
+        this.events.push(ev);
+        if (this.events.length > MAX_PTY_EVENTS) this.events.splice(0, this.events.length - MAX_PTY_EVENTS);
     }
 
     kill(): void {
@@ -144,6 +202,7 @@ export class TerminalAdapter {
     }
 
     private onChunk(chunk: string): void {
+        this.recordEvent('output', capPreview(escapeControl(chunk)), chunk.length);
         try { this.handlers.on_pty_data?.(chunk); } catch { /* user side */ }
         this.screen.write(chunk);
         // Coalesce snapshot emission — rapid bursts shouldn't fire 200x.
@@ -151,6 +210,14 @@ export class TerminalAdapter {
         this.screenTimer = setTimeout(() => {
             this.screenTimer = null;
             const snap = this.computeScreen();
+            // Record cursor movement at the (debounced) screen-change boundary
+            // rather than per output chunk, so the timeline isn't flooded.
+            const cur = this.screen.getCursorPosition();
+            const curKey = `${cur.row},${cur.col}`;
+            if (curKey !== this.lastCursorKey) {
+                this.lastCursorKey = curKey;
+                this.recordEvent('cursor', `(${cur.row},${cur.col})`);
+            }
             if (snap === this.lastScreen) return;
             this.lastScreen = snap;
             try { this.handlers.on_screen_changed?.(snap); } catch { /* user side */ }
