@@ -420,6 +420,45 @@ export interface AcpSessionSummary {
     lastActivityAt: number
 }
 
+/**
+ * Per-machine session dedup key.
+ *
+ * A mesh-delegated session lands in the SAME machine group twice:
+ *  - the worker's own report:            daemonId='<worker>', id='<worker>:cli:<sid>', no ownerDaemonId,
+ *                                         providerName/cliName = raw providerType (e.g. "claude-cli")
+ *  - the coordinator's synthesised copy: daemonId='<coordinator>', id='<coordinator>:cli:<sid>',
+ *                                         ownerDaemonId='<worker>', providerName mapped to the
+ *                                         displayName (e.g. "Claude Code")
+ * Both are attributed to the worker machine (ownerDaemonId || daemonId), but their full `id`
+ * differs by the reporting-daemon prefix and their label differs (raw providerType vs displayName),
+ * so the old `c.id === daemon.id` dedup missed them and the card rendered twice. Both copies carry
+ * the SAME underlying sessionId (the coordinator mirror uses the worker's real session id), so key
+ * on it to collapse the two. Neither the reporting-daemon prefix nor the provider label may enter
+ * the key. Fall back to the full id when no sessionId exists so unrelated single-path sessions stay
+ * distinct (regression guard).
+ */
+function getMachineSessionDedupeKey(entry: { sessionId?: string; id: string }): string {
+    const sessionId = String(entry.sessionId || '').trim()
+    return sessionId || entry.id
+}
+
+/**
+ * A provider label is a real displayName when it is non-empty and differs from the raw providerType.
+ * The coordinator mirror carries the mapped displayName ("Claude Code") while the worker's own
+ * report carries the raw providerType ("claude-cli"); prefer the displayName for the merged card.
+ */
+function isDisplayNameLabel(name: string | undefined, providerType: string | undefined): boolean {
+    const normalized = String(name || '').trim()
+    return normalized.length > 0 && normalized !== String(providerType || '').trim()
+}
+
+/** Prefer the livelier of two statuses (working > waiting > rest) so a stale idle copy can't mask
+ *  an active one when the two reports of a single mesh session are merged. */
+function pickLiveSessionStatus(existing: string, incoming: string): string {
+    const rank = (status: string) => isManagedStatusWorking(status) ? 2 : isManagedStatusWaiting(status) ? 1 : 0
+    return rank(incoming) > rank(existing) ? incoming : existing
+}
+
 /** Group daemon array by machine */
 export function groupByMachine(daemons: DaemonData[], providerLabels: Record<string, string>): MachineGroup[] {
     const machines: MachineGroup[] = []
@@ -476,8 +515,18 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
         const parent = machines.find(m => m.machineId === ownerKey)
         if (!parent) continue
 
+        const dedupeKey = getMachineSessionDedupeKey(daemon)
         if (isAcpEntry(daemon)) {
-            if (!parent.acpSessions.some(a => a.id === daemon.id)) {
+            const existing = parent.acpSessions.find(a => getMachineSessionDedupeKey(a) === dedupeKey)
+            if (existing) {
+                const incomingName = daemon.cliName || daemon.type
+                if (isDisplayNameLabel(incomingName, daemon.type) && !isDisplayNameLabel(existing.acpName, existing.acpType)) {
+                    existing.acpName = incomingName
+                }
+                existing.status = pickLiveSessionStatus(existing.status, daemon.status || 'online')
+                existing.lastActivityAt = Math.max(existing.lastActivityAt, getDaemonEntryActivityAt(daemon))
+                if (!existing.workspace && daemon.workspace) existing.workspace = daemon.workspace
+            } else {
                 parent.acpSessions.push({
                     id: daemon.id,
                     sessionId: daemon.sessionId,
@@ -489,7 +538,16 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                 })
             }
         } else if (isCliEntry(daemon)) {
-            if (!parent.cliSessions.some(c => c.id === daemon.id)) {
+            const existing = parent.cliSessions.find(c => getMachineSessionDedupeKey(c) === dedupeKey)
+            if (existing) {
+                const incomingName = daemon.cliName || daemon.type
+                if (isDisplayNameLabel(incomingName, daemon.type) && !isDisplayNameLabel(existing.cliName, existing.cliType)) {
+                    existing.cliName = incomingName
+                }
+                existing.status = pickLiveSessionStatus(existing.status, daemon.status || 'online')
+                existing.lastActivityAt = Math.max(existing.lastActivityAt, getDaemonEntryActivityAt(daemon))
+                if (!existing.workspace && daemon.workspace) existing.workspace = daemon.workspace
+            } else {
                 parent.cliSessions.push({
                     id: daemon.id,
                     sessionId: daemon.sessionId,
@@ -505,7 +563,12 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                 })
             }
         } else {
-            if (!parent.ideSessions.some(i => i.id === daemon.id)) {
+            const existing = parent.ideSessions.find(i => getMachineSessionDedupeKey(i) === dedupeKey)
+            if (existing) {
+                existing.status = pickLiveSessionStatus(existing.status, daemon.status || 'online')
+                existing.lastActivityAt = Math.max(existing.lastActivityAt, getDaemonEntryActivityAt(daemon))
+                if (!existing.workspace && daemon.workspace) existing.workspace = daemon.workspace
+            } else {
                 parent.ideSessions.push({
                     id: daemon.id,
                     sessionId: daemon.sessionId,
