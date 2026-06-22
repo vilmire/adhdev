@@ -56,6 +56,7 @@ import {
     expireStaleUnresolvedDelegateForwards,
 } from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString, readMeshCompletionSummary } from './mesh-events-utils.js';
+import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { expandDaemonIdForms } from '@adhdev/mesh-shared';
 import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
@@ -230,6 +231,15 @@ function injectPendingIntoCoordinator(
 ): void {
     if (!coordinator || !pending.coordinatorMessage) return;
     const force = shouldForceInjectMeshEvent(pending.event);
+    // EVTTRACE: event surfaced to the coordinator (injected into its live CLI session).
+    // This is the terminal happy-path stage. Observation only.
+    traceMeshEventStage('surfaced', {
+        taskId: pending.metadataEvent?.taskId,
+        sessionId: pending.metadataEvent?.targetSessionId ?? pending.targetCoordinatorSessionId,
+        nodeId: pending.nodeId,
+        meshId: pending.meshId,
+        event: pending.event,
+    }, force ? 'force-inject' : 'inject');
     coordinator.onEvent('send_message', {
         input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage },
         ...(force ? { force: true } : {}),
@@ -357,6 +367,16 @@ function recoverStrandedAssignedDispatches(meshId: string, store: MeshRuntimeSto
             LOG.warn('MeshReconcile', `Reclaimed stranded assigned task ${row.id} on mesh ${meshId} `
                 + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}, dispatched `
                 + `${Math.round((nowMs - dispatchedAtMs) / 1000)}s ago, never confirmed delivered → ${reclaimed.status})`);
+            // EVTTRACE: the dispatch for this task was stranded (assigned, never confirmed
+            // delivered) and reclaimed (CANON-B) — its expected completion event never
+            // arrived. Observation only; the reclaim decision above is unchanged.
+            traceMeshEventDrop('assigned_stranded_reclaim', {
+                taskId: row.id,
+                sessionId: row.assignedSessionId,
+                nodeId: row.assignedNodeId,
+                meshId,
+                event: 'agent:generating_completed',
+            }, `unconfirmed ${Math.round((nowMs - dispatchedAtMs) / 1000)}s → ${reclaimed.status}`);
         }
     }
 }
@@ -652,6 +672,15 @@ function holdOrExpireStrictUnmatchedEvent(
         try {
             queuePendingMeshCoordinatorEvent(pending); // preserves queuedAt → true age retained
             LOG.info('MeshReconcile', `Strict route hold: coordinator session ${wantSession} not live on mesh ${meshId} — re-queued (${pending.event})`);
+            // EVTTRACE: event held (re-queued) — its originating coordinator session is not
+            // currently deliverable. Held, not dropped; surfaces later or expires past TTL.
+            traceMeshEventDrop('strict_route_hold', {
+                taskId: pending.metadataEvent?.taskId,
+                sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
+                nodeId: pending.nodeId,
+                meshId,
+                event: pending.event,
+            }, `coordinatorSession=${wantSession} not live`);
         } catch (e: any) {
             LOG.warn('MeshReconcile', `Strict route re-queue failed for ${pending.event} on mesh ${meshId}: ${e?.message || e}`);
         }
@@ -675,6 +704,14 @@ function holdOrExpireStrictUnmatchedEvent(
             },
         });
         LOG.warn('MeshReconcile', `Strict route expire: coordinator session ${wantSession} never returned for mesh ${meshId} — recorded to ledger (recoverable), dropped (${pending.event})`);
+        // EVTTRACE: event expired past the strict-route TTL — dropped (recoverable, ledgered).
+        traceMeshEventDrop('strict_route_expired', {
+            taskId: pending.metadataEvent?.taskId,
+            sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
+            nodeId: pending.nodeId,
+            meshId,
+            event: pending.event,
+        }, `coordinatorSession=${wantSession} never returned`);
     } catch (e: any) {
         LOG.warn('MeshReconcile', `Failed to ledger-expire strict-unmatched ${pending.event} for mesh ${meshId}: ${e?.message || e}`);
     }
@@ -698,16 +735,26 @@ async function retryUnresolvedDelegateForwards(components: DaemonComponents): Pr
     if (entries.length === 0) return;
 
     for (const entry of entries) {
+        // EVTTRACE correlation context for this outbox entry's retry.
+        const entryTraceCtx = {
+            taskId: (entry.payload as Record<string, unknown>).taskId,
+            sessionId: readNonEmptyString(entry.payload.targetSessionId) || readNonEmptyString(entry.payload.sessionId),
+            nodeId: readNonEmptyString(entry.payload.nodeId),
+            event: readNonEmptyString(entry.payload.event),
+        };
         let result: any;
         try {
+            traceMeshEventStage('forward_send', entryTraceCtx, `retry → ${entry.coordinatorDaemonId}`);
             result = await dispatchMeshCommand(entry.coordinatorDaemonId, 'mesh_forward_event', entry.payload);
         } catch (e: any) {
             // Coordinator unreachable — keep the entry queued and try again next tick.
             LOG.warn('MeshReconcile', `Retry forward to coordinator ${entry.coordinatorDaemonId} failed: ${e?.message || e} — left queued`);
+            traceMeshEventDrop('retry_forward_failed', entryTraceCtx, e?.message || String(e));
             continue;
         }
         if (result && result.success === false) {
             LOG.warn('MeshReconcile', `Retry forward to coordinator ${entry.coordinatorDaemonId} rejected (${readNonEmptyString(result.error) || 'no reason'}) — left queued`);
+            traceMeshEventDrop('retry_forward_rejected', entryTraceCtx, readNonEmptyString(result.error) || 'no reason');
             continue;
         }
         // Acked — mark the durable copy delivered.

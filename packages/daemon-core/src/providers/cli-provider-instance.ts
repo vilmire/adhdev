@@ -21,6 +21,7 @@ import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pt
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter, isNativeSourceCanonicalHistory, materializeProviderNativeHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
+import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trace.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
 import { formatAutoApprovalMessage, pickApprovalButton, pickAutoApprovalButton, looksLikeActiveApprovalPromptText } from './approval-utils.js';
@@ -1411,6 +1412,26 @@ export class CliProviderInstance implements ProviderInstance {
         this.completedDebounceTimer = setTimeout(() => this.flushCompletedDebounceIfFinalized(), delayMs);
     }
 
+    // EVTTRACE (observation-only): is this a mesh worker session whose completion
+    // events must route to a coordinator? Used purely to gate trace logging so a
+    // non-mesh CLI session's completions don't add EvtTrace noise. No decision logic.
+    private isMeshWorkerSession(): boolean {
+        return !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId
+            || this.settings.meshNodeId || this.settings.launchedByCoordinator);
+    }
+
+    // EVTTRACE correlation context for this session's completion lifecycle. taskId is
+    // the primary grep anchor; instanceId is the session fallback.
+    private meshTraceCtx(event = 'agent:generating_completed'): Record<string, unknown> {
+        return {
+            taskId: this.settings.meshActiveTaskId,
+            sessionId: this.instanceId,
+            nodeId: this.settings.meshNodeId,
+            meshId: this.settings.meshNodeFor,
+            event,
+        };
+    }
+
     private flushCompletedDebounceIfFinalized(): void {
         const pending = this.completedDebouncePending;
         if (!pending) {
@@ -1455,6 +1476,11 @@ export class CliProviderInstance implements ProviderInstance {
             if (!isTranscriptEvidenceGate && (block.terminal || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS)) {
                 if (pending.loggedBlockReason !== blockReason) {
                     LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
+                    // EVTTRACE: completion held by the finalization gate (CANON-C). Observation
+                    // only — does not change the hold decision above.
+                    if (this.isMeshWorkerSession()) {
+                        traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `${blockReason} waited=${waitedMs}ms`);
+                    }
                     pending.loggedBlockReason = blockReason;
                 }
                 this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
@@ -1473,6 +1499,10 @@ export class CliProviderInstance implements ProviderInstance {
             // notification (transcript still pending) is not mistaken for a 30s-timeout fallback.
             (completionDiagnostic as Record<string, unknown>).decoupledImmediateEmit = isTranscriptEvidenceGate && !emittedAfterFinalizationTimeout;
             LOG.warn('CLI', `[${this.type}] emitting completed event (${isTranscriptEvidenceGate && !emittedAfterFinalizationTimeout ? 'CANON-C decoupled-immediate, transcript pending' : `after ${waitedMs}ms`}) without finalized assistant turn (${blockReason})`);
+            // EVTTRACE: completion fired (forced past the finalization timeout / CANON-C decoupled-immediate).
+            if (this.isMeshWorkerSession()) {
+                traceMeshEventStage('fired', this.meshTraceCtx(), `forced after ${waitedMs}ms (${blockReason})`);
+            }
             this.pushEvent({
                 event: 'agent:generating_completed',
                 chatTitle: pending.chatTitle,
@@ -1498,6 +1528,10 @@ export class CliProviderInstance implements ProviderInstance {
         }
 
         LOG.info('CLI', `[${this.type}] completed in ${pending.duration}s`);
+        // EVTTRACE: completion fired (transcript finalized cleanly).
+        if (this.isMeshWorkerSession()) {
+            traceMeshEventStage('fired', this.meshTraceCtx(), `duration=${pending.duration}s`);
+        }
         this.pushEvent({
             event: 'agent:generating_completed',
             chatTitle: pending.chatTitle,
@@ -1859,7 +1893,12 @@ export class CliProviderInstance implements ProviderInstance {
                         LOG.info('CLI', `[${this.type}] short completion suppressed: missing final assistant evidence, no mesh context (source=${shortEvidenceSource})`);
                         // completedDebouncePending intentionally left null — the session is now idle
                         // with no confirmed turn, matching the startup-blip suppression semantics.
+                        // (No EvtTrace: not a mesh session, so nothing routes to a coordinator.)
                     } else {
+                        // EVTTRACE: completion fired (short-generating idle path).
+                        if (this.isMeshWorkerSession()) {
+                            traceMeshEventStage('fired', this.meshTraceCtx(), `short-generating idle (source=${shortEvidenceSource})`);
+                        }
                         this.pushEvent({
                             event: 'agent:generating_completed',
                             chatTitle,
@@ -1940,6 +1979,10 @@ export class CliProviderInstance implements ProviderInstance {
                 && !this.hasAdapterPendingResponse()
                 && !hasNonEmptyCliModalButtons(monitorParsedStatus?.activeModal ?? monitorParsedStatus?.modal)
             ) {
+                // EVTTRACE: completion fired (no-progress monitor reconciled to completion).
+                if (this.isMeshWorkerSession()) {
+                    traceMeshEventStage('fired', this.meshTraceCtx(), 'no_progress_monitor_final_summary');
+                }
                 this.pushEvent({
                     event: 'agent:generating_completed',
                     chatTitle,

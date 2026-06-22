@@ -15,6 +15,7 @@ import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } f
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
+import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
@@ -1559,6 +1560,16 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     const eventSessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
     const eventNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
 
+    // EVTTRACE correlation context for this event's coordinator-side lifecycle (queue /
+    // dedup / suppress). Observation only — never read by any decision below.
+    const traceCtx = {
+        taskId: args.metadataEvent.taskId,
+        sessionId: eventSessionId,
+        nodeId: eventNodeId,
+        meshId: args.meshId,
+        event: args.event,
+    };
+
     const sourceSession = args.sourceInstanceId
         ? components.instanceManager.getInstance(args.sourceInstanceId)
         : undefined;
@@ -1645,6 +1656,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             } catch { /* best-effort */ }
         }
         LOG.info('MeshEvents', `Suppressed ${args.event} for intentionally cleanup-stopped session ${eventSessionId || '(unknown session)'}`);
+        traceMeshEventDrop('intentional_cleanup_stop', traceCtx);
         return { success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true };
     }
 
@@ -1666,6 +1678,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
         if (reconciledCompletion?.source === 'no_progress_terminal_ledger_suppression') {
             LOG.info('MeshEvents', `Suppressed no-progress monitor because terminal ledger evidence already exists for session ${eventSessionId || '(unknown session)'}`);
+            traceMeshEventDrop('no_progress_terminal_ledger_suppression', traceCtx, `terminalKind=${reconciledCompletion.terminalLedgerKind}`);
             return {
                 success: true,
                 forwarded: 0,
@@ -1678,6 +1691,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 
     if (isDuplicateRefineTerminalEvent(args.meshId, args.event, args.metadataEvent)) {
         LOG.info('MeshEvents', `Suppressed duplicate ${args.event} for refine job ${readRefineJobId({ metadataEvent: args.metadataEvent })}`);
+        traceMeshEventDrop('duplicate_refine_terminal', traceCtx);
         return { success: true, forwarded: 0, suppressed: true, duplicateRefineTerminalEvent: true };
     }
 
@@ -1693,6 +1707,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         });
         if (duplicateApproval) {
             LOG.info('MeshEvents', `Suppressed duplicate approval event for mesh ${args.meshId} session ${eventSessionId}`);
+            traceMeshEventDrop('duplicate_approval', traceCtx);
             return { success: true, forwarded: 0, suppressed: true, duplicateApproval: true };
         }
     }
@@ -1725,6 +1740,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     || args.metadataEvent.source === 'no_progress_reconciliation'
                 ) {
                     LOG.info('MeshEvents', `Suppressed duplicate completion with existing terminal ledger evidence for mesh ${args.meshId} session ${eventSessionId}`);
+                    traceMeshEventDrop('duplicate_completion_terminal_ledger', traceCtx);
                     return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true, terminalLedgerEvidence: true };
                 }
             }
@@ -1743,6 +1759,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         });
         if (duplicateCompletion) {
             LOG.info('MeshEvents', `Suppressed duplicate completion for mesh ${args.meshId} session ${eventSessionId}`);
+            traceMeshEventDrop('duplicate_completion', traceCtx);
             return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true };
         }
     }
@@ -1761,6 +1778,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         });
         if (duplicateStopped) {
             LOG.info('MeshEvents', `Suppressed duplicate stopped event for mesh ${args.meshId} session ${eventSessionId}`);
+            traceMeshEventDrop('duplicate_stopped', traceCtx);
             return { success: true, forwarded: 0, suppressed: true, duplicateStopped: true };
         }
     }
@@ -2116,6 +2134,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     };
     if (queuePendingMeshCoordinatorEvent(pendingEvent)) {
         LOG.info('MeshEvents', `Queued ${args.event} for coordinator (mesh ${args.meshId}${workerCoordinatorDaemonId ? `, coordinator daemon ${workerCoordinatorDaemonId}` : ''}${workerCoordinatorSessionId ? `, coordinator session ${workerCoordinatorSessionId}` : ''})`);
+        // EVTTRACE: event persisted to the coordinator pending queue (awaiting reconcile drain).
+        traceMeshEventStage('queued', traceCtx, workerCoordinatorDaemonId ? `coordinatorDaemon=${workerCoordinatorDaemonId}` : 'broadcast');
+    } else {
+        // EVTTRACE: queue rejected the event (dedup at queue time / persistence guard).
+        traceMeshEventDrop('queue_dedup', traceCtx);
     }
     return { success: true, forwarded: 0 };
 }
@@ -2141,7 +2164,25 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
     const meshId = readNonEmptyString(payload.meshId)
         || (workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '')
         || recoverMeshIdByNodeId(nodeId);
-    if (!meshId) return { success: false, error: 'meshId required' };
+    if (!meshId) {
+        // EVTTRACE: forwarded event rejected at receive — no meshId could be resolved
+        // (no payload.meshId, no workspace→mesh, no nodeId→mesh). Observation only.
+        traceMeshEventDrop('meshId_required', {
+            taskId: payload.taskId,
+            sessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId),
+            nodeId,
+            event: eventName,
+        }, workspace ? `workspace=${workspace} unresolved` : 'no workspace/nodeId');
+        return { success: false, error: 'meshId required' };
+    }
+    // EVTTRACE: forwarded event accepted at receive (meshId resolved).
+    traceMeshEventStage('received', {
+        taskId: payload.taskId,
+        sessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId),
+        nodeId,
+        meshId,
+        event: eventName,
+    });
     const nodeLabel = nodeId ? `Node '${nodeId}'` : workspace ? `Agent at ${workspace}` : 'Remote agent';
     const relayModalMessage = readNonEmptyString(payload.modalMessage);
     const relayModalButtons = Array.isArray(payload.modalButtons)
@@ -2277,13 +2318,24 @@ function forwardUnresolvedDelegateEvent(
     //    push below (degrades to the old at-most-once behaviour rather than dropping
     //    the chance entirely).
     const persisted = enqueueUnresolvedDelegateForward(coordinatorDaemonId, eventName, payload);
+    // EVTTRACE: unresolved-mesh worker persisted its completion to the outbox (no meshId
+    // available locally; coordinator will recover it on receive).
+    const fwdTraceCtx = {
+        taskId: (payload as Record<string, unknown>).taskId,
+        sessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId),
+        nodeId: readNonEmptyString(routing.nodeId) || readNonEmptyString(event.meshNodeId),
+        event: eventName,
+    };
+    traceMeshEventStage('outbox_enqueue', fwdTraceCtx, `coordinatorDaemon=${coordinatorDaemonId} meshId=absent`);
 
     // 2) Best-effort immediate push for low latency. On success, ack the outbox row so
     //    the retry loop won't re-send it. On failure, leave it queued — PHASE 0 retries.
+    traceMeshEventStage('forward_send', fwdTraceCtx, 'immediate push');
     Promise.resolve(components.dispatchMeshCommand(coordinatorDaemonId, 'mesh_forward_event', payload))
         .then((result: any) => {
             if (result && result.success === false) {
                 LOG.warn('MeshEvents', `Immediate forward of ${eventName} to coordinator ${coordinatorDaemonId} rejected (${readNonEmptyString(result.error) || 'no reason'}) — left queued for retry`);
+                traceMeshEventDrop('immediate_forward_rejected', fwdTraceCtx, readNonEmptyString(result.error) || 'no reason');
                 return;
             }
             // Acked. Mark the durable copy delivered so the retry loop skips it.
@@ -2410,6 +2462,17 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
             // silently. Leave a fail-loud diagnostic so the missing completion is traceable.
             // Benign non-delegate rejections (not_cli / no_workspace / etc.) are no-ops inside
             // recordUnroutableDelegateEvent.
+            // EVTTRACE: a delegate event that could not be routed AND could not be
+            // fallback-forwarded (no coordinator anchor). Only mesh_unresolved is a real
+            // drop; the benign non-delegate rejections are ordinary non-mesh traffic.
+            if (isUnroutableDelegateRejection(routing)) {
+                traceMeshEventDrop('unroutable', {
+                    taskId: (event as Record<string, unknown>).meshActiveTaskId ?? (event as Record<string, unknown>).taskId,
+                    sessionId: routing.sessionId,
+                    nodeId: routing.nodeId,
+                    event: event.event,
+                }, 'no coordinator anchor / mesh_unresolved');
+            }
             recordUnroutableDelegateEvent(routing, event.event);
             return;
         }
