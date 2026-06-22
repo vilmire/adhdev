@@ -15,11 +15,13 @@ import * as path from 'path';
 import * as os from 'os';
 
 // ─── Config ──────────────────────────────────
-const LOG_DIR = process.platform === 'win32'
-    ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'adhdev', 'logs')
-    : process.platform === 'darwin'
-        ? path.join(os.homedir(), 'Library', 'Logs', 'adhdev')
-        : path.join(os.homedir(), '.local', 'share', 'adhdev', 'logs');
+// Command history lives under the unified ADHDev home (~/.adhdev/logs/) next to
+// the daemon log, on every platform. Honor ADHDEV_CONFIG_DIR for isolated homes.
+// Keep this in sync with logger.ts LOG_DIR.
+const ADHDEV_HOME = process.env.ADHDEV_CONFIG_DIR && process.env.ADHDEV_CONFIG_DIR.trim()
+    ? process.env.ADHDEV_CONFIG_DIR.trim()
+    : path.join(os.homedir(), '.adhdev');
+const LOG_DIR = path.join(ADHDEV_HOME, 'logs');
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_DAYS = 7;

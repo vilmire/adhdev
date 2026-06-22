@@ -7,7 +7,7 @@
  * 1. daemonLog(category, msg, level) — explicit per-category logging
  * 2. installGlobalInterceptor() — Auto-intercept console.log (once on daemon start)
  * 3. Recent log ring buffer — for remote transmission via P2P/WS
- * 4. File logging — ~/Library/Logs/adhdev/daemon.log (10MB rolling)
+ * 4. File logging — ~/.adhdev/logs/daemon-YYYY-MM-DD.log (date-based rolling)
  * 
  * use:
  * import { daemonLog, LOG } from './daemon-logger';
@@ -37,11 +37,17 @@ export function setLogLevel(level: LogLevel): void {
 
 export function getLogLevel(): LogLevel { return currentLevel; }
 // ─── File logging (date-based rolling) ──────────────────────────────
-const LOG_DIR = process.platform === 'win32'
-    ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'adhdev', 'logs')
-    : process.platform === 'darwin'
-        ? path.join(os.homedir(), 'Library', 'Logs', 'adhdev')
-        : path.join(os.homedir(), '.local', 'share', 'adhdev', 'logs');
+// Logs live under the unified ADHDev home (~/.adhdev/logs/) on every platform,
+// alongside config.json, providers/, history/, daemon.pid and session-host.log.
+// Earlier builds wrote to OS-specific dirs (~/Library/Logs/adhdev on macOS,
+// ~/.local/share/adhdev/logs on Linux, %LOCALAPPDATA%/adhdev/logs on Windows),
+// which made the daemon log undiscoverable next to everything else under
+// ~/.adhdev and inconsistent with session-host.log. Honor ADHDEV_CONFIG_DIR so
+// isolated/standalone namespaces keep their logs in their own home.
+const ADHDEV_HOME = process.env.ADHDEV_CONFIG_DIR && process.env.ADHDEV_CONFIG_DIR.trim()
+    ? process.env.ADHDEV_CONFIG_DIR.trim()
+    : path.join(os.homedir(), '.adhdev');
+const LOG_DIR = path.join(ADHDEV_HOME, 'logs');
 
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB per day
 const MAX_LOG_DAYS = 7; // 7-day retention
