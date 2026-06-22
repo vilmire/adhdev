@@ -186,6 +186,11 @@ export {
 } from './config/mesh-config.js';
 export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './config/mesh-config.js';
 
+// ── Mesh shared daemon-id helpers (re-export so external tooling — e.g. the
+//    mcp-server, which depends only on @adhdev/daemon-core — can canonicalize
+//    daemon-id forms without taking a direct @adhdev/mesh-shared dependency). ──
+export { expandDaemonIdForms, daemonIdsEquivalent, machineCoreFromDaemonId } from '@adhdev/mesh-shared';
+
 // ── Mesh Coordinator ──
 export { buildCoordinatorSystemPrompt } from './mesh/coordinator-prompt.js';
 export { upsertMeshMission, getMeshMissions, getMeshMission, summarizeMissionTasks, summarizeMeshMission, getActiveMeshMissionSummaries, getMeshStatusMissionSummaries, getMeshStatusMissionsCompact, listMeshMissionSummaries, buildMissionPromptSection, GOAL_PREVIEW_MAX, COMPACT_STATUS_GOAL_PREVIEW_MAX, MESH_MISSION_STATUSES } from './mesh/mesh-missions.js';

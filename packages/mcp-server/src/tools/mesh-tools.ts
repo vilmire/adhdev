@@ -23,6 +23,7 @@ import { compactChatPayload, isCoordinatorVisibleMessage, messageContent } from 
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
+    daemonIdsEquivalent,
     appendLedgerEntry,
     appendRemoteLedgerEntries,
     buildCompactStaleDirectWorkSummary,
@@ -1928,9 +1929,15 @@ function nodeHasLocalDaemonEvidence(ctx: MeshContext, node: any): boolean {
 function isDirectLocalNode(ctx: MeshContext, node: LocalMeshNodeEntry): boolean {
     const machineId = readNodeMachineId(node);
     const daemonId = readNodeDaemonId(node);
+    // id-form robust: a node's daemon/machine id may be stored in a DIFFERENT form
+    // (bare `mach_X` vs `daemon_mach_X` vs `standalone_mach_X`) than the coordinator's
+    // resolved ctx ids. A strict `===` misclassified the coordinator's own node as
+    // REMOTE, so the enqueue fan-out dispatched the task body to this very daemon — where
+    // it fuzzy-injected into the coordinator's own CLI session (TASKECHO). daemonIdsEquivalent
+    // canonicalizes both sides to the machine core before comparing.
     return Boolean(
-        (ctx.localMachineId && machineId === ctx.localMachineId)
-        || (ctx.localDaemonId && daemonId === ctx.localDaemonId)
+        (ctx.localMachineId && daemonIdsEquivalent(machineId, ctx.localMachineId))
+        || (ctx.localDaemonId && daemonIdsEquivalent(daemonId, ctx.localDaemonId))
         || nodeHasLocalDaemonEvidence(ctx, node)
     );
 }
@@ -1941,10 +1948,13 @@ function isConfiguredCoordinatorNode(ctx: MeshContext, node: LocalMeshNodeEntry)
     if (!nodeId) return false;
     // If the node carries explicit daemon/machine identity that doesn't match the
     // coordinator, it is definitively a remote node — skip the positional fallback.
+    // Compare under canonical id form (daemonIdsEquivalent), NOT a raw `!==`: a local
+    // coordinator node stored in a different daemon-id form (bare vs `daemon_`/`standalone_`)
+    // would otherwise be wrongly excluded here and treated as remote.
     const nodeDaemonId = readNodeDaemonId(node);
     const nodeMachineId = readNodeMachineId(node);
-    if (nodeDaemonId && ctx.localDaemonId && nodeDaemonId !== ctx.localDaemonId) return false;
-    if (nodeMachineId && ctx.localMachineId && nodeMachineId !== ctx.localMachineId) return false;
+    if (nodeDaemonId && ctx.localDaemonId && !daemonIdsEquivalent(nodeDaemonId, ctx.localDaemonId)) return false;
+    if (nodeMachineId && ctx.localMachineId && !daemonIdsEquivalent(nodeMachineId, ctx.localMachineId)) return false;
     const preferredNodeId = readString(ctx.mesh.coordinator?.preferredNodeId)
         || readString((ctx.mesh.coordinator as any)?.preferred_node_id);
     if (preferredNodeId) return nodeId === preferredNodeId;

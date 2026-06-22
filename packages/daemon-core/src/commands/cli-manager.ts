@@ -1097,10 +1097,19 @@ export class DaemonCliManager {
                 }
             }
         }
- // 2. Fuzzy match (returns first of multiple sessions — may be inaccurate)
-        for (const [k, a] of this.adapters) {
-            if (a.cliType === agentType) {
-                return { adapter: a, key: k };
+ // 2. Fuzzy match (returns first of multiple sessions — may be inaccurate).
+ //    FAIL-CLOSED: only when NO explicit instanceKey/targetSessionId was requested.
+ //    When a specific session WAS named (step 0) but is not hosted on this daemon,
+ //    falling back to the first same-cliType adapter silently redirects the command
+ //    into an UNRELATED session — e.g. a relayed/misrouted mesh send_chat lands in the
+ //    coordinator's own CLI session, echoing the dispatched task body back to the
+ //    coordinator (TASKECHO self-inject). Returning null instead makes the caller
+ //    surface an explicit "not running" error rather than mis-delivering the message.
+        if (!opts?.instanceKey) {
+            for (const [k, a] of this.adapters) {
+                if (a.cliType === agentType) {
+                    return { adapter: a, key: k };
+                }
             }
         }
         return null;

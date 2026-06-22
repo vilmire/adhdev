@@ -189,4 +189,39 @@ describe('DaemonCliManager agent_command', () => {
     expect(result).toMatchObject({ success: true, status: 'generating' })
     expect(sendMessage).toHaveBeenCalledWith('next task')
   })
+
+  // TASKECHO fix #1: findAdapter must fail closed when an explicit targetSessionId is
+  // given but not hosted locally. Previously it fuzzy-fell-back to the first same-cliType
+  // adapter (the coordinator's own session), echoing the dispatched task body back to the
+  // coordinator. It must now throw instead of mis-delivering to an unrelated session.
+  it('fails closed: an explicit targetSessionId that is not hosted locally is NOT fuzzy-redirected', async () => {
+    const { manager, sendMessage } = createManager('idle')
+
+    await expect(manager.handleCliCommand('agent_command', {
+      targetSessionId: 'session-on-another-daemon',
+      agentType: 'hermes-cli',
+      cliType: 'hermes-cli',
+      action: 'send_chat',
+      message: 'task body that must NOT echo into the local session',
+    })).rejects.toThrow(/CLI agent not running/)
+
+    // The local same-cliType session ('session-1') must NOT have received the message.
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  // Regression: the fuzzy fallback is preserved when NO targetSessionId is requested
+  // (sessionless dispatch — let the worker daemon pick its single live session).
+  it('still fuzzy-matches the single same-cliType session when no targetSessionId is given', async () => {
+    const { manager, sendMessage } = createManager('idle')
+
+    const result = await manager.handleCliCommand('agent_command', {
+      agentType: 'hermes-cli',
+      cliType: 'hermes-cli',
+      action: 'send_chat',
+      message: 'next task',
+    })
+
+    expect(result).toMatchObject({ success: true, status: 'generating' })
+    expect(sendMessage).toHaveBeenCalledWith('next task')
+  })
 })

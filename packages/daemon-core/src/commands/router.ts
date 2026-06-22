@@ -40,6 +40,7 @@ import {
     summarizeGitShape as sharedSummarizeGitShape,
     normalizeMeshNodeId,
     meshNodeIdMatches,
+    daemonIdsEquivalent,
 } from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
@@ -3462,6 +3463,13 @@ const MESH_FORWARDABLE_SESSION_COMMANDS = new Set([
     'set_mode',
     'change_model',
     'set_thought_level',
+    // agent_command (send_chat / clear_history / stop) is session-scoped too: a command
+    // explicitly naming a targetSessionId MUST reach that session wherever it lives, never a
+    // different local session. Without forwarding, a misrouted/relayed send_chat for a REMOTE
+    // worker session that reaches the wrong daemon used to fuzzy-inject the task body into that
+    // daemon's own CLI session (TASKECHO coordinator self-echo). Forwarding to the owning daemon
+    // delivers it to the real worker instead. (findAdapter is also fail-closed as the backstop.)
+    'agent_command',
 ]);
 const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
 
@@ -3901,7 +3909,10 @@ export class DaemonCommandRouter {
             if (!nodeDaemonId) continue;
             // Only forward to a genuinely remote daemon. When the owning node is this
             // coordinator itself (locally hosted worker), fall through to local handling.
-            if (selfDaemonId && nodeDaemonId === selfDaemonId) return undefined;
+            // id-form robust: the node daemonId and selfDaemonId may be stored in different
+            // forms of the same machine — a strict `===` would miss the self-match and forward
+            // a local session to a remote form of THIS daemon (loopback).
+            if (selfDaemonId && daemonIdsEquivalent(nodeDaemonId, selfDaemonId)) return undefined;
             return nodeDaemonId;
         }
         return undefined;
@@ -6326,14 +6337,17 @@ export class DaemonCommandRouter {
         // Session-scoped commands issued from the dashboard (the controlbar Model/Mode
         // selectors → invoke_provider_script, and modal approval → resolve_action, plus the
         // direct set_mode/change_model/set_thought_level mutations) target a session by
-        // targetSessionId. When that session is a mesh worker hosted on a REMOTE daemon, this
+        // targetSessionId. agent_command (send_chat / clear_history / stop) is included for the
+        // same reason: a command naming a session must reach THAT session, never a different
+        // local one. When that session is a mesh worker hosted on a REMOTE daemon, this
         // coordinator never holds its live instance, so the CommandHandler delegation would
-        // fail with "Live session not found". Forward to the owning worker daemon — the same
-        // daemon that already executes send_chat for that session — so the controlbar acts on
-        // the real worker. _meshDirectDispatch prevents re-forwarding once the call lands on
-        // the owning daemon (it then handles the session locally). A locally-hosted worker (or
-        // any session this coordinator owns) resolves to undefined below and falls through to
-        // normal local handling — no regression.
+        // fail with "Live session not found" — or, for agent_command, findAdapter would have
+        // fuzzy-injected the message into the coordinator's own CLI session (TASKECHO). Forward
+        // to the owning worker daemon — the same daemon that already executes send_chat for that
+        // session — so the command acts on the real worker. _meshDirectDispatch prevents
+        // re-forwarding once the call lands on the owning daemon (it then handles the session
+        // locally). A locally-hosted worker (or any session this coordinator owns) resolves to
+        // undefined below and falls through to normal local handling — no regression.
         if (MESH_FORWARDABLE_SESSION_COMMANDS.has(cmd) && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
             const targetSessionId = readStringValue(args?.targetSessionId, args?.sessionId, args?.instanceId);
             if (targetSessionId) {
