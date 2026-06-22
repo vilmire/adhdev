@@ -8110,7 +8110,10 @@ export class DaemonCommandRouter {
                 // _meshDirectDispatch prevents re-forwarding (and P2P self-dial) when the stored
                 // daemonId uses a legacy format that doesn't match the receiving daemon's identity.
                 const selfDaemonId = this.deps.statusInstanceId;
-                const isRemote = nodeDaemonId && selfDaemonId && nodeDaemonId !== selfDaemonId;
+                // daemonIdsEquivalent: a legacy-form stored daemonId that resolves to THIS
+                // machine's core must be treated as local (not remote) so it is not forwarded /
+                // P2P self-dialed. Equivalent → local.
+                const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
                 if (isRemote && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
                     const forwarded = await this.deps.dispatchMeshCommand(nodeDaemonId!, 'fast_forward_mesh_node', {
                         ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
@@ -8154,7 +8157,9 @@ export class DaemonCommandRouter {
                 // once the call lands on the owning daemon — that daemon then reads
                 // its own logs even if the stored daemonId uses a legacy form.
                 const selfDaemonId = this.deps.statusInstanceId;
-                const isRemote = nodeDaemonId && selfDaemonId && nodeDaemonId !== selfDaemonId;
+                // daemonIdsEquivalent: a legacy-form daemonId resolving to this machine's core is
+                // local — read locally instead of forwarding. Equivalent → local.
+                const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
                 if (isRemote && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
                     const forwarded = await this.deps.dispatchMeshCommand(nodeDaemonId!, 'get_mesh_node_logs', {
                         ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
@@ -8230,7 +8235,9 @@ export class DaemonCommandRouter {
                     const forwardNode = meshRecordForForward?.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
                     const nodeDaemonId = typeof forwardNode?.daemonId === 'string' ? forwardNode.daemonId.trim() : undefined;
                     const selfDaemonId = this.deps.statusInstanceId;
-                    const isRemote = nodeDaemonId && selfDaemonId && nodeDaemonId !== selfDaemonId;
+                    // daemonIdsEquivalent: a legacy-form daemonId resolving to this machine's core
+                    // is local — execute locally instead of forwarding. Equivalent → local.
+                    const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
                     if (isRemote && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
                         const callerCoordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
                             ? args.coordinatorDaemonId.trim()
@@ -8347,7 +8354,9 @@ export class DaemonCommandRouter {
                     let worktreeCleanup: Record<string, unknown> | undefined;
                     if (node?.isLocalWorktree) {
                         const nodeDaemonId = typeof node.daemonId === 'string' ? node.daemonId.trim() : undefined;
-                        const isRemoteWorktree = nodeDaemonId && nodeDaemonId !== this.deps.statusInstanceId && this.deps.dispatchMeshCommand
+                        // daemonIdsEquivalent: an equivalent-form daemonId is this machine —
+                        // clean up locally, do not forward. Equivalent → local.
+                        const isRemoteWorktree = nodeDaemonId && !daemonIdsEquivalent(nodeDaemonId, this.deps.statusInstanceId) && this.deps.dispatchMeshCommand
                             && !args?._meshDirectDispatch;
                         if (isRemoteWorktree) {
                             // Worktree lives on a different machine — ask that daemon to clean it up.
@@ -8473,7 +8482,9 @@ export class DaemonCommandRouter {
                     // _meshDirectDispatch prevents infinite re-forwarding when the stored daemonId
                     // uses a legacy format that doesn't match the receiving daemon's statusInstanceId.
                     const sourceDaemonId = typeof sourceNode.daemonId === 'string' ? sourceNode.daemonId.trim() : undefined;
-                    if (sourceDaemonId && sourceDaemonId !== this.deps.statusInstanceId && this.deps.dispatchMeshCommand
+                    // daemonIdsEquivalent: an equivalent-form source daemonId is this machine —
+                    // clone locally, do not forward. Equivalent → local.
+                    if (sourceDaemonId && !daemonIdsEquivalent(sourceDaemonId, this.deps.statusInstanceId) && this.deps.dispatchMeshCommand
                         && !args?._meshDirectDispatch) {
                         const forwarded = await this.deps.dispatchMeshCommand(sourceDaemonId, 'clone_mesh_node', {
                             ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
@@ -8748,7 +8759,9 @@ export class DaemonCommandRouter {
                     // Bootstrap runs scripts in the worktree path — forward to the node's daemon if remote.
                     // _meshDirectDispatch prevents re-forwarding when stored daemonId uses legacy format.
                     const nodeDaemonId = typeof node.daemonId === 'string' ? node.daemonId.trim() : undefined;
-                    if (nodeDaemonId && nodeDaemonId !== this.deps.statusInstanceId && this.deps.dispatchMeshCommand
+                    // daemonIdsEquivalent: an equivalent-form daemonId is this machine —
+                    // bootstrap locally, do not forward. Equivalent → local.
+                    if (nodeDaemonId && !daemonIdsEquivalent(nodeDaemonId, this.deps.statusInstanceId) && this.deps.dispatchMeshCommand
                         && !args?._meshDirectDispatch) {
                         const forwarded = await this.deps.dispatchMeshCommand(nodeDaemonId, 'retry_mesh_node_bootstrap', {
                             ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
