@@ -1,7 +1,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { GitDiffSummary, GitFileChange, GitFileChangeStatus } from './git-types.js';
-import { GitCommandError, isPathInside, resolveGitRepository, runGit } from './git-executor.js';
+import { GIT_STATUS_TIMEOUT_MS, GitCommandError, isPathInside, resolveGitRepository, runGit } from './git-executor.js';
 
 const DEFAULT_MAX_FILES = 200;
 const DEFAULT_MAX_BYTES = 200_000;
@@ -16,6 +16,21 @@ export interface GitDiffOptions {
    * sections do not apply in this mode.
    */
   baseRef?: string;
+}
+
+/**
+ * Diff collection fans out an even larger parallel git burst than status (up to five
+ * concurrent spawns — name-status/numstat × unstaged/staged + ls-files — plus its own
+ * `rev-parse --show-toplevel`) and runs concurrently with the status path. On Windows the
+ * per-spawn cost alone can exceed the 5s `execGitRaw` default, so — exactly like
+ * getGitRepoStatus — give the collection path the larger status budget unless the caller
+ * pinned a timeout. Without this, a slow-but-healthy Windows worktree times out on the diff
+ * burst and the catch below flattens it to `repoRoot:null, isGitRepo:false`, dropping the
+ * diff while the (already-hardened) status block reports isGitRepo:true — an asymmetric
+ * failure that reads as "not a git repo" for diff only.
+ */
+function withCollectionTimeout(options: GitDiffOptions): GitDiffOptions {
+  return options.timeoutMs === undefined ? { ...options, timeoutMs: GIT_STATUS_TIMEOUT_MS } : options;
 }
 
 function validateBaseRef(ref: string): string {
@@ -54,16 +69,17 @@ export async function getGitDiffSummary(
   options: GitDiffOptions = {},
 ): Promise<GitDiffSummary> {
   const lastCheckedAt = Date.now();
+  const effectiveOptions = withCollectionTimeout(options);
 
   try {
-    const repo = await resolveGitRepository(workspace, options);
+    const repo = await resolveGitRepository(workspace, effectiveOptions);
     const repoRoot = repo.repoRoot!;
 
     if (options.baseRef) {
       const range = `${validateBaseRef(options.baseRef)}...HEAD`;
       const [nameStatus, numstat] = await Promise.all([
-        runGit(repo, ['diff', '--no-ext-diff', '--name-status', range, '--'], { ...options, cwd: repoRoot }),
-        runGit(repo, ['diff', '--no-ext-diff', '--numstat', range, '--'], { ...options, cwd: repoRoot }),
+        runGit(repo, ['diff', '--no-ext-diff', '--name-status', range, '--'], { ...effectiveOptions, cwd: repoRoot }),
+        runGit(repo, ['diff', '--no-ext-diff', '--numstat', range, '--'], { ...effectiveOptions, cwd: repoRoot }),
       ]);
       const outputBytes = byteLength(nameStatus.stdout + numstat.stdout);
       const changes = combineDiffEntries(nameStatus.stdout, numstat.stdout, false);
@@ -83,11 +99,11 @@ export async function getGitDiffSummary(
     }
 
     const [unstagedNameStatus, unstagedNumstat, stagedNameStatus, stagedNumstat, untracked] = await Promise.all([
-      runGit(repo, ['diff', '--no-ext-diff', '--name-status'], { ...options, cwd: repoRoot }),
-      runGit(repo, ['diff', '--no-ext-diff', '--numstat'], { ...options, cwd: repoRoot }),
-      runGit(repo, ['diff', '--cached', '--no-ext-diff', '--name-status'], { ...options, cwd: repoRoot }),
-      runGit(repo, ['diff', '--cached', '--no-ext-diff', '--numstat'], { ...options, cwd: repoRoot }),
-      runGit(repo, ['ls-files', '--others', '--exclude-standard'], { ...options, cwd: repoRoot }),
+      runGit(repo, ['diff', '--no-ext-diff', '--name-status'], { ...effectiveOptions, cwd: repoRoot }),
+      runGit(repo, ['diff', '--no-ext-diff', '--numstat'], { ...effectiveOptions, cwd: repoRoot }),
+      runGit(repo, ['diff', '--cached', '--no-ext-diff', '--name-status'], { ...effectiveOptions, cwd: repoRoot }),
+      runGit(repo, ['diff', '--cached', '--no-ext-diff', '--numstat'], { ...effectiveOptions, cwd: repoRoot }),
+      runGit(repo, ['ls-files', '--others', '--exclude-standard'], { ...effectiveOptions, cwd: repoRoot }),
     ]);
 
     const outputBytes = byteLength(
@@ -139,14 +155,15 @@ export async function getGitFileDiff(
   options: GitDiffOptions = {},
 ): Promise<GitFileDiffResult> {
   const lastCheckedAt = Date.now();
-  const repo = await resolveGitRepository(workspace, options);
+  const effectiveOptions = withCollectionTimeout(options);
+  const repo = await resolveGitRepository(workspace, effectiveOptions);
   const repoRoot = repo.repoRoot!;
   const selected = await resolveRepoFilePath(repoRoot, filePath);
   const maxBytes = normalizePositiveInteger(options.maxBytes, DEFAULT_MAX_BYTES);
 
   if (options.baseRef) {
     const range = `${validateBaseRef(options.baseRef)}...HEAD`;
-    const result = await runGit(repo, ['diff', '--no-ext-diff', range, '--', selected.relativePath], { ...options, cwd: repoRoot });
+    const result = await runGit(repo, ['diff', '--no-ext-diff', range, '--', selected.relativePath], { ...effectiveOptions, cwd: repoRoot });
     const bounded = truncateText(result.stdout, maxBytes);
     return {
       workspace: repo.workspace,
@@ -160,15 +177,15 @@ export async function getGitFileDiff(
   }
 
   const [unstaged, staged] = await Promise.all([
-    runGit(repo, ['diff', '--no-ext-diff', '--', selected.relativePath], { ...options, cwd: repoRoot }),
-    runGit(repo, ['diff', '--cached', '--no-ext-diff', '--', selected.relativePath], { ...options, cwd: repoRoot }),
+    runGit(repo, ['diff', '--no-ext-diff', '--', selected.relativePath], { ...effectiveOptions, cwd: repoRoot }),
+    runGit(repo, ['diff', '--cached', '--no-ext-diff', '--', selected.relativePath], { ...effectiveOptions, cwd: repoRoot }),
   ]);
 
   let diff = [unstaged.stdout, staged.stdout].filter((part) => part.length > 0).join('\n');
 
   if (!diff) {
     const untracked = await runGit(repo, ['ls-files', '--others', '--exclude-standard', '--', selected.relativePath], {
-      ...options,
+      ...effectiveOptions,
       cwd: repoRoot,
     });
     const untrackedFiles = untracked.stdout.split('\n').filter(Boolean);

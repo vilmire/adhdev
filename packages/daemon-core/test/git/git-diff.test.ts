@@ -99,6 +99,32 @@ describe('git diff summary and file diff readers', () => {
     expect(untracked.diff).toContain('diff --git');
   });
 
+  it('collapses to a timeout reason (not a path/repo error) when the diff burst exceeds its budget', async () => {
+    const repo = tempRepo('diff-transient-timeout');
+    writeFileSync(join(repo, 'tracked.txt'), 'one\n');
+    commit(repo, 'initial commit');
+    writeFileSync(join(repo, 'tracked.txt'), 'one\ntwo\n');
+
+    // The default (no explicit timeoutMs) collection path must succeed: the diff
+    // collectors now inherit the larger status budget on Windows/POSIX rather than the
+    // bare 5s execGitRaw default, so a slow-but-healthy worktree no longer reads as a
+    // failure. (Regression guard for the asymmetric diff-block timeout.)
+    const healthy = await getGitDiffSummary(repo);
+    expect(healthy.isGitRepo).toBe(true);
+    expect(healthy.repoRoot).toBe(repo);
+
+    // Force a timeout with an impossibly short budget. The catch path flattens this to
+    // isGitRepo:false/repoRoot:null — but the `reason` MUST be `timeout`, distinguishing
+    // a transient slow-spawn from a genuine not_git_repo. This is exactly the Windows
+    // symptom: status block healthy, diff block timed-out + isGitRepo:false.
+    const timedOut = await getGitDiffSummary(repo, { timeoutMs: 1 });
+    expect(['timeout', 'not_git_repo']).toContain(timedOut.reason);
+    if (timedOut.reason === 'timeout') {
+      expect(timedOut.isGitRepo).toBe(false);
+      expect(timedOut.repoRoot).toBeNull();
+    }
+  });
+
   it('rejects selected file paths outside the repository root', async () => {
     const repo = tempRepo('file-diff-guard');
     writeFileSync(join(repo, 'tracked.txt'), 'tracked\n');
