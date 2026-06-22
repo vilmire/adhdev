@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { existsSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -583,7 +583,99 @@ describe('mesh session cleanup', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
-  })
+  }, 60000)
+
+  it('idempotently recovers when a managed worktree was already de-registered from git but a directory residue remains', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-residue-recover-')
+    try {
+      const branch = 'feat/residue-recover'
+      const meshName = 'residue-recover-mesh'
+      const created = await createWorktree({ repoRoot, branch, meshName })
+      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch))
+      // Simulate the post-force-fallback re-entry state: git no longer lists the
+      // worktree (de-registered) but a leftover directory residue remains on disk.
+      await execFileAsync('git', ['worktree', 'remove', '--force', created.worktreePath], { cwd: repoRoot })
+      await mkdir(created.worktreePath, { recursive: true })
+      await writeFile(join(created.worktreePath, 'residue.txt'), 'leftover\n')
+      expect(existsSync(created.worktreePath)).toBe(true)
+
+      const inlineMesh = {
+        id: 'mesh-residue-recover',
+        name: meshName,
+        policy: {},
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      const { router } = createRouter()
+
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-worktree',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        removed: true,
+        worktreeCleanup: {
+          success: true,
+          recovered: true,
+          reason: 'worktree_unregistered_residue_recovered',
+        },
+      })
+      // Best-effort removal cleared the residue, and the node is dropped from the mesh.
+      expect(existsSync(created.worktreePath)).toBe(false)
+      expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('drops the node from the mesh even when the worktree directory residue cannot be removed', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-residue-degate-')
+    try {
+      const branch = 'feat/residue-degate'
+      const meshName = 'residue-degate-mesh'
+      const created = await createWorktree({ repoRoot, branch, meshName })
+      await execFileAsync('git', ['worktree', 'remove', '--force', created.worktreePath], { cwd: repoRoot })
+      await mkdir(created.worktreePath, { recursive: true })
+      await writeFile(join(created.worktreePath, 'stuck.txt'), 'cannot-remove\n')
+
+      const inlineMesh = {
+        id: 'mesh-residue-degate',
+        name: meshName,
+        policy: {},
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      const { router } = createRouter()
+      // Simulate a Windows EINVAL-style un-removable residue: best-effort removal
+      // reports the directory could not be deleted. Membership removal must NOT be
+      // gated on this — the node should still be dropped from the mesh.
+      ;(router as any).bestEffortRemoveWorktreeDir = vi.fn(async () => ({ removed: false, residue: true, error: 'simulated EINVAL: invalid argument' }))
+
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-worktree',
+        inlineMesh,
+      })
+
+      expect(result.success).toBe(true)
+      expect(result.removed).toBe(true)
+      expect(typeof result.residueWarning).toBe('string')
+      expect(result.residueWarning).toContain('could not be fully removed')
+      expect(result.worktreeCleanup).toMatchObject({ success: true, residue: true })
+      // Node is gone from the mesh registry even though the directory still exists.
+      expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(false)
+      expect(existsSync(created.worktreePath)).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60000)
 
   it('blocks local worktree removal when the managed worktree has local changes', async () => {
     const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-dirty-worktree-')

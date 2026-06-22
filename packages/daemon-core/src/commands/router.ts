@@ -4090,12 +4090,52 @@ export class DaemonCommandRouter {
         return false;
     }
 
+    /**
+     * Best-effort recursive removal of a managed worktree directory.
+     *
+     * The git-registry de-registration is the safety-critical step of worktree
+     * teardown; a leftover directory must never gate dropping the node from the
+     * mesh. On Windows, `fs.rmSync` can throw EINVAL/EPERM/EBUSY on submodule
+     * gitlink (`.git`) files, long paths, junctions, or while a just-stopped
+     * delegate session is still releasing a handle/cwd on the directory. This
+     * helper absorbs those errors (never throws), with bounded retries + backoff
+     * to give handles time to release, and reports whether residue remains.
+     */
+    private async bestEffortRemoveWorktreeDir(dir: string): Promise<{ removed: boolean; residue: boolean; error?: string }> {
+        if (!dir || !fs.existsSync(dir)) return { removed: true, residue: false };
+        const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+        // EINVAL is the Windows symptom for submodule gitlink residue; the rest are
+        // transient lock/permission classes. None should escape as a throw here.
+        const ABSORB = new Set(['EINVAL', 'EPERM', 'EBUSY', 'ENOTEMPTY', 'EACCES', 'EMFILE', 'ENFILE']);
+        let lastErr: any;
+        for (let attempt = 0; attempt < 4; attempt++) {
+            try {
+                // maxRetries/retryDelay give fs.rmSync its own internal backoff for
+                // EBUSY/EPERM/ENOTEMPTY; the outer loop extends tolerance to EINVAL.
+                fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+                if (!fs.existsSync(dir)) return { removed: true, residue: false };
+                lastErr = new Error('directory still present after rmSync');
+            } catch (e: any) {
+                lastErr = e;
+                const code = typeof e?.code === 'string' ? e.code : '';
+                if (code && !ABSORB.has(code)) {
+                    // Unexpected error class — stay best-effort (no throw) but stop retrying.
+                    break;
+                }
+            }
+            await sleep(150 * (attempt + 1));
+        }
+        return fs.existsSync(dir)
+            ? { removed: false, residue: true, error: String(lastErr?.message || lastErr || 'unknown rm error') }
+            : { removed: true, residue: false };
+    }
+
     private async cleanupLocalWorktreeNode(args: {
         mesh: any;
         node: any;
         nodeId: string;
         force?: boolean;
-    }): Promise<{ success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string; fallback?: string; forced?: boolean; convergence?: Record<string, unknown> } | { success: false; code: string; error: string; recoveryHint: string; convergence?: Record<string, unknown> }> {
+    }): Promise<{ success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string; fallback?: string; forced?: boolean; convergence?: Record<string, unknown>; recovered?: boolean; residue?: boolean; residueWarning?: string; residueError?: string } | { success: false; code: string; error: string; recoveryHint: string; convergence?: Record<string, unknown> }> {
         const workspace = typeof args.node?.workspace === 'string' ? args.node.workspace.trim() : '';
         if (!workspace) {
             return {
@@ -4155,11 +4195,35 @@ export class DaemonCommandRouter {
         const entries = await listWorktrees(repoRoot);
         const managedEntry = entries.find(entry => normalizePath(entry.path) === actualPath);
         if (!managedEntry) {
+            // Idempotent residue recovery (NOT a refusal). By this point the path is
+            // already proven ADHDev-managed: worktreeBranch metadata is present and
+            // actualPath === expectedPath. Git nonetheless no longer lists it as a
+            // worktree. This is the post-force-fallback re-entry state — an earlier
+            // removal de-registered the worktree from git but left the directory
+            // behind (commonly Windows EINVAL on submodule gitlink files). Refusing
+            // here would strand the node in mesh membership forever, so prune any
+            // stale registration, best-effort remove the leftover directory, and
+            // report success so the caller drops the node from the mesh registry.
+            try {
+                const { execFile } = await import('node:child_process');
+                const { promisify } = await import('node:util');
+                const execFileAsync = promisify(execFile);
+                await execFileAsync('git', ['worktree', 'prune'], {
+                    cwd: repoRoot, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+                });
+            } catch { /* prune is best-effort */ }
+            const rm = await this.bestEffortRemoveWorktreeDir(workspace);
             return {
-                success: false,
-                code: 'mesh_worktree_cleanup_not_registered',
-                error: `Refusing to remove '${workspace}' because it is not registered in git worktree list for '${repoRoot}'`,
-                recoveryHint: 'Inspect git worktree list --porcelain from the source repo. If the path was already removed, prune git worktrees before retrying.',
+                success: true,
+                removedPath: workspace,
+                repoRoot,
+                reason: 'worktree_unregistered_residue_recovered',
+                recovered: true,
+                ...(rm.residue ? {
+                    residue: true,
+                    residueWarning: `Worktree was already de-registered from git but the directory could not be fully removed (leftover residue at '${workspace}'): ${rm.error || 'unknown error'}. The node will be dropped from the mesh; remove the directory manually if needed.`,
+                    residueError: rm.error,
+                } : {}),
             };
         }
         if (managedEntry.branch && managedEntry.branch !== args.node.worktreeBranch) {
@@ -4221,29 +4285,31 @@ export class DaemonCommandRouter {
                         convergence: forceFallbackConvergence,
                     };
                 } catch (deinitError: any) {
-                    // Fallback 2: deinit+remove still failed — rmSync + prune
+                    // Fallback 2: deinit+remove still failed — best-effort directory
+                    // removal + prune. The path is already proven managed/converged
+                    // here, and a leftover directory must NOT gate dropping the node
+                    // from the mesh, so absorb Windows EINVAL/EPERM and report success
+                    // with a residue warning instead of failing the whole removal.
+                    const rm = await this.bestEffortRemoveWorktreeDir(workspace);
                     try {
-                        fs.rmSync(workspace, { recursive: true, force: true });
                         await execFileAsync('git', ['worktree', 'prune'], {
                             cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true,
                         });
-                        return {
-                            success: true,
-                            removedPath: workspace,
-                            repoRoot,
-                            fallback: 'fs_rm_worktree_prune' as const,
-                            forced: true,
-                            reason: 'working_trees_containing_submodules' as const,
-                            convergence: forceFallbackConvergence,
-                        };
-                    } catch (rmError: any) {
-                        return {
-                            success: false,
-                            code: 'mesh_worktree_cleanup_failed',
-                            error: `All removal fallbacks exhausted. deinit+remove: ${deinitError?.message || deinitError}; rmSync+prune: ${rmError?.message || rmError}`,
-                            recoveryHint: 'Manually remove the worktree directory and run git worktree prune from the source repo.',
-                        };
-                    }
+                    } catch { /* prune is best-effort */ }
+                    return {
+                        success: true,
+                        removedPath: workspace,
+                        repoRoot,
+                        fallback: 'fs_rm_worktree_prune' as const,
+                        forced: true,
+                        reason: 'working_trees_containing_submodules' as const,
+                        convergence: forceFallbackConvergence,
+                        ...(rm.residue ? {
+                            residue: true,
+                            residueWarning: `Worktree was de-registered from git but the directory could not be fully removed (leftover residue at '${workspace}'): ${rm.error || 'unknown error'}; deinit+remove first failed with: ${deinitError?.message || deinitError}. The node will be dropped from the mesh; remove the directory manually if needed.`,
+                            residueError: rm.error,
+                        } : {}),
+                    };
                 }
             }
 
@@ -8279,6 +8345,14 @@ export class DaemonCommandRouter {
                             return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
                         }
                         const cleanupResult = await this.cleanupLocalWorktreeNode({ mesh, node, nodeId, force: args?.force === true });
+                        // De-gating: membership removal is NOT gated on the worktree
+                        // directory actually being deleted. cleanupLocalWorktreeNode now
+                        // returns success:true (with a residue flag) whenever the path is
+                        // proven managed and the only remaining problem is leftover
+                        // directory bytes (e.g. Windows EINVAL). A success:false here means
+                        // a genuinely-unsafe condition — missing metadata, a non-managed /
+                        // unexpected path, a branch mismatch, a dirty worktree, or an
+                        // unverified force fallback — and those still block removal.
                         if (cleanupResult.success === false) {
                             return {
                                 success: false,
@@ -8335,7 +8409,19 @@ export class DaemonCommandRouter {
                         } catch { /* ledger append is best-effort */ }
                     }
 
-                    return { success: true, removed, ...(sessionCleanup ? { sessionCleanup } : {}), ...(worktreeCleanup ? { worktreeCleanup } : {}) };
+                    // Surface leftover-directory residue at the top level so callers
+                    // see the node was dropped from the mesh even though the worktree
+                    // directory could not be fully removed (best-effort, non-gating).
+                    const residueWarning = worktreeCleanup?.residue === true && typeof worktreeCleanup?.residueWarning === 'string'
+                        ? worktreeCleanup.residueWarning
+                        : undefined;
+                    return {
+                        success: true,
+                        removed,
+                        ...(residueWarning ? { residueWarning } : {}),
+                        ...(sessionCleanup ? { sessionCleanup } : {}),
+                        ...(worktreeCleanup ? { worktreeCleanup } : {}),
+                    };
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
