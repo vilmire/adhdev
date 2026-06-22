@@ -292,13 +292,14 @@ async function waitForPidExit(pid: number, timeoutMs: number): Promise<void> {
   }
 }
 
-export function stopSessionHostProcesses(appName: string): void {
+export async function stopSessionHostProcesses(appName: string): Promise<void> {
   const pidFile = path.join(os.homedir(), '.adhdev', `${appName}-session-host.pid`);
+  let killedPid: number | null = null;
   try {
     if (fs.existsSync(pidFile)) {
       const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
       if (Number.isFinite(pid) && pid !== process.pid && isManagedSessionHostPid(pid)) {
-        killPid(pid);
+        if (killPid(pid)) killedPid = pid;
       }
     }
   } catch {
@@ -310,6 +311,31 @@ export function stopSessionHostProcesses(appName: string): void {
       // noop
     }
   }
+
+  // The session-host process keeps node-pty's `conpty.node` memory-mapped. On
+  // Windows a mapped native addon stays EXCLUSIVELY locked until the process
+  // fully exits and tears down the mapping — and that teardown lags `taskkill`
+  // by an indeterminate interval. `taskkill` only *requests* termination, so
+  // returning immediately lets the caller run `npm install` while conpty.node
+  // is still locked, which makes npm's copy-to-staging fail with EBUSY (the
+  // intermittent Windows upgrade failure). Wait for the killed process to
+  // actually disappear — like we already do for the parent daemon pid — so the
+  // file handle is released before the install runs. (POSIX can replace an open
+  // file freely, so the wait is harmless there.)
+  if (killedPid !== null) {
+    await waitForPidExit(killedPid, 15000);
+  }
+}
+
+// npm copies the current install's files into a staging dir before swapping in
+// the new version. On Windows that copy of `conpty.node` can still race a
+// just-killed session-host whose mapping hasn't been released yet, surfacing as
+// EBUSY/EPERM. Treat those as transient and retry with backoff.
+function isRetriableInstallLockError(error: any): boolean {
+  const code = error?.code;
+  if (code === 'EBUSY' || code === 'EPERM') return true;
+  const text = `${error?.message || ''} ${error?.stderr || ''}`;
+  return /\bEBUSY\b|\bEPERM\b|resource busy or locked/i.test(text);
 }
 
 function removeDaemonPidFile(): void {
@@ -412,23 +438,40 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
     await waitForPidExit(payload.parentPid, 15000);
   }
 
-  stopSessionHostProcesses(sessionHostAppName);
+  await stopSessionHostProcesses(sessionHostAppName);
   removeDaemonPidFile();
   cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
 
   const spec = `${payload.packageName}@${payload.targetVersion || 'latest'}`;
   appendUpgradeLog(`Installing ${spec}`);
-  const installOutput = execFileSync(
-    installCommand.command,
-    installCommand.args,
-    {
-      encoding: 'utf8',
-      stdio: 'pipe',
-      maxBuffer: 20 * 1024 * 1024,
-      env: buildInstallEnvWithNodeOnPath(),
-      ...installCommand.execOptions,
-    },
-  );
+  // Windows can still race a lingering conpty.node mapping even after the
+  // session-host exits, so retry the install on transient lock errors there.
+  const maxInstallAttempts = process.platform === 'win32' ? 3 : 1;
+  let installOutput = '';
+  for (let attempt = 1; attempt <= maxInstallAttempts; attempt++) {
+    try {
+      installOutput = String(execFileSync(
+        installCommand.command,
+        installCommand.args,
+        {
+          encoding: 'utf8',
+          stdio: 'pipe',
+          maxBuffer: 20 * 1024 * 1024,
+          env: buildInstallEnvWithNodeOnPath(),
+          ...installCommand.execOptions,
+        },
+      ));
+      break;
+    } catch (error: any) {
+      if (attempt < maxInstallAttempts && isRetriableInstallLockError(error)) {
+        appendUpgradeLog(`Install attempt ${attempt} hit a file lock (${error?.code || 'lock'}); cleaning staging and retrying after backoff`);
+        cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+        continue;
+      }
+      throw error;
+    }
+  }
   if (installOutput.trim()) {
     appendUpgradeLog(installOutput.trim());
   }

@@ -36,7 +36,15 @@ let platformDescriptor: PropertyDescriptor | undefined
 beforeEach(() => {
   mocks.execFileSync.mockReset()
   mocks.spawn.mockClear()
-  killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+  // SIGTERM (kill request) succeeds; the signal-0 liveness probe in
+  // waitForPidExit throws to signal the process is already gone, so the
+  // post-kill wait resolves immediately instead of spinning for 15s.
+  killSpy = vi.spyOn(process, 'kill').mockImplementation((_pid: number, signal?: string | number) => {
+    if (signal === 0) {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
+    }
+    return true
+  })
   platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
   Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
 })
@@ -52,7 +60,7 @@ afterEach(() => {
 })
 
 describe('upgrade helper session-host stop', () => {
-  it('kills only the pidfile-owned session-host process and does not pgrep sweep', () => {
+  it('kills only the pidfile-owned session-host process and does not pgrep sweep', async () => {
     const appName = `adhdev-upgrade-stop-${process.pid}-${Date.now()}`
     const pidFile = writePidFile(appName, 43210)
     const execCalls: Array<{ file: string; args: readonly string[] }> = []
@@ -62,14 +70,14 @@ describe('upgrade helper session-host stop', () => {
       throw new Error(`unexpected execFileSync ${file}`)
     })
 
-    stopSessionHostProcesses(appName)
+    await stopSessionHostProcesses(appName)
 
     expect(killSpy).toHaveBeenCalledWith(43210, 'SIGTERM')
     expect(execCalls.some((call) => call.file === 'pgrep')).toBe(false)
     expect(fs.existsSync(pidFile)).toBe(false)
   })
 
-  it('does not kill a stale pidfile reused by an unrelated process', () => {
+  it('does not kill a stale pidfile reused by an unrelated process', async () => {
     const appName = `adhdev-upgrade-stop-unrelated-${process.pid}-${Date.now()}`
     const pidFile = writePidFile(appName, 43211)
     const execCalls: Array<{ file: string; args: readonly string[] }> = []
@@ -79,7 +87,7 @@ describe('upgrade helper session-host stop', () => {
       throw new Error(`unexpected execFileSync ${file}`)
     })
 
-    stopSessionHostProcesses(appName)
+    await stopSessionHostProcesses(appName)
 
     expect(killSpy).not.toHaveBeenCalled()
     expect(execCalls.some((call) => call.file === 'pgrep')).toBe(false)
