@@ -55,12 +55,24 @@ export function resolveSections(
                 // Normalize anchor + context into parallel candidate lists. A
                 // scalar anchor becomes a single-entry array; a single context
                 // object applies to every entry; an array context is positional.
-                // Candidates are tried IN ORDER as independent passes: the first
-                // pattern that finds any line wins. This keeps a scalar anchor's
-                // behavior identical, and lets an array express a preferred shape
-                // (e.g. a box divider) with later entries as fallbacks (e.g. a
-                // divider-less modal anchored on its question line) — the
-                // fallback only takes over when the preferred pattern is absent.
+                // Each candidate resolves its own anchor line independently
+                // (anchor_last → that candidate's LAST matching line, else its
+                // FIRST). Across candidates we then pick the TOPMOST resolved
+                // line, because a section's anchor marks the TOP of the block:
+                // among several recognized landmark shapes, the highest one
+                // bounds the whole block. This keeps a scalar anchor identical
+                // (one candidate), preserves a genuine box-top divider (it sits
+                // ABOVE the question line, so it still wins), and — crucially —
+                // stops a stray lower landmark from clipping the block: e.g. a
+                // claude approval whose numbered choices sit ABOVE the input-box
+                // `────` rule. anchor_last on the bare-divider pattern alone
+                // would latch that LOWER chrome rule and strand the buttons
+                // above it (deriveModal sees < min_count → auto-approve never
+                // fires); preferring the topmost landmark (here the question
+                // line just above the choices, matched by the fallback context)
+                // captures the whole modal. The fallback still only contributes
+                // when its own pattern matches, so non-modal screens are
+                // unaffected.
                 const anchorPatterns = Array.isArray(sec.anchor) ? sec.anchor : [sec.anchor];
                 const sharedCtx: AnchorContext | null = Array.isArray(sec.anchor_context)
                     ? null
@@ -84,12 +96,15 @@ export function resolveSections(
                     && (c.nextRe === null || (i < total - 1 && c.nextRe.test(lines[i + 1])));
                 let idx = -1;
                 for (const c of candidates) {
+                    let candIdx = -1;
                     if (sec.anchor_last) {
-                        for (let i = total - 1; i >= 0; i--) { if (matchesCandidate(c, i)) { idx = i; break; } }
+                        for (let i = total - 1; i >= 0; i--) { if (matchesCandidate(c, i)) { candIdx = i; break; } }
                     } else {
-                        for (let i = 0; i < total; i++) { if (matchesCandidate(c, i)) { idx = i; break; } }
+                        for (let i = 0; i < total; i++) { if (matchesCandidate(c, i)) { candIdx = i; break; } }
                     }
-                    if (idx !== -1) break;
+                    // Topmost resolved anchor across candidates wins (see note
+                    // above): keep the smallest matching line index.
+                    if (candIdx !== -1 && (idx === -1 || candIdx < idx)) idx = candIdx;
                 }
                 if (idx !== -1) {
                     from = idx;

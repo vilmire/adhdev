@@ -618,3 +618,161 @@ describe('claude-cli v4 FSM — FALSEIDLE2 ellipsis-less spinner + whole-screen 
         expect(a2i).toBe(i2b);
     });
 });
+
+// ── (a) modal button extraction survives a divider BELOW the choices ──────────
+// Live root cause (auto-approve stall): the modal section's preferred anchor is a
+// bare `────` rule (^[─╌]+$, anchor_last). claude renders an approval as
+//   ────────────  (rule above the modal)
+//    Bash command / … / Do you want to proceed?
+//    ❯ 1. Yes / 2. No
+//   ────────────  (a CLOSING rule below the choices)
+//    Esc to cancel …
+// anchor_last latched the LOWER closing rule, so the modal section resolved to
+// just "────\n Esc to cancel" — extractButtonsFromRule returned 0 buttons,
+// deriveModal returned null (< min_count 2), activeModal went null, and the
+// auto-approve gate bailed (`if (!modal || buttons.length === 0) return`) so the
+// approval never auto-fired. The →approval transition still fired (footer ❯ 1.
+// is visible), so the session sat in approval forever.
+//
+// Fix (evaluator.ts): an array anchor now resolves each candidate independently
+// and picks the TOPMOST resolved line. The divider-less fallback candidate
+// (the question line just above the numbered choices) sits ABOVE the closing
+// rule, so it wins and the section spans the whole modal → buttons extract.
+
+const D = '─'.repeat(64);
+
+// The exact snapshot shape: header "Bash command", the question, ❯ 1. Yes / 2.
+// No, and an "Esc to cancel" footer hint — WITH a closing divider below the
+// choices (the form that stranded the buttons pre-fix).
+const bashApprovalDividerBelow = [
+    '❯ Run the build for me',
+    '',
+    '⏺ Bash(npm run build)',
+    ' ⎿  Running…',
+    '',
+    D,
+    ' Bash command',
+    '',
+    ' npm run build',
+    ' Run shell command',
+    '',
+    ' Do you want to proceed?',
+    ' ❯ 1. Yes',
+    ' 2. No',
+    D,
+    ' Esc to cancel · Tab to amend · ctrl+e to explain',
+].join('\n');
+
+describe('claude-cli v4 FSM — modal buttons survive a divider below the choices', () => {
+    const spec = loadSpec();
+
+    it('→approval still fires (footer ❯ 1. is visible)', () => {
+        const ev = evaluateFsm(spec, 'busy', bashApprovalDividerBelow, { row: 12, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('approval');
+    });
+
+    it('modal section spans the choices, not the closing rule', () => {
+        const lines = strip(bashApprovalDividerBelow);
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const modal = sectionText(sections, 'modal', lines.join('\n'));
+        expect(modal).toContain('Do you want to proceed?');
+        expect(modal).toContain('1. Yes');
+        expect(modal).toContain('2. No');
+        // Must NOT collapse to just the closing rule + footer hint.
+        expect(modal.trim().startsWith('Esc to cancel')).toBe(false);
+    });
+
+    it('extracts both buttons so the auto-approve gate can fire (was 0 → null)', () => {
+        const approval = spec.states.find(s => s.id === 'approval')!;
+        const lines = strip(bashApprovalDividerBelow);
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const rule = approval.extract!.buttons!;
+        const hay = sectionText(sections, rule.section, lines.join('\n'));
+        const buttons = extractButtonsFromRule(rule, hay);
+        expect(buttons.map(b => b.index)).toEqual([1, 2]);
+        expect(buttons[0].key).toBe('1\r');
+        expect(buttons.map(b => b.label).join(' ')).toMatch(/yes/i);
+        // min_count (2) is met → deriveModal would return a non-null modal.
+        expect(buttons.length).toBeGreaterThanOrEqual(rule.min_count ?? 2);
+    });
+
+    // Same modal but ALSO trailed by the input-box chrome (──── / ❯ / ──── /
+    // ⏵⏵) — two more bare dividers below the choices. The topmost-landmark rule
+    // must still anchor on the question line above the choices.
+    it('survives input-box chrome below the choices too', () => {
+        const screen = [
+            '⏺ Bash(npm run build)', ' ⎿  Running…', '',
+            D, ' Bash command', '', ' npm run build', ' Run shell command', '',
+            ' Do you want to proceed?', ' ❯ 1. Yes', ' 2. No', '',
+            D, '❯ ', D, ' ⏵⏵ accept edits on (shift+tab to cycle)',
+        ].join('\n');
+        const lines = strip(screen);
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const rule = spec.states.find(s => s.id === 'approval')!.extract!.buttons!;
+        const hay = sectionText(sections, rule.section, lines.join('\n'));
+        const buttons = extractButtonsFromRule(rule, hay);
+        expect(buttons.map(b => b.index)).toEqual([1, 2]);
+    });
+});
+
+// ── (c) approval→busy footer guard (approval sticky) ─────────────────────────
+// approval→idle guards on `not footer ❯ 1.` (the modal is gone) but approval→busy
+// did NOT — so a residual spinner / "esc to interrupt" cue left over from the
+// pre-approval turn flipped the FSM approval→busy while the modal's "❯ 1." choice
+// was STILL on screen. That collapsed the live modal to a generating state, the
+// modal stopped being surfaced, and auto-approve never fired (the 2nd-order flap).
+// Fix (4.0.json): approval→busy now also requires the footer ❯ 1. anchor to be
+// ABSENT, mirroring approval→idle. While the modal is up, approval is sticky.
+
+describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)', () => {
+    const spec = loadSpec();
+
+    it('approval→busy when-clause carries the not-footer ❯ 1. guard', () => {
+        const t = spec.transitions.find(tr => tr.label === 'approval→busy')!;
+        const clauses = (t.when as any).all as any[];
+        expect(Array.isArray(clauses)).toBe(true);
+        const guard = clauses.find(c => c.not && c.not.section === 'footer'
+            && typeof c.not.matches === 'string' && c.not.matches.includes('1\\.'));
+        expect(guard).toBeTruthy();
+    });
+
+    // Modal still up (footer ❯ 1.) AND a residual spinner in the body. Pre-fix
+    // this flipped to busy; now approval is sticky.
+    const stickyApproval = [
+        '❯ Run the build please',
+        '',
+        '⏺ Bash(npm run build)',
+        ' ⎿  Running…',
+        '✶ Finishing up… (esc to interrupt)',
+        D,
+        ' Bash command',
+        ' npm run build',
+        ' Do you want to proceed?',
+        ' ❯ 1. Yes',
+        ' 2. No',
+        '',
+        ' Esc to cancel · Tab to amend',
+    ].join('\n');
+
+    // Genuine resume: the modal is gone (no ❯ 1.), the spinner is active → busy.
+    const genuineResume = [
+        '❯ Run the build please',
+        '',
+        '⏺ Bash(npm run build)',
+        '✶ Finishing up… (esc to interrupt)',
+        '',
+        D, '❯ ', D,
+        ' ⏵⏵ accept edits on (shift+tab to cycle)',
+    ].join('\n');
+
+    it('STAYS in approval while the modal ❯ 1. is still on screen (residual spinner)', () => {
+        // Clock well past min_hold (1500ms) so only the footer guard holds it.
+        const ev = evaluateFsm(spec, 'approval', stickyApproval, { row: 9, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).not.toBe('busy');
+    });
+
+    it('approval→busy still fires once the modal dismisses and the spinner is active', () => {
+        const ev = evaluateFsm(spec, 'approval', genuineResume, { row: 6, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('busy');
+    });
+});

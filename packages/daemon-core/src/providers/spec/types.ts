@@ -154,11 +154,15 @@ export interface SectionDef {
     until?: string;             // section id OR regex (starts with ^)
     /**
      * Anchor regex(es). A single string anchors on the first/last matching line
-     * (per `anchor_last`). An array is an OR-set: every candidate line is one
-     * that matches ANY entry; with `anchor_last` the LAST such line across all
-     * patterns wins, otherwise the FIRST. This lets one section capture two
-     * different shapes — e.g. a box-divider modal AND a divider-less modal whose
-     * only stable landmark is the question line above its numbered choices.
+     * (per `anchor_last`). An array is an OR-set of candidate shapes: each
+     * candidate resolves its OWN anchor line independently (anchor_last → that
+     * candidate's last matching line, else its first), then the TOPMOST resolved
+     * line across candidates wins — a section's anchor marks the top of its
+     * block, so the highest recognized landmark bounds the whole block. This
+     * lets one section capture two shapes — e.g. a box-divider modal AND a
+     * divider-less modal whose only stable landmark is the question line above
+     * its numbered choices — while preventing a stray LOWER landmark (e.g. an
+     * input-box `────` rule below the choices) from clipping the block.
      */
     anchor?: string | string[];
     anchor_flags?: string;
