@@ -457,6 +457,17 @@ function deliverTaskToSession(dispatchThunk: () => Promise<unknown>, ctx: Delive
     });
 }
 
+// WTCLAIM: normalize a workspace path for base-vs-worktree comparison. Mirrors
+// cli-manager.ts normalizeDirForCompare (fix-B) — folds separator style, trailing
+// slashes, and case (Windows paths are case-insensitive) so a base node and a worktree
+// clone, whose only structural difference is their distinct workspace roots, are still
+// told apart. Kept local (the cli-manager copy is module-private) so the comparison rule
+// stays identical to the one fix-B already uses on the worker side.
+function normalizeMeshWorkspaceForCompare(dir?: string): string {
+    if (typeof dir !== 'string') return '';
+    return dir.trim().replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
 export function tryAssignQueueTask(
     components: DaemonComponents,
     meshId: string,
@@ -466,6 +477,32 @@ export function tryAssignQueueTask(
 ): boolean {
     const mesh = getMeshWithCache(components, meshId);
     const node = mesh?.nodes.find((n: any) => readMeshNodeId(n) === nodeId);
+
+    // WTCLAIM (fix-B extended to the enqueue→claim path): a base-targeted task must never be
+    // claimed by — and dispatched into — a co-located worktree-clone session, nor vice versa.
+    // The drain candidate's nodeId is derived from settings.meshNodeId || settings.nodeId
+    // (triggerMeshQueue), so a worktree session whose meshNodeId is empty/stale falls back to
+    // settings.nodeId = the BASE node id and impersonates the base node here. fix-B's worker-side
+    // workspace scope only ran for sessionless dispatch (meshScopeNodeId && !targetSessionId); the
+    // claim path ALWAYS carries a targetSessionId, so it never engaged. Apply the same scope here:
+    // for a LOCAL claiming session (adapter resolvable on this daemon), require its actual
+    // workingDir to match the target node's declared workspace. On a confirmed mismatch, refuse the
+    // claim so the task returns to pending for the correctly-scoped session/node to pull. Scoped to
+    // local sessions where the workspace is verifiable — a remote session lives on another daemon
+    // whose paths we cannot compare here (and remote candidates are already nodeId-matched from
+    // getRemoteIdleSessions). Conservative by design: when either workspace is unknown we do NOT
+    // skip, so a node with no declared workspace keeps its prior behavior and no legitimate claim
+    // is starved.
+    const localClaimAdapter = components.cliManager?.adapters?.get(sessionId) as { workingDir?: string } | undefined;
+    if (localClaimAdapter) {
+        const sessionWorkspace = normalizeMeshWorkspaceForCompare(localClaimAdapter.workingDir);
+        const nodeWorkspace = normalizeMeshWorkspaceForCompare(readNonEmptyString(node?.workspace));
+        if (sessionWorkspace && nodeWorkspace && sessionWorkspace !== nodeWorkspace) {
+            LOG.info('MeshQueue', `WTCLAIM: refusing claim for node ${nodeId} (${sessionId}) — session workspace "${sessionWorkspace}" ≠ node workspace "${nodeWorkspace}" (cross-workspace dispatch blocked)`);
+            return false;
+        }
+    }
+
     const capabilityTags = buildMeshNodeCapabilityTags(node, providerType);
     // Per-(node, provider) maxParallel cap (RepoMeshNodePolicy.providerRoles) layers
     // on top of the global/taskMode caps — stricter wins. Resolved here where the
