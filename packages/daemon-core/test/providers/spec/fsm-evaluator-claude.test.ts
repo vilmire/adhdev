@@ -914,3 +914,156 @@ describe('claude-cli v4 FSM — FALSEBUSY middle-dot body false-match', () => {
         expect(i2b).not.toContain('[·');
     });
 });
+
+// ── FALSEBUSY mechanism B: completion footer pushed out of the viewport ───────
+// Live root cause (coordinator "Cody" claude-cli sessions): mesh tool-call output /
+// mission lists / JSON convergence reports FILL the 32-row viewport, so BOTH the
+// generation `esc to interrupt` cue AND the `✻ … for Ns` completion footer scroll
+// out of the visible viewport. The session is genuinely idle (no spinner glyph, the
+// body is static), yet busy→idle wedges: cond1 not-spinner = TRUE, cond3 stable =
+// TRUE, but cond2 (the `✻ … for Ns` completion footer, HARD-required) = FALSE
+// forever → all() never satisfied → permanent busy (observed ~26 min).
+//
+// Fix (additive, spec-only): a parallel `busy→idle-quiet` transition that drives
+// idle on whole-screen no-spinner + a longer whole-screen stable window
+// (stable_ms 12000), WITHOUT requiring the completion footer. The original
+// busy→idle (footer fast-path, 8s) is left byte-identical, so every existing
+// FALSEIDLE2 / footer-position / SPECDBG test is untouched. This is safe against
+// false-idle because claude-cli draws a per-second ticking elapsed timer during
+// generation (whole-screen changes every ~1s → 12s stable is never reached while
+// generating) and is NOT focus-gated (no refocus_when_stalled_ms stall-freeze).
+
+describe('claude-cli v4 FSM — FALSEBUSY B: footer pushed out of viewport (Cody)', () => {
+    const spec = loadSpec();
+    const Dline = '─'.repeat(64);
+
+    // A "Cody-type" idle screen: mesh/JSON/mission output fills the viewport; the
+    // generation esc cue and the ✻…for Ns completion footer have BOTH scrolled out.
+    // Genuinely idle (no spinner glyph), ❯ composer at the bottom.
+    const codyIdle = [
+        '⏺ Mission convergence report:',
+        '{ "missions": [',
+        '    {"id":"WARMUPGAP","status":"done"},',
+        '    {"id":"FALSEIDLE2","status":"done"},',
+        '    {"id":"FALSEBUSY","status":"active"} ],',
+        '  "nodes": 4, "note": "footer pushed out of viewport" }',
+        '· WARMUPGAP — guard dispatch-row updates',
+        '· SPECDBG — PTY event timeline',
+        '1. converge providers', '2. relocate oss test', '3. await approval',
+        'Done. Awaiting next instruction.',
+        Dline, '❯ ', Dline,
+        '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    ].join('\n');
+
+    // Same, but the body fills to the last line — even the ❯ composer is pushed out.
+    const codyIdleNoComposer = [
+        '⏺ Mission convergence report:',
+        '{ "missions":[{"id":"FALSEBUSY","status":"active"}], "nodes":4 }',
+        '· WARMUPGAP — guard dispatch-row updates',
+        '· SPECDBG — PTY event timeline',
+        '1. converge providers', '2. relocate oss test', '3. await approval',
+        'Done. Awaiting next instruction. (no composer / footer visible)',
+    ].join('\n');
+
+    // Actively generating: a real spinner sits at the bottom (esc cue in-frame).
+    const codyGenerating = [
+        '⏺ Mission convergence report:',
+        '{ "missions": [ {"id":"FALSEBUSY","status":"active"} ] }',
+        '· WARMUPGAP — guard dispatch-row updates',
+        '1. converge providers', '2. relocate oss test',
+        '✢ Spelunking… (1m 37s · ↓ 6.1k tokens · esc to interrupt)',
+        Dline, '❯ ', Dline,
+        '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    ].join('\n');
+
+    it('(repro) original-style stick: cond2 footer required — see busy→idle alone', () => {
+        // The footer fast-path alone cannot fire (no ✻…for Ns). It is the additive
+        // busy→idle-quiet transition that recovers — asserted below.
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const footerClause = (busyToIdle.when as any).all.find(
+            (c: any) => typeof c.matches === 'string' && c.matches.includes('for'));
+        expect(new RegExp(footerClause.matches).test(codyIdle)).toBe(false); // no completion footer on screen
+    });
+
+    it('(recovery) Cody idle → idle via busy→idle-quiet once whole-screen quiet ≥12s', () => {
+        const ev = evaluateFsm(spec, 'busy', codyIdle, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('(recovery) Cody idle with even the composer pushed out → still idle', () => {
+        const ev = evaluateFsm(spec, 'busy', codyIdleNoComposer, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('(no false-idle) Cody generating (spinner in-frame) → stays busy', () => {
+        const ev = evaluateFsm(spec, 'busy', codyGenerating, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('(no false-idle) Cody generating, whole-screen changed 2s ago → stays busy', () => {
+        // Spinner tick 2s ago keeps the whole-screen stable timer under 12s.
+        const ev = evaluateFsm(spec, 'busy', codyGenerating, undefined, undefined, clk(60000, 0, [[-1, 58000]]));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('(gate) Cody idle settled only 9s → not yet idle (12s window)', () => {
+        const ev = evaluateFsm(spec, 'busy', codyIdle, undefined, undefined, clk(60000, 0, [[-1, 51000]]));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('(fast-path intact) a genuine completion footer still drives idle at 8s', () => {
+        const footerDone = [
+            '▗ ▗   ▖ ▖  Claude Code v2.1.153', '  ▘▘ ▝▝    ~/Work/adhdev', '',
+            '⏺ Done.', '', '✻ Worked for 8s', '',
+            Dline, '❯ ', Dline, '  ⏵⏵ accept edits on (shift+tab to cycle)',
+        ].join('\n');
+        const ev = evaluateFsm(spec, 'busy', footerDone, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('(FALSEIDLE2 preserved) original busy→idle unchanged; quiet transition added', () => {
+        const orig = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const notSpinner = (orig.when as any).all.find(
+            (c: any) => c.not && c.not.matches && c.not.matches.includes('2800'));
+        expect(notSpinner.not.section).toBeUndefined();                  // still whole-screen
+        expect((orig.when as any).all.find((c: any) => typeof c.stable_ms === 'number').stable_ms).toBe(8000);
+        const quiet = spec.transitions.find(t => t.label === 'busy→idle-quiet') as any;
+        expect(quiet).toBeTruthy();
+        expect(quiet.from).toBe('busy');
+        expect(quiet.to).toBe('idle');
+        // quiet reuses the SAME whole-screen not-spinner clause (no section) + a longer stable.
+        expect(quiet.when.all[0].not.section).toBeUndefined();
+        expect(quiet.when.all[0].not.matches).toBe(notSpinner.not.matches);
+        expect(quiet.when.all.find((c: any) => typeof c.stable_ms === 'number').stable_ms).toBe(12000);
+    });
+
+    it('(FALSEIDLE2 preserved) a real Braille spinner still holds busy on the quiet path too', () => {
+        const realSpin = [
+            '▗ ▗   ▖ ▖  Claude Code v2.1.153', '  ▘▘ ▝▝    ~/Work/adhdev', '',
+            '⏺ Working', '', '⣾ Running the test suite… (esc to interrupt)', '',
+            Dline, '❯ ', Dline, '  ⏵⏵ accept edits on (shift+tab to cycle)',
+        ].join('\n');
+        const ev = evaluateFsm(spec, 'busy', realSpin, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('(no false-idle) a streaming token counter (no spinner glyph) holds busy on the quiet path', () => {
+        // '✻ Worked for 7s · ↑ 1.2k tokens' has NO spinner glyph (✻ is excluded) but a
+        // live token counter — a generation signal. The quiet path's token guard must
+        // keep it busy even when the frame looks stable. Plain JSON 'tokens' (no ↑/↓
+        // arrow) does NOT trip it, so genuine Cody idle still recovers (covered above).
+        const tokenProgress = [
+            '▗ ▗   ▖ ▖  Claude Code v2.1.153', '  ▘▘ ▝▝    ~/Work/adhdev', '',
+            '⏺ working', '', '✻ Worked for 7s · ↑ 1.2k tokens', '',
+            Dline, '❯ ', Dline, '  ⏵⏵ accept edits on (shift+tab to cycle)',
+        ].join('\n');
+        const ev = evaluateFsm(spec, 'busy', tokenProgress, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+        // a token counter that is part of plain JSON output (no arrow) must NOT block recovery
+        const quiet = spec.transitions.find(t => t.label === 'busy→idle-quiet') as any;
+        const tokenGuard = quiet.when.all.find((c: any) => c.not && /tokens\?/.test(c.not.matches) && !c.not.matches.includes('2800'));
+        const re = new RegExp(tokenGuard.not.matches, 'i');
+        expect(re.test('"tokens": 1234, "nodes": 4')).toBe(false);
+        expect(re.test('✻ Worked for 7s · ↑ 1.2k tokens')).toBe(true);
+    });
+});
