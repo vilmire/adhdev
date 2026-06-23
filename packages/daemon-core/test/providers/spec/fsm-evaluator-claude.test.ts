@@ -780,3 +780,137 @@ describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)',
         expect(ev.fired?.to).toBe('busy');
     });
 });
+
+// ── FALSEBUSY: middle-dot (·) body text false-matching the spinner glyph set ──
+// Live root cause (coordinator claude-cli session 4b86ddc6, busy held ~26 min):
+// the spinner glyph class led with `·` (U+00B7 MIDDLE DOT). That glyph is NOT a
+// distinguishing claude spinner frame (claude animates with the asterisk frames
+// ✢✳✶✽✷✸✹ and the Braille range ⠀-⣿), but `·` is a common prose / list bullet.
+// A mission-list body line such as `· WARMUPGAP — guard dispatch-row updates…`
+// (bullet + word + trailing ellipsis) therefore matched the spinner regex. Because
+// the busy→idle not-spinner clause is — deliberately — whole-screen scoped (the
+// FALSEIDLE2 / footer-anchored-spinner fixes, so a real spinner BELOW the prompt is
+// still seen), that body line kept not-spinner FALSE forever → busy→idle never
+// satisfied its all(3) → the session stuck busy. The same `·` also let idle→busy
+// false-fire on the bullet, falsely ENTERING busy from a quiet prompt.
+//
+// Fix (spec-only, minimal): drop `·` from the shared spinner glyph class in all
+// four spinner-detecting clauses (idle→busy / busy→idle / approval→busy /
+// approval→idle) AND from the busy→idle completion-footer spinner-below lookahead.
+// Whole-screen scope is UNCHANGED (FALSEIDLE2 invariant preserved) — only the one
+// prose-colliding glyph is removed, so real asterisk / Braille spinners still hold
+// busy while mission-list bullets no longer masquerade as a spinner.
+
+describe('claude-cli v4 FSM — FALSEBUSY middle-dot body false-match', () => {
+    const spec = loadSpec();
+    const Dline = '─'.repeat(64);
+
+    // A quiet idle prompt whose body is a `·`-bulleted mission list (the exact
+    // shape that false-matched). Footer is the ❯ composer, no spinner, no modal.
+    const missionListIdle = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+        '  ▘▘ ▝▝    ~/Work/adhdev',
+        '',
+        '⏺ Here are the active missions:',
+        '· WARMUPGAP — guard dispatch-row updates…',
+        '· FALSEIDLE2 — ellipsis-less spinner regex…',
+        '· SPECDBG 등',
+        '',
+        Dline, '❯ ', Dline,
+        '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    ].join('\n');
+
+    // Same mission-list body but WITH a genuine completion footer present, so the
+    // busy→idle completion-footer clause is satisfiable — the recovery path that
+    // was wedged shut by the `·` line holding not-spinner FALSE.
+    const missionListWithCompletion = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+        '  ▘▘ ▝▝    ~/Work/adhdev',
+        '',
+        '⏺ Done. Active missions:',
+        '· WARMUPGAP — guard dispatch-row updates…',
+        '· SPECDBG 등',
+        '',
+        '✻ Worked for 8s',
+        '',
+        Dline, '❯ ', Dline,
+        '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    ].join('\n');
+
+    // A real generating frame: Braille spinner + esc cue (must still hold busy).
+    const realBrailleBusy = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+        '  ▘▘ ▝▝    ~/Work/adhdev',
+        '',
+        '⏺ Let me run the tests.',
+        '',
+        '⣾ Running the test suite… (esc to interrupt)',
+        '',
+        Dline, '❯ ', Dline,
+        '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    ].join('\n');
+
+    it('(guard) idle→busy does NOT false-fire on a `·`-bulleted mission list', () => {
+        // Pre-fix: `· WARMUPGAP … updates…` matched the spinner regex → false busy.
+        const ev = evaluateFsm(spec, 'idle', missionListIdle, undefined, undefined, clk(5000, 0));
+        expect(ev.fired?.to).not.toBe('busy');
+    });
+
+    it('(entry) idle→busy still fires on a real asterisk spinner (✢ Slithering…)', () => {
+        const slither = missionListIdle.replace('⏺ Here are the active missions:', '✢ Slithering… (esc to interrupt)');
+        const ev = evaluateFsm(spec, 'idle', slither, undefined, undefined, clk(5000, 0));
+        expect(ev.fired?.to).toBe('busy');
+    });
+
+    it('(entry) idle→busy still fires on a real Braille spinner (⣾ …)', () => {
+        const ev = evaluateFsm(spec, 'idle', realBrailleBusy, undefined, undefined, clk(5000, 0));
+        expect(ev.fired?.to).toBe('busy');
+    });
+
+    it('(recovery) busy→idle escapes once a `·` line no longer blocks not-spinner', () => {
+        // not-spinner now TRUE (the `·` line is no longer a spinner), completion
+        // footer present, screen quiet ≥8s → idle. Pre-fix: stuck busy forever.
+        const ev = evaluateFsm(spec, 'busy', missionListWithCompletion, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('(FALSEIDLE2 preserved) busy STAYS busy on a real Braille spinner frame', () => {
+        const ev = evaluateFsm(spec, 'busy', realBrailleBusy, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('(FALSEIDLE2 preserved) busy→idle not-spinner clause stays whole-screen scoped', () => {
+        // The fix must NOT re-scope the clause to a section — that is the exact
+        // regression the bottom-anchoring approach would have caused.
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const notSpinner = (busyToIdle.when as any).all.find(
+            (c: any) => c.not && c.not.matches && c.not.matches.includes('2800'));
+        expect(notSpinner.not.section).toBeUndefined();
+    });
+
+    it('(unit) the spinner regex drops `·` but keeps real spinner glyphs', () => {
+        const idleToBusy = spec.transitions.find(t => t.label === 'idle→busy')!;
+        const re = new RegExp((idleToBusy.when as any).matches, 'i');
+        // prose bullet no longer reads as a spinner
+        expect(re.test('· WARMUPGAP — guard dispatch-row updates…')).toBe(false);
+        expect(re.test('· SPECDBG 등')).toBe(false);
+        // real claude spinner frames still match
+        expect(re.test('✢ Slithering… (esc to interrupt)')).toBe(true);
+        expect(re.test('⣾ Running the test suite… (esc to interrupt)')).toBe(true);
+        expect(re.test('✽ Ebbing (3m · ↑10k tokens)')).toBe(true);
+        // `·` is gone from the glyph class itself
+        expect((idleToBusy.when as any).matches).not.toContain('[·');
+    });
+
+    it('(unify) all four spinner clauses still share the identical (de-dotted) regex', () => {
+        const m = (l: string) => spec.transitions.find(t => t.label === l)!.when as any;
+        const i2b = m('idle→busy').matches;
+        const b2i = m('busy→idle').all[0].not.matches;
+        const a2b = m('approval→busy').all.find((c: any) => c.section === 'body').matches;
+        const a2i = m('approval→idle').all.find((c: any) => c.not && c.not.matches && c.not.matches.includes('2800')).not.matches;
+        expect(b2i).toBe(i2b);
+        expect(a2b).toBe(i2b);
+        expect(a2i).toBe(i2b);
+        expect(i2b).not.toContain('[·');
+    });
+});
