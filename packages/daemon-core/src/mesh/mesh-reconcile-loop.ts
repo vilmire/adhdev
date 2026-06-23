@@ -57,7 +57,7 @@ import {
 } from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString, readMeshCompletionSummary } from './mesh-events-utils.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
-import { expandDaemonIdForms } from '@adhdev/mesh-shared';
+import { expandDaemonIdForms, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
@@ -805,7 +805,7 @@ async function pullRemoteNodeQueues(
         // (`daemon_<machineId>`) which would NOT equal bare localDaemonId, and pulling
         // from ourselves over P2P is both wasteful and a self-dispatch hazard.
         if (!nodeDaemonId) continue;
-        if (localDaemonId && nodeDaemonId === localDaemonId) continue;
+        if (daemonIdsEquivalent(nodeDaemonId, localDaemonId)) continue;
         if (candidateDaemonIds.includes(nodeDaemonId)) continue;
 
         for (const pendingEventArgs of pulls) {
@@ -883,7 +883,7 @@ async function reconcileUnterminatedDirectDispatches(
         // has a live instance here. Anything else is reached over P2P.
         const isLocalNode = !nodeDaemonId
             || selfIds.includes(nodeDaemonId)
-            || (localDaemonId !== undefined && nodeDaemonId === localDaemonId)
+            || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
             || !!components.instanceManager.getInstance(sessionId);
 
         const providerType = readNonEmptyString(dispatch.providerType);
@@ -1003,7 +1003,7 @@ async function collectLiveNodesWithSessions(
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         const isLocalNode = !nodeDaemonId
             || selfIds.includes(nodeDaemonId)
-            || (localDaemonId !== undefined && nodeDaemonId === localDaemonId);
+            || daemonIdsEquivalent(nodeDaemonId, localDaemonId);
         let statusResult: unknown;
         try {
             if (isLocalNode) {

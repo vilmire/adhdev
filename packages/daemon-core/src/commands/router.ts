@@ -3964,7 +3964,12 @@ export class DaemonCommandRouter {
         inlineMesh?: unknown,
         options?: { preferInline?: boolean },
     ): Promise<{ mesh: any; inline: boolean; source: 'inline_cache' | 'inline_bootstrap' | 'local_config' } | null> {
-        const preferInline = options?.preferInline === true;
+        // Default to inline-cache-preferred: a caller that omits the flag still sees
+        // inline-cache-only (worktree clone) nodes in the resolved mesh view, closing
+        // the CLAIMSTALL gap where a missed `preferInline: true` silently dropped them.
+        // An explicit `preferInline: false` is still honored for any local-config-only
+        // read that deliberately bypasses the inline cache.
+        const preferInline = options?.preferInline !== false;
         if (preferInline) {
             const cached = this.getCachedInlineMesh(meshId);
             if (cached) {

@@ -19,7 +19,7 @@ import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, expandDaemonIdForms, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -690,10 +690,11 @@ function isLocalAutoLaunchNode(node: any): boolean {
     const machineId = readNonEmptyString(node?.machineId);
     const appConfig = loadConfig();
     const localMachineId = readNonEmptyString(appConfig.machineId) || readNonEmptyString(appConfig.registeredMachineId);
-    const cloudDaemonId = localMachineId ? `daemon_${localMachineId}` : '';
-    const standaloneDaemonId = localMachineId ? `standalone_${localMachineId}` : '';
 
-    const daemonMatchesLocal = !daemonId || daemonId === cloudDaemonId || daemonId === standaloneDaemonId;
+    // Route through the canonical daemon-id equivalence helper so a node carrying the
+    // bare `mach_<hex>` form (not just the reassembled `daemon_`/`standalone_` prefixed
+    // forms) resolves to THIS coordinator instead of being misjudged as remote.
+    const daemonMatchesLocal = !daemonId || daemonIdsEquivalent(daemonId, localMachineId);
     const machineMatchesLocal = !machineId || (!!localMachineId && machineId === localMachineId);
 
     if (node?.isLocalWorktree === true) {
@@ -2090,7 +2091,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         });
                         LOG.info('MeshRecovery', `Auto-requeued failed task: ${task.id} for node ${autoNodeId}`);
 
-                        const node = mesh?.nodes.find((n: any) => n.id === autoNodeId);
+                        const node = mesh?.nodes.find((n: any) => meshNodeIdMatches(n, autoNodeId));
                         if (node) {
                             components.cliManager.handleCliCommand('launch_cli', {
                                 cliType: recoveryContext.failedProviderType,
