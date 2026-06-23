@@ -1684,6 +1684,12 @@ async function ipcDispatchToRemoteAgent(
             cliType: resolvedProviderType,
             action: 'send_chat',
             message: args.message,
+            // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
+            // scoped to THIS node's session on the worker (findAdapter dir match /
+            // findMeshNodeAdapter). Without it, a worker hosting both a base node and a
+            // cloned worktree node (same daemonId) would fall through to a provider-only
+            // fuzzy match and could land worktree work on the base session.
+            ...(node.workspace ? { dir: node.workspace } : {}),
             ...(args.meshContext ? { meshContext: args.meshContext } : {}),
         });
         const dispatchPayload = unwrapCommandPayload(dispatchResult);

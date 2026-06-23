@@ -148,6 +148,18 @@ function hasCompletedStartingLaunch(adapter: any): boolean {
     return hasFinalAssistantMessage(parsedStatus?.messages);
 }
 
+/**
+ * WTCLAIM (B): compare two workspace paths for node scoping. Normalizes separator
+ * style, trailing slashes, and case (Windows paths are case-insensitive; the
+ * coordinator-supplied node.workspace and the adapter's launch workingDir can
+ * differ only in those) so a base node and a worktree clone are still told apart
+ * by their distinct workspace roots.
+ */
+function normalizeDirForCompare(dir?: string): string {
+    if (typeof dir !== 'string') return '';
+    return dir.trim().replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
 function shouldSuppressStaleParsedBusyStatus(adapterStatus: string, parsedStatus: any, adapter: any): boolean {
     const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
     if (!BUSY_AGENT_STATUSES.has(parsedRawStatus)) return false;
@@ -1142,6 +1154,40 @@ export class DaemonCliManager {
         return adapter ? { adapter, key: ik } : null;
     }
 
+    /**
+     * WTCLAIM (B): resolve the adapter for a mesh dispatch that named a node
+     * (meshContext.nodeId) but carried no explicit session. Matches by the
+     * instance's bound mesh node id (settings.meshNodeId, falling back to the
+     * sticky meshLastNodeId) first, then by the node workspace (workingDir).
+     *
+     * Unlike findAdapter's step-2 fuzzy fallback, this NEVER degrades to a
+     * provider-only first-match: on a daemon hosting BOTH a base node and a
+     * cloned worktree node (same daemonId), that fuzzy match could land a
+     * worktree-targeted task on the base session. Returns null when no session
+     * is bound to this node so the caller fails closed.
+     */
+    private findMeshNodeAdapter(agentType: string, nodeId: string, dir?: string): { adapter: CliAdapter; key: string } | null {
+        const instanceManager = this.deps.getInstanceManager();
+        const targetDir = normalizeDirForCompare(dir);
+        let workspaceMatch: { adapter: CliAdapter; key: string } | null = null;
+        for (const [k, a] of this.adapters) {
+            if (a.cliType !== agentType) continue;
+            const settings = (instanceManager?.getInstance(k) as any)?.getState?.()?.settings as Record<string, unknown> | undefined;
+            const boundNodeId = (typeof settings?.meshNodeId === 'string' && settings.meshNodeId.trim())
+                ? settings.meshNodeId.trim()
+                : (typeof settings?.meshLastNodeId === 'string' ? settings.meshLastNodeId.trim() : '');
+            // Exact node binding wins immediately (most precise).
+            if (boundNodeId && boundNodeId === nodeId) return { adapter: a, key: k };
+            // Workspace identity is the secondary signal for a session not (yet)
+            // stamped with a node id — a base node and a worktree clone always have
+            // distinct workspaces, so this still separates them.
+            if (!workspaceMatch && targetDir && normalizeDirForCompare(a.workingDir) === targetDir) {
+                workspaceMatch = { adapter: a, key: k };
+            }
+        }
+        return workspaceMatch;
+    }
+
  // ─── CLI command handling ────────────────────────────
 
     async handleCliCommand(cmd: string, args: any): Promise<CommandResult | null> {
@@ -1343,10 +1389,29 @@ export class DaemonCliManager {
                 const action = args?.action;
                 if (!agentType || !action) throw new Error('agentType and action required');
 
-                const found = this.findAdapter(agentType, {
-                    dir: args?.dir,
-                    instanceKey: args?.targetSessionId,
-                });
+                // WTCLAIM (B): a mesh dispatch that named a node (meshContext.nodeId)
+                // but resolved no explicit session must be scoped to THAT node's
+                // session — never routed by findAdapter's provider-only fuzzy fallback,
+                // which on a daemon hosting both a base node and a cloned worktree node
+                // (same daemonId) could land a worktree task on the base session. Fail
+                // closed when no session is bound to the node so the coordinator
+                // launches/retries instead of mis-landing the work.
+                const meshScopeNodeId = (() => {
+                    const mc = (args as any)?.meshContext;
+                    return mc && typeof mc === 'object' && typeof mc.nodeId === 'string' ? mc.nodeId.trim() : '';
+                })();
+                let found: { adapter: CliAdapter; key: string } | null;
+                if (meshScopeNodeId && !args?.targetSessionId) {
+                    found = this.findMeshNodeAdapter(agentType, meshScopeNodeId, args?.dir);
+                    if (!found) {
+                        throw new Error(`No mesh worker session bound to node '${meshScopeNodeId}' for agent '${agentType}' on this daemon; refusing provider-only fuzzy match to avoid cross-node dispatch`);
+                    }
+                } else {
+                    found = this.findAdapter(agentType, {
+                        dir: args?.dir,
+                        instanceKey: args?.targetSessionId,
+                    });
+                }
                 if (!found) throw new Error(`CLI agent not running: ${agentType}`);
                 const { adapter, key } = found;
 
