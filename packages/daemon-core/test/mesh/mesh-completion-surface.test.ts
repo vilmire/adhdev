@@ -70,3 +70,48 @@ describe('buildMeshSystemMessage — completion summary auto-surface (C2)', () =
     expect(readMeshCompletionSummary({ sessionId: 'x' })).toBe('')
   })
 })
+
+// FALSEIDLE-b: a WEAK completion — the worker FSM hit idle but the final assistant turn was
+// never confirmed (completionDiagnostic.finalAssistantPresent=false / blockReason=
+// 'missing_final_assistant'), or the event self-declares insufficient/weak evidence — is not
+// trustworthy terminal evidence even when reviewRecommended is not set. The coordinator
+// message surfaces an explicit verify hint so a false idle is not mistaken for "done". A
+// genuine completion (final assistant confirmed, no weak diagnostic) is unchanged.
+describe('buildMeshSystemMessage — weak-completion verify hint (FALSEIDLE-b)', () => {
+  const base = (metadataEvent: Record<string, unknown>) => buildMeshSystemMessage({
+    event: 'agent:generating_completed',
+    nodeLabel: "Node 'node_child_1'",
+    metadataEvent: { sessionId: 'sess-w', timestamp: Date.now(), ...metadataEvent },
+  })
+
+  it('appends the verify hint when finalAssistantPresent=false, even with a summary and no reviewRecommended', () => {
+    const msg = base({ finalSummary: 'Looks done.', completionDiagnostic: { finalAssistantPresent: false } })
+    expect(msg).toContain('Looks done.')
+    expect(msg).toContain('Completion evidence is weak')
+    expect(msg).toContain('verify via mesh_read_chat')
+  })
+
+  it('appends the verify hint on the no-summary path when blockReason=missing_final_assistant', () => {
+    const msg = base({ completionDiagnostic: { blockReason: 'missing_final_assistant' } })
+    expect(msg).toContain('Completion evidence is weak')
+    // The legacy "review its final progress" lead is replaced by the weak verify hint.
+    expect(msg).not.toContain('Use mesh_read_chat once to review its final progress')
+  })
+
+  it('treats an approval_resolution_unconfirmed completion as weak (gate-held false idle)', () => {
+    const msg = base({ finalSummary: 'x', completionDiagnostic: { blockReason: 'approval_resolution_unconfirmed', finalAssistantPresent: false } })
+    expect(msg).toContain('Completion evidence is weak')
+  })
+
+  it('does NOT append the weak hint for a genuine completion (final assistant confirmed, no weak flags)', () => {
+    const msg = base({ finalSummary: 'All tests pass.', completionDiagnostic: { finalAssistantPresent: true, blockReason: 'present' } })
+    expect(msg).toContain('All tests pass.')
+    expect(msg).not.toContain('Completion evidence is weak')
+  })
+
+  it('does NOT append the weak hint for a genuine summary-less completion (legacy path preserved)', () => {
+    const msg = base({})
+    expect(msg).not.toContain('Completion evidence is weak')
+    expect(msg).toContain('Use mesh_read_chat once to review its final progress')
+  })
+})

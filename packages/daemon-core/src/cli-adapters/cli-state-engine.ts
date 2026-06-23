@@ -126,7 +126,13 @@ export class CliStateEngine {
      * seq) is always a real, distinct approval and must be written.
      */
     approvalEntrySeq = 0;
-    private lastResolvedEntrySeq = -1;
+    // Records which approval entry the last resolveModal() handled. Set unconditionally on
+    // every resolveModal (auto-approve fire, dashboard/mesh_approve, dev-cli-debug), so
+    // `lastResolvedEntrySeq >= approvalEntrySeq` is positive, ADHDev-side proof that the
+    // current/latest approval entry was actually resolved. Exposed via getStatus so the
+    // completion finalization gate (FALSEIDLE-a) can require resolution evidence before
+    // confirming a waiting_approval→idle transition. Public (read-only by convention).
+    lastResolvedEntrySeq = -1;
     /**
      * When the engine previously held a modal but the latest parse failed
      * to extract one, we record the timestamp here and only drop the modal

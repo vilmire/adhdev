@@ -38,6 +38,16 @@ export interface CliSessionStatus {
      * seq is the only reliable discriminator.
      */
     approvalEntrySeq?: number;
+    /**
+     * The approval entry seq that the engine's last resolveModal() handled. When
+     * `lastResolvedEntrySeq >= approvalEntrySeq` (and approvalEntrySeq > 0) it is positive
+     * evidence that the current/latest approval entry was resolved through ADHDev (auto-approve
+     * fire, dashboard / mesh_approve, or dev-cli-debug — all route through resolveModal). The
+     * completion finalization gate uses this to avoid confirming a waiting_approval→idle
+     * transition for which no resolution actually occurred (a false idle: the spec's text-based
+     * approval→idle rule tripped while the modal is still on screen).
+     */
+    lastResolvedEntrySeq?: number;
     activeInteractivePrompt?: InteractivePrompt | null;
     pendingOutboundCount?: number;
     pendingOutboundMessages?: Array<{

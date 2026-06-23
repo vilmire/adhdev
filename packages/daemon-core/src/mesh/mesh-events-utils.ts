@@ -195,6 +195,23 @@ function readEventTimestampValue(value: unknown): number {
     return 0;
 }
 
+// A completion whose evidence is WEAK: the worker FSM reached idle but the turn's
+// final assistant message was never confirmed (missing_final_assistant / a
+// finalAssistantPresent=false diagnostic), or the event self-declares insufficient/weak
+// evidence. cli-provider-instance emits this on the CANON-C decoupled-immediate path and
+// on a forced finalization timeout, and the new structural approval-resolution gate
+// (FALSEIDLE-a) can also let an unconfirmed approval→idle through. Such a completion is NOT
+// trustworthy terminal evidence — surface a verify hint so the coordinator confirms via
+// mesh_read_chat / git status before declaring the task done. Mirrors
+// isWeakCompletionMetadata in mesh-events-pending.ts.
+export function isWeakCompletionMetadata(metadataEvent: Record<string, unknown>): boolean {
+    const evidenceLevel = readNonEmptyString(metadataEvent.evidenceLevel);
+    if (evidenceLevel === 'insufficient' || evidenceLevel === 'weak') return true;
+    if (metadataEvent.reviewRecommended === true) return true;
+    const diag = readRecord(metadataEvent.completionDiagnostic);
+    return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
+}
+
 function formatCompletionMetadata(event: Record<string, unknown>): string {
     const completionDiagnostic = event.completionDiagnostic && typeof event.completionDiagnostic === 'object'
         ? event.completionDiagnostic as Record<string, unknown>
@@ -229,6 +246,13 @@ export function buildMeshSystemMessage(args: {
             return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The no-progress monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
         }
         const reviewRecommended = args.metadataEvent.reviewRecommended === true;
+        // FALSEIDLE-b: a weak completion (missing final assistant / finalAssistantPresent=false /
+        // insufficient evidence) is not trustworthy terminal evidence even when reviewRecommended
+        // is not set. Append an explicit verify hint so the coordinator does not declare the task
+        // done off a false idle. Only the weak case is affected — a genuine completion (final
+        // assistant confirmed, no weak diagnostic) carries no extra note and is unchanged.
+        const weakCompletion = isWeakCompletionMetadata(args.metadataEvent);
+        const verifyTextNote = ' Completion evidence is weak — verify via mesh_read_chat or git status before declaring the task done; the worker may still be parked on an approval/modal.';
         // Auto-surface the worker's final summary directly into the coordinator chat so it
         // does not have to call mesh_read_chat just to see the result. The summary IS the
         // worker's final assistant message; embedding it here replaces the previous
@@ -244,12 +268,14 @@ export function buildMeshSystemMessage(args: {
                 : completionSummary;
             const verifyNote = reviewRecommended
                 ? ' Completion evidence is insufficient — verify via git status or provider_session_id before assuming the task is done.'
-                : '';
+                : (weakCompletion ? verifyTextNote : '');
             return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. Its final summary is included below — read it directly and only call mesh_read_chat if you need the full transcript.${verifyNote}\n\n--- ${args.nodeLabel} final summary ---\n${surfaced}`;
         }
         const reviewNote = reviewRecommended
             ? ' Completion evidence is insufficient — verify via git status or provider_session_id before assuming the task is done. Use mesh_read_chat once if needed, but do not poll repeatedly.'
-            : ' Use mesh_read_chat once to review its final progress, but do not poll repeatedly.';
+            : (weakCompletion
+                ? `${verifyTextNote} Use mesh_read_chat once if needed, but do not poll repeatedly.`
+                : ' Use mesh_read_chat once to review its final progress, but do not poll repeatedly.');
         return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. This completion came from the agent status event path;${reviewNote}`;
     }
     if (args.event === 'agent:waiting_approval') {

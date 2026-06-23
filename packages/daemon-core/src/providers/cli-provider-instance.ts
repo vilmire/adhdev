@@ -1401,6 +1401,12 @@ export class CliProviderInstance implements ProviderInstance {
             }
         }
 
+        // (FALSEIDLE-a) Structural approval-resolution gate. Runs BEFORE the brittle
+        // screen-text heuristic below so it also catches modals whose text does not match
+        // looksLikeActiveApprovalPromptText (e.g. claude-cli's cd / "untrusted hooks" prompt).
+        const approvalResolutionBlock = this.approvalResolutionFinalizationBlock(pending);
+        if (approvalResolutionBlock) return approvalResolutionBlock;
+
         // Guard: if the screen still shows an approval/choice prompt as the last visible text,
         // the turn is not complete even if the parsed status says idle and there is an assistant
         // message. This catches the case where waiting_approval→idle transitions occur before
@@ -1418,6 +1424,46 @@ export class CliProviderInstance implements ProviderInstance {
         } catch { /* defensive: screen text read is best-effort */ }
 
         return null;
+    }
+
+    // (FALSEIDLE-a) Positive, structural proof that the latest approval entry was resolved
+    // through ADHDev. resolveModal() — driven by auto-approve, dashboard/mesh_approve, and
+    // dev-cli-debug alike — advances the engine's lastResolvedEntrySeq to the current
+    // approvalEntrySeq. So `lastResolvedEntrySeq >= approvalEntrySeq` (with a real entry,
+    // approvalEntrySeq > 0) means the modal we last saw was actually answered. Absence of this
+    // evidence after a waiting_approval→idle transition means the idle is suspect: the spec's
+    // text-based approval→idle rule false-tripped while the modal is still unresolved.
+    // Fails OPEN (returns true) when the seq fields are unavailable, so the gate can never wedge
+    // a session on a provider/adapter that does not surface the counters.
+    private hasApprovalResolutionEvidence(): boolean {
+        try {
+            const status = this.adapter.getStatus({ allowParse: false }) as any;
+            const entrySeq = typeof status?.approvalEntrySeq === 'number' ? status.approvalEntrySeq : 0;
+            if (entrySeq <= 0) return true;
+            const resolvedSeq = typeof status?.lastResolvedEntrySeq === 'number' ? status.lastResolvedEntrySeq : undefined;
+            if (resolvedSeq === undefined) return true;
+            return resolvedSeq >= entrySeq;
+        } catch {
+            return true;
+        }
+    }
+
+    // (FALSEIDLE-a) Hold a completion that is the anomalous DIRECT waiting_approval→idle
+    // transition with no positive resolution evidence. A genuinely resolved approval routes
+    // through resolveModal → setStatus('generating'), so its completion's previousStatus is
+    // 'generating' (not 'waiting_approval') and this gate never fires for it. Scoped to
+    // delegated mesh/coordinator sessions — whose only modal-resolution path is auto-approve /
+    // mesh_approve (both advance lastResolvedEntrySeq) — so an interactive local session, where
+    // a human may answer the PTY prompt directly and leave no resolveModal record, is untouched.
+    // Non-terminal: the hold is bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS (30s), giving a
+    // settling auto-approve time to fire and advance the seq, and guaranteeing no permanent wedge
+    // if resolution ever happens via a path that does not record evidence.
+    private approvalResolutionFinalizationBlock(pending: CompletedDebouncePending): CompletedFinalizationBlock | null {
+        if (pending.previousStatus !== 'waiting_approval') return null;
+        const meshContext = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
+        if (!meshContext) return null;
+        if (this.hasApprovalResolutionEvidence()) return null;
+        return { reason: 'approval_resolution_unconfirmed', terminal: false };
     }
 
     private scheduleCompletedDebounceFlush(delayMs: number): void {
