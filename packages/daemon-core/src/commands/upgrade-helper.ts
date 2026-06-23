@@ -194,6 +194,15 @@ function buildInstallEnvWithNodeOnPath(baseEnv: NodeJS.ProcessEnv = process.env)
   const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
   const current = env[pathKey] || '';
   env[pathKey] = current ? `${nodeBinDir};${current}` : nodeBinDir;
+  // Belt-and-suspenders for the same Node-version guard: the PATH prepend above
+  // only works if the running helper's node is itself a supported version, but a
+  // helper launched via an nvm shim (e.g. `C:\nvm4w\nodejs\node.exe`) can resolve
+  // to Node 24 even though the real install target node is pinned via `--prefix`.
+  // In the AUTOMATIC upgrade path the install target is already pinned/verified,
+  // so authorize the lifecycle guard to proceed via the same bootstrap escape
+  // hatch the guard already honors. This is scoped to the helper-built env only —
+  // it never weakens the guard for a user-run `npm i -g adhdev`.
+  env.ADHDEV_BOOTSTRAP = '1';
   return env;
 }
 
@@ -327,6 +336,139 @@ export async function stopSessionHostProcesses(appName: string): Promise<void> {
   }
 }
 
+// Native addons that stay EXCLUSIVELY locked on Windows while any process keeps
+// them memory-mapped. node-pty's `conpty.node` is the confirmed offender; the
+// ghostty VT dll has the same lifetime, so guard both.
+const LOCKED_NATIVE_ADDON_BASENAMES = ['conpty.node', 'ghostty-vt.dll'];
+
+/**
+ * Enumerate processes that have a locked native addon (conpty.node /
+ * ghostty-vt.dll) of *this* install memory-mapped.
+ *
+ * `stopSessionHostProcesses()` only knows the single managed session-host pid, so
+ * any *foreign* holder — e.g. an orphaned `pty_*probe*.cjs` left in `%TEMP%` — is
+ * invisible to it and keeps the addon locked through every install retry, dooming
+ * the upgrade with EBUSY. This scans by the module's full path so we only ever
+ * target a holder of the exact `packageRoot` being replaced (never an unrelated
+ * install's copy). Windows-only — these locks don't exist on POSIX.
+ */
+export function listForeignNativeAddonHolders(
+  packageRoot: string | null | undefined,
+): Array<{ pid: number; commandLine: string | null }> {
+  if (process.platform !== 'win32' || !packageRoot) return [];
+  const rootLower = packageRoot.replace(/\//g, '\\').replace(/'/g, "''").toLowerCase();
+  const endsWithChecks = LOCKED_NATIVE_ADDON_BASENAMES
+    .map((name) => `$lf.EndsWith('${name}')`)
+    .join(' -or ');
+  // List pids of node processes whose loaded modules include a locked native
+  // addon living UNDER this install's package root. Accessing .Modules for a
+  // process we can't open throws — swallow per-process so one inaccessible
+  // process doesn't abort the whole scan.
+  const script = [
+    `$root = '${rootLower}'`,
+    `Get-Process node -ErrorAction SilentlyContinue | ForEach-Object {`,
+    `  $p = $_`,
+    `  try {`,
+    `    foreach ($m in $p.Modules) {`,
+    `      $fn = $m.FileName`,
+    `      if ($fn) {`,
+    `        $lf = $fn.ToLower()`,
+    `        if ($lf.StartsWith($root) -and (${endsWithChecks})) { $p.Id; break }`,
+    `      }`,
+    `    }`,
+    `  } catch {}`,
+    `}`,
+  ].join('\n');
+
+  let out = '';
+  try {
+    out = String(execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-Command', script,
+    ], { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })).trim();
+  } catch {
+    return [];
+  }
+
+  const selfPid = process.pid;
+  const seen = new Set<number>();
+  const holders: Array<{ pid: number; commandLine: string | null }> = [];
+  for (const line of out.split(/\r?\n/)) {
+    const pid = Number.parseInt(line.trim(), 10);
+    if (!Number.isFinite(pid) || pid <= 0 || pid === selfPid || seen.has(pid)) continue;
+    seen.add(pid);
+    holders.push({ pid, commandLine: getProcessCommandLine(pid) });
+  }
+  return holders;
+}
+
+/**
+ * Terminate every foreign process holding this install's native addon mapped,
+ * then wait for each to actually exit so the mapping is released before npm
+ * copies the file into its staging dir. Returns what it found/killed so the
+ * caller can surface an actionable recovery message on failure.
+ */
+export async function stopForeignNativeAddonHolders(
+  packageRoot: string | null | undefined,
+  options: { parentPid?: number } = {},
+): Promise<Array<{ pid: number; commandLine: string | null; killed: boolean }>> {
+  if (process.platform !== 'win32' || !packageRoot) return [];
+  const parentPid = Number.isFinite(options.parentPid) ? Number(options.parentPid) : -1;
+  const holders = listForeignNativeAddonHolders(packageRoot);
+  const results: Array<{ pid: number; commandLine: string | null; killed: boolean }> = [];
+  for (const holder of holders) {
+    // The parent daemon pid is already awaited for exit separately; never
+    // double-handle it here.
+    if (holder.pid === parentPid) continue;
+    appendUpgradeLog(
+      `Foreign native-addon holder found: pid ${holder.pid}${holder.commandLine ? ` — ${holder.commandLine}` : ''}`,
+    );
+    const killed = killPid(holder.pid);
+    if (killed) {
+      await waitForPidExit(holder.pid, 15000);
+      appendUpgradeLog(`Terminated foreign native-addon holder pid ${holder.pid}`);
+    } else {
+      appendUpgradeLog(`Failed to terminate foreign native-addon holder pid ${holder.pid}`);
+    }
+    results.push({ ...holder, killed });
+  }
+  return results;
+}
+
+function getUpgradeFailureNoticePath(): string {
+  const home = os.homedir();
+  const dir = path.join(home, '.adhdev');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    // noop — appendUpgradeLog already creates the dir; this is best-effort.
+  }
+  return path.join(dir, 'daemon-upgrade-last-error.txt');
+}
+
+function buildManualRecoveryCommand(installCommand: PinnedGlobalInstallCommand): string {
+  return [installCommand.command, ...installCommand.args]
+    .map((part) => (/\s/.test(part) ? `"${part}"` : part))
+    .join(' ');
+}
+
+/**
+ * On final failure, leave the user something actionable instead of only a buried
+ * log line: the pids/commandlines still holding the lock and a paste-ready
+ * recovery command. Written to a stable path the CLI can surface on next boot.
+ */
+function emitUpgradeFailureNotice(lines: string[]): void {
+  const body = lines.join('\n');
+  appendUpgradeLog(`Upgrade blocked — user action required:\n${body}`);
+  try {
+    fs.writeFileSync(getUpgradeFailureNoticePath(), `[${new Date().toISOString()}]\n${body}\n`, 'utf8');
+  } catch {
+    // noop
+  }
+}
+
 // npm copies the current install's files into a staging dir before swapping in
 // the new version. On Windows that copy of `conpty.node` can still race a
 // just-killed session-host whose mapping hasn't been released yet, surfacing as
@@ -440,6 +582,11 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
 
   await stopSessionHostProcesses(sessionHostAppName);
   removeDaemonPidFile();
+  // Kill any *foreign* process still holding this install's conpty.node mapped
+  // (the session-host stop above only covers the single managed pid). Do this
+  // BEFORE the staging GC so the just-released file can also be cleaned up now
+  // that no process maps it.
+  await stopForeignNativeAddonHolders(installCommand.surface.packageRoot, { parentPid: payload.parentPid });
   cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
 
   const spec = `${payload.packageName}@${payload.targetVersion || 'latest'}`;
@@ -464,10 +611,34 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
       break;
     } catch (error: any) {
       if (attempt < maxInstallAttempts && isRetriableInstallLockError(error)) {
-        appendUpgradeLog(`Install attempt ${attempt} hit a file lock (${error?.code || 'lock'}); cleaning staging and retrying after backoff`);
+        appendUpgradeLog(`Install attempt ${attempt} hit a file lock (${error?.code || 'lock'}); clearing holders + staging and retrying after backoff`);
+        // Re-run the active cleanup ("정리 → 확인 → 설치") rather than relying on
+        // backoff alone: a never-exiting foreign holder won't disappear on its
+        // own, so kill it again before the next attempt.
+        await stopForeignNativeAddonHolders(installCommand.surface.packageRoot, { parentPid: payload.parentPid });
         cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
         await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
         continue;
+      }
+      // Out of retries on a lock error: leave the user an actionable recovery
+      // notice naming whoever is still holding the native addon locked.
+      if (isRetriableInstallLockError(error)) {
+        const blockers = listForeignNativeAddonHolders(installCommand.surface.packageRoot);
+        const notice: string[] = [
+          `adhdev ${spec} could not be installed: a file lock (${error?.code || 'EBUSY/EPERM'}) is blocking the native addon.`,
+        ];
+        if (blockers.length > 0) {
+          notice.push('Processes still holding the lock:');
+          for (const b of blockers) {
+            notice.push(`  pid ${b.pid}${b.commandLine ? ` — ${b.commandLine}` : ''}`);
+          }
+          notice.push('To recover, stop them and reinstall:');
+          notice.push(`  Stop-Process -Id ${blockers.map((b) => b.pid).join(',')} -Force`);
+        } else {
+          notice.push('To recover, reinstall manually:');
+        }
+        notice.push(`  ${buildManualRecoveryCommand(installCommand)}`);
+        emitUpgradeFailureNotice(notice);
       }
       throw error;
     }
