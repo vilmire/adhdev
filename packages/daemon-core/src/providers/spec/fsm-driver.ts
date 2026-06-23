@@ -163,16 +163,11 @@ const SUBMIT_DELAY_FLOOR_MS = 200;
 // trimmed by the TUI on submit.
 const WIN32_SUBMIT_RESEND_GAP_MS = 350;
 const WIN32_SUBMIT_MAX_RESENDS = 14;
-// Settle-gate for the win32 FIRST submit CR. Hold the CR until the PTY output has
-// gone quiet for WIN32_SUBMIT_SETTLE_MS after the last input write — i.e. the full
-// (possibly multi-KB / multiline) message body has finished arriving in the
-// composer and echoing back. A long message waits until it actually lands; a short
-// one settles almost immediately. WIN32_SUBMIT_MAX_SETTLE_WAIT_MS bounds the wait
-// so a perpetually-noisy screen can never hang the submit. This is what stops a
-// blind fixed-delay CR from submitting a half-arrived prompt and dropping its
-// leading lines. The phase-2 verified-resend loop (below) is unchanged.
+// Quiet window the win32 echo-gate (below) requires AFTER the body is seen in the
+// composer, so a CR fires only once the FULL (possibly multi-KB / multiline) body has
+// finished arriving and echoing — not mid-arrival. POLL_MS is the gate's recheck
+// cadence while it waits for the body to echo.
 const WIN32_SUBMIT_SETTLE_MS = 500;
-const WIN32_SUBMIT_MAX_SETTLE_WAIT_MS = 10_000;
 const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
 // Defensive paced PTY write. A single unbounded ConPTY write can overflow the
 // input pipe and drop leading bytes; split a large body into bounded chunks with a
@@ -180,6 +175,25 @@ const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
 // write in one shot.
 const WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
 const WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
+// Echo-gate for the win32 FIRST submit CR (supersedes the bare output-quiet settle).
+// The body write can race claude-cli's boot — its stdin reader is not wired until the
+// composer renders (~5–7s in, later under load), so a too-early write is buffered and
+// the output goes quiet with a still-EMPTY composer; a quiet-only gate then fires a CR
+// into nothing. Instead, hold the CR until the body text has actually ECHOED into the
+// composer (effect-confirmed, not readiness-signal-guessed) — the buffered write lands
+// once claude wires up, just late. WIN32_ECHO_MAX_WAIT_MS bounds the wait so a body
+// that truly never confirms still fires a blind CR (resend net) rather than hanging; it
+// is set generously so even a slow/contended boot lands its body before the blind fire.
+const WIN32_ECHO_PROBE_CHARS = 16;
+const WIN32_ECHO_MAX_WAIT_MS = 20_000;
+
+/** Collapse a string to its non-whitespace characters for echo comparison: the
+ *  composer wraps, indents, and prefixes the body (with the `❯ ` prompt), so a raw
+ *  substring test against the rendered screen fails. Stripping all whitespace makes
+ *  "❯ hello world" reliably contain the probe "helloworld". */
+function normalizeForEcho(s: string): string {
+    return s.replace(/\s+/g, '');
+}
 
 export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text: string): number {
     const lines = countNewlines(text);
@@ -927,7 +941,7 @@ export class FsmDriver implements ISpecDriver {
         // over the typing visual there.
         if (process.platform === 'win32') {
             this.writeWin32Body(text);
-            this.scheduleWin32Submit(sm.submit_key, beforeSubmit);
+            this.scheduleWin32Submit(sm.submit_key, beforeSubmit, text);
             return;
         }
 
@@ -1000,13 +1014,16 @@ export class FsmDriver implements ISpecDriver {
     /**
      * win32 submit. Two phases:
      *
-     *  Phase 1 (settle-gate): hold the first CR until the PTY output has been quiet
-     *  for WIN32_SUBMIT_SETTLE_MS after the last input write — i.e. the full
-     *  (possibly multi-KB / multiline) body has finished arriving in the composer
-     *  and echoing. Honors an initial minimum delay and is bounded by
-     *  WIN32_SUBMIT_MAX_SETTLE_WAIT_MS so a noisy screen can never hang the submit.
-     *  This is what stops a long message from being submitted half-arrived (its
-     *  leading lines lost). A short message settles almost immediately.
+     *  Phase 1 (echo-gate): hold the first CR until the body text is CONFIRMED in the
+     *  composer (its whitespace-collapsed tail appears in the rendered screen) AND the
+     *  PTY output is then quiet for WIN32_SUBMIT_SETTLE_MS (the full, possibly multi-KB
+     *  / multiline body has finished arriving). This replaces a bare output-quiet
+     *  settle: an early write that races claude's boot is buffered, not dropped, so the
+     *  screen can go quiet with the body NOT YET in the composer — a quiet-only gate
+     *  would then fire a CR into an empty composer (no submit). Waiting on the echo
+     *  closes that. Honors an initial minimum delay and a generous WIN32_ECHO_MAX_WAIT_MS
+     *  last-resort blind fire so a body that truly never confirms still submits (carried
+     *  by phase 2) rather than hanging. A settled session echoes immediately → no delay.
      *
      *  Phase 2 (verified resend — unchanged): send the submit key, wait a gap, and
      *  if the FSM is still 'idle' (the CR was absorbed as a multiline-paste
@@ -1015,9 +1032,20 @@ export class FsmDriver implements ISpecDriver {
      *  idle and stop the instant the agent leaves idle (submitted → generating /
      *  approval). This preserves the win32 lone-CR-swallow handling.
      */
-    private scheduleWin32Submit(submitKey: string, initialDelayMs: number): void {
+    private scheduleWin32Submit(submitKey: string, initialDelayMs: number, body: string): void {
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         const startedAt = Date.now();
+
+        // Distinctive whitespace-collapsed TAIL of the body — what we look for in the
+        // composer to confirm the body landed. The tail (not the head) because a long
+        // multiline body scrolls its leading lines out of the composer viewport while
+        // the cursor — and therefore the body's end — stays visible. Empty body →
+        // nothing to confirm.
+        const probe = normalizeForEcho(body).slice(-WIN32_ECHO_PROBE_CHARS);
+        const bodyEchoed = (): boolean => {
+            if (!probe) return true;
+            return normalizeForEcho(this.adapter.snapshot()).includes(probe);
+        };
 
         const fire = (attempt: number): void => {
             this.win32SubmitTimer = null;
@@ -1030,21 +1058,30 @@ export class FsmDriver implements ISpecDriver {
             }, WIN32_SUBMIT_RESEND_GAP_MS);
         };
 
-        const waitForSettle = (): void => {
+        // Echo-gate: hold the first CR until the body is CONFIRMED in the composer, not
+        // merely until output goes quiet — a quiet screen with a not-yet-arrived body is
+        // the exact empty-submit failure this replaces. The body is NOT re-written: on
+        // the session-host IPC transport an early write is buffered, not dropped, so it
+        // lands once claude's stdin reader wires up (just late on a slow/contended boot);
+        // re-writing would risk a duplicated body when several buffered writes drain
+        // together. So we simply WAIT for the echo. The hard upper bound only fires a
+        // blind CR if the body never confirms at all (resend net carries it), set
+        // generously so a slow boot still lands its body first.
+        const waitForEcho = (): void => {
             this.win32SubmitTimer = null;
             const now = Date.now();
             const quietFor = now - this.lastWin32InputActivityAt();
             const waited = now - startedAt;
-            if (quietFor >= WIN32_SUBMIT_SETTLE_MS || waited >= WIN32_SUBMIT_MAX_SETTLE_WAIT_MS) {
-                fire(0);
-                return;
-            }
-            const recheckIn = Math.min(WIN32_SUBMIT_SETTLE_MS - quietFor, WIN32_SUBMIT_SETTLE_POLL_MS);
-            this.win32SubmitTimer = setTimeout(waitForSettle, Math.max(recheckIn, 30));
+            const settled = quietFor >= WIN32_SUBMIT_SETTLE_MS;
+            // Body present in the composer AND output quiet (full body arrived) → submit.
+            if (bodyEchoed() && settled) { fire(0); return; }
+            // Last-resort blind fire so a body that truly never confirms cannot hang.
+            if (waited >= WIN32_ECHO_MAX_WAIT_MS) { fire(0); return; }
+            this.win32SubmitTimer = setTimeout(waitForEcho, WIN32_SUBMIT_SETTLE_POLL_MS);
         };
 
-        if (initialDelayMs > 0) this.win32SubmitTimer = setTimeout(waitForSettle, initialDelayMs);
-        else waitForSettle();
+        if (initialDelayMs > 0) this.win32SubmitTimer = setTimeout(waitForEcho, initialDelayMs);
+        else waitForEcho();
     }
 
     private handleClickControl(controlId: string, payload?: unknown): void {

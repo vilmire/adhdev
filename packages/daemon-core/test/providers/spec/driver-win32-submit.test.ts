@@ -105,6 +105,9 @@ interface CollectOpts {
     submitAfterMs?: number;
     /** ms after dispatch to stop collecting. */
     totalWaitMs?: number;
+    /** Set false to NOT echo the body back into the composer — simulates a body
+     *  dropped during boot, exercising the echo-gate's hold/re-write path. */
+    echoBody?: boolean;
 }
 
 async function sendAndCollect(opts: CollectOpts = {}): Promise<string[]> {
@@ -125,6 +128,11 @@ async function sendAndCollect(opts: CollectOpts = {}): Promise<string[]> {
         const before = pty.writes.length;
         driver.dispatch({ kind: 'send_message', text });
         const start = Date.now();
+        // Echo the body into the composer: the win32 submit echo-gate holds the first
+        // CR until the body text is confirmed on screen (real claude renders typed
+        // input back). A fake PTY must mirror that echo or the gate would (correctly)
+        // never fire. Tests that want to simulate a DROPPED body omit this.
+        if (opts.echoBody !== false) pty.feed(`\n${text}`);
         if (submitAfterMs != null) {
             await sleep(submitAfterMs);
             // Simulate the agent having submitted: footer now shows the interrupt
@@ -215,7 +223,7 @@ describe('FsmDriver -- win32 submit', () => {
         expect(bodyWrites.some(w => w.includes('\r'))).toBe(false);
     });
 
-    it('win32: settle-gate holds the first CR while PTY output is still arriving, then submits once quiet', async () => {
+    it('win32 echo-gate: holds the first CR until the body is confirmed in the composer, then submits', async () => {
         setPlatform('win32');
         const factory = new DrivableFactory();
         const driver = new FsmDriver({
@@ -230,25 +238,56 @@ describe('FsmDriver -- win32 submit', () => {
             pty.feed('\n>\n? for shortcuts');
             await sleep(200);
             const before = pty.writes.length;
-            driver.dispatch({ kind: 'send_message', text: 'go' });
-            // Keep the PTY "noisy" well past the spec's initial submit delay (200ms)
-            // with benign repaints that do NOT trigger a state transition (stay
-            // idle). The old fixed-delay path would have fired a CR at ~200ms; the
-            // settle-gate must hold it while output keeps arriving.
-            for (let i = 0; i < 8; i += 1) {
+            driver.dispatch({ kind: 'send_message', text: 'echoprobe' });
+            // Body NOT yet echoed into the composer — keep the screen noisy with
+            // repaints that do NOT contain the body. The echo-gate must hold the CR:
+            // it has no confirmation the body landed, which is exactly the empty-
+            // composer submit this gate prevents.
+            for (let i = 0; i < 6; i += 1) {
                 pty.feed(`repaint ${i}`);
                 await sleep(100);
             }
-            const midWrites = pty.writes.slice(before);
-            expect(midWrites.filter(w => w === '\r').length).toBe(0);
-            // Go quiet → the 500ms settle window elapses → the first CR fires.
+            expect(pty.writes.slice(before).filter(w => w === '\r').length).toBe(0);
+            // The body now echoes into the composer + the screen goes quiet → the
+            // echo-gate confirms it landed and fires the CR.
+            pty.feed('\necho echoprobe');
             await sleep(800);
-            const finalWrites = pty.writes.slice(before);
-            expect(finalWrites.filter(w => w === '\r').length).toBeGreaterThanOrEqual(1);
+            expect(pty.writes.slice(before).filter(w => w === '\r').length).toBeGreaterThanOrEqual(1);
         } finally {
             driver.shutdown();
         }
-    }, 5000);
+    }, 6000);
+
+    // ── Echo-gate late-body path (buffered write lands late, no empty submit) ───
+    it('win32 echo-gate: a body that echoes late is NOT submitted blindly — the CR waits for it', async () => {
+        setPlatform('win32');
+        const factory = new DrivableFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(submitSpec()),
+            workingDir: os.tmpdir(),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        driver.start();
+        const pty = factory.last!;
+        try {
+            pty.feed('\n>\n? for shortcuts');
+            await sleep(200);
+            const before = pty.writes.length;
+            driver.dispatch({ kind: 'send_message', text: 'lateprobe' });
+            // The body has not echoed yet (buffered during a slow boot). The gate must
+            // NOT fire a blind CR into the empty composer — it holds.
+            await sleep(2500);
+            expect(pty.writes.slice(before).filter(w => w === '\r').length).toBe(0);
+            // The buffered body finally lands → gate confirms it → CR fires (single line
+            // submits on the first CR; the resend loop stops once it leaves idle).
+            pty.feed('\nlateprobe');
+            await sleep(800);
+            expect(pty.writes.slice(before).filter(w => w === '\r').length).toBeGreaterThanOrEqual(1);
+        } finally {
+            driver.shutdown();
+        }
+    }, 8000);
 });
 
 describe('chunkPreservingSurrogates', () => {
