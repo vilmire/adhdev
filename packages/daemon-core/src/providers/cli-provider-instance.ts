@@ -910,7 +910,13 @@ export class CliProviderInstance implements ProviderInstance {
         this.settings = {
             ...this.settings,
             meshNodeFor: assignment.meshId,
-            ...(assignment.nodeId ? { meshNodeId: assignment.nodeId } : {}),
+            // WTCLAIM (A): track the bound node id under BOTH the active marker
+            // (meshNodeId, cleared on detach) and a sticky marker (meshLastNodeId,
+            // preserved across detach). The sticky marker lets a detached but still
+            // coordinator-owned session be re-picked ONLY for the SAME node it served
+            // — never auto-adopted for a sibling node (e.g. a cloned worktree) that
+            // shares this daemon. See isMeshOwnedDelegateSession's post-detach gate.
+            ...(assignment.nodeId ? { meshNodeId: assignment.nodeId, meshLastNodeId: assignment.nodeId } : {}),
             ...(assignment.taskId ? { meshActiveTaskId: assignment.taskId } : {}),
             ...(assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {}),
             // Session-level routing anchor: the originating coordinator session, so this
@@ -929,8 +935,15 @@ export class CliProviderInstance implements ProviderInstance {
     detachMeshAssignment(): void {
         if (!this.settings.meshNodeFor && !this.settings.meshActiveTaskId && !this.settings.meshNodeId) return;
         const { meshNodeFor, meshNodeId, meshActiveTaskId, ...rest } = this.settings;
-        void meshNodeFor; void meshNodeId; void meshActiveTaskId;
-        this.settings = rest;
+        void meshNodeFor; void meshActiveTaskId;
+        // WTCLAIM (A): clear the active binding but PRESERVE the last bound node id
+        // (meshLastNodeId) so a later sessionless dispatch can re-adopt this idle
+        // session ONLY for the node it last served. Carry the id being cleared, or
+        // keep an already-present sticky marker if meshNodeId was absent.
+        const lastNodeId = (typeof meshNodeId === 'string' && meshNodeId.trim())
+            ? meshNodeId.trim()
+            : (typeof rest.meshLastNodeId === 'string' && rest.meshLastNodeId.trim() ? rest.meshLastNodeId.trim() : undefined);
+        this.settings = lastNodeId ? { ...rest, meshLastNodeId: lastNodeId } : rest;
         this.adapter.updateRuntimeSettings?.(this.settings);
     }
 

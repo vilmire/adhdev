@@ -985,7 +985,20 @@ export function isMeshOwnedDelegateSession(session: any, meshId: string, nodeId:
     // unrelated alias and rejected — even though the router self-heals meshNodeFor /
     // meshNodeId at dispatch time (buildMeshWorkerRelayStamp). Treat the preserved
     // coordinator markers as ownership evidence so the dispatch-time restamp can run.
-    return settings?.launchedByCoordinator === true || Boolean(readString(settings?.meshCoordinatorDaemonId));
+    const coordinatorOwned = settings?.launchedByCoordinator === true || Boolean(readString(settings?.meshCoordinatorDaemonId));
+    if (!coordinatorOwned) return false;
+    // WTCLAIM (A): a detached coordinator session is reusable, but ONLY for the node
+    // it last served. detachMeshAssignment preserves meshLastNodeId (the sticky bind
+    // marker). On a daemon hosting BOTH a base node and a cloned worktree node (same
+    // daemonId), without this gate a detached BASE session would be auto-picked for a
+    // worktree-targeted sessionless dispatch — running worktree work on the base node.
+    // When the sticky marker is present it must equal the requested node; legitimate
+    // same-node reuse still passes. When absent (never bound, or a pre-fix session),
+    // fall back to the prior permissive behavior — fix (B)'s worker-side nodeId/
+    // workspace scoping is the defense-in-depth backstop for that residual case.
+    const lastNodeId = readString(settings?.meshLastNodeId);
+    if (lastNodeId) return lastNodeId === nodeId;
+    return true;
 }
 
 function hasRemoteRelayMetadata(session: any): boolean {
