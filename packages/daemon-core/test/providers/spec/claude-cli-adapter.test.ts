@@ -124,11 +124,29 @@ describe('SpecCliAdapter — FSM state is authoritative for status', () => {
   it('surfaces modal buttons when the approval state has a parsed modal', () => {
     const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
     adapter.latestState = { id: 'approval', label: 'Approval requested', title: 'Proceed?', status: 'approval' };
-    adapter.latestModal = { title: 'Proceed?', buttons: [{ index: 0, label: 'Yes' }, { index: 1, label: 'No' }] };
+    adapter.latestModal = { title: 'Proceed?', buttons: [{ index: 0, label: 'Yes' }, { index: 1, label: 'No' }], kind: 'approval' };
 
     const status = adapter.getStatus();
     expect(status.status).toBe('waiting_approval');
-    expect(status.activeModal).toEqual({ message: 'Proceed?', buttons: ['Yes', 'No'] });
+    // activeModal carries the semantic modal `kind` through to the auto-approve gate.
+    expect(status.activeModal).toEqual({ message: 'Proceed?', buttons: ['Yes', 'No'], kind: 'approval' });
+  });
+
+  it('surfaces a picker modal as waiting_approval but tags it kind=picker (so it is NOT auto-answered)', () => {
+    // A /model picker shares the approval status (so the dashboard still shows
+    // the modal), but carries kind='picker' so the auto-approve gate leaves it
+    // for the user instead of blindly selecting the first option.
+    const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+    adapter.latestState = { id: 'picker', label: 'Picker open', title: 'Select a model', status: 'approval' };
+    adapter.latestModal = {
+      title: 'Select a model',
+      buttons: [{ index: 0, label: '1. Default (recommended)' }, { index: 1, label: '2. Opus' }, { index: 2, label: '3. Sonnet' }],
+      kind: 'picker',
+    };
+
+    const status = adapter.getStatus();
+    expect(status.status).toBe('waiting_approval');
+    expect(status.activeModal?.kind).toBe('picker');
   });
 
   it('reports generating for a busy state regardless of modal', () => {

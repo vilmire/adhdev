@@ -24,7 +24,7 @@ import { LOG } from '../logging/logger.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trace.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
-import { formatAutoApprovalMessage, pickApprovalButton, pickAutoApprovalButton, looksLikeActiveApprovalPromptText } from './approval-utils.js';
+import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, looksLikeActiveApprovalPromptText } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
@@ -1622,10 +1622,34 @@ export class CliProviderInstance implements ProviderInstance {
         if (!modal || buttons.length === 0) {
             return autoApproveActive;
         }
-        const { index: buttonIndex, label: buttonLabel } = pickAutoApprovalButton(buttons);
-        if (buttonIndex < 0) {
-            // No concrete button matched — don't pick a random index, just
-            // surface the modal so the user can decide.
+        // Picker/confirm exclusion (provider-common). A /model or /mode picker is
+        // surfaced with status=waiting_approval so the dashboard shows it, but it
+        // has no "correct" answer to auto-pick — blindly selecting the first
+        // option silently switches the model (the "always Opus, before I even
+        // choose" bug). Two independent gates, BOTH must pass to fire:
+        //
+        //   (1) modal_kind — the spec/FSM tells us this is an 'approval' modal,
+        //       not a 'picker'/'confirm'. A modal whose kind is unknown (legacy
+        //       adapter, or a spec that predates modal_kind) reads as 'approval'
+        //       so genuine approvals keep auto-approving; only an explicit
+        //       'picker'/'confirm' is excluded here.
+        //   (2) structural anchor — a real approval offers an affirmative AND a
+        //       decline option (pickApprovalButton finds a positive that isn't a
+        //       decline, and hasNegativeApprovalOption confirms a No/Cancel/Deny
+        //       is present). A model picker ("1. Default  2. Opus  3. Sonnet")
+        //       has no decline, so even an un-migrated picker is caught here.
+        //
+        // Mirrors the SDK v1 detect-status approval heuristic (detect-status.ts).
+        const modalKind = typeof modal?.kind === 'string' ? modal.kind : 'approval';
+        if (modalKind !== 'approval') {
+            // Picker/confirm — leave it for the user; keep the modal surfaced.
+            return autoApproveActive;
+        }
+        const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, this.provider);
+        if (buttonIndex < 0 || !hasNegativeApprovalOption(buttons)) {
+            // No affirmative matched, or no decline option present (→ not a real
+            // consent prompt, e.g. a picker that slipped past the kind gate).
+            // Surface the modal so the user decides; never pick blindly.
             return autoApproveActive;
         }
         // Modal *identity* signature — the question/button set only, NO volatile

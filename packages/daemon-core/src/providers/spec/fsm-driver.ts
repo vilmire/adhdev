@@ -32,7 +32,7 @@ import {
 import { evaluateFsm, type FsmClock, type TransitionEval, type FsmEvaluation } from './fsm-evaluator.js';
 import {
     type CliSpecV4, type FsmState, type FsmTransition,
-    initialState, stateById, statusForState, outgoingTransitions,
+    initialState, stateById, statusForState, modalKindForState, outgoingTransitions,
 } from './fsm-types.js';
 import { loadFsmSpec } from './fsm-loader.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
@@ -44,7 +44,7 @@ import { LOG } from '../../logging/logger.js';
 export type DashboardEvent =
     | { kind: 'pty_data'; chunk: string }
     | { kind: 'state_changed'; state: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' };
-        modal: { title: string | null; buttons: { index: number; label: string }[] } | null;
+        modal: { title: string | null; buttons: { index: number; label: string }[]; kind: 'approval' | 'picker' | 'confirm' | null } | null;
         controls: { id: string; label: string; action_type: string }[] }
     | { kind: 'notification'; id: string; title: string; body: string }
     | { kind: 'delegate'; id: string; task: string }
@@ -694,7 +694,12 @@ export class FsmDriver implements ISpecDriver {
             this.emit({
                 kind: 'state_changed',
                 state: next.state,
-                modal: next.modal ? { title: next.modal.title, buttons: next.modal.buttons.map(b => ({ index: b.index, label: b.label })) } : null,
+                // kind is the SEMANTIC modal class (approval vs picker/confirm)
+                // derived from the FSM state, NOT from the parsed buttons — the
+                // status field already collapsed it to 'approval' so the modal is
+                // surfaced. The auto-approve worker needs the distinction back to
+                // avoid answering a /model picker on the user's behalf.
+                modal: next.modal ? { title: next.modal.title, buttons: next.modal.buttons.map(b => ({ index: b.index, label: b.label })), kind: modalKindForState(state) } : null,
                 controls: next.controls.map(c => ({ id: c.id, label: c.label, action_type: c.actionType })),
             });
             this.fireNotifications(state.id, title);

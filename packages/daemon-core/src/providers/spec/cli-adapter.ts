@@ -75,7 +75,7 @@ export class SpecCliAdapter implements CliAdapter {
     };
     private lastEvent: DashboardEvent | null = null;
     private latestState: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' } | null = null;
-    private latestModal: { title: string | null; buttons: { index: number; label: string }[] } | null = null;
+    private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | null } | null = null;
     private statusCallback: (() => void) | null = null;
     private ptyDataCallback: ((data: string) => void) | null = null;
     private partialResponse = '';
@@ -193,8 +193,10 @@ export class SpecCliAdapter implements CliAdapter {
                 messages: [],
                 // Surface buttons when we have them; an approval state with no parsed
                 // modal this frame still stays waiting_approval (no activeModal yet).
+                // `kind` carries the semantic modal class through to the auto-approve
+                // gate so a /model picker (kind='picker') is never auto-answered.
                 activeModal: modal
-                    ? { message: modal.title ?? state.label, buttons: modal.buttons.map(b => b.label) }
+                    ? { message: modal.title ?? state.label, buttons: modal.buttons.map(b => b.label), kind: modal.kind ?? null }
                     : null,
                 activeInteractivePrompt: this.activeInteractivePrompt,
                 ...sessionFields,

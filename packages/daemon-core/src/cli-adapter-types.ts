@@ -14,6 +14,15 @@ export interface CliAdapterStatus {
     activeModal?: {
         message: string;
         buttons: string[];
+        /**
+         * Semantic modal class, when the adapter knows it (spec/FSM path):
+         * 'approval' = tool/command/trust consent (auto-approve may fire);
+         * 'picker' = a selection menu the user opened (/model, /mode — must NOT
+         * be auto-answered); 'confirm' = a yes/no left to the user. Absent/null
+         * for adapters that don't classify modals — the auto-approve gate then
+         * falls back to its structural heuristic.
+         */
+        kind?: 'approval' | 'picker' | 'confirm' | null;
     } | null;
     activeInteractivePrompt?: InteractivePrompt | null;
     providerSessionId?: string;

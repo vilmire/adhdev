@@ -88,6 +88,27 @@ export interface FsmState {
     /** Modal states (approval/picker) expose modal buttons in the UI and are
      *  treated as "interesting" — the dashboard surfaces them distinctly. */
     modal?: boolean;
+    /**
+     * For a modal state, what KIND of modal it is — the semantic distinction the
+     * status field (always 'approval' for any modal, so the dashboard surfaces it)
+     * deliberately loses. The auto-approve worker uses this to decide whether it
+     * may answer the modal on the user's behalf:
+     *
+     *   - 'approval' — a tool/command/trust consent prompt ("Allow Bash?",
+     *     "Trust this folder?"). Auto-approve MAY fire (a background mesh worker
+     *     should not stall on these).
+     *   - 'picker'   — a selection menu the user opened (/model, /mode, …). There
+     *     is no "correct" answer to auto-pick; blindly selecting the first option
+     *     silently changes the model/mode. Auto-approve must NOT fire — the user
+     *     chooses.
+     *   - 'confirm'  — a non-consent yes/no the user must decide. Left to the user.
+     *
+     * Defaults to 'approval' for a modal state that omits it (preserves the
+     * pre-existing "auto-approve any modal" behaviour for un-migrated specs;
+     * picker/confirm states declare their kind explicitly). Non-modal states
+     * have no modal_kind.
+     */
+    modal_kind?: 'approval' | 'picker' | 'confirm';
     /** Status this state maps to for the dashboard/cli-adapter status field.
      *  One of: idle | generating | approval. Defaults: modal→approval,
      *  initial→idle, id==='busy'→generating, else idle. Explicit wins. */
@@ -235,4 +256,18 @@ export function statusForState(state: FsmState): 'idle' | 'generating' | 'approv
     if (state.modal) return 'approval';
     if (state.id === 'busy' || state.id === 'generating') return 'generating';
     return 'idle';
+}
+
+/**
+ * The modal kind for a state, or null when the state is not modal. A modal state
+ * that omits `modal_kind` defaults to 'approval' so the established
+ * auto-approve-any-modal behaviour is preserved for specs that have not yet
+ * declared a kind; picker/confirm states must opt out by declaring their kind.
+ * This is the value the cli-adapter carries on `activeModal.kind` and the
+ * auto-approve gate reads — see cli-provider-instance.maybeAutoApproveStatus.
+ */
+export function modalKindForState(state: FsmState): 'approval' | 'picker' | 'confirm' | null {
+    if (state.modal_kind) return state.modal_kind;
+    if (state.modal) return 'approval';
+    return null;
 }
