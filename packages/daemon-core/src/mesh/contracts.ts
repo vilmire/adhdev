@@ -28,6 +28,8 @@
  * types and leaves runtime behaviour unchanged.
  */
 
+import { daemonIdsEquivalent, machineCoreFromDaemonId } from '@adhdev/mesh-shared';
+
 /** Provider type identifier (e.g. 'claude-cli', 'codex-cli', 'roo-code').
  *  Free-form string; no shared enum exists in daemon-core yet. */
 type ProviderType = string;
@@ -76,15 +78,22 @@ export interface CoordinatorIdentity {
 }
 
 export function coordinatorIdentityEquals(a: CoordinatorIdentity, b: CoordinatorIdentity): boolean {
-  return a.daemonId === b.daemonId
+  // daemonId compares by machine core: the same daemon answers to three
+  // interchangeable id forms (mach_X / daemon_mach_X / standalone_mach_X), so a
+  // raw `===` would treat one coordinator addressed under two forms as distinct.
+  return daemonIdsEquivalent(a.daemonId, b.daemonId)
       && a.coordinatorRunId === b.coordinatorRunId
       && (a.sessionId ?? '') === (b.sessionId ?? '');
 }
 
 export function coordinatorIdentityKey(identity: CoordinatorIdentity): string {
   // Stable string form for map keys and ledger payloads. Avoids the
-  // {a:b, c:d} JSON.stringify ordering trap by enforcing field order.
-  return `${identity.daemonId}|${identity.coordinatorRunId}|${identity.sessionId ?? ''}`;
+  // {a:b, c:d} JSON.stringify ordering trap by enforcing field order. The
+  // daemonId is normalized to its machine core so the key stays consistent with
+  // coordinatorIdentityEquals — two equal identities addressed under different
+  // daemon-id forms must produce the SAME key (else equal-but-distinct-key bug).
+  const daemonCore = machineCoreFromDaemonId(identity.daemonId) ?? identity.daemonId;
+  return `${daemonCore}|${identity.coordinatorRunId}|${identity.sessionId ?? ''}`;
 }
 
 // ─── Session handle ──────────────────────────────────────────────────────

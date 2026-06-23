@@ -32,6 +32,49 @@ describe('coordinatorIdentity helpers', () => {
   });
 });
 
+describe('coordinatorIdentity daemon-id form normalization (RF-IDENTITY)', () => {
+  // One machine answers to three interchangeable daemon-id forms, all derived
+  // from a single `mach_<hex>` core. Before the fix, equals/key used a raw `===`
+  // and treated the same coordinator addressed under two forms as distinct,
+  // silently dropping unicast completion events at the scope filter.
+  const CORE = 'mach_abc123';
+  const bare: CoordinatorIdentity = { daemonId: CORE, coordinatorRunId: 'run-x' };
+  const cloud: CoordinatorIdentity = { daemonId: `daemon_${CORE}`, coordinatorRunId: 'run-x' };
+  const standalone: CoordinatorIdentity = { daemonId: `standalone_${CORE}`, coordinatorRunId: 'run-x' };
+
+  it('equals collapses the three interchangeable daemon-id forms of one machine', () => {
+    expect(coordinatorIdentityEquals(bare, cloud)).toBe(true);
+    expect(coordinatorIdentityEquals(bare, standalone)).toBe(true);
+    expect(coordinatorIdentityEquals(cloud, standalone)).toBe(true);
+  });
+
+  it('still distinguishes a different machine core and a different run id', () => {
+    expect(coordinatorIdentityEquals(bare, { daemonId: 'daemon_mach_other', coordinatorRunId: 'run-x' })).toBe(false);
+    expect(coordinatorIdentityEquals(bare, { ...cloud, coordinatorRunId: 'run-y' })).toBe(false);
+  });
+
+  it('key stays consistent with equals: equal identities produce an identical key', () => {
+    // Invariant: a==b  ⟺  key(a)===key(b). A raw-form key here would break it.
+    expect(coordinatorIdentityKey(bare)).toBe(coordinatorIdentityKey(cloud));
+    expect(coordinatorIdentityKey(bare)).toBe(coordinatorIdentityKey(standalone));
+    expect(coordinatorIdentityKey(cloud)).toBe(coordinatorIdentityKey(standalone));
+  });
+
+  it('key still separates different cores and run ids', () => {
+    expect(coordinatorIdentityKey(bare)).not.toBe(coordinatorIdentityKey({ daemonId: 'mach_other', coordinatorRunId: 'run-x' }));
+    expect(coordinatorIdentityKey(bare)).not.toBe(coordinatorIdentityKey({ ...bare, coordinatorRunId: 'run-y' }));
+  });
+
+  it('routes a unicast event whose intendedFor and drainer use different daemon-id forms of the same machine', () => {
+    // Latent-bug guard at the routing layer: a completion scoped to
+    // `daemon_mach_X` must still reach a drainer holding bare `mach_X`.
+    const evt = buildV2Event({ scope: 'unicast', intendedFor: cloud });
+    expect(shouldDeliverPendingEventToCoordinator(evt, bare)).toBe(true);
+    expect(shouldDeliverPendingEventToCoordinator(evt, standalone)).toBe(true);
+    expect(shouldDeliverPendingEventToCoordinator(evt, { daemonId: 'daemon_mach_other', coordinatorRunId: 'run-x' })).toBe(false);
+  });
+});
+
 describe('protocol version + enum guards', () => {
   it('accepts known versions and rejects unknown', () => {
     expect(isSupportedMeshProtocolVersion('1.0')).toBe(true);

@@ -2444,7 +2444,7 @@ function ackUnresolvedDelegateForwardByFingerprint(
     payload: Record<string, unknown>,
 ): void {
     const match = peekUnresolvedDelegateForwards().find(entry =>
-        entry.coordinatorDaemonId === coordinatorDaemonId
+        daemonIdsEquivalent(entry.coordinatorDaemonId, coordinatorDaemonId)
         && readNonEmptyString(entry.payload.event) === eventName
         && readNonEmptyString(entry.payload.targetSessionId || entry.payload.sessionId || entry.payload.instanceId)
             === readNonEmptyString(payload.targetSessionId || payload.sessionId || payload.instanceId)

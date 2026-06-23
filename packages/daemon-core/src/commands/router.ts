@@ -336,7 +336,7 @@ function buildMeshNodeMachineIdentity(node: Record<string, unknown>, opts: {
     const machineName = readMeshNodeDisplayMachineName(node);
     const coordinatorHostname = readStringValue(opts.coordinatorHostname);
     const machineIdMatches = Boolean(opts.localMachineId && machineId && opts.localMachineId === machineId);
-    const daemonIdMatches = Boolean(opts.localDaemonId && daemonId && opts.localDaemonId === daemonId);
+    const daemonIdMatches = Boolean(opts.localDaemonId && daemonId && daemonIdsEquivalent(opts.localDaemonId, daemonId));
     const hostnameMatches = Boolean(
         normalizeMeshHostname(hostname)
         && normalizeMeshHostname(coordinatorHostname)
@@ -1403,7 +1403,7 @@ async function hydrateInlineMeshDirectTruth(args: {
         const isSelfNode = Boolean(
             nodeId && selectedCoordinatorNodeId && nodeId === selectedCoordinatorNodeId,
         ) || Boolean(
-            daemonId && (daemonId === args.localMachineId || daemonId === args.statusInstanceId),
+            daemonId && (daemonIdsEquivalent(daemonId, args.localMachineId) || daemonIdsEquivalent(daemonId, args.statusInstanceId)),
         ) || Boolean(args.meshSource !== 'local_config' && nodeIndex === 0);
 
         // A dead local worktree owned by this coordinator (isLocalWorktree, the
@@ -1415,7 +1415,7 @@ async function hydrateInlineMeshDirectTruth(args: {
         // strictly self + isLocalWorktree + absent-path; remote peers and nodes
         // whose workspace still exists are unaffected and stay classifiable.
         const isSelfDaemonNode = Boolean(
-            daemonId && (daemonId === args.localMachineId || daemonId === args.statusInstanceId),
+            daemonId && (daemonIdsEquivalent(daemonId, args.localMachineId) || daemonIdsEquivalent(daemonId, args.statusInstanceId)),
         );
         if ((isSelfNode || isSelfDaemonNode) && isDeadLocalWorktreeNode(node)) {
             deadNodeIds.push(nodeId);
@@ -6411,7 +6411,7 @@ export class DaemonCommandRouter {
                 // fail-closes for a remote node when none resolve. We deliberately do NOT
                 // self-stamp this daemon's own id when the field is missing: for a
                 // P2P-relayed remote worker launch, stamping the worker's own id would make
-                // the self-forward gate (mesh-events-coordinator: sameDaemonId) treat the
+                // the self-forward gate (mesh-events-coordinator: daemonIdsEquivalent) treat the
                 // worker as its own coordinator, suppressing the spontaneous completion-event
                 // forward and leaving the event in the pending inbox until a read_chat
                 // reconcile drains it. If the anchor is genuinely absent here, leave it
@@ -9592,7 +9592,7 @@ export class DaemonCommandRouter {
                         const isSelfNode = Boolean(
                             nodeId && inlineCoordinatorNodeId && nodeId === inlineCoordinatorNodeId,
                         ) || Boolean(
-                            daemonId && (daemonId === localMachineId || daemonId === this.deps.statusInstanceId),
+                            daemonId && (daemonIdsEquivalent(daemonId, localMachineId) || daemonIdsEquivalent(daemonId, this.deps.statusInstanceId)),
                         ) || Boolean(meshRecord?.inline && nodeIndex === 0)
                             || sparseConfiguredCoordinatorNode;
                         const machineIdentity = buildMeshNodeMachineIdentity(node as Record<string, unknown>, {
