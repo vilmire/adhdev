@@ -6,8 +6,15 @@ import {
   conversationMatchesTarget,
   getConversationHistorySessionId,
   getConversationHistoryLookupIds,
+  getDaemonEntrySessionSuffix,
+  isMeshOwnedSessionCopy,
+  getIdeChatDedupeKey,
+  getMachineSessionDedupeKey,
+  getConversationTabKey,
+  resolveOwnerMachineName,
 } from '../../../src/components/dashboard/conversation-identity'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
+import type { DaemonData } from '../../../src/types'
 
 function createConversation(overrides: Partial<ActiveConversation> = {}): ActiveConversation {
   return {
@@ -95,5 +102,91 @@ describe('conversation identity contract sketch', () => {
 
   it('matches raw route id targets through the same helper contract', () => {
     expect(conversationMatchesTarget(createConversation(), { routeId: 'machine-1:ide:cursor-1' })).toBe(true)
+  })
+})
+
+describe('DaemonData-level session identity SSOT (RF-CONVID)', () => {
+  const ide = (partial: Partial<DaemonData>): DaemonData => partial as DaemonData
+
+  describe('getDaemonEntrySessionSuffix', () => {
+    it('strips the reporting-daemon prefix', () => {
+      expect(getDaemonEntrySessionSuffix(ide({ daemonId: 'workerD', id: 'workerD:cli:s1' }))).toBe('cli:s1')
+    })
+    it('returns the id unchanged when it has no daemon prefix', () => {
+      expect(getDaemonEntrySessionSuffix(ide({ daemonId: 'workerD', id: 'unprefixed' }))).toBe('unprefixed')
+    })
+  })
+
+  describe('isMeshOwnedSessionCopy', () => {
+    it('is true for any of the five mesh markers', () => {
+      expect(isMeshOwnedSessionCopy(ide({ ownerDaemonId: 'workerD' }))).toBe(true)
+      expect(isMeshOwnedSessionCopy(ide({ settings: { meshNodeFor: 'm1' } }))).toBe(true)
+      expect(isMeshOwnedSessionCopy(ide({ settings: { meshNodeId: 'n1' } }))).toBe(true)
+      expect(isMeshOwnedSessionCopy(ide({ settings: { launchedByCoordinator: true } }))).toBe(true)
+      expect(isMeshOwnedSessionCopy(ide({ settings: { _remoteOwnedSession: true } }))).toBe(true)
+    })
+    it('is false for a marker-less worker copy', () => {
+      expect(isMeshOwnedSessionCopy(ide({ daemonId: 'workerD', id: 'workerD:cli:s1' }))).toBe(false)
+    })
+  })
+
+  describe('getIdeChatDedupeKey — ghost-tab collapse (Key 1)', () => {
+    it('collapses the coordinator mirror and the marker-less worker copy of one mesh session into a single key', () => {
+      const coordinatorCopy = ide({ id: 'coordD:cli:s1', daemonId: 'coordD', ownerDaemonId: 'workerD' })
+      const workerCopy = ide({ id: 'workerD:cli:s1', daemonId: 'workerD' })
+      // mesh suffixes are collected from mesh-owned copies, mirroring dedupeChatIdes
+      const meshSuffixes = new Set<string>()
+      for (const e of [coordinatorCopy, workerCopy]) {
+        if (isMeshOwnedSessionCopy(e)) meshSuffixes.add(getDaemonEntrySessionSuffix(e))
+      }
+      const k1 = getIdeChatDedupeKey(coordinatorCopy, meshSuffixes)
+      const k2 = getIdeChatDedupeKey(workerCopy, meshSuffixes)
+      expect(k1).toBe('mesh:cli:s1')
+      expect(k2).toBe('mesh:cli:s1')
+      expect(k1).toBe(k2) // single tab, no ghost
+    })
+    it('keeps two unrelated non-mesh sessions on different daemons that share a raw session id distinct', () => {
+      const a = ide({ id: 'd1:cli:x', daemonId: 'd1' })
+      const b = ide({ id: 'd2:cli:x', daemonId: 'd2' })
+      const empty = new Set<string>()
+      expect(getIdeChatDedupeKey(a, empty)).toBe('d1:cli:x')
+      expect(getIdeChatDedupeKey(b, empty)).toBe('d2:cli:x')
+      expect(getIdeChatDedupeKey(a, empty)).not.toBe(getIdeChatDedupeKey(b, empty))
+    })
+  })
+
+  describe('getMachineSessionDedupeKey — machine-card collapse (Key 2)', () => {
+    it('collapses two reports of one session by raw sessionId regardless of reporting-daemon prefix', () => {
+      expect(getMachineSessionDedupeKey({ sessionId: 's1', id: 'coordD:cli:s1' }))
+        .toBe(getMachineSessionDedupeKey({ sessionId: 's1', id: 'workerD:cli:s1' }))
+    })
+    it('keeps different sessionIds distinct and falls back to id when sessionId is absent', () => {
+      expect(getMachineSessionDedupeKey({ sessionId: 's1', id: 'a' })).not.toBe(getMachineSessionDedupeKey({ sessionId: 's2', id: 'a' }))
+      expect(getMachineSessionDedupeKey({ id: 'only-id' })).toBe('only-id')
+    })
+  })
+
+  describe('getConversationTabKey — dockview panel key (Key 3)', () => {
+    it('prefers the route fallback key, then sessionId, then unknown', () => {
+      expect(getConversationTabKey('s1', 'route-1')).toBe('route-1')
+      expect(getConversationTabKey('s1', '')).toBe('s1')
+      expect(getConversationTabKey(undefined, '')).toBe('unknown')
+    })
+  })
+
+  describe('resolveOwnerMachineName — owner-machine fallback chain', () => {
+    const names = { workerD: 'Worker Mac', coordD: 'Coordinator Mac' }
+    it('prefers the resolved owning (worker) daemon machine name over the coordinator snapshot daemon', () => {
+      expect(resolveOwnerMachineName(ide({ ownerDaemonId: 'workerD', daemonId: 'coordD' }), names)).toBe('Worker Mac')
+    })
+    it('falls back to an explicit ownerMachineName when the owner daemon is not in the map', () => {
+      expect(resolveOwnerMachineName(ide({ ownerDaemonId: 'unknownD', ownerMachineName: 'Explicit', daemonId: 'coordD' }), names)).toBe('Explicit')
+    })
+    it('falls back to the snapshot daemon machine for an ordinary local session', () => {
+      expect(resolveOwnerMachineName(ide({ daemonId: 'coordD' }), names)).toBe('Coordinator Mac')
+    })
+    it('returns undefined when nothing resolves', () => {
+      expect(resolveOwnerMachineName(ide({ daemonId: 'ghost' }), names)).toBeUndefined()
+    })
   })
 })
