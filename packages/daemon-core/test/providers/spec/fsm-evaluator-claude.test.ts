@@ -1067,3 +1067,108 @@ describe('claude-cli v4 FSM — FALSEBUSY B: footer pushed out of viewport (Cody
         expect(re.test('✻ Worked for 7s · ↑ 1.2k tokens')).toBe(true);
     });
 });
+
+// ── APPROVESTUCK fixA: decisive footer-marker gate on the approval modal ──────
+// Root cause (live, cd/untrusted-hooks modal): the →approval transition keyed ONLY
+// on the footer `❯ 1.` anchor. But the footer section is `^[❯›>]` anchor_last — the
+// LAST prompt-cursor line through EOF — so a composer line a worker typed that
+// starts with "1." (rendered `❯ 1. converge providers …`) IS the footer and matched
+// `[❯›>]\s*1\.`, false-entering approval with no real modal on screen. The active
+// claude approval modal ALWAYS renders its decisive chrome — the `Esc to cancel ·
+// Tab to amend · ctrl+e to explain` footer and/or the `Do you want to proceed?`
+// question (both visible in every real-screen fixture above) — so →approval now
+// also requires one of those markers. Stickiness on approval→busy / approval→idle is
+// reinforced with the same `Esc to cancel` footer guard (modal up ⇒ never idle).
+
+describe('claude-cli v4 FSM — APPROVESTUCK footer-marker approval gate (fixA)', () => {
+    const spec = loadSpec();
+    const Dline = '─'.repeat(64);
+
+    // A quiet composer where a worker typed a numbered line starting "1." — this is
+    // the EXACT false-match: the composer (footer) reads `❯ 1. …`, no modal present.
+    const composerTypedNumber = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+        '  ▘▘ ▝▝    ~/Work/adhdev',
+        '',
+        '⏺ Here is the plan.',
+        '',
+        Dline,
+        '❯ 1. converge providers then relocate the oss test',
+        Dline,
+        '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    ].join('\n');
+
+    it('(unit) →approval when-clause requires ❯ 1. AND a decisive marker (Esc to cancel | proceed)', () => {
+        const t = spec.transitions.find(tr => tr.label === '→approval')!;
+        const all = (t.when as any).all as any[];
+        expect(Array.isArray(all)).toBe(true);
+        const footerChoice = all.find(c => c.section === 'footer' && typeof c.matches === 'string' && c.matches.includes('1\\.'));
+        expect(footerChoice).toBeTruthy();
+        const markerAny = all.find(c => Array.isArray(c.any));
+        expect(markerAny).toBeTruthy();
+        const markerSrc = (markerAny.any as any[]).map(c => c.matches).join(' | ');
+        expect(markerSrc).toMatch(/Esc to cancel/);
+        expect(markerSrc).toMatch(/Do you want to proceed/);
+    });
+
+    it('does NOT false-enter approval on a composer-typed "❯ 1." line (no modal marker)', () => {
+        // The footer ❯ 1. anchor matches (proving the old gate WOULD have fired)...
+        const footerClause = (spec.transitions.find(t => t.label === '→approval')!.when as any)
+            .all.find((c: any) => c.section === 'footer' && c.matches.includes('1\\.'));
+        const lines = strip(composerTypedNumber);
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const footer = sectionText(sections, 'footer', lines.join('\n'));
+        expect(new RegExp(footerClause.matches).test(footer)).toBe(true);
+        // ...but with no decisive marker the transition must NOT fire approval.
+        const ev = evaluateFsm(spec, 'busy', composerTypedNumber, { row: 6, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).not.toBe('approval');
+    });
+
+    it('DOES enter approval once the same screen carries the decisive marker', () => {
+        const withModal = composerTypedNumber
+            .replace('⏺ Here is the plan.', 'Do you want to proceed?')
+            .replace('❯ 1. converge providers then relocate the oss test', ' ❯ 1. Yes')
+            .replace('  ⏵⏵ accept edits on (shift+tab to cycle)', ' Esc to cancel · Tab to amend · ctrl+e to explain');
+        const ev = evaluateFsm(spec, 'busy', withModal, { row: 6, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('approval');
+    });
+
+    it('real divider-less / divider / bash approval screens still enter approval (no regression)', () => {
+        for (const screen of [dividerlessApproval, dividerApproval, bashApprovalDividerBelow]) {
+            const lines = strip(screen);
+            const ev = evaluateFsm(spec, 'busy', screen, { row: lines.length - 1, col: 2 }, undefined, clk(10000, 0));
+            expect(ev.fired?.to).toBe('approval');
+        }
+    });
+
+    it('(sticky) approval→busy AND approval→idle carry the not-footer "Esc to cancel" guard', () => {
+        for (const label of ['approval→busy', 'approval→idle']) {
+            const clauses = (spec.transitions.find(t => t.label === label)!.when as any).all as any[];
+            const guard = clauses.find(c => c.not && c.not.section === 'footer'
+                && typeof c.not.matches === 'string' && /Esc to cancel/.test(c.not.matches));
+            expect(guard, `${label} missing Esc to cancel guard`).toBeTruthy();
+        }
+    });
+
+    it('(sticky) STAYS in approval while the "Esc to cancel" footer is up, even without ❯ 1.', () => {
+        // Modal chrome where the choice line momentarily lacks the ❯ marker but the
+        // decisive "Esc to cancel" footer is still rendered + a residual spinner.
+        // Pre-fix the not(footer ❯ 1.) guard alone would let approval→busy fire.
+        const markerStillUp = [
+            '❯ Run the build please',
+            '',
+            '⏺ Bash(npm run build)',
+            '✶ Finishing up… (esc to interrupt)',
+            Dline,
+            ' Bash command',
+            ' Do you want to proceed?',
+            '   1. Yes',
+            '   2. No',
+            '',
+            ' Esc to cancel · Tab to amend',
+        ].join('\n');
+        const ev = evaluateFsm(spec, 'approval', markerStillUp, { row: 7, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).not.toBe('busy');
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+});

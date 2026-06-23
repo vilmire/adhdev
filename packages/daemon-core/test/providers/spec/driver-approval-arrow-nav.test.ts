@@ -18,7 +18,7 @@
  * that.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
@@ -30,8 +30,19 @@ const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
 const ESC = String.fromCharCode(27); // ANSI escape (0x1b)
 const UP = `${ESC}[A`;
 const DOWN = `${ESC}[B`;
+const IS_WIN32 = process.platform === 'win32';
 
 type ModalButton = { index: number; label: string; key: string; current: boolean };
+
+// On win32 the confirm CR is resent on a timer (scheduleWin32ModalConfirm) until
+// the modal resolves; the fake driver never leaves 'approval', so clear the
+// dangling timer between tests to avoid leaking real setTimeout handles.
+const liveDrivers: any[] = [];
+afterEach(() => {
+    for (const d of liveDrivers.splice(0)) {
+        if (d.win32ModalConfirmTimer) { clearTimeout(d.win32ModalConfirmTimer); d.win32ModalConfirmTimer = null; }
+    }
+});
 
 /**
  * Exercise the private handleClickModalButton in isolation — same technique the
@@ -44,11 +55,34 @@ function makeDriver(buttons: ModalButton[], rule: Record<string, unknown>): { dr
     const driver = Object.create(FsmDriver.prototype);
     Object.assign(driver, {
         currentStateId: 'approval',
-        spec: { states: [{ id: 'approval', label: 'Approval', modal: true, extract: { buttons: rule } }] },
+        spec: {
+            states: [
+                { id: 'approval', label: 'Approval', modal: true, extract: { buttons: rule } },
+                { id: 'busy', label: 'Generating', status: 'generating' },
+            ],
+        },
         currentEval: { state: { id: 'approval' }, modal: { title: 'Do you want to proceed?', buttons }, controls: [] },
         adapter: { send_keys: (k: string) => sent.push(k) },
+        win32ModalConfirmTimer: null,
     });
+    liveDrivers.push(driver);
     return { driver, sent };
+}
+
+// On win32 a confirm whose key ends in a CR is split (digits written, CR resent
+// via the verified loop); the FIRST CR still fires synchronously, so the
+// immediate keystrokes a test observes are identical except a trailing "X\r"
+// becomes "X" then "\r". This normalizes the EXPECTED keys for the platform so
+// the same assertion holds on win32 (split) and posix (combined single write).
+function expectKeys(combined: string[]): string[] {
+    if (!IS_WIN32) return combined;
+    const out: string[] = [];
+    for (const k of combined) {
+        const m = /^([\s\S]*?)([\r\n]+)$/.exec(k);
+        if (m && m[2] && m[1]) { out.push(m[1], m[2]); }
+        else out.push(k);
+    }
+    return out;
 }
 
 // A claude-cli approval modal: cursor (❯) opens on the first option.
@@ -68,7 +102,7 @@ describe('FsmDriver — approval modal arrow-nav SELECT', () => {
         driver.handleClickModalButton(1);
 
         // Cursor is on row 1 already → no arrows, just the confirm CR.
-        expect(sent).toEqual(['\r']);
+        expect(sent).toEqual(expectKeys(['\r']));
         // The digit '1' must never reach the PTY — that is the leak being fixed.
         expect(sent.join('')).not.toContain('1');
     });
@@ -79,7 +113,7 @@ describe('FsmDriver — approval modal arrow-nav SELECT', () => {
         driver.handleClickModalButton(3);
 
         // current = row 1, target = row 3 → 2× DOWN then CR. No '3' typed.
-        expect(sent).toEqual([`${DOWN}${DOWN}`, '\r']);
+        expect(sent).toEqual(expectKeys([`${DOWN}${DOWN}`, '\r']));
         expect(sent.join('')).not.toContain('3');
     });
 
@@ -90,7 +124,7 @@ describe('FsmDriver — approval modal arrow-nav SELECT', () => {
         driver.handleClickModalButton(1);
 
         // current = row 3, target = row 1 → 2× UP then CR.
-        expect(sent).toEqual([`${UP}${UP}`, '\r']);
+        expect(sent).toEqual(expectKeys([`${UP}${UP}`, '\r']));
     });
 
     it('falls back to stepping down from row 1 when no cursor marker is detected', () => {
@@ -100,7 +134,7 @@ describe('FsmDriver — approval modal arrow-nav SELECT', () => {
         driver.handleClickModalButton(2);
 
         // No detected cursor → assume the modal opened on row 1 → 1× DOWN + CR.
-        expect(sent).toEqual([DOWN, '\r']);
+        expect(sent).toEqual(expectKeys([DOWN, '\r']));
     });
 
     it('honors custom cursor_keys overrides', () => {
@@ -108,7 +142,7 @@ describe('FsmDriver — approval modal arrow-nav SELECT', () => {
 
         driver.handleClickModalButton(2);
 
-        expect(sent).toEqual(['j', '\r']);
+        expect(sent).toEqual(expectKeys(['j', '\r']));
     });
 });
 
@@ -119,8 +153,88 @@ describe('FsmDriver — index-keyed approval modal SELECT (no regression)', () =
         driver.handleClickModalButton(2);
 
         // Index mode: send the button's pre-rendered key ('2\r') — codex/hermes
-        // approval modals rely on this number-keyed behavior.
-        expect(sent).toEqual(['2\r']);
+        // approval modals rely on this number-keyed behavior. On win32 the trailing
+        // CR is split off and resent via the verified loop (APPROVESTUCK), so the
+        // immediate keys are '2' then '\r'; posix keeps the single combined write.
+        expect(sent).toEqual(expectKeys(['2\r']));
+    });
+});
+
+// ── APPROVESTUCK fixB: win32 modal-confirm CR resend ─────────────────────────
+// Root cause (live, 3× capture): the claude cd/untrusted-hooks approval auto-fired
+// its confirm CR via handleClickModalButton, but on win32 ConPTY a lone CR is
+// absorbed as a literal newline (the same lone-CR-swallow that scheduleWin32Submit
+// exists to defeat for send_message). The modal never resolved → the FSM flapped
+// approval↔busy for ~75s while auto-approve re-fired into the void. Fix: the confirm
+// CR is now resent on a cadence until the modal actually resolves (status leaves
+// 'approval'), gated + bounded exactly like the send_message submit loop.
+describe('FsmDriver — APPROVESTUCK win32 modal-confirm CR resend', () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p, configurable: true });
+    const GAP = 350; // WIN32_SUBMIT_RESEND_GAP_MS
+
+    afterEach(() => {
+        vi.useRealTimers();
+        Object.defineProperty(process, 'platform', realPlatform);
+    });
+
+    it('win32: fires the confirm CR immediately, then resends while still in approval, and stops once resolved', () => {
+        setPlatform('win32');
+        vi.useFakeTimers();
+        const { driver, sent } = makeDriver(APPROVAL_BUTTONS, ARROW_RULE);
+
+        driver.handleClickModalButton(1);
+        // Cursor on row 1 → no arrows; the first confirm CR fires synchronously.
+        expect(sent).toEqual(['\r']);
+        expect(driver.win32ModalConfirmTimer).not.toBeNull(); // a resend is armed
+
+        // Still in the modal (status 'approval') → the gated resend fires another CR.
+        vi.advanceTimersByTime(GAP);
+        expect(sent).toEqual(['\r', '\r']);
+        expect(driver.win32ModalConfirmTimer).not.toBeNull();
+
+        // Modal resolves: the FSM leaves approval (→ generating). The next gated
+        // tick observes status !== 'approval' and stops — no stray CR into the
+        // next turn's composer.
+        driver.currentStateId = 'busy';
+        vi.advanceTimersByTime(GAP);
+        expect(sent).toEqual(['\r', '\r']);
+        expect(driver.win32ModalConfirmTimer).toBeNull();
+    });
+
+    it('win32 index-mode: writes the digit once, then resends only the confirm CR while in approval', () => {
+        setPlatform('win32');
+        vi.useFakeTimers();
+        const { driver, sent } = makeDriver(APPROVAL_BUTTONS, INDEX_RULE);
+
+        driver.handleClickModalButton(2);
+        // Digit written separately, first CR fired; the combined '2\r' is never one write.
+        expect(sent).toEqual(['2', '\r']);
+        expect(sent).not.toContain('2\r');
+
+        vi.advanceTimersByTime(GAP);
+        expect(sent).toEqual(['2', '\r', '\r']); // CR resent, digit NOT repeated
+    });
+
+    it('win32: the resend loop is bounded by the retry budget (does not spin forever)', () => {
+        setPlatform('win32');
+        vi.useFakeTimers();
+        const { driver, sent } = makeDriver(APPROVAL_BUTTONS, ARROW_RULE);
+
+        driver.handleClickModalButton(1); // never leaves 'approval' in this fake
+        vi.advanceTimersByTime(GAP * 30); // well past WIN32_SUBMIT_MAX_RESENDS (14)
+        expect(sent.length).toBeLessThanOrEqual(14);
+        expect(sent.length).toBeGreaterThan(1); // it DID resend
+        expect(driver.win32ModalConfirmTimer).toBeNull(); // budget spent → loop ended
+    });
+
+    it('posix: a single confirm CR, no resend timer (unchanged behavior)', () => {
+        setPlatform('linux');
+        const { driver, sent } = makeDriver(APPROVAL_BUTTONS, ARROW_RULE);
+
+        driver.handleClickModalButton(1);
+        expect(sent).toEqual(['\r']);
+        expect(driver.win32ModalConfirmTimer == null).toBe(true);
     });
 });
 

@@ -90,9 +90,11 @@ const approvalScreen = [
     '',
     '────────────────────────────────────────────────────────────────────────────────',
     'Bash command',
+    'Do you want to proceed?',
     '❯ 1. Yes',
     '  2. No',
     '────────────────────────────────────────────────────────────────────────────────',
+    ' Esc to cancel · Tab to amend · ctrl+e to explain',
 ].join('\n');
 
 describe('claude-cli v4 FSM', () => {
@@ -157,7 +159,11 @@ describe('claude-cli v4 FSM', () => {
     });
 
     it('approval state extracts modal title + buttons from the real fixture', () => {
-        const fxPath = resolveSpecPath().replace('specs/4.0.json', 'fixtures/missed-approval-write-2026-06-04.json');
+        // Derive the fixtures dir from the spec path in a separator-agnostic way:
+        // resolveSpecPath() returns .../claude-cli/specs/4.0.json (back- or forward-
+        // slashed depending on OS), so a literal 'specs/4.0.json' replace silently
+        // no-ops on win32 and points fxPath back at the spec (no .input) → TypeError.
+        const fxPath = path.join(path.dirname(path.dirname(resolveSpecPath())), 'fixtures', 'missed-approval-write-2026-06-04.json');
         if (!fs.existsSync(fxPath)) return; // fixture only present in the providers checkout
         const screen = JSON.parse(fs.readFileSync(fxPath, 'utf8')).input.screenText as string;
 

@@ -70,16 +70,23 @@ describe('shipped CLI specs — every modal state carries a modal_kind', () => {
 
   it('claude-cli live approval screen is classified approval by the real evaluator', () => {
     const spec = loadLiveSpec('claude-cli');
-    // A real claude tool-consent prompt: footer shows the ❯ 1. choice block.
+    // A real claude tool-consent prompt: the ❯ 1. choice block PLUS the decisive
+    // modal chrome a real screen always renders — the "Do you want to proceed?"
+    // question and the "Esc to cancel · Tab to amend · ctrl+e to explain" footer.
+    // (The ❯ 1. anchor alone is no longer sufficient — APPROVESTUCK fixA requires
+    // the decisive marker so a worker-typed "1." composer line cannot false-enter
+    // approval. See fsm-evaluator-claude.test.ts.)
     const approvalScreen = [
       '⏺ I will run a command.',
       '────────────────────────────────────────────',
       ' Bash command',
       ' npm test',
-      '────────────────────────────────────────────',
+      ' Do you want to proceed?',
       '❯ 1. Yes',
       "  2. Yes, and don't ask again",
       '  3. No, tell Claude what to do differently',
+      '────────────────────────────────────────────',
+      ' Esc to cancel · Tab to amend · ctrl+e to explain',
     ].join('\n');
     const ev = evaluateFsm(spec, 'idle', approvalScreen, { row: 8, col: 2 }, undefined,
       { now: 10_000, stateEnteredAt: 0, regionLastChangedAt: new Map() });

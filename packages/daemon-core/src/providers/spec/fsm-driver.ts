@@ -294,6 +294,11 @@ export class FsmDriver implements ISpecDriver {
     private lastWin32WriteAt = 0;
     /** Pending paced chunk-write timer for a large win32 body (see writeWin32Body). */
     private win32WriteTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Timer driving the win32 verification-based modal-confirm CR resend loop (see
+     *  scheduleWin32ModalConfirm). A lone CR that confirms an approval/picker choice
+     *  is absorbed by ConPTY the same way a send_message submit CR is, so the confirm
+     *  must be resent until the modal actually resolves (status leaves 'approval'). */
+    private win32ModalConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 
     private currentEval: CurrentEval | null = null;
     private stateHistory: HistoryEntry[] = [];
@@ -413,6 +418,7 @@ export class FsmDriver implements ISpecDriver {
         if (this.stallTimer) { clearTimeout(this.stallTimer); this.stallTimer = null; }
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
+        if (this.win32ModalConfirmTimer) { clearTimeout(this.win32ModalConfirmTimer); this.win32ModalConfirmTimer = null; }
         this.specWatcher?.close();
         this.adapter.kill();
     }
@@ -1140,10 +1146,58 @@ export class FsmDriver implements ISpecDriver {
             // `{index}\r` → `\r`.
             const confirm = (rule.key_for_index || '\r').replace(/\{index\}/g, '') || '\r';
             if (nav) this.adapter.send_keys(nav);
-            this.adapter.send_keys(confirm);
+            this.submitModalConfirm(confirm);
             return;
         }
-        this.adapter.send_keys(btn.key);
+        this.submitModalConfirm(btn.key);
+    }
+
+    /**
+     * Submit a modal-confirm key sequence (the choice key + its trailing CR).
+     *
+     * On win32 the trailing CR is the SAME lone-CR-swallow case as a send_message
+     * submit: ConPTY can absorb a single CR as a literal newline instead of a
+     * confirm, so the approval/picker modal never resolves and the FSM flaps
+     * approval↔busy while auto-approve keeps firing into the void (APPROVESTUCK).
+     * So we split any non-CR prefix (e.g. the "1" of "1\r") off, write it once, and
+     * resend the CR on a fixed cadence until the modal actually resolves (status
+     * leaves 'approval'). Non-win32 keeps the single direct write — its CR submits
+     * on the first try.
+     */
+    private submitModalConfirm(keys: string): void {
+        if (process.platform !== 'win32') {
+            this.adapter.send_keys(keys);
+            return;
+        }
+        const m = /^([\s\S]*?)([\r\n]+)$/.exec(keys);
+        const prefix = m ? m[1] : keys;
+        const cr = m ? m[2] : '';
+        if (prefix) this.adapter.send_keys(prefix);
+        if (!cr) return;
+        this.scheduleWin32ModalConfirm(cr);
+    }
+
+    /**
+     * win32 modal-confirm CR resend loop. Mirrors scheduleWin32Submit's phase-2
+     * verified resend, but gated on still being IN a modal (status 'approval')
+     * rather than still idle: the first CR fires immediately, then resends every
+     * WIN32_SUBMIT_RESEND_GAP_MS while the FSM is still showing the modal, up to
+     * WIN32_SUBMIT_MAX_RESENDS. The instant the modal resolves (status flips to
+     * generating/idle) we stop, so no stray CR leaks into the next turn's composer.
+     */
+    private scheduleWin32ModalConfirm(submitKey: string): void {
+        if (this.win32ModalConfirmTimer) { clearTimeout(this.win32ModalConfirmTimer); this.win32ModalConfirmTimer = null; }
+        const fire = (attempt: number): void => {
+            this.win32ModalConfirmTimer = null;
+            this.adapter.send_keys(submitKey);
+            if (attempt + 1 >= WIN32_SUBMIT_MAX_RESENDS) return;
+            this.win32ModalConfirmTimer = setTimeout(() => {
+                // Left the modal → it resolved; stop resending.
+                if (this.currentStatus() !== 'approval') { this.win32ModalConfirmTimer = null; return; }
+                fire(attempt + 1);
+            }, WIN32_SUBMIT_RESEND_GAP_MS);
+        };
+        fire(0);
     }
 
     private handleAttachImage(blob: string, mime: string): void {
