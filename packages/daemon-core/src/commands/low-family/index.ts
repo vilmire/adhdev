@@ -10,6 +10,13 @@
 import { sessionHostHandlers } from './session-host.js';
 import { specProviderDevHandlers } from './spec-providerdev.js';
 import { refineConfigHandlers } from './refine-config.js';
+import { diagnosticsHandlers } from './diagnostics.js';
+import { statusMetaHandlers } from './status-meta.js';
+import { coordinatorPromptHandlers } from './coordinator-prompt.js';
+import { notificationHandlers } from './notification.js';
+import { daemonLifecycleHandlers } from './daemon-lifecycle.js';
+import { meshLedgerHandlers } from './mesh-ledger.js';
+import { meshNodeLogsHandlers } from './mesh-node-logs.js';
 import type { LowFamilyRegistry } from './types.js';
 
 export type { LowFamilyContext, LowFamilyHandler, LowFamilyRegistry } from './types.js';
@@ -19,5 +26,12 @@ export const lowFamilyRegistry: LowFamilyRegistry = new Map(
         ...sessionHostHandlers,
         ...specProviderDevHandlers,
         ...refineConfigHandlers,
+        ...diagnosticsHandlers,
+        ...statusMetaHandlers,
+        ...coordinatorPromptHandlers,
+        ...notificationHandlers,
+        ...daemonLifecycleHandlers,
+        ...meshLedgerHandlers,
+        ...meshNodeLogsHandlers,
     }),
 );

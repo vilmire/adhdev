@@ -19,10 +19,10 @@ import type { HostedCliRuntimeDescriptor } from './cli-manager.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { launchWithCdp, killIdeProcess, isIdeRunning } from '../launch.js';
-import { loadConfig, saveConfig, updateConfig } from '../config/config.js';
+import { loadConfig, saveConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
 import { resolveIdeLaunchWorkspace } from '../config/workspaces.js';
-import { appendRecentActivity, getRecentActivity, markSessionSeen, dismissSessionNotification, markSessionNotificationUnread } from '../config/recent-activity.js';
+import { appendRecentActivity, getRecentActivity } from '../config/recent-activity.js';
 import { getSavedProviderSessions } from '../config/saved-sessions.js';
 import { listProviderHistorySessions } from '../config/chat-history.js';
 import { detectIDEs } from '../detection/ide-detector.js';
@@ -48,14 +48,10 @@ import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
 import type { CommandLogEntry } from '../logging/command-log.js';
 import * as yaml from 'js-yaml';
-import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
-import { readDaemonLogTail, MAX_TAIL_BYTES } from '../logging/log-tail-reader.js';
-import { redactLogLines } from '../logging/log-redactor.js';
-import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
+import { createInteractionId, recordDebugTrace } from '../logging/debug-trace.js';
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
 import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
-import { buildSessionEntries } from '../status/builders.js';
-import { registerMeshCoordinator, getCoordinatorForSession } from '../mesh/coordinator-registry.js';
+import { registerMeshCoordinator } from '../mesh/coordinator-registry.js';
 import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, type PendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { getRecentUnroutableDeliveries } from '../mesh/mesh-routing.js';
 import { buildMeshWorkerRelayStamp } from '../mesh/mesh-events-utils.js';
@@ -82,10 +78,6 @@ import {
     type WorktreeBootstrapState,
 } from '../mesh/worktree-bootstrap-config.js';
 import { runMeshInit } from '../mesh/mesh-init.js';
-import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
-import { getDaemonBuildInfo } from '../build-info.js';
-import { getSessionCompletionMarker } from '../status/snapshot.js';
-import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
 import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
@@ -96,29 +88,6 @@ import { execFileSync } from 'node:child_process';
 import { normalizeInteractivePromptResponse } from '../providers/types/interactive-prompt.js';
 import { workingDirBasename } from '../providers/working-dir.js';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
-
-type ReleaseChannel = 'stable' | 'preview';
-const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
-const CHANNEL_SERVER_URL: Record<ReleaseChannel, string> = {
-    stable: 'https://api.adhf.dev',
-    preview: 'https://api-preview.adhf.dev',
-};
-
-function normalizeReleaseChannel(value: unknown): ReleaseChannel | null {
-    if (typeof value !== 'string') return null;
-    const normalized = value.trim().toLowerCase();
-    if (normalized === 'stable' || normalized === 'latest') return 'stable';
-    if (normalized === 'preview' || normalized === 'next') return 'preview';
-    return null;
-}
-
-function resolveUpgradeChannel(args: any): ReleaseChannel {
-    return normalizeReleaseChannel(args?.channel)
-        || normalizeReleaseChannel(args?.updatePolicy?.channel)
-        || normalizeReleaseChannel(args?.npmTag)
-        || normalizeReleaseChannel(loadConfig().updateChannel)
-        || 'stable';
-}
 
 function readProviderPriorityFromPolicy(policy: unknown): string[] {
     const record = policy && typeof policy === 'object' && !Array.isArray(policy)
@@ -3472,7 +3441,6 @@ const MESH_FORWARDABLE_SESSION_COMMANDS = new Set([
     // delivers it to the real worker instead. (findAdapter is also fail-closed as the backstop.)
     'agent_command',
 ]);
-const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
 
 function normalizeCommandSource(source: string): CommandLogEntry['source'] {
     switch (source) {
@@ -6209,7 +6177,10 @@ export class DaemonCommandRouter {
         // case used to; a miss falls through to the switch unchanged.
         const lowFamilyHandler = lowFamilyRegistry.get(cmd);
         if (lowFamilyHandler) {
-            return await lowFamilyHandler({ deps: this.deps }, args);
+            return await lowFamilyHandler({
+                deps: this.deps,
+                getMeshForCommand: this.getMeshForCommand.bind(this),
+            }, args);
         }
 
         switch (cmd) {
@@ -6346,49 +6317,6 @@ export class DaemonCommandRouter {
             }
 
             // ─── Logs ───
-            case 'get_logs': {
-                const count = parseInt(args?.count) || parseInt(args?.lines) || 100;
-                const minLevel = args?.minLevel || 'info';
-                const sinceTs = args?.since || 0;
-
-                try {
-                    // Priority 1: ring buffer (fast and structured)
-                    let logs = getRecentLogs(count, minLevel);
-                    if (sinceTs > 0) {
-                        logs = logs.filter((l: any) => l.ts > sinceTs);
-                    }
-                    if (logs.length > 0) {
-                        return { success: true, logs, totalBuffered: logs.length };
-                    }
-                    // Incremental polling must not fall back to unfiltered file text: the file
-                    // format is not timestamp-filterable, and returning its tail makes the UI
-                    // replace structured logs with old raw fallback lines when nothing new exists.
-                    if (sinceTs > 0) {
-                        return { success: true, logs: [], totalBuffered: 0 };
-                    }
-                    // Priority 2: file fallback
-                    if (fs.existsSync(LOG_PATH)) {
-                        const content = fs.readFileSync(LOG_PATH, 'utf-8');
-                        const allLines = content.split('\n');
-                        const recent = allLines.slice(-count).join('\n');
-                        return { success: true, logs: recent, totalLines: allLines.length };
-                    }
-                    return { success: true, logs: [], totalBuffered: 0 };
-                } catch (e: any) {
-                    return { success: false, error: e.message };
-                }
-            }
-
-            case 'get_debug_trace': {
-                const count = parseInt(args?.count) || parseInt(args?.limit) || 100;
-                const sinceTs = Number(args?.since) || 0;
-                const interactionId = typeof args?.interactionId === 'string' ? args.interactionId : undefined;
-                const category = typeof args?.category === 'string' ? args.category : undefined;
-                const trace = getRecentDebugTrace({ interactionId, category, limit: count })
-                    .filter((entry) => !sinceTs || entry.ts > sinceTs);
-                return { success: true, trace, count: trace.length };
-            }
-
             case 'list_saved_sessions': {
                 const providerType = typeof args?.providerType === 'string'
                     ? args.providerType.trim()
@@ -6602,333 +6530,6 @@ export class DaemonCommandRouter {
                 this.deps.detectedIdes.value = results;
                 this.deps.providerLoader.setIdeDetectionResults(results, true);
                 return { success: true, detectedInfo: results };
-            }
-
-            // ─── Set User Name ───
-            case 'set_user_name': {
-                const name = args?.userName;
-                if (!name || typeof name !== 'string') throw new Error('userName required');
-                updateConfig({ userName: name });
-                return { success: true, userName: name };
-            }
-
-            case 'get_status_metadata': {
-                const snapshot = buildStatusSnapshot({
-                    allStates: this.deps.instanceManager.collectAllStates(),
-                    cdpManagers: this.deps.cdpManagers,
-                    providerLoader: this.deps.providerLoader,
-                    detectedIdes: this.deps.detectedIdes.value,
-                    instanceId: this.deps.statusInstanceId || loadConfig().machineId || 'daemon',
-                    version: this.deps.statusVersion || 'unknown',
-                    profile: 'metadata',
-                });
-                // Surface the daemon's build stamp so coordinators (mesh_status)
-                // can detect a running daemon that predates a just-merged fix and
-                // is awaiting deploy/restart. Sibling of `status` to avoid
-                // perturbing the dashboard status snapshot shape.
-                return { success: true, status: snapshot, daemonBuild: getDaemonBuildInfo() };
-            }
-
-            case 'get_machine_runtime_stats': {
-                return {
-                    success: true,
-                    machine: buildMachineInfo('full'),
-                    timestamp: Date.now(),
-                };
-            }
-
-            // Session-info popup data. Aggregates whatever the daemon knows
-            // about a single live session into one envelope so the dashboard
-            // doesn't need to stitch together status + coordinator registry +
-            // session registry on the client. Includes the actual system
-            // prompt that was injected at launch when the session is a mesh
-            // coordinator — that's the "what prompt did the agent see?"
-            // question the info-icon dialog is meant to answer.
-            case 'get_session_info': {
-                const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim()
-                    : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
-                if (!sessionId) return { success: false, error: 'targetSessionId required' };
-                // Fetch both lookups up front. We used to bail with "Session not
-                // found" when sessionRegistry forgot the SID (auto-cleanup,
-                // daemon restart with the session not yet restored, etc), which
-                // hid the coordinator-side metadata even though the
-                // coordinator-registry still has it. Now we return whichever
-                // side we have. The dashboard renders "no coordinator-specific
-                // prompt" only when *neither* side knows the session.
-                const target = this.deps.sessionRegistry.get(sessionId);
-                const coord = getCoordinatorForSession(sessionId);
-                if (!target && !coord) return { success: false, error: 'Session not found', sessionId };
-                const adapter = target
-                    ? this.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter
-                    : undefined;
-                const runtimeMeta = (adapter && typeof (adapter as any).getRuntimeMetadata === 'function')
-                    ? (adapter as any).getRuntimeMetadata()
-                    : undefined;
-                // Launch metadata (args / cwd / extra-env keys / providerSessionId) is
-                // derived from the live adapter's spawn plan; only available while the
-                // adapter is alive (resumed-from-history sessions report nothing here).
-                const launchInfo = (adapter && typeof (adapter as any).getLaunchInfo === 'function')
-                    ? (adapter as any).getLaunchInfo()
-                    : undefined;
-                const providerType = target?.providerType || coord?.cliType || '';
-                const providerMetaForSession = providerType
-                    ? this.deps.providerLoader.resolve?.(providerType) || this.deps.providerLoader.getMeta(providerType)
-                    : undefined;
-                return {
-                    success: true,
-                    session: {
-                        sessionId,
-                        providerType,
-                        providerName: providerMetaForSession?.name,
-                        transport: target?.transport,
-                        workspace: (target as any)?.workspace || coord?.workspace,
-                        spawnedAtMs: (target as any)?.spawnedAtMs || coord?.startedAt,
-                        // providerSessionId now comes from the live adapter's launch info
-                        // (the registry target never carried it — it was always undefined).
-                        providerSessionId: launchInfo?.providerSessionId || (target as any)?.providerSessionId,
-                        runtimeMetadata: runtimeMeta,
-                        launch: launchInfo,
-                    },
-                    coordinator: coord ? {
-                        meshId: coord.meshId,
-                        startedAt: coord.startedAt,
-                        cliType: coord.cliType,
-                        systemPrompt: coord.systemPrompt,
-                        extraSystemPrompt: coord.extraSystemPrompt,
-                        injection: coord.injection,
-                        mcpConfigPath: coord.mcpConfigPath,
-                    } : null,
-                };
-            }
-
-            case 'list_coordinator_prompts': {
-                const fs = await import('node:fs');
-                const path = await import('node:path');
-                const os = await import('node:os');
-                const dir = path.join(os.homedir(), '.adhdev', 'coordinator-prompts');
-                const entries: Record<string, { override: string; append: string }> = {};
-                try {
-                    if (fs.existsSync(dir)) {
-                        for (const name of fs.readdirSync(dir)) {
-                            // Bucket files into <key>.{md|append.md}; ignore others
-                            // so a stray README or .DS_Store doesn't show up.
-                            const matchOverride = name.match(/^([a-zA-Z0-9_.-]+)\.md$/);
-                            const matchAppend = name.match(/^([a-zA-Z0-9_.-]+)\.append\.md$/);
-                            // append-pattern wins when both match (file is `.append.md`).
-                            const m = matchAppend || matchOverride;
-                            if (!m) continue;
-                            const isAppend = !!matchAppend;
-                            const key = m[1];
-                            const full = path.join(dir, name);
-                            let content = '';
-                            try { content = fs.readFileSync(full, 'utf8'); } catch { /* skip */ }
-                            if (!entries[key]) entries[key] = { override: '', append: '' };
-                            if (isAppend) entries[key].append = content;
-                            else entries[key].override = content;
-                        }
-                    }
-                } catch (error: any) {
-                    return { success: false, error: error?.message || String(error) };
-                }
-                return { success: true, dir, entries };
-            }
-
-            case 'write_coordinator_prompt': {
-                const fs = await import('node:fs');
-                const path = await import('node:path');
-                const os = await import('node:os');
-                const key = typeof args?.key === 'string' ? args.key.trim() : '';
-                const kind = args?.kind === 'append' ? 'append' : 'override';
-                const content = typeof args?.content === 'string' ? args.content : '';
-                // Whitelist key chars so a malicious caller can't write
-                // ../../etc/passwd. Same charset readUserPromptFile accepts.
-                if (!key || !/^[a-zA-Z0-9_.-]+$/.test(key)) {
-                    return { success: false, error: 'key must match [a-zA-Z0-9_.-]+' };
-                }
-                const dir = path.join(os.homedir(), '.adhdev', 'coordinator-prompts');
-                const filename = kind === 'append' ? `${key}.append.md` : `${key}.md`;
-                const full = path.join(dir, filename);
-                try {
-                    fs.mkdirSync(dir, { recursive: true });
-                    if (content.trim()) {
-                        fs.writeFileSync(full, content, { encoding: 'utf8', mode: 0o600 });
-                    } else if (fs.existsSync(full)) {
-                        // Empty content = "reset to default" — delete the file
-                        // so the daemon's readUserPromptFile path falls through.
-                        fs.unlinkSync(full);
-                    }
-                    return { success: true, path: full, kind, key };
-                } catch (error: any) {
-                    return { success: false, error: error?.message || String(error) };
-                }
-            }
-
-            case 'mark_session_seen': {
-                const sessionId = args?.sessionId;
-                if (!sessionId || typeof sessionId !== 'string') {
-                    return { success: false, error: 'sessionId is required' };
-                }
-                const currentState = loadState();
-                const prevSeenAt = currentState.sessionReads?.[sessionId] || 0;
-                const sessionEntries = buildSessionEntries(
-                    this.deps.instanceManager.collectAllStates(),
-                    this.deps.cdpManagers,
-                );
-                const targetSession = sessionEntries.find((entry) => entry.id === sessionId);
-                const requestedCompletionMarker = typeof args?.completionMarker === 'string'
-                    ? args.completionMarker.trim()
-                    : '';
-                const completionMarker = requestedCompletionMarker || (targetSession ? getSessionCompletionMarker(targetSession) : '');
-                const requestedProviderSessionId = typeof args?.providerSessionId === 'string'
-                    ? args.providerSessionId.trim()
-                    : '';
-                const providerSessionId = requestedProviderSessionId || targetSession?.providerSessionId;
-                const next = markSessionSeen(
-                    currentState,
-                    sessionId,
-                    typeof args?.seenAt === 'number' ? args.seenAt : Date.now(),
-                    completionMarker,
-                    providerSessionId,
-                );
-                if (READ_DEBUG_ENABLED) {
-                    LOG.info('RecentRead', `mark_session_seen sessionId=${sessionId} seenAt=${String(args?.seenAt || '')} prevSeenAt=${String(prevSeenAt)} nextSeenAt=${String(next.sessionReads?.[sessionId] || 0)} marker=${completionMarker || '-'}`);
-                }
-                saveState(next);
-                this.deps.onStatusChange?.();
-                return {
-                    success: true,
-                    sessionId,
-                    seenAt: next.sessionReads?.[sessionId] || Date.now(),
-                    completionMarker,
-                };
-            }
-
-            case 'delete_notification': {
-                const sessionId = args?.sessionId;
-                const notificationId = typeof args?.notificationId === 'string' ? args.notificationId.trim() : '';
-                if (!sessionId || typeof sessionId !== 'string') {
-                    return { success: false, error: 'sessionId is required' };
-                }
-                if (!notificationId) {
-                    return { success: false, error: 'notificationId is required' };
-                }
-                const sessionEntries = buildSessionEntries(
-                    this.deps.instanceManager.collectAllStates(),
-                    this.deps.cdpManagers,
-                );
-                const targetSession = sessionEntries.find((entry) => entry.id === sessionId);
-                const next = dismissSessionNotification(
-                    loadState(),
-                    sessionId,
-                    notificationId,
-                    targetSession?.providerSessionId,
-                );
-                saveState(next);
-                this.deps.onStatusChange?.();
-                return {
-                    success: true,
-                    sessionId,
-                    notificationId,
-                };
-            }
-
-            case 'mark_notification_unread': {
-                const sessionId = args?.sessionId;
-                const notificationId = typeof args?.notificationId === 'string' ? args.notificationId.trim() : '';
-                if (!sessionId || typeof sessionId !== 'string') {
-                    return { success: false, error: 'sessionId is required' };
-                }
-                if (!notificationId) {
-                    return { success: false, error: 'notificationId is required' };
-                }
-                const sessionEntries = buildSessionEntries(
-                    this.deps.instanceManager.collectAllStates(),
-                    this.deps.cdpManagers,
-                );
-                const targetSession = sessionEntries.find((entry) => entry.id === sessionId);
-                const next = markSessionNotificationUnread(
-                    loadState(),
-                    sessionId,
-                    notificationId,
-                    targetSession?.providerSessionId,
-                );
-                saveState(next);
-                this.deps.onStatusChange?.();
-                return {
-                    success: true,
-                    sessionId,
-                    notificationId,
-                };
-            }
-
-            // ─── Daemon Self-Upgrade ───
-            case 'daemon_upgrade': {
-                LOG.info('Upgrade', 'Remote upgrade requested from dashboard');
-                try {
-                    // Detect package name for upgrade
-                    const isStandalone = this.deps.packageName === '@adhdev/daemon-standalone'
-                        || process.argv[1]?.includes('daemon-standalone');
-                    const pkgName = isStandalone ? '@adhdev/daemon-standalone' : 'adhdev';
-                    const npmSurface = resolveCurrentGlobalInstallSurface({ packageName: pkgName });
-                    const channel = resolveUpgradeChannel(args);
-                    const npmTag = CHANNEL_NPM_TAG[channel];
-
-                    // Check channel-pinned dist-tag and resolve it to a concrete install version.
-                    const latest = String(execNpmCommandSync(['view', `${pkgName}@${npmTag}`, 'version'], { encoding: 'utf-8', timeout: 10000 }, npmSurface)).trim();
-                    LOG.info('Upgrade', `Latest ${pkgName}@${npmTag}: v${latest}`);
-                    updateConfig({ updateChannel: channel, serverUrl: CHANNEL_SERVER_URL[channel] } as any);
-                    let currentInstalled: string | null = null;
-                    try {
-                        const currentJson = String(execNpmCommandSync(['ls', '-g', pkgName, '--depth=0', '--json'], {
-                            encoding: 'utf-8',
-                            timeout: 10000,
-                            stdio: ['pipe', 'pipe', 'pipe'],
-                        }, npmSurface)).trim();
-                        const parsed = JSON.parse(currentJson);
-                        currentInstalled = parsed?.dependencies?.[pkgName]?.version || null;
-                    } catch {
-                        // ignore ls failures; upgrade can still proceed
-                    }
-
-                    const runningVersion = typeof this.deps.statusVersion === 'string'
-                        ? this.deps.statusVersion.trim().replace(/^v/, '')
-                        : null;
-                    if (currentInstalled === latest && runningVersion === latest) {
-                        LOG.info('Upgrade', `Already on ${channel} channel version v${latest}; skipping install`);
-                        return { success: true, upgraded: false, alreadyLatest: true, version: latest, channel, npmTag };
-                    }
-                    if (currentInstalled === latest && runningVersion && runningVersion !== latest) {
-                        LOG.info('Upgrade', `Installed package is v${latest}, but running daemon is v${runningVersion}; scheduling restart`);
-                    }
-
-                    spawnDetachedDaemonUpgradeHelper({
-                        packageName: pkgName,
-                        targetVersion: latest,
-                        parentPid: process.pid,
-                        restartArgv: process.argv.slice(1),
-                        cwd: process.cwd(),
-                        sessionHostAppName: process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev',
-                    });
-                    LOG.info('Upgrade', `Scheduled detached ${channel} upgrade to v${latest}`);
-
-                    // Exit after the command response has been sent so the helper can replace the package cleanly.
-                    setTimeout(() => {
-                        LOG.info('Upgrade', 'Exiting daemon so detached upgrader can continue...');
-                        process.exit(0);
-                    }, 3000);
-
-                    return { success: true, upgraded: true, version: latest, restarting: true, channel, npmTag };
-                } catch (e: any) {
-                    LOG.error('Upgrade', `Failed: ${e.message}`);
-                    return { success: false, error: e.message };
-                }
-            }
-
-            // ─── Machine Settings ───
-            case 'set_machine_nickname': {
-                const nickname = args?.nickname;
-                updateConfig({ machineNickname: nickname || null });
-                return { success: true };
             }
 
             // ─── Mesh CRUD (local meshes.json) ───
@@ -7261,57 +6862,6 @@ export class DaemonCommandRouter {
                 }
             }
 
-            case 'get_mesh_ledger': {
-                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                if (!meshId) return { success: false, error: 'meshId required' };
-                try {
-                    const { readLedgerEntries, getLedgerSummary } = await import('../mesh/mesh-ledger.js');
-                    const tail = typeof args?.tail === 'number' ? args.tail : 20;
-                    const since = typeof args?.since === 'string' ? args.since : undefined;
-                    const kind = Array.isArray(args?.kind) ? args.kind.filter((k: any) => typeof k === 'string') : undefined;
-                    const entries = readLedgerEntries(meshId, { tail, since, kind });
-                    const summary = getLedgerSummary(meshId);
-                    return { success: true, entries, summary };
-                } catch (e: any) {
-                    return { success: false, error: e.message };
-                }
-            }
-
-            case 'get_mesh_ledger_slice': {
-                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                if (!meshId) return { success: false, error: 'meshId required' };
-                try {
-                    const { readLedgerSlice } = await import('../mesh/mesh-ledger.js');
-                    const kind = Array.isArray(args?.kind) ? args.kind.filter((k: any) => typeof k === 'string') : undefined;
-                    const slice = readLedgerSlice(meshId, {
-                        afterId: typeof args?.afterId === 'string' ? args.afterId : undefined,
-                        since: typeof args?.since === 'string' ? args.since : undefined,
-                        kind,
-                        limit: typeof args?.limit === 'number' ? args.limit : undefined,
-                    });
-                    return { success: true, slice };
-                } catch (e: any) {
-                    return { success: false, error: e.message };
-                }
-            }
-
-            case 'import_mesh_ledger_slice': {
-                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                if (!meshId) return { success: false, error: 'meshId required' };
-                try {
-                    const { appendRemoteLedgerEntries, getLedgerSummary } = await import('../mesh/mesh-ledger.js');
-                    const entries = Array.isArray(args?.entries)
-                        ? args.entries as any[]
-                        : Array.isArray(args?.slice?.entries)
-                            ? args.slice.entries as any[]
-                            : [];
-                    const result = appendRemoteLedgerEntries(meshId, entries as any);
-                    return { success: true, result, summary: getLedgerSummary(meshId) };
-                } catch (e: any) {
-                    return { success: false, error: e.message };
-                }
-            }
-
             case 'get_mesh_queue': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
@@ -7601,70 +7151,6 @@ export class DaemonCommandRouter {
                     allowAutoPublishSubmoduleMainCommits,
                 }) as Promise<unknown>);
                 return result as CommandRouterResult;
-            }
-
-            case 'get_mesh_node_logs': {
-                // Coordinator-driven remote log fetch: read a (possibly remote)
-                // daemon's recent log tail over P2P instead of opening a session
-                // and grepping the file by hand. Mirrors fast_forward_mesh_node's
-                // forward pattern — resolve the node, forward to its owning daemon
-                // when remote, otherwise read locally. The reply tail is HARD
-                // byte-bounded and secret-redacted before it leaves the machine.
-                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
-                let nodeDaemonId: string | undefined;
-                if (meshId && nodeId) {
-                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-                    const node = meshRecord?.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
-                    nodeDaemonId = typeof node?.daemonId === 'string' ? node.daemonId.trim() : undefined;
-                }
-                // _meshDirectDispatch prevents re-forwarding (and P2P self-dial)
-                // once the call lands on the owning daemon — that daemon then reads
-                // its own logs even if the stored daemonId uses a legacy form.
-                const selfDaemonId = this.deps.statusInstanceId;
-                // daemonIdsEquivalent: a legacy-form daemonId resolving to this machine's core is
-                // local — read locally instead of forwarding. Equivalent → local.
-                const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
-                if (isRemote && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
-                    const forwarded = await this.deps.dispatchMeshCommand(nodeDaemonId!, 'get_mesh_node_logs', {
-                        ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
-                        _meshDirectDispatch: true,
-                    });
-                    return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
-                }
-
-                // Local read on the owning daemon.
-                const rawTailBytes = Number(args?.tailBytes);
-                const tail = readDaemonLogTail({
-                    date: typeof args?.date === 'string' ? args.date : undefined,
-                    tailBytes: Number.isFinite(rawTailBytes) ? Math.min(rawTailBytes, MAX_TAIL_BYTES) : undefined,
-                    grep: typeof args?.grep === 'string' ? args.grep : undefined,
-                    sinceMs: Number.isFinite(Number(args?.sinceMs)) ? Number(args?.sinceMs) : undefined,
-                });
-                if (!tail.success) {
-                    return {
-                        success: false,
-                        error: tail.error || 'failed to read daemon log tail',
-                        nodeId,
-                        logPath: tail.logPath,
-                        platform: tail.platform,
-                    } as CommandRouterResult;
-                }
-                // SECURITY: redact secrets from every line before returning over P2P.
-                const redactedLines = redactLogLines(tail.lines);
-                return {
-                    success: true,
-                    nodeId,
-                    daemonId: selfDaemonId,
-                    logPath: tail.logPath,
-                    platform: tail.platform,
-                    lines: redactedLines,
-                    lineCount: redactedLines.length,
-                    truncated: tail.truncated,
-                    filtered: tail.filtered,
-                    bytesReturned: tail.bytesReturned,
-                    ...(tail.grep ? { grep: tail.grep } : {}),
-                } as CommandRouterResult;
             }
 
             case 'refine_mesh_node': {
