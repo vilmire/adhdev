@@ -5,6 +5,7 @@ import type {
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
 import {
+    daemonIdsEquivalent,
     normalizeGitStatus,
     normalizeMeshSessionRecord,
     pickBestTransitGitStatus,
@@ -301,7 +302,11 @@ function attachCoordinatorSessionsToNodes(status: RepoMeshStatus, nodes: RepoMes
             const sessionDaemonId = readString(record.daemonId, record.daemon_id)
             const sessionWorkspace = readString(record.workspace)
             if (sessionNodeId && sessionNodeId === node.nodeId) return true
-            if (sessionDaemonId && node.daemonId && sessionDaemonId === node.daemonId) {
+            // daemonIdsEquivalent (mesh-shared SSOT) collapses the interchangeable
+            // mach_ / daemon_mach_ / standalone_mach_ id forms of one machine, so a
+            // session stamped in a different-but-equivalent form still matches its
+            // node — a raw === here used to false-miss cross-form pairs.
+            if (daemonIdsEquivalent(sessionDaemonId, node.daemonId)) {
                 return !sessionWorkspace || !node.workspace || sessionWorkspace === node.workspace
             }
             return Boolean(sessionWorkspace && node.workspace && sessionWorkspace === node.workspace)
