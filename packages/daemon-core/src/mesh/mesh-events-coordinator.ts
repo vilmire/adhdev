@@ -1840,7 +1840,16 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // transcript and record the genuine completion once the worker truly finishes (commonly
         // after a coordinator nudge / re-dispatch). A matched queue task, or a completion with
         // genuine evidence, is marked terminal as before.
-        const leaveDirectDispatchActive = !task && opts?.tentativeIfDirect === true;
+        // WARMUPGAP: a no-taskId completion from a session that holds no active assignment is a
+        // pre-assignment warmup / ghost event (a worker spawns, idles, and emits idle→generating→
+        // completed before any task is dispatched, with meshActiveTaskId unset so the event carries
+        // no taskId). Letting it through would hit the session_id fallback in updateDirectDispatchStatus
+        // and flip a sibling/stale dispatch row this event does not own — the real task later lands on
+        // a corrupted row and never reaches completed. Skip the dispatch update for that case. A
+        // taskId-carrying completion (real task), or any completion whose session currently holds an
+        // active assignment (legacy/relayed worker), still flips as before.
+        const leaveDirectDispatchActive = (!task && opts?.tentativeIfDirect === true)
+            || (!eventTaskId && !sessionHasActiveAssignment(args.meshId, sessionId));
         if (!leaveDirectDispatchActive) {
             // CANON-B: flip the exact dispatch row the completion echoed its taskId for; the
             // session_id fallback (no echoed taskId) still covers legacy/relayed workers.
@@ -1958,7 +1967,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // sibling must keep that row 'dispatched' so its own confirm can match it; acking
             // by session would mark it 'acked' prematurely and hide a genuine non-delivery.
             const startedTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
-            updateDirectDispatchStatus(args.meshId, sessionId, 'acked', startedTaskId);
+            // WARMUPGAP: only ack a dispatch row when the event names its task, or the session
+            // currently holds an active assignment. A no-taskId generating_started from an
+            // unassigned session is a pre-assignment warmup — the session_id fallback would ack a
+            // sibling/stale dispatch row this event does not own, marking it 'acked' prematurely and
+            // hiding a genuine non-delivery. Skip the dispatch ack for that ghost case (the delivery
+            // acks below are bound to actual deliveries and stay a no-op for a warmup session).
+            if (startedTaskId || sessionHasActiveAssignment(args.meshId, sessionId)) {
+                updateDirectDispatchStatus(args.meshId, sessionId, 'acked', startedTaskId);
+            }
             const activeDeliveries = ((): { id: string; taskId: string | null }[] => {
                 try { return MeshRuntimeStore.getInstance().getActiveSessionDeliveries(args.meshId, sessionId); }
                 catch { return []; }
