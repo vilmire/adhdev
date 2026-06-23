@@ -9,6 +9,7 @@ import type { GitCompactSummary, MessageInputSupport, RecentSessionBucket } from
 import { deriveNativeConversationStatus, deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
+import { getConversationTabKey, resolveOwnerMachineName } from './conversation-identity';
 
 interface BuildConversationContext {
     machineName?: string;
@@ -41,13 +42,6 @@ export function getWorkspaceName(ide: DaemonData): string {
 
 function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentType: string }): string {
     return stream.sessionId || stream.instanceId || stream.agentType;
-}
-
-function getConversationTabKey(sessionId: string | undefined, fallbackKey: string): string {
-    // Tab/panel identity must be globally unique across connected daemons.
-    // Keep raw sessionId/providerSessionId on the conversation for URL/history compatibility,
-    // but use the daemon-scoped route id as the stable Dockview tab key.
-    return fallbackKey || sessionId || 'unknown';
 }
 
 function isConversationIdentityDebugEnabled(): boolean {
@@ -97,16 +91,11 @@ export function getIdeConversationBuildContext(
 ): BuildConversationContext {
     const daemonId = ide.daemonId || ide.id?.split(':')[0] || ide.id;
     // Mesh delegated sessions are synthesised into the coordinator's snapshot but belong to a
-    // worker node. Honour the per-session owner attribution (resolved owning daemon's machine
-    // name, then an explicit fallback) so the dashboard shows the worker machine rather than the
-    // coordinator's. Falls back to the snapshot daemon's machine for ordinary local sessions.
-    const ownerMachineName = (ide.ownerDaemonId && options.machineNames?.[ide.ownerDaemonId])
-        || ide.ownerMachineName
-        || undefined;
+    // worker node. resolveOwnerMachineName honours the per-session owner attribution (resolved
+    // owning daemon's machine name, then an explicit fallback, then the snapshot daemon's machine)
+    // so the dashboard shows the worker machine rather than the coordinator's.
     return {
-        machineName: ownerMachineName
-            || (ide.daemonId && options.machineNames?.[ide.daemonId])
-            || undefined,
+        machineName: resolveOwnerMachineName(ide, options.machineNames),
         connectionState: options.connectionStates
             ? (options.connectionStates[daemonId] || options.defaultConnectionState || 'new')
             : options.defaultConnectionState,

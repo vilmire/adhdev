@@ -6,6 +6,7 @@
 import type { DaemonData } from '../types'
 import type { MachineInfo, DetectedIdeInfo, SessionEntry, RuntimeWriteOwner } from '@adhdev/daemon-core'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
+import { getMachineSessionDedupeKey } from '../components/dashboard/conversation-identity'
 
 // ─── Formatters ──────────────────────────────────
 
@@ -418,28 +419,6 @@ export interface AcpSessionSummary {
     workspace: string
     model?: string
     lastActivityAt: number
-}
-
-/**
- * Per-machine session dedup key.
- *
- * A mesh-delegated session lands in the SAME machine group twice:
- *  - the worker's own report:            daemonId='<worker>', id='<worker>:cli:<sid>', no ownerDaemonId,
- *                                         providerName/cliName = raw providerType (e.g. "claude-cli")
- *  - the coordinator's synthesised copy: daemonId='<coordinator>', id='<coordinator>:cli:<sid>',
- *                                         ownerDaemonId='<worker>', providerName mapped to the
- *                                         displayName (e.g. "Claude Code")
- * Both are attributed to the worker machine (ownerDaemonId || daemonId), but their full `id`
- * differs by the reporting-daemon prefix and their label differs (raw providerType vs displayName),
- * so the old `c.id === daemon.id` dedup missed them and the card rendered twice. Both copies carry
- * the SAME underlying sessionId (the coordinator mirror uses the worker's real session id), so key
- * on it to collapse the two. Neither the reporting-daemon prefix nor the provider label may enter
- * the key. Fall back to the full id when no sessionId exists so unrelated single-path sessions stay
- * distinct (regression guard).
- */
-function getMachineSessionDedupeKey(entry: { sessionId?: string; id: string }): string {
-    const sessionId = String(entry.sessionId || '').trim()
-    return sessionId || entry.id
 }
 
 /**

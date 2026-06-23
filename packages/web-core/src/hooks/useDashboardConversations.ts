@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { buildMachineNameMap, buildScopedIdeConversations, getIdeConversationBuildContext } from '../components/dashboard/buildConversations'
-import { buildConversationLookupKeys } from '../components/dashboard/conversation-identity'
+import { buildConversationLookupKeys, getDaemonEntrySessionSuffix, getIdeChatDedupeKey, isMeshOwnedSessionCopy } from '../components/dashboard/conversation-identity'
 import { compareConversationRecency, getConversationSortTimestamp, getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import type { ActiveConversation, DashboardMessage } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
@@ -14,54 +14,6 @@ interface UseDashboardConversationsOptions {
     hiddenTabs: Set<string>
 }
 
-/** Strip the reporting-daemon prefix from `id`, yielding the raw session id shared
- *  across the coordinator-reported and worker-reported copies of one mesh session. */
-function getSessionSuffix(ide: DaemonData): string {
-    const daemonId = String(ide.daemonId || '').trim()
-    const id = String(ide.id || '').trim()
-    return daemonId && id.startsWith(`${daemonId}:`) ? id.slice(daemonId.length + 1) : id
-}
-
-/** True when this entry is a coordinator-synthesised mesh-owned session copy. The
- *  coordinator stamps any of these markers; a worker's own session report carries none. */
-function isMeshOwnedSessionCopy(ide: DaemonData): boolean {
-    if (String(ide.ownerDaemonId || '').trim()) return true
-    const settings = ide.settings as Record<string, unknown> | undefined
-    if (!settings) return false
-    return Boolean(settings.meshNodeFor) || Boolean(settings.meshNodeId)
-        || settings.launchedByCoordinator === true || settings._remoteOwnedSession === true
-}
-
-function getChatIdeDedupeKey(ide: DaemonData, meshSessionSuffixes: Set<string>) {
-    const daemonId = String(ide.daemonId || '').trim()
-    const id = String(ide.id || '').trim()
-    const sessionSuffix = getSessionSuffix(ide)
-    // Mesh delegated sessions arrive through two sources for the SAME underlying session:
-    //  - coordinator-reported: id='<coordDaemon>:<rest>', daemonId='<coordDaemon>', ownerDaemonId='<workerDaemon>'
-    //  - worker-reported:      id='<workerDaemon>:<rest>', daemonId='<workerDaemon>', ownerDaemonId=undefined
-    // Keying on the reporting daemon yields two distinct keys and a duplicate "ghost" tab.
-    //
-    // When the coordinator successfully resolved owner attribution it carries
-    // ownerDaemonId='<workerDaemon>', so normalizing to (ownerDaemonId || daemonId) collapses both
-    // arrivals to '<workerDaemon>:<rest>'. But attribution resolution is racy — the owning node may
-    // not be probed yet — and when it fails the coordinator copy has NO ownerDaemonId (or a
-    // node-scoped fallback that does NOT equal the worker daemonId). The reporting-daemon
-    // normalization then can't merge it with the worker copy and the ghost tab reappears.
-    //
-    // Defense: any session that is mesh-owned (coordinator copy carries a mesh marker) is keyed on
-    // the session SUFFIX alone — a value both the coordinator copy and the marker-less worker copy
-    // share — so the two collapse regardless of whether attribution resolved. `meshSessionSuffixes`
-    // is the set of suffixes seen on a mesh-owned copy, so the marker-less worker copy is pulled in too.
-    if (sessionSuffix && meshSessionSuffixes.has(sessionSuffix)) {
-        return `mesh:${sessionSuffix}`
-    }
-    // Non-mesh sessions keep their reporting daemon and stay distinct (two unrelated local sessions
-    // on different daemons that happen to share a raw session id must remain separate tabs).
-    const ownerDaemonId = String(ide.ownerDaemonId || '').trim() || daemonId
-    if (!ownerDaemonId) return id
-    return sessionSuffix ? `${ownerDaemonId}:${sessionSuffix}` : ownerDaemonId
-}
-
 export function dedupeChatIdes(ides: DaemonData[]) {
     const filtered = ides.filter(ide => ide.type !== 'adhdev-daemon')
     // First pass: collect the session suffixes of every mesh-owned copy. A worker's own session
@@ -70,14 +22,14 @@ export function dedupeChatIdes(ides: DaemonData[]) {
     const meshSessionSuffixes = new Set<string>()
     for (const ide of filtered) {
         if (!isMeshOwnedSessionCopy(ide)) continue
-        const suffix = getSessionSuffix(ide)
+        const suffix = getDaemonEntrySessionSuffix(ide)
         if (suffix) meshSessionSuffixes.add(suffix)
     }
 
     const seen = new Map<string, DaemonData>()
 
     for (const ide of filtered) {
-        const dedupeKey = getChatIdeDedupeKey(ide, meshSessionSuffixes)
+        const dedupeKey = getIdeChatDedupeKey(ide, meshSessionSuffixes)
         const existing = seen.get(dedupeKey)
         if (!existing) {
             seen.set(dedupeKey, ide)
