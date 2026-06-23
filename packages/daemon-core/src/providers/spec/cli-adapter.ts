@@ -19,6 +19,7 @@
 'use strict';
 
 import { FsmDriver, type DashboardEvent, type ISpecDriver } from './fsm-driver.js';
+import { lastContiguousNumberedBlock } from './evaluator.js';
 import { executeNativeHistory } from './native-history-executor.js';
 import * as fs from 'node:fs';
 import type { NativeHistoryConfig, Control, ControlAction } from './types.js';
@@ -521,21 +522,27 @@ export class SpecCliAdapter implements CliAdapter {
         const ec = action.extract_choices;
         if (!ec?.pattern) return [];
         const text = this.readScreenSectionText(ec.section);
-        const out: Array<{ index: number; label: string; current: boolean }> = [];
-        const seen = new Set<number>();
+        // Collect EVERY matching line in screen order with no top-down de-dup.
+        // The picker section can include conversation history above it (a stray
+        // "1./2./3." list, blockquote `>` lines); a `seen.has(idx)` first-wins
+        // scan would let those body lines claim the option indices and shadow
+        // the real choices — committing the wrong model under arrow-key nav.
+        const all: Array<{ index: number; label: string; current: boolean }> = [];
         for (const rawLine of text.split('\n')) {
             const line = rawLine.replace(/\r$/, '');
             const m = new RegExp(ec.pattern, ec.flags ?? '').exec(line);
             if (!m) continue;
             const idx = Number(m[1]);
-            if (!Number.isFinite(idx) || seen.has(idx)) continue;
+            if (!Number.isFinite(idx) || idx <= 0) continue;
             const label = (m[2] ?? '').replace(/\s+/g, ' ').trim();
             if (!label) continue;
             const current = /^\s*[❯›>]/.test(line) || /[✔✓●]\s*$/.test(label);
-            seen.add(idx);
-            out.push({ index: idx, label, current });
+            all.push({ index: idx, label, current });
         }
-        return out;
+        // Real options are the bottom-most contiguous numbered block; this also
+        // confines the `current` cursor flag to that block so a body `>` line is
+        // never mistaken for the cursor row.
+        return lastContiguousNumberedBlock(all);
     }
 
     /** Live text of a named screen section (or the whole screen when no

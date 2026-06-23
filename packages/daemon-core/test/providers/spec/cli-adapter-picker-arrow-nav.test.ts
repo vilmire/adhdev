@@ -40,6 +40,31 @@ const SONNET_CURRENT_SCREEN = [
     '    4. Opus                   Opus 4.8 · complex tasks',
 ].join('\n');
 
+// MODELSWITCH body-pollution regression: an EXISTING conversation whose history
+// carries its own "1./2./3." numbered list, a ──── divider, AND a blockquote
+// "> 1." line (the blockquote even carries a cursor glyph `>` + index 1, which
+// the old top-down scan mistook for the live cursor row). The real /model picker
+// renders LAST, at the bottom. Pre-fix the top-down first-wins scan bound indices
+// 1/2/3 to the body lines and dropped the real options → Sonnet was "not found"
+// (or, when a body label collided, the wrong cursor delta committed Opus). The
+// bottom-up contiguous-block scan must ignore all of the body and parse only the
+// trailing picker (Default / Sonnet / Opus-current).
+const BODY_POLLUTED_MODEL_PICKER = [
+    '❯ Draft a release plan',
+    '',
+    '⏺ Sure — here is the rollout plan:',
+    '  1. Cut the release branch',
+    '  2. Run the smoke suite',
+    '  3. Deploy to preview',
+    '────────────────────────────────────────────────────────────────',
+    '  > 1. an earlier quoted checklist item',
+    '',
+    '  Select model',
+    '    1. Default (recommended)  Opus 4.8 with 1M context · everyday',
+    '    2. Sonnet                 Sonnet 4.6 · routine tasks',
+    '  ❯ 3. Opus ✔                 Opus 4.8 · complex tasks',
+].join('\n');
+
 const ARROW_NAV_SET_MODEL = {
     id: 'set_model',
     label: 'Model',
@@ -139,6 +164,38 @@ describe('SpecCliAdapter — arrow-nav picker SELECT', () => {
         expect(res.error).toMatch(/cursor row/i);
         // Nothing was committed.
         expect(pty(dispatches)).toEqual([]);
+    });
+});
+
+describe('SpecCliAdapter — body-pollution regression (MODELSWITCH bottom-up)', () => {
+    it('lists ONLY the bottom picker options, ignoring body 1./2./3. + > quote', async () => {
+        const { adapter } = makePickerAdapter(BODY_POLLUTED_MODEL_PICKER, ARROW_NAV_SET_MODEL);
+
+        const res: any = await adapter.invokeScript('set_model', {}); // list, no select
+        const labels = res.controlResult.options.map((o: any) => o.label);
+
+        // Real picker options — NOT the conversation-history list.
+        expect(res.controlResult.options.map((o: any) => o.value)).toHaveLength(3);
+        expect(labels.join(' ')).toContain('Default');
+        expect(labels.join(' ')).toContain('Sonnet');
+        expect(labels.join(' ')).toMatch(/\bOpus\b/);
+        expect(labels.join(' ')).not.toMatch(/Cut the release branch|smoke suite|Deploy to preview|earlier quoted/);
+        // The cursor row is the picker's Opus row, NOT the body's "> 1." line.
+        expect(res.controlResult.currentValue).toContain('Opus');
+        expect(res.controlResult.options.filter((o: any) => o.current)).toHaveLength(1);
+    });
+
+    it('commits the correct model: Sonnet steps 1× UP from the Opus cursor (was Opus-save)', async () => {
+        const { adapter, dispatches } = makePickerAdapter(BODY_POLLUTED_MODEL_PICKER, ARROW_NAV_SET_MODEL);
+
+        const res: any = await adapter.invokeScript('set_model', { value: 'Sonnet' });
+
+        // Picker cursor = row 3 (Opus), Sonnet = row 2 → 1× UP then CR. Pre-fix the
+        // body shadowed the options and either errored or stepped from a body row.
+        expect(pty(dispatches)).toEqual([UP, '\r']);
+        expect(res.ok).toBe(true);
+        expect(res.controlResult.selectedIndex).toBe(2);
+        expect(res.controlResult.currentValue).toContain('Sonnet');
     });
 });
 

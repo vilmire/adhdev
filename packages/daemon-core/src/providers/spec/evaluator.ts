@@ -338,7 +338,10 @@ export function extractButtonsFromRule(
                 label += ' ' + next.trim();
                 j += 1;
             }
-            if (buttons.some(b => b.index === idx)) continue;
+            // No top-down de-dup here: a stray body "1." above the modal would
+            // otherwise claim the index and shadow the real choice. Collect
+            // every match in screen order and let lastContiguousNumberedBlock
+            // pick the bottom-most option block below.
             const key = keyTemplate.replace(/\{index\}/g, String(idx));
             buttons.push({ index: idx, label, key, current });
             i = j - 1;
@@ -350,17 +353,51 @@ export function extractButtonsFromRule(
             const idx = Number(m[1]);
             const label = String(m[2] ?? '').trim();
             if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
-            if (buttons.some(b => b.index === idx)) continue;
             const key = keyTemplate.replace(/\{index\}/g, String(idx));
             // The matched text begins at the cursor marker (the pattern's
             // optional `[❯›>]` prefix); flag this row as the cursor's current
             // position so `select_mode: 'arrow_keys'` can step from it.
+            // Like the continuation path, no top-down de-dup — body numbered
+            // lines are filtered out by the bottom-block selection below.
             buttons.push({ index: idx, label, key, current: hasCursorMarker(m[0]) });
         }
     }
 
-    buttons.sort((a, b) => a.index - b.index);
-    return buttons;
+    // Buttons were collected in screen (top→bottom) order. The real choices are
+    // the bottom-most contiguous numbered block (the modal/picker always renders
+    // them last); reduce to that block so conversation-history numbered lists
+    // pulled into the modal section can never be mistaken for options.
+    const block = lastContiguousNumberedBlock(buttons);
+    block.sort((a, b) => a.index - b.index);
+    return block;
+}
+
+/**
+ * Reduce a top→bottom-ordered list of parsed numbered entries to only the
+ * bottom-most contiguous block — the run whose indices descend by exactly 1
+ * scanning upward from the last entry.
+ *
+ * Picker and approval choices always render as the LAST contiguous numbered
+ * block at the bottom of the modal section. The conversation history above can
+ * carry its own stray "1./2./3." numbered lists (and blockquote `>` lines), and
+ * because section anchoring can pull body lines into the modal section, a naive
+ * top-down scan would bind the low option indices to those body lines and drop
+ * the real choices (the dashboard would show, and an arrow-key picker would
+ * commit, the wrong row). Selecting the bottom block makes the on-screen picker
+ * win regardless of body content. Since pickers number their options 1..N
+ * contiguously and bodies use indices ≥ 1, the upward chain always breaks the
+ * moment it would need a "0." above the picker's "1." — so the picker block is
+ * isolated cleanly. Entries are assumed already in screen order; the returned
+ * slice keeps that order.
+ */
+export function lastContiguousNumberedBlock<T extends { index: number }>(entries: T[]): T[] {
+    if (entries.length <= 1) return entries.slice();
+    let start = entries.length - 1;
+    for (let i = entries.length - 1; i > 0; i -= 1) {
+        if (entries[i - 1].index === entries[i].index - 1) start = i - 1;
+        else break;
+    }
+    return entries.slice(start);
 }
 
 /** True when a button line carries a TUI cursor marker (`❯`, `›`, `>`) before
