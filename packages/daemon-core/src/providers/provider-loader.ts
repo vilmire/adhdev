@@ -18,6 +18,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as chokidar from 'chokidar';
 import { registerIDEDefinition } from '../detection/ide-detector.js';
+import { sha256Hex } from '../system/hash.js';
 import { LOG } from '../logging/logger.js';
 import { VersionArchive } from './version-archive.js';
 import type {
@@ -1604,10 +1605,7 @@ export class ProviderLoader {
         });
 
         // Verify checksum
-        const actualChecksum = await new Promise<string>((resolve) => {
-          const crypto = require('crypto') as typeof import('crypto');
-          resolve(crypto.createHash('sha256').update(manifestBody, 'utf-8').digest('hex'));
-        });
+        const actualChecksum = sha256Hex(manifestBody);
         if (actualChecksum !== checksum) {
           this.log(`⚠ Registry checksum mismatch for ${type}@${version} — skipping`);
           continue;

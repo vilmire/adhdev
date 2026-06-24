@@ -25,6 +25,7 @@ import type { SessionRegistry, SessionRuntimeTarget } from '../sessions/registry
 import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
 import { resolveLegacyProviderScript, type LegacyStringScript } from './provider-script-resolver.js';
+import { sha256Hex } from '../system/hash.js';
 import { MANUAL_ATTENDANCE_COMMANDS } from '../providers/manual-attendance.js';
 
 // Sub-module imports
@@ -688,7 +689,6 @@ export class DaemonCommandHandler implements CommandHelpers {
         const https = require('https') as typeof import('https');
         const fs = require('fs') as typeof import('fs');
         const path = require('path') as typeof import('path');
-        const crypto = require('crypto') as typeof import('crypto');
         const REGISTRY = 'https://api.adhf.dev/api/v1/registry';
 
         function fetchText(url: string, timeoutMs: number): Promise<string> {
@@ -723,7 +723,7 @@ export class DaemonCommandHandler implements CommandHelpers {
             );
 
             // 3. Verify checksum.
-            const actualChecksum = crypto.createHash('sha256').update(manifestBody, 'utf-8').digest('hex');
+            const actualChecksum = sha256Hex(manifestBody);
             if (actualChecksum !== meta.checksum) {
                 return { success: false, error: `checksum mismatch: expected ${meta.checksum}, got ${actualChecksum}` };
             }

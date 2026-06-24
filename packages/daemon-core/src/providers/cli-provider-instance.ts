@@ -15,6 +15,7 @@ import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } 
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
 import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, type InteractivePrompt } from './types/interactive-prompt.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
+import { shortHash } from '../system/hash.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import { createCliAdapter } from './spec/route.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
@@ -1056,11 +1057,7 @@ export class CliProviderInstance implements ProviderInstance {
 
         const receivedAt = Date.now();
         this.lastAcknowledgedUserInputAt = receivedAt;
-        const dedupKey = `user_input_ack:${crypto
-            .createHash('sha256')
-            .update(`${this.instanceId}:${content}:${receivedAt}`)
-            .digest('hex')
-            .slice(0, 24)}`;
+        const dedupKey = `user_input_ack:${shortHash(`${this.instanceId}:${content}:${receivedAt}`, 24)}`;
         this.appendRuntimeMessage(buildChatMessage({
             role: 'user',
             senderName: 'User',
