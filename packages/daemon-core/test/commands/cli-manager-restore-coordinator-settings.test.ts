@@ -207,6 +207,69 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     }
   }, 15000);
 
+  it('CORDBADGE worker-overbind: a delegated worker sharing the coordinator workspace+cliType is NOT rebound while the real coordinator keeps its mark', async () => {
+    // The reported bug: after a daemon restart, a delegated worker session that lives
+    // in the SAME workspace+cliType as the real coordinator was painted as a coordinator.
+    // The coordinator is registered and restores under its own (stable) runtimeId, so the
+    // exact by-id match binds it. The worker's runtimeId is unknown to the registry, so it
+    // hits the workspace fallback — which must refuse the mark because the coordinator is
+    // already present under its own id (this record is therefore a worker).
+    const loader = setupLoader();
+    const meshId = 'mesh-coexist';
+    const coordinatorRuntimeId = 'real-coordinator-runtime';
+    const workerRuntimeId = 'delegated-worker-runtime';
+    registerMeshCoordinator({ meshId, sessionId: coordinatorRuntimeId, workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+
+    try {
+      const addInstance = vi.fn();
+      const restored = await createManager(loader, {
+        getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+        getSessionRegistry: () => ({ register: vi.fn() }),
+      }).restoreHostedSessions([
+        { runtimeId: coordinatorRuntimeId, cliType: 'sample-cli', workspace: workingDir },
+        { runtimeId: workerRuntimeId, cliType: 'sample-cli', workspace: workingDir },
+      ]);
+
+      expect(restored).toBe(2);
+      const byRuntime = new Map<string, any>();
+      for (const call of addInstance.mock.calls) byRuntime.set(call[0], call[2]);
+      // Real coordinator keeps the mark (CORDBADGE regression preserved).
+      expect(byRuntime.get(coordinatorRuntimeId).settings).toMatchObject({ autoApprove: true, meshCoordinatorFor: meshId });
+      // Worker is restored but NOT marked as a coordinator.
+      expect(byRuntime.get(workerRuntimeId).settings).toMatchObject({ autoApprove: true });
+      expect(byRuntime.get(workerRuntimeId).settings.meshCoordinatorFor).toBeUndefined();
+    } finally {
+      unregisterMeshCoordinator(coordinatorRuntimeId);
+    }
+  }, 15000);
+
+  it('CORDBADGE worker-overbind: when the coordinator id ALSO changed and a worker coexists, neither is rebound (ambiguous)', async () => {
+    // Conservative tail: the coordinator re-attaches under a new runtimeId (registered id
+    // is gone from the batch) AND a second same-workspace+cliType session is being restored.
+    // We cannot tell which of the two is the renamed coordinator, so the fallback must stay
+    // unbound for both rather than guess and risk marking the worker.
+    const loader = setupLoader();
+    registerMeshCoordinator({ meshId: 'mesh-ambig-batch', sessionId: 'gone-coordinator-id', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+
+    try {
+      const addInstance = vi.fn();
+      const restored = await createManager(loader, {
+        getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+        getSessionRegistry: () => ({ register: vi.fn() }),
+      }).restoreHostedSessions([
+        { runtimeId: 'unknown-runtime-a', cliType: 'sample-cli', workspace: workingDir },
+        { runtimeId: 'unknown-runtime-b', cliType: 'sample-cli', workspace: workingDir },
+      ]);
+
+      expect(restored).toBe(2);
+      for (const call of addInstance.mock.calls) {
+        expect(call[2].settings.meshCoordinatorFor).toBeUndefined();
+      }
+    } finally {
+      unregisterMeshCoordinator('gone-coordinator-id');
+    }
+  }, 15000);
+
   it('restores provider autoApprove but does not invent a coordinator mark for a plain session', async () => {
     const loader = setupLoader();
     const runtimeId = 'plain-runtime-1';

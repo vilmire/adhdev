@@ -1044,6 +1044,29 @@ export class DaemonCliManager {
         const restoredBindings = new Set<string>();
         const managerTag = this.deps.hostedRuntimeManagerTag;
 
+        // CORDBADGE worker-overbind guard pre-pass: the workspace-scoped coordinator
+        // rebind fallback (below) recovers a coordinator's mark when its runtimeId
+        // changed across restart. But a delegated WORKER session that shares the
+        // coordinator's workspace+cliType ALSO misses the exact by-id lookup, so the
+        // fallback would wrongly stamp it with the lone registered coordinator's mesh
+        // mark (the reported bug: a worker shown with role:coordinator after restart).
+        // Two batch-level signals let the fallback refuse to mark a worker:
+        //   - restoredRuntimeIds: every runtimeId in this restore batch. If a
+        //     registered coordinator's own sessionId appears here, that coordinator is
+        //     being restored under its known id (the exact match binds it), so ANY
+        //     other same-workspace session is a worker — not the renamed coordinator.
+        //   - workspaceTypeCounts: how many sessions in the batch share a
+        //     workspace+cliType. >1 means we cannot tell the coordinator from a worker
+        //     even if the coordinator's id changed, so we stay unbound (ambiguous).
+        const restoredRuntimeIds = new Set<string>();
+        const workspaceTypeCounts = new Map<string, number>();
+        for (const r of sessions) {
+            if (!r?.runtimeId || !r?.cliType || !r?.workspace) continue;
+            restoredRuntimeIds.add(r.runtimeId);
+            const key = `${r.workspace}::${r.cliType}`;
+            workspaceTypeCounts.set(key, (workspaceTypeCounts.get(key) || 0) + 1);
+        }
+
         for (const record of sessions) {
             if (!record?.runtimeId || !record?.cliType || !record?.workspace) continue;
             if (!shouldRestoreHostedRuntime(record, managerTag)) {
@@ -1102,20 +1125,44 @@ export class DaemonCliManager {
             // PTY, and the only recovery is a manual coordinator restart. Recover the mark
             // from the persisted registry scoped to this exact workspace, but ONLY when it is
             // UNAMBIGUOUS: exactly one registered coordinator for this workspace AND its
-            // cliType matches the restored session's type. The registry never holds worker
-            // sessions (only launch_mesh_coordinator registrations), so this cannot mis-mark a
-            // delegated worker; the uniqueness + cliType gate keeps it from guessing when two
-            // coordinators ever shared a workspace. Anything ambiguous stays unbound (we would
-            // rather miss a badge than mis-attribute one).
+            // cliType matches the restored session's type.
+            //
+            // WORKER-OVERBIND guard: "exactly one registered coordinator" is NOT enough —
+            // a delegated worker session sharing the coordinator's workspace+cliType also
+            // misses the by-id lookup, and the registry holding only the (single) real
+            // coordinator does NOT stop the fallback from projecting that coordinator's
+            // mark onto the worker record. So before adopting the mark we positively rule
+            // the worker out:
+            //   (a) coordinatorPresentById — the registered coordinator's own sessionId is
+            //       in this restore batch, i.e. it is being restored under its known id and
+            //       the exact match already binds it. Then THIS record (which missed) is a
+            //       worker, not the renamed coordinator → do not rebind.
+            //   (b) siblingCount > 1 — more than one session shares this workspace+cliType,
+            //       so even if the coordinator's id changed we cannot tell it from a worker
+            //       → stay unbound (ambiguous).
+            // Anything ambiguous stays unbound (we would rather miss a badge than
+            // mis-attribute one).
             if (!coordinatorEntry?.meshId && record.workspace) {
                 const workspaceCoordinators = listCoordinatorsForWorkspace(record.workspace)
                     .filter(e => e.meshId && (!e.cliType || e.cliType === record.cliType));
                 if (workspaceCoordinators.length === 1) {
-                    coordinatorEntry = workspaceCoordinators[0];
-                    LOG.info(
-                        'CLI',
-                        `↻ Rebound coordinator mark by workspace for ${record.runtimeKey || record.runtimeId} (mesh ${coordinatorEntry.meshId} @ ${record.workspace}); registry key did not match runtimeId`
-                    );
+                    const candidate = workspaceCoordinators[0];
+                    const coordinatorPresentById = !!candidate.sessionId && restoredRuntimeIds.has(candidate.sessionId);
+                    const siblingCount = workspaceTypeCounts.get(`${record.workspace}::${record.cliType}`) || 1;
+                    if (!coordinatorPresentById && siblingCount === 1) {
+                        coordinatorEntry = candidate;
+                        LOG.info(
+                            'CLI',
+                            `↻ Rebound coordinator mark by workspace for ${record.runtimeKey || record.runtimeId} (mesh ${candidate.meshId} @ ${record.workspace}); registry key did not match runtimeId`
+                        );
+                    } else {
+                        LOG.info(
+                            'CLI',
+                            `↷ Skipping workspace coordinator rebind for ${record.runtimeKey || record.runtimeId} (${record.cliType} @ ${record.workspace}): ${coordinatorPresentById
+                                ? 'registered coordinator is restoring under its own id — this is a delegated worker'
+                                : `ambiguous (${siblingCount} sessions share this workspace+cliType)`}`
+                        );
+                    }
                 }
             }
             if (coordinatorEntry?.meshId) {
