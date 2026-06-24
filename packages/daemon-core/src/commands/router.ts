@@ -1978,6 +1978,51 @@ function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmoduleReach
     return `Ask the user for explicit approval to push/publish the unreachable submodule commit(s) (${refs}) to the configured submodule remote main branch, then rerun mesh_refine_node. Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.`;
 }
 
+/**
+ * Async git exec helper used across the synchronous-refine stage pipeline. Bound
+ * once in the orchestrator and threaded through RefineContext so every stage runs
+ * git the same way (execFile + promisify, utf8). Returns the child's stdout/stderr.
+ */
+type RefineExecFileAsync = (file: string, args: string[], options: { cwd: string; encoding: 'utf8' }) => Promise<{ stdout: string; stderr: string }>;
+
+/**
+ * Accumulated state shared by the synchronous-refine stages. The orchestrator
+ * (executeMeshRefineNodeSynchronously) seeds this in the resolve_refs stage and
+ * each later stage reads / extends it. `branchHead` and `patchEquivalence` are the
+ * only fields a stage mutates after creation (auto-rebase updates both), so they
+ * are carried on the mutable context rather than re-threaded through return types.
+ */
+interface RefineContext {
+    meshId: string;
+    nodeId: string;
+    args: any;
+    refineStages: Array<Record<string, unknown>>;
+    execFileAsync: RefineExecFileAsync;
+    mesh: any;
+    node: any;
+    sourceNode: any;
+    repoRoot: string;
+    branch: string;
+    baseBranch: string;
+    baseHead: string;
+    branchHead: string;
+    validationSummary: Awaited<ReturnType<typeof runMeshRefineValidationGate>>;
+    patchEquivalence: Awaited<ReturnType<typeof runMeshRefinePatchEquivalenceGate>>;
+    submoduleReachability: Awaited<ReturnType<typeof runMeshRefineSubmoduleReachabilityGate>>;
+}
+
+/**
+ * Stage outcome for the synchronous-refine pipeline. A stage either produces a
+ * terminal CommandRouterResult (an early-exit gate failure, or a successful
+ * already-merged short-circuit), in which case the orchestrator returns it
+ * immediately, or it returns `continue` with the (possibly extended) context for
+ * the next stage. This makes the orchestrator a flat sequence of stage calls
+ * while preserving the original body's exact early-return control flow.
+ */
+type RefineStageOutcome =
+    | { kind: 'terminal'; result: CommandRouterResult }
+    | { kind: 'continue'; ctx: RefineContext };
+
 function resolveRefineryAutoPublishSubmoduleMainCommits(mesh: any, workspace: string): { enabled: boolean; source?: string } {
     if (mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true) {
         process.stderr.write(
@@ -4821,33 +4866,77 @@ export class DaemonCommandRouter {
         }
     }
 
+    /**
+     * Synchronous refinery for a single worktree node — the gate pipeline that
+     * validates, preflights (patch-equivalence / submodule-reachability /
+     * no-op), merges, aligns submodules, cleans up the worktree node and
+     * (optionally) pushes. The body is a flat sequence of stage methods; each
+     * stage either returns a terminal CommandRouterResult (gate failure or a
+     * successful already-merged short-circuit) or `continue` with the extended
+     * context. Behavior — stage order, every early-exit, and every result shape —
+     * is identical to the previous single inlined body.
+     */
     private async executeMeshRefineNodeSynchronously(meshId: string, nodeId: string, args: any): Promise<CommandRouterResult> {
         const refineStages: Array<Record<string, unknown>> = [];
         try {
+            const resolved = await this.refineResolveRefsStage(meshId, nodeId, args, refineStages);
+            if (resolved.kind === 'terminal') return resolved.result;
+            const ctx = resolved.ctx;
+
+            const validation = await this.refineValidationStage(ctx);
+            if (validation.kind === 'terminal') return validation.result;
+
+            const patchEquivalence = await this.refinePatchEquivalenceStage(ctx);
+            if (patchEquivalence.kind === 'terminal') return patchEquivalence.result;
+
+            const submoduleReachability = await this.refineSubmoduleReachabilityStage(ctx);
+            if (submoduleReachability.kind === 'terminal') return submoduleReachability.result;
+
+            const effectiveDiff = await this.refineEffectiveDiffStage(ctx);
+            if (effectiveDiff.kind === 'terminal') return effectiveDiff.result;
+
+            const merge = await this.refineMergeAndFinalizeStage(ctx);
+            return (merge as { kind: 'terminal'; result: CommandRouterResult }).result;
+        } catch (e: any) {
+            return { success: false, error: e.message, refineStages };
+        }
+    }
+
+    /**
+     * resolve_refs stage: resolve the mesh / worktree node / source node /
+     * repoRoot, then the worktree branch, base branch, fetched base head and
+     * branch head. Seeds the RefineContext consumed by every later stage.
+     */
+    private async refineResolveRefsStage(
+        meshId: string,
+        nodeId: string,
+        args: any,
+        refineStages: Array<Record<string, unknown>>,
+    ): Promise<RefineStageOutcome> {
             // preferInline: same as startMeshRefineJob — inline-cache-only clone nodes must resolve.
             const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
             const mesh = meshRecord?.mesh;
             const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
-            if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh`, refineStages };
+            if (!node) return { kind: 'terminal', result: { success: false, error: `Node '${nodeId}' not found in mesh`, refineStages } };
 
             if (!node.isLocalWorktree || !node.workspace) {
-                return { success: false, error: `Refinery requires a local worktree node`, refineStages };
+                return { kind: 'terminal', result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
             }
 
             const sourceNode = node.clonedFromNodeId
                 ? mesh?.nodes.find((n: any) => meshNodeIdMatches(n, node.clonedFromNodeId))
                 : mesh?.nodes.find((n: any) => !n.isLocalWorktree);
             const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
-            if (!repoRoot) return { success: false, error: 'Source node repoRoot not found', refineStages };
+            if (!repoRoot) return { kind: 'terminal', result: { success: false, error: 'Source node repoRoot not found', refineStages } };
 
             const { execFile } = await import('node:child_process');
             const { promisify } = await import('node:util');
-            const execFileAsync = promisify(execFile);
+            const execFileAsync = promisify(execFile) as unknown as RefineExecFileAsync;
 
             const resolveStarted = Date.now();
             const { stdout: branchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8' });
             const branch = branchStdout.trim();
-            if (!branch) return { success: false, error: 'Could not determine branch of the worktree node', refineStages };
+            if (!branch) return { kind: 'terminal', result: { success: false, error: 'Could not determine branch of the worktree node', refineStages } };
 
             const { stdout: baseBranchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8' });
             const baseBranch = baseBranchStdout.trim();
@@ -4874,9 +4963,39 @@ export class DaemonCommandRouter {
 
             const { stdout: branchHeadStdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8' });
             const baseHead = baseHeadRaw;
-            let branchHead = branchHeadStdout.trim();
+            const branchHead = branchHeadStdout.trim();
             recordMeshRefineStage(refineStages, 'resolve_refs', 'passed', resolveStarted, { branch, baseBranch, baseHead, branchHead, ...(fetchWarning ? { fetchWarning } : {}) });
 
+            return {
+                kind: 'continue',
+                ctx: {
+                    meshId,
+                    nodeId,
+                    args,
+                    refineStages,
+                    execFileAsync,
+                    mesh,
+                    node,
+                    sourceNode,
+                    repoRoot,
+                    branch,
+                    baseBranch,
+                    baseHead,
+                    branchHead,
+                    validationSummary: undefined as any,
+                    patchEquivalence: undefined as any,
+                    submoduleReachability: undefined as any,
+                },
+            };
+    }
+
+    /**
+     * validation stage: run the refinery validation gate (typecheck / test /
+     * lint / build per node config) and block on failure or when no allowlisted
+     * command was available. On pass, stores the summary on the context.
+     */
+    private async refineValidationStage(ctx: RefineContext): Promise<RefineStageOutcome> {
+            const { mesh, node, branch, baseBranch, refineStages } = ctx;
             const validationStarted = Date.now();
             const validationSummary = await runMeshRefineValidationGate(mesh, node.workspace, {
                 // M2-2: consume the node's persisted bootstrap state; persist re-runs.
@@ -4888,6 +5007,7 @@ export class DaemonCommandRouter {
                         .catch(() => { /* persistence is best-effort */ });
                 },
             });
+            ctx.validationSummary = validationSummary;
             recordMeshRefineStage(
                 refineStages,
                 'validation',
@@ -4923,7 +5043,7 @@ export class DaemonCommandRouter {
                         tail ? `Output (tail):\n${tail}` : '',
                     ].filter(Boolean).join('\n');
                 };
-                return {
+                return { kind: 'terminal', result: {
                     success: false,
                     code: validationSummary.failureCode || 'validation_failed',
                     convergenceStatus: 'blocked_review',
@@ -4940,10 +5060,10 @@ export class DaemonCommandRouter {
                 validation: 'failed',
                 status: 'blocked_review',
                     },
-                };
+                } };
             }
             if (validationSummary.status === 'skipped') {
-                return {
+                return { kind: 'terminal', result: {
                     success: false,
                     code: 'validation_unavailable',
                     convergenceStatus: 'blocked_review',
@@ -4960,9 +5080,22 @@ export class DaemonCommandRouter {
                 validation: 'unavailable',
                 status: 'blocked_review',
                     },
-                };
+                } };
             }
 
+            return { kind: 'continue', ctx };
+    }
+
+    /**
+     * patch_equivalence stage: preflight that the worktree branch's cumulative
+     * patch is equivalent to base+branch. On a "behind base" branch, auto-rebase
+     * once and re-check; on an empty merge-tree with real branch changes, treat as
+     * already-merged-via-another-path and short-circuit to cleanup. Mutates the
+     * context's branchHead (after rebase) and patchEquivalence (rebased gate).
+     */
+    private async refinePatchEquivalenceStage(ctx: RefineContext): Promise<RefineStageOutcome> {
+            const { meshId, nodeId, args, repoRoot, baseHead, node, branch, baseBranch, validationSummary, refineStages, execFileAsync } = ctx;
+            let branchHead = ctx.branchHead;
             const patchEquivalenceStarted = Date.now();
             let patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
             recordMeshRefineStage(refineStages, 'patch_equivalence', patchEquivalence.status, patchEquivalenceStarted, {
@@ -5005,7 +5138,7 @@ export class DaemonCommandRouter {
                             patchEquivalence = rebasedPatchEquivalence;
                             didAutoRebase = true;
                         } else {
-                            return {
+                            return { kind: 'terminal', result: {
                                 success: false,
                                 code: 'needs_rebase',
                                 convergenceStatus: 'blocked_review',
@@ -5024,14 +5157,14 @@ export class DaemonCommandRouter {
                                     patchEquivalence: 'failed',
                                     status: 'blocked_review',
                                 },
-                            };
+                            } };
                         }
                     } catch (rebaseErr: any) {
                         try { execFileSync('git', ['rebase', '--abort'], { cwd: node.workspace, stdio: 'ignore' }); } catch { /* ignore */ }
                         recordMeshRefineStage(refineStages, 'patch_equivalence_after_auto_rebase', 'failed', autoRebaseStarted, {
                             error: rebaseErr?.message || String(rebaseErr),
                         });
-                        return {
+                        return { kind: 'terminal', result: {
                             success: false,
                             code: 'needs_rebase_with_conflicts',
                             convergenceStatus: 'blocked_review',
@@ -5050,7 +5183,7 @@ export class DaemonCommandRouter {
                                 patchEquivalence: 'failed',
                                 status: 'blocked_review',
                             },
-                        };
+                        } };
                     }
                 }
 
@@ -5066,7 +5199,7 @@ export class DaemonCommandRouter {
                 // is a degenerate worktree case, not an "already merged" scenario.
                 const alreadyMergedViaOtherPath = !patchEquivalence.actualPatchId && !!patchEquivalence.expectedPatchId;
                 if (!didAutoRebase && !alreadyMergedViaOtherPath) {
-                    return {
+                    return { kind: 'terminal', result: {
                         success: false,
                         code: 'patch_equivalence_failed',
                         convergenceStatus: 'blocked_review',
@@ -5085,7 +5218,7 @@ export class DaemonCommandRouter {
                             patchEquivalence: 'failed',
                             status: 'blocked_review',
                         },
-                    };
+                    } };
                 }
 
                 if (!didAutoRebase && alreadyMergedViaOtherPath) {
@@ -5114,7 +5247,7 @@ export class DaemonCommandRouter {
                             payload: { alreadyMergedViaOtherPath: true, branch, into: baseBranch, validationSummary, patchEquivalence },
                         });
                     } catch { /* ledger append is best-effort */ }
-                    return {
+                    return { kind: 'terminal', result: {
                         success: removeResult?.success !== false,
                         code: 'already_merged',
                         merged: false,
@@ -5136,10 +5269,23 @@ export class DaemonCommandRouter {
                             patchEquivalence: 'already_merged',
                             status: removeResult?.success === false ? 'merged_cleanup_failed' : 'merged_to_main',
                         },
-                    };
+                    } };
                 }
             }
 
+            ctx.branchHead = branchHead;
+            ctx.patchEquivalence = patchEquivalence;
+            return { kind: 'continue', ctx };
+    }
+
+    /**
+     * submodule_reachability stage: verify every submodule gitlink commit that
+     * would land via the merge is reachable from its configured remote main
+     * branch (optionally auto-publishing when policy allows). Blocks the merge
+     * when any commit is unreachable. Stores the result on the context.
+     */
+    private async refineSubmoduleReachabilityStage(ctx: RefineContext): Promise<RefineStageOutcome> {
+            const { mesh, node, repoRoot, branch, baseBranch, branchHead, validationSummary, patchEquivalence, refineStages } = ctx;
             const submoduleReachabilityStarted = Date.now();
             const autoPublishSubmoduleMainCommits = resolveRefineryAutoPublishSubmoduleMainCommits(mesh, node.workspace);
             const submoduleReachability = await runMeshRefineSubmoduleReachabilityGate(repoRoot, patchEquivalence.mergedTree || branchHead, {
@@ -5196,7 +5342,7 @@ export class DaemonCommandRouter {
             });
             if (submoduleReachability.status === 'failed') {
                 const nextStep = buildSubmodulePublishRequiredNextStep(submoduleReachability.unreachable);
-                return {
+                return { kind: 'terminal', result: {
                     success: false,
                     code: 'submodule_reachability_failed',
                     convergenceStatus: 'blocked_review',
@@ -5244,9 +5390,21 @@ export class DaemonCommandRouter {
                 reason: 'submodule_publish_required',
                 nextStep,
                     },
-                };
+                } };
             }
 
+            ctx.submoduleReachability = submoduleReachability;
+            return { kind: 'continue', ctx };
+    }
+
+    /**
+     * effective_diff stage (no-op guard): block a silent no-op merge where the
+     * branch produces no effective root-tree diff against base — typically a
+     * submodule that has commits but whose root-level gitlink (pointer) bump was
+     * never committed, so the merge would land nothing real on main.
+     */
+    private async refineEffectiveDiffStage(ctx: RefineContext): Promise<RefineStageOutcome> {
+            const { repoRoot, baseHead, branchHead, branch, baseBranch, validationSummary, patchEquivalence, refineStages } = ctx;
             // No-op guard: block a silent no-op merge where the root tree is identical to base.
             // This catches the trap where a submodule has commits but the root branch never
             // committed the gitlink (oss-pointer) bump — merging would report success while the
@@ -5268,7 +5426,7 @@ export class DaemonCommandRouter {
                     hintLines.length ? `Submodules with uncommitted pointer bumps:\n${hintLines.join('\n')}` : '',
                     `Fix: commit the submodule pointer bump on '${branch}' (git add <submodule-path> && git commit), then re-run refine.`,
                 ].filter(Boolean).join('\n');
-                return {
+                return { kind: 'terminal', result: {
                     success: false,
                     code: 'no_effective_diff',
                     convergenceStatus: 'blocked_review',
@@ -5291,9 +5449,20 @@ export class DaemonCommandRouter {
                         reason: 'no_effective_diff',
                         ...(effectiveDiff.submoduleHints?.length ? { submoduleHints: effectiveDiff.submoduleHints } : {}),
                     },
-                };
+                } };
             }
 
+            return { kind: 'continue', ctx };
+    }
+
+    /**
+     * merge + finalize stage: perform the --no-ff merge, align submodule
+     * checkouts after merge, clean up (remove) the worktree node per policy,
+     * append the refinery ledger entry, and (unless approval is required) push the
+     * base branch. Always terminal — produces the final CommandRouterResult.
+     */
+    private async refineMergeAndFinalizeStage(ctx: RefineContext): Promise<RefineStageOutcome> {
+            const { meshId, nodeId, args, repoRoot, baseHead, node, branch, baseBranch, sourceNode, validationSummary, patchEquivalence, submoduleReachability, mesh, refineStages, execFileAsync } = ctx;
             let mergeResult: Record<string, unknown> | undefined;
             const mergeStarted = Date.now();
             try {
@@ -5310,7 +5479,7 @@ export class DaemonCommandRouter {
                     stdout: truncateValidationOutput(e?.stdout),
                     stderr: truncateValidationOutput(e?.stderr),
                 });
-                return {
+                return { kind: 'terminal', result: {
                     success: false,
                     error: `Merge failed (conflicts?): ${e.message}`,
                     validationSummary,
@@ -5325,7 +5494,7 @@ export class DaemonCommandRouter {
                 patchEquivalence: 'passed',
                 status: 'not_mergeable',
                     },
-                };
+                } };
             }
 
             const submoduleAlignmentStarted = Date.now();
@@ -5345,7 +5514,7 @@ export class DaemonCommandRouter {
                 });
             }
             if (submoduleAlignment.status === 'failed') {
-                return {
+                return { kind: 'terminal', result: {
                     success: false,
                     code: 'post_merge_submodule_alignment_failed',
                     error: 'Refinery merge completed but post-merge submodule checkout alignment failed; run the reported git submodule update command and re-check base workspace status.',
@@ -5371,7 +5540,7 @@ export class DaemonCommandRouter {
                 status: 'post_merge_alignment_failed',
                 nextStep: submoduleAlignment.command || 'Run git submodule update --init --recursive for the reported path(s), then re-check base workspace status.',
                     },
-                };
+                } };
             }
 
             const cleanupStarted = Date.now();
@@ -5451,7 +5620,7 @@ export class DaemonCommandRouter {
             };
 
             if (removeResult?.success === false) {
-                return {
+                return { kind: 'terminal', result: {
                     success: false,
                     code: 'cleanup_failed',
                     error: 'Refinery merge completed but worktree cleanup failed; manual cleanup/retry is required.',
@@ -5467,7 +5636,7 @@ export class DaemonCommandRouter {
                     refineStages,
                     ...(ledgerError ? { ledgerError } : {}),
                     finalBranchConvergenceState,
-                };
+                } };
             }
 
             // Push logic: after a successful merge, either auto-push or surface push info
@@ -5494,7 +5663,7 @@ export class DaemonCommandRouter {
                 }
             }
 
-            return {
+            return { kind: 'terminal', result: {
                 success: true,
                 merged: true,
                 branch,
@@ -5516,10 +5685,7 @@ export class DaemonCommandRouter {
                         pushCommand: `git push origin ${baseBranch}`,
                         pushNote: 'requireApprovalForPush is enabled — run the push command or obtain user approval before pushing.',
                     }),
-            };
-        } catch (e: any) {
-            return { success: false, error: e.message, refineStages };
-        }
+            } };
     }
 
     /**
