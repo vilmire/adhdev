@@ -2649,10 +2649,33 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             });
 
             if (supportsNative && !decision.nativeSelected) {
+                // Dead-end: we are in the history-only path (no live PTY/ACP
+                // adapter was found for this target session) AND provider-native
+                // history is not safely mappable to the requested session
+                // (no historySessionId stamp / workspace mismatch). Previously
+                // this returned `success:false`, which the command logger emits
+                // at warn level on EVERY poll (handler.ts logCommandEnd) —
+                // mesh coordinators poll read_chat continuously, so a worker whose
+                // transcript can never be safely mapped produced a 100% warn-log
+                // storm with no recovery. Switch to a SOFT response: success with
+                // empty messages + pending:true so the coordinator treats it as
+                // "no live messages readable yet" rather than a hard failure, and
+                // carry the machine-readable reason for debuggability. The normal
+                // live-adapter path (above) and the safe-native return (below) are
+                // unaffected — this is strictly the both-absent dead end.
+                LOG.debug('Command', `[read_chat] soft pending: no live adapter and native history not safely mappable target=${String(args?.targetSessionId || '')} provider=${agentStr} reason=native_history_not_safely_available`);
                 return {
-                    success: false,
+                    success: true,
+                    pending: true,
+                    // Both signals are true here: we reached the history-only path
+                    // because no live adapter was found (`live_adapter_not_found`),
+                    // and native history is not safely mappable
+                    // (`native_history_not_safely_available`).
+                    reason: 'native_history_not_safely_available',
+                    reasons: ['live_adapter_not_found', 'native_history_not_safely_available'],
                     code: 'native_history_not_safely_available',
-                    error: 'Provider-native history was not safely available for the requested CLI session.',
+                    messages: [],
+                    status: 'idle',
                     providerSessionId: historyProviderSessionId,
                     messageSource: decision.messageSource,
                     transcriptProvenance: decision.messageSource,
