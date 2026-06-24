@@ -34,6 +34,8 @@ import {
     buildMeshLedgerReconciliationEvidence,
     buildMeshLedgerReplicaEvidence,
     buildMeshNodeCapabilityTags,
+    buildMeshNodeDataFreshness,
+    MESH_NODE_LIVE_TRUTH_MARKER,
     buildP2pRelayFailurePayload,
     cancelTask,
     classifyP2pRelayFailure,
@@ -1293,7 +1295,7 @@ function compactMeshStatusNode(entry: any): any {
 
     // Generic backstop: elide any other oversized nested blob on the node.
     for (const k of Object.keys(next)) {
-        if (k === 'git' || k === 'machine' || k === 'branchConvergence' || k === 'staleDaemonBuild' || k === 'sessions') continue;
+        if (k === 'git' || k === 'machine' || k === 'branchConvergence' || k === 'staleDaemonBuild' || k === 'sessions' || k === 'dataFreshness') continue;
         next[k] = elideLargeNestedValue(k, next[k]);
     }
 
@@ -1382,6 +1384,10 @@ function minimalCompactNode(entry: any): any {
         ...(entry.launchBlockedReason !== undefined ? { launchBlockedReason: entry.launchBlockedReason } : {}),
         ...(bc ? { branchConvergence: bc } : {}),
         ...(entry.sessionSummary ? { sessionSummary: entry.sessionSummary } : {}),
+        // The freshness/reachability marker is exactly the signal a coordinator needs
+        // on a QUIET node — is this idle peer live, cached, or unreachable? — and it is
+        // tiny (6 scalar fields), so keep it even on the minimal stub.
+        ...(entry.dataFreshness !== undefined ? { dataFreshness: entry.dataFreshness } : {}),
         folded: true,
     };
 }
@@ -3380,6 +3386,11 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             ...buildNodeCapabilityExposure(node),
         };
 
+        // Tracks whether THIS call obtained live truth from a fresh git_status probe.
+        // The coordinator-facing mesh_status always probes each node fresh, so a probe
+        // that returns is live truth and a probe that throws is an unreachable peer —
+        // consumed below to stamp the additive `dataFreshness` marker.
+        let liveTruthProbed = false;
         try {
             const autoDiscover = (node.policy as any)?.autoDiscoverSubmodules !== false;
             const statusResult = await commandForNode(ctx, node, 'git_status', {
@@ -3388,6 +3399,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 includeSubmodules: autoDiscover,
                 submoduleIgnorePaths: (node.policy as any)?.submoduleIgnorePaths || undefined,
             });
+            liveTruthProbed = true;
             const status = extractGitStatus(statusResult);
             const uncommittedChanges = countUncommittedChanges(status);
             const dirty = isGitStatusDirty(status);
@@ -3429,6 +3441,29 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 noFallbackReason: failure.noFallbackReason,
             });
         }
+
+        // Additive freshness/reachability marker. Without this, the coordinator's
+        // mesh_status could not tell a node whose live probe just succeeded from one
+        // it could not reach — both rendered as `health` + git scalars only. Computed
+        // through the same canonical classifier the daemon aggregate uses so the
+        // dataSource/staleness enums stay consistent across both surfaces.
+        const freshnessDaemonId = readNodeDaemonId(node);
+        const freshnessStatus: Record<string, unknown> = {
+            git: entry.git,
+            connection: { state: liveTruthProbed ? 'connected' : 'disconnected' },
+        };
+        if (liveTruthProbed) freshnessStatus[MESH_NODE_LIVE_TRUTH_MARKER] = true;
+        entry.dataFreshness = buildMeshNodeDataFreshness({
+            status: freshnessStatus,
+            node,
+            isSelfNode: (entry.machine as any)?.sameMachine === true,
+            daemonId: freshnessDaemonId,
+            liveTruthProbed,
+            // A probe that threw against a configured (daemonId-bearing) peer is an
+            // unreachable peer; an unconfigured node (no daemonId) falls through to
+            // the classifier's `unconfigured` branch instead of being mislabeled.
+            directTruthUnavailable: !liveTruthProbed && !!freshnessDaemonId,
+        });
 
         // Recovery Hints & Next-step reporting
         const recoveryContext = getSessionRecoveryContext(mesh.id, { nodeId: node.id });
