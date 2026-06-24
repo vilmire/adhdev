@@ -595,9 +595,15 @@ export function tryAssignQueueTask(
     // claiming session's providerType + node policy are both known, then enforced
     // inside the atomic claim transaction so concurrent claims can't overshoot it.
     const providerMaxParallel = resolveProviderMaxParallel(node?.policy, providerType);
+    // WTDISPATCH-FANOUT: tell the atomic claim whether the claiming node is a worktree
+    // clone so a `convergence` task (base-only: merge → push → cleanup) is refused for
+    // worktree sessions. Without it, every sibling worktree session on this daemon could
+    // claim the same convergence intent and race push/production-deploy (the 4-way fan-out).
+    const nodeIsWorktree = node?.isLocalWorktree === true;
     const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags, {
         providerType,
         ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
+        nodeIsWorktree,
     });
     if (!task) {
         return false;
@@ -1189,6 +1195,11 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // dropped a target node whose identity arrived under a different form (a freshly
                 // mesh_clone_node'd worktree), emptying candidateNodes and mislabelling the skip.
                 if (task.targetNodeId && !meshNodeIdMatches(node, task.targetNodeId)) return false;
+                // WTDISPATCH-FANOUT: a convergence task is base-only (it merges/pushes onto
+                // base). Never auto-launch a worktree-clone session for it — that is the very
+                // fan-out the claim guard refuses, so spinning the session up would only waste
+                // a launch that can never claim. Mirrors claimNextQueueTask's convergence gate.
+                if (task.taskMode === 'convergence' && node?.isLocalWorktree === true) return false;
                 // Skip nodes that can never satisfy requiredTags regardless of which provider
                 // from providerPriority is selected. A node satisfies tags if at least one
                 // provider in its priority list would produce matching capability tags.

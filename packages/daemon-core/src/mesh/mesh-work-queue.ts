@@ -721,7 +721,7 @@ export function claimNextTask(
     nodeId: string,
     sessionId: string,
     capabilityTags?: string[],
-    opts?: { providerType?: string; providerMaxParallel?: number },
+    opts?: { providerType?: string; providerMaxParallel?: number; nodeIsWorktree?: boolean },
 ): MeshWorkQueueEntry | null {
     return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags, opts);
 }

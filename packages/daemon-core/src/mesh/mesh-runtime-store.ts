@@ -609,7 +609,7 @@ export class MeshRuntimeStore {
         nodeId: string,
         sessionId: string,
         capabilityTags: string[] = [],
-        opts?: { providerType?: string; providerMaxParallel?: number },
+        opts?: { providerType?: string; providerMaxParallel?: number; nodeIsWorktree?: boolean },
     ): MeshWorkQueueEntry | null {
         return this.transaction(() => {
             this.ensureLegacyQueueMigrated(meshId);
@@ -690,9 +690,34 @@ export class MeshRuntimeStore {
                 return !nodeBusy;
             };
 
+            // WTDISPATCH-FANOUT: a `convergence` task lands its work onto base (merge →
+            // push → cleanup against the real checkout). It must NEVER be claimed by a
+            // co-located worktree-clone session — N sibling worktree sessions on one daemon
+            // each claiming the same convergence intent is the 4-way push/deploy fan-out the
+            // live repro hit. Base-only, fail-closed: when the claiming node is a worktree
+            // (nodeIsWorktree), exclude every convergence candidate so it stays pending for
+            // the base node to pull.
+            const nodeIsWorktree = opts?.nodeIsWorktree === true;
+            const convergenceAllows = (candidate: MeshWorkQueueEntry): boolean =>
+                candidate.taskMode !== 'convergence' || !nodeIsWorktree;
+
+            // WTDISPATCH-FANOUT: defensive exact-target gate. The prioritized SQL above
+            // already segregates session/node-pinned rows, but a future query change (or a
+            // candidate row whose stored target drifted from its column) must never let a
+            // sibling worktree session on the same daemon absorb another node's/session's
+            // pinned task. When a task carries an explicit target, require an exact match
+            // here too — fail-closed.
+            const targetMatches = (candidate: MeshWorkQueueEntry): boolean => {
+                if (candidate.targetSessionId && candidate.targetSessionId !== sessionId) return false;
+                if (candidate.targetNodeId && candidate.targetNodeId !== nodeId) return false;
+                return true;
+            };
+
             const entry = candidates.find(candidate =>
                 nodeSatisfiesRequiredTags(candidate.requiredTags, capabilityTags)
                 && dependenciesSatisfied(candidate)
+                && convergenceAllows(candidate)
+                && targetMatches(candidate)
                 && nodeConflictAllows(candidate));
             if (!entry) return null;
 

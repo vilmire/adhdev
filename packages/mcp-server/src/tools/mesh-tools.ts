@@ -4657,6 +4657,26 @@ export async function meshSendTask(
         return JSON.stringify({ error: `Node '${args.node_id}' is read-only` });
     }
 
+    // WTDISPATCH-FANOUT: a `convergence` task lands its work onto base (merge → push →
+    // cleanup) and is base-only. Refuse a direct dispatch that targets a worktree-clone
+    // node, fail-closed — co-located sibling worktree sessions racing a convergence
+    // push/production-deploy is exactly the 4-way fan-out the live repro hit. Mirrors the
+    // queue claim guard (claimNextQueueTask) and the auto-launch eligibility filter so the
+    // base-only invariant holds across every dispatch entry point.
+    if (taskMode === 'convergence' && node.isLocalWorktree === true) {
+        return JSON.stringify({
+            success: false,
+            recoverable: true,
+            code: 'mesh_convergence_target_is_worktree',
+            reason: 'mesh_convergence_target_is_worktree',
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            taskMode,
+            error: `Node '${args.node_id}' is a worktree clone; a convergence task is base-only (it merges/pushes onto base). Dispatching it to a worktree session risks a multi-worktree push/deploy race.`,
+            nextAction: `Dispatch the convergence task to the base node for this mesh, or run the deterministic fast-forward convergence path (mesh_fast_forward_node / mesh_refine_node) instead of mesh_send_task.`,
+        });
+    }
+
     let explicitTargetSession: any | undefined;
     if (args.session_id && isWorkerTaskMode(taskMode)) {
         try {
