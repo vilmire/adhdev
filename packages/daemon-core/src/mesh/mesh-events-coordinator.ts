@@ -19,7 +19,7 @@ import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -457,16 +457,10 @@ function deliverTaskToSession(dispatchThunk: () => Promise<unknown>, ctx: Delive
     });
 }
 
-// WTCLAIM: normalize a workspace path for base-vs-worktree comparison. Mirrors
-// cli-manager.ts normalizeDirForCompare (fix-B) — folds separator style, trailing
-// slashes, and case (Windows paths are case-insensitive) so a base node and a worktree
-// clone, whose only structural difference is their distinct workspace roots, are still
-// told apart. Kept local (the cli-manager copy is module-private) so the comparison rule
-// stays identical to the one fix-B already uses on the worker side.
-function normalizeMeshWorkspaceForCompare(dir?: string): string {
-    if (typeof dir !== 'string') return '';
-    return dir.trim().replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
-}
+// WTCLAIM: workspace normalization for base-vs-worktree comparison now lives in
+// @adhdev/mesh-shared (normalizeMeshWorkspaceForCompare) so the enqueue→claim path,
+// the mesh_status per-node session filter, and the read_chat node scope guard all
+// share one comparison rule instead of drifting module-private copies.
 
 export function tryAssignQueueTask(
     components: DaemonComponents,

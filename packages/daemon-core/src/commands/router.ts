@@ -47,6 +47,7 @@ import {
     normalizeMeshNodeId,
     meshNodeIdMatches,
     daemonIdsEquivalent,
+    meshWorkspacesEquivalent,
 } from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
@@ -1635,14 +1636,17 @@ function liveSessionRecordMatchesMeshNode(record: any, meshId: string, nodeId: s
     if (!recordNodeId || recordNodeId !== nodeId) return false;
     if (nodeIsMissingLocalWorktree) return false;
     const recordWorkspace = readStringValue(record?.workspace);
-    if (nodeWorkspace && recordWorkspace && recordWorkspace !== nodeWorkspace) return false;
+    // Normalized compare (shared WTCLAIM rule): a base node and a co-located worktree
+    // clone differ ONLY by workspace root, so a separator/case-skewed exact compare
+    // could wrongly keep a sibling worktree's session attached to this node.
+    if (nodeWorkspace && recordWorkspace && !meshWorkspacesEquivalent(recordWorkspace, nodeWorkspace)) return false;
     const recordMeshId = readStringValue(record?.meta?.meshNodeFor);
     return !recordMeshId || recordMeshId === meshId;
 }
 
 function liveSessionRecordMatchesMeshWorkspace(record: any, meshId: string, workspace: string): boolean {
     const recordWorkspace = readStringValue(record?.workspace);
-    if (!recordWorkspace || !workspace || recordWorkspace !== workspace) return false;
+    if (!recordWorkspace || !workspace || !meshWorkspacesEquivalent(recordWorkspace, workspace)) return false;
 
     const recordMeshId = readStringValue(record?.meta?.meshNodeFor);
     if (recordMeshId) return recordMeshId === meshId;
