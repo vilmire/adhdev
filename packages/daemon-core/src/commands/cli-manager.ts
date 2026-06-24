@@ -706,6 +706,28 @@ export class DaemonCliManager {
         }
 
         this.adapters.set(key, cliInstance.getAdapter());
+
+        // WTDISPATCH (no_node_binding): a coordinator-launched worker carries its mesh node
+        // binding on the CLI-instance settings, but the session-host RECORD meta was never
+        // stamped with it — `updateRuntimeSettings` only mutates in-memory runtime settings and
+        // `updateRuntimeMeta` was only ever called with providerSessionId. So mesh_cleanup_sessions
+        // matched these worker sessions to a node by workspace ALONE
+        // (`live_session_matched_by_workspace_only_no_node_binding`), which on a daemon hosting
+        // sibling worktree nodes cannot tell two co-located clones apart. Push the launch-time node
+        // binding to the record meta so the record is 1:1 bound to its node (the spawned pty exists
+        // by now, so updateMeta reaches the session-host store). Best-effort; guarded.
+        const launchMeshNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
+        const launchMeshNodeFor = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
+        if (launchMeshNodeId || launchMeshNodeFor) {
+            try {
+                cliInstance.getAdapter().updateRuntimeMeta?.({
+                    ...(launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {}),
+                    ...(launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {}),
+                    ...(settings?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {}),
+                });
+            } catch { /* best-effort — record-meta stamp is cleanup hygiene, not on the dispatch path */ }
+        }
+
         this.startCliExitMonitor(key, cliType);
     }
 

@@ -19,7 +19,7 @@ import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -487,14 +487,52 @@ export function tryAssignQueueTask(
     // getRemoteIdleSessions). Conservative by design: when either workspace is unknown we do NOT
     // skip, so a node with no declared workspace keeps its prior behavior and no legitimate claim
     // is starved.
+    // WTDISPATCH (residual of WTCLAIM): the cross-node claim guard must reach EVERY claiming
+    // session this daemon can observe — not only those whose adapter happens to be in
+    // cliManager.adapters. An auto-launched worker session can carry its node binding on the
+    // CLI-instance settings while its session-host record shows no_node_binding, and the
+    // event-driven / remote-idle drain (agent:ready → setRemoteIdleSession → tryAssignQueueTask)
+    // can pass a nodeId that does NOT belong to the claiming session — a sibling worktree node
+    // on the SAME daemon. The adapter-only WTCLAIM check (rc.361/4c5b30b1) never engaged for a
+    // session observed solely via instanceManager, so session A could pull node B's task and
+    // node A's task was left with no session to claim it (no task_dispatched — it never dispatches).
+    //
+    // Resolve the claiming session's REAL identity from the adapter workingDir, then fall back to
+    // the live CLI instance's workspace + its stamped meshNodeId, and refuse a claim that
+    // contradicts EITHER (fail-closed). Reuses the shared meshWorkspacesEquivalent / meshNodeIdMatches
+    // comparators — no new comparison logic. Conservative: when neither the workspace NOR the stamp
+    // is resolvable we do NOT refuse, so a node with no declared workspace keeps prior behavior and
+    // a genuinely remote (cross-daemon) candidate stays nodeId-matched from getRemoteIdleSessions.
     const localClaimAdapter = components.cliManager?.adapters?.get(sessionId) as { workingDir?: string } | undefined;
-    if (localClaimAdapter) {
-        const sessionWorkspace = normalizeMeshWorkspaceForCompare(localClaimAdapter.workingDir);
-        const nodeWorkspace = normalizeMeshWorkspaceForCompare(readNonEmptyString(node?.workspace));
-        if (sessionWorkspace && nodeWorkspace && sessionWorkspace !== nodeWorkspace) {
-            LOG.info('MeshQueue', `WTCLAIM: refusing claim for node ${nodeId} (${sessionId}) — session workspace "${sessionWorkspace}" ≠ node workspace "${nodeWorkspace}" (cross-workspace dispatch blocked)`);
+    let claimInstanceWorkspace = '';
+    let claimStampedNodeId = '';
+    try {
+        const claimState = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
+        claimInstanceWorkspace = readNonEmptyString(claimState?.workspace);
+        const claimSettings = (claimState?.settings as Record<string, unknown>) || {};
+        claimStampedNodeId = readNonEmptyString(claimSettings.meshNodeId);
+    } catch { /* best-effort — fall through to the conservative (no refuse) path */ }
+
+    const nodeWorkspaceRaw = readNonEmptyString(node?.workspace);
+    const sessionWorkspaceRaw = readNonEmptyString(localClaimAdapter?.workingDir) || claimInstanceWorkspace;
+
+    if (claimStampedNodeId && nodeId) {
+        // The session carries its OWN meshNodeId stamp — its authoritative node identity, set when
+        // the coordinator launched/dispatched it (mesh-routing trusts this stamp FIRST). When it
+        // matches the claim target the session genuinely belongs to this node, so the stamp settles
+        // it and the workspace heuristic is skipped (a base/worktree pair can legitimately share a
+        // workspace). When it does NOT match, the claim is a cross-node leak — refuse, fail-closed.
+        if (!meshNodeIdMatches({ id: claimStampedNodeId } as MeshNodeIdentified, nodeId)) {
+            LOG.info('MeshQueue', `WTDISPATCH: refusing claim for node ${nodeId} (${sessionId}) — session is bound to node "${claimStampedNodeId}" (cross-node claim blocked)`);
             return false;
         }
+    } else if (sessionWorkspaceRaw && nodeWorkspaceRaw && !meshWorkspacesEquivalent(sessionWorkspaceRaw, nodeWorkspaceRaw)) {
+        // No stamp (the no_node_binding worker) — fall back to the workspace to tell two co-located
+        // sibling worktree sessions apart. WTCLAIM, now reaching instanceManager-observable sessions
+        // too. Conservative: unknown workspace on either side → do NOT refuse (no legitimate claim
+        // starved; a genuinely remote cross-daemon candidate stays nodeId-matched as before).
+        LOG.info('MeshQueue', `WTCLAIM: refusing claim for node ${nodeId} (${sessionId}) — session workspace "${normalizeMeshWorkspaceForCompare(sessionWorkspaceRaw)}" ≠ node workspace "${normalizeMeshWorkspaceForCompare(nodeWorkspaceRaw)}" (cross-workspace dispatch blocked)`);
+        return false;
     }
 
     const capabilityTags = buildMeshNodeCapabilityTags(node, providerType);
