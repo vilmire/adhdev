@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/mesh-shared",
-  "version": "0.9.82-rc.276",
+  "version": "0.9.82-rc.373",
   "description": "ADHDev mesh-shared — pure mesh/git status normalizers shared by daemon-core and web-core",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

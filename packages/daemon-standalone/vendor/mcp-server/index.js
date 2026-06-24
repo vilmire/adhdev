@@ -1210,6 +1210,7 @@ function summarizeCompactSubmodules(submodules) {
     ...outOfSync.length > 0 ? { outOfSyncPaths: outOfSync } : {}
   };
 }
+var MESH_COMPACT_PRESERVED_MARKER_FIELDS = ["dataFreshness"];
 function compactMeshStatusNode(entry) {
   if (!entry || typeof entry !== "object") return entry;
   const next = { ...entry };
@@ -1248,8 +1249,9 @@ function compactMeshStatusNode(entry) {
     };
   }
   delete next.capabilityTagsByProvider;
+  const elideSkip = /* @__PURE__ */ new Set(["git", "machine", "branchConvergence", "staleDaemonBuild", "sessions", ...MESH_COMPACT_PRESERVED_MARKER_FIELDS]);
   for (const k of Object.keys(next)) {
-    if (k === "git" || k === "machine" || k === "branchConvergence" || k === "staleDaemonBuild" || k === "sessions") continue;
+    if (elideSkip.has(k)) continue;
     next[k] = elideLargeNestedValue(k, next[k]);
   }
   return next;
@@ -1289,6 +1291,10 @@ function minimalCompactNode(entry) {
     reason: entry.branchConvergence.reason,
     branch: entry.branchConvergence.branch
   } : void 0;
+  const preservedMarkers = {};
+  for (const field of MESH_COMPACT_PRESERVED_MARKER_FIELDS) {
+    if (entry[field] !== void 0) preservedMarkers[field] = entry[field];
+  }
   return {
     nodeId: entry.nodeId,
     workspace: entry.workspace,
@@ -1303,6 +1309,7 @@ function minimalCompactNode(entry) {
     ...entry.launchBlockedReason !== void 0 ? { launchBlockedReason: entry.launchBlockedReason } : {},
     ...bc ? { branchConvergence: bc } : {},
     ...entry.sessionSummary ? { sessionSummary: entry.sessionSummary } : {},
+    ...preservedMarkers,
     folded: true
   };
 }
@@ -2492,6 +2499,18 @@ var MESH_FAST_FORWARD_NODE_TOOL = {
     required: ["node_id"]
   }
 };
+var MESH_RESTART_DAEMON_TOOL = {
+  name: "mesh_restart_daemon",
+  description: `Update a mesh node's daemon to the latest published version on its release channel and restart it \u2014 the same path as the dashboard "preview update" button, exposed as a mesh command so a coordinator can roll a worker daemon onto a freshly deployed version without a manual restart round-trip. No agent session is launched. Idle-gated: a node whose daemon has an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted. If the node is already on the latest version it is a no-op (no restart), matching the dashboard button (returns alreadyLatest:true). Targets a single node \u2014 call other (idle) nodes first; restarting the coordinator's OWN daemon is naturally refused while its calling turn is active. Passing channel switches the daemon's release channel (and server URL) before restarting; omit it to keep the daemon on its configured channel.`,
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Target node ID \u2014 the daemon that owns this node is updated and restarted." },
+      channel: { type: "string", enum: ["stable", "preview"], description: "Optional release channel to update from. Defaults to the daemon's configured updateChannel. Setting it also repoints the daemon's server URL to that channel." }
+    },
+    required: ["node_id"]
+  }
+};
 var MESH_CHECKPOINT_TOOL = {
   name: "mesh_checkpoint",
   description: "Create a git checkpoint (commit) on a mesh node workspace.",
@@ -2767,6 +2786,7 @@ var ALL_MESH_TOOLS = [
   MESH_GIT_STATUS_TOOL,
   MESH_READ_NODE_LOGS_TOOL,
   MESH_FAST_FORWARD_NODE_TOOL,
+  MESH_RESTART_DAEMON_TOOL,
   MESH_CHECKPOINT_TOOL,
   MESH_APPROVE_TOOL,
   MESH_CLONE_NODE_TOOL,
@@ -2805,6 +2825,7 @@ async function meshStatus(ctx, args = {}) {
       ...getNodeLaunchReadiness(node),
       ...buildNodeCapabilityExposure(node)
     };
+    let liveTruthProbed = false;
     try {
       const autoDiscover = node.policy?.autoDiscoverSubmodules !== false;
       const statusResult = await commandForNode(ctx, node, "git_status", {
@@ -2813,6 +2834,7 @@ async function meshStatus(ctx, args = {}) {
         includeSubmodules: autoDiscover,
         submoduleIgnorePaths: node.policy?.submoduleIgnorePaths || void 0
       });
+      liveTruthProbed = true;
       const status = extractGitStatus(statusResult);
       const uncommittedChanges = countUncommittedChanges(status);
       const dirty = isGitStatusDirty(status);
@@ -2848,6 +2870,13 @@ async function meshStatus(ctx, args = {}) {
         noFallbackReason: failure.noFallbackReason
       });
     }
+    entry.dataFreshness = (0, import_daemon_core.buildMeshNodeProbeFreshness)({
+      git: entry.git,
+      liveTruthProbed,
+      isSelfNode: entry.machine?.sameMachine === true,
+      daemonId: readNodeDaemonId(node),
+      node
+    });
     const recoveryContext = (0, import_daemon_core.getSessionRecoveryContext)(mesh.id, { nodeId: node.id });
     if (recoveryContext.consecutiveNodeFailures > 0) {
       entry.recoveryHints = {
@@ -3718,6 +3747,19 @@ async function meshSendTask(ctx, args) {
   if (node.policy?.readOnly) {
     return JSON.stringify({ error: `Node '${args.node_id}' is read-only` });
   }
+  if (taskMode === "convergence" && node.isLocalWorktree === true) {
+    return JSON.stringify({
+      success: false,
+      recoverable: true,
+      code: "mesh_convergence_target_is_worktree",
+      reason: "mesh_convergence_target_is_worktree",
+      nodeId: args.node_id,
+      sessionId: args.session_id,
+      taskMode,
+      error: `Node '${args.node_id}' is a worktree clone; a convergence task is base-only (it merges/pushes onto base). Dispatching it to a worktree session risks a multi-worktree push/deploy race.`,
+      nextAction: `Dispatch the convergence task to the base node for this mesh, or run the deterministic fast-forward convergence path (mesh_fast_forward_node / mesh_refine_node) instead of mesh_send_task.`
+    });
+  }
   let explicitTargetSession;
   if (args.session_id && isWorkerTaskMode(taskMode)) {
     try {
@@ -4418,6 +4460,26 @@ async function meshFastForwardNode(ctx, args) {
       executed: false,
       blockingReasons: [failure.code || "mesh_fast_forward_unavailable"]
     }, null, 2);
+  }
+}
+async function meshRestartDaemon(ctx, args) {
+  await refreshMeshFromDaemon(ctx);
+  const node = await findNodeWithRefresh(ctx, args.node_id);
+  try {
+    const result = await commandForNode(ctx, node, "restart_daemon_node", {
+      meshId: ctx.mesh.id,
+      nodeId: node.id,
+      inlineMesh: ctx.mesh,
+      ...args.channel ? { channel: args.channel } : {}
+    });
+    return JSON.stringify(unwrapCommandPayload(result), null, 2);
+  } catch (e) {
+    const failure = buildCoordinatorP2pRelayFailure(e, {
+      command: "restart_daemon_node",
+      targetDaemonId: node.daemonId,
+      nodeId: args.node_id
+    });
+    return JSON.stringify(failure, null, 2);
   }
 }
 async function meshCheckpoint(ctx, args) {
@@ -5841,6 +5903,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_fast_forward_node":
             text = await meshFastForwardNode(meshCtx, a);
+            break;
+          case "mesh_restart_daemon":
+            text = await meshRestartDaemon(meshCtx, a);
             break;
           case "mesh_checkpoint":
             text = await meshCheckpoint(meshCtx, a);
