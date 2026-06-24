@@ -3008,6 +3008,23 @@ export const MESH_FAST_FORWARD_NODE_TOOL = {
     },
 };
 
+export const MESH_RESTART_DAEMON_TOOL = {
+    name: 'mesh_restart_daemon',
+    description: 'Update a mesh node\'s daemon to the latest published version on its release channel and restart it — the same path as the dashboard "preview update" button, exposed as a mesh command so a coordinator can roll a worker daemon onto a freshly deployed version without a manual restart round-trip. No agent session is launched. '
+        + 'Idle-gated: a node whose daemon has an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted. '
+        + 'If the node is already on the latest version it is a no-op (no restart), matching the dashboard button (returns alreadyLatest:true). '
+        + 'Targets a single node — call other (idle) nodes first; restarting the coordinator\'s OWN daemon is naturally refused while its calling turn is active. '
+        + 'Passing channel switches the daemon\'s release channel (and server URL) before restarting; omit it to keep the daemon on its configured channel.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Target node ID — the daemon that owns this node is updated and restarted.' },
+            channel: { type: 'string', enum: ['stable', 'preview'], description: 'Optional release channel to update from. Defaults to the daemon\'s configured updateChannel. Setting it also repoints the daemon\'s server URL to that channel.' },
+        },
+        required: ['node_id'],
+    },
+};
+
 export const MESH_CHECKPOINT_TOOL = {
     name: 'mesh_checkpoint',
     description: 'Create a git checkpoint (commit) on a mesh node workspace.',
@@ -3315,6 +3332,7 @@ export const ALL_MESH_TOOLS = [
     MESH_GIT_STATUS_TOOL,
     MESH_READ_NODE_LOGS_TOOL,
     MESH_FAST_FORWARD_NODE_TOOL,
+    MESH_RESTART_DAEMON_TOOL,
     MESH_CHECKPOINT_TOOL,
     MESH_APPROVE_TOOL,
     MESH_CLONE_NODE_TOOL,
@@ -5494,6 +5512,34 @@ export async function meshFastForwardNode(
             executed: false,
             blockingReasons: [failure.code || 'mesh_fast_forward_unavailable'],
         }, null, 2);
+    }
+}
+
+export async function meshRestartDaemon(
+    ctx: MeshContext,
+    args: { node_id: string; channel?: 'stable' | 'preview' },
+): Promise<string> {
+    await refreshMeshFromDaemon(ctx);
+    const node = await findNodeWithRefresh(ctx, args.node_id);
+
+    try {
+        // inlineMesh lets the owning daemon resolve this node for the
+        // remote-forward guard; channel is forwarded only when explicitly set so
+        // an unset call keeps the daemon on its configured channel.
+        const result = await commandForNode(ctx, node, 'restart_daemon_node', {
+            meshId: ctx.mesh.id,
+            nodeId: node.id,
+            inlineMesh: ctx.mesh,
+            ...(args.channel ? { channel: args.channel } : {}),
+        });
+        return JSON.stringify(unwrapCommandPayload(result), null, 2);
+    } catch (e: any) {
+        const failure = buildCoordinatorP2pRelayFailure(e, {
+            command: 'restart_daemon_node',
+            targetDaemonId: node.daemonId,
+            nodeId: args.node_id,
+        });
+        return JSON.stringify(failure, null, 2);
     }
 }
 
