@@ -28,6 +28,7 @@ import { runMeshReconcileTick, setupMeshEventForwarding } from '../../src/mesh/m
 import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js'
 import {
   peekUnresolvedDelegateForwards,
+  enqueueUnresolvedDelegateForward,
   __clearUnresolvedDelegateForwardOutboxForTests,
 } from '../../src/mesh/mesh-unresolved-forward-outbox.js'
 import { __resetMeshWorkspaceCacheForTests } from '../../src/mesh/mesh-events.js'
@@ -35,13 +36,13 @@ import { __resetMeshWorkspaceCacheForTests } from '../../src/mesh/mesh-events.js
 // A worker that is NOT a member of the coordinator's mesh: meshNodeFor absent, no
 // workspace→mesh resolution, but it carries the coordinator daemon anchor. Its
 // completion routes through forwardUnresolvedDelegateEvent → durable outbox.
-function createUnresolvedWorker() {
+function createUnresolvedWorker(coordinatorDaemonId = 'daemon_remote_coordinator') {
   let listener: ((event: any) => void) | undefined
   const sourceState = {
     instanceId: 'worker-session-1',
     workspace: '/repo/worktree-worker',
     settings: {
-      meshCoordinatorDaemonId: 'daemon_remote_coordinator',
+      meshCoordinatorDaemonId: coordinatorDaemonId,
       meshNodeId: 'node_worker',
       launchedByCoordinator: true,
     },
@@ -158,5 +159,70 @@ describe('unresolved-delegate durable forward', () => {
 
     // A rejected push must NOT ack — the completion stays durable for the next tick.
     expect(peekUnresolvedDelegateForwards()).toHaveLength(1)
+  })
+})
+
+// Regression: the self-forward infinite-retry loop. When the resolved coordinator IS
+// this daemon (a self-coordinating / single-node mesh, or a delegate whose coordinator
+// anchor resolved to our own id — `daemon_<self machineId>`), a cross-daemon
+// mesh_forward_event to our own id is REFUSED by the dispatch self-dial guard
+// ("Refusing to send ... to this daemon's own id; route via the local router instead").
+// Before the fix the entry was persisted/re-pushed forever (log spam every tick, outbox
+// row never drained). It must instead be routed through the local receiver and drained.
+// The mocked loadConfig().machineId is 'test-worker-machine', so 'daemon_test-worker-machine'
+// is this daemon's OWN id in config form.
+describe('unresolved-delegate self-forward loop', () => {
+  const SELF_COORDINATOR_ID = 'daemon_test-worker-machine'
+
+  it('routes a self-addressed completion via the local router and never enters the outbox', async () => {
+    const { components, emit } = createUnresolvedWorker(SELF_COORDINATOR_ID)
+    // If a cross-daemon push were attempted to our own id it would hit the self-dial
+    // guard; assert it is never called for this self-addressed event.
+    const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
+    components.dispatchMeshCommand = dispatchMeshCommand
+
+    setupMeshEventForwarding(components)
+    emit(COMPLETION)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // No cross-daemon push (would be refused by the self-dial guard); routed locally.
+    expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    // Nothing persisted → no permanently-undrained outbox row, no retry loop.
+    expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
+
+    // A reconcile tick has nothing to retry and never cross-dials.
+    await runMeshReconcileTick(components)
+    expect(dispatchMeshCommand).not.toHaveBeenCalled()
+  })
+
+  it('drains a pre-existing self-addressed outbox entry locally instead of looping on the guard', async () => {
+    const { components } = createUnresolvedWorker(SELF_COORDINATOR_ID)
+    // The pre-fix daemon left self-addressed rows in the durable outbox; every retry
+    // dispatch throws the self-dial guard. Reproduce that here.
+    const dispatchMeshCommand = vi.fn(async () => {
+      throw new Error("Refusing to send mesh command 'mesh_forward_event' to this daemon's own id; route via the local router instead.")
+    })
+    components.dispatchMeshCommand = dispatchMeshCommand
+
+    enqueueUnresolvedDelegateForward(SELF_COORDINATOR_ID, 'agent:generating_completed', {
+      event: 'agent:generating_completed',
+      nodeId: 'node_worker',
+      workspace: '/repo/worktree-worker',
+      targetSessionId: 'worker-session-1',
+    })
+    expect(peekUnresolvedDelegateForwards()).toHaveLength(1)
+
+    await runMeshReconcileTick(components)
+
+    // The self-addressed entry must NOT be cross-dialled (that hits the guard forever) …
+    expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    // … and it is drained (routed via the local router), so the retry loop terminates.
+    expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
+
+    // Subsequent ticks have nothing left to retry — the loop is truly gone.
+    await runMeshReconcileTick(components)
+    expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
   })
 })

@@ -734,6 +734,12 @@ async function retryUnresolvedDelegateForwards(components: DaemonComponents): Pr
     const entries = peekUnresolvedDelegateForwards();
     if (entries.length === 0) return;
 
+    // Every id-form THIS daemon answers to. A self-addressed outbox entry (coordinator
+    // == this daemon) must never be cross-dialled — see the self-route branch below.
+    const selfIds = resolveCoordinatorDaemonIds(components);
+    const isSelfCoordinatorId = (id: string): boolean =>
+        selfIds.some(self => daemonIdsEquivalent(self, id));
+
     for (const entry of entries) {
         // EVTTRACE correlation context for this outbox entry's retry.
         const entryTraceCtx = {
@@ -742,6 +748,38 @@ async function retryUnresolvedDelegateForwards(components: DaemonComponents): Pr
             nodeId: readNonEmptyString(entry.payload.nodeId),
             event: readNonEmptyString(entry.payload.event),
         };
+
+        // Self-addressed forward: the coordinator daemon this entry targets IS this
+        // daemon (a self-coordinating / single-node mesh, or a delegate whose coordinator
+        // anchor resolved to our own id). A cross-daemon mesh_forward_event to our own id
+        // is REFUSED by the dispatch self-dial guard ("Refusing to send ... to this
+        // daemon's own id; route via the local router instead") on every retry, so the
+        // entry can never be acked and loops forever (~every tick), spamming the log and
+        // pinning the outbox row permanently undrained. Honour the guard's own advice:
+        // route the event straight through the local receiver (handleMeshForwardEvent —
+        // the same path the coordinator runs on receiving a remote push), then ack it.
+        // We drain regardless of the local result: a cross-daemon dispatch could not have
+        // resolved it either (the guard rejects before the receiver ever runs), so leaving
+        // it queued only re-spams. handleMeshForwardEvent has the BEST recovery chance —
+        // this daemon hosts the mesh, so its workspace/nodeId → meshId recovery applies.
+        if (isSelfCoordinatorId(entry.coordinatorDaemonId)) {
+            let localResult: any;
+            try {
+                traceMeshEventStage('forward_send', entryTraceCtx, `self → local router (${entry.coordinatorDaemonId})`);
+                localResult = handleMeshForwardEvent(components, entry.payload);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Local route of self-addressed forward to ${entry.coordinatorDaemonId} threw: ${e?.message || e} — draining anyway to break the retry loop`);
+            }
+            ackUnresolvedDelegateForward(entry.id);
+            if (localResult && localResult.success === false) {
+                LOG.warn('MeshReconcile', `Self-addressed unresolved-delegate ${readNonEmptyString(entry.payload.event)} rejected by local router (${readNonEmptyString(localResult.error) || 'no reason'}) — drained to break the self-forward retry loop`);
+                traceMeshEventDrop('self_forward_local_rejected', entryTraceCtx, readNonEmptyString(localResult.error) || 'no reason');
+            } else {
+                LOG.info('MeshReconcile', `Self-addressed unresolved-delegate ${readNonEmptyString(entry.payload.event)} routed via local router (coordinator ${entry.coordinatorDaemonId} is self) — drained`);
+            }
+            continue;
+        }
+
         let result: any;
         try {
             traceMeshEventStage('forward_send', entryTraceCtx, `retry → ${entry.coordinatorDaemonId}`);

@@ -2486,6 +2486,24 @@ function forwardUnresolvedDelegateEvent(
         workspace: readNonEmptyString(routing.workspace) || readNonEmptyString(event.workspace) || undefined,
     };
 
+    // Self-addressed fallback: the resolved coordinator IS this daemon (a self-
+    // coordinating / single-node mesh, or a delegate whose coordinator anchor resolved
+    // to our own id). A cross-daemon mesh_forward_event to our own id is REFUSED by the
+    // dispatch self-dial guard ("route via the local router instead"), so persisting it
+    // to the outbox would only loop forever in PHASE 0's retry, never acked. Honour the
+    // guard's advice: route the event straight through the local receiver — the exact
+    // path the coordinator runs on receiving a remote push — and skip the outbox entirely.
+    const selfDaemonIds = resolveCoordinatorDrainDaemonIds(components);
+    if (selfDaemonIds.some(self => daemonIdsEquivalent(self, coordinatorDaemonId))) {
+        try {
+            handleMeshForwardEvent(components, payload);
+            LOG.info('MeshEvents', `Self-addressed unresolved-delegate ${eventName} routed via local router (coordinator ${coordinatorDaemonId} is self) — outbox skipped`);
+        } catch (e: any) {
+            LOG.warn('MeshEvents', `Local route of self-addressed unresolved-delegate ${eventName} failed: ${e?.message || e}`);
+        }
+        return true;
+    }
+
     // 1) Persist durably FIRST. Idempotent on fingerprint, so a re-fired completion
     //    does not duplicate the outbox row. If persistence fails we still attempt the
     //    push below (degrades to the old at-most-once behaviour rather than dropping
