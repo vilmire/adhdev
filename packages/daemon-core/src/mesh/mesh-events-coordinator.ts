@@ -16,6 +16,7 @@ import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
+import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
@@ -379,6 +380,29 @@ function resolveActiveDirectDispatchTaskId(meshId: string, sessionId: string): s
 // the durable cross-restart backstop for a timer lost to a daemon restart.
 const DISPATCH_CONFIRM_TIMEOUT_MS = 120_000;
 
+// Cold-open connect budget for the warmup-aware REMOTE task dispatch deadline. A
+// remote `agent_command` to a peer whose mesh DataChannel is not open yet first has
+// to drive the cross-machine (often TURN-relayed) handshake; charging that warmup
+// against the response budget is the same cold-open false-timeout the git_status
+// probe path already guards against. This budget bounds ONLY the "channel not open
+// yet" phase; once the channel is warm the DISPATCH_CONFIRM_TIMEOUT_MS response
+// budget governs (identical to the legacy flat guard for an already-open peer, so
+// no latency is added to a normal dispatch). Matches the daemon-cloud
+// DaemonMeshManager CONNECT_TIMEOUT_MS (45s) so the caller-side deadline tracks the
+// transport's own cold-open window rather than guessing.
+const DISPATCH_CONNECT_TIMEOUT_MS = 45_000;
+
+// Fail-loud (throttled) trace for a remote dispatch that ran with NO live mesh
+// connection getter wired — the same degraded-warmup misconfiguration the git probe
+// path warns about. Warn once per peer; resolveWarmupDeadlineOpts then falls back to
+// the conservative combined budget instead of silently assuming "always warm".
+const dispatchWarmupGetterMissingWarned = new Set<string>();
+function warnDispatchWarmupGetterMissingOnce(daemonId: string): void {
+    if (dispatchWarmupGetterMissingWarned.has(daemonId)) return;
+    dispatchWarmupGetterMissingWarned.add(daemonId);
+    LOG.warn('MeshQueue', `Mesh peer connection getter unavailable for ${String(daemonId).slice(0, 12)}; remote task-dispatch warmup deadline degraded to the combined connect+response window. Avoids a cold-open false-timeout but loses warm/cold precision — wire getMeshPeerConnectionStatus on this daemon.`);
+}
+
 interface DeliverTaskContext {
     meshId: string;
     nodeId: string;
@@ -397,7 +421,22 @@ interface DeliverTaskContext {
 // Bug B hang timeout are identical and live here once so a future change to the dispatch
 // lifecycle cannot drift between the two paths. The caller passes a `dispatchThunk` that
 // performs only the transport-specific send and returns its promise.
-function deliverTaskToSession(dispatchThunk: () => Promise<unknown>, ctx: DeliverTaskContext): void {
+//
+// Cold-open warmup (remote only): the REMOTE transport speaks over a P2P
+// DataChannel that may still be opening when the first task is dispatched to a peer.
+// When `warmup` is supplied the dispatch is awaited under the warmup-aware deadline
+// (mesh-warmup-deadline) — the cold-open handshake is charged to the connect budget
+// and only the warm round trip to the DISPATCH_CONFIRM_TIMEOUT_MS response budget —
+// so the very first dispatch to a not-yet-open peer is no longer false-timed at the
+// combined window. An already-open peer behaves identically to the legacy flat guard
+// (response budget governs from t0), so a normal dispatch sees no added latency. The
+// LOCAL transport (in-process cliManager) has no channel to warm up and keeps the
+// flat Bug B hang guard.
+function deliverTaskToSession(
+    dispatchThunk: () => Promise<unknown>,
+    ctx: DeliverTaskContext,
+    warmup?: { daemonId: string; getConnection?: (daemonId: string) => Record<string, unknown> | null },
+): void {
     const delivery = createSessionDelivery({
         meshId: ctx.meshId,
         nodeId: ctx.nodeId,
@@ -421,17 +460,32 @@ function deliverTaskToSession(dispatchThunk: () => Promise<unknown>, ctx: Delive
     }
 
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const guarded = Promise.race([
-        dispatchPromise,
-        new Promise<never>((_, reject) => {
-            timer = setTimeout(
-                () => reject(new Error(`dispatch_confirm_timeout after ${DISPATCH_CONFIRM_TIMEOUT_MS}ms`)),
-                DISPATCH_CONFIRM_TIMEOUT_MS,
-            );
-            // Never keep the process alive solely for this confirm-timeout timer.
-            if (typeof (timer as { unref?: () => void })?.unref === 'function') (timer as { unref: () => void }).unref();
-        }),
-    ]);
+    let guarded: Promise<unknown>;
+    if (warmup) {
+        // Remote P2P: cold-open-aware deadline. awaitWithWarmupDeadline owns its own
+        // timers (so `timer` stays undefined and the clearTimeout below is a no-op),
+        // and rejects with Error('timeout') when either budget lapses — the same
+        // retryable failure shape the catch below already handles (requeue + ledger).
+        guarded = awaitWithWarmupDeadline(dispatchPromise, resolveWarmupDeadlineOpts({
+            getConnection: warmup.getConnection,
+            daemonId: warmup.daemonId,
+            connectTimeoutMs: DISPATCH_CONNECT_TIMEOUT_MS,
+            responseTimeoutMs: DISPATCH_CONFIRM_TIMEOUT_MS,
+            onMissingGetter: warnDispatchWarmupGetterMissingOnce,
+        }));
+    } else {
+        guarded = Promise.race([
+            dispatchPromise,
+            new Promise<never>((_, reject) => {
+                timer = setTimeout(
+                    () => reject(new Error(`dispatch_confirm_timeout after ${DISPATCH_CONFIRM_TIMEOUT_MS}ms`)),
+                    DISPATCH_CONFIRM_TIMEOUT_MS,
+                );
+                // Never keep the process alive solely for this confirm-timeout timer.
+                if (typeof (timer as { unref?: () => void })?.unref === 'function') (timer as { unref: () => void }).unref();
+            }),
+        ]);
+    }
 
     guarded.then(() => {
         if (timer) clearTimeout(timer);
@@ -588,6 +642,10 @@ export function tryAssignQueueTask(
                     ...(sourceCoordinatorSessionId ? { sourceCoordinatorSessionId } : {}),
                     ...(localDaemonIdForDispatch ? { sourceCoordinatorDaemonId: localDaemonIdForDispatch } : {}),
                 },
+                // Warmup-aware deadline: this dispatch can be the FIRST command to a
+                // peer whose mesh DataChannel is still opening — charge the cold-open
+                // handshake to the connect budget, not the response budget.
+                { daemonId: remoteDaemonId, getConnection: components.getMeshPeerConnectionStatus },
             );
             return true;
         }

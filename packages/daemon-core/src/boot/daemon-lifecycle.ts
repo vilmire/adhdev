@@ -113,6 +113,13 @@ export interface DaemonComponents {
     detectedIdes: { value: IDEInfo[] };
     refreshProviderAvailability: (providerType?: string) => Promise<void>;
     dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<any>;
+    // Cloud-only: live selected-coordinator mesh peer telemetry for a target daemon.
+    // Lets the remote task-dispatch path (mesh-events-coordinator deliverTaskToSession)
+    // tell a still-opening DataChannel ("cold") apart from an open one ("warm") so a
+    // cold-open handshake is charged to the connect budget, not the response budget.
+    // Injected by daemon-cloud; absent on standalone (no P2P mesh), where the remote
+    // dispatch path is unused.
+    getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
     // Cloud-only hook: after the single core forwarder handles a mesh coordinator event, cloud
     // uses this to keep its P2P dashboard view in sync (mesh-owned session metadata + flush
     // subscriptions). Injected by daemon-cloud; absent/no-op on standalone. Replaces cloud's
@@ -369,6 +376,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         detectedIdes: detectedIdesRef,
         refreshProviderAvailability,
         dispatchMeshCommand: config.dispatchMeshCommand,
+        getMeshPeerConnectionStatus: config.getMeshPeerConnectionStatus,
         onMeshCoordinatorEventForwarded: config.onMeshCoordinatorEventForwarded,
         statusInstanceId: config.statusInstanceId,
     };

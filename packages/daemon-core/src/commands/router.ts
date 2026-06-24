@@ -80,6 +80,7 @@ import {
 } from '../mesh/worktree-bootstrap-config.js';
 import { runMeshInit } from '../mesh/mesh-init.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
+import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from '../mesh/mesh-warmup-deadline.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
 import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
 import { homedir, hostname as osHostname } from 'os';
@@ -1371,90 +1372,11 @@ export class MeshGitProbeCache {
     }
 }
 
-/**
- * Await `work` under a warmup-aware deadline so a cold-open DataChannel handshake
- * is NOT charged against the command response budget — the root cause of the
- * "first mesh probe to a cold peer false-times-out, the warm retry succeeds"
- * signature. Two budgets, switched by the live peer connection state:
- *
- *  - While `isConnected()` returns false the peer's channel is still opening; the
- *    cold-open `connectTimeoutMs` budget applies. This phase is deliberately
- *    generous because a TURN-relayed cross-machine handshake legitimately needs
- *    many seconds — but a genuine connect *failure* is surfaced by `work`
- *    rejecting on its own (the mesh manager fails the peer the instant its
- *    PeerConnection state goes terminal), so a real failure is never masked for
- *    the whole window.
- *  - The first time `isConnected()` returns true the channel is warm; from that
- *    instant the tight `responseTimeoutMs` governs how long the handler may take.
- *    Warm-channel callers therefore see behavior identical to the old single
- *    `Promise.race(work, responseTimeoutMs)`.
- *
- * Rejects with `Error('timeout')` when either budget is exhausted, mirroring the
- * previous single-race contract. Pure except for timers + the injected
- * `isConnected` probe, so it is unit-testable under fake timers without any real
- * WebRTC. When no connection getter is wired `isConnected` should be `() => true`
- * (the caller's choice) so the response deadline governs from t0 — the legacy
- * single-budget behavior, never a combined connect+response window.
- */
-export function awaitWithWarmupDeadline<T>(
-    work: Promise<T>,
-    opts: {
-        isConnected: () => boolean;
-        connectTimeoutMs: number;
-        responseTimeoutMs: number;
-        pollIntervalMs?: number;
-    },
-): Promise<T> {
-    const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
-    return new Promise<T>((resolve, reject) => {
-        let done = false;
-        let poll: ReturnType<typeof setInterval> | undefined;
-        let responseTimer: ReturnType<typeof setTimeout> | undefined;
-        const startedAt = Date.now();
-        const cleanup = () => {
-            if (poll) { clearInterval(poll); poll = undefined; }
-            if (responseTimer) { clearTimeout(responseTimer); responseTimer = undefined; }
-        };
-        const settle = (fn: () => void) => {
-            if (done) return;
-            done = true;
-            cleanup();
-            fn();
-        };
-        // Arm the response deadline exactly once, the moment the channel is warm.
-        const armResponse = () => {
-            if (responseTimer || done) return;
-            responseTimer = setTimeout(
-                () => settle(() => reject(new Error('timeout'))),
-                opts.responseTimeoutMs,
-            );
-            if (typeof responseTimer.unref === 'function') responseTimer.unref();
-        };
-        const onPoll = () => {
-            if (done) return;
-            if (opts.isConnected()) {
-                if (poll) { clearInterval(poll); poll = undefined; }
-                armResponse();
-                return;
-            }
-            if (Date.now() - startedAt >= opts.connectTimeoutMs) {
-                settle(() => reject(new Error('timeout')));
-            }
-        };
-        if (opts.isConnected()) {
-            // Already warm (e.g. a retry over an open channel) — skip the warmup
-            // phase entirely and let the response deadline govern from t0.
-            armResponse();
-        } else {
-            poll = setInterval(onPoll, pollMs);
-            if (typeof poll.unref === 'function') poll.unref();
-        }
-        work.then(
-            (val) => settle(() => resolve(val)),
-            (err) => settle(() => reject(err)),
-        );
-    });
-}
+// The warmup-aware deadline now lives in the dependency-free mesh leaf so BOTH the
+// dashboard git_status probe (here) and the general task-dispatch path
+// (mesh/mesh-events-coordinator.ts) can share it without an import cycle. Re-exported
+// for the existing `from '../commands/router.js'` callers/tests.
+export { awaitWithWarmupDeadline };
 
 async function probeRemoteMeshGitStatus(args: {
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
@@ -1465,8 +1387,9 @@ async function probeRemoteMeshGitStatus(args: {
     // Cold-open warmup budget — applies only while the channel is still opening.
     connectTimeoutMs: number;
     // Live peer connection snapshot getter; lets the deadline tell "still warming
-    // up" apart from "warm but slow". Absent → behave as if always warm (the
-    // response deadline governs from t0, i.e. the legacy single-budget behavior).
+    // up" apart from "warm but slow". Absent → degrade conservatively (fail-loud,
+    // combined connect+response window) rather than silently assuming "always warm"
+    // — see resolveWarmupDeadlineOpts.
     getConnection?: (daemonId: string) => Record<string, unknown> | null;
 }): Promise<Record<string, unknown> | null> {
     if (!args.dispatchMeshCommand) return null;
@@ -1476,15 +1399,17 @@ async function probeRemoteMeshGitStatus(args: {
     // the response budget, so the first probe to a cold peer is no longer
     // false-timed-out before its channel has even opened.
     const dispatch = args.dispatchMeshCommand(args.daemonId, 'git_status', { workspace: args.workspace, refreshUpstream: true });
-    const getConnection = args.getConnection;
-    const isConnected = getConnection
-        ? () => readMeshConnectionState(getConnection(args.daemonId)) === 'connected'
-        : () => true;
-    const remoteResult = await awaitWithWarmupDeadline(dispatch, {
-        isConnected,
+    // A missing connection getter no longer silently becomes `() => true`
+    // ("always warm") — that charged a still-opening channel against the response
+    // budget and re-introduced the cold-open false-timeout. resolveWarmupDeadlineOpts
+    // warns once per peer and grants the combined budget instead.
+    const remoteResult = await awaitWithWarmupDeadline(dispatch, resolveWarmupDeadlineOpts({
+        getConnection: args.getConnection,
+        daemonId: args.daemonId,
         connectTimeoutMs: args.connectTimeoutMs,
         responseTimeoutMs: args.responseTimeoutMs,
-    }) as any;
+        onMissingGetter: warnMeshWarmupGetterMissingOnce,
+    })) as any;
     const remoteGit = remoteResult?.status ?? remoteResult?.git ?? remoteResult;
     if (!remoteGit || typeof remoteGit !== 'object' || typeof remoteGit.isGitRepo !== 'boolean') return null;
     // The member daemon stamps its own platform/arch onto the git_status result
@@ -1504,6 +1429,18 @@ const MESH_DIRECT_PROBE_MAX_RETRIES = 2;
 
 function readMeshConnectionState(connection: Record<string, unknown> | null | undefined): string | undefined {
     return readStringValue((connection as any)?.state);
+}
+
+// Fail-loud (but throttled) trace for the degraded-warmup case: a direct-peer mesh
+// dispatch ran with NO live connection getter wired. This is a misconfiguration in a
+// P2P-capable daemon (the getter should be present), and the old `() => true`
+// fallback hid it while silently re-introducing the cold-open false-timeout. Warn
+// once per peer so the degrade is visible without flooding the log on every probe.
+const meshWarmupGetterMissingWarned = new Set<string>();
+function warnMeshWarmupGetterMissingOnce(daemonId: string): void {
+    if (meshWarmupGetterMissingWarned.has(daemonId)) return;
+    meshWarmupGetterMissingWarned.add(daemonId);
+    LOG.warn('Mesh', `Mesh peer connection getter unavailable for ${String(daemonId).slice(0, 12)}; warmup deadline degraded to the combined connect+response window (cannot observe DataChannel open). This avoids a cold-open false-timeout but loses warm/cold precision — wire getMeshPeerConnectionStatus on this daemon.`);
 }
 
 /**
