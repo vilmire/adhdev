@@ -1325,6 +1325,14 @@ export interface MeshQueueTriggerResult {
         status?: string;
     }>;
     autoLaunchStarted: boolean;
+    /**
+     * True when a worker session is already on its way to claim a still-pending task —
+     * either launched this tick (autoLaunchStarted) or launched on a prior tick and still
+     * booting/awaiting-claim. Callers MUST treat this as "wait, do not launch another
+     * session": a second launch double-edits the worktree. Mutually informative with
+     * `noIdleMeshSessionAvailable`, which is suppressed whenever this is true.
+     */
+    autoLaunchPending?: boolean;
     noIdleMeshSessionAvailable?: boolean;
 }
 
@@ -1485,6 +1493,28 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
             nodeId: task.assignedNodeId,
             sessionId: task.assignedSessionId,
         }));
+
+    // An auto-launch is "pending" when the coordinator has already spun a session up
+    // for a still-pending task and is waiting on that session's idle→claim. This covers
+    // two ticks:
+    //   - THIS tick fired the launch (autoLaunchStarted), or
+    //   - a PRIOR tick launched a session that is still booting/awaiting-claim — the
+    //     per-task await-claim guard (maybeAutoLaunchOneQueueSession) deliberately
+    //     declines to launch again, so autoLaunchStarted is false even though a session
+    //     is on its way to claim this task.
+    // Without this signal, the second tick reports `noIdleMeshSessionAvailable` and the
+    // MCP guidance tells the coordinator to launch ANOTHER worker — producing a duplicate
+    // session that double-edits the worktree. The claim itself is fine; only the wording
+    // was wrong, so we surface `autoLaunchPending` to suppress the bad "launch one more"
+    // advice while the just-launched session converges.
+    const autoLaunchPending = autoLaunchStarted || afterQueue.some(task => {
+        if (task.status !== 'pending') return false;
+        const al = task.autoLaunch;
+        if (!al || (al.status !== 'started' && al.status !== 'completed')) return false;
+        const launchedAtMs = Date.parse(al.updatedAt);
+        return Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+    });
+
     return {
         success: true,
         meshId,
@@ -1498,7 +1528,11 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         remoteIdleSessionsChecked,
         skippedSessions,
         autoLaunchStarted,
-        ...(pendingAfter > 0 && newlyAssignedTasks.length === 0 && localIdleSessionsChecked === 0 && remoteIdleSessionsChecked === 0 && !autoLaunchStarted
+        ...(autoLaunchPending ? { autoLaunchPending: true } : {}),
+        // Only report "no idle session, go launch one" when nothing is already on its way.
+        // A pending auto-launch (this tick or a prior still-converging one) means a session
+        // WILL claim shortly, so it is not a no-session-available situation.
+        ...(pendingAfter > 0 && newlyAssignedTasks.length === 0 && localIdleSessionsChecked === 0 && remoteIdleSessionsChecked === 0 && !autoLaunchPending
             ? { noIdleMeshSessionAvailable: true }
             : {}),
     };

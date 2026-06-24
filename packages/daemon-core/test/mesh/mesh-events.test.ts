@@ -51,7 +51,7 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
 }))
 
 import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch, getActiveDirectDispatches } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch, getActiveDirectDispatches, recordTaskAutoLaunch } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { computeMeshTaskStats } from '../../src/mesh/mesh-task-stats.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
@@ -2140,6 +2140,47 @@ describe('setupMeshEventForwarding', () => {
       expect(entry.assignedSessionId).toBe('auto-session-1')
       expect(entry.autoLaunch?.status).toBe('completed')
       expect(readLedgerEntries(meshId).some(e => e.kind === 'session_auto_launch' && e.payload?.phase === 'completed')).toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('reports autoLaunchPending (not noIdleMeshSessionAvailable) for a pending task whose just-launched session is still booting', async () => {
+    // ENQNAG regression: a prior tick auto-launched a worker session for this task; the
+    // session is booting and will claim within seconds (per-task await-claim guard
+    // suppresses a second launch). On this follow-up tick autoLaunchStarted is false, but
+    // the task is NOT in a no-session-available state — a session is on its way. The
+    // trigger result must therefore advertise autoLaunchPending and MUST NOT set
+    // noIdleMeshSessionAvailable, so the MCP layer does not advise launching a duplicate
+    // worker that would double-edit the worktree.
+    const meshId = `mesh_autolaunch_pending_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
+      })
+      detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
+      const queued = enqueueTask(meshId, 'queued task awaiting booting session')
+      // Simulate the prior tick's successful launch: a session was spun up and we are
+      // within the await-claim window (recordTaskAutoLaunch stamps updatedAt = now).
+      recordTaskAutoLaunch(meshId, queued.id, {
+        status: 'completed',
+        nodeId: 'node_child_1',
+        providerType: 'hermes-cli',
+        sessionId: 'auto-session-booting',
+      })
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      const result = await triggerMeshQueue(components, meshId)
+
+      // The await-claim guard suppressed a second launch — no new session was spun up.
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      // Task is still pending (the booting session has not claimed yet)...
+      expect(getQueue(meshId)[0].status).toBe('pending')
+      // ...but the result tells callers to WAIT, not to launch another worker.
+      expect(result.autoLaunchPending).toBe(true)
+      expect(result.noIdleMeshSessionAvailable).toBeUndefined()
     } finally {
       cleanupMeshFiles(meshId)
     }

@@ -939,6 +939,17 @@ function buildQueueTriggerGuidance(queueTrigger: Record<string, unknown> | undef
             nextAction: 'Do not assume the queued task is running. Check mesh_view_queue and daemon connectivity before redispatching.',
         };
     }
+    if (queueTrigger.autoLaunchPending === true) {
+        // The coordinator already spun up (or is spinning up) a worker session for this
+        // task — it is booting and will claim within a few seconds. Telling the caller to
+        // launch ANOTHER session here would double-edit the worktree. Do NOT advise a new
+        // launch; just wait for the in-flight session to claim.
+        return {
+            queueClaimed: false,
+            queueDispatchState: 'pending_waiting_for_autolaunch',
+            nextAction: 'A worker session was just auto-launched for this task and is booting; it will claim the task shortly. Wait for it to claim — do NOT launch another session. Use mesh_view_queue to confirm the assignment lands.',
+        };
+    }
     if (queueTrigger.noIdleMeshSessionAvailable === true) {
         return {
             queueClaimed: false,
