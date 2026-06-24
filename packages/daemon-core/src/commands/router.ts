@@ -16,6 +16,8 @@ import { lowFamilyRegistry } from './low-family/index.js';
 import { medFamilyRegistry } from './med-family/index.js';
 import { launchIde } from './med-family/ide.js';
 import type { MedFamilyContext } from './med-family/index.js';
+import { highFamilyRegistry } from './high-family/index.js';
+import type { HighFamilyContext } from './high-family/index.js';
 import { DaemonCliManager } from './cli-manager.js';
 import { supportsExplicitSessionResume } from './cli-manager.js';
 import type { HostedCliRuntimeDescriptor } from './cli-manager.js';
@@ -52,17 +54,12 @@ import { logCommand } from '../logging/command-log.js';
 import type { CommandLogEntry } from '../logging/command-log.js';
 import * as yaml from 'js-yaml';
 import { createInteractionId, recordDebugTrace } from '../logging/debug-trace.js';
-import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
-import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
-import { registerMeshCoordinator } from '../mesh/coordinator-registry.js';
-import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, type PendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
-import { getRecentUnroutableDeliveries } from '../mesh/mesh-routing.js';
+import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
+import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { buildMeshWorkerRelayStamp } from '../mesh/mesh-events-utils.js';
-import { buildMeshHostRequiredFailure, normalizeMeshDaemonRole, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
+import { buildMeshHostRequiredFailure, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
-import { buildPreviewFreshness } from '../mesh/preview-freshness.js';
-import { buildMeshAsyncRefineJobs } from '../mesh/mesh-refine-status.js';
 import {
     MESH_REFINE_CONFIG_LOCATIONS,
     MESH_REFINE_CONFIG_SCHEMA,
@@ -88,11 +85,10 @@ import { homedir, hostname as osHostname } from 'os';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
-import { normalizeInteractivePromptResponse } from '../providers/types/interactive-prompt.js';
 import { workingDirBasename } from '../providers/working-dir.js';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 
-function readProviderPriorityFromPolicy(policy: unknown): string[] {
+export function readProviderPriorityFromPolicy(policy: unknown): string[] {
     const record = policy && typeof policy === 'object' && !Array.isArray(policy)
         ? policy as Record<string, unknown>
         : {};
@@ -153,7 +149,7 @@ function readNumberValue(...values: unknown[]): number | undefined {
     return undefined;
 }
 
-function readBooleanValue(...values: unknown[]): boolean | undefined {
+export function readBooleanValue(...values: unknown[]): boolean | undefined {
     for (const value of values) {
         if (typeof value === 'boolean') return value;
     }
@@ -163,7 +159,7 @@ function readBooleanValue(...values: unknown[]): boolean | undefined {
 // summarizeRepoMeshDebugGit was a hand-synced copy of the cloud git-shape
 // summarizer; both now call shared summarizeGitShape (@adhdev/mesh-shared).
 
-function summarizeRepoMeshStatusDebug(status: any): Record<string, unknown> {
+export function summarizeRepoMeshStatusDebug(status: any): Record<string, unknown> {
     const nodes = Array.isArray(status?.nodes) ? status.nodes : [];
     return {
         success: status?.success,
@@ -195,7 +191,7 @@ function summarizeRepoMeshStatusDebug(status: any): Record<string, unknown> {
     };
 }
 
-function logRepoMeshStatusDebug(event: string, fields: Record<string, unknown>): void {
+export function logRepoMeshStatusDebug(event: string, fields: Record<string, unknown>): void {
     try {
         LOG.info('MeshStatusDebug', `[RepoMeshStatusDebug] ${JSON.stringify({ event, ...fields })}`);
     } catch {
@@ -257,7 +253,7 @@ function readMeshNodeDaemonId(node: Record<string, unknown>): string | undefined
     );
 }
 
-function readMeshNodeHostname(node: Record<string, unknown>): string | undefined {
+export function readMeshNodeHostname(node: Record<string, unknown>): string | undefined {
     return readStringValue(
         node.hostname,
         node.host,
@@ -297,7 +293,7 @@ function compactMeshIdentityEvidence(value: string | undefined): string | undefi
     return value.length > 24 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value;
 }
 
-function buildMeshNodeMachineIdentity(node: Record<string, unknown>, opts: {
+export function buildMeshNodeMachineIdentity(node: Record<string, unknown>, opts: {
     localMachineId?: string;
     localDaemonId?: string;
     coordinatorHostname?: string;
@@ -357,7 +353,7 @@ function normalizeInlineMeshGitStatus(
     return sharedNormalizeGitStatus(status, readObjectRecord(node), options) as Record<string, unknown> | undefined;
 }
 
-function buildInlineMeshTransitGitStatus(node: any): Record<string, unknown> | undefined {
+export function buildInlineMeshTransitGitStatus(node: any): Record<string, unknown> | undefined {
     return sharedPickBestTransitGitStatus(readObjectRecord(node), { lastCheckedAt: Date.now() }) as Record<string, unknown> | undefined;
 }
 
@@ -370,7 +366,7 @@ function shouldRefreshStalePendingAggregate(snapshot: any, options?: { requireDi
     });
 }
 
-function buildLivePeerGitConnection(connection: Record<string, unknown>, timestamp = new Date().toISOString()): Record<string, unknown> {
+export function buildLivePeerGitConnection(connection: Record<string, unknown>, timestamp = new Date().toISOString()): Record<string, unknown> {
     const source = readStringValue(connection.source);
     const transport = readStringValue(connection.transport);
     return {
@@ -385,7 +381,7 @@ function buildLivePeerGitConnection(connection: Record<string, unknown>, timesta
     };
 }
 
-function recordInlineMeshDirectGitTruth(
+export function recordInlineMeshDirectGitTruth(
     node: any,
     git: Record<string, unknown>,
     source: 'selected_coordinator_local_git' | 'selected_coordinator_mesh_p2p_git',
@@ -462,7 +458,7 @@ function stampNodeReporterPlatform(node: any, platform: string | null, arch: str
  * Fire-and-forget (same pattern as the worktreeBootstrap writer) — a persistence
  * failure must never block the status response.
  */
-function persistNodeReporterPlatform(
+export function persistNodeReporterPlatform(
     meshSource: 'inline_cache' | 'inline_bootstrap' | 'local_config',
     mesh: any,
     nodeId: string | undefined,
@@ -736,7 +732,7 @@ function isInlineMeshAutoFastForwardEligible(git: Record<string, unknown> | null
     return dirty !== true && countGitWorktreeChanges(git) === 0;
 }
 
-function deriveMeshNodeHealthFromGit(git: Record<string, unknown> | null | undefined): 'online' | 'dirty' | 'degraded' {
+export function deriveMeshNodeHealthFromGit(git: Record<string, unknown> | null | undefined): 'online' | 'dirty' | 'degraded' {
     if (!git || readBooleanValue(git.isGitRepo) === false) return 'degraded';
     const branch = readStringValue(git.branch);
     if (!branch) return 'degraded';
@@ -875,7 +871,7 @@ function buildInlineMeshBranchConvergence(args: {
     };
 }
 
-function applyInlineMeshBranchConvergence(mesh: any, node: any, status: Record<string, unknown>): void {
+export function applyInlineMeshBranchConvergence(mesh: any, node: any, status: Record<string, unknown>): void {
     const git = readObjectRecord(status.git);
     if (Object.keys(git).length === 0 && !status.gitProbePending) return;
     const uncommittedChanges = countGitWorktreeChanges(git);
@@ -890,7 +886,7 @@ function applyInlineMeshBranchConvergence(mesh: any, node: any, status: Record<s
     }
 }
 
-function summarizeInlineMeshBranchConvergence(nodes: Array<Record<string, unknown>>): Record<string, unknown> {
+export function summarizeInlineMeshBranchConvergence(nodes: Array<Record<string, unknown>>): Record<string, unknown> {
     const followUps = nodes
         .filter(node => {
             if (readObjectRecord(node.branchConvergence).needsConvergence !== true) return false;
@@ -1076,7 +1072,7 @@ function synthesizeMeshNodeFreshnessFromConnection(status: Record<string, unknow
     }
 }
 
-function finalizeMeshNodeStatus(args: {
+export function finalizeMeshNodeStatus(args: {
     status: Record<string, unknown>;
     node: any;
     daemonId?: string;
@@ -1132,8 +1128,8 @@ function readMeshTimeoutEnvMs(name: string, defaultMs: number): number {
 // round-trip to slow (often TURN-relayed) peers, so such a node was permanently
 // marked unavailable and blocked the whole mesh graph. Default raised to 25s
 // (still under the P2P REQUEST_TIMEOUT of 30s) and made env-overridable.
-const MESH_DIRECT_PROBE_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_TIMEOUT_MS', 25_000);
-const MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS', 25_000);
+export const MESH_DIRECT_PROBE_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_TIMEOUT_MS', 25_000);
+export const MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS', 25_000);
 // How long a successful per-peer git_status probe stays fresh enough to be
 // reused instead of issuing another blocking `refreshUpstream:true` fan-out.
 // A slow (TURN-relayed) peer's probe can take 9-23s, and the dashboard's
@@ -1266,7 +1262,7 @@ function isMeshConnectionDefinitivelyDown(
  * attempt; a non-`connected` state short-circuits the retry loop (the very first
  * attempt always runs so a missing connection getter still gets one try).
  */
-async function probeRemoteMeshGitStatusWithRetry(args: {
+export async function probeRemoteMeshGitStatusWithRetry(args: {
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
     daemonId: string;
     workspace: string;
@@ -1483,7 +1479,7 @@ export async function hydrateInlineMeshDirectTruth(args: {
     };
 }
 
-function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
+export function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
     const meta = readObjectRecord(record?.meta);
     const isSelfCoordinator = Boolean(readStringValue(meta.meshCoordinatorFor));
     const chatStatus = readStringValue(record?.chatStatus, record?.activeChat?.status, meta.chatStatus, meta.sessionStatus);
@@ -1531,7 +1527,7 @@ function liveSessionRecordMatchesMeshWorkspace(record: any, meshId: string, work
     return record?.meta?.launchedByCoordinator === true || !!readStringValue(record?.meta?.meshNodeId);
 }
 
-function readLiveMeshNodeWorkspace(args: {
+export function readLiveMeshNodeWorkspace(args: {
     meshId: string;
     nodeId: string;
     liveSessionRecords: any[];
@@ -1558,7 +1554,7 @@ function readLiveMeshNodeWorkspace(args: {
     return '';
 }
 
-function collectLiveMeshSessionRecords(args: {
+export function collectLiveMeshSessionRecords(args: {
     meshId: string;
     node: any;
     nodeId: string;
@@ -1589,7 +1585,7 @@ function collectLiveMeshSessionRecords(args: {
     return matches;
 }
 
-function buildHistoricalMeshSessions(args: {
+export function buildHistoricalMeshSessions(args: {
     meshId: string;
     nodes: any[];
     liveSessionRecords: any[];
@@ -1635,7 +1631,7 @@ function buildHistoricalMeshSessions(args: {
     };
 }
 
-function applyCachedInlineMeshNodeStatus(
+export function applyCachedInlineMeshNodeStatus(
     status: Record<string, unknown>,
     node: any,
     options?: { skipGit?: boolean; skipError?: boolean; skipHealth?: boolean },
@@ -1669,7 +1665,7 @@ function applyCachedInlineMeshNodeStatus(
     return activeSessions.length > 0 || !!machineStatus || !!lastSeenAt || !!updatedAt;
 }
 
-async function resolveProviderTypeFromPriority(args: {
+export async function resolveProviderTypeFromPriority(args: {
     nodeId: string;
     providerPriority: string[];
     providerLoader: ProviderLoader;
@@ -1699,7 +1695,7 @@ async function resolveProviderTypeFromPriority(args: {
 
     return { error: `No usable provider detected for node '${args.nodeId}' from providerPriority: ${failed.join('; ')}` };
 }
-type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
+export type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
 type MeshRefineValidationStatus = 'passed' | 'failed' | 'skipped';
 type MeshRefineValidationCommand = MeshRefineValidationCommandPlan;
 
@@ -1849,7 +1845,7 @@ type MeshRefineSubmoduleReachabilitySummary = {
 
 type MeshRefineAsyncJobStatus = 'accepted' | 'completed' | 'failed';
 
-type MeshRefineJobHandle = {
+export type MeshRefineJobHandle = {
     success: true;
     async: true;
     status: MeshRefineAsyncJobStatus;
@@ -3285,18 +3281,18 @@ function loadYamlModule(): { load: (input: string) => any; dump: (input: any, op
     return yaml as { load: (input: string) => any; dump: (input: any, options?: Record<string, any>) => string };
 }
 
-function getMcpServersKey(format: MeshCoordinatorConfigFormat): 'mcpServers' | 'mcp_servers' {
+export function getMcpServersKey(format: MeshCoordinatorConfigFormat): 'mcpServers' | 'mcp_servers' {
     return format === 'hermes_config_yaml' ? 'mcp_servers' : 'mcpServers';
 }
 
-function parseMeshCoordinatorMcpConfig(text: string, format: MeshCoordinatorConfigFormat): Record<string, any> {
+export function parseMeshCoordinatorMcpConfig(text: string, format: MeshCoordinatorConfigFormat): Record<string, any> {
     if (!text.trim()) return {};
     if (format === 'claude_mcp_json') return JSON.parse(text);
     const parsed = loadYamlModule().load(text);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
 
-function serializeMeshCoordinatorMcpConfig(config: Record<string, any>, format: MeshCoordinatorConfigFormat): string {
+export function serializeMeshCoordinatorMcpConfig(config: Record<string, any>, format: MeshCoordinatorConfigFormat): string {
     if (format === 'claude_mcp_json') return JSON.stringify(config, null, 2);
     return loadYamlModule().dump(config, { noRefs: true, lineWidth: 120 });
 }
@@ -3306,7 +3302,7 @@ function resolveHermesUserHome(): string {
     return explicitHome || pathJoin(homedir(), '.hermes');
 }
 
-function loadHermesCoordinatorBaseConfig(targetConfigPath: string): { config: Record<string, any>; sourceHome: string; sourceConfigPath: string } {
+export function loadHermesCoordinatorBaseConfig(targetConfigPath: string): { config: Record<string, any>; sourceHome: string; sourceConfigPath: string } {
     const sourceHome = resolveHermesUserHome();
     const sourceConfigPath = pathJoin(sourceHome, 'config.yaml');
     if (!fs.existsSync(sourceConfigPath)) return { config: {}, sourceHome, sourceConfigPath };
@@ -3317,7 +3313,7 @@ function loadHermesCoordinatorBaseConfig(targetConfigPath: string): { config: Re
     return { config: baseConfig, sourceHome, sourceConfigPath };
 }
 
-function stripHermesCoordinatorTempModelProviderOverrides(config: Record<string, any>): Record<string, any> {
+export function stripHermesCoordinatorTempModelProviderOverrides(config: Record<string, any>): Record<string, any> {
     const {
         model: _model,
         provider: _provider,
@@ -3346,7 +3342,7 @@ function stripHermesCoordinatorTempModelProviderOverrides(config: Record<string,
     return sanitized;
 }
 
-function copyHermesCoordinatorCredentialFiles(sourceHome: string, targetHome: string) {
+export function copyHermesCoordinatorCredentialFiles(sourceHome: string, targetHome: string) {
     if (pathResolve(sourceHome) === pathResolve(targetHome)) return;
     for (const fileName of ['.env', 'auth.json']) {
         const sourcePath = pathJoin(sourceHome, fileName);
@@ -3895,6 +3891,30 @@ export class DaemonCommandRouter {
             meshGitProbeCache: this.meshGitProbeCache,
         };
         return ctx;
+    }
+
+    /**
+     * Build the HighFamilyContext handed to RF-ROUTER HIGH family handlers. Binds
+     * the router-private collaborators those handlers need (mesh resolution, the
+     * aggregate-status memory cache + its bound read/write helpers, the
+     * running-refine-job table, inline-mesh + git-probe caches, and the router's
+     * own `execute` for the get_mesh_review_inbox mesh_status re-entry). HIGH
+     * handlers reach more router-owned state than MED, but the binding shape is
+     * the same: bound methods + direct field references, none reachable from
+     * `deps`.
+     */
+    private buildHighFamilyContext(): HighFamilyContext {
+        return {
+            deps: this.deps,
+            getMeshForCommand: this.getMeshForCommand.bind(this),
+            getCachedAggregateMeshStatus: this.getCachedAggregateMeshStatus.bind(this),
+            rememberAggregateMeshStatus: this.rememberAggregateMeshStatus.bind(this),
+            execute: this.execute.bind(this),
+            aggregateMeshStatusCache: this.aggregateMeshStatusCache,
+            runningRefineJobs: this.runningRefineJobs,
+            inlineMeshCache: this.inlineMeshCache,
+            meshGitProbeCache: this.meshGitProbeCache,
+        };
     }
 
 
@@ -6231,1179 +6251,19 @@ export class DaemonCommandRouter {
             return await medFamilyHandler(this.buildMedFamilyContext(), args);
         }
 
-        switch (cmd) {
-            // ─── CLI / ACP commands ───
-            case 'mesh_forward_event': {
-                return handleMeshForwardEvent({ instanceManager: this.deps.instanceManager } as any, args as Record<string, unknown>);
-            }
-
-            case 'get_pending_mesh_events': {
-                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                // (B3) Respect coordinatorDaemonId when the caller declares it
-                // so unicast events route to the right coordinator instead of
-                // being silently consumed by the first drainer.
-                const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
-                    ? args.coordinatorDaemonId.trim()
-                    : undefined;
-                const events = drainPendingMeshCoordinatorEvents(meshId || undefined, coordinatorDaemonId);
-                return { success: true, events };
-            }
-
-            case 'interactive_prompt_response': {
-                const sessionId = typeof args?.targetSessionId === 'string' && args.targetSessionId.trim()
-                    ? args.targetSessionId.trim()
-                    : typeof args?.sessionId === 'string' && args.sessionId.trim()
-                        ? args.sessionId.trim()
-                        : '';
-                if (!sessionId) return { success: false, error: 'targetSessionId required' };
-                const response = normalizeInteractivePromptResponse(args?.response ?? args);
-                const instance = this.deps.instanceManager.getInstance(sessionId);
-                if (!instance) return { success: false, error: `No running instance for session ${sessionId}` };
-                this.deps.instanceManager.sendEvent(sessionId, 'interactive_prompt_response', response);
-                return { success: true };
-            }
-
-            // ─── Mesh Coordinator Launch ───
-            case 'launch_mesh_coordinator': {
-                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                let cliType = typeof args?.cliType === 'string' ? args.cliType.trim() : '';
-                // Optional per-launch system-prompt addition. Dashboard or API
-                // callers (e.g. when spawning a mesh-node-specific coordinator)
-                // can pass extra context that gets appended to the rendered
-                // default prompt under the "## Additional Context" section.
-                // Going through buildCoordinatorSystemPrompt's userInstruction
-                // means user-level override files (~/.adhdev/coordinator-prompts)
-                // and this per-launch addition compose cleanly: an override
-                // wins outright, but if there's no override, the default
-                // prompt + the optional append.md file + this extra context
-                // all stack in declared order.
-                const extraSystemPrompt = typeof args?.extraSystemPrompt === 'string'
-                    ? args.extraSystemPrompt.trim()
-                    : '';
-                if (!meshId) return { success: false, error: 'meshId required' };
-
-                try {
-                    const { buildCoordinatorSystemPrompt } = await import('../mesh/coordinator-prompt.js');
-                    const { buildMissionPromptSection } = await import('../mesh/mesh-missions.js');
-                    // M3-3: inject the active mission summary into the coordinator prompt.
-                    // Best-effort — a store failure must not block coordinator launch.
-                    const buildMissionSectionBestEffort = (id: string): string => {
-                        try { return buildMissionPromptSection(id); } catch { return ''; }
-                    };
-
-                    // Support inline mesh data from cloud (bypasses local meshes.json lookup)
-                    let mesh: any;
-                    if (args?.inlineMesh && typeof args.inlineMesh === 'object') {
-                        mesh = args.inlineMesh;
-                        // Cache cloud mesh so the MCP server can retrieve it via get_mesh
-                        this.inlineMeshCache.set(meshId, mesh);
-                    } else {
-                        const { getMesh } = await import('../config/mesh-config.js');
-                        mesh = getMesh(meshId);
-                    }
-                    if (!mesh) return { success: false, error: 'Mesh not found' };
-                    const meshHost = resolveMeshHostStatus(mesh);
-                    if (!meshHost.canOwnCoordinator) {
-                        return {
-                            success: false,
-                            ...buildMeshHostRequiredFailure(mesh, 'coordinator launch'),
-                            meshId,
-                            cliType,
-                        };
-                    }
-                    if (!Array.isArray(mesh.nodes) || mesh.nodes.length === 0) return { success: false, error: 'No nodes in mesh' };
-
-                    const requestedCoordinatorNodeId = typeof args?.coordinatorNodeId === 'string'
-                        ? args.coordinatorNodeId.trim()
-                        : '';
-                    const preferredCoordinatorNodeId = requestedCoordinatorNodeId
-                        || (typeof mesh.coordinator?.preferredNodeId === 'string' ? mesh.coordinator.preferredNodeId.trim() : '');
-                    const coordinatorNode = preferredCoordinatorNodeId
-                        ? mesh.nodes.find((node: any) => node?.id === preferredCoordinatorNodeId || node?.nodeId === preferredCoordinatorNodeId)
-                        : mesh.nodes[0];
-                    if (!coordinatorNode) {
-                        return {
-                            success: false,
-                            code: 'mesh_coordinator_node_not_found',
-                            error: `Coordinator node ${preferredCoordinatorNodeId} was not found in mesh`,
-                            meshId,
-                            cliType,
-                        };
-                    }
-                    const sessionHostRecords = this.deps.sessionHostControl?.listSessions
-                        ? await this.deps.sessionHostControl.listSessions().catch(() => [])
-                        : [];
-                    const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
-                    const workspace = readLiveMeshNodeWorkspace({
-                        meshId,
-                        nodeId: String(normalizeMeshNodeId(coordinatorNode) || preferredCoordinatorNodeId || ''),
-                        liveSessionRecords: liveMeshSessions,
-                        allowCoordinatorSession: true,
-                    }) || (typeof coordinatorNode.workspace === 'string' ? coordinatorNode.workspace.trim() : '');
-                    if (!workspace) return { success: false, error: 'Coordinator node workspace required', meshId, cliType };
-                    if (!cliType) {
-                        const resolved = await resolveProviderTypeFromPriority({
-                            nodeId: String(normalizeMeshNodeId(coordinatorNode) || preferredCoordinatorNodeId || 'coordinator'),
-                            providerPriority: readProviderPriorityFromPolicy(coordinatorNode.policy),
-                            providerLoader: this.deps.providerLoader,
-                            onStatusChange: this.deps.onStatusChange,
-                        });
-                        if (!resolved.providerType) {
-                            return {
-                                success: false,
-                                code: 'mesh_coordinator_provider_priority_unusable',
-                                error: resolved.error || 'No usable provider found from node providerPriority',
-                                meshId,
-                                cliType,
-                                workspace,
-                            };
-                        }
-                        cliType = resolved.providerType;
-                    }
-                    const providerMeta = this.deps.providerLoader.resolve?.(cliType) || this.deps.providerLoader.getMeta(cliType);
-                    const coordinatorSetup = resolveMeshCoordinatorSetup({
-                        provider: providerMeta,
-                        cliType,
-                        meshId,
-                        workspace,
-                    });
-
-                    if (coordinatorSetup.kind === 'unsupported') {
-                        return {
-                            success: false,
-                            code: 'mesh_coordinator_unsupported',
-                            error: coordinatorSetup.reason,
-                            meshId,
-                            cliType,
-                            workspace,
-                        };
-                    }
-
-                    if (coordinatorSetup.kind === 'manual') {
-                        return {
-                            success: false,
-                            code: 'mesh_coordinator_manual_mcp_setup_required',
-                            error: coordinatorSetup.instructions,
-                            meshId,
-                            cliType,
-                            workspace,
-                            meshCoordinatorSetup: coordinatorSetup,
-                        };
-                    }
-
-                    // ─── CLI-command MCP registration (Codex, Gemini CLI) ───────────
-                    if (coordinatorSetup.kind === 'cli_command') {
-                        // Build coordinator prompt first — fail closed on errors.
-                        let cliCmdSystemPrompt = '';
-                        try {
-                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id) });
-                        } catch (error: any) {
-                            const message = error?.message || String(error);
-                            LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
-                            return {
-                                success: false,
-                                code: 'mesh_coordinator_prompt_failed',
-                                error: `Failed to build Repo Mesh coordinator prompt: ${message}`,
-                                meshId, cliType, workspace,
-                            };
-                        }
-
-                        // Run the provider's MCP registration command under a
-                        // PTY. Some providers (agy, future bubbletea CLIs)
-                        // refuse to run without /dev/tty, so pipe-only
-                        // execFileSync silently no-ops the registration and
-                        // the coordinator ends up without any mcp tools. With
-                        // a real PTY the registration goes through and the
-                        // exit code tells us whether it actually persisted.
-                        let mcpRegistrationOk = false;
-                        let mcpRegistrationFailure: {
-                            command: string;
-                            output: string;
-                            exitCode: number | null;
-                            signal: number | null;
-                            timedOut: boolean;
-                        } | null = null;
-                        try {
-                            const { buildMeshCoordinatorRegistrationPlan, execUnderPty } = await import('./mesh-coordinator.js');
-                            const registrationPlan = buildMeshCoordinatorRegistrationPlan(
-                                cliType,
-                                coordinatorSetup.serverName,
-                                coordinatorSetup.command,
-                            );
-                            for (const step of registrationPlan) {
-                                const renderedCommand = [step.command, ...step.args].join(' ');
-                                LOG.info('MeshCoordinator', `Running MCP ${step.label} (pty): ${renderedCommand}`);
-                                const ptyResult = await execUnderPty(step.command, step.args, { cwd: workspace, timeoutMs: 20_000 });
-                                if (ptyResult.exitCode === 0 && !ptyResult.timedOut) {
-                                    if (step.required) mcpRegistrationOk = true;
-                                    continue;
-                                }
-                                LOG.warn('MeshCoordinator', `MCP ${step.label} failed exit=${ptyResult.exitCode} signal=${ptyResult.signal} timedOut=${ptyResult.timedOut} — output:\n${ptyResult.output.slice(-2000)}`);
-                                if (step.required) {
-                                    mcpRegistrationFailure = {
-                                        command: renderedCommand,
-                                        output: ptyResult.output.slice(-2000),
-                                        exitCode: ptyResult.exitCode,
-                                        signal: ptyResult.signal,
-                                        timedOut: ptyResult.timedOut,
-                                    };
-                                    break;
-                                }
-                            }
-                        } catch (error: any) {
-                            LOG.warn('MeshCoordinator', `MCP registration command failed: ${error?.message || error}`);
-                            mcpRegistrationFailure = {
-                                command: coordinatorSetup.command,
-                                output: error?.message || String(error),
-                                exitCode: null,
-                                signal: null,
-                                timedOut: false,
-                            };
-                        }
-
-                        if (!mcpRegistrationOk) {
-                            return {
-                                success: false,
-                                code: 'mesh_coordinator_mcp_registration_failed',
-                                error: `Could not register ${coordinatorSetup.serverName}; coordinator session was not launched`,
-                                meshId,
-                                cliType,
-                                workspace,
-                                registration: mcpRegistrationFailure,
-                            };
-                        }
-
-                        // Codex gives repo-local .mcp.json precedence over its
-                        // global `codex mcp add` registration. Refresh an
-                        // existing ADHDev entry so a stale workspace command
-                        // cannot shadow the registration we just verified.
-                        if (cliType === 'codex-cli') {
-                            const repoMcpConfigPath = pathJoin(workspace, '.mcp.json');
-                            if (fs.existsSync(repoMcpConfigPath)) {
-                                try {
-                                    const repoMcpConfig = parseMeshCoordinatorMcpConfig(
-                                        fs.readFileSync(repoMcpConfigPath, 'utf-8'),
-                                        'claude_mcp_json',
-                                    );
-                                    const existingServers = repoMcpConfig.mcpServers;
-                                    if (
-                                        existingServers
-                                        && typeof existingServers === 'object'
-                                        && !Array.isArray(existingServers)
-                                        && existingServers[coordinatorSetup.serverName]
-                                    ) {
-                                        fs.writeFileSync(repoMcpConfigPath, serializeMeshCoordinatorMcpConfig({
-                                            ...repoMcpConfig,
-                                            mcpServers: {
-                                                ...existingServers,
-                                                [coordinatorSetup.serverName]: coordinatorSetup.mcpServer,
-                                            },
-                                        }, 'claude_mcp_json'), 'utf-8');
-                                        LOG.info('MeshCoordinator', `Refreshed repo-local ${repoMcpConfigPath} entry for ${coordinatorSetup.serverName}`);
-                                    }
-                                } catch (error: any) {
-                                    return {
-                                        success: false,
-                                        code: 'mesh_coordinator_config_write_failed',
-                                        error: `Could not refresh repo-local MCP config: ${error?.message || error}`,
-                                        meshId,
-                                        cliType,
-                                        workspace,
-                                    };
-                                }
-                            }
-                        }
-
-                        // Inject system prompt declaratively from provider.v1.json.
-                        const cliCmdArgs: string[] = [];
-                        const cliCmdEnv: Record<string, string> = {};
-                        let cliCmdContextFilePath: string | undefined;
-                        if (cliCmdSystemPrompt) {
-                            const { applyMeshCoordinatorSystemPromptInjection } = await import('./mesh-coordinator.js');
-                            const effect = applyMeshCoordinatorSystemPromptInjection(
-                                cliCmdSystemPrompt,
-                                providerMeta?.meshCoordinator?.systemPromptInjection,
-                                { cliArgs: cliCmdArgs, launchEnv: cliCmdEnv, workspace, cliType },
-                            );
-                            cliCmdContextFilePath = effect.contextFilePath;
-                        }
-
-                        const cliCmdLaunch: any = await this.deps.cliManager.handleCliCommand('launch_cli', {
-                            cliType,
-                            dir: workspace,
-                            cliArgs: cliCmdArgs.length > 0 ? cliCmdArgs : undefined,
-                            env: Object.keys(cliCmdEnv).length > 0 ? cliCmdEnv : undefined,
-                            settings: { meshCoordinatorFor: meshId },
-                        });
-
-                        // R48 inject-then-remove. Spawn was just kicked off above; agy and
-                        // gemini-cli read AGENTS.md / GEMINI.md exactly once at startup and
-                        // cache it for the rest of the session, so we can safely strip
-                        // the wrapper from disk shortly after launch. That keeps any
-                        // worker session launched into the same workspace later from
-                        // picking up our wrapper block.
-                        if (cliCmdLaunch?.success && cliCmdContextFilePath) {
-                            const stripPath = cliCmdContextFilePath;
-                            setTimeout(() => {
-                                void import('./mesh-coordinator.js').then(({ stripCoordinatorWrapperFile }) => {
-                                    stripCoordinatorWrapperFile(stripPath);
-                                    LOG.info('MeshCoordinator', `Stripped wrapper from ${stripPath} after launch settle (cli_command)`);
-                                }).catch(() => { /* best-effort */ });
-                            }, 5000);
-                        }
-
-                        if (!cliCmdLaunch?.success) {
-                            return { success: false, error: cliCmdLaunch?.error || 'Failed to launch CLI session' };
-                        }
-
-                        LOG.info('MeshCoordinator', `Launched ${cliType} coordinator (cli_command) for mesh ${meshId}`);
-                        const cliCmdSessionId = cliCmdLaunch.sessionId || cliCmdLaunch.id;
-                        if (cliCmdSessionId) {
-                            const cliCmdInjectionDecl = providerMeta?.meshCoordinator?.systemPromptInjection;
-                            registerMeshCoordinator({
-                                meshId,
-                                sessionId: cliCmdSessionId,
-                                workspace,
-                                startedAt: Date.now(),
-                                cliType,
-                                systemPrompt: cliCmdSystemPrompt || undefined,
-                                extraSystemPrompt: extraSystemPrompt || undefined,
-                                injection: cliCmdInjectionDecl ? {
-                                    mode: cliCmdInjectionDecl.mode,
-                                    target: 'flag' in cliCmdInjectionDecl ? cliCmdInjectionDecl.flag
-                                        : 'name' in cliCmdInjectionDecl ? cliCmdInjectionDecl.name
-                                        : 'path' in cliCmdInjectionDecl ? cliCmdInjectionDecl.path
-                                        : undefined,
-                                } : undefined,
-                            });
-                        }
-                        try {
-                            const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
-                            appendLedgerEntry(meshId, {
-                                kind: 'coordinator_started',
-                                sessionId: cliCmdSessionId,
-                                providerType: cliType,
-                                payload: { workspace },
-                            });
-                        } catch { /* best-effort */ }
-
-                        return {
-                            success: true,
-                            meshId,
-                            cliType,
-                            workspace,
-                            sessionId: cliCmdSessionId,
-                            mcpRegistered: mcpRegistrationOk,
-                        };
-                    }
-
-                    const configFormat = coordinatorSetup.configFormat as MeshCoordinatorConfigFormat;
-                    if (configFormat !== 'claude_mcp_json' && configFormat !== 'hermes_config_yaml') {
-                        return {
-                            success: false,
-                            code: 'mesh_coordinator_unsupported',
-                            error: `Unsupported auto-import MCP config format: ${String(coordinatorSetup.configFormat)}`,
-                            meshId,
-                            cliType,
-                            workspace,
-                        };
-                    }
-
-                    // Build the coordinator prompt before mutating workspace config or launching.
-                    // Prompt generation failures are configuration/data-shape errors; fail closed so
-                    // broken mesh state is visible instead of silently launching with weaker rules.
-                    let systemPrompt = '';
-                    try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id) });
-                    } catch (error: any) {
-                        const message = error?.message || String(error);
-                        LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
-                        return {
-                            success: false,
-                            code: 'mesh_coordinator_prompt_failed',
-                            error: `Failed to build Repo Mesh coordinator prompt: ${message}`,
-                            meshId,
-                            cliType,
-                            workspace,
-                        };
-                    }
-
-                    // 1. Write provider-declared MCP config for CLIs that auto-import it.
-                    const { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync } = await import('fs');
-                    const { dirname } = await import('path');
-                    const mcpConfigPath = coordinatorSetup.configPath;
-                    const hermesManualFallback = cliType === 'hermes-cli' && configFormat === 'hermes_config_yaml'
-                        ? createHermesManualMeshCoordinatorSetup(meshId, workspace)
-                        : null;
-                    let hermesBaseConfig: { config: Record<string, any>; sourceHome: string; sourceConfigPath: string } | null = null;
-                    if (hermesManualFallback) {
-                        try {
-                            hermesBaseConfig = loadHermesCoordinatorBaseConfig(mcpConfigPath);
-                        } catch (error: any) {
-                            const message = `Failed to parse Hermes base config for automatic coordinator setup: ${error?.message || error}`;
-                            LOG.error('MeshCoordinator', message);
-                            return { success: false, code: 'mesh_coordinator_config_parse_failed', error: message, meshId, cliType, workspace };
-                        }
-                    }
-                    const returnManualFallback = (message: string) => ({
-                        success: false,
-                        code: 'mesh_coordinator_manual_mcp_setup_required',
-                        error: message,
-                        meshId,
-                        cliType,
-                        workspace,
-                        meshCoordinatorSetup: hermesManualFallback,
-                    });
-
-                    // Merge ADHDev mesh server into existing config.
-                    // Pass full mesh data as env var so the MCP server can bootstrap
-                    // without depending on meshes.json or a running daemon.
-                    const mcpServerEntry: Record<string, any> = {
-                        command: coordinatorSetup.mcpServer.command,
-                        args: coordinatorSetup.mcpServer.args,
-                    };
-                    if (args?.inlineMesh) {
-                        const modeArgIndex = coordinatorSetup.mcpServer.args.findIndex((value: string) => value === '--mode');
-                        const mcpTransport = modeArgIndex >= 0 ? coordinatorSetup.mcpServer.args[modeArgIndex + 1] : 'ipc';
-                        mcpServerEntry.env = {
-                            ADHDEV_INLINE_MESH: JSON.stringify(mesh),
-                            ADHDEV_MCP_TRANSPORT: mcpTransport === 'local' ? 'local' : 'ipc',
-                        };
-                    }
-
-                    try {
-                        mkdirSync(dirname(mcpConfigPath), { recursive: true });
-                    } catch (error: any) {
-                        const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
-                        LOG.error('MeshCoordinator', message);
-                        if (hermesManualFallback) return returnManualFallback(message);
-                        return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
-                    }
-
-                    // Backup existing MCP config if present.
-                    const hadExistingMcpConfig = existsSync(mcpConfigPath);
-                    let existingMcpConfig: Record<string, any> = hermesBaseConfig?.config || {};
-                    if (hermesBaseConfig) {
-                        copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname(mcpConfigPath));
-                    }
-                    if (hadExistingMcpConfig) {
-                        try {
-                            const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync(mcpConfigPath, 'utf-8'), configFormat);
-                            const existingCoordinatorConfig = hermesManualFallback
-                                ? stripHermesCoordinatorTempModelProviderOverrides(parsedExistingMcpConfig)
-                                : parsedExistingMcpConfig;
-                            existingMcpConfig = { ...existingMcpConfig, ...existingCoordinatorConfig };
-                            copyFileSync(mcpConfigPath, mcpConfigPath + '.backup');
-                        } catch (error: any) {
-                            LOG.error('MeshCoordinator', `Failed to parse existing MCP config ${mcpConfigPath}: ${error?.message || error}`);
-                            return {
-                                success: false,
-                                code: 'mesh_coordinator_config_parse_failed',
-                                error: `Failed to parse existing MCP config at ${mcpConfigPath}`,
-                            };
-                        }
-                    }
-
-                    const mcpServersKey = getMcpServersKey(configFormat);
-                    const existingServers = existingMcpConfig[mcpServersKey];
-                    const mcpConfig = {
-                        ...existingMcpConfig,
-                        [mcpServersKey]: {
-                            ...(existingServers && typeof existingServers === 'object' && !Array.isArray(existingServers) ? existingServers : {}),
-                            [coordinatorSetup.serverName]: mcpServerEntry,
-                        },
-                    };
-                    try {
-                        writeFileSync(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), 'utf-8');
-                    } catch (error: any) {
-                        const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
-                        LOG.error('MeshCoordinator', message);
-                        if (hermesManualFallback) return returnManualFallback(message);
-                        return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
-                    }
-                    LOG.info('MeshCoordinator', `Wrote ${mcpConfigPath} with ${coordinatorSetup.serverName} server`);
-
-                    const cliArgs: string[] = [];
-                    const launchEnv: Record<string, string> = {};
-                    if (configFormat === 'hermes_config_yaml') {
-                        launchEnv.HERMES_HOME = dirname(mcpConfigPath);
-                        launchEnv.HERMES_IGNORE_USER_CONFIG = '';
-                    }
-                    let autoImportContextFilePath: string | undefined;
-                    if (systemPrompt) {
-                        const { applyMeshCoordinatorSystemPromptInjection } = await import('./mesh-coordinator.js');
-                        const effect = applyMeshCoordinatorSystemPromptInjection(
-                            systemPrompt,
-                            providerMeta?.meshCoordinator?.systemPromptInjection,
-                            { cliArgs, launchEnv, workspace, cliType },
-                        );
-                        autoImportContextFilePath = effect.contextFilePath;
-                    }
-                    if (cliType === 'claude-cli') {
-                        cliArgs.push('--mcp-config', coordinatorSetup.configPath);
-                    }
-
-                    // 3. Launch CLI session via existing cliManager.
-                    // Provider-specific prompt injection remains fail-closed: Claude gets
-                    // explicit CLI args, while Hermes reads HERMES_EPHEMERAL_SYSTEM_PROMPT.
-                    const launchResult: any = await this.deps.cliManager.handleCliCommand('launch_cli', {
-                        cliType,
-                        dir: workspace,
-                        cliArgs: cliArgs.length > 0 ? cliArgs : undefined,
-                        env: Object.keys(launchEnv).length > 0 ? launchEnv : undefined,
-                        settings: {
-                            meshCoordinatorFor: meshId
-                        }
-                    });
-
-                    // R48 inject-then-remove. See the cli_command branch for context;
-                    // same idea: strip the wrapper from disk ~5s after launch so the
-                    // user's AGENTS.md / GEMINI.md is untouched the moment any
-                    // worker session opens up in the same workspace.
-                    if (launchResult?.success && autoImportContextFilePath) {
-                        const stripPath = autoImportContextFilePath;
-                        setTimeout(() => {
-                            void import('./mesh-coordinator.js').then(({ stripCoordinatorWrapperFile }) => {
-                                stripCoordinatorWrapperFile(stripPath);
-                                LOG.info('MeshCoordinator', `Stripped wrapper from ${stripPath} after launch settle (auto_import)`);
-                            }).catch(() => { /* best-effort */ });
-                        }, 5000);
-                    }
-
-                    if (!launchResult?.success) {
-                        return { success: false, error: launchResult?.error || 'Failed to launch CLI session' };
-                    }
-
-                    LOG.info('MeshCoordinator', `Launched ${cliType} coordinator for mesh ${meshId} in ${workspace}`);
-                    const launchSessionId = launchResult.sessionId || launchResult.id;
-                    if (launchSessionId) {
-                        const autoImportInjectionDecl = providerMeta?.meshCoordinator?.systemPromptInjection;
-                        registerMeshCoordinator({
-                            meshId,
-                            sessionId: launchSessionId,
-                            workspace,
-                            startedAt: Date.now(),
-                            cliType,
-                            systemPrompt: systemPrompt || undefined,
-                            extraSystemPrompt: extraSystemPrompt || undefined,
-                            mcpConfigPath,
-                            injection: autoImportInjectionDecl ? {
-                                mode: autoImportInjectionDecl.mode,
-                                target: 'flag' in autoImportInjectionDecl ? autoImportInjectionDecl.flag
-                                    : 'name' in autoImportInjectionDecl ? autoImportInjectionDecl.name
-                                    : 'path' in autoImportInjectionDecl ? autoImportInjectionDecl.path
-                                    : undefined,
-                            } : undefined,
-                        });
-                    }
-
-                    // Record coordinator launch in task ledger
-                    try {
-                        const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
-                        appendLedgerEntry(meshId, {
-                            kind: 'coordinator_started',
-                            sessionId: launchSessionId,
-                            providerType: cliType,
-                            payload: { workspace },
-                        });
-                    } catch { /* ledger append is best-effort */ }
-
-                    return {
-                        success: true,
-                        meshId,
-                        cliType,
-                        workspace,
-                        sessionId: launchSessionId,
-                        mcpConfigWritten: true,
-                    };
-                } catch (e: any) {
-                    LOG.error('MeshCoordinator', `Failed: ${e.message}`);
-                    return { success: false, error: e.message };
-                }
-            }
-
-            case 'mesh_status': {
-                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                if (!meshId) return { success: false, error: 'meshId required' };
-                try {
-                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-                    const mesh = meshRecord?.mesh;
-                    if (!mesh) return { success: false, error: 'Mesh not found' };
-                    const meshHost = resolveMeshHostStatus(mesh);
-
-                    const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
-                    // Compact (default) elides each mission's full goal text from the
-                    // payload — coordinators polling node health don't need every
-                    // mission's multi-hundred-char goal repeated. verbose=true (or the
-                    // explicit compact=false) restores full goals. Verbose bypasses the
-                    // shared (compact) aggregate cache so a verbose call never poisons
-                    // the compact cache and vice versa.
-                    const verboseMissions = args?.verbose === true || args?.compact === false;
-                    // See (B3) below: scope the peek to this daemon when the
-                    // caller doesn't tell us, otherwise scoped events look
-                    // missing and we falsely return a stale cache.
-                    const peekScope = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
-                        ? args.coordinatorDaemonId.trim()
-                        : (this.deps.statusInstanceId || undefined);
-                    const pendingCoordinatorEventCount = getPendingMeshCoordinatorEvents(meshId, peekScope).length;
-                    const hadAggregateCache = this.aggregateMeshStatusCache.has(meshId);
-                    if (!refreshRequested && !verboseMissions && pendingCoordinatorEventCount === 0) {
-                        const cachedStatus = this.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
-                        if (cachedStatus) {
-                            logRepoMeshStatusDebug('return_cached', {
-                                meshId,
-                                command: 'mesh_status',
-                                refreshRequested,
-                                summary: summarizeRepoMeshStatusDebug(cachedStatus),
-                            });
-                            return cachedStatus;
-                        }
-                    }
-                    const refreshReason = refreshRequested
-                        ? 'explicit_refresh'
-                        : pendingCoordinatorEventCount > 0
-                            ? 'pending_coordinator_events'
-                        : hadAggregateCache
-                            ? 'stale_pending_cache_refresh'
-                            : 'cold_cache_miss';
-
-                    const { getMeshQueueStats, getQueue } = await import('../mesh/mesh-work-queue.js');
-                    const queue = getQueue(meshId);
-                    const queueSummary = getMeshQueueStats(meshId);
-
-                    const { readLedgerEntries, getLedgerSummary } = await import('../mesh/mesh-ledger.js');
-                    const ledgerEntries = readLedgerEntries(meshId, { tail: 20 });
-                    const asyncRefineLedgerEntries = readLedgerEntries(meshId, { tail: 100 });
-                    const ledgerSummary = getLedgerSummary(meshId);
-                    const sessionHostRecords = this.deps.sessionHostControl?.listSessions
-                        ? await this.deps.sessionHostControl.listSessions().catch(() => [])
-                        : [];
-                    const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
-
-                    const localMachineId = loadConfig().machineId || '';
-                    const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
-                    // Shared probe gate for this mesh_status call: the bootstrap
-                    // hydrate below and the per-node render loop further down both
-                    // probe the same peers — route both through this cache so they
-                    // dedup within the call and reuse recent results across calls.
-                    const meshGitProbeCache = this.meshGitProbeCache;
-                    const directTruth = requireDirectPeerTruth
-                        ? await hydrateInlineMeshDirectTruth({
-                            mesh,
-                            meshSource: meshRecord.source,
-                            dispatchMeshCommand: this.deps.dispatchMeshCommand,
-                            getMeshPeerConnectionStatus: this.deps.getMeshPeerConnectionStatus,
-                            statusInstanceId: this.deps.statusInstanceId,
-                            localMachineId,
-                            // Standing-state model: only an explicit refresh fans
-                            // out a blocking peer git probe. Default loads return
-                            // held truth so one slow peer can't block the graph.
-                            probeRemotePeers: refreshRequested,
-                            probeCache: meshGitProbeCache,
-                        })
-                        : {
-                            directEvidenceCount: 0,
-                            localConfirmedCount: 0,
-                            peerAttemptedCount: 0,
-                            peerConfirmedCount: 0,
-                            standingEvidenceCount: 0,
-                            unavailableNodeIds: [] as string[],
-                            deadNodeIds: [] as string[],
-                        };
-                    // Default/cached loads may not attempt a remote peer probe yet; do not surface that as
-                    // a direct mesh truth failure until an explicit probe attempt actually fails.
-                    const passivePeerTruthNotAttempted = requireDirectPeerTruth
-                        && !refreshRequested
-                        && directTruth.directEvidenceCount > 0
-                        && directTruth.peerAttemptedCount === 0;
-                    const effectiveDirectTruth = passivePeerTruthNotAttempted
-                        ? { ...directTruth, unavailableNodeIds: [] as string[] }
-                        : directTruth;
-                    const unavailableDirectTruthNodeIds = new Set(effectiveDirectTruth.unavailableNodeIds);
-                    const unavailableNodesAreOnlyRemovedWorktrees = unavailableDirectTruthNodeIds.size > 0
-                        && Array.isArray(mesh.nodes)
-                        && mesh.nodes
-                            .filter((node: any) => unavailableDirectTruthNodeIds.has(normalizeMeshNodeId(node) ?? ''))
-                            .every((node: any) => node?.isLocalWorktree === true);
-                    // Default (non-refresh) loads never hard-fail: held
-                    // standing-state truth is returned and the graph renders
-                    // immediately. The hard mesh_direct_peer_truth_unavailable
-                    // failure is reserved for an explicit refresh that actually
-                    // attempted a peer probe and could not confirm any evidence.
-                    const directTruthSatisfied = !requireDirectPeerTruth
-                        || !refreshRequested
-                        || (effectiveDirectTruth.directEvidenceCount > 0 && (effectiveDirectTruth.unavailableNodeIds.length === 0 || unavailableNodesAreOnlyRemovedWorktrees));
-                    if (requireDirectPeerTruth && refreshRequested && !directTruthSatisfied) {
-                        const failureResult = {
-                            success: false,
-                            code: 'mesh_direct_peer_truth_unavailable',
-                            error: 'Selected coordinator could not confirm direct mesh truth yet. Bootstrap inventory stays unavailable until direct mesh_status probes succeed.',
-                            sourceOfTruth: {
-                                membership: meshRecord.source === 'inline_cache'
-                                    ? 'coordinator_inline_mesh_cache'
-                                    : meshRecord.source === 'local_config'
-                                        ? 'local_mesh_config'
-                                        : 'inline_bootstrap_snapshot',
-                                coordinatorOwnsLiveTruth: false,
-                                currentStatus: 'direct_peer_truth_unavailable',
-                                directPeerTruth: {
-                                    required: true,
-                                    satisfied: false,
-                                    directEvidenceCount: directTruth.directEvidenceCount,
-                                    localConfirmedCount: directTruth.localConfirmedCount,
-                                    peerAttemptedCount: directTruth.peerAttemptedCount,
-                                    peerConfirmedCount: directTruth.peerConfirmedCount,
-                                    unavailableNodeIds: directTruth.unavailableNodeIds,
-                                },
-                            },
-                        };
-                        logRepoMeshStatusDebug('direct_truth_unavailable', {
-                            meshId,
-                            command: 'mesh_status',
-                            refreshRequested,
-                            meshSource: meshRecord.source,
-                            directTruth,
-                        });
-                        return failureResult;
-                    }
-                    const directTruthUnavailableNodeIds = new Set(effectiveDirectTruth.unavailableNodeIds);
-                    const coordinatorHostname = osHostname();
-                    const selectedCoordinatorNodeId = readStringValue(
-                        mesh.coordinator?.preferredNodeId,
-                        normalizeMeshNodeId(mesh.nodes?.[0] as any),
-                    );
-                    const inlineCoordinatorNodeId = meshRecord?.inline && Array.isArray(mesh.nodes)
-                        ? selectedCoordinatorNodeId
-                        : undefined;
-                    const refreshedAt = new Date().toISOString();
-                    const nodeStatuses = [];
-                    for (const [nodeIndex, node] of (mesh.nodes || []).entries()) {
-                        const nodeId = normalizeMeshNodeId(node) ?? '';
-                        const daemonId = readStringValue(node.daemonId);
-                        const nodeMachineId = readMeshNodeMachineId(node as Record<string, unknown>);
-                        const nodeHostname = readMeshNodeHostname(node as Record<string, unknown>);
-                        const providerPriority = readProviderPriorityFromPolicy(node.policy);
-                        const configuredCoordinatorNode = Boolean(
-                            nodeId && selectedCoordinatorNodeId && nodeId === selectedCoordinatorNodeId,
-                        );
-                        const sparseConfiguredCoordinatorNode = configuredCoordinatorNode
-                            && !daemonId
-                            && !nodeMachineId
-                            && !nodeHostname;
-                        const isSelfNode = Boolean(
-                            nodeId && inlineCoordinatorNodeId && nodeId === inlineCoordinatorNodeId,
-                        ) || Boolean(
-                            daemonId && (daemonIdsEquivalent(daemonId, localMachineId) || daemonIdsEquivalent(daemonId, this.deps.statusInstanceId)),
-                        ) || Boolean(meshRecord?.inline && nodeIndex === 0)
-                            || sparseConfiguredCoordinatorNode;
-                        const machineIdentity = buildMeshNodeMachineIdentity(node as Record<string, unknown>, {
-                            localMachineId,
-                            localDaemonId: this.deps.statusInstanceId,
-                            coordinatorHostname,
-                            isSelfNode,
-                        });
-                        const status: Record<string, unknown> = {
-                            nodeId,
-                            machineLabel: buildMeshNodeDisplayLabel(node as Record<string, unknown>, nodeId, providerPriority),
-                            labelSource: readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias)
-                                ? 'explicit_metadata'
-                                : 'workspace_host_provider_context',
-                            workspace: node.workspace,
-                            repoRoot: node.repoRoot,
-                            isLocalWorktree: node.isLocalWorktree,
-                            worktreeBranch: node.worktreeBranch,
-                            role: normalizeMeshDaemonRole(node.role) || (meshHost.hostNodeId && nodeId === meshHost.hostNodeId ? 'host' : undefined),
-                            daemonId,
-                            machineId: nodeMachineId || node.machineId,
-                            machine: machineIdentity,
-                            machineStatus: node.machineStatus,
-                            health: 'unknown',
-                            providers: node.providers || [],
-                            providerPriority,
-                            activeSessions: [],
-                            activeSessionDetails: [],
-                            launchReady: false,
-                        };
-                        if (isSelfNode) {
-                            status.connection = {
-                                perspective: 'selected_coordinator',
-                                source: 'mesh_peer_status',
-                                state: 'self',
-                                transport: 'local',
-                                reported: true,
-                                reason: 'Selected coordinator daemon',
-                                lastStateChangeAt: refreshedAt,
-                            };
-                        } else if (daemonId) {
-                            const connection = this.deps.getMeshPeerConnectionStatus?.(daemonId);
-                            status.connection = connection ?? {
-                                perspective: 'selected_coordinator',
-                                source: 'not_reported',
-                                state: 'unknown',
-                                transport: 'unknown',
-                                reported: false,
-                                reason: 'No live mesh peer telemetry reported by the selected coordinator yet.',
-                            };
-                        } else {
-                            status.connection = {
-                                perspective: 'selected_coordinator',
-                                source: 'not_reported',
-                                state: 'unknown',
-                                transport: 'unknown',
-                                reported: false,
-                                reason: 'Node has no daemon id, so mesh transport cannot be reported from the selected coordinator.',
-                            };
-                        }
-                        const matchedLiveSessionRecords = collectLiveMeshSessionRecords({
-                            meshId,
-                            node,
-                            nodeId,
-                            liveSessionRecords: liveMeshSessions,
-                            allowCoordinatorSession: nodeId === selectedCoordinatorNodeId,
-                        });
-                        const workspace = readLiveMeshNodeWorkspace({
-                            meshId,
-                            nodeId,
-                            liveSessionRecords: matchedLiveSessionRecords,
-                            allowCoordinatorSession: nodeId === selectedCoordinatorNodeId,
-                        }) || (typeof node.workspace === 'string' ? node.workspace : '');
-                        status.workspace = workspace || node.workspace;
-                        if (matchedLiveSessionRecords.length > 0) {
-                            const sessionIds = matchedLiveSessionRecords
-                                .map((record: any) => typeof record?.sessionId === 'string' ? record.sessionId : '')
-                                .filter(Boolean);
-                            const providerTypes = matchedLiveSessionRecords
-                                .map((record: any) => readStringValue(record?.providerType))
-                                .filter(Boolean) as string[];
-                            status.activeSessions = sessionIds;
-                            status.activeSessionDetails = matchedLiveSessionRecords.map(summarizeMeshSessionRecord);
-                            if (providerTypes.length > 0) {
-                                status.providers = Array.from(new Set([...(Array.isArray(status.providers) ? status.providers as string[] : []), ...providerTypes]));
-                            }
-                        }
-                        if (workspace) {
-                            if (!fs.existsSync(workspace)) {
-                                // Workspace not local — prefer direct live inline truth, then attempt a P2P git probe.
-                                const inlineTransitGit = buildInlineMeshTransitGitStatus(node);
-                                let remoteProbeApplied = false;
-                                if (inlineTransitGit) {
-                                    status.git = inlineTransitGit;
-                                    status.health = inlineTransitGit.isGitRepo
-                                        ? deriveMeshNodeHealthFromGit(inlineTransitGit as unknown as Record<string, unknown>)
-                                        : 'degraded';
-                                    const connection = readObjectRecord(status.connection);
-                                    const connectionState = readStringValue(connection.state);
-                                    const connectionReported = readBooleanValue(connection.reported) ?? false;
-                                    if (!connectionReported || connectionState === 'unknown') {
-                                        status.connection = buildLivePeerGitConnection(connection, refreshedAt);
-                                    }
-                                    remoteProbeApplied = true;
-                                } else if (refreshRequested && !isSelfNode && daemonId && this.deps.dispatchMeshCommand && !directTruthUnavailableNodeIds.has(nodeId)) {
-                                    // Only an explicit refresh fans out a blocking
-                                    // per-node git probe. On the default load a peer
-                                    // with no held truth falls through to
-                                    // gitProbePending below — the graph still renders.
-                                    // Bounded retry (shared with the bootstrap hydrate
-                                    // path), gated on the peer staying connected, so a
-                                    // slow TURN-relayed peer is recovered rather than
-                                    // dropped after a single timeout.
-                                    const runNodeProbe = () => probeRemoteMeshGitStatusWithRetry({
-                                        dispatchMeshCommand: this.deps.dispatchMeshCommand,
-                                        daemonId,
-                                        workspace,
-                                        timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
-                                        retryTimeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
-                                        getConnection: this.deps.getMeshPeerConnectionStatus,
-                                        onConnection: connection => { status.connection = connection; },
-                                    });
-                                    // Same shared cache as the bootstrap hydrate path: within one
-                                    // mesh_status call this dedups the bootstrap probe against this
-                                    // per-node probe for the same peer, and across calls it reuses a
-                                    // recent result so the dashboard auto-retry loop can't restart a
-                                    // fresh refreshUpstream probe seconds apart.
-                                    const remoteGit = await meshGitProbeCache.probe(daemonId, workspace, runNodeProbe);
-                                    if (remoteGit) {
-                                        status.git = remoteGit;
-                                        status.health = remoteGit.isGitRepo
-                                            ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
-                                            : 'degraded';
-                                        const connection = readObjectRecord(status.connection);
-                                        const connectionState = readStringValue(connection.state);
-                                        const connectionReported = readBooleanValue(connection.reported) ?? false;
-                                        if (!connectionReported || connectionState === 'unknown') {
-                                            status.connection = buildLivePeerGitConnection(connection, refreshedAt);
-                                        }
-                                        const reporter = recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
-                                        persistNodeReporterPlatform(meshRecord.source, mesh, nodeId, reporter);
-                                        remoteProbeApplied = true;
-                                    }
-                                }
-                                if (!remoteProbeApplied) {
-                                    const connectionState = readStringValue((status.connection as any)?.state);
-                                    const pendingPeerGitProbe = !inlineTransitGit
-                                        && !isSelfNode
-                                        && !!daemonId
-                                        && (
-                                            readStringValue(status.machineStatus) === 'online'
-                                            || readStringValue(status.health) === 'online'
-                                            || connectionState === 'connecting'
-                                            || connectionState === 'connected'
-                                            || connectionState === 'unknown'
-                                        );
-                                    if (pendingPeerGitProbe) {
-                                        status.gitProbePending = true;
-                                        status.health = 'unknown';
-                                    }
-                                    if (applyCachedInlineMeshNodeStatus(
-                                        status,
-                                        node,
-                                        pendingPeerGitProbe ? { skipGit: true, skipError: true, skipHealth: true } : undefined,
-                                    )) {
-                                        applyInlineMeshBranchConvergence(mesh, node, status);
-                                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
-                                        nodeStatuses.push(status);
-                                        continue;
-                                    }
-                                    if (meshRecord?.source === 'inline_cache' && !isSelfNode) {
-                                        applyInlineMeshBranchConvergence(mesh, node, status);
-                                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
-                                        nodeStatuses.push(status);
-                                        continue;
-                                    }
-                                }
-                            } else {
-                                try {
-                                    const gitStatus = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
-                                    status.git = gitStatus;
-                                    const reporter = recordInlineMeshDirectGitTruth(node, gitStatus as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
-                                    persistNodeReporterPlatform(meshRecord.source, mesh, nodeId, reporter);
-                                    if (gitStatus.isGitRepo) {
-                                        status.health = deriveMeshNodeHealthFromGit(gitStatus as unknown as Record<string, unknown>);
-                                    } else {
-                                        status.health = 'degraded';
-                                        if (gitStatus.error && !status.error) status.error = gitStatus.error;
-                                    }
-                                } catch {
-                                    if (!applyCachedInlineMeshNodeStatus(status, node)) {
-                                        status.health = 'degraded';
-                                    }
-                                }
-                            }
-                        } else {
-                            applyCachedInlineMeshNodeStatus(status, node);
-                        }
-                        applyInlineMeshBranchConvergence(mesh, node, status);
-                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
-                        nodeStatuses.push(status);
-                    }
-
-                    // (B3) Resolve the coordinator daemon scope for the peek.
-                    // mesh_status is a read-only status query — it must not consume
-                    // (drain) pending events as a side effect. Coordinators that see
-                    // pendingCoordinatorEvents in the response are expected to call
-                    // get_pending_mesh_events to explicitly drain them after processing.
-                    const callerCoordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
-                        ? args.coordinatorDaemonId.trim()
-                        : (this.deps.statusInstanceId || undefined);
-                    const pendingCoordinatorEvents = getPendingMeshCoordinatorEvents(meshId, callerCoordinatorDaemonId);
-                    // R4: surface recent fail-loud routing drops so a coordinator/operator can see
-                    // that a worker completion was lost (envelope present, mesh unresolved) instead
-                    // of it vanishing silently. Diagnostic-only — never cached (see omit below).
-                    const unroutableDeliveries = getRecentUnroutableDeliveries();
-                    const previewFreshness = (() => {
-                        const localRepoRoot = nodeStatuses
-                            .map((node: any) => readStringValue(node?.git?.repoRoot, node?.repoRoot, node?.workspace))
-                            .find((candidate: string | undefined) => !!candidate && fs.existsSync(candidate));
-                        return localRepoRoot ? buildPreviewFreshness(localRepoRoot) : undefined;
-                    })();
-                    const asyncRefineJobs = buildMeshAsyncRefineJobs({
-                        meshId,
-                        ledgerEntries: asyncRefineLedgerEntries,
-                        pendingEvents: [...pendingCoordinatorEvents],
-                    });
-                    const historicalSessions = buildHistoricalMeshSessions({
-                        meshId,
-                        nodes: mesh.nodes || [],
-                        liveSessionRecords: liveMeshSessions,
-                    });
-                    const { getMeshStatusMissionSummaries } = await import('../mesh/mesh-missions.js');
-                    // withStats opts in to per-mission operational rollups (durations /
-                    // retries) for the dashboard mission detail. The rollup scans a
-                    // bounded ledger tail per mission, but only over the bounded set
-                    // returned here (live + capped history), so the cost stays linear
-                    // in visible missions rather than the whole mesh history.
-                    const missions = getMeshStatusMissionSummaries(meshId, { verbose: verboseMissions, withStats: true });
-                    const statusResult = {
-                        success: true,
-                        meshId: mesh.id,
-                        meshName: mesh.name,
-                        repoIdentity: mesh.repoIdentity,
-                        defaultBranch: mesh.defaultBranch,
-                        refreshedAt,
-                        meshHost,
-                        sourceOfTruth: {
-                            membership: meshRecord?.source === 'inline_cache'
-                                ? 'coordinator_inline_mesh_cache'
-                                : meshRecord?.source === 'local_config'
-                                    ? 'local_mesh_config'
-                                    : 'inline_bootstrap_snapshot',
-                            coordinatorOwnsLiveTruth: directTruthSatisfied,
-                            meshHost: {
-                                owner: 'mesh_host_daemon',
-                                localRole: meshHost.role,
-                                hostDaemonId: meshHost.hostDaemonId,
-                                hostNodeId: meshHost.hostNodeId,
-                                hostAddress: meshHost.hostAddress,
-                            },
-                            ...(requireDirectPeerTruth ? {
-                                currentStatus: directTruthSatisfied ? 'live_git_and_session_probes' : 'direct_peer_truth_unavailable',
-                                directPeerTruth: {
-                                    required: true,
-                                    satisfied: directTruthSatisfied,
-                                    directEvidenceCount: effectiveDirectTruth.directEvidenceCount,
-                                    localConfirmedCount: effectiveDirectTruth.localConfirmedCount,
-                                    peerAttemptedCount: effectiveDirectTruth.peerAttemptedCount,
-                                    peerConfirmedCount: effectiveDirectTruth.peerConfirmedCount,
-                                    unavailableNodeIds: effectiveDirectTruth.unavailableNodeIds,
-                                    partialNodeFailures: effectiveDirectTruth.unavailableNodeIds,
-                                },
-                            } : {}),
-                            historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary', 'historicalSessions'],
-                        },
-                        branchConvergenceSummary: summarizeInlineMeshBranchConvergence(nodeStatuses),
-                        ...(previewFreshness ? { previewFreshness, deployFreshness: previewFreshness } : {}),
-                        nodes: nodeStatuses,
-                        queue: { tasks: queue, summary: queueSummary },
-                        ledger: { entries: ledgerEntries, summary: ledgerSummary },
-                        ...(missions.length > 0 ? { missions } : {}),
-                        ...(asyncRefineJobs.length > 0 ? { asyncRefineJobs } : {}),
-                        ...(historicalSessions ? { historicalSessions } : {}),
-                        ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
-                        ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
-                        activeRefineJobs: Array.from(this.runningRefineJobs.values())
-                            .filter(job => job.meshId === meshId)
-                            .map(job => ({
-                                jobId: job.jobId,
-                                nodeId: job.targetNodeId,
-                                workspace: job.workspace,
-                                startedAt: job.startedAt,
-                                status: job.status,
-                                targetCoordinatorDaemonId: job.targetCoordinatorDaemonId,
-                            })),
-                    };
-                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, unroutableDeliveries: _unroutableDeliveries, ...cacheableStatusResult } = statusResult as any;
-                    // Verbose carries full mission goals; never store it in the shared
-                    // (compact) aggregate cache or a later compact poll would return the
-                    // heavy goals from cache. Return it without caching.
-                    const rememberedStatus = verboseMissions
-                        ? cacheableStatusResult
-                        : this.rememberAggregateMeshStatus(meshId, cacheableStatusResult, refreshReason);
-                    const returnedStatus = {
-                        ...rememberedStatus,
-                        ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
-                        ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
-                    };
-                    logRepoMeshStatusDebug('return_live', {
-                        meshId,
-                        command: 'mesh_status',
-                        refreshRequested,
-                        refreshReason,
-                        meshSource: meshRecord.source,
-                        directTruth,
-                        summary: summarizeRepoMeshStatusDebug(returnedStatus),
-                    });
-                    return returnedStatus;
-                } catch (e: any) {
-                    return { success: false, error: e.message };
-                }
-            }
-
-            case 'get_mesh_review_inbox': {
-                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                if (!meshId) return { success: false, error: 'meshId required' };
-                try {
-                    const { deriveMeshReviewInboxItems } = await import('../mesh/mesh-review-inbox.js');
-                    const { readLedgerEntries } = await import('../mesh/mesh-ledger.js');
-                    const { getGitDiffSummary } = await import('../git/git-diff.js');
-                    const { existsSync } = await import('node:fs');
-
-                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-                    const mesh = meshRecord?.mesh;
-                    if (!mesh) return { success: false, error: 'Mesh not found' };
-
-                    // Ensure we have a fresh aggregate status so nodeStatuses carry
-                    // computed fields (connection.state, branchConvergence, isLocalWorktree)
-                    // that the raw mesh.nodes config objects don't have.
-                    // When the caller provides an inlineMesh, prefer its nodes directly
-                    // (they already carry the computed fields from the coordinator).
-                    const inlineNodes = args?.inlineMesh && Array.isArray((args.inlineMesh as any)?.nodes)
-                        ? (args.inlineMesh as any).nodes as Record<string, unknown>[]
-                        : null;
-                    let cachedStatus = !inlineNodes ? this.getCachedAggregateMeshStatus(meshId, mesh, {}) : null;
-                    if (!cachedStatus && !inlineNodes) {
-                        const freshStatus = await this.execute('mesh_status', {
-                            meshId,
-                            inlineMesh: args?.inlineMesh,
-                            refresh: true,
-                        }, 'get_mesh_review_inbox');
-                        cachedStatus = (freshStatus?.success !== false) ? freshStatus : null;
-                    }
-                    const nodeStatuses: Record<string, unknown>[] = inlineNodes
-                        ? inlineNodes
-                        : Array.isArray(cachedStatus?.nodes)
-                            ? cachedStatus.nodes as Record<string, unknown>[]
-                            : Array.isArray(mesh.nodes)
-                                ? mesh.nodes as Record<string, unknown>[]
-                                : [];
-
-                    const ledgerEntries = readLedgerEntries(meshId, { tail: 300 });
-                    const derivation = deriveMeshReviewInboxItems({ nodes: nodeStatuses, ledgerEntries });
-
-                    for (const item of derivation.items) {
-                        const workspace = item.workspace;
-                        if (!workspace || !existsSync(workspace)) continue;
-                        const baseRef = item.defaultBranch
-                            ? `origin/${item.defaultBranch}`
-                            : 'origin/main';
-                        try {
-                            const diffResult = await getGitDiffSummary(workspace, { baseRef, maxFiles: 100 });
-                            if (diffResult.isGitRepo) {
-                                item.diffSummary = {
-                                    baseRef,
-                                    files: diffResult.files.map(f => ({
-                                        path: f.path,
-                                        status: f.status,
-                                        insertions: f.insertions,
-                                        deletions: f.deletions,
-                                        binary: f.binary,
-                                        oldPath: f.oldPath,
-                                    })),
-                                    totalFiles: diffResult.files.length,
-                                    totalInsertions: diffResult.totalInsertions,
-                                    totalDeletions: diffResult.totalDeletions,
-                                    truncated: diffResult.truncated,
-                                    ...(diffResult.error ? { error: diffResult.error } : {}),
-                                };
-                            }
-                        } catch {
-                            item.diffSummary = null;
-                        }
-                    }
-
-                    return {
-                        success: true,
-                        meshId,
-                        inbox: derivation.items,
-                        remoteNodesExcluded: derivation.remoteNodesExcluded,
-                        excludedRemoteNodeIds: derivation.excludedRemoteNodeIds,
-                    };
-                } catch (e: any) {
-                    return { success: false, error: e.message };
-                }
-            }
-
-            default:
-                break;
+        // RF-ROUTER HIGH family: high-coupling commands (mesh coordinator-event
+        // relay + interactive prompt, mesh coordinator launch, mesh aggregate
+        // status + review inbox) are handled by the registry after the LOW and
+        // MED families and before the (now empty) switch. HIGH handlers reach the
+        // most router-owned state — the aggregate-status memory cache and the
+        // running-refine-job table — so the context carries those plus bound
+        // read/write helpers and the router's own `execute` (the
+        // get_mesh_review_inbox mesh_status re-entry). A hit returns the same
+        // CommandRouterResult the inlined case used to; a miss falls through to
+        // CommandHandler delegation.
+        const highFamilyHandler = highFamilyRegistry.get(cmd);
+        if (highFamilyHandler) {
+            return await highFamilyHandler(this.buildHighFamilyContext(), args);
         }
 
         return null; // Not handled at this level → delegate to CommandHandler
