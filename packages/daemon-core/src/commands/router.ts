@@ -1073,19 +1073,176 @@ function synthesizeMeshNodeFreshnessFromConnection(status: Record<string, unknow
     }
 }
 
+/**
+ * Transient per-node marker the mesh_status render loop stamps onto a node
+ * `status` at the two sites that obtain git truth from a FRESH probe this call
+ * (a successful local `getGitRepoStatus`, or a successful P2P `git_status`
+ * round-trip). finalizeMeshNodeStatus consumes and deletes it. Held/standing
+ * truth (node.lastGit / cachedStatus / inline transit) is deliberately NOT
+ * stamped — its absence is exactly how the freshness marker tells "live" apart
+ * from "cached". Internal only; never serialized in the response.
+ */
+export const MESH_NODE_LIVE_TRUTH_MARKER = '__liveTruthProbed';
+
+type MeshNodeDataSource =
+    | 'self'          // the selected coordinator's own node — local truth
+    | 'live'          // git/session truth confirmed by a fresh probe THIS call
+    | 'cached'        // rendered from held standing truth (possibly old — see staleness)
+    | 'pending'       // reachable/known but no probe attempted yet (default load)
+    | 'unreachable'   // peer could not be reached (P2P probe failed / not connected, no held truth)
+    | 'empty'         // reachable but genuinely no session + git data
+    | 'unconfigured'; // node has no daemonId, so transport truth cannot be reported
+
+type MeshNodeStaleness = 'fresh' | 'recent' | 'stale' | 'unknown';
+
+// Staleness buckets (ms). Held/cached truth younger than FRESH reads as fresh,
+// younger than RECENT as recent, older as stale. Kept coarse on purpose — the
+// coordinator only needs "just-now / minutes-old / old", not millisecond precision.
+const MESH_FRESHNESS_FRESH_MS = 30_000;
+const MESH_FRESHNESS_RECENT_MS = 300_000;
+
+function classifyMeshNodeStaleness(dataSource: MeshNodeDataSource, ageMs: number | null): MeshNodeStaleness {
+    if (dataSource === 'self' || dataSource === 'live') return 'fresh';
+    if (ageMs === null) return 'unknown';
+    if (ageMs < MESH_FRESHNESS_FRESH_MS) return 'fresh';
+    if (ageMs < MESH_FRESHNESS_RECENT_MS) return 'recent';
+    return 'stale';
+}
+
+/**
+ * Build the additive per-node `dataFreshness` marker. This NEVER mutates any
+ * existing field — it only adds an explicit, machine-readable answer to the
+ * question the legacy fields blurred: is this node's data live (just probed),
+ * cached (held truth, maybe old), or absent because the peer was unreachable?
+ *
+ * The crucial separation: an UNREACHABLE peer (P2P probe failed / not connected)
+ * is no longer indistinguishable from an idle/EMPTY node. Both used to render as
+ * `health:'unknown'` with no sessions; now `dataFreshness.dataSource` and
+ * `reachable` tell them apart so a coordinator never reads a dead peer as "online
+ * but doing nothing".
+ */
+export function buildMeshNodeDataFreshness(args: {
+    status: Record<string, unknown>;
+    node?: any;
+    isSelfNode: boolean;
+    daemonId?: string;
+    /** True when this node was stamped with a fresh live git probe this call. */
+    liveTruthProbed: boolean;
+    /** True when direct-peer-truth accounting classified this node unavailable. */
+    directTruthUnavailable?: boolean;
+    now?: () => number;
+}): Record<string, unknown> {
+    const { status, node, isSelfNode, daemonId, liveTruthProbed, directTruthUnavailable } = args;
+    const now = args.now ?? Date.now;
+    const connection = readObjectRecord(status.connection);
+    const connectionState = readStringValue(connection.state);
+    const git = readObjectRecord(status.git);
+    const hasGit = readBooleanValue(git.isGitRepo) === true
+        || !!readStringValue(git.branch, git.headCommit, git.head, git.upstream);
+    const connectionFreshAt = toIsoTimestamp(connection.lastCommandAt ?? connection.lastConnectedAt ?? connection.lastStateChangeAt);
+    // Provenance-aware probe time. A FRESH probe this call writes a genuine
+    // git.lastCheckedAt, so trust it for live nodes. Held/standing truth, however,
+    // is re-normalized through pickBestTransitGitStatus which stamps lastCheckedAt
+    // with Date.now() on assembly (git-normalize.ts) — so status.git.lastCheckedAt
+    // would falsely read fresh. For cached nodes prefer the authentic peer-reported
+    // check time persisted on node.lastGit.checkedAt / cachedStatus, so a genuinely
+    // old cache is correctly reported stale.
+    const liveGitCheckedAt = liveTruthProbed ? toIsoTimestamp(git.lastCheckedAt) : null;
+    const heldGit = readObjectRecord(node?.lastGit ?? node?.last_git);
+    const heldCheckedAt = toIsoTimestamp(heldGit.checkedAt ?? heldGit.checked_at);
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    const cachedGitCheckedAt = toIsoTimestamp(readObjectRecord(cachedStatus.git).lastCheckedAt);
+    const lastProbeAt = liveGitCheckedAt
+        ?? heldCheckedAt
+        ?? cachedGitCheckedAt
+        ?? toIsoTimestamp(git.lastCheckedAt)
+        ?? connectionFreshAt
+        ?? toIsoTimestamp(status.updatedAt)
+        ?? toIsoTimestamp(status.lastSeenAt);
+
+    // connectionReachable: true (connected) / false (terminally down) / null (unknown,
+    // not yet reported) — used so a cached/pending node carries the coordinator's last
+    // known transport state rather than guessing.
+    const connectionReachable: boolean | null = connectionState === 'connected'
+        ? true
+        : (!connectionState || connectionState === 'unknown' || connectionState === 'connecting')
+            ? (connectionState === 'connecting' ? true : null)
+            : false;
+
+    let dataSource: MeshNodeDataSource;
+    let reachable: boolean | null;
+    if (isSelfNode) {
+        dataSource = 'self';
+        reachable = true;
+    } else if (liveTruthProbed) {
+        dataSource = 'live';
+        reachable = true;
+    } else if (readBooleanValue(status.gitProbePending) === true) {
+        dataSource = 'pending';
+        reachable = connectionReachable;
+    } else if (directTruthUnavailable) {
+        dataSource = 'unreachable';
+        reachable = false;
+    } else if (hasGit) {
+        dataSource = 'cached';
+        reachable = connectionReachable;
+    } else if (!daemonId) {
+        dataSource = 'unconfigured';
+        reachable = null;
+    } else if (connectionState === 'connected') {
+        dataSource = 'empty';
+        reachable = true;
+    } else {
+        dataSource = 'unreachable';
+        reachable = false;
+    }
+
+    const probeOk = dataSource === 'live' || dataSource === 'self';
+    let ageMs: number | null = null;
+    if (lastProbeAt) {
+        const parsed = Date.parse(lastProbeAt);
+        if (Number.isFinite(parsed)) ageMs = Math.max(0, now() - parsed);
+    }
+    const staleness = classifyMeshNodeStaleness(dataSource, ageMs);
+
+    return {
+        dataSource,
+        probeOk,
+        reachable,
+        lastProbeAt: lastProbeAt ?? null,
+        ageMs,
+        staleness,
+    };
+}
+
 export function finalizeMeshNodeStatus(args: {
     status: Record<string, unknown>;
     node: any;
     daemonId?: string;
     isSelfNode: boolean;
+    /** True when direct-peer-truth accounting classified this node unavailable. */
+    directTruthUnavailable?: boolean;
 }): void {
-    const { status, node, daemonId, isSelfNode } = args;
+    const { status, node, daemonId, isSelfNode, directTruthUnavailable } = args;
     if (!readStringValue(status.machineStatus)) {
         const cachedStatus = readObjectRecord(node?.cachedStatus);
         const machineStatus = readStringValue(cachedStatus.machineStatus, cachedStatus.machine_status, node?.machineStatus);
         if (machineStatus) status.machineStatus = machineStatus;
     }
     synthesizeMeshNodeFreshnessFromConnection(status);
+    // Stamp the additive freshness/reachability marker before any early return so
+    // every node — including bootstrap-blocked ones — carries it. Consume and drop
+    // the transient live-probe marker so it never leaks into the response.
+    const liveTruthProbed = readBooleanValue(status[MESH_NODE_LIVE_TRUTH_MARKER]) === true;
+    delete status[MESH_NODE_LIVE_TRUTH_MARKER];
+    status.dataFreshness = buildMeshNodeDataFreshness({
+        status,
+        node,
+        isSelfNode,
+        daemonId,
+        liveTruthProbed,
+        directTruthUnavailable,
+    });
     const bootstrap = readObjectRecord(node?.worktreeBootstrap);
     if (node?.isLocalWorktree && readStringValue(bootstrap.status)) {
         status.worktreeBootstrap = bootstrap;

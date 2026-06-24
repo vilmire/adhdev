@@ -542,9 +542,151 @@ describe('mesh_status', () => {
           reported: false,
         }),
       }))
+      // Freshness marker (additive): the self coordinator node reads as live local
+      // truth; the remote node whose git probe has not run yet reads as pending —
+      // never conflated with an unreachable/empty peer.
+      expect(result.nodes.find((node: any) => node.nodeId === 'node-local').dataFreshness).toEqual(expect.objectContaining({
+        dataSource: 'self',
+        probeOk: true,
+        reachable: true,
+        staleness: 'fresh',
+      }))
+      expect(result.nodes.find((node: any) => node.nodeId === 'node-remote').dataFreshness).toEqual(expect.objectContaining({
+        dataSource: 'pending',
+        probeOk: false,
+        reachable: null,
+        lastProbeAt: '2026-05-17T05:01:00.000Z',
+      }))
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+
+  it('marks a freshly P2P-probed remote node as live truth', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-live-marker-')
+    try {
+      const dispatchMeshCommand = vi.fn(async () => ({
+        status: {
+          workspace: '/missing/remote',
+          repoRoot: '/missing/remote',
+          isGitRepo: true,
+          branch: 'main',
+          head: 'abcd1234',
+          upstream: 'origin/main',
+          upstreamStatus: 'fresh',
+          ahead: 0,
+          behind: 0,
+          dirty: false,
+          hasConflicts: false,
+          lastCheckedAt: Date.parse('2026-06-20T07:02:58.779Z'),
+        },
+      }))
+      const getMeshPeerConnectionStatus = vi.fn((daemonId: string) => daemonId === 'machine-remote'
+        ? {
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'connected',
+            transport: 'direct',
+            reported: true,
+            reason: 'Connected directly peer-to-peer.',
+            lastStateChangeAt: '2026-06-20T07:00:06.000Z',
+          }
+        : null)
+      const { router } = createRouter({ dispatchMeshCommand, getMeshPeerConnectionStatus })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-live-marker',
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh-live-marker',
+          name: 'Live Marker Mesh',
+          repoIdentity: 'repo',
+          policy: {},
+          nodes: [
+            { id: 'node-local', daemonId: 'machine-local', machineLabel: 'Local', workspace: repoRoot, providers: ['hermes-cli'], policy: { providerPriority: ['hermes-cli'] } },
+            { id: 'node-remote', daemonId: 'machine-remote', machineLabel: 'Remote', workspace: '/missing/remote', providers: ['hermes-cli'], policy: { providerPriority: ['hermes-cli'] } },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      const remote = result.nodes.find((node: any) => node.nodeId === 'node-remote')
+      expect(remote.dataFreshness).toEqual(expect.objectContaining({
+        dataSource: 'live',
+        probeOk: true,
+        reachable: true,
+        staleness: 'fresh',
+        lastProbeAt: '2026-06-20T07:02:58.779Z',
+      }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('marks a disconnected peer with no held truth as unreachable, not idle/empty', async () => {
+    const { router } = createRouter({
+      statusInstanceId: 'machine-local',
+      getMeshPeerConnectionStatus: vi.fn((daemonId: string) => daemonId === 'machine-remote'
+        ? {
+            perspective: 'selected_coordinator',
+            source: 'mesh_peer_status',
+            state: 'disconnected',
+            transport: 'unknown',
+            reported: true,
+            reason: 'Mesh DataChannel closed.',
+            lastStateChangeAt: '2026-06-20T00:00:00.000Z',
+          }
+        : null),
+    })
+
+    const result = await router.execute('mesh_status', {
+      meshId: 'mesh-unreachable',
+      inlineMesh: {
+        id: 'mesh-unreachable',
+        name: 'Unreachable Mesh',
+        repoIdentity: 'repo',
+        policy: {},
+        coordinator: { preferredNodeId: 'node-local' },
+        nodes: [
+          {
+            id: 'node-local',
+            daemonId: 'machine-local',
+            machineLabel: 'Local',
+            workspace: '/missing/local',
+            providers: ['hermes-cli'],
+            policy: { providerPriority: ['hermes-cli'] },
+          },
+          {
+            // Remote peer the coordinator cannot reach: P2P disconnected, no
+            // cachedStatus/lastGit held truth. The legacy fields would render this
+            // identically to an idle/empty node (health 'unknown', no sessions);
+            // the freshness marker must call it out as unreachable.
+            id: 'node-remote',
+            daemonId: 'machine-remote',
+            machineLabel: 'Remote',
+            workspace: '/missing/remote',
+            providers: ['codex-cli'],
+            policy: { providerPriority: ['codex-cli'] },
+          },
+        ],
+      },
+    }) as any
+
+    expect(result.success).toBe(true)
+    const remote = result.nodes.find((node: any) => node.nodeId === 'node-remote')
+    expect(remote.gitProbePending).toBeUndefined()
+    expect(remote.dataFreshness).toEqual(expect.objectContaining({
+      dataSource: 'unreachable',
+      probeOk: false,
+      reachable: false,
+    }))
+    // Self node stays reachable/live — the marker is additive and does not regress
+    // normal node rendering.
+    const local = result.nodes.find((node: any) => node.nodeId === 'node-local')
+    expect(local.dataFreshness).toEqual(expect.objectContaining({
+      dataSource: 'self',
+      reachable: true,
+    }))
   })
 
   it('surfaces preview freshness from the local deploy record', async () => {
@@ -1096,6 +1238,19 @@ describe('mesh_status', () => {
         cached: false,
         refreshReason: 'explicit_refresh',
       })
+      // The requireDirectPeerTruth refresh confirms remote git via the bootstrap
+      // hydrate, which lands on node.lastGit; the render loop reads that as held
+      // (cached) truth. lastProbeAt/staleness reflect the peer's AUTHENTIC git-check
+      // time (2026-05-21 here), so a snapshot whose underlying git is old is correctly
+      // flagged stale rather than masquerading as fresh just because it was re-fetched.
+      // The reachable flag flips true once the live peer-git connection is synthesized.
+      expect(refreshed.nodes.find((node: any) => node.nodeId === 'node_303a1ded96a859540d7bf608448d1fcc').dataFreshness).toEqual(expect.objectContaining({
+        dataSource: 'cached',
+        probeOk: false,
+        reachable: true,
+        lastProbeAt: '2026-05-21T14:10:00.000Z',
+        staleness: 'stale',
+      }))
       expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
       expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
 
@@ -1119,6 +1274,15 @@ describe('mesh_status', () => {
       expect(cached.nodes.find((node: any) => node.nodeId === 'node_303a1ded96a859540d7bf608448d1fcc')).toMatchObject({
         git: expect.objectContaining({ branch: 'main', upstream: 'origin/main', headCommit: 'cb6fda78' }),
       })
+      // The default (non-refresh) load renders the same node from held standing
+      // truth — explicitly marked cached so the coordinator reads the data as
+      // possibly-stale rather than a fresh probe. The git lastCheckedAt drives
+      // lastProbeAt/staleness.
+      expect(cached.nodes.find((node: any) => node.nodeId === 'node_303a1ded96a859540d7bf608448d1fcc').dataFreshness).toEqual(expect.objectContaining({
+        dataSource: 'cached',
+        probeOk: false,
+        lastProbeAt: '2026-05-21T14:10:00.000Z',
+      }))
       expect(dispatchMeshCommand).not.toHaveBeenCalled()
       expect(sessionHostControl.listSessions).not.toHaveBeenCalled()
     } finally {

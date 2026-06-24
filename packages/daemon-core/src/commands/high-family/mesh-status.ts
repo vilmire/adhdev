@@ -49,6 +49,7 @@ import {
     summarizeInlineMeshBranchConvergence,
     buildHistoricalMeshSessions,
     hydrateInlineMeshDirectTruth,
+    MESH_NODE_LIVE_TRUTH_MARKER,
     logRepoMeshStatusDebug,
     summarizeRepoMeshStatusDebug,
     MESH_DIRECT_PROBE_TIMEOUT_MS,
@@ -359,6 +360,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                     const remoteGit = await meshGitProbeCache.probe(daemonId, workspace, runNodeProbe);
                                     if (remoteGit) {
                                         status.git = remoteGit;
+                                        status[MESH_NODE_LIVE_TRUTH_MARKER] = true;
                                         status.health = remoteGit.isGitRepo
                                             ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
                                             : 'degraded';
@@ -395,13 +397,13 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                         pendingPeerGitProbe ? { skipGit: true, skipError: true, skipHealth: true } : undefined,
                                     )) {
                                         applyInlineMeshBranchConvergence(mesh, node, status);
-                                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
+                                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                                         nodeStatuses.push(status);
                                         continue;
                                     }
                                     if (meshRecord?.source === 'inline_cache' && !isSelfNode) {
                                         applyInlineMeshBranchConvergence(mesh, node, status);
-                                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
+                                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                                         nodeStatuses.push(status);
                                         continue;
                                     }
@@ -410,6 +412,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 try {
                                     const gitStatus = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
                                     status.git = gitStatus;
+                                    status[MESH_NODE_LIVE_TRUTH_MARKER] = true;
                                     const reporter = recordInlineMeshDirectGitTruth(node, gitStatus as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
                                     persistNodeReporterPlatform(meshRecord.source, mesh, nodeId, reporter);
                                     if (gitStatus.isGitRepo) {
@@ -428,7 +431,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             applyCachedInlineMeshNodeStatus(status, node);
                         }
                         applyInlineMeshBranchConvergence(mesh, node, status);
-                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode });
+                        finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                         nodeStatuses.push(status);
                     }
 
