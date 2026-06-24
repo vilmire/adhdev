@@ -254,6 +254,40 @@ function isTransientUnavailableEmptyTail(
   return typeof fallbackReason === 'string' && fallbackReason.startsWith('native_history_')
 }
 
+/**
+ * Outcome of evaluating an incoming chat-tail update against the live snapshot.
+ * - 'defer-busy-shrink': a warm/busy (incl. waiting_approval) shrink that would
+ *   transiently drop hydrated bubbles — ignore it (CHATFLICKER shrink-defense).
+ * - 'skip-transient-empty': an empty tail from a not-yet-hydrated native/PTY
+ *   source that would erase visible fallback/live bubbles — ignore it.
+ * - 'apply': accept the update.
+ */
+export type ChatTailUpdateDecision = 'apply' | 'defer-busy-shrink' | 'skip-transient-empty'
+
+/**
+ * Single decision point for whether to accept an incoming tail update. This only
+ * centralises the existing accept/reject gates into one named outcome; the gate
+ * predicates (shouldDeferBusyTailUpdate / isTransientUnavailableEmptyTail) are
+ * unchanged and evaluated in the exact same order, so the result is byte-identical
+ * to the previous inline checks. The shrink-defense's waiting_approval coverage
+ * (via shouldGuardTailShrinkForStatus) is preserved untouched.
+ */
+function decideChatTailUpdate(
+  snapshot: SessionChatTailSnapshot,
+  fallbackRecentCount: number,
+  nextMessages: DashboardMessage[],
+  status: unknown,
+  messageSource: Record<string, unknown> | undefined,
+): ChatTailUpdateDecision {
+  if (shouldDeferBusyTailUpdate(snapshot, fallbackRecentCount, nextMessages, status, messageSource)) {
+    return 'defer-busy-shrink'
+  }
+  if (isTransientUnavailableEmptyTail(snapshot, fallbackRecentCount, nextMessages, messageSource)) {
+    return 'skip-transient-empty'
+  }
+  return 'apply'
+}
+
 function readChatTailUpdateMessages(update: SessionChatTailUpdate): DashboardMessage[] {
   if (Array.isArray(update.messages)) return update.messages as DashboardMessage[]
   const tailMessages = (update as SessionChatTailUpdate & { messagesTail?: unknown }).messagesTail
@@ -477,10 +511,7 @@ export class SessionChatTailController {
 
     const nextMessages = readChatTailUpdateMessages(update)
     const incomingMessageSource = (update as SessionChatTailUpdate & { messageSource?: Record<string, unknown> }).messageSource
-    if (shouldDeferBusyTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource)) {
-      return
-    }
-    if (isTransientUnavailableEmptyTail(this.snapshot, this.fallbackRecentCount, nextMessages, incomingMessageSource)) {
+    if (decideChatTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource) !== 'apply') {
       return
     }
     const nextCursor: SessionChatTailCursor = { tailLimit: this.snapshot.cursor.tailLimit }
