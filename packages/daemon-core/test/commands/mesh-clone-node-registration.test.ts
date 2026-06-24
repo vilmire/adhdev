@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { cleanupTempDir, resetMeshRuntimeStore } from '../helpers/temp-cleanup.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -38,6 +39,11 @@ function createRouter() {
   })
   return { router }
 }
+
+// Close the process-wide mesh runtime sqlite store after each test so an open
+// handle can't EBUSY the next test's temp-dir removal on win32, and no stale
+// singleton leaks across tests.
+afterEach(resetMeshRuntimeStore)
 
 /**
  * Regression: clone_node-registration event ordering / membership divergence.
@@ -146,8 +152,8 @@ describe('clone_mesh_node registration <-> membership consistency', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      await rm(configDir, { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(configDir)
+      await cleanupTempDir(dir)
     }
   })
 })
@@ -248,8 +254,8 @@ describe('mesh_refine_node membership <-> inline-cache-only clone node', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      await rm(configDir, { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(configDir)
+      await cleanupTempDir(dir)
     }
   })
 })

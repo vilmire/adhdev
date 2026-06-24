@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { cleanupTempDir, resetMeshRuntimeStore } from '../helpers/temp-cleanup.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -78,6 +79,12 @@ function createRouter(overrides: Record<string, unknown> = {}) {
   return { router, sessionHostControl }
 }
 
+// Safety net: close the process-wide mesh runtime sqlite store after every test so
+// a test that throws before its own finally can't leak an open handle (which would
+// EBUSY the next test's temp-dir removal on win32) or a stale singleton into the
+// next test.
+afterEach(resetMeshRuntimeStore)
+
 describe('mesh_status', () => {
   it('persists standalone manual Mesh Host pairing config without storing the raw token', async () => {
     const configDir = await mkdtemp(join(tmpdir(), 'mesh-host-pairing-config-'))
@@ -130,7 +137,7 @@ describe('mesh_status', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      await rm(configDir, { recursive: true, force: true })
+      await cleanupTempDir(configDir)
     }
   })
 
@@ -195,7 +202,7 @@ describe('mesh_status', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      await rm(configDir, { recursive: true, force: true })
+      await cleanupTempDir(configDir)
     }
   })
 
@@ -239,7 +246,7 @@ describe('mesh_status', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      await rm(configDir, { recursive: true, force: true })
+      await cleanupTempDir(configDir)
     }
   })
 
@@ -292,7 +299,7 @@ describe('mesh_status', () => {
         localRole: 'member',
       }))
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -440,7 +447,7 @@ describe('mesh_status', () => {
         canOwnCoordinator: false,
       }))
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -558,7 +565,7 @@ describe('mesh_status', () => {
         lastProbeAt: '2026-05-17T05:01:00.000Z',
       }))
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -619,7 +626,7 @@ describe('mesh_status', () => {
         lastProbeAt: '2026-06-20T07:02:58.779Z',
       }))
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -734,7 +741,7 @@ describe('mesh_status', () => {
       }))
       expect(result.deployFreshness).toEqual(result.previewFreshness)
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -800,7 +807,7 @@ describe('mesh_status', () => {
         }),
       ])
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -852,7 +859,7 @@ describe('mesh_status', () => {
         }),
       ])
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -917,7 +924,7 @@ describe('mesh_status', () => {
         ],
       }))
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1008,7 +1015,7 @@ describe('mesh_status', () => {
         lastCommandAt: '2026-05-17T06:00:30.000Z',
       }))
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1116,13 +1123,17 @@ describe('mesh_status', () => {
 
       expect(result.success).toBe(true)
       expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
-      // The bounded retry now reads the peer connection one extra time: a pre-attempt
-      // liveness gate (added to fast-fail offline/dropped peers before burning a 25s
-      // probe window) consults getConnection once before the first attempt. The peer
-      // is `connecting` there — not definitively down — so the probe still runs and
-      // the connection flips to `connected` on the between-attempt re-check, exactly
-      // as before. Only the read count changes (2 → 3); the surfaced git truth does not.
-      expect(getMeshPeerConnectionStatus).toHaveBeenCalledTimes(3)
+      // The bounded retry re-reads the peer connection across attempts: a pre-attempt
+      // liveness gate fast-fails offline/dropped peers, the between-attempt gate decides
+      // whether to retry, and the warmup deadline samples it while a cold channel opens.
+      // The EXACT read count is therefore an implementation detail that varies with
+      // dispatch/timer ordering (observed 3–5 across platforms) — pinning it made this a
+      // cross-platform flake. Assert the invariant the retry actually depends on instead:
+      // the connection is consulted more than once (so the between-attempt re-check ran),
+      // always scoped to the remote peer, and the surfaced connection/git truth below
+      // proves the probe recovered after the telemetry flipped to `connected`.
+      expect(getMeshPeerConnectionStatus.mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(getMeshPeerConnectionStatus).toHaveBeenCalledWith('machine-remote')
       const remoteNode = result.nodes.find((node: any) => node.nodeId === 'node-remote')
       expect(remoteNode?.gitProbePending).toBeUndefined()
       expect(remoteNode).toEqual(expect.objectContaining({
@@ -1160,7 +1171,7 @@ describe('mesh_status', () => {
         }),
       }))
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1286,7 +1297,7 @@ describe('mesh_status', () => {
       expect(dispatchMeshCommand).not.toHaveBeenCalled()
       expect(sessionHostControl.listSessions).not.toHaveBeenCalled()
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1336,8 +1347,8 @@ describe('mesh_status', () => {
       __resetMeshRuntimeStoreForTests()
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      await rm(configDir, { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(configDir)
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1428,8 +1439,8 @@ describe('mesh_status', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      await rm(configDir, { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(configDir)
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1481,8 +1492,8 @@ describe('mesh_status', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      await rm(configDir, { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(configDir)
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1580,7 +1591,7 @@ describe('mesh_status', () => {
       expect(node303).not.toHaveProperty('gitProbePending')
       expect(node303).not.toHaveProperty('error')
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1674,7 +1685,7 @@ describe('mesh_status', () => {
       expect(node303).not.toHaveProperty('error')
       expect(sessionHostControl.listSessions).not.toHaveBeenCalled()
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1727,7 +1738,7 @@ describe('mesh_status', () => {
         unavailableNodeIds: [],
       })
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1775,8 +1786,8 @@ describe('mesh_status', () => {
       })
       expect(dispatchMeshCommand).not.toHaveBeenCalled()
     } finally {
-      await rm(primary.dir, { recursive: true, force: true })
-      await rm(sibling.dir, { recursive: true, force: true })
+      await cleanupTempDir(primary.dir)
+      await cleanupTempDir(sibling.dir)
     }
   })
 
@@ -1840,7 +1851,7 @@ describe('mesh_status', () => {
         }),
       })
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -1986,7 +1997,7 @@ describe('mesh_status', () => {
       // (daemon_303) actually dispatches git_status.
       expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -2046,7 +2057,7 @@ describe('mesh_status', () => {
       const slowNode = result.nodes.find((node: any) => node.nodeId === 'node_slow')
       expect(slowNode.gitProbePending).toBe(true)
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -2110,7 +2121,7 @@ describe('mesh_status', () => {
         health: 'unknown',
       })
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -2144,7 +2155,7 @@ describe('mesh_status', () => {
         health: 'dirty',
       }))
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -2196,7 +2207,7 @@ describe('mesh_status', () => {
         isGitRepo: true,
       }))
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 })
@@ -2258,7 +2269,7 @@ describe('mesh_status dead local worktree exclusion', () => {
       expect(result.sourceOfTruth.directPeerTruth.unavailableNodeIds).not.toContain('node_7ebd')
       expect(dispatchMeshCommand).not.toHaveBeenCalled()
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -2336,7 +2347,7 @@ describe('mesh_status dead local worktree exclusion', () => {
         expect(call[0]).not.toBe('daemon_self')
       }
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 })
@@ -2407,7 +2418,7 @@ describe('inline mesh node tombstone', () => {
       expect(echoedIds).toContain('node_self')
       expect(echoedIds).not.toContain('node_wt')
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await cleanupTempDir(dir)
     }
   })
 
@@ -2471,8 +2482,8 @@ describe('inline mesh node tombstone', () => {
       const ids = (revived.mesh?.nodes ?? []).map((n: any) => n.id ?? n.nodeId)
       expect(ids).toContain('node_wt')
     } finally {
-      await rm(primary.dir, { recursive: true, force: true })
-      await rm(reborn.dir, { recursive: true, force: true })
+      await cleanupTempDir(primary.dir)
+      await cleanupTempDir(reborn.dir)
     }
   })
 })
