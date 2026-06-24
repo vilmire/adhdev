@@ -18,6 +18,7 @@ import { loadConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
+import { shortHash } from '../system/hash.js';
 import { unregisterMeshCoordinator, getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
@@ -301,7 +302,7 @@ function hasConfigOverride(args: string[], key: string): boolean {
 function ensureEmptyDelegatedMcpConfig(workspace: string): string {
     const baseDir = path.join(os.tmpdir(), 'adhdev-delegated-agent-empty-mcp');
     mkdirSync(baseDir, { recursive: true });
-    const workspaceHash = crypto.createHash('sha256').update(path.resolve(workspace || os.tmpdir())).digest('hex').slice(0, 16);
+    const workspaceHash = shortHash(path.resolve(workspace || os.tmpdir()));
     const filePath = path.join(baseDir, `${workspaceHash}.json`);
     writeFileSync(filePath, JSON.stringify({ mcpServers: {} }, null, 2), 'utf-8');
     return filePath;

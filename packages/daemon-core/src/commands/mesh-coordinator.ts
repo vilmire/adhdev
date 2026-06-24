@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { LOG } from '../logging/logger.js'
+import { shortHash } from '../system/hash.js'
 import type {
   MeshCoordinatorMcpConfigFormat,
   MeshCoordinatorSystemPromptInjection,
@@ -241,7 +241,7 @@ function replaceLegacyCliCommandMcpArgs(command: string, args: string[]): string
 
 function resolveHermesCoordinatorHome(meshId: string, workspace: string): string {
   const key = `${meshId || 'mesh'}\n${resolve(workspace || os.tmpdir())}`
-  const hash = createHash('sha256').update(key).digest('hex').slice(0, 16)
+  const hash = shortHash(key)
   return join(os.tmpdir(), `adhdev-hermes-mesh-coordinator-${hash}`)
 }
 

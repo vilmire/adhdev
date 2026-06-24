@@ -8,7 +8,8 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { createHash, randomBytes, randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
+import { shortHash } from '../system/hash.js';
 import { getConfigDir } from './config.js';
 import type {
     LocalMeshConfig,
@@ -309,7 +310,7 @@ function normalizeManualHostAddress(hostAddress: string): string {
 }
 
 export function tokenIdForManualPairing(token: string): string {
-    return `tok_${createHash('sha256').update(token).digest('hex').slice(0, 16)}`;
+    return `tok_${shortHash(token)}`;
 }
 
 function normalizeTokenExpiry(value: unknown): string | undefined {

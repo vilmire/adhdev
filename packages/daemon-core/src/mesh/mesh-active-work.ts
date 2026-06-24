@@ -208,6 +208,60 @@ function classifyDirectDispatch(params: {
     return { ledgerOnlyStaleReason, isFreshUnacknowledged };
 }
 
+/**
+ * Build a direct-dispatch MeshActiveWorkRecord from a `task_dispatched` ledger entry,
+ * matching it against the terminal ledger entries and live mesh nodes. Shared by the
+ * remote-ledger scan (inside the MeshRuntimeStore branch) and the full-ledger scan
+ * (standalone branch) — those two loops were previously byte-identical except for a
+ * single `dbTaskIds.has(taskId)` skip guard that stays in the caller. Returns the record
+ * plus `terminalRow` so the caller can route it into terminal/stale/active buckets.
+ */
+function buildLedgerDirectDispatchRecord(
+    dispatch: MeshLedgerEntry,
+    ctx: { terminals: MeshLedgerEntry[]; nodes: any[] | undefined; now: number },
+): { record: MeshActiveWorkRecord; terminalRow: boolean } {
+    const taskId = directDispatchTaskId(dispatch);
+    const terminal = ctx.terminals
+        .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
+        .find(entry => terminalMatchesDispatch(entry, dispatch, taskId));
+    const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
+    const live = sessionStatusFromNodes(ctx.nodes, dispatch.nodeId, dispatch.sessionId);
+    const status = terminalStatus || live.status || 'assigned';
+    const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
+    const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
+        status,
+        isTerminalRow: terminalRow,
+        hasTerminalStatus: Boolean(terminalStatus),
+        liveStatus: live.status,
+        liveStaleReason: live.staleReason,
+        dispatchedToIdleSession: dispatch.payload?.dispatchedToIdleSession === true,
+    });
+    const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
+    const { title, summary } = summarizeMessage(message);
+    const record: MeshActiveWorkRecord = {
+        taskId,
+        source: 'direct',
+        status,
+        nodeId: dispatch.nodeId,
+        sessionId: dispatch.sessionId,
+        providerType: dispatch.providerType || readString(dispatch.payload?.providerType),
+        taskTitle: readString(dispatch.payload?.taskTitle) || title,
+        taskSummary: readString(dispatch.payload?.taskSummary) || summary,
+        message,
+        taskMode: readString(dispatch.payload?.taskMode),
+        createdAt: dispatch.timestamp,
+        updatedAt: terminal?.timestamp || dispatch.timestamp,
+        dispatchedAt: dispatch.timestamp,
+        elapsedMs: elapsedSince(dispatch.timestamp, ctx.now),
+        terminal: terminalRow,
+        terminalKind: terminal?.kind,
+        terminalAt: terminal?.timestamp,
+        staleReason: live.staleReason || ledgerOnlyStaleReason,
+        ...(isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}),
+    };
+    return { record, terminalRow };
+}
+
 export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): MeshActiveWorkSummary {
     const statusCounts: Record<MeshActiveWorkStatus, number> = {
         pending: 0,
@@ -324,51 +378,13 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
         for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
-            const taskId = directDispatchTaskId(dispatch);
-            if (dbTaskIds.has(taskId)) continue; // already covered by MeshRuntimeStore path above
-            const terminal = terminals
-                .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
-                .find(entry => terminalMatchesDispatch(entry, dispatch, taskId));
-            const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
-            const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
-            const status = terminalStatus || live.status || 'assigned';
-            const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
-            const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
-                status,
-                isTerminalRow: terminalRow,
-                hasTerminalStatus: Boolean(terminalStatus),
-                liveStatus: live.status,
-                liveStaleReason: live.staleReason,
-                dispatchedToIdleSession: dispatch.payload?.dispatchedToIdleSession === true,
-            });
-            const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
-            const { title, summary } = summarizeMessage(message);
-            const record: MeshActiveWorkRecord = {
-                taskId,
-                source: 'direct',
-                status,
-                nodeId: dispatch.nodeId,
-                sessionId: dispatch.sessionId,
-                providerType: dispatch.providerType || readString(dispatch.payload?.providerType),
-                taskTitle: readString(dispatch.payload?.taskTitle) || title,
-                taskSummary: readString(dispatch.payload?.taskSummary) || summary,
-                message,
-                taskMode: readString(dispatch.payload?.taskMode),
-                createdAt: dispatch.timestamp,
-                updatedAt: terminal?.timestamp || dispatch.timestamp,
-                dispatchedAt: dispatch.timestamp,
-                elapsedMs: elapsedSince(dispatch.timestamp, now),
-                terminal: terminalRow,
-                terminalKind: terminal?.kind,
-                terminalAt: terminal?.timestamp,
-                staleReason: live.staleReason || ledgerOnlyStaleReason,
-                ...(isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}),
-            };
+            if (dbTaskIds.has(directDispatchTaskId(dispatch))) continue; // already covered by MeshRuntimeStore path above
+            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminals, nodes: opts.nodes, now });
             if (terminalRow) {
                 terminalDirectWork.push(record);
                 if (opts.includeTerminalDirect !== true) continue;
             }
-            if ((live.staleReason || ledgerOnlyStaleReason) && !terminalRow) {
+            if (record.staleReason && !terminalRow) {
                 staleDirectWork.push(record);
                 continue;
             }
@@ -379,50 +395,12 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
         for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
-            const taskId = directDispatchTaskId(dispatch);
-            const terminal = terminals
-                .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
-                .find(entry => terminalMatchesDispatch(entry, dispatch, taskId));
-            const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
-            const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId, dispatch.sessionId);
-            const status = terminalStatus || live.status || 'assigned';
-            const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
-            const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
-                status,
-                isTerminalRow: terminalRow,
-                hasTerminalStatus: Boolean(terminalStatus),
-                liveStatus: live.status,
-                liveStaleReason: live.staleReason,
-                dispatchedToIdleSession: dispatch.payload?.dispatchedToIdleSession === true,
-            });
-            const message = readString(dispatch.payload?.message) || readString(dispatch.payload?.summary) || '';
-            const { title, summary } = summarizeMessage(message);
-            const record: MeshActiveWorkRecord = {
-                taskId,
-                source: 'direct',
-                status,
-                nodeId: dispatch.nodeId,
-                sessionId: dispatch.sessionId,
-                providerType: dispatch.providerType || readString(dispatch.payload?.providerType),
-                taskTitle: readString(dispatch.payload?.taskTitle) || title,
-                taskSummary: readString(dispatch.payload?.taskSummary) || summary,
-                message,
-                taskMode: readString(dispatch.payload?.taskMode),
-                createdAt: dispatch.timestamp,
-                updatedAt: terminal?.timestamp || dispatch.timestamp,
-                dispatchedAt: dispatch.timestamp,
-                elapsedMs: elapsedSince(dispatch.timestamp, now),
-                terminal: terminalRow,
-                terminalKind: terminal?.kind,
-                terminalAt: terminal?.timestamp,
-                staleReason: live.staleReason || ledgerOnlyStaleReason,
-                ...(isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}),
-            };
+            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminals, nodes: opts.nodes, now });
             if (terminalRow) {
                 terminalDirectWork.push(record);
                 if (opts.includeTerminalDirect !== true) continue;
             }
-            if ((live.staleReason || ledgerOnlyStaleReason) && !terminalRow) {
+            if (record.staleReason && !terminalRow) {
                 staleDirectWork.push(record);
                 continue;
             }
