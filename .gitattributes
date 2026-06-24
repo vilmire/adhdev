@@ -1,0 +1,4 @@
+# Vendored build artifacts are committed with LF and read directly by the runtime.
+# Force LF so Windows checkouts (core.autocrlf=true) don't munge them into CRLF,
+# which otherwise makes them perpetually dirty and blocks submodule update / ff.
+packages/daemon-standalone/vendor/** text eol=lf
