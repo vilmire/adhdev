@@ -1844,7 +1844,26 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // re-attributed to the latest task (the normal task_completed path below).
             const supersedesWeakTerminal = isWeakTerminalLedgerPayload(terminal.payload)
                 && isGenuineCompletionEvidence(args.metadataEvent);
-            if (!newDispatchAfterTerminal && !supersedesWeakTerminal) {
+            // CANON-B (direct-dispatch completion race): a FAST direct dispatch (mesh_send_task)
+            // to an already-idle, previously-used session can have its genuine completion reach
+            // this coordinator handler BEFORE the dispatching side records the new task's dispatch
+            // row / task_dispatched ledger entry — insertDirectDispatch + appendLedgerEntry both run
+            // AFTER the agent_command await resolves, while the worker may already be done. In that
+            // window sessionHasActiveAssignment is false (no active dispatch row, no unterminal
+            // ledger entry yet), so this prior-terminal dedup engages; and because providerSessionId
+            // is STABLE across a reused session's turns, the providerSessionId/finalSummary match
+            // below would suppress the NEW task's completion as a duplicate of the PRIOR task —
+            // silently losing it (the observed intermittent miss; fresh enqueue/autoLaunch is immune
+            // because a fresh session has no prior same-providerSessionId terminal and the queue row
+            // is claimed atomically before dispatch). The echoed taskId is the authoritative
+            // discriminator: when the completion names a DIFFERENT task than the recorded terminal,
+            // it is a genuinely new task's completion, never a duplicate — let it through so it is
+            // attributed to its own taskId. A same-task re-arrival (taskId equal) or a taskId-less
+            // legacy event still falls through to the providerSessionId/finalSummary dedup.
+            const terminalTaskId = readNonEmptyString(terminal.payload.taskId);
+            const eventTaskId = readNonEmptyString(args.metadataEvent.taskId);
+            const distinctTaskCompletion = !!eventTaskId && !!terminalTaskId && eventTaskId !== terminalTaskId;
+            if (!newDispatchAfterTerminal && !supersedesWeakTerminal && !distinctTaskCompletion) {
                 const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
                 const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);
                 const eventProviderSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);

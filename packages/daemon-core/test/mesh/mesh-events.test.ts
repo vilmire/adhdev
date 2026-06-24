@@ -1130,6 +1130,92 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('CANON-B direct-dispatch race: a NEW task completion into a reused idle session is not suppressed by the PRIOR task terminal (same providerSessionId) and flips its own row, not a sibling', async () => {
+    // Race regression: a fast mesh_send_task into an ALREADY-IDLE, previously-used session can
+    // have its genuine agent:generating_completed reach the coordinator handler BEFORE the
+    // dispatching side commits the new task's dispatch row / task_dispatched ledger entry. In
+    // that window sessionHasActiveAssignment is false (no active dispatch row, no unterminal
+    // ledger entry yet). The session already carries a PRIOR task_completed terminal whose
+    // providerSessionId is identical (providerSessionId is stable across a reused session's
+    // turns), so the prior-terminal dedup would match the NEW completion as a duplicate of the
+    // PRIOR task and silently drop it (the intermittent miss). The echoed taskId is the
+    // authoritative discriminator: a DIFFERENT taskId is a genuinely new completion and must
+    // pass through. Fresh enqueue/autoLaunch is immune (no prior same-providerSessionId
+    // terminal; queue row claimed atomically before dispatch) — hence direct-dispatch only.
+    const meshId = `mesh_canonb_direct_race_${Date.now()}`
+    const sharedProviderSessionId = 'provider-session-reused'
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // PRIOR task terminal for the SAME session/providerSessionId — exactly the shape
+      // findRecentTerminalLedgerEvidence keys off to suppress a later completion.
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        payload: {
+          event: 'agent:generating_completed',
+          taskId: 'task_prior',
+          providerSessionId: sharedProviderSessionId,
+          finalSummary: 'prior task report',
+          completedViaReady: true,
+        },
+      })
+
+      // A SIBLING direct dispatch that is still active and MUST NOT be flipped by the
+      // completion of a different task. (It shares the session but a distinct taskId.)
+      insertDirectDispatch(meshId, {
+        taskId: 'task_sibling',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        message: 'sibling still-running task',
+        via: 'local_direct',
+        dispatchedAt: new Date().toISOString(),
+      })
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      // The NEW task's genuine completion. It carries its own taskId (task_new) and the SAME
+      // stable providerSessionId as the prior terminal — the exact collision the old dedup hit.
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: sharedProviderSessionId,
+        taskId: 'task_new',
+        finalSummary: 'new task report',
+        timestamp: Date.now(),
+      })
+
+      // Not suppressed: the coordinator gets exactly one pending completion for the NEW task.
+      const pending = getPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('agent:generating_completed')
+      expect(pending[0].metadataEvent.targetSessionId).toBe('runtime-session-1')
+      expect(pending[0].metadataEvent.taskId).toBe('task_new')
+
+      // The terminal ledger entry is attributed to the NEW task's id, exactly once.
+      const completedEntries = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')
+      expect(completedEntries.map(e => e.payload.taskId)).toEqual(['task_prior', 'task_new'])
+
+      // The sibling dispatch row is NOT flipped — the session_id fallback that would strand it
+      // is never exercised because the completion echoed its own (distinct) taskId.
+      const stillActive = getActiveDirectDispatches(meshId).map(d => d.taskId)
+      expect(stillActive).toContain('task_sibling')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('records a second task_completed for same-session continuations after an earlier completion', async () => {
     const meshId = `mesh_same_session_continuation_${Date.now()}`
     try {
@@ -3032,6 +3118,80 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       expect(allCompleted[0].payload.taskId).toBe(queuedTask.id)
       // Second entry has no taskId (direct task not in queue) but belongs to the direct dispatch
       expect(allCompleted[1].payload.taskId).toBeUndefined()
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does not suppress a fast direct-dispatch completion that races ahead of its dispatch record when it echoes a distinct taskId', () => {
+    // Regression for the direct-dispatch completion race (#8): a FAST mesh_send_task to an
+    // already-idle, previously-used session can have its genuine agent:generating_completed reach
+    // the coordinator BEFORE the dispatching side records the new task's dispatch row
+    // (insertDirectDispatch) / task_dispatched ledger entry — both run only AFTER the agent_command
+    // await resolves, while a quick worker may already be done. In that window
+    // sessionHasActiveAssignment is false and there is no task_dispatched-after-terminal, so the
+    // prior-terminal dedup engages; and because providerSessionId is STABLE across the reused
+    // session's turns, the providerSessionId match would suppress the NEW task's completion as a
+    // duplicate of the PRIOR task — silently losing it (the observed intermittent miss). The echoed
+    // taskId is the authoritative discriminator: a completion naming a DIFFERENT task than the
+    // recorded terminal must NOT be suppressed, and it must be attributed to its own taskId.
+    const meshId = `mesh_direct_completion_race_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      // Prior terminal ledger evidence: a previous direct task completed on this reused session,
+      // with a providerSessionId that is stable across the session's turns.
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        payload: {
+          event: 'agent:generating_completed',
+          taskId: 'task_prior',
+          providerSessionId: 'shared-provider-session-id',
+          finalSummary: 'prior task report',
+        },
+      })
+
+      // The NEW direct dispatch (task_next) completes FAST — its completion arrives before the
+      // dispatch row / task_dispatched ledger entry is recorded (the race). Deliberately NO
+      // insertDirectDispatch and NO task_dispatched ledger entry: sessionHasActiveAssignment is
+      // false and hasDispatchAfterTerminal is false. The completion echoes its own taskId
+      // (meshActiveTaskId) and the SAME stable providerSessionId as the prior terminal.
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'shared-provider-session-id',
+        taskId: 'task_next',
+        finalSummary: 'next task report',
+      })
+
+      // Must NOT be suppressed — the echoed taskId differs from the prior terminal's taskId.
+      expect(result).not.toMatchObject({ suppressed: true })
+      expect(result.success).toBe(true)
+
+      // Both completions present; the second is attributed to its own (distinct) taskId — not
+      // flipped onto / merged with the prior task's row.
+      const completed = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')
+      expect(completed).toHaveLength(2)
+      expect(completed.map(e => e.payload.taskId)).toEqual(['task_prior', 'task_next'])
+
+      // Exactly one pending coordinator event for the new completion is queued (delivered once).
+      const pending = getPendingMeshCoordinatorEvents(meshId).filter(p => p.event === 'agent:generating_completed')
+      expect(pending).toHaveLength(1)
+      expect(pending[0].metadataEvent.taskId).toBe('task_next')
     } finally {
       cleanupMeshFiles(meshId)
     }
