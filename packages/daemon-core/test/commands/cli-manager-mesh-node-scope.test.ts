@@ -166,6 +166,28 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
     expect(worktree.sendMessage).not.toHaveBeenCalled()
   })
 
+  it('WTDISPATCH-FANOUT (a): a named targetSessionId absent on this daemon fails closed even when dir matches a sibling worktree', async () => {
+    // The remote mesh relay (ipcDispatchToRemoteAgent) carries BOTH targetSessionId and
+    // dir: node.workspace. When the named session is stale/relaunched (not on this daemon),
+    // the dir fallback used to redirect the session-pinned dispatch onto whatever session
+    // lives in that workspace — the sibling-worktree leak. With a session explicitly named,
+    // resolution must be exact-or-null: never heal to a different session by workspace.
+    const { manager, base, worktree } = createDualNodeManager()
+
+    await expect(manager.handleCliCommand('agent_command', {
+      targetSessionId: 'sess-ghost', // not hosted here
+      agentType: 'hermes-cli',
+      cliType: 'hermes-cli',
+      action: 'send_chat',
+      message: 'must NOT leak to the worktree sibling',
+      dir: WORKTREE_DIR, // would dir-match sess-worktree under the old fallback
+      meshContext: { meshId: 'mesh-1', nodeId: 'node_worktree' },
+    })).rejects.toThrow(/CLI agent not running/)
+
+    expect(worktree.sendMessage).not.toHaveBeenCalled()
+    expect(base.sendMessage).not.toHaveBeenCalled()
+  })
+
   it('non-mesh sessionless dispatch keeps the provider fuzzy fallback (no regression)', async () => {
     // No meshContext at all → original findAdapter behavior (single-session fuzzy).
     const base = makeAdapter('D:/repo')

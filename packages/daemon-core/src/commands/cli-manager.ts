@@ -1215,8 +1215,17 @@ export class DaemonCliManager {
             const adapter = this.adapters.get(ik);
             if (adapter) return { adapter, key: ik };
         }
- // 1. agentType + dir match
-        if (opts?.dir) {
+ // 1. agentType + dir match.
+ //    FAIL-CLOSED when an explicit instanceKey/targetSessionId was named (step 0) but
+ //    did not resolve: the caller pinned a SPECIFIC session, so healing by workspace must
+ //    not silently redirect the command into a co-located SIBLING worktree session. The
+ //    remote mesh relay (ipcDispatchToRemoteAgent) carries `dir: node.workspace` alongside
+ //    targetSessionId for the sessionless-scope case; when a session WAS named, that dir
+ //    fallback is the WTDISPATCH-FANOUT (a) leak — a stale/relaunched session_id would
+ //    dir-match whatever session lives in that workspace instead of failing. The sessionless
+ //    node-scoped path uses findMeshNodeAdapter, not this fallback, so gating dir on
+ //    !instanceKey loses no legitimate routing. Mirror step 2's fail-closed rule.
+        if (opts?.dir && !opts?.instanceKey) {
             for (const [k, a] of this.adapters) {
                 if (a.cliType === agentType && a.workingDir === opts.dir) {
                     return { adapter: a, key: k };
