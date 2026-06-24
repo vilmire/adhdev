@@ -85,6 +85,29 @@ function isWeakCompletionLedgerPayload(payload: Record<string, unknown> | undefi
     return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
 }
 
+export function findTerminalLedgerEvidenceForTask(args: {
+    meshId: string;
+    taskId?: string;
+    sessionId?: string;
+    nodeId?: string;
+    tail?: number;
+}): { id: string; kind: Extract<MeshLedgerKind, 'task_completed' | 'task_failed' | 'task_stalled'>; payload: Record<string, unknown>; timestamp: string } | null {
+    const taskId = readNonEmptyString(args.taskId);
+    if (!taskId) return null;
+    const entries = readLedgerEntries(args.meshId, { tail: args.tail ?? 500 });
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
+        const terminalTaskId = readNonEmptyString(entry.payload?.taskId);
+        if (terminalTaskId !== taskId) continue;
+        if (entry.kind === 'task_completed' && isWeakCompletionLedgerPayload(entry.payload)) continue;
+        if (args.sessionId && entry.sessionId && entry.sessionId !== args.sessionId) continue;
+        if (!args.sessionId && args.nodeId && entry.nodeId && !meshNodeIdMatches(entry as unknown as MeshNodeIdentified, args.nodeId)) continue;
+        return { id: entry.id, kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
+    }
+    return null;
+}
+
 function findDirectDispatchLedgerEntry(args: {
     meshId: string;
     taskId: string;

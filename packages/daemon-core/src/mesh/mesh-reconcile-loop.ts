@@ -58,10 +58,10 @@ import {
 import { readNonEmptyString, readMeshCompletionSummary } from './mesh-events-utils.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { expandDaemonIdForms, daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask } from './mesh-work-queue.js';
+import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
-import { reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
+import { findTerminalLedgerEvidenceForTask, reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence } from '../providers/chat-message-normalization.js';
 import type { ChatMessage } from '../types.js';
 
@@ -164,7 +164,12 @@ function daemonHostsMesh(mesh: LocalMeshEntry, daemonIds: string[]): boolean {
     const hostDaemonId = readNonEmptyString(host.hostDaemonId);
     // Host role but no pinned hostDaemonId → treat as host (single-daemon / legacy).
     if (!hostDaemonId) return true;
-    return daemonIds.includes(hostDaemonId);
+    return daemonIdListIncludes(daemonIds, hostDaemonId);
+}
+
+function daemonIdListIncludes(ids: readonly string[], id: string | undefined): boolean {
+    if (!id) return false;
+    return ids.some(candidate => candidate === id || daemonIdsEquivalent(candidate, id));
 }
 
 // Resolve EVERY id-form this daemon answers to FOR A GIVEN MESH: the runtime drain
@@ -183,8 +188,8 @@ function resolveCoordinatorSelfIds(mesh: LocalMeshEntry, drainDaemonIds: string[
     for (const node of mesh.nodes) {
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         const nodeMachineId = readNonEmptyString(node.machineId);
-        const isSelf = (nodeDaemonId && drainDaemonIds.includes(nodeDaemonId))
-            || (nodeMachineId && drainDaemonIds.includes(nodeMachineId));
+        const isSelf = (nodeDaemonId && daemonIdListIncludes(drainDaemonIds, nodeDaemonId))
+            || (nodeMachineId && daemonIdListIncludes(drainDaemonIds, nodeMachineId));
         if (!isSelf) continue;
         if (nodeDaemonId) ids.add(nodeDaemonId);
         if (nodeMachineId) ids.add(nodeMachineId);
@@ -196,7 +201,7 @@ function resolveCoordinatorSelfIds(mesh: LocalMeshEntry, drainDaemonIds: string[
     // this daemon does not make this daemon the host; daemonHostsMesh still honours a
     // foreign hostDaemonId and rejects ownership.
     const hostDaemonId = readNonEmptyString(mesh.meshHost?.hostDaemonId);
-    if (hostDaemonId && ids.has(hostDaemonId)) ids.add(hostDaemonId);
+    if (hostDaemonId && daemonIdListIncludes([...ids], hostDaemonId)) ids.add(hostDaemonId);
     return [...ids];
 }
 
@@ -358,6 +363,23 @@ function recoverStrandedAssignedDispatches(meshId: string, store: MeshRuntimeSto
         const dispatchedAtMs = Date.parse(row.dispatchTimestamp ?? '');
         if (!Number.isFinite(dispatchedAtMs)) continue;              // no dispatch ts → can't age it
         if (nowMs - dispatchedAtMs < ASSIGNED_STRANDED_DEADLINE_MS) continue;  // still in confirm window
+        const terminal = findTerminalLedgerEvidenceForTask({
+            meshId,
+            taskId: row.id,
+        });
+        if (terminal) {
+            const status = terminal.kind === 'task_completed' ? 'completed' : 'failed';
+            updateTaskStatus(meshId, row.id, status);
+            LOG.warn('MeshReconcile', `Skipped stranded reclaim redispatch for terminal task ${row.id} on mesh ${meshId}; ${terminal.kind} ledger evidence already exists`);
+            traceMeshEventDrop('assigned_stranded_terminal_ledger', {
+                taskId: row.id,
+                sessionId: row.assignedSessionId,
+                nodeId: row.assignedNodeId,
+                meshId,
+                event: 'agent:generating_completed',
+            }, terminal.kind);
+            continue;
+        }
         if (store.taskHasConfirmedDelivery(meshId, row.id)) continue;          // dispatched → PHASE 4's job
         const reclaimed = reclaimStrandedAssignedTask(meshId, row.id, {
             reason: 'assigned_stranded_dispatch_unconfirmed',
@@ -896,7 +918,7 @@ async function pullRemoteNodeQueues(
         // from ourselves over P2P is both wasteful and a self-dispatch hazard.
         if (!nodeDaemonId) continue;
         if (daemonIdsEquivalent(nodeDaemonId, localDaemonId)) continue;
-        if (candidateDaemonIds.includes(nodeDaemonId)) continue;
+        if (daemonIdListIncludes(candidateDaemonIds, nodeDaemonId)) continue;
 
         for (const pendingEventArgs of pulls) {
             let events: unknown;
@@ -972,7 +994,7 @@ async function reconcileUnterminatedDirectDispatches(
         // A node is local when it has no daemonId, names this daemon, or actually
         // has a live instance here. Anything else is reached over P2P.
         const isLocalNode = !nodeDaemonId
-            || selfIds.includes(nodeDaemonId)
+            || daemonIdListIncludes(selfIds, nodeDaemonId)
             || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
             || !!components.instanceManager.getInstance(sessionId);
 
@@ -1092,7 +1114,7 @@ async function collectLiveNodesWithSessions(
     return Promise.all(mesh.nodes.map(async (node) => {
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         const isLocalNode = !nodeDaemonId
-            || selfIds.includes(nodeDaemonId)
+            || daemonIdListIncludes(selfIds, nodeDaemonId)
             || daemonIdsEquivalent(nodeDaemonId, localDaemonId);
         let statusResult: unknown;
         try {

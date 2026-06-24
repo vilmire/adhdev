@@ -23,6 +23,7 @@ import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
+    findTerminalLedgerEvidenceForTask,
     hasDispatchAfterTerminal,
     hasUnterminalDirectDispatchLedgerEntry,
     buildNoProgressCompletionReconciliation,
@@ -651,6 +652,24 @@ export function tryAssignQueueTask(
         nodeIsWorktree,
     });
     if (!task) {
+        return false;
+    }
+
+    const terminal = findTerminalLedgerEvidenceForTask({
+        meshId,
+        taskId: task.id,
+    });
+    if (terminal) {
+        const status = terminal.kind === 'task_completed' ? 'completed' : 'failed';
+        updateTaskStatus(meshId, task.id, status);
+        LOG.info('MeshQueue', `Skipped dispatch for terminal task ${task.id} on mesh ${meshId}; ${terminal.kind} ledger evidence already exists`);
+        traceMeshEventDrop('dispatch_terminal_ledger', {
+            taskId: task.id,
+            sessionId,
+            nodeId,
+            meshId,
+            event: 'agent_command',
+        }, terminal.kind);
         return false;
     }
 

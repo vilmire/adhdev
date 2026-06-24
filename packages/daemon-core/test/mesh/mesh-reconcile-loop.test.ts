@@ -1330,6 +1330,42 @@ describe('runMeshReconcileTick', () => {
       }
     })
 
+    it('does NOT reclaim or re-dispatch an assigned row that already has terminal task ledger evidence', async () => {
+      const meshId = `mesh_phase25_terminal_skip_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-idle-worker'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, 'sess-finished', [])!
+        backdateDispatch(meshId, claimed.id, STRANDED_MS)
+        appendLedgerEntry(meshId, {
+          kind: 'task_completed',
+          nodeId,
+          sessionId: 'sess-finished',
+          providerType: 'claude-cli',
+          payload: {
+            taskId: claimed.id,
+            finalSummary: 'finished before dispatch confirm was observed',
+            evidenceLevel: 'sufficient',
+          },
+        } as any)
+
+        const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/worker', daemonId: 'test-machine' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        expect(handleCliCommand).not.toHaveBeenCalled()
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('completed')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
     it('does NOT reclaim an assigned row whose dispatch WAS confirmed delivered (genuine in-flight)', async () => {
       const meshId = `mesh_phase25_confirmed_${Date.now()}`
       const nodeId = 'node_w'
@@ -1348,6 +1384,68 @@ describe('runMeshReconcileTick', () => {
         expect(row.status).toBe('assigned')
         expect(row.assignedSessionId).toBe('sess-live')
         expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('matches bare and daemon_ coordinator id forms when deciding this daemon hosts queue recovery', async () => {
+      const meshId = `mesh_phase25_canon_host_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-idle-worker'
+      const coordinatorCore = 'coord_form_safe'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
+        Object.assign(components, { statusInstanceId: coordinatorCore })
+        const mesh = {
+          id: meshId,
+          meshHost: { role: 'host', hostDaemonId: `daemon_${coordinatorCore}` },
+          nodes: [{ id: nodeId, workspace: '/repo/worker', daemonId: `daemon_${coordinatorCore}` }],
+        }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        expect(handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
+          targetSessionId: sessionId,
+          action: 'send_chat',
+        }))
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('does NOT dispatch a pending task that already has terminal task ledger evidence', async () => {
+      const meshId = `mesh_phase25_pending_terminal_skip_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-idle-worker'
+      const taskId = 'task-already-terminal'
+      try {
+        enqueueTask(meshId, 'do work', { id: taskId, targetNodeId: nodeId })
+        appendLedgerEntry(meshId, {
+          kind: 'task_completed',
+          nodeId,
+          sessionId: 'sess-previous-worker',
+          providerType: 'claude-cli',
+          payload: {
+            taskId,
+            finalSummary: 'already finished',
+            evidenceLevel: 'sufficient',
+          },
+        } as any)
+
+        const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/worker', daemonId: 'test-machine' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        expect(handleCliCommand).not.toHaveBeenCalled()
+        const row = getQueue(meshId).find(t => t.id === taskId)!
+        expect(row.status).toBe('completed')
       } finally {
         cleanup(meshId)
       }
