@@ -70,7 +70,37 @@ import {
     resolveDelegatedWorkerAutoApprove,
     validateMeshTaskModeRequest,
 } from '@adhdev/daemon-core';
-import { readString, readNumeric } from './mesh-tool-shared.js';
+import { readString, readNumeric, LARGE_LEDGER_FIELD_KEYS, summarizeLargeLedgerField, elideLargeNestedValue } from './mesh-tool-shared.js';
+import {
+    readSessionRecordId,
+    extractStatusMetadataSessions,
+    resolveSessionProviderType,
+    isMeshCoordinatorSessionRecord,
+    isUnmanagedSessionRecord,
+    isWorkerTaskMode,
+    collectNodeSessionIds,
+    unwrapCommandPayload,
+    isTerminalSessionRecord,
+    isIdleSessionRecord,
+} from './mesh-session-helpers.js';
+import {
+    ACTIVE_QUEUE_STATUSES,
+    HISTORICAL_QUEUE_STATUSES,
+    COMPACT_MAX_ACTIVE_QUEUE_ROWS,
+    COMPACT_MAX_ACTIVE_WORK_ROWS,
+    buildQueueStatusSummary,
+    normalizeQueueViewMode,
+    sanitizeQueueStatusFilter,
+    filterQueueForView,
+    prioritizeActiveQueueRows,
+    buildQueueMaintenanceReport,
+    buildCompactQueueMaintenanceReport,
+    compactQueueRow,
+    compactQueueRows,
+    compactActiveWorkRecords,
+    annotateQueueStaleness,
+} from './mesh-queue-helpers.js';
+import type { QueueViewMode } from './mesh-queue-helpers.js';
 
 export interface MeshContext {
     mesh: LocalMeshEntry;
@@ -177,11 +207,7 @@ function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
 }
 
 const DUPLICATE_DISPATCH_WINDOW_MS = 60_000;
-const STALE_ASSIGNED_QUEUE_MS = 30 * 60_000;
-const OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 60_000;
-const ACTIVE_QUEUE_STATUSES = new Set(['pending', 'assigned']);
-const HISTORICAL_QUEUE_STATUSES = new Set(['completed', 'failed', 'cancelled']);
-type QueueViewMode = 'all' | 'active' | 'historical';
+// (queue constants/types moved to ./mesh-queue-helpers.ts)
 
 /**
  * Refresh the MCP process's mesh snapshot from the daemon inline mesh cache.
@@ -361,408 +387,9 @@ function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: { node_id: str
     };
 }
 
-type QueueLivenessIndex = {
-    nodeIds: Set<string>;
-    nodeSessionIds: Map<string, Set<string>>;
-};
+// (queue helpers moved to ./mesh-queue-helpers.ts)
 
-function readSessionRecordId(session: any): string | undefined {
-    return readString(session?.id)
-        || readString(session?.sessionId)
-        || readString(session?.session_id)
-        || readString(session?.runtimeSessionId)
-        || readString(session?.runtime_session_id)
-        || readString(session?.instanceId)
-        || readString(session?.instance_id);
-}
-
-function extractStatusMetadataSessions(value: any): any[] {
-    const payload = unwrapCommandPayload(value);
-    const status = payload?.status && typeof payload.status === 'object'
-        ? payload.status
-        : payload;
-    return Array.isArray(status?.sessions) ? status.sessions : [];
-}
-
-function resolveSessionProviderType(session: any): string {
-    return readString(session?.providerType)
-        || readString(session?.cliType)
-        || readString(session?.agentType)
-        || '';
-}
-
-function isMeshCoordinatorSessionRecord(session: any): boolean {
-    return Boolean(
-        readString(session?.settings?.meshCoordinatorFor)
-        || readString(session?.meta?.meshCoordinatorFor)
-        || readString(session?.metadata?.meshCoordinatorFor)
-        || readString(session?.meshCoordinatorFor),
-    );
-}
-
-/**
- * Returns true when a session has no mesh delegation metadata at all — neither
- * meshNodeFor (worker) nor meshCoordinatorFor (coordinator).  Dispatching a
- * worker task to such a session is unsafe: the session may be the coordinator's
- * own CLI session (self-send risk), an unrelated session, or a stale record
- * whose providerSessionId now aliases the coordinator's transcript.
- *
- * The check intentionally fails closed: an explicit delegate session launched
- * via mesh_launch_session always carries meshNodeFor, so any safe target passes.
- */
-function isUnmanagedSessionRecord(session: any): boolean {
-    const hasMeshNodeFor = Boolean(
-        readString(session?.settings?.meshNodeFor)
-        || readString(session?.meta?.meshNodeFor)
-        || readString(session?.metadata?.meshNodeFor)
-        || readString(session?.meshNodeFor),
-    );
-    if (hasMeshNodeFor) return false;
-    if (isMeshCoordinatorSessionRecord(session)) return false;
-    // launchedByCoordinator is set by the daemon when it auto-launches a worker
-    // session in response to a queue task; treat it as a managed delegate.
-    const launchedByCoordinator = Boolean(
-        session?.settings?.launchedByCoordinator === true
-        || session?.meta?.launchedByCoordinator === true
-        || session?.launchedByCoordinator === true,
-    );
-    return !launchedByCoordinator;
-}
-
-function isWorkerTaskMode(taskMode: string | undefined): boolean {
-    return taskMode !== 'live_debug_readonly';
-}
-
-function addSessionRecord(target: Set<string>, session: any): void {
-    if (!session || typeof session !== 'object' || isTerminalSessionRecord(session)) return;
-    const sessionId = readSessionRecordId(session);
-    if (sessionId) target.add(sessionId);
-}
-
-function collectNodeSessionIds(node: any): Set<string> {
-    const sessions = new Set<string>();
-    const sessionArrays = [
-        node?.sessions,
-        node?.activeSessions,
-        node?.active_sessions,
-        node?.lastProbe?.sessions,
-        node?.last_probe?.sessions,
-        node?.lastProbe?.status?.sessions,
-        node?.last_probe?.status?.sessions,
-    ];
-    for (const value of sessionArrays) {
-        if (Array.isArray(value)) value.forEach(session => addSessionRecord(sessions, session));
-    }
-
-    const sessionRecords = [
-        node?.activeSession,
-        node?.active_session,
-        node?.currentSession,
-        node?.current_session,
-        node?.runtimeSession,
-        node?.runtime_session,
-        node?.session,
-        node?.lastProbe?.activeSession,
-        node?.last_probe?.active_session,
-        node?.lastProbe?.currentSession,
-        node?.last_probe?.current_session,
-        node?.lastProbe?.session,
-        node?.last_probe?.session,
-    ];
-    sessionRecords.forEach(session => addSessionRecord(sessions, session));
-    return sessions;
-}
-
-function buildQueueLivenessIndex(mesh?: LocalMeshEntry): QueueLivenessIndex {
-    const nodeIds = new Set<string>();
-    const nodeSessionIds = new Map<string, Set<string>>();
-    for (const node of Array.isArray(mesh?.nodes) ? mesh.nodes : []) {
-        const nodeId = readString((node as any).id) || readString((node as any).nodeId) || readString((node as any).node_id);
-        if (!nodeId) continue;
-        nodeIds.add(nodeId);
-        const sessions = collectNodeSessionIds(node);
-        if (sessions.size > 0) nodeSessionIds.set(nodeId, sessions);
-    }
-    return { nodeIds, nodeSessionIds };
-}
-
-function queueAssignmentStaleReason(task: any, liveness: QueueLivenessIndex): string | undefined {
-    if (task?.status !== 'assigned') return undefined;
-    const nodeId = readString(task.assignedNodeId) || readString(task.nodeId) || readString(task.node_id) || readString(task.targetNodeId);
-    const sessionId = readString(task.assignedSessionId) || readString(task.sessionId) || readString(task.session_id) || readString(task.targetSessionId);
-
-    if (nodeId && liveness.nodeIds.size > 0 && !liveness.nodeIds.has(nodeId)) {
-        return 'assigned node is not present in the current mesh snapshot';
-    }
-    if (nodeId && sessionId && liveness.nodeSessionIds.has(nodeId) && !liveness.nodeSessionIds.get(nodeId)!.has(sessionId)) {
-        return 'assigned session is not live on the assigned node';
-    }
-
-    const updatedAt = new Date(task.updatedAt).getTime();
-    const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : null;
-    if (!nodeId && ageMs !== null && ageMs >= STALE_ASSIGNED_QUEUE_MS) {
-        return 'assigned task has no assigned node metadata';
-    }
-    return undefined;
-}
-
-function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
-    const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
-    let staleAssigned = 0;
-    for (const task of queue) {
-        const status = typeof task?.status === 'string' ? task.status : undefined;
-        if (status && Object.prototype.hasOwnProperty.call(counts, status)) {
-            counts[status as keyof typeof counts] += 1;
-        }
-        if (status === 'assigned' && task?.staleAssigned === true) staleAssigned += 1;
-    }
-    const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
-    return {
-        totalCount: queue.length,
-        activeCount: counts.pending + liveAssigned,
-        historicalCount: counts.completed + counts.failed + counts.cancelled,
-        counts,
-        activeCounts: {
-            pending: counts.pending,
-            assigned: liveAssigned,
-        },
-        staleAssignedCount: staleAssigned,
-        rawActiveCounts: {
-            pending: counts.pending,
-            assigned: counts.assigned,
-        },
-        historicalCounts: {
-            completed: counts.completed,
-            failed: counts.failed,
-            cancelled: counts.cancelled,
-        },
-    };
-}
-
-function normalizeQueueViewMode(value: unknown): QueueViewMode {
-    return value === 'active' || value === 'historical' || value === 'all' ? value : 'all';
-}
-
-function sanitizeQueueStatusFilter(value: unknown): string[] | undefined {
-    if (!Array.isArray(value)) return undefined;
-    const statuses = value
-        .map(item => typeof item === 'string' ? item.trim() : '')
-        .filter(status => ACTIVE_QUEUE_STATUSES.has(status) || HISTORICAL_QUEUE_STATUSES.has(status));
-    return statuses.length ? Array.from(new Set(statuses)) : undefined;
-}
-
-function filterQueueForView(queue: any[], view: QueueViewMode, statuses?: string[]): any[] {
-    if (statuses?.length) {
-        const allowed = new Set(statuses);
-        return queue.filter(task => allowed.has(String(task?.status || '')));
-    }
-    if (view === 'active') return queue.filter(task => ACTIVE_QUEUE_STATUSES.has(String(task?.status || '')));
-    if (view === 'historical') return queue.filter(task => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
-    return queue;
-}
-
-function prioritizeActiveQueueRows(queue: any[]): any[] {
-    const active: any[] = [];
-    const historical: any[] = [];
-    const other: any[] = [];
-    for (const task of queue) {
-        const status = String(task?.status || '');
-        if (ACTIVE_QUEUE_STATUSES.has(status)) active.push(task);
-        else if (HISTORICAL_QUEUE_STATUSES.has(status)) historical.push(task);
-        else other.push(task);
-    }
-    return [...active, ...other, ...historical];
-}
-
-function slimQueueTask(task: any): Record<string, unknown> {
-    return {
-        id: task?.id,
-        status: task?.status,
-        assignedNodeId: task?.assignedNodeId,
-        assignedSessionId: task?.assignedSessionId,
-        targetNodeId: task?.targetNodeId,
-        targetSessionId: task?.targetSessionId,
-        updatedAt: task?.updatedAt,
-        staleAssigned: task?.staleAssigned === true,
-        staleReason: task?.staleReason,
-    };
-}
-
-function buildQueueMaintenanceReport(queue: any[]): Record<string, unknown> {
-    const now = Date.now();
-    const staleAssignedTasks = queue
-        .filter(task => task?.status === 'assigned' && task?.staleAssigned === true)
-        .map(slimQueueTask);
-    const historicalTasks = queue.filter(task => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
-    const oldHistoricalTasks = historicalTasks
-        .filter(task => {
-            const updatedAt = new Date(task?.updatedAt).getTime();
-            return Number.isFinite(updatedAt) && now - updatedAt >= OLD_HISTORICAL_QUEUE_RECORD_MS;
-        })
-        .map(task => ({
-            ...slimQueueTask(task),
-            cleanupClass: 'old_historical_record',
-            reason: 'terminal queue record is older than the read-only maintenance threshold',
-        }));
-    const cleanupCandidates = [
-        ...staleAssignedTasks.map(task => ({
-            ...task,
-            cleanupClass: 'stale_assigned',
-            reason: typeof task.staleReason === 'string' ? task.staleReason : 'active assigned task does not match current live mesh node/session state',
-            suggestedOperation: 'operator_review_then_requeue_or_cancel',
-        })),
-        ...oldHistoricalTasks.map(task => ({
-            ...task,
-            suggestedOperation: 'operator_review_then_archive_or_keep',
-        })),
-    ];
-    return {
-        readOnly: true,
-        mutationPerformed: false,
-        sourceOfTruth: 'mesh_work_queue_file',
-        staleAssignedDefinition: 'Only active assigned queue rows are stale candidates, and only when the assigned node/session is absent from the current live mesh snapshot.',
-        historicalDefinition: 'completed/failed/cancelled rows are historical ledger records and never active assignments.',
-        staleAssignedTasks,
-        staleAssignedCount: staleAssignedTasks.length,
-        historicalRecordCount: historicalTasks.length,
-        oldHistoricalRecordCount: oldHistoricalTasks.length,
-        cleanupCandidates,
-        cleanupCandidateCount: cleanupCandidates.length,
-    };
-}
-
-// Compact maintenance report: drop the per-row arrays (staleAssignedTasks,
-// cleanupCandidates) that scale with old historical record count and instead
-// surface the counts. staleAssignedTasks rows are still active work, so keep a
-// small sample for coordinator visibility; cleanupCandidates are dominated by
-// old historical rows and are dropped entirely in favor of the count + a hint.
-function buildCompactQueueMaintenanceReport(maintenance: Record<string, unknown>): Record<string, unknown> {
-    const staleAssignedTasks = Array.isArray((maintenance as any).staleAssignedTasks)
-        ? (maintenance as any).staleAssignedTasks
-        : [];
-    const cleanupCandidateCount = (maintenance as any).cleanupCandidateCount ?? 0;
-    return {
-        readOnly: true,
-        mutationPerformed: false,
-        sourceOfTruth: 'mesh_work_queue_file',
-        payloadMode: 'compact',
-        staleAssignedDefinition: (maintenance as any).staleAssignedDefinition,
-        historicalDefinition: (maintenance as any).historicalDefinition,
-        // staleAssignedTasks are active assigned rows (not historical) — retain a
-        // bounded sample so coordinators can still see drift without the full array.
-        staleAssignedTasks: staleAssignedTasks.slice(0, 5),
-        staleAssignedSampleLimit: 5,
-        staleAssignedCount: (maintenance as any).staleAssignedCount ?? staleAssignedTasks.length,
-        historicalRecordCount: (maintenance as any).historicalRecordCount ?? 0,
-        oldHistoricalRecordCount: (maintenance as any).oldHistoricalRecordCount ?? 0,
-        cleanupCandidateCount,
-        cleanupCandidatesOmitted: true,
-        cleanupCandidatesHint: 'Per-row cleanup candidates are omitted in compact mode; call mesh_view_queue with verbose=true for the full maintenance/cleanupDryRun rows.',
-    };
-}
-
-// Compact-mode bounds for mesh_view_queue active rows. Active (pending/assigned)
-// rows are kept — they drive dispatch decisions — but a busy mesh can have dozens
-// of them, each carrying the full task `message` (often multi-KB). Truncate the
-// message and cap the row count so the active queue can't blow the token cap.
-const COMPACT_MAX_ACTIVE_QUEUE_ROWS = 15;
-const COMPACT_QUEUE_MESSAGE_CAP = 140;
-const COMPACT_MAX_ACTIVE_WORK_ROWS = 12;
-// In compact mode an activeWork row keeps a single short title only; the original
-// delegation prompt is NOT echoed (leak #2). 80 chars is enough to recognize the task.
-const COMPACT_ACTIVE_WORK_TITLE_CAP = 80;
-
-function truncateForCompact(value: unknown, cap: number): unknown {
-    if (typeof value !== 'string') return value;
-    return value.length > cap ? value.slice(0, cap) + '…' : value;
-}
-
-// Slim an active queue row for compact mode: truncate the long free-text message
-// and elide any oversized nested field. Status/ids/deps/tags (the dispatch-relevant
-// scalars) are preserved.
-function compactQueueRow(task: any): any {
-    if (!task || typeof task !== 'object') return task;
-    const slim: any = {};
-    for (const [k, v] of Object.entries(task)) {
-        if (k === 'message') slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
-        else slim[k] = elideLargeNestedValue(k, v);
-    }
-    return slim;
-}
-
-function compactQueueRows(rows: any[]): { rows: any[]; omitted: number } {
-    const capped = rows.slice(0, COMPACT_MAX_ACTIVE_QUEUE_ROWS).map(compactQueueRow);
-    return { rows: capped, omitted: Math.max(0, rows.length - capped.length) };
-}
-
-// Slim an activeWork record for compact mode. Leak #2: the original delegation
-// prompt was echoed THREE times per row — `taskTitle` (truncated) + `taskSummary`
-// (mid-length) + `message` (full). In compact we keep only a single short
-// `taskTitle`; `taskSummary` and `message` are dropped entirely (the full text is
-// available via mesh_task_history or with verbose=true). All dispatch-relevant
-// scalars (taskId/status/nodeId/sessionId/timestamps/terminal+stale flags) are
-// preserved so the row stays actionable.
-function compactActiveWorkRecord(record: any): any {
-    if (!record || typeof record !== 'object') return record;
-    const slim: any = {};
-    for (const [k, v] of Object.entries(record)) {
-        if (k === 'message' || k === 'taskSummary') continue; // redundant full-text echoes
-        else if (k === 'taskTitle') slim[k] = truncateForCompact(v, COMPACT_ACTIVE_WORK_TITLE_CAP);
-        else slim[k] = elideLargeNestedValue(k, v);
-    }
-    return slim;
-}
-
-function compactActiveWorkRecords(records: any[]): { records: any[]; omitted: number } {
-    if (!Array.isArray(records)) return { records, omitted: 0 };
-    const capped = records.slice(0, COMPACT_MAX_ACTIVE_WORK_ROWS).map(compactActiveWorkRecord);
-    return { records: capped, omitted: Math.max(0, records.length - capped.length) };
-}
-
-function annotateQueueStaleness(queue: any[], mesh?: LocalMeshEntry): any[] {
-    const liveness = buildQueueLivenessIndex(mesh);
-    const now = Date.now();
-    return queue.map(task => {
-        const taskStatus = typeof task?.status === 'string' ? task.status : undefined;
-        const annotated = {
-            ...task,
-            taskStatus,
-            isActive: taskStatus ? ACTIVE_QUEUE_STATUSES.has(taskStatus) : false,
-            isHistorical: taskStatus ? HISTORICAL_QUEUE_STATUSES.has(taskStatus) : false,
-            dispatchedAt: task?.createdAt,
-            ...(taskStatus === 'assigned' ? { activeTaskId: task.id } : {}),
-            ...(taskStatus === 'completed' || taskStatus === 'failed' ? {
-                completedAt: task.updatedAt,
-            } : {}),
-        };
-        if (taskStatus !== 'assigned') return annotated;
-        const updatedAt = new Date(task.updatedAt).getTime();
-        const ageMs = Number.isFinite(updatedAt) ? now - updatedAt : null;
-        const staleReason = queueAssignmentStaleReason(task, liveness);
-        if (!staleReason) return annotated;
-        return {
-            ...annotated,
-            stale: true,
-            staleAssigned: true,
-            staleReason,
-            ...(ageMs !== null ? { assignedAgeMs: ageMs } : {}),
-        };
-    });
-}
-
-function unwrapCommandPayload(value: any): any {
-    let current = value;
-    const seen = new Set<any>();
-    for (let depth = 0; depth < 8; depth += 1) {
-        if (!current || typeof current !== 'object' || seen.has(current)) break;
-        seen.add(current);
-
-        const nested = current.result ?? current.payload;
-        if (!nested || typeof nested !== 'object') break;
-        current = nested;
-    }
-    return current;
-}
+// (moved to ./mesh-session-helpers.ts — session/payload record helpers)
 
 function isDirectDispatchLedgerEntry(entry: any): boolean {
     if (entry?.kind !== 'task_dispatched') return false;
@@ -963,19 +590,7 @@ function buildQueueTriggerGuidance(queueTrigger: Record<string, unknown> | undef
     };
 }
 
-function isTerminalSessionRecord(session: any): boolean {
-    const status = typeof session?.status === 'string' ? session.status.toLowerCase() : '';
-    const lifecycle = typeof session?.lifecycle === 'string' ? session.lifecycle.toLowerCase() : '';
-    const state = typeof session?.state === 'string' ? session.state.toLowerCase() : '';
-    return [status, lifecycle, state].some(value => ['stopped', 'failed', 'terminated', 'exited', 'closed'].includes(value));
-}
-
-function isIdleSessionRecord(session: any): boolean {
-    if (isTerminalSessionRecord(session)) return false;
-    const status = typeof session?.status === 'string' ? session.status.toLowerCase() : '';
-    const chatStatus = typeof session?.activeChat?.status === 'string' ? session.activeChat.status.toLowerCase() : '';
-    return status === 'idle' || chatStatus === 'waiting_input';
-}
+// (moved to ./mesh-session-helpers.ts — session/payload record helpers)
 
 export function isMeshOwnedDelegateSession(session: any, meshId: string, nodeId: string): boolean {
     const settings = session?.settings;
@@ -1898,59 +1513,7 @@ function isGitStatusDirty(status: any): boolean {
 // full per-node validation plan + suggested config). In compact mode these are
 // summarized rather than dropped — full detail stays available via verbose=true /
 // mesh_reconcile_ledger.
-const LARGE_LEDGER_FIELD_KEYS = new Set(['plan', 'validationPlan', 'suggestedConfig', 'payload']);
-const LARGE_LEDGER_OBJECT_THRESHOLD = 800;
-// Any nested object/array in a compact payload whose serialized size exceeds this
-// is replaced with an elided placeholder. This is the PRIMARY defense: it covers
-// arbitrary evidence keys (validationSummary, result, patchEquivalence,
-// submoduleReachability, plus any future key) without a hardcoded allowlist. The
-// specific per-key rules below are just tuning on top of this general guard.
-const LARGE_LEDGER_NESTED_BYTES_THRESHOLD = 2000;
-
-function summarizeLargeLedgerField(key: string, value: unknown): unknown {
-    if (typeof value === 'string') {
-        return value.length > 500 ? value.slice(0, 500) + '…' : value;
-    }
-    if (Array.isArray(value)) {
-        const serialized = JSON.stringify(value);
-        if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
-            return `[${key} summarized: ${value.length} items — use verbose=true or mesh_reconcile_ledger]`;
-        }
-        return value;
-    }
-    if (value && typeof value === 'object') {
-        const serialized = JSON.stringify(value);
-        if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
-            return `[${key} summarized: ${Object.keys(value as Record<string, unknown>).length} keys — use verbose=true or mesh_reconcile_ledger]`;
-        }
-        return value;
-    }
-    return value;
-}
-
-// Generic nested-value guard. Replaces any object/array (or oversized string) whose
-// serialized size exceeds LARGE_LEDGER_NESTED_BYTES_THRESHOLD with a compact
-// placeholder that records the original key, byte size, and a recovery hint. Small
-// scalars and short fields (source, success, async, into, mergedBranch, …) pass
-// through untouched.
-function elideLargeNestedValue(key: string, value: unknown): unknown {
-    if (value === null || value === undefined) return value;
-    if (typeof value === 'string') {
-        // Long bare strings (not one of the explicitly-capped fields) get a hard cap
-        // so a single multi-KB string blob can't blow the payload either.
-        return value.length > 1000 ? value.slice(0, 1000) + '…' : value;
-    }
-    if (typeof value !== 'object') return value; // number / boolean
-    const serialized = JSON.stringify(value);
-    const bytes = serialized ? serialized.length : 0;
-    if (bytes <= LARGE_LEDGER_NESTED_BYTES_THRESHOLD) return value;
-    return {
-        _elided: true,
-        _kind: key,
-        _bytes: bytes,
-        _hint: 'full evidence via mesh_reconcile_ledger',
-    };
-}
+// (large-value compaction utils moved to ./mesh-tool-shared.ts)
 
 function slimLedgerPayload(payload: Record<string, unknown>): Record<string, unknown> {
     const slim: Record<string, unknown> = {};
