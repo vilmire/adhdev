@@ -1394,6 +1394,211 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
+  it('keeps the hydrated assistant bubble visible through a short partial tail while waiting_approval (no flicker)', () => {
+    // CHATFLICKER regression: during approval the daemon can emit a short partial
+    // tail (only the user prompt; assistant bubble briefly missing). Because the
+    // session-chat-tail snapshot is the sole transcript authority, that shrink
+    // would transiently erase the assistant bubble. waiting_approval is a warm/active
+    // status, so the shrink-defense gate must defer it.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+    })
+
+    controller.retain()
+    // Hydrate a full tail with a visible assistant answer (idle applies immediately).
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'here is the answer', id: 'msg-assistant', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-hydrated',
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'please run the command',
+      'here is the answer',
+    ])
+
+    // Approval window: a short partial tail arrives carrying only the user prompt.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+      ],
+      status: 'waiting_approval',
+      totalMessages: 1,
+      lastMessageSignature: 'sig-partial-approval',
+    }))
+
+    // Deferred: the hydrated assistant bubble must still be present.
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'please run the command',
+      'here is the answer',
+    ])
+  })
+
+  it('applies the immediately-following full tail normally after a deferred waiting_approval partial', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'here is the answer', id: 'msg-assistant', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-hydrated',
+    }))
+
+    // Short partial during approval → deferred.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+      ],
+      status: 'waiting_approval',
+      totalMessages: 1,
+      lastMessageSignature: 'sig-partial-approval',
+    }))
+
+    // Next full tail (assistant restored + approval continuation) applies as-is.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'here is the answer', id: 'msg-assistant', timestamp: 2 } as any,
+        { role: 'assistant', content: 'command approved and finished', id: 'msg-final', timestamp: 3 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 3,
+      lastMessageSignature: 'sig-final',
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'please run the command',
+      'here is the answer',
+      'command approved and finished',
+    ])
+  })
+
+  it('applies an intentional empty clear immediately even though a transient empty update follows during new chat / switch', () => {
+    // No-regression: the new_chat/reset/switchedConversation clear path must keep
+    // working. clearLiveSnapshot sets an explicit empty live snapshot and a
+    // following transient empty tail must NOT resurrect old rows; the empty stays.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'old prompt', id: 'old-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'old answer', id: 'old-assistant', timestamp: 2 } as any,
+      ],
+      status: 'waiting_approval',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-old',
+    }))
+
+    // Explicit new-chat/reset.
+    clearSessionChatTailControllerSnapshot('daemon-1', 'session-1', 'history-1')
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: true,
+    })
+
+    // A transient empty native-unavailable tail right after the clear must stay empty.
+    manager.publish(createUpdate({
+      messages: [],
+      status: 'waiting_approval',
+      messageSource: {
+        selected: 'pty-parser',
+        fallbackReason: 'native_history_empty',
+        nativeSource: 'native-unavailable',
+      },
+    } as any))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: true,
+    })
+  })
+
+  it('still defers a short partial tail during streaming exactly as before (busy shrink-defense unchanged)', () => {
+    // No-regression for the pre-existing busy shrink-defense: a short partial tail
+    // during a strictly-busy status (streaming) must continue to be deferred. The
+    // CHATFLICKER fix only ADDED waiting_approval coverage; busy behavior is intact.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+    })
+
+    controller.retain()
+    // Hydrate via idle so the baseline applies, then exercise the streaming shrink.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'streaming answer', id: 'msg-assistant', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-hydrated',
+    }))
+
+    // Short partial during streaming → deferred (unchanged busy behavior).
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+      ],
+      status: 'streaming',
+      totalMessages: 1,
+      lastMessageSignature: 'sig-partial-streaming',
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'please run the command',
+      'streaming answer',
+    ])
+  })
+
   it('exposes historyOffset=0 after a truncated live tail update before any history page is loaded', () => {
     // Regression guard for long Hermes/CLI chat invisibility: when a session has 100
     // total messages and the subscription fires with a 20-msg tail window, the snapshot

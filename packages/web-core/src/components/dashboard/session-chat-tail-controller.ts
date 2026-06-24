@@ -154,6 +154,27 @@ function isBusyChatTailStatus(status: unknown): boolean {
   return value === 'generating' || value === 'no_progress' || value === 'long_generating' || value === 'streaming' || value === 'working' || value === 'starting'
 }
 
+/**
+ * Shrink-defer gate (NOT a "busy" predicate). Returns true for every status that
+ * keeps a session warm/active, i.e. every member of
+ * WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES, which crucially includes
+ * `waiting_approval`.
+ *
+ * `isBusyChatTailStatus` intentionally EXCLUDES `waiting_approval` (and other
+ * warm states like `starting`) because its callers rely on the strict "busy"
+ * meaning. But the chat-tail shrink-defense must protect the approval window
+ * too: during `waiting_approval` the daemon can emit a short partial tail (e.g.
+ * only the user prompt, assistant bubble briefly missing) that — without this
+ * guard — replaces the longer hydrated `liveMessages` and makes the assistant
+ * bubble transiently disappear/return (CHATFLICKER on approve). We widen ONLY
+ * this shrink-defer gate to WARM_ACTIVE membership; `isBusyChatTailStatus` keeps
+ * its existing busy semantics untouched.
+ */
+function shouldGuardTailShrinkForStatus(status: unknown): boolean {
+  const value = typeof status === 'string' ? status.trim().toLowerCase() : ''
+  return WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES.has(value)
+}
+
 function getExistingVisibleMessageCount(snapshot: SessionChatTailSnapshot, fallbackRecentCount: number): number {
   return Math.max(
     Math.max(0, fallbackRecentCount),
@@ -168,7 +189,11 @@ function shouldDeferBusyTailUpdate(
   status: unknown,
   messageSource: Record<string, unknown> | undefined,
 ): boolean {
-  if (!isBusyChatTailStatus(status)) return false
+  // Engage the shrink-defense for any warm/active status (incl. waiting_approval)
+  // OR any strictly-busy status (no_progress/long_generating are busy but not in
+  // WARM_ACTIVE). Union of the two keeps every previously-protected busy state
+  // protected while adding the approval window.
+  if (!shouldGuardTailShrinkForStatus(status) && !isBusyChatTailStatus(status)) return false
   const existingCount = getExistingVisibleMessageCount(snapshot, fallbackRecentCount)
   if (existingCount <= 0) return false
 
