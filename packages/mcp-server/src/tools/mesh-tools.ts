@@ -24,6 +24,7 @@ import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
     daemonIdsEquivalent,
+    meshNodeIdMatches,
     appendLedgerEntry,
     appendRemoteLedgerEntries,
     buildCompactStaleDirectWorkSummary,
@@ -172,7 +173,7 @@ function buildDirectTaskPayload(
 }
 
 function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
-    const node = mesh.nodes.find(n => n.id === nodeId);
+    const node = mesh.nodes.find(n => meshNodeIdMatches(n, nodeId));
     if (!node) throw new Error(`Node '${nodeId}' is not a member of mesh '${mesh.name}'`);
     return node;
 }
@@ -214,23 +215,23 @@ async function syncCoordinatorDaemonMeshCache(ctx: MeshContext): Promise<void> {
 }
 
 async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry> {
-    const hit = ctx.mesh.nodes.find(n => n.id === nodeId);
+    const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n, nodeId));
     if (hit && !hit.isLocalWorktree) return hit;
 
     await refreshMeshFromDaemon(ctx);
 
-    const refreshed = ctx.mesh.nodes.find(n => n.id === nodeId);
+    const refreshed = ctx.mesh.nodes.find(n => meshNodeIdMatches(n, nodeId));
     if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
     return refreshed;
 }
 
 async function findOptionalNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry | null> {
-    const hit = ctx.mesh.nodes.find(n => n.id === nodeId);
+    const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n, nodeId));
     if (hit && !hit.isLocalWorktree) return hit;
 
     await refreshMeshFromDaemon(ctx);
 
-    return ctx.mesh.nodes.find(n => n.id === nodeId) ?? null;
+    return ctx.mesh.nodes.find(n => meshNodeIdMatches(n, nodeId)) ?? null;
 }
 
 function hasRecentDuplicateDispatch(ctx: MeshContext, args: { node_id: string; session_id?: string; message: string }): { duplicate: boolean; entry?: any; source?: 'ledger' | 'queue' } {
@@ -805,7 +806,7 @@ function readFinalAssistantTranscriptEvidence(payload: any): { finalSummary?: st
 
 function findNodeSession(nodes: any[], nodeId?: string | null, sessionId?: string | null): { node?: any; session?: any } {
     if (!nodeId || !sessionId) return {};
-    const node = nodes.find((candidate: any) => readString(candidate?.id) === nodeId || readString(candidate?.nodeId) === nodeId);
+    const node = nodes.find((candidate: any) => meshNodeIdMatches(candidate, nodeId));
     if (!node) return {};
     const sessions = Array.isArray(node.sessions) ? node.sessions : [];
     const session = sessions.find((candidate: any) => readSessionRecordId(candidate) === sessionId);
@@ -2007,7 +2008,7 @@ function getLocalControlPlaneMatchReason(ctx: MeshContext, node: LocalMeshNodeEn
 function findClonedFromNode(ctx: MeshContext, node: LocalMeshNodeEntry): LocalMeshNodeEntry | undefined {
     const clonedFromNodeId = readString(node.clonedFromNodeId) || readString((node as any).cloned_from_node_id);
     if (!clonedFromNodeId) return undefined;
-    return ctx.mesh.nodes.find(n => n.id === clonedFromNodeId || (n as any).nodeId === clonedFromNodeId || (n as any).node_id === clonedFromNodeId);
+    return ctx.mesh.nodes.find(n => meshNodeIdMatches(n, clonedFromNodeId));
 }
 
 /**

@@ -430,7 +430,7 @@ function buildDirectTaskPayload(message, via, opts) {
   };
 }
 function findNode(mesh, nodeId) {
-  const node = mesh.nodes.find((n) => n.id === nodeId);
+  const node = mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId));
   if (!node) throw new Error(`Node '${nodeId}' is not a member of mesh '${mesh.name}'`);
   return node;
 }
@@ -460,18 +460,18 @@ async function syncCoordinatorDaemonMeshCache(ctx) {
   }
 }
 async function findNodeWithRefresh(ctx, nodeId) {
-  const hit = ctx.mesh.nodes.find((n) => n.id === nodeId);
+  const hit = ctx.mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId));
   if (hit && !hit.isLocalWorktree) return hit;
   await refreshMeshFromDaemon(ctx);
-  const refreshed = ctx.mesh.nodes.find((n) => n.id === nodeId);
+  const refreshed = ctx.mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId));
   if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
   return refreshed;
 }
 async function findOptionalNodeWithRefresh(ctx, nodeId) {
-  const hit = ctx.mesh.nodes.find((n) => n.id === nodeId);
+  const hit = ctx.mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId));
   if (hit && !hit.isLocalWorktree) return hit;
   await refreshMeshFromDaemon(ctx);
-  return ctx.mesh.nodes.find((n) => n.id === nodeId) ?? null;
+  return ctx.mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId)) ?? null;
 }
 function hasRecentDuplicateDispatch(ctx, args) {
   const now = Date.now();
@@ -930,7 +930,7 @@ function readFinalAssistantTranscriptEvidence(payload) {
 }
 function findNodeSession(nodes, nodeId, sessionId) {
   if (!nodeId || !sessionId) return {};
-  const node = nodes.find((candidate) => readString(candidate?.id) === nodeId || readString(candidate?.nodeId) === nodeId);
+  const node = nodes.find((candidate) => (0, import_daemon_core.meshNodeIdMatches)(candidate, nodeId));
   if (!node) return {};
   const sessions = Array.isArray(node.sessions) ? node.sessions : [];
   const session = sessions.find((candidate) => readSessionRecordId(candidate) === sessionId);
@@ -1742,7 +1742,7 @@ function getLocalControlPlaneMatchReason(ctx, node) {
 function findClonedFromNode(ctx, node) {
   const clonedFromNodeId = readString(node.clonedFromNodeId) || readString(node.cloned_from_node_id);
   if (!clonedFromNodeId) return void 0;
-  return ctx.mesh.nodes.find((n) => n.id === clonedFromNodeId || n.nodeId === clonedFromNodeId || n.node_id === clonedFromNodeId);
+  return ctx.mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, clonedFromNodeId));
 }
 function resolvePreferredWorktreeNodeId(ctx) {
   const worktreeNodes = (ctx.mesh.nodes || []).filter((n) => n.isLocalWorktree === true);
