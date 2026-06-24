@@ -2460,6 +2460,43 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
 }
 
 // ---------------------------------------------------------------------------
+// Per-coordinator forward serialization (P2P send-backpressure relief).
+//
+// When several workers finish at once, each completion runs forwardUnresolvedDelegate
+// Event and fires its own `mesh_forward_event` push. Firing the whole burst
+// concurrently dumps it into the single per-peer P2P DataChannel buffer in one tick,
+// which starves the rpc_ack/rpc_res replies the same channel must carry — a
+// coordinator's inbound `git_status` then times out even though the worker's own
+// forward acks return in ~1s. To cap the concurrent burst we serialize the immediate
+// pushes per coordinator: at most one push is in flight to a given coordinator at a
+// time, the rest run in arrival order behind it. A lone event (idle lane) still
+// dispatches immediately — only a genuine burst is paced. Durability is unchanged:
+// every event is already persisted to the outbox before the push runs, so serializing
+// only delays the best-effort fast path; PHASE 0 retry still covers any gap. This pairs
+// with the DataChannel send-buffer gate in daemon-cloud's mesh manager (writeRequest),
+// which is the hard guarantee; this throttle keeps the burst from piling up there.
+interface CoordinatorForwardLane { tail: Promise<unknown>; depth: number; }
+const coordinatorForwardLanes = new Map<string, CoordinatorForwardLane>();
+function enqueueCoordinatorForwardPush(coordinatorDaemonId: string, run: () => Promise<unknown>): void {
+    let lane = coordinatorForwardLanes.get(coordinatorDaemonId);
+    if (!lane) { lane = { tail: Promise.resolve(), depth: 0 }; coordinatorForwardLanes.set(coordinatorDaemonId, lane); }
+    const wasIdle = lane.depth === 0;
+    lane.depth += 1;
+    const dec = (): void => { lane!.depth -= 1; };
+    if (wasIdle) {
+        // Idle lane → dispatch synchronously, so a lone completion (the common case) has
+        // ZERO added latency and the push call happens in-line. Only a genuine burst —
+        // events arriving while a push is still in flight — is paced (else branch).
+        lane.tail = Promise.resolve(run()).catch(() => {}).then(dec, dec);
+    } else {
+        // Burst: queue behind the in-flight push(es) in arrival order so the whole burst
+        // is not dumped into the shared DataChannel buffer at once. The tail is guarded
+        // so one rejecting push never wedges the lane for the next.
+        lane.tail = lane.tail.then(() => run()).catch(() => {}).then(dec, dec);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Worker-side fallback forward for unresolved-mesh delegates.
 //
 // A REMOTE worker daemon that is being P2P-remote-controlled by a coordinator is
@@ -2554,21 +2591,27 @@ function forwardUnresolvedDelegateEvent(
     // 2) Best-effort immediate push for low latency. On success, ack the outbox row so
     //    the retry loop won't re-send it. On failure, leave it queued — PHASE 0 retries.
     traceMeshEventStage('forward_send', fwdTraceCtx, 'immediate push');
-    Promise.resolve(components.dispatchMeshCommand(coordinatorDaemonId, 'mesh_forward_event', payload))
-        .then((result: any) => {
-            if (result && result.success === false) {
-                LOG.warn('MeshEvents', `Immediate forward of ${eventName} to coordinator ${coordinatorDaemonId} rejected (${readNonEmptyString(result.error) || 'no reason'}) — left queued for retry`);
-                traceMeshEventDrop('immediate_forward_rejected', fwdTraceCtx, readNonEmptyString(result.error) || 'no reason');
-                return;
-            }
-            // Acked. Mark the durable copy delivered so the retry loop skips it.
-            if (persisted) ackUnresolvedDelegateForwardByFingerprint(coordinatorDaemonId, eventName, payload);
-        })
-        .catch((e: any) => {
-            // Coordinator momentarily unreachable; the durable row stays queued and the
-            // reconcile loop retries it. Trace so the relay attempt is visible.
-            LOG.warn('MeshEvents', `Immediate forward of ${eventName} to coordinator ${coordinatorDaemonId} failed: ${e?.message || e} — left queued for retry`);
-        });
+    // Serialize per coordinator so a multi-worker completion burst is paced rather than
+    // dumped concurrently into the shared P2P DataChannel buffer (see coordinator
+    // ForwardLanes). dispatchMeshCommand was null-checked above; capture it for the
+    // deferred closure.
+    const dispatchMeshCommand = components.dispatchMeshCommand;
+    enqueueCoordinatorForwardPush(coordinatorDaemonId, () =>
+        Promise.resolve(dispatchMeshCommand(coordinatorDaemonId, 'mesh_forward_event', payload))
+            .then((result: any) => {
+                if (result && result.success === false) {
+                    LOG.warn('MeshEvents', `Immediate forward of ${eventName} to coordinator ${coordinatorDaemonId} rejected (${readNonEmptyString(result.error) || 'no reason'}) — left queued for retry`);
+                    traceMeshEventDrop('immediate_forward_rejected', fwdTraceCtx, readNonEmptyString(result.error) || 'no reason');
+                    return;
+                }
+                // Acked. Mark the durable copy delivered so the retry loop skips it.
+                if (persisted) ackUnresolvedDelegateForwardByFingerprint(coordinatorDaemonId, eventName, payload);
+            })
+            .catch((e: any) => {
+                // Coordinator momentarily unreachable; the durable row stays queued and the
+                // reconcile loop retries it. Trace so the relay attempt is visible.
+                LOG.warn('MeshEvents', `Immediate forward of ${eventName} to coordinator ${coordinatorDaemonId} failed: ${e?.message || e} — left queued for retry`);
+            }));
     LOG.info('MeshEvents', `Durably forwarded ${eventName} for unresolved-mesh worker at ${routing.workspace || '(no workspace)'} to coordinator daemon ${coordinatorDaemonId}`);
     return true;
 }
