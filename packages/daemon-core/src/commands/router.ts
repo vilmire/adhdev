@@ -1130,6 +1130,21 @@ function readMeshTimeoutEnvMs(name: string, defaultMs: number): number {
 // (still under the P2P REQUEST_TIMEOUT of 30s) and made env-overridable.
 export const MESH_DIRECT_PROBE_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_TIMEOUT_MS', 25_000);
 export const MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS', 25_000);
+// Cold-open warmup budget for the FIRST direct-peer probe to a peer whose mesh
+// DataChannel is not open yet. A fresh cross-machine, TURN-relayed handshake
+// (ICE gather + TURN allocation + DTLS across two residential networks) routinely
+// needs many seconds. Charging that warmup against the response deadline
+// (MESH_DIRECT_PROBE_TIMEOUT_MS) made the very first git_status to a cold peer
+// false-timeout, after which the warm retry — reusing the now-open channel —
+// succeeded: the classic cold-open signature. This budget bounds ONLY the
+// "channel not open yet" phase; once the channel opens the response deadline
+// governs the round trip. A genuine connect failure still rejects immediately —
+// the mesh manager fails the peer the instant its PeerConnection state goes
+// terminal, and isMeshConnectionDefinitivelyDown pre-gates an already-dead peer —
+// so this never masks a real failure for the whole window; it only grants a
+// still-handshaking peer the time it legitimately needs. Matches the daemon-cloud
+// DaemonMeshManager CONNECT_TIMEOUT_MS (45s). Env-overridable for very slow links.
+export const MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS', 45_000);
 // How long a successful per-peer git_status probe stays fresh enough to be
 // reused instead of issuing another blocking `refreshUpstream:true` fan-out.
 // A slow (TURN-relayed) peer's probe can take 9-23s, and the dashboard's
@@ -1198,17 +1213,120 @@ export class MeshGitProbeCache {
     }
 }
 
+/**
+ * Await `work` under a warmup-aware deadline so a cold-open DataChannel handshake
+ * is NOT charged against the command response budget — the root cause of the
+ * "first mesh probe to a cold peer false-times-out, the warm retry succeeds"
+ * signature. Two budgets, switched by the live peer connection state:
+ *
+ *  - While `isConnected()` returns false the peer's channel is still opening; the
+ *    cold-open `connectTimeoutMs` budget applies. This phase is deliberately
+ *    generous because a TURN-relayed cross-machine handshake legitimately needs
+ *    many seconds — but a genuine connect *failure* is surfaced by `work`
+ *    rejecting on its own (the mesh manager fails the peer the instant its
+ *    PeerConnection state goes terminal), so a real failure is never masked for
+ *    the whole window.
+ *  - The first time `isConnected()` returns true the channel is warm; from that
+ *    instant the tight `responseTimeoutMs` governs how long the handler may take.
+ *    Warm-channel callers therefore see behavior identical to the old single
+ *    `Promise.race(work, responseTimeoutMs)`.
+ *
+ * Rejects with `Error('timeout')` when either budget is exhausted, mirroring the
+ * previous single-race contract. Pure except for timers + the injected
+ * `isConnected` probe, so it is unit-testable under fake timers without any real
+ * WebRTC. When no connection getter is wired `isConnected` should be `() => true`
+ * (the caller's choice) so the response deadline governs from t0 — the legacy
+ * single-budget behavior, never a combined connect+response window.
+ */
+export function awaitWithWarmupDeadline<T>(
+    work: Promise<T>,
+    opts: {
+        isConnected: () => boolean;
+        connectTimeoutMs: number;
+        responseTimeoutMs: number;
+        pollIntervalMs?: number;
+    },
+): Promise<T> {
+    const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
+    return new Promise<T>((resolve, reject) => {
+        let done = false;
+        let poll: ReturnType<typeof setInterval> | undefined;
+        let responseTimer: ReturnType<typeof setTimeout> | undefined;
+        const startedAt = Date.now();
+        const cleanup = () => {
+            if (poll) { clearInterval(poll); poll = undefined; }
+            if (responseTimer) { clearTimeout(responseTimer); responseTimer = undefined; }
+        };
+        const settle = (fn: () => void) => {
+            if (done) return;
+            done = true;
+            cleanup();
+            fn();
+        };
+        // Arm the response deadline exactly once, the moment the channel is warm.
+        const armResponse = () => {
+            if (responseTimer || done) return;
+            responseTimer = setTimeout(
+                () => settle(() => reject(new Error('timeout'))),
+                opts.responseTimeoutMs,
+            );
+            if (typeof responseTimer.unref === 'function') responseTimer.unref();
+        };
+        const onPoll = () => {
+            if (done) return;
+            if (opts.isConnected()) {
+                if (poll) { clearInterval(poll); poll = undefined; }
+                armResponse();
+                return;
+            }
+            if (Date.now() - startedAt >= opts.connectTimeoutMs) {
+                settle(() => reject(new Error('timeout')));
+            }
+        };
+        if (opts.isConnected()) {
+            // Already warm (e.g. a retry over an open channel) — skip the warmup
+            // phase entirely and let the response deadline govern from t0.
+            armResponse();
+        } else {
+            poll = setInterval(onPoll, pollMs);
+            if (typeof poll.unref === 'function') poll.unref();
+        }
+        work.then(
+            (val) => settle(() => resolve(val)),
+            (err) => settle(() => reject(err)),
+        );
+    });
+}
+
 async function probeRemoteMeshGitStatus(args: {
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
     daemonId: string;
     workspace: string;
-    timeoutMs: number;
+    // Response deadline — applies only once the peer's DataChannel is open (warm).
+    responseTimeoutMs: number;
+    // Cold-open warmup budget — applies only while the channel is still opening.
+    connectTimeoutMs: number;
+    // Live peer connection snapshot getter; lets the deadline tell "still warming
+    // up" apart from "warm but slow". Absent → behave as if always warm (the
+    // response deadline governs from t0, i.e. the legacy single-budget behavior).
+    getConnection?: (daemonId: string) => Record<string, unknown> | null;
 }): Promise<Record<string, unknown> | null> {
     if (!args.dispatchMeshCommand) return null;
-    const remoteResult = await Promise.race([
-        args.dispatchMeshCommand(args.daemonId, 'git_status', { workspace: args.workspace, refreshUpstream: true }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), args.timeoutMs)),
-    ]) as any;
+    // Fire the dispatch first — this is what drives the mesh manager to ensure /
+    // open the peer connection. The warmup-aware deadline then charges the
+    // cold-open handshake to the connect budget and only the warm round trip to
+    // the response budget, so the first probe to a cold peer is no longer
+    // false-timed-out before its channel has even opened.
+    const dispatch = args.dispatchMeshCommand(args.daemonId, 'git_status', { workspace: args.workspace, refreshUpstream: true });
+    const getConnection = args.getConnection;
+    const isConnected = getConnection
+        ? () => readMeshConnectionState(getConnection(args.daemonId)) === 'connected'
+        : () => true;
+    const remoteResult = await awaitWithWarmupDeadline(dispatch, {
+        isConnected,
+        connectTimeoutMs: args.connectTimeoutMs,
+        responseTimeoutMs: args.responseTimeoutMs,
+    }) as any;
     const remoteGit = remoteResult?.status ?? remoteResult?.git ?? remoteResult;
     if (!remoteGit || typeof remoteGit !== 'object' || typeof remoteGit.isGitRepo !== 'boolean') return null;
     // The member daemon stamps its own platform/arch onto the git_status result
@@ -1269,6 +1387,8 @@ export async function probeRemoteMeshGitStatusWithRetry(args: {
     timeoutMs: number;
     /** Per-attempt timeout for retries (attempts > 0); defaults to timeoutMs. */
     retryTimeoutMs?: number;
+    /** Cold-open warmup budget per attempt; defaults to MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS. */
+    connectTimeoutMs?: number;
     getConnection?: (daemonId: string) => Record<string, unknown> | null;
     onConnection?: (connection: Record<string, unknown>) => void;
 }): Promise<Record<string, unknown> | null> {
@@ -1300,7 +1420,9 @@ export async function probeRemoteMeshGitStatusWithRetry(args: {
                 dispatchMeshCommand: args.dispatchMeshCommand,
                 daemonId: args.daemonId,
                 workspace: args.workspace,
-                timeoutMs: attempt === 0 ? args.timeoutMs : (args.retryTimeoutMs ?? args.timeoutMs),
+                responseTimeoutMs: attempt === 0 ? args.timeoutMs : (args.retryTimeoutMs ?? args.timeoutMs),
+                connectTimeoutMs: args.connectTimeoutMs ?? MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS,
+                getConnection: args.getConnection,
             });
             if (remoteGit) return remoteGit;
         } catch {
@@ -1447,6 +1569,7 @@ export async function hydrateInlineMeshDirectTruth(args: {
             workspace,
             timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
             retryTimeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
+            connectTimeoutMs: MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS,
             getConnection: args.getMeshPeerConnectionStatus,
         });
         const remoteGit = args.probeCache
