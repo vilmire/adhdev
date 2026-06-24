@@ -742,6 +742,38 @@ describe('mesh session cleanup', () => {
     }
   })
 
+  it('refuses to remove the coordinator base node when self-id and node.daemonId are different id-forms of the same machine', async () => {
+    const meshId = `mesh-base-guard-canon-${Date.now()}`
+    try {
+      // CANON regression: a daemon answers to the same machine under interchangeable
+      // id forms. Here the coordinator's statusInstanceId is the standalone form
+      // (`standalone_mach_<core>`) while the stored node.daemonId is the cloud form
+      // (`daemon_mach_<core>`) — SAME machine core, DIFFERENT string. A raw `===`
+      // guard would miss this self-match and fail open, letting the coordinator delete
+      // its own live base node. The form-safe daemonIdsEquivalent collapses both forms
+      // to `mach_<core>` and rejects the removal.
+      const { router } = createRouter({}, { statusInstanceId: 'standalone_mach_canonbase01' })
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-base',
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          nodes: [{ id: 'node-base', workspace: '/Users/me/Work/adhdev', daemonId: 'daemon_mach_canonbase01' }],
+        },
+      })
+      expect(result).toMatchObject({
+        success: false,
+        removed: false,
+        code: 'mesh_remove_coordinator_base_node_protected',
+      })
+      expect(String(result.error)).toContain("coordinator's own base node")
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
+  })
+
   it('removes the coordinator base node when force:true is passed', async () => {
     const meshId = `mesh-base-force-${Date.now()}`
     try {

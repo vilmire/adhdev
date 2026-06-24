@@ -289,9 +289,19 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 const nodeMachineId = readMeshNodeMachineId(node as Record<string, unknown>) || '';
                 const selfDaemonId = ctx.deps.statusInstanceId || '';
                 const selfMachineId = (() => { try { return loadConfig().machineId || ''; } catch { return ''; } })();
+                // Identity match is form-safe: a daemon answers to the same machine
+                // under interchangeable id forms (bare `mach_X`, cloud `daemon_mach_X`,
+                // standalone `standalone_mach_X`). statusInstanceId/loadConfig().machineId
+                // and the node's stored daemonId/machineId frequently hold DIFFERENT forms
+                // of the same machine, so a raw `===` would miss the self-match and let the
+                // coordinator delete its own live base node (the very accident this guard
+                // exists to prevent). daemonIdsEquivalent collapses every form to its
+                // machine core before comparing, so a same-machine match is caught
+                // regardless of which form each side carries. This only widens matches
+                // (every raw-`===` hit still matches) — fail-open → fail-closed.
                 const isCoordinatorBaseNode =
-                    (!!selfDaemonId && (nodeDaemonId === selfDaemonId || nodeMachineId === selfDaemonId))
-                    || (!!selfMachineId && (nodeDaemonId === selfMachineId || nodeMachineId === selfMachineId));
+                    (!!selfDaemonId && (daemonIdsEquivalent(nodeDaemonId, selfDaemonId) || daemonIdsEquivalent(nodeMachineId, selfDaemonId)))
+                    || (!!selfMachineId && (daemonIdsEquivalent(nodeDaemonId, selfMachineId) || daemonIdsEquivalent(nodeMachineId, selfMachineId)));
                 if (isCoordinatorBaseNode) {
                     return {
                         success: false,
