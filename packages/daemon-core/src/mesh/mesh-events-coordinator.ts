@@ -1754,6 +1754,197 @@ export function shouldForceInjectMeshEvent(eventName: unknown): boolean {
     return typeof eventName === 'string' && MESH_FORCE_INJECT_EVENTS.has(eventName);
 }
 
+// Coordinator-side suppression/reconcile gate for an incoming mesh event. Each clause is a
+// closed dedup/suppression concern that only inspects the event + already-resolved context and
+// either (a) returns a `suppress` result the caller forwards verbatim, (b) returns a `reconcile`
+// signal carrying the rewritten metadataEvent for the caller to re-inject as
+// agent:generating_completed, or (c) returns null to let the event fall through to the
+// terminal/ledger machinery. Extracted verbatim from injectMeshSystemMessage — no behavior
+// change; the only side effects (best-effort remote-idle cleanup, LOG, trace) fire on the same
+// paths as before.
+function evaluateMeshEventSuppression(
+    args: {
+        meshId: string;
+        sourceInstanceId?: string;
+        nodeId?: string;
+        nodeLabel: string;
+        event: string;
+        metadataEvent: Record<string, unknown>;
+    },
+    ctx: {
+        traceCtx: Parameters<typeof traceMeshEventDrop>[1];
+        eventSessionId: string;
+        eventNodeId: string;
+        eventTimestamp: number | null;
+        workerCoordinatorDaemonId: string | undefined;
+    },
+):
+    | { kind: 'suppress'; result: { success: true; forwarded: 0; suppressed: true; [extra: string]: unknown } }
+    | { kind: 'reconcile'; metadataEvent: Record<string, unknown> }
+    | null {
+    const { traceCtx, eventSessionId, eventNodeId, eventTimestamp, workerCoordinatorDaemonId } = ctx;
+
+    const intentionalCleanupStop = shouldSuppressIntentionalCleanupStop({
+        event: args.event,
+        meshId: args.meshId,
+        metadataEvent: args.metadataEvent,
+        sessionId: eventSessionId || undefined,
+        nodeId: eventNodeId || undefined,
+    });
+    if (intentionalCleanupStop) {
+        if (eventSessionId && eventNodeId) {
+            try {
+                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(eventNodeId, eventSessionId);
+            } catch { /* best-effort */ }
+        }
+        LOG.info('MeshEvents', `Suppressed ${args.event} for intentionally cleanup-stopped session ${eventSessionId || '(unknown session)'}`);
+        traceMeshEventDrop('intentional_cleanup_stop', traceCtx);
+        return { kind: 'suppress', result: { success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true } };
+    }
+
+    if (args.event === 'monitor:no_progress') {
+        const reconciledCompletion = buildNoProgressCompletionReconciliation({
+            meshId: args.meshId,
+            nodeId: args.nodeId,
+            nodeLabel: args.nodeLabel,
+            metadataEvent: args.metadataEvent,
+            sourceInstanceId: args.sourceInstanceId,
+        });
+        if (reconciledCompletion?.source === 'no_progress_reconciliation') {
+            LOG.info('MeshEvents', `Reconciled no-progress monitor to completion for session ${eventSessionId || '(unknown session)'}`);
+            return { kind: 'reconcile', metadataEvent: reconciledCompletion };
+        }
+        if (reconciledCompletion?.source === 'no_progress_terminal_ledger_suppression') {
+            LOG.info('MeshEvents', `Suppressed no-progress monitor because terminal ledger evidence already exists for session ${eventSessionId || '(unknown session)'}`);
+            traceMeshEventDrop('no_progress_terminal_ledger_suppression', traceCtx, `terminalKind=${reconciledCompletion.terminalLedgerKind}`);
+            return {
+                kind: 'suppress',
+                result: {
+                    success: true,
+                    forwarded: 0,
+                    suppressed: true,
+                    terminalLedgerEvidence: true,
+                    terminalLedgerKind: reconciledCompletion.terminalLedgerKind,
+                },
+            };
+        }
+    }
+
+    if (isDuplicateRefineTerminalEvent(args.meshId, args.event, args.metadataEvent)) {
+        LOG.info('MeshEvents', `Suppressed duplicate ${args.event} for refine job ${readRefineJobId({ metadataEvent: args.metadataEvent })}`);
+        traceMeshEventDrop('duplicate_refine_terminal', traceCtx);
+        return { kind: 'suppress', result: { success: true, forwarded: 0, suppressed: true, duplicateRefineTerminalEvent: true } };
+    }
+
+    if (args.event === 'agent:waiting_approval' && eventSessionId) {
+        const duplicateApproval = isDuplicateMeshApprovalEvent({
+            meshId: args.meshId,
+            sessionId: eventSessionId,
+            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+            timestamp: eventTimestamp,
+            modalMessage: readNonEmptyString(args.metadataEvent.modalMessage) || undefined,
+            modalButtons: args.metadataEvent.modalButtons,
+        });
+        if (duplicateApproval) {
+            LOG.info('MeshEvents', `Suppressed duplicate approval event for mesh ${args.meshId} session ${eventSessionId}`);
+            traceMeshEventDrop('duplicate_approval', traceCtx);
+            return { kind: 'suppress', result: { success: true, forwarded: 0, suppressed: true, duplicateApproval: true } };
+        }
+    }
+    if (args.event === 'agent:generating_completed' && eventSessionId) {
+        const terminal = findRecentTerminalLedgerEvidence({
+            meshId: args.meshId,
+            sessionId: eventSessionId,
+            nodeId: eventNodeId || undefined,
+        });
+        if (terminal?.kind === 'task_completed' && !sessionHasActiveAssignment(args.meshId, eventSessionId)) {
+            const newDispatchAfterTerminal = hasDispatchAfterTerminal(args.meshId, eventSessionId, terminal.id);
+            // Fix B (re-dispatch 2nd-completion routing): a prior terminal recorded from a FALSE
+            // idle (weak evidence / no confirmed final assistant) must NOT permanently suppress a
+            // later GENUINE completion of the same session. providerSessionId is stable across a
+            // session's turns, so the providerSessionId/finalSummary dedup below would otherwise
+            // swallow the real 2nd-turn completion that a coordinator nudge (direct re-dispatch)
+            // drove — exactly the missed-event bug. When the prior terminal was weak and the new
+            // event carries genuine completion evidence, let it through so it is recorded and
+            // re-attributed to the latest task (the normal task_completed path below).
+            const supersedesWeakTerminal = isWeakTerminalLedgerPayload(terminal.payload)
+                && isGenuineCompletionEvidence(args.metadataEvent);
+            // CANON-B (direct-dispatch completion race): a FAST direct dispatch (mesh_send_task)
+            // to an already-idle, previously-used session can have its genuine completion reach
+            // this coordinator handler BEFORE the dispatching side records the new task's dispatch
+            // row / task_dispatched ledger entry — insertDirectDispatch + appendLedgerEntry both run
+            // AFTER the agent_command await resolves, while the worker may already be done. In that
+            // window sessionHasActiveAssignment is false (no active dispatch row, no unterminal
+            // ledger entry yet), so this prior-terminal dedup engages; and because providerSessionId
+            // is STABLE across a reused session's turns, the providerSessionId/finalSummary match
+            // below would suppress the NEW task's completion as a duplicate of the PRIOR task —
+            // silently losing it (the observed intermittent miss; fresh enqueue/autoLaunch is immune
+            // because a fresh session has no prior same-providerSessionId terminal and the queue row
+            // is claimed atomically before dispatch). The echoed taskId is the authoritative
+            // discriminator: when the completion names a DIFFERENT task than the recorded terminal,
+            // it is a genuinely new task's completion, never a duplicate — let it through so it is
+            // attributed to its own taskId. A same-task re-arrival (taskId equal) or a taskId-less
+            // legacy event still falls through to the providerSessionId/finalSummary dedup.
+            const terminalTaskId = readNonEmptyString(terminal.payload.taskId);
+            const eventTaskId = readNonEmptyString(args.metadataEvent.taskId);
+            const distinctTaskCompletion = !!eventTaskId && !!terminalTaskId && eventTaskId !== terminalTaskId;
+            if (!newDispatchAfterTerminal && !supersedesWeakTerminal && !distinctTaskCompletion) {
+                const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
+                const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);
+                const eventProviderSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);
+                const eventFinalSummary = readNonEmptyString(args.metadataEvent.finalSummary);
+                if (
+                    (terminalProviderSessionId && terminalProviderSessionId === eventProviderSessionId)
+                    || (terminalFinalSummary && terminalFinalSummary === eventFinalSummary)
+                    || args.metadataEvent.source === 'no_progress_reconciliation'
+                ) {
+                    LOG.info('MeshEvents', `Suppressed duplicate completion with existing terminal ledger evidence for mesh ${args.meshId} session ${eventSessionId}`);
+                    traceMeshEventDrop('duplicate_completion_terminal_ledger', traceCtx);
+                    return { kind: 'suppress', result: { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true, terminalLedgerEvidence: true } };
+                }
+            }
+        }
+        const duplicateCompletion = isDuplicateMeshCompletionEvent({
+            meshId: args.meshId,
+            event: args.event,
+            sessionId: eventSessionId,
+            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+            providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
+            timestamp: eventTimestamp,
+            finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+            coordinatorDaemonId: workerCoordinatorDaemonId || undefined,
+            taskId: readNonEmptyString(args.metadataEvent.taskId) || undefined,
+            nodeId: eventNodeId || undefined,
+        });
+        if (duplicateCompletion) {
+            LOG.info('MeshEvents', `Suppressed duplicate completion for mesh ${args.meshId} session ${eventSessionId}`);
+            traceMeshEventDrop('duplicate_completion', traceCtx);
+            return { kind: 'suppress', result: { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true } };
+        }
+    }
+    if (args.event === 'agent:stopped' && eventSessionId) {
+        const duplicateStopped = isDuplicateMeshCompletionEvent({
+            meshId: args.meshId,
+            event: args.event,
+            sessionId: eventSessionId,
+            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+            providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
+            timestamp: eventTimestamp,
+            finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+            coordinatorDaemonId: workerCoordinatorDaemonId || undefined,
+            taskId: readNonEmptyString(args.metadataEvent.taskId) || undefined,
+            nodeId: eventNodeId || undefined,
+        });
+        if (duplicateStopped) {
+            LOG.info('MeshEvents', `Suppressed duplicate stopped event for mesh ${args.meshId} session ${eventSessionId}`);
+            traceMeshEventDrop('duplicate_stopped', traceCtx);
+            return { kind: 'suppress', result: { success: true, forwarded: 0, suppressed: true, duplicateStopped: true } };
+        }
+    }
+
+    return null;
+}
+
 function injectMeshSystemMessage(components: DaemonComponents, args: {
     meshId: string;
     sourceInstanceId?: string;
@@ -1847,164 +2038,26 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         } catch { /* dashboard metadata sync is best-effort */ }
     }
 
-    const intentionalCleanupStop = shouldSuppressIntentionalCleanupStop({
-        event: args.event,
-        meshId: args.meshId,
-        metadataEvent: args.metadataEvent,
-        sessionId: eventSessionId || undefined,
-        nodeId: eventNodeId || undefined,
+    const eventTimestamp = readEventTimestamp(args.metadataEvent.timestamp);
+    // Coordinator-side dedup/suppression gate (extracted, behavior-preserving). A non-null
+    // outcome either short-circuits with a forwarded result or signals a no-progress→completion
+    // reconciliation that we re-inject; null lets the event fall through to the ledger machinery.
+    const suppression = evaluateMeshEventSuppression(args, {
+        traceCtx,
+        eventSessionId,
+        eventNodeId,
+        eventTimestamp,
+        workerCoordinatorDaemonId,
     });
-    if (intentionalCleanupStop) {
-        if (eventSessionId && eventNodeId) {
-            try {
-                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(eventNodeId, eventSessionId);
-            } catch { /* best-effort */ }
-        }
-        LOG.info('MeshEvents', `Suppressed ${args.event} for intentionally cleanup-stopped session ${eventSessionId || '(unknown session)'}`);
-        traceMeshEventDrop('intentional_cleanup_stop', traceCtx);
-        return { success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true };
-    }
-
-    if (args.event === 'monitor:no_progress') {
-        const reconciledCompletion = buildNoProgressCompletionReconciliation({
-            meshId: args.meshId,
-            nodeId: args.nodeId,
-            nodeLabel: args.nodeLabel,
-            metadataEvent: args.metadataEvent,
-            sourceInstanceId: args.sourceInstanceId,
-        });
-        if (reconciledCompletion?.source === 'no_progress_reconciliation') {
-            LOG.info('MeshEvents', `Reconciled no-progress monitor to completion for session ${eventSessionId || '(unknown session)'}`);
+    if (suppression) {
+        if (suppression.kind === 'reconcile') {
             return injectMeshSystemMessage(components, {
                 ...args,
                 event: 'agent:generating_completed',
-                metadataEvent: reconciledCompletion,
+                metadataEvent: suppression.metadataEvent,
             });
         }
-        if (reconciledCompletion?.source === 'no_progress_terminal_ledger_suppression') {
-            LOG.info('MeshEvents', `Suppressed no-progress monitor because terminal ledger evidence already exists for session ${eventSessionId || '(unknown session)'}`);
-            traceMeshEventDrop('no_progress_terminal_ledger_suppression', traceCtx, `terminalKind=${reconciledCompletion.terminalLedgerKind}`);
-            return {
-                success: true,
-                forwarded: 0,
-                suppressed: true,
-                terminalLedgerEvidence: true,
-                terminalLedgerKind: reconciledCompletion.terminalLedgerKind,
-            };
-        }
-    }
-
-    if (isDuplicateRefineTerminalEvent(args.meshId, args.event, args.metadataEvent)) {
-        LOG.info('MeshEvents', `Suppressed duplicate ${args.event} for refine job ${readRefineJobId({ metadataEvent: args.metadataEvent })}`);
-        traceMeshEventDrop('duplicate_refine_terminal', traceCtx);
-        return { success: true, forwarded: 0, suppressed: true, duplicateRefineTerminalEvent: true };
-    }
-
-    const eventTimestamp = readEventTimestamp(args.metadataEvent.timestamp);
-    if (args.event === 'agent:waiting_approval' && eventSessionId) {
-        const duplicateApproval = isDuplicateMeshApprovalEvent({
-            meshId: args.meshId,
-            sessionId: eventSessionId,
-            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
-            timestamp: eventTimestamp,
-            modalMessage: readNonEmptyString(args.metadataEvent.modalMessage) || undefined,
-            modalButtons: args.metadataEvent.modalButtons,
-        });
-        if (duplicateApproval) {
-            LOG.info('MeshEvents', `Suppressed duplicate approval event for mesh ${args.meshId} session ${eventSessionId}`);
-            traceMeshEventDrop('duplicate_approval', traceCtx);
-            return { success: true, forwarded: 0, suppressed: true, duplicateApproval: true };
-        }
-    }
-    if (args.event === 'agent:generating_completed' && eventSessionId) {
-        const terminal = findRecentTerminalLedgerEvidence({
-            meshId: args.meshId,
-            sessionId: eventSessionId,
-            nodeId: eventNodeId || undefined,
-        });
-        if (terminal?.kind === 'task_completed' && !sessionHasActiveAssignment(args.meshId, eventSessionId)) {
-            const newDispatchAfterTerminal = hasDispatchAfterTerminal(args.meshId, eventSessionId, terminal.id);
-            // Fix B (re-dispatch 2nd-completion routing): a prior terminal recorded from a FALSE
-            // idle (weak evidence / no confirmed final assistant) must NOT permanently suppress a
-            // later GENUINE completion of the same session. providerSessionId is stable across a
-            // session's turns, so the providerSessionId/finalSummary dedup below would otherwise
-            // swallow the real 2nd-turn completion that a coordinator nudge (direct re-dispatch)
-            // drove — exactly the missed-event bug. When the prior terminal was weak and the new
-            // event carries genuine completion evidence, let it through so it is recorded and
-            // re-attributed to the latest task (the normal task_completed path below).
-            const supersedesWeakTerminal = isWeakTerminalLedgerPayload(terminal.payload)
-                && isGenuineCompletionEvidence(args.metadataEvent);
-            // CANON-B (direct-dispatch completion race): a FAST direct dispatch (mesh_send_task)
-            // to an already-idle, previously-used session can have its genuine completion reach
-            // this coordinator handler BEFORE the dispatching side records the new task's dispatch
-            // row / task_dispatched ledger entry — insertDirectDispatch + appendLedgerEntry both run
-            // AFTER the agent_command await resolves, while the worker may already be done. In that
-            // window sessionHasActiveAssignment is false (no active dispatch row, no unterminal
-            // ledger entry yet), so this prior-terminal dedup engages; and because providerSessionId
-            // is STABLE across a reused session's turns, the providerSessionId/finalSummary match
-            // below would suppress the NEW task's completion as a duplicate of the PRIOR task —
-            // silently losing it (the observed intermittent miss; fresh enqueue/autoLaunch is immune
-            // because a fresh session has no prior same-providerSessionId terminal and the queue row
-            // is claimed atomically before dispatch). The echoed taskId is the authoritative
-            // discriminator: when the completion names a DIFFERENT task than the recorded terminal,
-            // it is a genuinely new task's completion, never a duplicate — let it through so it is
-            // attributed to its own taskId. A same-task re-arrival (taskId equal) or a taskId-less
-            // legacy event still falls through to the providerSessionId/finalSummary dedup.
-            const terminalTaskId = readNonEmptyString(terminal.payload.taskId);
-            const eventTaskId = readNonEmptyString(args.metadataEvent.taskId);
-            const distinctTaskCompletion = !!eventTaskId && !!terminalTaskId && eventTaskId !== terminalTaskId;
-            if (!newDispatchAfterTerminal && !supersedesWeakTerminal && !distinctTaskCompletion) {
-                const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
-                const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);
-                const eventProviderSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);
-                const eventFinalSummary = readNonEmptyString(args.metadataEvent.finalSummary);
-                if (
-                    (terminalProviderSessionId && terminalProviderSessionId === eventProviderSessionId)
-                    || (terminalFinalSummary && terminalFinalSummary === eventFinalSummary)
-                    || args.metadataEvent.source === 'no_progress_reconciliation'
-                ) {
-                    LOG.info('MeshEvents', `Suppressed duplicate completion with existing terminal ledger evidence for mesh ${args.meshId} session ${eventSessionId}`);
-                    traceMeshEventDrop('duplicate_completion_terminal_ledger', traceCtx);
-                    return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true, terminalLedgerEvidence: true };
-                }
-            }
-        }
-        const duplicateCompletion = isDuplicateMeshCompletionEvent({
-            meshId: args.meshId,
-            event: args.event,
-            sessionId: eventSessionId,
-            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
-            providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
-            timestamp: eventTimestamp,
-            finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
-            coordinatorDaemonId: workerCoordinatorDaemonId || undefined,
-            taskId: readNonEmptyString(args.metadataEvent.taskId) || undefined,
-            nodeId: eventNodeId || undefined,
-        });
-        if (duplicateCompletion) {
-            LOG.info('MeshEvents', `Suppressed duplicate completion for mesh ${args.meshId} session ${eventSessionId}`);
-            traceMeshEventDrop('duplicate_completion', traceCtx);
-            return { success: true, forwarded: 0, suppressed: true, duplicateCompletion: true };
-        }
-    }
-    if (args.event === 'agent:stopped' && eventSessionId) {
-        const duplicateStopped = isDuplicateMeshCompletionEvent({
-            meshId: args.meshId,
-            event: args.event,
-            sessionId: eventSessionId,
-            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
-            providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
-            timestamp: eventTimestamp,
-            finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
-            coordinatorDaemonId: workerCoordinatorDaemonId || undefined,
-            taskId: readNonEmptyString(args.metadataEvent.taskId) || undefined,
-            nodeId: eventNodeId || undefined,
-        });
-        if (duplicateStopped) {
-            LOG.info('MeshEvents', `Suppressed duplicate stopped event for mesh ${args.meshId} session ${eventSessionId}`);
-            traceMeshEventDrop('duplicate_stopped', traceCtx);
-            return { success: true, forwarded: 0, suppressed: true, duplicateStopped: true };
-        }
+        return suppression.result;
     }
 
     function markSessionTerminal(sessionId: string, outcome: 'completed' | 'failed', occurredAtMs?: number | null, opts?: { tentativeIfDirect?: boolean }): { id?: string } | null {
