@@ -34,8 +34,7 @@ import {
     buildMeshLedgerReconciliationEvidence,
     buildMeshLedgerReplicaEvidence,
     buildMeshNodeCapabilityTags,
-    buildMeshNodeDataFreshness,
-    MESH_NODE_LIVE_TRUTH_MARKER,
+    buildMeshNodeProbeFreshness,
     buildP2pRelayFailurePayload,
     cancelTask,
     classifyP2pRelayFailure,
@@ -1218,6 +1217,17 @@ function summarizeCompactSubmodules(submodules: any): Record<string, unknown> | 
     };
 }
 
+// Canonical set of small per-node MARKER fields that MUST survive compact folding
+// intact on every node — quiet stub or detailed. Both fold paths reference this one
+// list: (a) the generic elide backstop skips these so they aren't truncated, and
+// (b) the minimal-stub reconstruction (minimalCompactNode) re-attaches them. Keeping
+// it single-sourced is the fix for the class of bug the rc.371 dataFreshness
+// regression exposed — a canonical node marker that survived the elide skip-list but
+// was silently dropped by the allowlist-based minimal stub, so it read null on
+// exactly the quiet nodes a coordinator most needs the marker for. Add a new marker
+// field HERE once and both fold paths preserve it; never hand-list it in two places.
+const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness'] as const;
+
 // Compact-mode per-node fold for mesh_status. The dashboard/verbose payload
 // (`results`) is untouched; this only slims the LLM-facing node copy. It folds
 // the repetitive heavy fields that scale O(nodes):
@@ -1293,9 +1303,12 @@ function compactMeshStatusNode(entry: any): any {
     // verbose/dashboard concern. Drop it from the compact LLM-facing copy.
     delete next.capabilityTagsByProvider;
 
-    // Generic backstop: elide any other oversized nested blob on the node.
+    // Generic backstop: elide any other oversized nested blob on the node. The
+    // structural blobs slimmed above plus the canonical preserved markers are skipped
+    // so the byte guard never truncates them.
+    const elideSkip = new Set<string>(['git', 'machine', 'branchConvergence', 'staleDaemonBuild', 'sessions', ...MESH_COMPACT_PRESERVED_MARKER_FIELDS]);
     for (const k of Object.keys(next)) {
-        if (k === 'git' || k === 'machine' || k === 'branchConvergence' || k === 'staleDaemonBuild' || k === 'sessions' || k === 'dataFreshness') continue;
+        if (elideSkip.has(k)) continue;
         next[k] = elideLargeNestedValue(k, next[k]);
     }
 
@@ -1370,6 +1383,15 @@ function minimalCompactNode(entry: any): any {
             branch: entry.branchConvergence.branch,
         }
         : undefined;
+    // Canonical per-node marker fields (e.g. dataFreshness) are exactly the signal a
+    // coordinator needs on a QUIET node — is this idle peer live, cached, or
+    // unreachable? — and they are tiny, so re-attach them from the single canonical
+    // list rather than hand-listing each one (the path the dataFreshness regression
+    // slipped through when only one field was added by hand).
+    const preservedMarkers: Record<string, unknown> = {};
+    for (const field of MESH_COMPACT_PRESERVED_MARKER_FIELDS) {
+        if (entry[field] !== undefined) preservedMarkers[field] = entry[field];
+    }
     return {
         nodeId: entry.nodeId,
         workspace: entry.workspace,
@@ -1384,10 +1406,7 @@ function minimalCompactNode(entry: any): any {
         ...(entry.launchBlockedReason !== undefined ? { launchBlockedReason: entry.launchBlockedReason } : {}),
         ...(bc ? { branchConvergence: bc } : {}),
         ...(entry.sessionSummary ? { sessionSummary: entry.sessionSummary } : {}),
-        // The freshness/reachability marker is exactly the signal a coordinator needs
-        // on a QUIET node — is this idle peer live, cached, or unreachable? — and it is
-        // tiny (6 scalar fields), so keep it even on the minimal stub.
-        ...(entry.dataFreshness !== undefined ? { dataFreshness: entry.dataFreshness } : {}),
+        ...preservedMarkers,
         folded: true,
     };
 }
@@ -3444,25 +3463,19 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
 
         // Additive freshness/reachability marker. Without this, the coordinator's
         // mesh_status could not tell a node whose live probe just succeeded from one
-        // it could not reach — both rendered as `health` + git scalars only. Computed
-        // through the same canonical classifier the daemon aggregate uses so the
-        // dataSource/staleness enums stay consistent across both surfaces.
-        const freshnessDaemonId = readNodeDaemonId(node);
-        const freshnessStatus: Record<string, unknown> = {
+        // it could not reach — both rendered as `health` + git scalars only. Derived
+        // through the SINGLE canonical daemon-core live-probe adapter
+        // (buildMeshNodeProbeFreshness) rather than rebuilding the freshness input
+        // here, so the dataSource/staleness wiring cannot drift between this
+        // coordinator surface and the daemon aggregate (the rc.371 regression where
+        // dataFreshness was wired on the daemon surface but null on every coordinator
+        // node because this site re-derived its own input).
+        entry.dataFreshness = buildMeshNodeProbeFreshness({
             git: entry.git,
-            connection: { state: liveTruthProbed ? 'connected' : 'disconnected' },
-        };
-        if (liveTruthProbed) freshnessStatus[MESH_NODE_LIVE_TRUTH_MARKER] = true;
-        entry.dataFreshness = buildMeshNodeDataFreshness({
-            status: freshnessStatus,
-            node,
-            isSelfNode: (entry.machine as any)?.sameMachine === true,
-            daemonId: freshnessDaemonId,
             liveTruthProbed,
-            // A probe that threw against a configured (daemonId-bearing) peer is an
-            // unreachable peer; an unconfigured node (no daemonId) falls through to
-            // the classifier's `unconfigured` branch instead of being mislabeled.
-            directTruthUnavailable: !liveTruthProbed && !!freshnessDaemonId,
+            isSelfNode: (entry.machine as any)?.sameMachine === true,
+            daemonId: readNodeDaemonId(node),
+            node,
         });
 
         // Recovery Hints & Next-step reporting

@@ -1216,6 +1216,51 @@ export function buildMeshNodeDataFreshness(args: {
     };
 }
 
+/**
+ * Canonical live-probe → freshness adapter. The coordinator-facing mesh_status
+ * (mcp-server `meshStatus`) builds each node entry from a SINGLE fresh git_status
+ * probe that either returns (live truth) or throws (peer unreachable). It used to
+ * hand-reconstruct the freshness INPUT inline — a synthetic `{ git, connection }`
+ * status plus the directTruthUnavailable/liveTruthProbed wiring — which is exactly
+ * how a field added to `buildMeshNodeDataFreshness`'s input contract ends up "wired
+ * on the daemon surface, null on the coordinator surface" (the rc.371
+ * null-everywhere regression). Routing every live-probe surface through this one
+ * adapter keeps the marker derivation canonical: there is a SINGLE place that turns
+ * a probe outcome into freshness args, so the two mesh_status surfaces cannot drift.
+ *
+ * `liveTruthProbed` true → the probe returned (live/self truth); false → it threw,
+ * so a configured peer is unreachable while an unconfigured node (no daemonId) falls
+ * through to the classifier's `unconfigured` branch.
+ */
+export function buildMeshNodeProbeFreshness(args: {
+    /** The git snapshot this probe stamped on the node entry (entry.git). */
+    git: unknown;
+    /** True when the fresh git_status probe RETURNED (live truth); false when it threw. */
+    liveTruthProbed: boolean;
+    isSelfNode: boolean;
+    /** The node's resolved daemonId; absent → unconfigured node. */
+    daemonId?: string;
+    /** The mesh node record, for held-git fallback when the probe did not return live. */
+    node?: any;
+    now?: () => number;
+}): Record<string, unknown> {
+    const { git, liveTruthProbed, isSelfNode, daemonId, node, now } = args;
+    const status: Record<string, unknown> = {
+        git,
+        connection: { state: liveTruthProbed ? 'connected' : 'disconnected' },
+    };
+    if (liveTruthProbed) status[MESH_NODE_LIVE_TRUTH_MARKER] = true;
+    return buildMeshNodeDataFreshness({
+        status,
+        node,
+        isSelfNode,
+        daemonId,
+        liveTruthProbed,
+        directTruthUnavailable: !liveTruthProbed && !!daemonId,
+        now,
+    });
+}
+
 export function finalizeMeshNodeStatus(args: {
     status: Record<string, unknown>;
     node: any;
