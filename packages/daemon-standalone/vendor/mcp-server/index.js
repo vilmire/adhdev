@@ -48,7 +48,23 @@ var IPC_COMMAND_TIMEOUTS_MS = {
   git_status: 45e3,
   git_diff_summary: 45e3,
   fast_forward_mesh_node: 12e4,
-  mesh_status: 12e4
+  mesh_status: 12e4,
+  // Heavy repo-mutating worktree ops (relay budgets: clone 90s, remove 60s). A local
+  // clone synchronously creates a worktree (~30s) plus a bounded setup-wait (~14s);
+  // 120s leaves headroom and matches the relay-wrapped remote path.
+  clone_mesh_node: 12e4,
+  remove_mesh_node: 6e4,
+  // A5: plan_mesh_refine_node is the SYNCHRONOUS refine dry-run — it runs several git
+  // probes (status/merge-tree/submodule) inline before replying, which can approach the
+  // 15s default on a slow (Windows) host. 45s defensively, matching git_status/diff.
+  plan_mesh_refine_node: 45e3,
+  // A2: refine_mesh_node / batch_refine_mesh_nodes are async-job-ack (the responder
+  // returns { async:true, status:'accepted' } immediately and works in the background),
+  // so 15s already suffices. 30s is a defensive floor guarding a future sync-dry-run
+  // regression; it is intentionally BELOW the relay 90s budget because the synchronous
+  // ack reply is sub-second and never bounded by the relay deadline.
+  refine_mesh_node: 3e4,
+  batch_refine_mesh_nodes: 3e4
 };
 var WS_CONNECTING = 0;
 var WS_OPEN = 1;
@@ -1026,6 +1042,13 @@ function buildQueueTriggerGuidance(queueTrigger) {
       nextAction: "Do not assume the queued task is running. Check mesh_view_queue and daemon connectivity before redispatching."
     };
   }
+  if (queueTrigger.autoLaunchPending === true) {
+    return {
+      queueClaimed: false,
+      queueDispatchState: "pending_waiting_for_autolaunch",
+      nextAction: "A worker session was just auto-launched for this task and is booting; it will claim the task shortly. Wait for it to claim \u2014 do NOT launch another session. Use mesh_view_queue to confirm the assignment lands."
+    };
+  }
   if (queueTrigger.noIdleMeshSessionAvailable === true) {
     return {
       queueClaimed: false,
@@ -1059,7 +1082,11 @@ function isMeshOwnedDelegateSession(session, meshId, nodeId) {
     if (sessionMeshId !== meshId) return false;
     return !sessionNodeId || sessionNodeId === nodeId;
   }
-  return settings?.launchedByCoordinator === true || Boolean(readString(settings?.meshCoordinatorDaemonId));
+  const coordinatorOwned = settings?.launchedByCoordinator === true || Boolean(readString(settings?.meshCoordinatorDaemonId));
+  if (!coordinatorOwned) return false;
+  const lastNodeId = readString(settings?.meshLastNodeId);
+  if (lastNodeId) return lastNodeId === nodeId;
+  return true;
 }
 function hasRemoteRelayMetadata(session) {
   return Boolean(
@@ -1078,7 +1105,7 @@ function chooseDispatchableSession(sessions, providerType, meshId, nodeId, coord
     const safety = classifyRemoteDelegateRelaySafety(session, meshId, nodeId, coordinatorDaemonId);
     return safety === "safe" || safety === "self_heal";
   });
-  return meshSessions.find((session) => isIdleSessionRecord(session) && matchingProvider(session)) || meshSessions.find(matchingProvider) || void 0;
+  return meshSessions.find((session) => isIdleSessionRecord(session) && matchingProvider(session)) || void 0;
 }
 function buildRelayUnsafeRemoteSessionFailure(ctx, node, sessionId, providerType) {
   return {
@@ -1229,6 +1256,7 @@ function compactMeshStatusNode(entry) {
 }
 var COMPACT_DETAILED_NODES_BYTE_BUDGET = 9e3;
 var COMPACT_NODES_TOTAL_BYTE_BUDGET = 13e3;
+var COMPACT_MISSIONS_BYTE_BUDGET = 6e3;
 function compactNodeSeverity(entry) {
   if (!entry || typeof entry !== "object") return 0;
   if (entry.error || entry.health && entry.health !== "online" && entry.health !== "dirty") return 5;
@@ -1523,6 +1551,12 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
       cliType: resolvedProviderType,
       action: "send_chat",
       message: args.message,
+      // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
+      // scoped to THIS node's session on the worker (findAdapter dir match /
+      // findMeshNodeAdapter). Without it, a worker hosting both a base node and a
+      // cloned worktree node (same daemonId) would fall through to a provider-only
+      // fuzzy match and could land worktree work on the base session.
+      ...node.workspace ? { dir: node.workspace } : {},
       ...args.meshContext ? { meshContext: args.meshContext } : {}
     });
     const dispatchPayload = unwrapCommandPayload(dispatchResult);
@@ -1678,7 +1712,7 @@ function isDirectLocalNode(ctx, node) {
   const machineId = readNodeMachineId(node);
   const daemonId = readNodeDaemonId(node);
   return Boolean(
-    ctx.localMachineId && machineId === ctx.localMachineId || ctx.localDaemonId && daemonId === ctx.localDaemonId || nodeHasLocalDaemonEvidence(ctx, node)
+    ctx.localMachineId && (0, import_daemon_core.daemonIdsEquivalent)(machineId, ctx.localMachineId) || ctx.localDaemonId && (0, import_daemon_core.daemonIdsEquivalent)(daemonId, ctx.localDaemonId) || nodeHasLocalDaemonEvidence(ctx, node)
   );
 }
 function isConfiguredCoordinatorNode(ctx, node) {
@@ -1687,8 +1721,8 @@ function isConfiguredCoordinatorNode(ctx, node) {
   if (!nodeId) return false;
   const nodeDaemonId = readNodeDaemonId(node);
   const nodeMachineId = readNodeMachineId(node);
-  if (nodeDaemonId && ctx.localDaemonId && nodeDaemonId !== ctx.localDaemonId) return false;
-  if (nodeMachineId && ctx.localMachineId && nodeMachineId !== ctx.localMachineId) return false;
+  if (nodeDaemonId && ctx.localDaemonId && !(0, import_daemon_core.daemonIdsEquivalent)(nodeDaemonId, ctx.localDaemonId)) return false;
+  if (nodeMachineId && ctx.localMachineId && !(0, import_daemon_core.daemonIdsEquivalent)(nodeMachineId, ctx.localMachineId)) return false;
   const preferredNodeId = readString(ctx.mesh.coordinator?.preferredNodeId) || readString(ctx.mesh.coordinator?.preferred_node_id);
   if (preferredNodeId) return nodeId === preferredNodeId;
   const first = ctx.mesh.nodes?.[0];
@@ -3089,15 +3123,44 @@ async function meshStatus(ctx, args = {}) {
   } catch {
   }
   try {
-    const missions = (0, import_daemon_core.getMeshStatusMissionSummaries)(mesh.id, { verbose: !compact });
-    if (missions.length > 0) {
-      response.missions = missions.map((mission) => {
-        try {
-          return { ...mission, stats: (0, import_daemon_core.computeMeshMissionStats)(mesh.id, mission.id) };
-        } catch {
-          return mission;
+    if (compact) {
+      const { live, historyFold } = (0, import_daemon_core.getMeshStatusMissionsCompact)(mesh.id);
+      const ranked = [...live].sort((a, b) => String(b.tasks?.lastActivityAt ?? "").localeCompare(String(a.tasks?.lastActivityAt ?? "")));
+      const kept = [];
+      const overflow = [];
+      let spent = 0;
+      for (const m of ranked) {
+        const cost = JSON.stringify(m).length + 1;
+        if (kept.length === 0 || spent + cost <= COMPACT_MISSIONS_BYTE_BUDGET) {
+          kept.push(m);
+          spent += cost;
+        } else {
+          overflow.push(m);
         }
-      });
+      }
+      if (kept.length > 0) response.missions = kept;
+      if (overflow.length > 0) {
+        const byStatus = {};
+        for (const m of overflow) byStatus[String(m.status)] = (byStatus[String(m.status)] ?? 0) + 1;
+        response.foldedMissions = {
+          count: overflow.length,
+          note: "Live-mission byte budget reached: these active/paused missions are listed by id only. Use mesh_mission_list or mesh_status verbose=true for their detail.",
+          byStatus,
+          missionIds: overflow.map((m) => String(m.id))
+        };
+      }
+      if (historyFold) response.missionsHistory = historyFold;
+    } else {
+      const missions = (0, import_daemon_core.getMeshStatusMissionSummaries)(mesh.id, { verbose: true });
+      if (missions.length > 0) {
+        response.missions = missions.map((mission) => {
+          try {
+            return { ...mission, stats: (0, import_daemon_core.computeMeshMissionStats)(mesh.id, mission.id) };
+          } catch {
+            return mission;
+          }
+        });
+      }
     }
   } catch {
   }
@@ -3368,7 +3431,7 @@ async function meshEnqueueTask(ctx, args) {
   const preferWorktree = args.preferWorktree === true || args.prefer_worktree === true;
   const targetNodeId = explicitTarget || (preferWorktree ? resolvePreferredWorktreeNodeId(ctx) : void 0);
   try {
-    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId });
+    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {} });
     if (!(ctx.transport instanceof IpcTransport)) {
       const queueTrigger = await triggerMeshQueueAndReport(ctx);
       return JSON.stringify({
@@ -3725,7 +3788,11 @@ async function meshSendTask(ctx, args) {
           meshId: ctx.mesh.id,
           nodeId: args.node_id,
           taskId,
-          ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
+          ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
+          // (3) Stamp the originating coordinator session so the worker's completion
+          // routes back to THIS coordinator session (multi-coordinator). Survives the
+          // P2P dispatch to the remote worker, which echoes it on its completion event.
+          ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
         }
       });
       if (result2.success) {
@@ -3899,7 +3966,9 @@ async function meshSendTask(ctx, args) {
           meshId: ctx.mesh.id,
           nodeId: args.node_id,
           taskId,
-          ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
+          ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
+          // (3) Originating coordinator session anchor — see the remote-dispatch path above.
+          ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
         }
       });
       const dispatchPayload = unwrapCommandPayload(dispatchResult);
@@ -4019,6 +4088,81 @@ async function meshSendTask(ctx, args) {
     return JSON.stringify(failure);
   }
 }
+function classifyReadChatTransportCause(error) {
+  const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
+  if (/not acknowledged|delivery failure|channel never opened|connect timed out|not connected|datachannel|disconnected|\bclosed\b|offline|no route|failed to initiate p2p|p2p mesh is not available|connect queue full/.test(message)) {
+    return "not_connected";
+  }
+  return "saturated";
+}
+function resolveCachedMeshSessionPreviewFromLedger(ctx, nodeId, sessionId) {
+  const entries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
+    const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
+    if (entryNodeId && entryNodeId !== nodeId) continue;
+    const entrySessionId = readString(entry.sessionId) || readString(payload.targetSessionId) || readString(payload.sessionId) || readString(payload.instanceId);
+    if (entrySessionId !== sessionId) continue;
+    const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === "object" && !Array.isArray(payload.metadataEvent) ? payload.metadataEvent : payload;
+    const preview = (0, import_daemon_core.resolveMeshSurfacedSessionPreview)(metadataEvent);
+    if (preview) {
+      return { ...preview, ledgerKind: entry.kind, timestamp: entry.timestamp };
+    }
+  }
+  return void 0;
+}
+function buildMeshReadChatCacheFallback(ctx, args, node, error) {
+  const classification = (0, import_daemon_core.classifyP2pRelayFailure)(error, { command: "read_chat", targetDaemonId: node.daemonId });
+  const cause = classifyReadChatTransportCause(error);
+  const errorMessage = error instanceof Error ? error.message : String(error ?? "");
+  const causeNote = cause === "not_connected" ? "the worker daemon is not currently connected over P2P (no live channel)" : "the worker daemon is connected but saturated \u2014 it acknowledged the request but did not return the transcript within the deadline";
+  const cached = resolveCachedMeshSessionPreviewFromLedger(ctx, args.node_id, args.session_id);
+  if (cached) {
+    return JSON.stringify({
+      success: true,
+      source: "coordinator_cache_fallback",
+      fallback: true,
+      nodeId: args.node_id,
+      sessionId: args.session_id,
+      transport: "p2p",
+      transportFailure: {
+        code: classification.code,
+        reason: classification.reason,
+        cause,
+        error: errorMessage
+      },
+      advisory: `Live transcript unavailable (${causeNote}). Showing the cached coordinator-side summary surfaced from the worker's last completion/status event \u2014 a stale point-in-time summary, NOT the live transcript. The full transcript requires a live P2P read_chat once the peer is reachable.`,
+      fullTranscriptRequiresP2p: true,
+      summary: cached.preview,
+      messages: [{
+        role: cached.role,
+        content: cached.preview,
+        cached: true,
+        ...cached.receivedAt ? { receivedAt: cached.receivedAt } : {}
+      }],
+      cachedPreview: {
+        role: cached.role,
+        ledgerKind: cached.ledgerKind,
+        ledgerTimestamp: cached.timestamp,
+        ...cached.receivedAt ? { receivedAt: cached.receivedAt } : {}
+      }
+    }, null, 2);
+  }
+  const failure = buildCoordinatorP2pRelayFailure(error, {
+    command: "read_chat",
+    targetDaemonId: node.daemonId,
+    nodeId: args.node_id,
+    sessionId: args.session_id
+  });
+  return JSON.stringify({
+    ...failure,
+    cause,
+    cachedSummaryAvailable: false,
+    fullTranscriptRequiresP2p: true,
+    advisory: `Live transcript unavailable (${causeNote}) and no cached coordinator-side summary exists for this session yet (no completion/status event has been surfaced). The full transcript requires a live P2P read_chat once the peer is reachable.`
+  }, null, 2);
+}
 async function meshReadChat(ctx, args) {
   const node = await findOptionalNodeWithRefresh(ctx, args.node_id);
   if (!node) {
@@ -4027,14 +4171,21 @@ async function meshReadChat(ctx, args) {
   await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
   const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
   const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached?.providerSessionId;
-  const result = await commandForNode(ctx, node, "read_chat", {
-    sessionId: args.session_id,
-    targetSessionId: args.session_id,
-    workspace: node.workspace,
-    ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
-    ...providerSessionId ? { providerSessionId } : {},
-    tailLimit: args.tail ?? 10
-  });
+  const isLocalNode = isLocalControlPlaneNode(ctx, node);
+  let result;
+  try {
+    result = await commandForNode(ctx, node, "read_chat", {
+      sessionId: args.session_id,
+      targetSessionId: args.session_id,
+      workspace: node.workspace,
+      ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
+      ...providerSessionId ? { providerSessionId } : {},
+      tailLimit: args.tail ?? 10
+    });
+  } catch (e) {
+    if (isLocalNode || !(0, import_daemon_core.isP2pRelayTransportFailure)(e)) throw e;
+    return buildMeshReadChatCacheFallback(ctx, args, node, e);
+  }
   const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result), {
     key: `mesh:${args.node_id}:${args.session_id}`,
     toolName: "mesh_read_chat",
@@ -4121,6 +4272,10 @@ async function meshLaunchSession(ctx, args) {
           // Lands in settingsOverride and beats the global per-provider autoApprove.
           autoApprove: delegatedWorkerAutoApprove,
           ...coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {},
+          // (3) Stamp the originating coordinator SESSION at launch too, so a worker
+          // launched via mesh_launch_session routes its completions back to the exact
+          // coordinator session (multi-coordinator). Absent → daemon-level fallback.
+          ...ctx.coordinatorSessionId ? { meshCoordinatorSessionId: ctx.coordinatorSessionId } : {},
           ...coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {},
           launchedByCoordinator: true
         }
@@ -4886,22 +5041,53 @@ function formatSpecDebugResult(result, options) {
   }
   if (snap.sections && typeof snap.sections === "object") {
     lines.push("");
-    lines.push("\u2500\u2500 sections \u2500\u2500");
+    lines.push("## Sections");
     for (const [id, text] of Object.entries(snap.sections)) {
-      const preview = String(text || "").replace(/\n/g, "\u21B5").slice(0, 120);
-      lines.push(`  ${id}: ${preview}`);
+      const raw = String(text ?? "");
+      const lineCount = raw.length === 0 ? 0 : raw.split("\n").length;
+      lines.push("");
+      lines.push(`### section: ${id} (${lineCount} lines, ${raw.length} chars)`);
+      lines.push("```");
+      lines.push(raw);
+      lines.push("```");
     }
   }
   const history = Array.isArray(snap.stateHistory) ? snap.stateHistory : [];
   if (history.length > 0) {
     lines.push("");
-    lines.push("\u2500\u2500 state history (newest first) \u2500\u2500");
+    lines.push("## State History (newest first)");
     const now = Date.now();
     for (const entry of [...history].reverse().slice(0, 20)) {
       const agoMs = now - entry.at;
       const ago = agoMs < 2e3 ? `${agoMs}ms ago` : `${(agoMs / 1e3).toFixed(1)}s ago`;
       const dur = entry.durationMs > 0 ? `  held ${entry.durationMs}ms` : "";
-      lines.push(`  ${String(entry.stateId).padEnd(18)} ${ago}${dur}`);
+      const via = entry.via ? `  via ${entry.via}` : "";
+      lines.push(`  ${String(entry.stateId).padEnd(18)} ${ago}${dur}${via}`);
+      const rules = Array.isArray(entry.matchedRules) ? entry.matchedRules : [];
+      for (const rule of rules) {
+        lines.push(`      ${String(rule)}`);
+      }
+    }
+  }
+  const timeline = Array.isArray(snap.eventTimeline) ? snap.eventTimeline : [];
+  if (timeline.length > 0) {
+    lines.push("");
+    lines.push("## Event Timeline (oldest first)");
+    const now = Date.now();
+    const arrow = {
+      input: "\u2192 in ",
+      output: "\u2190 out",
+      resize: "\u21F2 size",
+      cursor: "\u2316 cur",
+      spawn: "\u23FB spawn",
+      exit: "\u23F9 exit"
+    };
+    for (const ev of timeline.slice(-120)) {
+      const agoMs = now - (ev.ts ?? now);
+      const ago = agoMs < 2e3 ? `${agoMs}ms` : `${(agoMs / 1e3).toFixed(1)}s`;
+      const tag = arrow[String(ev.kind)] ?? String(ev.kind);
+      const bytes = typeof ev.bytes === "number" ? ` [${ev.bytes}b]` : "";
+      lines.push(`  -${ago.padStart(6)}  ${tag}${bytes}  ${String(ev.content ?? "")}`);
     }
   }
   return lines.join("\n");
@@ -5588,7 +5774,8 @@ async function startMcpServer(opts) {
       } catch {
       }
     }
-    const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {}, ...coordinatorHostname ? { coordinatorHostname } : {} };
+    const coordinatorSessionId = typeof process.env.ADHDEV_COORDINATOR_SESSION_ID === "string" && process.env.ADHDEV_COORDINATOR_SESSION_ID.trim() ? process.env.ADHDEV_COORDINATOR_SESSION_ID.trim() : void 0;
+    const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {}, ...coordinatorHostname ? { coordinatorHostname } : {}, ...coordinatorSessionId ? { coordinatorSessionId } : {} };
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
     const server2 = new import_server.Server(
       { name: "adhdev-mcp-server", version: "0.9.82" },
