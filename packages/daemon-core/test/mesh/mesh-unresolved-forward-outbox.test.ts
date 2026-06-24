@@ -32,6 +32,8 @@ import {
   __clearUnresolvedDelegateForwardOutboxForTests,
 } from '../../src/mesh/mesh-unresolved-forward-outbox.js'
 import { __resetMeshWorkspaceCacheForTests } from '../../src/mesh/mesh-events.js'
+import { __resetUnresolvedForwardRejectionCountsForTests } from '../../src/mesh/mesh-reconcile-loop.js'
+import { listMeshes } from '../../src/config/mesh-config.js'
 
 // A worker that is NOT a member of the coordinator's mesh: meshNodeFor absent, no
 // workspace→mesh resolution, but it carries the coordinator daemon anchor. Its
@@ -76,6 +78,8 @@ beforeEach(() => {
   __resetMeshRuntimeStoreForTests()
   __resetMeshWorkspaceCacheForTests()
   __clearUnresolvedDelegateForwardOutboxForTests()
+  __resetUnresolvedForwardRejectionCountsForTests()
+  vi.mocked(listMeshes).mockReturnValue([])
 })
 
 describe('unresolved-delegate durable forward', () => {
@@ -224,5 +228,74 @@ describe('unresolved-delegate self-forward loop', () => {
     await runMeshReconcileTick(components)
     expect(dispatchMeshCommand).not.toHaveBeenCalled()
     expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
+  })
+})
+
+// RECONCILE-MESHID-DROP: the worker forwarded a completion with NO meshId (it "couldn't
+// resolve" one locally), and the coordinator's own workspace/nodeId recovery missed — so the
+// retry was rejected "meshId required" every tick forever. The worker can usually resolve the
+// meshId now (its hosted-node membership / the live session's meshNodeFor), so the retry
+// stamps it on; and a genuinely-unresolvable rejection is bounded by a cap instead of looping.
+describe('RECONCILE-MESHID-DROP: retry meshId injection + rejection cap', () => {
+  const REMOTE_COORDINATOR = 'daemon_remote_coordinator'
+
+  it('stamps a locally-resolvable meshId onto the retry payload so the coordinator accepts it', async () => {
+    const { components } = createUnresolvedWorker(REMOTE_COORDINATOR)
+    // The worker hosts node_worker as a member — listMeshes resolves the meshId by nodeId,
+    // exactly what the stripped forward payload never carried.
+    vi.mocked(listMeshes).mockReturnValue([{ id: 'mesh_member', nodes: [{ id: 'node_worker' }] }] as any)
+
+    // A pre-existing outbox row WITHOUT meshId (the bug's stored shape).
+    enqueueUnresolvedDelegateForward(REMOTE_COORDINATOR, 'agent:generating_completed', {
+      event: 'agent:generating_completed',
+      nodeId: 'node_worker',
+      workspace: '/repo/worktree-worker',
+      targetSessionId: 'worker-session-1',
+    })
+    expect(peekUnresolvedDelegateForwards()[0].payload.meshId).toBeUndefined()
+
+    const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
+    components.dispatchMeshCommand = dispatchMeshCommand
+    await runMeshReconcileTick(components)
+
+    // The retry push carried the recovered meshId, so the coordinator could accept it …
+    expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
+    const [, command, payload] = dispatchMeshCommand.mock.calls[0]
+    expect(command).toBe('mesh_forward_event')
+    expect(payload.meshId).toBe('mesh_member')
+    // … and on the ok response the entry is drained (loop terminates).
+    expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
+  })
+
+  it('caps hard rejections: drops the entry after MAX attempts to stop the infinite retry loop', async () => {
+    const { components } = createUnresolvedWorker(REMOTE_COORDINATOR)
+    // No mesh resolvable anywhere — the worker truly cannot stamp a meshId, so the coordinator
+    // keeps rejecting "meshId required". This is the infinite-loop case the cap bounds.
+    vi.mocked(listMeshes).mockReturnValue([])
+
+    enqueueUnresolvedDelegateForward(REMOTE_COORDINATOR, 'agent:generating_started', {
+      event: 'agent:generating_started',
+      workspace: '/repo/unknown-workspace',
+      targetSessionId: 'ghost-session',
+    })
+
+    const dispatchMeshCommand = vi.fn(async () => ({ success: false, error: 'meshId required' }))
+    components.dispatchMeshCommand = dispatchMeshCommand
+    components.instanceManager.getInstance = vi.fn(() => undefined) // session gone → no late resolution
+
+    // Ticks 1..4: rejected, left queued (under the cap of 5).
+    for (let i = 0; i < 4; i++) {
+      await runMeshReconcileTick(components)
+      expect(peekUnresolvedDelegateForwards()).toHaveLength(1)
+    }
+    // Tick 5: 5th rejection hits the cap → drained (dropped) with a single warning.
+    await runMeshReconcileTick(components)
+    expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
+    expect(dispatchMeshCommand).toHaveBeenCalledTimes(5)
+
+    // The loop is gone: no further pushes for the dropped entry.
+    dispatchMeshCommand.mockClear()
+    await runMeshReconcileTick(components)
+    expect(dispatchMeshCommand).not.toHaveBeenCalled()
   })
 })

@@ -91,6 +91,51 @@ function recoverMeshIdByNodeId(nodeId: string): string {
     return '';
 }
 
+// RECONCILE-MESHID-DROP: WORKER-side meshId resolution for an unresolved-delegate
+// forward payload. forwardUnresolvedDelegateEvent omits meshId by design (the worker
+// "can't resolve it") and relies on the COORDINATOR recovering it from workspace/nodeId.
+// That recovery fails when the no_node_binding session's payload has an empty nodeId AND
+// the coordinator's workspace→mesh lookup misses (a worktree clone whose repoIdentity
+// differs / a cache miss) — leaving the reconcile retry rejected with "meshId required"
+// every 4s forever. The worker actually has MORE context than the stripped payload gives
+// the coordinator: it hosts the node as a member and holds the LIVE session, whose
+// settings.meshNodeFor / meshNodeId are authoritative even when they were not stamped
+// onto the original event. Resolve here (worker side) and stamp meshId onto the payload so
+// the coordinator accepts it. Mirrors the receiver's recovery order, then adds the live-
+// session fallback. Returns '' when even the worker cannot resolve it (truly unresolvable —
+// the retry cap then drops it instead of looping). No side effects; safe to call per retry.
+export function resolveForwardEventMeshId(
+    components: DaemonComponents,
+    payload: Record<string, unknown>,
+): string {
+    const direct = readNonEmptyString(payload.meshId);
+    if (direct) return direct;
+    const workspace = readNonEmptyString(payload.workspace);
+    const byWorkspace = workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '';
+    if (byWorkspace) return byWorkspace;
+    const byNode = recoverMeshIdByNodeId(readNonEmptyString(payload.nodeId));
+    if (byNode) return byNode;
+    // Live-session fallback: the worker session may carry meshNodeFor / meshNodeId now even
+    // though the original event didn't (a late stamp, or an event that fired before binding).
+    const sessionId = readNonEmptyString(payload.targetSessionId)
+        || readNonEmptyString(payload.sessionId)
+        || readNonEmptyString(payload.instanceId);
+    if (sessionId) {
+        try {
+            const state = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
+            const settings = (state?.settings as Record<string, unknown>) || {};
+            const meshNodeFor = readNonEmptyString(settings.meshNodeFor);
+            if (meshNodeFor) return meshNodeFor;
+            const byStamp = recoverMeshIdByNodeId(readNonEmptyString(settings.meshNodeId));
+            if (byStamp) return byStamp;
+            const sessionWorkspace = readNonEmptyString(state?.workspace);
+            const bySessionWorkspace = sessionWorkspace ? readNonEmptyString(getCachedMeshByWorkspace(sessionWorkspace)?.id) : '';
+            if (bySessionWorkspace) return bySessionWorkspace;
+        } catch { /* best-effort — fall through to unresolved */ }
+    }
+    return '';
+}
+
 export function __resetIdleAutoFastForwardForTests(): void {
     idleAutoFastForwardLastAttempt.clear();
 }
@@ -2667,15 +2712,23 @@ function forwardUnresolvedDelegateEvent(
     if (!eventName) return false;
 
     // Flat payload mirroring buildForwardPayloadFromPending / what handleMeshForwardEvent
-    // reads. meshId is omitted on purpose — the worker can't resolve it; the coordinator
-    // recovers it from workspace. nodeId/workspace come from the worker envelope so the
-    // coordinator can name and locate the node.
+    // reads. nodeId/workspace come from the worker envelope so the coordinator can name and
+    // locate the node.
     const payload: Record<string, unknown> = {
         ...event,
         event: eventName,
         nodeId: readNonEmptyString(routing.nodeId) || readNonEmptyString(event.meshNodeId) || undefined,
         workspace: readNonEmptyString(routing.workspace) || readNonEmptyString(event.workspace) || undefined,
     };
+    // RECONCILE-MESHID-DROP: stamp meshId when the WORKER can resolve it (member node /
+    // live-session meshNodeFor). Historically omitted "because the worker can't resolve
+    // it", but for a member-hosted node a no_node_binding session's coordinator-side
+    // recovery (empty payload nodeId + workspace cache miss) fails and the retry is
+    // rejected "meshId required" forever. Resolving here makes the forward self-sufficient;
+    // when unresolvable even here it stays absent and the coordinator's own workspace/nodeId
+    // recovery still runs (unchanged), with the retry cap as the loop backstop.
+    const resolvedMeshId = resolveForwardEventMeshId(components, payload);
+    if (resolvedMeshId) payload.meshId = resolvedMeshId;
 
     // Self-addressed fallback: the resolved coordinator IS this daemon (a self-
     // coordinating / single-node mesh, or a delegate whose coordinator anchor resolved

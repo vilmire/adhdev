@@ -49,7 +49,7 @@ import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, bui
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { handleMeshForwardEvent, shouldForceInjectMeshEvent, MESH_FORCE_INJECT_EVENTS, triggerMeshQueue } from './mesh-events-coordinator.js';
+import { handleMeshForwardEvent, shouldForceInjectMeshEvent, MESH_FORCE_INJECT_EVENTS, triggerMeshQueue, resolveForwardEventMeshId } from './mesh-events-coordinator.js';
 import {
     peekUnresolvedDelegateForwards,
     ackUnresolvedDelegateForward,
@@ -724,6 +724,22 @@ function holdOrExpireStrictUnmatchedEvent(
 // Stale entries (coordinator unreachable past the max age) are expired first so the
 // outbox can't grow without bound. The coordinator dedups duplicate deliveries on its
 // own fingerprint, so a retry that races the original immediate push is harmless.
+// RECONCILE-MESHID-DROP: per-entry count of consecutive HARD rejections (the coordinator
+// returned success:false, e.g. "meshId required"). A rejection means the push was delivered
+// and deterministically refused — retrying the identical payload every 4s can never succeed,
+// so it would loop until the 30-minute age expiry, spamming the log the whole time. After
+// MAX_FORWARD_REJECTIONS such rejections we drop the entry (drain it) with ONE fail-loud
+// warning. Transient transport failures (the dispatch throws — coordinator momentarily
+// unreachable) do NOT count here; those legitimately retry until the age expiry. In-memory
+// (keyed by the durable outbox row id) is sufficient: a daemon restart re-arms the loop, and
+// the age expiry remains the durable backstop. Cleared whenever an entry is delivered/drained.
+const unresolvedForwardRejectionCounts = new Map<string, number>();
+const MAX_FORWARD_REJECTIONS = 5;
+
+export function __resetUnresolvedForwardRejectionCountsForTests(): void {
+    unresolvedForwardRejectionCounts.clear();
+}
+
 async function retryUnresolvedDelegateForwards(components: DaemonComponents): Promise<void> {
     const dispatchMeshCommand = components.dispatchMeshCommand;
     if (!dispatchMeshCommand) return;
@@ -732,7 +748,11 @@ async function retryUnresolvedDelegateForwards(components: DaemonComponents): Pr
     expireStaleUnresolvedDelegateForwards();
 
     const entries = peekUnresolvedDelegateForwards();
-    if (entries.length === 0) return;
+    if (entries.length === 0) {
+        // Nothing queued — clear any stale per-entry rejection counters so the map can't grow.
+        if (unresolvedForwardRejectionCounts.size > 0) unresolvedForwardRejectionCounts.clear();
+        return;
+    }
 
     // Every id-form THIS daemon answers to. A self-addressed outbox entry (coordinator
     // == this daemon) must never be cross-dialled — see the self-route branch below.
@@ -771,6 +791,7 @@ async function retryUnresolvedDelegateForwards(components: DaemonComponents): Pr
                 LOG.warn('MeshReconcile', `Local route of self-addressed forward to ${entry.coordinatorDaemonId} threw: ${e?.message || e} — draining anyway to break the retry loop`);
             }
             ackUnresolvedDelegateForward(entry.id);
+            unresolvedForwardRejectionCounts.delete(entry.id);
             if (localResult && localResult.success === false) {
                 LOG.warn('MeshReconcile', `Self-addressed unresolved-delegate ${readNonEmptyString(entry.payload.event)} rejected by local router (${readNonEmptyString(localResult.error) || 'no reason'}) — drained to break the self-forward retry loop`);
                 traceMeshEventDrop('self_forward_local_rejected', entryTraceCtx, readNonEmptyString(localResult.error) || 'no reason');
@@ -780,23 +801,54 @@ async function retryUnresolvedDelegateForwards(components: DaemonComponents): Pr
             continue;
         }
 
+        // RECONCILE-MESHID-DROP: the stored forward payload was built when the worker
+        // "couldn't resolve" its meshId, so the coordinator rejects it "meshId required"
+        // when its own workspace/nodeId recovery misses. The worker can usually resolve it
+        // now (member node membership / live-session meshNodeFor) — stamp it on so the
+        // coordinator accepts. Covers entries persisted before this fix AND late-bound
+        // sessions. No-op when the payload already carries a meshId or none is resolvable.
+        let pushPayload = entry.payload;
+        if (!readNonEmptyString(pushPayload.meshId)) {
+            const recoveredMeshId = resolveForwardEventMeshId(components, pushPayload);
+            if (recoveredMeshId) {
+                pushPayload = { ...pushPayload, meshId: recoveredMeshId };
+                traceMeshEventStage('forward_meshid_recovered', entryTraceCtx, `meshId=${recoveredMeshId}`);
+            }
+        }
+
         let result: any;
         try {
             traceMeshEventStage('forward_send', entryTraceCtx, `retry → ${entry.coordinatorDaemonId}`);
-            result = await dispatchMeshCommand(entry.coordinatorDaemonId, 'mesh_forward_event', entry.payload);
+            result = await dispatchMeshCommand(entry.coordinatorDaemonId, 'mesh_forward_event', pushPayload);
         } catch (e: any) {
-            // Coordinator unreachable — keep the entry queued and try again next tick.
+            // Coordinator unreachable (transport threw) — keep the entry queued and try again
+            // next tick. This is NOT a hard rejection, so it does not count toward the cap;
+            // the age expiry bounds a permanently-offline coordinator.
             LOG.warn('MeshReconcile', `Retry forward to coordinator ${entry.coordinatorDaemonId} failed: ${e?.message || e} — left queued`);
             traceMeshEventDrop('retry_forward_failed', entryTraceCtx, e?.message || String(e));
             continue;
         }
         if (result && result.success === false) {
-            LOG.warn('MeshReconcile', `Retry forward to coordinator ${entry.coordinatorDaemonId} rejected (${readNonEmptyString(result.error) || 'no reason'}) — left queued`);
-            traceMeshEventDrop('retry_forward_rejected', entryTraceCtx, readNonEmptyString(result.error) || 'no reason');
+            // Hard rejection: the push was delivered and deterministically refused. Retrying
+            // the identical payload can never succeed, so bound it — after MAX_FORWARD_REJECTIONS
+            // drop (drain) the entry with one fail-loud warning instead of re-spamming every tick.
+            const rejections = (unresolvedForwardRejectionCounts.get(entry.id) || 0) + 1;
+            unresolvedForwardRejectionCounts.set(entry.id, rejections);
+            const reason = readNonEmptyString(result.error) || 'no reason';
+            if (rejections >= MAX_FORWARD_REJECTIONS) {
+                ackUnresolvedDelegateForward(entry.id);
+                unresolvedForwardRejectionCounts.delete(entry.id);
+                LOG.warn('MeshReconcile', `Retry forward to coordinator ${entry.coordinatorDaemonId} rejected ${rejections}x (${reason}) — dropping unresolved-delegate ${readNonEmptyString(entry.payload.event)} (sess=${readNonEmptyString(entry.payload.targetSessionId) || readNonEmptyString(entry.payload.sessionId) || '-'}) to stop the retry loop`);
+                traceMeshEventDrop('retry_forward_exhausted', entryTraceCtx, `${reason} (${rejections} rejections)`);
+            } else {
+                LOG.warn('MeshReconcile', `Retry forward to coordinator ${entry.coordinatorDaemonId} rejected (${reason}) — left queued (attempt ${rejections}/${MAX_FORWARD_REJECTIONS})`);
+                traceMeshEventDrop('retry_forward_rejected', entryTraceCtx, reason);
+            }
             continue;
         }
         // Acked — mark the durable copy delivered.
         ackUnresolvedDelegateForward(entry.id);
+        unresolvedForwardRejectionCounts.delete(entry.id);
         LOG.info('MeshReconcile', `Retried+delivered unresolved-delegate ${readNonEmptyString(entry.payload.event)} to coordinator ${entry.coordinatorDaemonId}`);
     }
 }
