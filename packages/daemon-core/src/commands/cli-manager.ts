@@ -19,7 +19,7 @@ import { loadState, saveState } from '../config/state-store.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
 import { shortHash } from '../system/hash.js';
-import { unregisterMeshCoordinator, getCoordinatorForSession } from '../mesh/coordinator-registry.js';
+import { unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from '../mesh/coordinator-registry.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
@@ -1069,7 +1069,33 @@ export class DaemonCliManager {
             // Both restores are provider-agnostic — getSettings is keyed by provider type and the
             // registry mark is type-independent.
             const restoredSettings: Record<string, any> = { ...this.providerLoader.getSettings(normalizedType) };
-            const coordinatorEntry = getCoordinatorForSession(record.runtimeId);
+            // Primary rebind: exact persisted-registry match by runtimeId (stable across
+            // restart, see session-host runtimeId = runtimeRecord.sessionId).
+            let coordinatorEntry = getCoordinatorForSession(record.runtimeId);
+            // CORDBADGE fallback: the by-id match misses when a coordinator's runtime
+            // re-attaches under a different runtimeId than the one it was registered with
+            // (the registry survived, but its key no longer lines up). Without a rebind the
+            // restored session silently loses meshCoordinatorFor → the coordinator badge and
+            // selfIdentification block vanish and pending mesh events stop draining into its
+            // PTY, and the only recovery is a manual coordinator restart. Recover the mark
+            // from the persisted registry scoped to this exact workspace, but ONLY when it is
+            // UNAMBIGUOUS: exactly one registered coordinator for this workspace AND its
+            // cliType matches the restored session's type. The registry never holds worker
+            // sessions (only launch_mesh_coordinator registrations), so this cannot mis-mark a
+            // delegated worker; the uniqueness + cliType gate keeps it from guessing when two
+            // coordinators ever shared a workspace. Anything ambiguous stays unbound (we would
+            // rather miss a badge than mis-attribute one).
+            if (!coordinatorEntry?.meshId && record.workspace) {
+                const workspaceCoordinators = listCoordinatorsForWorkspace(record.workspace)
+                    .filter(e => e.meshId && (!e.cliType || e.cliType === record.cliType));
+                if (workspaceCoordinators.length === 1) {
+                    coordinatorEntry = workspaceCoordinators[0];
+                    LOG.info(
+                        'CLI',
+                        `↻ Rebound coordinator mark by workspace for ${record.runtimeKey || record.runtimeId} (mesh ${coordinatorEntry.meshId} @ ${record.workspace}); registry key did not match runtimeId`
+                    );
+                }
+            }
             if (coordinatorEntry?.meshId) {
                 restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
             }

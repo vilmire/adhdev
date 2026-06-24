@@ -130,6 +130,83 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     }
   }, 15000);
 
+  it('CORDBADGE: rebinds the coordinator mark by workspace when the runtimeId no longer matches the registered sessionId', async () => {
+    // The coordinator was registered under one sessionId, but on restart its runtime
+    // re-attaches under a DIFFERENT runtimeId (registry survived, key no longer lines
+    // up). The exact by-id lookup misses; the workspace-scoped fallback must recover the
+    // mark from the single unambiguous coordinator registered for this workspace.
+    const loader = setupLoader();
+    const meshId = 'mesh-rebind';
+    registerMeshCoordinator({ meshId, sessionId: 'old-coordinator-sessionid', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+
+    try {
+      const addInstance = vi.fn();
+      const restored = await createManager(loader, {
+        getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+        getSessionRegistry: () => ({ register: vi.fn() }),
+      }).restoreHostedSessions([
+        // Restored under a NEW runtimeId that the registry has never seen.
+        { runtimeId: 'new-coordinator-runtimeid', cliType: 'sample-cli', workspace: workingDir },
+      ]);
+
+      expect(restored).toBe(1);
+      const context = addInstance.mock.calls[0][2] as any;
+      expect(context.settings).toMatchObject({ autoApprove: true, meshCoordinatorFor: meshId });
+    } finally {
+      unregisterMeshCoordinator('old-coordinator-sessionid');
+    }
+  }, 15000);
+
+  it('CORDBADGE guard: does NOT rebind by workspace when the registered coordinator cliType differs from the restored session', async () => {
+    // A different provider is occupying the workspace — the persisted coordinator was a
+    // hermes-cli, but the restored session is sample-cli. The cliType gate must refuse to
+    // adopt the mark (rather than mis-mark a foreign session as the coordinator).
+    const loader = setupLoader();
+    registerMeshCoordinator({ meshId: 'mesh-other-provider', sessionId: 'hermes-coordinator', workspace: workingDir, startedAt: 1, cliType: 'hermes-cli' });
+
+    try {
+      const addInstance = vi.fn();
+      const restored = await createManager(loader, {
+        getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+        getSessionRegistry: () => ({ register: vi.fn() }),
+      }).restoreHostedSessions([
+        { runtimeId: 'sample-runtime', cliType: 'sample-cli', workspace: workingDir },
+      ]);
+
+      expect(restored).toBe(1);
+      const context = addInstance.mock.calls[0][2] as any;
+      expect(context.settings).toMatchObject({ autoApprove: true });
+      expect(context.settings.meshCoordinatorFor).toBeUndefined();
+    } finally {
+      unregisterMeshCoordinator('hermes-coordinator');
+    }
+  }, 15000);
+
+  it('CORDBADGE guard: does NOT rebind by workspace when two coordinators are registered for the same workspace (ambiguous)', async () => {
+    // Two coordinator entries share the workspace → the fallback cannot tell which mesh
+    // the restored session belongs to, so it must stay unbound rather than guess.
+    const loader = setupLoader();
+    registerMeshCoordinator({ meshId: 'mesh-one', sessionId: 'coord-one', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ meshId: 'mesh-two', sessionId: 'coord-two', workspace: workingDir, startedAt: 2, cliType: 'sample-cli' });
+
+    try {
+      const addInstance = vi.fn();
+      const restored = await createManager(loader, {
+        getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+        getSessionRegistry: () => ({ register: vi.fn() }),
+      }).restoreHostedSessions([
+        { runtimeId: 'ambiguous-runtime', cliType: 'sample-cli', workspace: workingDir },
+      ]);
+
+      expect(restored).toBe(1);
+      const context = addInstance.mock.calls[0][2] as any;
+      expect(context.settings.meshCoordinatorFor).toBeUndefined();
+    } finally {
+      unregisterMeshCoordinator('coord-one');
+      unregisterMeshCoordinator('coord-two');
+    }
+  }, 15000);
+
   it('restores provider autoApprove but does not invent a coordinator mark for a plain session', async () => {
     const loader = setupLoader();
     const runtimeId = 'plain-runtime-1';
