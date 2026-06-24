@@ -75,6 +75,12 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
             truncated: tail.truncated,
             filtered: tail.filtered,
             bytesReturned: tail.bytesReturned,
+            // Transparency meta — lets the coordinator see that a full-file grep
+            // ran past the recent tail window, and how much was scanned/excluded.
+            fullScan: tail.fullScan,
+            scannedBytes: tail.scannedBytes,
+            matchedLineCount: tail.matchedLineCount,
+            excludedByFilter: tail.excludedByFilter,
             ...(tail.grep ? { grep: tail.grep } : {}),
         } as CommandRouterResult;
     },

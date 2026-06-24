@@ -84,6 +84,74 @@ describe('readDaemonLogTail', () => {
     expect(result.grep).toBe('err')
   })
 
+  it('grep finds a match that sits BEYOND the tail-byte window (full-file scan past polling spam)', () => {
+    // The wanted line is written FIRST, then buried under far more than tailBytes
+    // of high-frequency polling spam. A tail-then-filter reader would never see it
+    // because it scrolled out of the byte window before the grep ran.
+    const wanted = '[12:00:00] [Mesh] dispatch get_mesh_node_logs -> node_73b2 inject forward'
+    const spam: string[] = [wanted]
+    for (let i = 0; i < 5000; i++) {
+      spam.push(`[12:00:0${i % 9}] [Mesh] Incoming P2P 'get_pending_mesh_events' poll ${String(i).padStart(6, '0')}`)
+    }
+    writeTestLog(spam.join('\n') + '\n')
+
+    // Tail window far smaller than the spam tail so the wanted line is out of it.
+    const result = readDaemonLogTail({ date: TEST_DATE, grep: 'dispatch.*inject', tailBytes: 8 * 1024 })
+    expect(result.success).toBe(true)
+    expect(result.fullScan).toBe(true)
+    // The match is recovered despite being far outside the tail window.
+    expect(result.lines).toContain(wanted)
+    expect(result.matchedLineCount).toBe(1)
+    // The spam lines were excluded by the filter, and the full file was scanned.
+    expect(result.excludedByFilter).toBe(5000)
+    expect(result.filtered).toBe(true)
+    expect(result.scannedBytes).toBeGreaterThan(8 * 1024)
+  })
+
+  it('byte-caps the MATCHING lines (newest matches kept, truncated=true) in filter mode', () => {
+    // Many matching lines, each ~50 bytes; cap to a small window so only the
+    // newest handful fit and older matches are dropped from the front.
+    const lines: string[] = []
+    for (let i = 0; i < 1000; i++) {
+      lines.push(`[12:00:00] [Mesh] MATCH dispatch entry number ${String(i).padStart(6, '0')} end`)
+    }
+    writeTestLog(lines.join('\n') + '\n')
+    const tailBytes = 2 * 1024
+    const result = readDaemonLogTail({ date: TEST_DATE, grep: 'MATCH dispatch', tailBytes })
+    expect(result.success).toBe(true)
+    expect(result.matchedLineCount).toBe(1000)
+    // Only a subset shipped, bounded by the byte cap.
+    expect(result.lines.length).toBeLessThan(1000)
+    expect(result.bytesReturned).toBeLessThanOrEqual(tailBytes)
+    // Newest matches retained, oldest dropped → truncated.
+    expect(result.truncated).toBe(true)
+    expect(result.lines[result.lines.length - 1]).toContain('000999')
+    expect(result.lines).not.toContain(lines[0])
+  })
+
+  it('includes the .1.log size-rotation backup in a filtered full-file scan', () => {
+    fs.mkdirSync(getDaemonLogDir(), { recursive: true })
+    // Older content lives in the rotation backup; the active file holds spam.
+    fs.writeFileSync(testBackupPath, '[12:00:00] [Mesh] ROTATED dispatch line in backup\n', 'utf-8')
+    const spam: string[] = []
+    for (let i = 0; i < 200; i++) spam.push(`[12:00:01] [Mesh] poll ${i}`)
+    writeTestLog(spam.join('\n') + '\n')
+    const result = readDaemonLogTail({ date: TEST_DATE, grep: 'ROTATED dispatch' })
+    expect(result.success).toBe(true)
+    expect(result.lines).toContain('[12:00:00] [Mesh] ROTATED dispatch line in backup')
+    expect(result.matchedLineCount).toBe(1)
+  })
+
+  it('no-filter mode keeps the legacy byte-bounded tail behaviour (fullScan=false)', () => {
+    writeTestLog('[12:00:01] a\n[12:00:02] b\n')
+    const result = readDaemonLogTail({ date: TEST_DATE })
+    expect(result.success).toBe(true)
+    expect(result.fullScan).toBe(false)
+    expect(result.filtered).toBe(false)
+    expect(result.excludedByFilter).toBe(0)
+    expect(result.lines).toEqual(['[12:00:01] a', '[12:00:02] b'])
+  })
+
   it('grep falls back to literal substring on an invalid regex', () => {
     writeTestLog('[12:00:01] value [abc\n[12:00:02] other\n')
     const result = readDaemonLogTail({ date: TEST_DATE, grep: '[abc' }) // unbalanced → invalid regex

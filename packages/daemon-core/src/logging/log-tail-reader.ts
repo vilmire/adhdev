@@ -7,7 +7,21 @@
  * grep the file by hand. Because the mesh RPC envelope is sent as a single
  * datachannel message (~256KB SCTP ceiling, no chunking), the returned tail is
  * HARD-bounded by `tailBytes` (default 64KB, capped at MAX_TAIL_BYTES=128KB) and
- * flags `truncated:true` when the file was larger.
+ * flags `truncated:true` when more content existed than fit.
+ *
+ * Two read modes:
+ *  - No filter (no grep/sinceMs): byte-bounded tail of the active file — read the
+ *    last `tailBytes` bytes only. Cheap, backward-compatible.
+ *  - Filtered (grep and/or sinceMs given): FULL-FILE scan. The filter is applied
+ *    across the ENTIRE file (plus the size-rotation `.1.log` backup) BEFORE the
+ *    byte cap, then the last `tailBytes` worth of MATCHING lines are returned.
+ *    This is the fix for "matches hidden behind polling spam": when the recent
+ *    tail window is saturated with high-frequency lines (e.g. coordinator polling
+ *    `get_pending_mesh_events`/`read_chat` every few seconds), a grep for a rarer
+ *    earlier line (dispatch/inject/forward) previously matched 0 because the line
+ *    had already scrolled out of the tail window before the filter ran. Filtering
+ *    the whole file first surfaces those matches regardless of how much unrelated
+ *    spam followed them.
  *
  * Boundary-safe: lines are cut on the newline byte (0x0A) only, which never
  * appears inside a multibyte UTF-8 sequence, so decoding each complete byte
@@ -36,14 +50,27 @@ export interface DaemonLogTailResult {
     success: boolean;
     error?: string;
     lines: string[];
+    /**
+     * No-filter mode: true when the file was larger than the byte window.
+     * Filter mode: true when matching lines were dropped from the FRONT to fit
+     * the byte cap (i.e. there are older matches than the ones returned).
+     */
     truncated: boolean;
     logPath: string;
     platform: NodeJS.Platform;
     bytesReturned: number;
-    /** True when a grep/since filter dropped lines from the raw tail window. */
+    /** True when a grep/since filter dropped at least one line. */
     filtered: boolean;
     /** The grep source actually applied (echoed back for clarity). */
     grep?: string;
+    /** True when the filtered full-file scan path ran (grep/sinceMs given). */
+    fullScan: boolean;
+    /** Total bytes read while scanning (filter mode scans the whole file + backup). */
+    scannedBytes: number;
+    /** Number of lines that matched the filter across the full scan (filter mode). */
+    matchedLineCount: number;
+    /** Number of scanned lines dropped by the filter ("N lines excluded by filter"). */
+    excludedByFilter: number;
 }
 
 function resolveLogPath(date?: string | Date): string {
@@ -102,6 +129,39 @@ function readByteBoundedTail(filePath: string, limitBytes: number): { text: stri
     }
 }
 
+/** Split decoded text into lines, dropping the trailing empty element a final
+ * newline produces. Pure helper shared by both read modes. */
+function splitLogLines(text: string): string[] {
+    const lines = text.split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    return lines;
+}
+
+/**
+ * Keep the LAST lines whose cumulative UTF-8 byte size (counting one byte per
+ * line for the joining newline) stays within `limitBytes`. Always keeps at least
+ * the final line, even if it alone exceeds the cap (matches the no-filter path's
+ * "never return nothing when there is content" behaviour). `truncated` is true
+ * when earlier lines were dropped to fit.
+ */
+function takeLastLinesWithinBytes(lines: string[], limitBytes: number): { kept: string[]; truncated: boolean; bytesReturned: number } {
+    if (lines.length === 0) return { kept: [], truncated: false, bytesReturned: 0 };
+    let total = 0;
+    let firstKept = lines.length;
+    for (let i = lines.length - 1; i >= 0; i--) {
+        const lineBytes = Buffer.byteLength(lines[i], 'utf-8') + 1; // +1 ≈ joining newline
+        // Once at least one line is kept, stop before overflowing the cap.
+        if (firstKept !== lines.length && total + lineBytes > limitBytes) break;
+        total += lineBytes;
+        firstKept = i;
+    }
+    return {
+        kept: lines.slice(firstKept),
+        truncated: firstKept > 0,
+        bytesReturned: total,
+    };
+}
+
 // Parse a leading timestamp from a log line into epoch ms. The unified logger
 // writes `[HH:MM:SS.mmm]` (local time, today's date) and the startup banner uses
 // a full timestamp; we best-effort parse `[HH:MM:SS...]` against the file's date.
@@ -122,99 +182,160 @@ function parseLineEpochMs(line: string, fileDate: Date): number | null {
     return d.getTime();
 }
 
+/** Build the case-insensitive line predicate for a grep source, falling back to
+ * a literal (lowercased substring) match when the source is not a valid regex. */
+function buildGrepPredicate(grepSource: string): (line: string) => boolean {
+    let re: RegExp | null = null;
+    try {
+        re = new RegExp(grepSource, 'i');
+    } catch {
+        re = null;
+    }
+    if (re) {
+        const compiled = re;
+        return (line: string) => compiled.test(line);
+    }
+    const needle = grepSource.toLowerCase();
+    return (line: string) => line.toLowerCase().includes(needle);
+}
+
+function fileDateFor(date?: string | Date): Date {
+    if (date instanceof Date) return date;
+    if (typeof date === 'string' && date.trim()) return new Date(`${date.trim()}T00:00:00.000Z`);
+    return new Date();
+}
+
+function errorResult(error: string, logPath: string, platform: NodeJS.Platform): DaemonLogTailResult {
+    return {
+        success: false,
+        error,
+        lines: [],
+        truncated: false,
+        logPath,
+        platform,
+        bytesReturned: 0,
+        filtered: false,
+        fullScan: false,
+        scannedBytes: 0,
+        matchedLineCount: 0,
+        excludedByFilter: 0,
+    };
+}
+
 /**
- * Read the daemon log tail for `date` (default today), bounded to `tailBytes`,
- * with optional grep (regex source) and sinceMs filters. Falls back to the
- * size-rotation backup (`*.1.log`) when the primary file does not exist.
+ * Read the daemon log tail for `date` (default today), bounded to `tailBytes`.
+ *
+ * - No grep/sinceMs → byte-bounded tail of the active file (legacy behaviour).
+ * - grep and/or sinceMs given → FULL-FILE scan: the filter is applied across the
+ *   whole file (plus the `*.1.log` size-rotation backup) BEFORE the byte cap, so
+ *   matches that have scrolled out of the recent tail window (e.g. behind
+ *   coordinator polling spam) are still returned. Only the last `tailBytes` worth
+ *   of matching lines ship over P2P.
+ *
+ * Falls back to the size-rotation backup (`*.1.log`) when the primary file does
+ * not exist.
  */
 export function readDaemonLogTail(args: ReadDaemonLogTailArgs = {}): DaemonLogTailResult {
     const platform = process.platform;
     const limitBytes = clampTailBytes(args.tailBytes);
-    let logPath = resolveLogPath(args.date);
+    const primaryPath = resolveLogPath(args.date);
+    const backupPath = primaryPath.replace(/\.log$/, '.1.log');
+    const primaryExists = fs.existsSync(primaryPath);
+    const backupExists = fs.existsSync(backupPath);
 
-    // Fall back to the size-rotation backup if the active file is absent.
-    if (!fs.existsSync(logPath)) {
-        const backup = logPath.replace(/\.log$/, '.1.log');
-        if (fs.existsSync(backup)) {
-            logPath = backup;
-        } else {
-            return {
-                success: false,
-                error: `No daemon log file at ${logPath} (dir: ${getDaemonLogDir()})`,
-                lines: [],
-                truncated: false,
-                logPath,
-                platform,
-                bytesReturned: 0,
-                filtered: false,
-            };
-        }
+    if (!primaryExists && !backupExists) {
+        return errorResult(
+            `No daemon log file at ${primaryPath} (dir: ${getDaemonLogDir()})`,
+            primaryPath,
+            platform,
+        );
     }
 
-    let raw: { text: string; truncated: boolean; bytesReturned: number };
-    try {
-        raw = readByteBoundedTail(logPath, limitBytes);
-    } catch (e: any) {
+    // Reported log path: the active file when present, else the backup.
+    const logPath = primaryExists ? primaryPath : backupPath;
+
+    const hasGrep = typeof args.grep === 'string' && args.grep.trim().length > 0;
+    const hasSince = Number.isFinite(args.sinceMs);
+    const filterMode = hasGrep || hasSince;
+
+    // ── No-filter mode: cheap byte-bounded tail of the active file ──────────
+    if (!filterMode) {
+        let raw: { text: string; truncated: boolean; bytesReturned: number };
+        try {
+            raw = readByteBoundedTail(logPath, limitBytes);
+        } catch (e: any) {
+            return errorResult(`Failed to read ${logPath}: ${e?.message ?? String(e)}`, logPath, platform);
+        }
+        const lines = splitLogLines(raw.text);
         return {
-            success: false,
-            error: `Failed to read ${logPath}: ${e?.message ?? String(e)}`,
-            lines: [],
-            truncated: false,
+            success: true,
+            lines,
+            truncated: raw.truncated,
             logPath,
             platform,
-            bytesReturned: 0,
+            bytesReturned: raw.bytesReturned,
             filtered: false,
+            fullScan: false,
+            scannedBytes: raw.bytesReturned,
+            matchedLineCount: lines.length,
+            excludedByFilter: 0,
         };
     }
 
-    let lines = raw.text.split('\n');
-    // A trailing newline yields a final empty element — drop it.
-    if (lines.length && lines[lines.length - 1] === '') lines.pop();
-    const rawCount = lines.length;
+    // ── Filter mode: scan the WHOLE file (backup then primary, chronological)
+    // so matches behind a saturated tail window are still found. ────────────
+    let scannedBytes = 0;
+    let allLines: string[] = [];
+    try {
+        for (const p of [backupExists ? backupPath : null, primaryExists ? primaryPath : null]) {
+            if (!p) continue;
+            const buf = fs.readFileSync(p);
+            scannedBytes += buf.length;
+            allLines = allLines.concat(splitLogLines(buf.toString('utf-8')));
+        }
+    } catch (e: any) {
+        return errorResult(`Failed to read ${logPath}: ${e?.message ?? String(e)}`, logPath, platform);
+    }
 
-    // since filter
-    if (Number.isFinite(args.sinceMs)) {
-        const fileDate = args.date instanceof Date
-            ? args.date
-            : typeof args.date === 'string' && args.date.trim()
-                ? new Date(`${args.date.trim()}T00:00:00.000Z`)
-                : new Date();
+    const scannedLineCount = allLines.length;
+    let lines = allLines;
+
+    // since filter — keep lines at/after the floor (and lines with no timestamp).
+    if (hasSince) {
+        const fileDate = fileDateFor(args.date);
         const floor = args.sinceMs as number;
         lines = lines.filter((line) => {
             const ts = parseLineEpochMs(line, fileDate);
-            // Keep lines with no parseable timestamp (continuation/stack lines).
             return ts === null || ts >= floor;
         });
     }
 
     // grep filter
     let appliedGrep: string | undefined;
-    if (typeof args.grep === 'string' && args.grep.trim()) {
-        appliedGrep = args.grep.trim();
-        let re: RegExp | null = null;
-        try {
-            re = new RegExp(appliedGrep, 'i');
-        } catch {
-            re = null;
-        }
-        if (re) {
-            const compiled = re;
-            lines = lines.filter((line) => compiled.test(line));
-        } else {
-            // Invalid regex → fall back to a literal substring match.
-            const needle = appliedGrep.toLowerCase();
-            lines = lines.filter((line) => line.toLowerCase().includes(needle));
-        }
+    if (hasGrep) {
+        appliedGrep = (args.grep as string).trim();
+        const matches = buildGrepPredicate(appliedGrep);
+        lines = lines.filter(matches);
     }
+
+    const matchedLineCount = lines.length;
+    const excludedByFilter = scannedLineCount - matchedLineCount;
+
+    // Byte cap applies to the MATCHING lines: keep the newest matches that fit.
+    const capped = takeLastLinesWithinBytes(lines, limitBytes);
 
     return {
         success: true,
-        lines,
-        truncated: raw.truncated,
+        lines: capped.kept,
+        truncated: capped.truncated,
         logPath,
         platform,
-        bytesReturned: raw.bytesReturned,
-        filtered: lines.length !== rawCount,
+        bytesReturned: capped.bytesReturned,
+        filtered: excludedByFilter > 0,
+        fullScan: true,
+        scannedBytes,
+        matchedLineCount,
+        excludedByFilter,
         ...(appliedGrep ? { grep: appliedGrep } : {}),
     };
 }
