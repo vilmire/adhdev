@@ -15,6 +15,7 @@ import {
     buildMeshActiveWork,
     buildMeshAsyncRefineJobs,
     buildMeshNodeProbeFreshness,
+    buildMeshSchedulingRuntime,
     buildNodeCapabilityExposure,
     buildNodeMachineIdentity,
     collectLiveStatusProbe,
@@ -68,6 +69,15 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
 
     let ledgerSummary = getLedgerSummary(mesh.id);
 
+    // Scheduling-runtime projection (load-balancer's live view): tie-break strategy,
+    // global parallel caps + consumption, and per-node load / priority / provider caps
+    // with structured "why this node can't take more write work" reasons. Derived from
+    // the mesh config + a queue snapshot (read-only) — never drives a scheduling
+    // decision, only exposes the picture the claim path acts on. Computed once so each
+    // node entry below can attach its slice and the response can carry the mesh rollup.
+    const schedulingRuntime = buildMeshSchedulingRuntime(mesh, getQueue(mesh.id));
+    const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
+
     // Probe all nodes in parallel — git_status + session collection per node are independent.
     const results = await Promise.all(mesh.nodes.map(async (node) => {
         const entry: any = {
@@ -79,6 +89,20 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             ...getNodeLaunchReadiness(node),
             ...buildNodeCapabilityExposure(node),
         };
+
+        // Per-node scheduling runtime (load, priority, provider caps, claim-block reasons).
+        // Full detail is a dashboard/verbose concern; in compact mode it repeats per node
+        // and would inflate the LLM payload past its byte budget, so compact keeps only the
+        // two scalars a coordinator needs to reason about load (current load + cap-reached).
+        // The mesh-level scheduling rollup (strategy/global caps) is always present below.
+        const nodeScheduling = schedulingByNode.get(node.id);
+        if (nodeScheduling) {
+            // Drop the redundant nodeId — the entry already carries it.
+            const { nodeId: _omit, ...rest } = nodeScheduling;
+            entry.scheduling = compact
+                ? { load: rest.load, capReached: rest.capReached }
+                : rest;
+        }
 
         // Tracks whether THIS call obtained live truth from a fresh git_status probe.
         // The coordinator-facing mesh_status always probes each node fresh, so a probe
@@ -482,6 +506,18 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         meshName: mesh.name,
         repoIdentity: mesh.repoIdentity,
         policy: mesh.policy,
+        // Mesh-level scheduling rollup (strategy + global cap consumption). Per-node
+        // detail (load/priority/provider caps/claim-block reasons) lives on each
+        // nodes[].scheduling; the node array is dropped here to avoid duplicating it.
+        scheduling: {
+            strategy: schedulingRuntime.strategy,
+            maxParallelTasks: schedulingRuntime.maxParallelTasks,
+            maxReadonlyParallelTasks: schedulingRuntime.maxReadonlyParallelTasks,
+            activeWriteAssigned: schedulingRuntime.activeWriteAssigned,
+            activeReadonlyAssigned: schedulingRuntime.activeReadonlyAssigned,
+            globalWriteCapReached: schedulingRuntime.globalWriteCapReached,
+            globalReadonlyCapReached: schedulingRuntime.globalReadonlyCapReached,
+        },
         payloadMode: compact ? 'compact' : 'full',
         refreshedAt: new Date().toISOString(),
         sourceOfTruth: {

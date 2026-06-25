@@ -2930,6 +2930,8 @@ async function meshStatus(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
   const { mesh, transport } = ctx;
   let ledgerSummary = (0, import_daemon_core3.getLedgerSummary)(mesh.id);
+  const schedulingRuntime = (0, import_daemon_core3.buildMeshSchedulingRuntime)(mesh, (0, import_daemon_core3.getQueue)(mesh.id));
+  const schedulingByNode = new Map(schedulingRuntime.nodes.map((n) => [n.nodeId, n]));
   const results = await Promise.all(mesh.nodes.map(async (node) => {
     const entry = {
       nodeId: node.id,
@@ -2940,6 +2942,11 @@ async function meshStatus(ctx, args = {}) {
       ...getNodeLaunchReadiness(node),
       ...buildNodeCapabilityExposure(node)
     };
+    const nodeScheduling = schedulingByNode.get(node.id);
+    if (nodeScheduling) {
+      const { nodeId: _omit, ...rest } = nodeScheduling;
+      entry.scheduling = compact ? { load: rest.load, capReached: rest.capReached } : rest;
+    }
     let liveTruthProbed = false;
     try {
       const autoDiscover = node.policy?.autoDiscoverSubmodules !== false;
@@ -3220,6 +3227,18 @@ async function meshStatus(ctx, args = {}) {
     meshName: mesh.name,
     repoIdentity: mesh.repoIdentity,
     policy: mesh.policy,
+    // Mesh-level scheduling rollup (strategy + global cap consumption). Per-node
+    // detail (load/priority/provider caps/claim-block reasons) lives on each
+    // nodes[].scheduling; the node array is dropped here to avoid duplicating it.
+    scheduling: {
+      strategy: schedulingRuntime.strategy,
+      maxParallelTasks: schedulingRuntime.maxParallelTasks,
+      maxReadonlyParallelTasks: schedulingRuntime.maxReadonlyParallelTasks,
+      activeWriteAssigned: schedulingRuntime.activeWriteAssigned,
+      activeReadonlyAssigned: schedulingRuntime.activeReadonlyAssigned,
+      globalWriteCapReached: schedulingRuntime.globalWriteCapReached,
+      globalReadonlyCapReached: schedulingRuntime.globalReadonlyCapReached
+    },
     payloadMode: compact ? "compact" : "full",
     refreshedAt: (/* @__PURE__ */ new Date()).toISOString(),
     sourceOfTruth: {

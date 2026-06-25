@@ -372,11 +372,9 @@ export function MeshNodeList({
                                                 : <span className="text-sm font-medium">{node.workspace.split('/').pop()}</span>
                                             }
                                             {features.addNodeDaemonPicker && <NodeHealthBadge status={health} />}
-                                            {activeAssignments.length > 0 && !features.addNodeDaemonPicker && (
-                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300 border border-orange-500/25">
-                                                    {activeAssignments.length} active task{activeAssignments.length === 1 ? '' : 's'}
-                                                </span>
-                                            )}
+                                            {/* Live per-node runtime (active task count, sessions, git drift) now
+                                                lives on the Mesh "Status" tab so this config list stays static.
+                                                See MeshObservabilitySurface → MeshStatusTab. */}
                                             {worktree && (
                                                 <span className={`text-[10px] px-2 py-0.5 rounded-full ${features.addNodeDaemonPicker ? 'bg-cyan-400/10 text-cyan-300 border border-cyan-400/30' : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/25'}`}>worktree</span>
                                             )}

@@ -31,7 +31,7 @@ import type {
     RepoMeshStatus,
     RepoMeshNodeStatus,
 } from '../repo-mesh-types.js';
-import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
+import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 
 /**
  * Cheap, locally-derived "what just happened" snapshot for the coordinator
@@ -196,7 +196,7 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     if (operatingNotes) sections.push(operatingNotes);
 
     // ── Policy ──
-    sections.push(buildPolicySection({ ...DEFAULT_MESH_POLICY, ...(mesh.policy || {}) }));
+    sections.push(buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)));
 
     // ── Tools ──
     sections.push(TOOLS_SECTION);
@@ -278,7 +278,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         mission: ctx.missionSection?.trim() || '',
         recentActivity: buildRecentActivitySection(ctx.recentActivity) || '',
         operatingNotes: buildOperatingNotesSection(ctx.operatingNotes) || '',
-        policy: buildPolicySection({ ...DEFAULT_MESH_POLICY, ...(mesh.policy || {}) }),
+        policy: buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)),
         tools: TOOLS_SECTION,
         workflow: WORKFLOW_SECTION,
         rules: buildRulesSection(coordinatorCliType),

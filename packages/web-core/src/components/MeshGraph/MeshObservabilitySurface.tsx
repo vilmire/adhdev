@@ -2,9 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type {
     GitLogEntry,
     RepoMeshLedgerSummaryStatus,
+    RepoMeshNodeSchedulingStatus,
     RepoMeshNodeStatus,
     RepoMeshQueueSummary,
     RepoMeshQueueTask,
+    RepoMeshSchedulingStatus,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
@@ -22,7 +24,7 @@ type DetailSelection =
     | { kind: 'session'; nodeId: string; sessionId: string }
     | { kind: 'queue'; taskId: string }
 
-export type MeshSurfaceTab = 'overview' | 'graph'
+export type MeshSurfaceTab = 'overview' | 'status' | 'graph'
 
 interface MeshObservabilitySurfaceProps {
     status: RepoMeshStatus
@@ -72,6 +74,15 @@ export function MeshSurfaceTabControls({
         <div className="flex items-center gap-2">
             <div className={`inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
                 <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => onActiveTabChange('overview')}>Overview</button>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'status'}
+                    className={tabButtonClass(activeTab === 'status')}
+                    onClick={() => onActiveTabChange('status')}
+                >
+                    Status
+                </button>
                 <button
                     type="button"
                     role="tab"
@@ -258,6 +269,143 @@ export function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
     if (driftedSubmodules.length > 0) parts.push(`${driftedSubmodules.length} submodule drift`)
     if (git.hasConflicts) parts.push('conflicts')
     return parts.join(' · ') || 'Clean'
+}
+
+// ─── Status / Runtime tab ───────────────────────────────────────────────────
+// The dedicated runtime surface: separates "what the mesh is doing right now"
+// (health, sessions, assigned work, git drift, worktree bootstrap, auto-ff /
+// stale-build signals, and the live scheduling picture) from the static config
+// editors that live on the mesh detail page. Reuses the same Badge/theme/health
+// helpers as the graph detail panel so the visual language stays consistent.
+
+const SCHEDULING_STRATEGY_LABELS: Record<string, string> = {
+    first_eligible: 'First eligible (no spread)',
+    least_loaded: 'Least loaded',
+    round_robin: 'Round robin',
+    priority_only: 'Priority only',
+}
+
+/** Human-readable label for a structured claim-block reason code. */
+function schedulingReasonLabel(reason: string): string {
+    if (reason.startsWith('max_provider_parallel_reached:')) {
+        return `provider cap reached (${reason.slice('max_provider_parallel_reached:'.length)})`
+    }
+    switch (reason) {
+        case 'global_max_parallel_tasks_reached': return 'global parallel cap reached'
+        case 'node_has_active_assignment': return 'already running a write task'
+        default: return reason.replace(/_/g, ' ')
+    }
+}
+
+function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingStatus }) {
+    const meshTheme = useContext(MeshGraphThemeContext)
+    if (!scheduling) {
+        return (
+            <div className={`${meshTheme.cardClass} rounded-2xl p-4 text-[12px] ${meshTheme.textSecondary}`}>
+                Scheduling runtime not reported by this daemon (older build). Update the
+                coordinator daemon to surface strategy, parallel caps, and per-node load.
+            </div>
+        )
+    }
+    const writeTone = scheduling.globalWriteCapReached ? 'warn' : 'good'
+    return (
+        <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
+            <div className="flex flex-wrap items-center gap-2">
+                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>Scheduling</span>
+                <Badge label={SCHEDULING_STRATEGY_LABELS[scheduling.strategy] ?? scheduling.strategy} tone="info" />
+                <Badge
+                    label={`write ${scheduling.activeWriteAssigned}/${scheduling.maxParallelTasks}`}
+                    tone={writeTone}
+                    title="Active write (non-readonly) assigned tasks vs the global parallel cap"
+                />
+                <Badge
+                    label={`readonly ${scheduling.activeReadonlyAssigned}/${scheduling.maxReadonlyParallelTasks}`}
+                    tone={scheduling.globalReadonlyCapReached ? 'warn' : 'default'}
+                    title="Active read-only diagnosis tasks vs their (2× write) cap"
+                />
+            </div>
+            <p className={`mt-2 text-[11px] ${meshTheme.textSecondary}`}>
+                The strategy only governs the tie-break when distributing untargeted work
+                across eligible nodes. Per-node load, priority, and provider caps are below.
+            </p>
+        </div>
+    )
+}
+
+function MeshNodeSchedulingBadges({ scheduling }: { scheduling?: RepoMeshNodeSchedulingStatus }) {
+    if (!scheduling) return null
+    return (
+        <>
+            <Badge label={`load ${scheduling.load}`} tone={scheduling.load > 0 ? 'info' : 'default'} title="Active assigned tasks on this node" />
+            {typeof scheduling.schedulingPriority === 'number' && scheduling.schedulingPriority !== 0 && (
+                <Badge label={`priority ${scheduling.schedulingPriority}`} tone="default" title="Soft scheduling priority (higher = preferred)" />
+            )}
+            {(scheduling.providerRoles ?? []).map(role => (
+                <Badge
+                    key={role.providerType}
+                    label={`${role.providerType} ${role.activeAssigned}${typeof role.maxParallel === 'number' ? `/${role.maxParallel}` : ''}`}
+                    tone={role.capReached ? 'warn' : 'default'}
+                    title="Per-(node, provider) active assignments vs declared maxParallel cap"
+                />
+            ))}
+            {scheduling.capReached && (scheduling.capReasons ?? []).map(reason => (
+                <Badge key={reason} label={schedulingReasonLabel(reason)} tone="warn" title="Why this node cannot currently claim a new write task" />
+            ))}
+        </>
+    )
+}
+
+function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
+    const meshTheme = useContext(MeshGraphThemeContext)
+    const sessionCount = (node.activeSessionDetails?.length ?? node.activeSessions?.length ?? 0)
+    const head = shortCommit(node.git?.headCommit)
+    const isWorktree = node.isLocalWorktree === true
+    const bootstrap = node.worktreeBootstrap as { status?: string } | undefined
+    const staleBuild = node.staleDaemonBuild
+    return (
+        <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+            <div className="flex flex-wrap items-center gap-2">
+                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{node.machineLabel || node.nodeId}</span>
+                <Badge label={node.health} tone={healthTone(node.health)} />
+                {isWorktree && <Badge label="worktree" tone="info" title={node.worktreeBranch ? `Worktree branch ${node.worktreeBranch}` : 'Local worktree node'} />}
+                {bootstrap?.status && bootstrap.status !== 'ready' && (
+                    <Badge label={`bootstrap ${bootstrap.status}`} tone="warn" title="Worktree bootstrap is still in progress" />
+                )}
+                {node.connection?.state && node.connection.state !== 'self' && (
+                    <Badge label={node.connection.state} tone={node.connection.state === 'connected' ? 'good' : 'warn'} title="Mesh peer connection state" />
+                )}
+                {sessionCount > 0 && <Badge label={`${sessionCount} session${sessionCount === 1 ? '' : 's'}`} tone="default" />}
+                {node.autoFastForwardEligible && <Badge label="fast-forward ready" tone="info" title="Clean, behind upstream — safe for fast-forward" />}
+                {!!staleBuild && <Badge label="stale build" tone="warn" title="Live daemon was built behind workspace HEAD — merged fixes may not be live" />}
+                <MeshNodeSchedulingBadges scheduling={node.scheduling} />
+            </div>
+            <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
+                {summarizeNodeDrift(node)}
+                {head ? <span className="ml-2 font-mono opacity-70">@{head}</span> : null}
+            </div>
+        </div>
+    )
+}
+
+function MeshStatusTab({ status }: { status: RepoMeshStatus }) {
+    const meshTheme = useContext(MeshGraphThemeContext)
+    return (
+        <div className="flex flex-col gap-3 p-1">
+            <MeshSchedulingCard scheduling={status.scheduling} />
+            <div className="flex flex-col gap-2">
+                <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
+                    Nodes — runtime
+                </span>
+                {status.nodes.length === 0 ? (
+                    <div className={`rounded-xl border p-3 text-[12px] ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
+                        No nodes reporting runtime yet.
+                    </div>
+                ) : (
+                    status.nodes.map(node => <MeshNodeRuntimeRow key={node.nodeId} node={node} />)
+                )}
+            </div>
+        </div>
+    )
 }
 
 function collectSessionEntries(status: RepoMeshStatus): SessionListEntry[] {
@@ -998,6 +1146,11 @@ export default function MeshObservabilitySurface({
                  dashboard "full view" cannot scroll down to the lower cards. */}
             <div className={`${activeTab === 'overview' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto`}>
                 {activeTab === 'overview' && <MeshOverviewCards status={status} />}
+            </div>
+
+            {/* ── Status / Runtime tab: scheduling + per-node runtime (own scroll region) ── */}
+            <div className={`${activeTab === 'status' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto`}>
+                {activeTab === 'status' && <MeshStatusTab status={canonicalStatus} />}
             </div>
 
             {/* ── Graph tab: existing topology card (lazily mounted) ── */}

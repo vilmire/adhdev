@@ -22,7 +22,7 @@ import type {
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
 } from '../repo-mesh-types.js';
-import { DEFAULT_MESH_POLICY, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
+import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
 // ─── Persistence ────────────────────────────────
@@ -151,63 +151,11 @@ export function normalizeRepoIdentity(remoteUrl: string): string {
 
 // ─── CRUD Operations ────────────────────────────
 
-const SESSION_CLEANUP_MODES = new Set(['preserve', 'stop', 'delete_stopped', 'stop_and_delete']);
-const SPAWNED_SESSION_VISIBILITY_MODES = new Set(['visible', 'hidden']);
-
-function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMeshPolicy> | undefined): RepoMeshPolicy {
-    const autoFastForward = normalizeAutoFastForwardPolicy({
-        ...DEFAULT_MESH_POLICY.autoFastForward,
-        ...((base?.autoFastForward && typeof base.autoFastForward === 'object') ? base.autoFastForward : {}),
-        ...((patch?.autoFastForward && typeof patch.autoFastForward === 'object') ? patch.autoFastForward : {}),
-    });
-    const policy: RepoMeshPolicy = {
-        ...DEFAULT_MESH_POLICY,
-        ...(base || {}),
-        ...(patch || {}),
-        autoFastForward,
-    };
-    if (!['block', 'warn', 'checkpoint_then_continue'].includes(policy.dirtyWorkspaceBehavior)) {
-        policy.dirtyWorkspaceBehavior = 'warn';
-    }
-    const maxParallelTasks = Number(policy.maxParallelTasks);
-    policy.maxParallelTasks = Number.isFinite(maxParallelTasks) ? Math.max(1, Math.min(8, Math.floor(maxParallelTasks))) : 2;
-    policy.allowAutoPublishSubmoduleMainCommits = policy.allowAutoPublishSubmoduleMainCommits === true;
-    if (!SESSION_CLEANUP_MODES.has(String(policy.sessionCleanupOnNodeRemove))) {
-        policy.sessionCleanupOnNodeRemove = 'preserve';
-    }
-    if (!SPAWNED_SESSION_VISIBILITY_MODES.has(String(policy.spawnedSessionVisibility))) {
-        policy.spawnedSessionVisibility = DEFAULT_MESH_POLICY.spawnedSessionVisibility;
-    }
-    // Load-balancing: normalize the scheduling strategy so an invalid/blank value
-    // falls back to 'first_eligible' (strict no-change). Only persist the field when
-    // it is explicitly a non-default value to keep existing meshes.json untouched.
-    const normalizedStrategy = normalizeMeshSchedulingStrategy(policy.schedulingStrategy);
-    if (normalizedStrategy === 'first_eligible') {
-        delete policy.schedulingStrategy;
-    } else {
-        policy.schedulingStrategy = normalizedStrategy;
-    }
-    // Convergence routing: strict opt-in (default false). Only persist when explicitly
-    // enabled so existing meshes.json stays byte-for-byte untouched.
-    if (policy.autoConvergeCodeChange === true) {
-        policy.autoConvergeCodeChange = true;
-    } else {
-        delete policy.autoConvergeCodeChange;
-    }
-    return policy;
-}
-
-function normalizeAutoFastForwardPolicy(value: unknown): NonNullable<RepoMeshPolicy['autoFastForward']> {
-    const record = value && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : {};
-    const maxBehind = Number(record.maxBehind);
-    return {
-        enabled: record.enabled !== false,
-        ...(Number.isFinite(maxBehind) && maxBehind >= 0 ? { maxBehind: Math.floor(maxBehind) } : {}),
-        requireCleanSubmodules: record.requireCleanSubmodules !== false,
-    };
-}
+// Single source of truth for default+merge+per-field normalization is
+// mergeAndNormalizePolicy in repo-mesh-types.ts. This thin alias keeps the local
+// call sites (createMesh/updateMesh) reading naturally while ensuring config
+// writes go through the exact same normalizer the scheduler/display paths use.
+const mergeMeshPolicy = mergeAndNormalizePolicy;
 
 export function listMeshes(): LocalMeshEntry[] {
     return loadMeshConfig().meshes;

@@ -268,6 +268,18 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
         ...(readString(record.updatedAt, record.updated_at, cachedStatus.updatedAt, cachedStatus.updated_at) ? { updatedAt: readString(record.updatedAt, record.updated_at, cachedStatus.updatedAt, cachedStatus.updated_at) } : {}),
         ...(connection ? { connection } : {}),
         ...(Object.keys(rawBranchConvergence).length > 0 ? { branchConvergence: rawBranchConvergence } : {}),
+        // Runtime fields surfaced on the Status/Runtime tab. The canonicalizer rebuilds
+        // the node field-by-field, so these must be carried through explicitly or the
+        // Status tab loses them. Pass-through (best-effort) — shapes are validated by
+        // the daemon-core types; the UI tolerates missing/older-daemon values.
+        ...(record.scheduling && typeof record.scheduling === 'object'
+            ? { scheduling: record.scheduling as RepoMeshNodeStatus['scheduling'] } : {}),
+        ...(readBoolean(record.autoFastForwardEligible, record.auto_fast_forward_eligible) === true
+            ? { autoFastForwardEligible: true } : {}),
+        ...(record.worktreeBootstrap && typeof record.worktreeBootstrap === 'object'
+            ? { worktreeBootstrap: record.worktreeBootstrap as RepoMeshNodeStatus['worktreeBootstrap'] } : {}),
+        ...(record.staleDaemonBuild && typeof record.staleDaemonBuild === 'object'
+            ? { staleDaemonBuild: record.staleDaemonBuild as RepoMeshNodeStatus['staleDaemonBuild'] } : {}),
         ...(error ? { error } : {}),
     }
 }

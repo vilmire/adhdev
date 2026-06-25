@@ -352,6 +352,114 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     maxTaskRetries: 1,
 };
 
+// ─── Policy normalization (single source of truth) ──────────────────────────
+//
+// Every mesh policy passes through mergeAndNormalizePolicy exactly once on write
+// (createMesh/updateMesh) and again whenever a policy is materialized for display
+// or scheduling. Co-locating the default constant, the per-field normalizers, and
+// the merge here keeps the three former layers (DEFAULT_MESH_POLICY, the merge in
+// mesh-config, and the scattered field clamps) from drifting apart. The function
+// is idempotent: feeding it an already-normalized policy yields the same object.
+
+const SESSION_CLEANUP_MODES = new Set<RepoMeshSessionCleanupMode>([
+    'preserve', 'stop', 'delete_stopped', 'stop_and_delete',
+]);
+const SPAWNED_SESSION_VISIBILITY_MODES = new Set<RepoMeshSpawnedSessionVisibility>([
+    'visible', 'hidden',
+]);
+const DIRTY_WORKSPACE_BEHAVIORS = new Set<RepoMeshPolicy['dirtyWorkspaceBehavior']>([
+    'block', 'warn', 'checkpoint_then_continue',
+]);
+
+/** Min/max bounds for the global write-task parallel cap. */
+export const MESH_MAX_PARALLEL_TASKS_MIN = 1;
+export const MESH_MAX_PARALLEL_TASKS_MAX = 8;
+
+/**
+ * Resolve the effective global write-task parallel cap from a raw policy value,
+ * clamped to [MESH_MAX_PARALLEL_TASKS_MIN, MESH_MAX_PARALLEL_TASKS_MAX] and
+ * defaulting to DEFAULT_MESH_POLICY.maxParallelTasks for a missing/NaN value.
+ * Both the config write path and the runtime scheduler read the cap through this
+ * helper so they can never disagree on what "max parallel" means.
+ */
+export function resolveMaxParallelTasks(value: unknown): number {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return DEFAULT_MESH_POLICY.maxParallelTasks;
+    return Math.max(MESH_MAX_PARALLEL_TASKS_MIN, Math.min(MESH_MAX_PARALLEL_TASKS_MAX, Math.floor(n)));
+}
+
+/**
+ * Normalize an autoFastForward sub-policy, filling defaults and dropping an
+ * invalid maxBehind. Mirrors the (previously mesh-config-local) shape so the merge
+ * always emits a fully-populated, valid autoFastForward object.
+ */
+export function normalizeAutoFastForwardPolicy(value: unknown): NonNullable<RepoMeshPolicy['autoFastForward']> {
+    const record = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+    const maxBehind = Number(record.maxBehind);
+    return {
+        enabled: record.enabled !== false,
+        ...(Number.isFinite(maxBehind) && maxBehind >= 0 ? { maxBehind: Math.floor(maxBehind) } : {}),
+        requireCleanSubmodules: record.requireCleanSubmodules !== false,
+    };
+}
+
+/**
+ * Canonical merge+normalize for a RepoMeshPolicy. Layers (lowest→highest):
+ * DEFAULT_MESH_POLICY → base (existing persisted policy) → patch (incoming change),
+ * then applies every per-field normalizer so the result is always valid regardless
+ * of what a hand-edited meshes.json or a partial patch contained.
+ *
+ * Persistence economy is preserved: schedulingStrategy is dropped when it
+ * normalizes to the 'first_eligible' default, and autoConvergeCodeChange is dropped
+ * unless explicitly true — so an untouched meshes.json stays byte-for-byte the same.
+ */
+export function mergeAndNormalizePolicy(
+    base: RepoMeshPolicy | undefined,
+    patch: Partial<RepoMeshPolicy> | undefined,
+): RepoMeshPolicy {
+    const autoFastForward = normalizeAutoFastForwardPolicy({
+        ...DEFAULT_MESH_POLICY.autoFastForward,
+        ...((base?.autoFastForward && typeof base.autoFastForward === 'object') ? base.autoFastForward : {}),
+        ...((patch?.autoFastForward && typeof patch.autoFastForward === 'object') ? patch.autoFastForward : {}),
+    });
+    const policy: RepoMeshPolicy = {
+        ...DEFAULT_MESH_POLICY,
+        ...(base || {}),
+        ...(patch || {}),
+        autoFastForward,
+    };
+    if (!DIRTY_WORKSPACE_BEHAVIORS.has(policy.dirtyWorkspaceBehavior)) {
+        policy.dirtyWorkspaceBehavior = 'warn';
+    }
+    policy.maxParallelTasks = resolveMaxParallelTasks(policy.maxParallelTasks);
+    policy.allowAutoPublishSubmoduleMainCommits = policy.allowAutoPublishSubmoduleMainCommits === true;
+    if (!SESSION_CLEANUP_MODES.has(policy.sessionCleanupOnNodeRemove as RepoMeshSessionCleanupMode)) {
+        policy.sessionCleanupOnNodeRemove = 'preserve';
+    }
+    if (!SPAWNED_SESSION_VISIBILITY_MODES.has(policy.spawnedSessionVisibility as RepoMeshSpawnedSessionVisibility)) {
+        policy.spawnedSessionVisibility = DEFAULT_MESH_POLICY.spawnedSessionVisibility;
+    }
+    // Load-balancing: normalize the scheduling strategy so an invalid/blank value
+    // falls back to 'first_eligible' (strict no-change). Only persist the field when
+    // it is explicitly a non-default value to keep existing meshes.json untouched.
+    const normalizedStrategy = normalizeMeshSchedulingStrategy(policy.schedulingStrategy);
+    if (normalizedStrategy === 'first_eligible') {
+        delete policy.schedulingStrategy;
+    } else {
+        policy.schedulingStrategy = normalizedStrategy;
+    }
+    // Convergence routing: strict opt-in (default false). Only persist when explicitly
+    // enabled so existing meshes.json stays byte-for-byte untouched.
+    if (policy.autoConvergeCodeChange === true) {
+        policy.autoConvergeCodeChange = true;
+    } else {
+        delete policy.autoConvergeCodeChange;
+    }
+    return policy;
+}
+
 /**
  * Resolve whether a delegated worker session launched onto `nodePolicy` (within a mesh
  * governed by `meshPolicy`) should auto-approve. Precedence: node override → mesh policy
@@ -585,6 +693,44 @@ export interface LocalMeshNodeEntry {
 
 // ─── Mesh Status (runtime, not persisted) ───────
 
+/**
+ * Per-(node, provider) cap + consumption, as surfaced on a node's scheduling
+ * status. Wire-shape mirror of MeshNodeProviderSchedulingRuntime.
+ */
+export interface RepoMeshNodeProviderSchedulingStatus {
+    providerType: string;
+    maxParallel?: number;
+    activeAssigned: number;
+    capReached: boolean;
+}
+
+/**
+ * Per-node scheduling runtime exposed on RepoMeshNodeStatus.scheduling. Carried in
+ * full by verbose mesh_status; compact mesh_status sends only {load, capReached}.
+ */
+export interface RepoMeshNodeSchedulingStatus {
+    load: number;
+    schedulingPriority?: number;
+    maxConcurrentSessions?: number;
+    providerRoles?: RepoMeshNodeProviderSchedulingStatus[];
+    capReached: boolean;
+    capReasons?: string[];
+}
+
+/**
+ * Mesh-level scheduling rollup exposed on RepoMeshStatus.scheduling: which tie-break
+ * strategy is live and how much of the global parallel caps is consumed.
+ */
+export interface RepoMeshSchedulingStatus {
+    strategy: RepoMeshSchedulingStrategy;
+    maxParallelTasks: number;
+    maxReadonlyParallelTasks: number;
+    activeWriteAssigned: number;
+    activeReadonlyAssigned: number;
+    globalWriteCapReached: boolean;
+    globalReadonlyCapReached: boolean;
+}
+
 export interface RepoMeshStatus {
     meshId: string;
     meshName: string;
@@ -595,6 +741,11 @@ export interface RepoMeshStatus {
     nodes: RepoMeshNodeStatus[];
     queue?: RepoMeshQueueStatus;
     ledger?: RepoMeshLedgerStatus;
+    /**
+     * Mesh-level scheduling rollup (strategy + global cap consumption). Omitted by
+     * daemons predating the scheduling-runtime exposure — treat as optional.
+     */
+    scheduling?: RepoMeshSchedulingStatus;
     /**
      * Mission summaries for the dashboard overview. Active/paused missions plus a
      * capped, newest-first slice of completed/abandoned history. Omitted by older
@@ -674,6 +825,19 @@ export interface RepoMeshNodeStatus {
     lastSeenAt?: string;
     updatedAt?: string;
     connection?: RepoMeshPeerConnectionStatus;
+    /**
+     * Per-node scheduling runtime (load / priority / provider caps / claim-block
+     * reasons). Verbose mesh_status carries the full shape; compact carries only
+     * {load, capReached}. Omitted by daemons predating the exposure.
+     */
+    scheduling?: RepoMeshNodeSchedulingStatus;
+    /**
+     * Stale-daemon-build marker: the live daemon's build commit is a strict ancestor
+     * of this node's workspace HEAD (merged code not yet live). Best-effort, set by
+     * mesh_status when the git probe reports daemonBuildBehind; shape is daemon-defined
+     * (scope/isDaemonAffecting flags). Omitted when the build is current.
+     */
+    staleDaemonBuild?: Record<string, unknown>;
     error?: string;
 }
 

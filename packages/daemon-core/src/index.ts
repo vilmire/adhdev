@@ -135,6 +135,9 @@ export type {
   RepoMeshLedgerStatus,
   MeshAsyncJobLifecycle,
   RepoMeshSchedulingStrategy,
+  RepoMeshSchedulingStatus,
+  RepoMeshNodeSchedulingStatus,
+  RepoMeshNodeProviderSchedulingStatus,
 } from './repo-mesh-types.js';
 export {
   DEFAULT_MESH_POLICY,
@@ -143,6 +146,12 @@ export {
   DEFAULT_MESH_SCHEDULING_STRATEGY,
   normalizeMeshSchedulingStrategy,
   resolveNodeSchedulingPriority,
+  resolveProviderMaxParallel,
+  mergeAndNormalizePolicy,
+  normalizeAutoFastForwardPolicy,
+  resolveMaxParallelTasks,
+  MESH_MAX_PARALLEL_TASKS_MIN,
+  MESH_MAX_PARALLEL_TASKS_MAX,
   MESH_CONVERGE_REFINE_TAG,
   MESH_CONVERGE_FAST_FORWARD_TAG,
   resolveAutoConvergeCodeChange,
@@ -245,6 +254,10 @@ export type { StaleDirectPruneClassification, StaleDirectPruneResult, PruneStale
 export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource, MeshStaleDirectWorkSummary } from './mesh/mesh-active-work.js';
 export { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs, STALE_TERMINAL_REFINE_WINDOW_MS, RECENT_TERMINAL_REFINE_CAP } from './mesh/mesh-refine-status.js';
 export type { MeshAsyncRefineJobStatus, MeshAsyncRefineJobSummary, MeshAsyncRefineJobsSummary } from './mesh/mesh-refine-status.js';
+
+// ── Mesh Scheduling Runtime (observability projection) ──
+export { buildMeshSchedulingRuntime } from './mesh/mesh-scheduling-runtime.js';
+export type { MeshSchedulingRuntime, MeshNodeSchedulingRuntime, MeshNodeProviderSchedulingRuntime } from './mesh/mesh-scheduling-runtime.js';
 
 // ── Mesh Host Ownership ──
 export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHostOwner, normalizeMeshDaemonRole, requireMeshHostQueueOwner, resolveMeshHostStatus } from './mesh/mesh-host-ownership.js';
