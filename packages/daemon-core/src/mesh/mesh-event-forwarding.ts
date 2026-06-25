@@ -310,6 +310,44 @@ function isDuplicateRefineTerminalEvent(meshId: string, eventName: string, metad
     return false;
 }
 
+// NOTIF-MISS (FIX 2): the set of `source` tags the transcript-reconcile synthesis path stamps
+// onto the terminal ledger entry it writes (mesh-events-stale.reconcileDirectDispatchCompletion
+// FromTranscript). A terminal carrying one of these was NOT produced by an actual provider
+// agent_status_event — it is a coordinator-side reconstruction from the worker's transcript. The
+// authoritative real completion must never be permanently masked by such a synthesized record.
+const RECONCILED_COMPLETION_SOURCES = new Set([
+    'direct_task_transcript_reconciliation',
+    'daemon_reconcile_transcript_completion',
+    'mcp_mesh_status_transcript_reconciliation',
+    'no_progress_reconciliation',
+]);
+
+// True when the recorded terminal ledger entry was SYNTHESIZED by transcript reconciliation
+// rather than emitted by the real provider event. The reconcile path tags its ledger payload
+// with a reconcile `source`; a genuine provider completion carries no such tag (or a normal
+// completionDiagnostic.reason). Both the explicit source AND the diagnostic reason are checked so
+// either carrier identifies the synthesized record.
+function isSynthesizedReconciledTerminal(terminalPayload: Record<string, unknown>): boolean {
+    const source = readNonEmptyString(terminalPayload.source);
+    if (source && RECONCILED_COMPLETION_SOURCES.has(source)) return true;
+    const diagnostic = terminalPayload.completionDiagnostic;
+    if (diagnostic && typeof diagnostic === 'object' && !Array.isArray(diagnostic)) {
+        const reason = readNonEmptyString((diagnostic as Record<string, unknown>).reason);
+        if (reason && RECONCILED_COMPLETION_SOURCES.has(reason)) return true;
+    }
+    return false;
+}
+
+// True when the INCOMING completion event is a REAL provider agent_status_event (an actual
+// agent:generating_completed from the live session) rather than itself a synthesized/reconciled
+// re-injection. We must only let a real event override a synthesized terminal — a second
+// synthesized re-arrival should still dedup normally. A real provider event carries no reconcile
+// `source` tag; a re-injected reconciliation does.
+function isRealProviderCompletionEvent(metadataEvent: Record<string, unknown>): boolean {
+    const source = readNonEmptyString(metadataEvent.source);
+    return !source || !RECONCILED_COMPLETION_SOURCES.has(source);
+}
+
 // The genuine-completion counterpart: a real final summary / worker result is present and
 // the completion is not flagged as a missing-final-assistant false idle. Used to decide
 // whether a new completion may supersede a prior WEAK (false-idle) terminal. NOTE this gates
@@ -516,7 +554,20 @@ function evaluateMeshEventSuppression(
                 terminalTaskId,
                 eventTaskId,
             });
-            if (!newDispatchAfterTerminal && !supersedesWeakTerminal && !distinctTaskCompletion && !supersedesTruncatedTerminal) {
+            // NOTIF-MISS (FIX 2): the recorded terminal was SYNTHESIZED by transcript reconciliation
+            // (no real provider event), and THIS incoming event is the authoritative REAL provider
+            // completion. The reconcile path may fire ~1s after a direct dispatch from a reused
+            // session's stale transcript tail, writing a synthesized terminal whose providerSessionId
+            // (stable across a session's turns) and/or finalSummary then match the real completion —
+            // so the providerSessionId/finalSummary dedup below would drop the genuine event and the
+            // coordinator would never learn the task finished. A synthesized record must NEVER
+            // permanently mask the real completion: let the real event through (it is re-recorded by
+            // the normal task_completed path, superseding the synthesized one). A second SYNTHESIZED
+            // re-arrival is NOT a real event and still dedups normally.
+            const supersedesSynthesizedTerminal = isSynthesizedReconciledTerminal(terminal.payload)
+                && isRealProviderCompletionEvent(args.metadataEvent)
+                && isGenuineCompletionEvidence(args.metadataEvent);
+            if (!newDispatchAfterTerminal && !supersedesWeakTerminal && !distinctTaskCompletion && !supersedesTruncatedTerminal && !supersedesSynthesizedTerminal) {
                 const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
                 const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);
                 const eventProviderSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);
@@ -1180,8 +1231,14 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
         return { success: false, error: 'meshId required' };
     }
     // EVTTRACE: forwarded event accepted at receive (meshId resolved).
+    // NOTIF-MISS (FIX 3): mirror buildRelayMetadataEvent's taskId fallback. A worker provider
+    // completion stamps its task id as `meshActiveTaskId` (settings → event), not always the
+    // top-level `taskId`, so reading payload.taskId alone rendered `task=-` at the received stage
+    // (the [stage:queued] task=<id> → [stage:received] task=- loss). Falling back to
+    // meshActiveTaskId keeps the trace task-scoped end-to-end so same-task redelivery is
+    // distinguishable from a different task's real completion.
     traceMeshEventStage('received', {
-        taskId: payload.taskId,
+        taskId: readNonEmptyString(payload.taskId) || readNonEmptyString(payload.meshActiveTaskId),
         sessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId),
         nodeId,
         meshId,

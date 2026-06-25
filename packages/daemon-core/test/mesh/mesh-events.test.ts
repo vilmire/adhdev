@@ -4233,7 +4233,14 @@ describe('EVT — re-dispatch 2nd-completion event recovery', () => {
   it('Fix C: transcript reconcile ignores a prior WEAK terminal and synthesizes the genuine completion', () => {
     const meshId = `mesh_reconcile_weak_${Date.now()}`
     try {
-      appendLedgerEntry(meshId, {
+      // NOTIF-MISS grace gate: the dispatch must be older than the direct-dispatch reconcile
+      // grace window for the synthesis to fire (this test exercises weak-terminal supersession,
+      // which is orthogonal to the grace). Write the task_dispatched entry straight to the store
+      // with a backdated timestamp (the public appendLedgerEntry always stamps `now`).
+      MeshRuntimeStore.getInstance().appendLedgerEntry({
+        id: 'dispatch-task_C',
+        meshId,
+        timestamp: new Date(Date.now() - 5 * 60_000).toISOString(),
         kind: 'task_dispatched',
         nodeId: 'node_child_1',
         sessionId: 'runtime-session-1',

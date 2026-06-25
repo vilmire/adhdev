@@ -10,6 +10,25 @@ import { meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared'
 // Stale direct-dispatch detection & transcript reconciliation
 // ---------------------------------------------------------------------------
 
+// NOTIF-MISS grace gate. A direct dispatch (mesh_send_task) to an ALREADY-IDLE,
+// previously-used session reuses a transcript that still holds the PRIOR turn's final
+// assistant message. The session momentarily reads `idle` in the first second after
+// dispatch (the worker hasn't started generating yet), so the transcript reconcile here
+// would otherwise synthesize a "completion" ~1s after dispatch from that stale tail —
+// writing a synthesized task_completed + queuing a completion event. When the REAL
+// completion fires minutes later, checkSuppressMeshEvent drops it as a duplicate of the
+// synthesized one (same providerSessionId/finalSummary), so the coordinator never learns
+// the task actually finished. The grace period refuses to synthesize until enough time has
+// passed since dispatch that a genuine same-task completion is plausible, closing the race
+// window. The stale-summary timestamp guard (transcript predates dispatch) and FIX 2 in
+// mesh-event-forwarding (a synthesized completion never suppresses the authoritative real
+// one) are the correctness backstops; this grace just stops the synthesis from firing in
+// the first place for the common case. An idle-session dispatch (dispatchedToIdleSession)
+// is the exact race above, so it gets a LONGER grace than a dispatch to a session that was
+// already generating (where a transcript reconcile is far less likely to be premature).
+const DIRECT_DISPATCH_RECONCILE_GRACE_MS = 60_000;
+const DIRECT_DISPATCH_IDLE_SESSION_RECONCILE_GRACE_MS = 120_000;
+
 export function findRecentTerminalLedgerEvidence(args: {
     meshId: string;
     sessionId?: string;
@@ -209,6 +228,29 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
     const transcriptAfterDispatch = Number.isFinite(dispatchTime) && Number.isFinite(transcriptTime) && transcriptTime >= dispatchTime;
     if (workerResult.source !== 'final_summary_json' && !transcriptAfterDispatch) {
         return { reconciled: false, reason: 'transcript_not_proven_after_dispatch' };
+    }
+    // NOTIF-MISS grace gate (FIX 1): refuse to synthesize a completion for a direct dispatch
+    // until a grace period has elapsed since its dispatch. A direct dispatch to an ALREADY-IDLE,
+    // previously-used session reuses a transcript that still holds the PRIOR turn's final
+    // assistant message; the session momentarily reads `idle` in the first second after dispatch
+    // (the worker hasn't started generating yet), so without this gate the reconcile would
+    // synthesize a "completion" ~1s after dispatch from that stale tail. When the REAL completion
+    // fires minutes later, checkSuppressMeshEvent drops it as a duplicate of the synthesized one
+    // (same providerSessionId/finalSummary) — the coordinator never learns the task finished.
+    // The grace refuses synthesis until a genuine same-task completion is plausible. An idle-
+    // session dispatch (dispatchedToIdleSession) is the exact race, so it gets a LONGER grace.
+    // A structured final_summary_json is self-attributing (the provider emitted it for THIS turn),
+    // so it is exempt; the grace only guards the ambiguous plain-text-tail case. When the dispatch
+    // entry is missing we cannot date it and do NOT block (the stale-summary timestamp guard +
+    // FIX 2 supersession remain the correctness backstops).
+    if (Number.isFinite(dispatchTime) && workerResult.source !== 'final_summary_json') {
+        const dispatchedToIdleSession = dispatch?.payload?.dispatchedToIdleSession === true;
+        const graceMs = dispatchedToIdleSession
+            ? DIRECT_DISPATCH_IDLE_SESSION_RECONCILE_GRACE_MS
+            : DIRECT_DISPATCH_RECONCILE_GRACE_MS;
+        if (Date.now() - dispatchTime < graceMs) {
+            return { reconciled: false, reason: 'direct_dispatch_grace_period' };
+        }
     }
     const workerFailed = workerResult.status === 'failed' || (workerResult.status !== 'completed' && workerResult.errors.length > 0);
     const kind: MeshLedgerKind = workerFailed ? 'task_failed' : 'task_completed';

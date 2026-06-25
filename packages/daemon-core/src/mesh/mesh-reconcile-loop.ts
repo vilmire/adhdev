@@ -1291,6 +1291,17 @@ function buildForwardPayloadFromPending(event: any): Record<string, unknown> {
             ? { targetCoordinatorSessionId: readNonEmptyString(event.targetCoordinatorSessionId) }
             : {}),
         ...metadata,
+        // NOTIF-MISS (FIX 3): surface the dispatch task id at the TOP LEVEL so the relay's
+        // received-stage trace (and buildRelayMetadataEvent) recovers it regardless of which
+        // carrier the producing daemon used. The metadata spread above may carry the id only as
+        // `meshActiveTaskId` (a worker provider event), leaving top-level `taskId` unset and the
+        // received stage rendering `task=-`. Resolve both carriers into an explicit `taskId` so
+        // dedup stays task-scoped end-to-end. Only set when a non-empty id exists (no clobber to
+        // undefined when neither is present).
+        ...((): Record<string, unknown> => {
+            const tid = readNonEmptyString(metadata.taskId) || readNonEmptyString(metadata.meshActiveTaskId);
+            return tid ? { taskId: tid } : {};
+        })(),
     };
 }
 
