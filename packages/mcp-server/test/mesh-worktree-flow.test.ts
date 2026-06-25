@@ -24,6 +24,8 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
+    // MESH-LAUNCH-DUP-GUARD probes live status before launch; no existing mesh session here.
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     calls.push({ daemonId, command, args });
     if (command === 'clone_mesh_node') {
       // Real cloud/daemon relay responses are nested several times:
@@ -131,6 +133,8 @@ test('mesh_launch_session includes queue trigger claim state in the response', a
   };
   const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    // MESH-LAUNCH-DUP-GUARD probes live status before launch; no existing mesh session here.
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     calls.push({ command, args });
     if (command === 'launch_cli') return { success: true, sessionId: 'session-worker-1' };
     if (command === 'trigger_mesh_queue') {
@@ -577,6 +581,8 @@ test('mesh_launch_session stamps delegated sessions hidden when mesh policy requ
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
+    // MESH-LAUNCH-DUP-GUARD probes live status before launch; no existing mesh session here.
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     calls.push({ daemonId, command, args });
     if (command === 'launch_cli') return { success: true, sessionId: 'session-hidden' };
     throw new Error(`unexpected mesh command: ${command}`);
@@ -623,6 +629,8 @@ test('mesh_launch_session stamps coordinator daemon id for remote worker nodes e
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
+    // MESH-LAUNCH-DUP-GUARD probes live status before launch; no existing mesh session here.
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     calls.push({ daemonId, command, args });
     if (command === 'launch_cli') return { success: true, sessionId: 'session-remote' };
     throw new Error(`unexpected mesh command: ${command}`);
@@ -660,6 +668,132 @@ test('mesh_launch_session stamps coordinator daemon id for remote worker nodes e
   assert.equal(calls[0].args.settings?.meshNodeId, 'node-remote-worker');
   assert.equal(calls[0].args.settings?.launchedByCoordinator, true);
   assert.equal(calls[0].args.settings?.role, 'worker');
+});
+
+test('mesh_launch_session returns the existing mesh-owned worker session instead of launching a duplicate (MESH-LAUNCH-DUP-GUARD)', async () => {
+  // Repro: an enqueue auto-launch already spawned a worker session for this mesh+node; a
+  // racing manual mesh_launch_session must NOT issue a second launch_cli (which would leave an
+  // empty duplicate "채팅 2개"). The guard probes live status, finds the mesh-owned session, and
+  // returns it idempotently.
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{
+              id: 'session-autolaunched',
+              providerType: 'hermes-cli',
+              status: 'generating', // still booting/working — duplicate guard must cover non-idle too
+              settings: {
+                meshNodeFor: 'mesh-dup-guard',
+                meshNodeId: 'node-dup',
+                meshCoordinatorDaemonId: 'daemon-coordinator',
+                launchedByCoordinator: true,
+              },
+            }],
+          },
+        },
+      };
+    }
+    if (command === 'launch_cli') return { success: true, sessionId: 'session-DUPLICATE' };
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: 'mesh-dup-guard',
+      name: 'Dup Guard Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-dup',
+        workspace: '/repo-dup',
+        repoRoot: '/repo-dup',
+        daemonId: 'daemon-worker',
+        userOverrides: {},
+        policy: { canPush: true },
+      }],
+    },
+    transport,
+  };
+
+  const launch = JSON.parse(await meshLaunchSession(ctx as any, { node_id: 'node-dup', type: 'hermes-cli' }));
+
+  // Existing session returned idempotently; NO duplicate launch.
+  assert.equal(launch.success, true);
+  assert.equal(launch.duplicate, true);
+  assert.equal(launch.reused, true);
+  assert.equal(launch.launched, false);
+  assert.equal(launch.sessionId, 'session-autolaunched');
+  assert.equal(launch.reason, 'mesh_launch_session_duplicate_guard');
+  // launch_cli must never have been relayed.
+  assert.ok(!calls.some(call => call.command === 'launch_cli'), 'duplicate guard must not issue a second launch_cli');
+  assert.deepEqual(calls.map(call => call.command), ['get_status_metadata']);
+});
+
+test('mesh_launch_session force=true launches an additional session even when a mesh-owned worker session already exists', async () => {
+  // A deliberate second concurrent provider/session is a legitimate request — force bypasses the
+  // duplicate guard. Status is not probed; launch_cli fires.
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    if (command === 'trigger_mesh_queue') return { success: true, trigger: { success: true, claimed: true } };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    // force=true must skip the status probe entirely — fail loudly if it runs.
+    if (command === 'get_status_metadata') throw new Error('force=true must not probe status');
+    if (command === 'launch_cli') return { success: true, sessionId: 'session-forced-second' };
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: 'mesh-dup-guard-force',
+      name: 'Dup Guard Force Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-dup',
+        workspace: '/repo-dup',
+        repoRoot: '/repo-dup',
+        daemonId: 'daemon-worker',
+        userOverrides: {},
+        policy: { canPush: true },
+      }],
+    },
+    transport,
+  };
+
+  const launch = JSON.parse(await meshLaunchSession(ctx as any, { node_id: 'node-dup', type: 'hermes-cli', force: true }));
+
+  assert.equal(launch.sessionId, 'session-forced-second');
+  assert.notEqual(launch.duplicate, true);
+  assert.equal(calls[0].command, 'launch_cli');
+  assert.ok(!calls.some(call => call.command === 'get_status_metadata'), 'force=true must skip the duplicate-guard status probe');
 });
 
 test('mesh_launch_session fails closed for remote worker nodes when coordinator daemon id is unavailable', async () => {
@@ -1933,6 +2067,8 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
+    // MESH-LAUNCH-DUP-GUARD probes live status before launch; no existing mesh session here.
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     calls.push({ daemonId, command, args });
     if (command === 'launch_cli') {
       return { success: true, sessionId: 'runtime-explicit', providerSessionId: 'provider-explicit' };
@@ -2041,6 +2177,8 @@ test('mesh_launch_session omitted type uses providerPriority detection and fails
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
+    // MESH-LAUNCH-DUP-GUARD probes live status before launch; no existing mesh session here.
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     calls.push({ daemonId, command, args });
     if (command === 'detect_provider') {
       return { success: true, detected: args.providerType === 'hermes-cli', providerType: args.providerType };

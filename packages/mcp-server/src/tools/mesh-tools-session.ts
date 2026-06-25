@@ -35,6 +35,7 @@ import {
     isIdleSessionRecord,
     isLocalControlPlaneNode,
     isMeshCoordinatorSessionRecord,
+    isMeshOwnedDelegateSession,
     isP2pRelayTransportFailure,
     isTerminalSessionRecord,
     isUnmanagedSessionRecord,
@@ -719,7 +720,7 @@ export async function meshReadDebug(
 
 export async function meshLaunchSession(
     ctx: MeshContext,
-    args: { node_id: string; type?: string },
+    args: { node_id: string; type?: string; force?: boolean },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
     const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node, ctx.mesh.policy);
@@ -760,6 +761,52 @@ export async function meshLaunchSession(
         if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
             return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
         }
+
+        // MESH-LAUNCH-DUP-GUARD: an enqueue auto-launch (queue task → daemon spawns a worker)
+        // races a manual mesh_launch_session for the same node/worktree. Without this guard the
+        // manual call unconditionally issues a second launch_cli, leaving an empty duplicate
+        // worker session alongside the one doing the work ("채팅 2개"). Right before launch, probe
+        // live status and, if a non-terminal mesh-owned worker session for THIS mesh+node already
+        // exists (idle OR still booting/generating), return it idempotently instead of spawning a
+        // duplicate. force=true bypasses the guard for a deliberate additional session. Placed
+        // AFTER provider resolution + the coordinator-id fail-closed check so an unlaunchable node
+        // never burns a status relay (and the relay-blocked invariant holds).
+        if (args.force !== true) {
+            try {
+                const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
+                const sessions = extractStatusMetadataSessions(statusResult);
+                const existing = sessions.find(session =>
+                    !isTerminalSessionRecord(session)
+                    && isMeshOwnedDelegateSession(session, ctx.mesh.id, args.node_id));
+                if (existing) {
+                    const existingSessionId = readSessionRecordId(existing);
+                    if (existingSessionId) {
+                        const existingProviderType = resolveSessionProviderType(existing) || resolvedProviderType || undefined;
+                        const existingStatus = typeof existing?.status === 'string' ? existing.status : 'unknown';
+                        return JSON.stringify({
+                            success: true,
+                            duplicate: true,
+                            launched: false,
+                            reused: true,
+                            sessionId: existingSessionId,
+                            nodeId: args.node_id,
+                            ...(existingProviderType ? { resolvedProviderType: existingProviderType, providerType: existingProviderType } : {}),
+                            sessionStatus: existingStatus,
+                            idle: isIdleSessionRecord(existing),
+                            reason: 'mesh_launch_session_duplicate_guard',
+                            warning: `Node '${args.node_id}' already has a live mesh-owned worker session ('${existingSessionId}', status '${existingStatus}'). Returning it instead of launching an empty duplicate (likely an enqueue auto-launch already spawned it).`,
+                            nextAction: `Use session '${existingSessionId}' for mesh_send_task/mesh_read_chat. If you intentionally need a second concurrent session on this node, retry mesh_launch_session with force=true.`,
+                        }, null, 2);
+                    }
+                }
+            } catch {
+                // Status probe failed (transport/timeout). Fail open — proceed to launch rather
+                // than blocking a legitimate launch on an unreachable status probe. A duplicate is
+                // recoverable (mesh_cleanup_sessions); a blocked launch on a transient probe error
+                // is worse for the coordinator flow.
+            }
+        }
+
         let result: any;
         try {
             result = await commandForNode(ctx, node, 'launch_cli', {

@@ -801,7 +801,8 @@ var MESH_LAUNCH_SESSION_TOOL = {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Target node ID." },
-      type: { type: "string", description: "Optional provider type to launch. Use hermes-cli for Hermes, claude-cli for Claude Code, codex-cli for Codex, gemini-cli for Gemini. When omitted, node.policy.providerPriority is probed in order." }
+      type: { type: "string", description: "Optional provider type to launch. Use hermes-cli for Hermes, claude-cli for Claude Code, codex-cli for Codex, gemini-cli for Gemini. When omitted, node.policy.providerPriority is probed in order." },
+      force: { type: "boolean", description: "Set true to launch an ADDITIONAL session even when this node already has a live mesh-owned worker session. Default false: if a live worker session for this mesh+node already exists (e.g. an enqueue auto-launch just spawned one), the existing session is returned idempotently instead of creating an empty duplicate. Only pass force when you intentionally want a second concurrent provider/session on the node." }
     },
     required: ["node_id"]
   }
@@ -4378,6 +4379,35 @@ async function meshLaunchSession(ctx, args) {
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
       return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
+    }
+    if (args.force !== true) {
+      try {
+        const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+        const sessions = extractStatusMetadataSessions(statusResult);
+        const existing = sessions.find((session) => !isTerminalSessionRecord(session) && isMeshOwnedDelegateSession(session, ctx.mesh.id, args.node_id));
+        if (existing) {
+          const existingSessionId = readSessionRecordId(existing);
+          if (existingSessionId) {
+            const existingProviderType = resolveSessionProviderType(existing) || resolvedProviderType || void 0;
+            const existingStatus = typeof existing?.status === "string" ? existing.status : "unknown";
+            return JSON.stringify({
+              success: true,
+              duplicate: true,
+              launched: false,
+              reused: true,
+              sessionId: existingSessionId,
+              nodeId: args.node_id,
+              ...existingProviderType ? { resolvedProviderType: existingProviderType, providerType: existingProviderType } : {},
+              sessionStatus: existingStatus,
+              idle: isIdleSessionRecord(existing),
+              reason: "mesh_launch_session_duplicate_guard",
+              warning: `Node '${args.node_id}' already has a live mesh-owned worker session ('${existingSessionId}', status '${existingStatus}'). Returning it instead of launching an empty duplicate (likely an enqueue auto-launch already spawned it).`,
+              nextAction: `Use session '${existingSessionId}' for mesh_send_task/mesh_read_chat. If you intentionally need a second concurrent session on this node, retry mesh_launch_session with force=true.`
+            }, null, 2);
+          }
+        }
+      } catch {
+      }
     }
     let result;
     try {
