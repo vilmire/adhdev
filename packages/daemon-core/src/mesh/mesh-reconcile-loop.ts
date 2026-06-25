@@ -205,6 +205,13 @@ function resolveCoordinatorSelfIds(mesh: LocalMeshEntry, drainDaemonIds: string[
     return [...ids];
 }
 
+// Observability: last-seen modal-park state per coordinator session, so we LOG.info
+// only on a TRANSITION (clear → parked, parked → cleared) instead of every 4s tick.
+// Per-process; a restart re-logs the first observation, which is desirable — it
+// re-confirms a coordinator that is still parked after the restart (the exact
+// "restart does not clear it" symptom the operator needs visibility into).
+const coordinatorModalParkState = new Map<string, boolean>();
+
 // Find live CLI coordinator instances on THIS daemon, keyed by mesh.
 function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
     const out: LiveCoordinator[] = [];
@@ -222,6 +229,20 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
         // and waiting_choice is absent from some of them (see cli-provider-instance).
         const modalParked = status === 'waiting_choice' || status === 'waiting_approval';
         const sessionId = readNonEmptyString(state.instanceId);
+        // Modal-park transition observability: a coordinator entering modal-park is what
+        // begins holding completion events under `modal_parked`; one leaving it is what
+        // drains them. Both transitions were previously SILENT (the operator had no log
+        // to diagnose a stuck/held completion), so emit a single line per edge.
+        const stateKey = `${meshId}::${sessionId || '?'}`;
+        const prevParked = coordinatorModalParkState.get(stateKey);
+        if (prevParked !== modalParked) {
+            coordinatorModalParkState.set(stateKey, modalParked);
+            if (modalParked) {
+                LOG.info('MeshReconcile', `Coordinator ${sessionId || '?'} (mesh ${meshId}) entered modal-park (status=${status}) — terminal events for it will be held until the modal is answered`);
+            } else if (prevParked === true) {
+                LOG.info('MeshReconcile', `Coordinator ${sessionId || '?'} (mesh ${meshId}) left modal-park (status=${status}) — held events will drain on this/next tick`);
+            }
+        }
         out.push({ meshId, instance: inst, sessionId, idle: status === 'idle', modalParked });
     }
     return out;
@@ -599,7 +620,73 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         // force-injected via generatingCoordinators — we never block the deadlock-break.)
         if (targetCoordinators.length === 0) {
             if (modalParkedCoordinators.length > 0) {
-                LOG.info('MeshReconcile', `Reconcile skip → modal-parked: holding pending event(s) for mesh ${meshId} (${modalParkedCoordinators.length} coordinator(s) awaiting a modal answer; events left queued)`);
+                // ── orphan escape (MUST precede the blanket modal-park hold) ──────────
+                // A modal-parked coordinator with no idle/generating sibling otherwise
+                // wedges EVERY pending event under `modal_parked` until that modal resolves
+                // — including a STRICT-routed completion whose originating coordinator
+                // session is GONE (an orphan: the worktree/session that produced it was
+                // removed, or that coordinator session died). Such an event will never be
+                // deliverable to its target session no matter what the modal-parked sibling
+                // does, so holding it under modal_parked is a permanent-held leak (the very
+                // "data restart re-reproduces it" symptom — the gate is reconstructed live
+                // from the still-parked modal, so a restart does not clear it). Route those
+                // orphan events through the strict-route hold/expire path so the bounded
+                // STRICT_SESSION_MATCH_TTL eventually expires them (recoverable, ledgered)
+                // instead of leaving them held forever. A strict event whose target session
+                // IS live but merely modal-parked is left to the blanket hold below (it is
+                // genuinely transiently blocked, not orphaned).
+                const liveSessionIds = new Set(
+                    meshCoordinators.map(c => readNonEmptyString(c.sessionId)).filter(Boolean),
+                );
+                let orphanEscaped = 0;
+                const hasPendingForOrphanPeek = !store
+                    || (() => { try { return store.pendingEventCount(meshId) > 0; } catch { return true; } })();
+                if (hasPendingForOrphanPeek) {
+                    // Identify which pending event NAMES correspond to orphan-targeted events
+                    // (a strict targetCoordinatorSessionId that matches no live coordinator).
+                    let peeked: readonly PendingMeshCoordinatorEvent[] = [];
+                    try {
+                        peeked = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : undefined);
+                    } catch { peeked = []; }
+                    const isOrphan = (e: PendingMeshCoordinatorEvent): boolean => {
+                        const want = readNonEmptyString(e.targetCoordinatorSessionId);
+                        return !!want && !liveSessionIds.has(want);
+                    };
+                    const orphanEventNames = new Set(peeked.filter(isOrphan).map(e => e.event));
+                    if (orphanEventNames.size > 0) {
+                        // The drain filter is event-NAME scoped (not per-row), so draining by the
+                        // orphan event names also pulls any non-orphan event sharing that name. Drain
+                        // them all, then re-route: orphan-targeted events go through the strict-route
+                        // hold/expire path (bounded TTL → eventually ledger-expired, recoverable);
+                        // non-orphan events of the same name are re-queued unchanged (queuedAt
+                        // preserved) so they remain genuinely held for their still-live, modal-parked
+                        // target. This is the same per-event strict routing PHASE 2 does below — just
+                        // reached here because the blanket modal-park short-circuit would otherwise
+                        // wedge the orphans forever.
+                        let drained: PendingMeshCoordinatorEvent[] = [];
+                        try {
+                            drained = drainPendingMeshCoordinatorEvents(
+                                meshId,
+                                drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
+                                { onlyEvents: orphanEventNames },
+                            );
+                        } catch (e: any) {
+                            LOG.warn('MeshReconcile', `Orphan-escape drain failed for mesh ${meshId}: ${e?.message || e}`);
+                            drained = [];
+                        }
+                        for (const pending of drained) {
+                            if (isOrphan(pending)) {
+                                holdOrExpireStrictUnmatchedEvent(pending, readNonEmptyString(pending.targetCoordinatorSessionId), meshId);
+                                orphanEscaped++;
+                            } else {
+                                // Still-live (modal-parked) target — re-queue unchanged so it is held
+                                // for the next modal-resolved tick, exactly like the blanket hold would.
+                                try { queuePendingMeshCoordinatorEvent(pending); } catch { /* best-effort re-queue */ }
+                            }
+                        }
+                    }
+                }
+                LOG.info('MeshReconcile', `Reconcile skip → modal-parked: holding pending event(s) for mesh ${meshId} (${modalParkedCoordinators.length} coordinator(s) awaiting a modal answer; events left queued${orphanEscaped > 0 ? `; ${orphanEscaped} orphan-targeted event(s) routed to strict-route TTL` : ''})`);
                 // C1: mirror held terminal events into the ledger so a held completion's
                 // worker summary is auditable/recoverable even if the modal is never
                 // resolved, the coordinator restarts, or the pending file is later trimmed.
@@ -1033,6 +1120,32 @@ async function reconcileUnterminatedDirectDispatches(
         const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
         const evidence = extractFinalAssistantSummaryEvidence(messages);
         if (!evidence.finalSummary) continue; // no assistant result yet — nothing to attribute
+
+        // STALE-SUMMARY guard (modal-parked / reused-session misattribution): a direct
+        // dispatch frequently reuses a session that already ran a PRIOR task. read_chat
+        // returns the tail of the WHOLE session, so extractFinalAssistantSummaryEvidence
+        // picks the latest user-facing assistant message — which, for a task that has
+        // barely started (the session momentarily reads idle between turns), is the prior
+        // task's final summary. The downstream reconcile proves the summary is after the
+        // LEDGER task_dispatched entry; here we additionally have the AUTHORITATIVE per-task
+        // dispatchedAt (the dispatch-store row, immune to ledger-ordering quirks), so when
+        // the selected transcript message is provably BEFORE this task's own dispatch we
+        // refuse it outright — it is a prior task's summary, not this task's output (the
+        // 2843ms-duration stale-summary bug where task 2e3f501e copy-pasted 4eca2d9d's
+        // summary). When the message carries no usable timestamp we do NOT block here: the
+        // downstream reconcile already rejects a non-JSON summary it cannot prove is
+        // post-dispatch (transcript_not_proven_after_dispatch), and a structured
+        // final_summary_json is self-attributing — so a timeless provider is not
+        // over-blocked while the provable-stale case is still caught.
+        const dispatchedAtMs = Date.parse(readNonEmptyString(dispatch.dispatchedAt));
+        const transcriptAtMs = Date.parse(evidence.transcriptMessageAt ?? '');
+        if (Number.isFinite(dispatchedAtMs) && Number.isFinite(transcriptAtMs) && transcriptAtMs < dispatchedAtMs) {
+            LOG.info('MeshReconcile', `Stale-summary guard: skipping transcript reconcile for task ${taskId} on node ${nodeId} (mesh ${mesh.id}) — final assistant message (${evidence.transcriptMessageAt}) predates this task's dispatch (${dispatch.dispatchedAt}); it is a prior task's summary`);
+            traceMeshEventDrop('reconcile_stale_summary_before_dispatch', {
+                taskId, sessionId, nodeId, meshId: mesh.id, event: 'agent:generating_completed',
+            }, `transcriptAt=${evidence.transcriptMessageAt} < dispatchedAt=${dispatch.dispatchedAt}`);
+            continue;
+        }
 
         const providerSessionId = readNonEmptyString(payload.providerSessionId);
         const coordinatorDaemonId = selfIds.find(id => !!id);

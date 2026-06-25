@@ -488,6 +488,112 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
+  // ── modal-park ORPHAN escape: a strict-routed completion whose originating
+  // coordinator session is GONE must NOT be wedged forever under `modal_parked` just
+  // because a SIBLING coordinator sits on a modal. It is routed to the strict-route
+  // hold/expire path (bounded TTL) so it eventually expires (recoverable) instead of
+  // being held permanently — the "restart doesn't clear it" event_held leak.
+  it('modal-park orphan escape: a strict event whose coordinator session is gone is re-queued via strict-route (not held as modal_parked)', async () => {
+    const meshId = `mesh_modal_orphan_escape_${Date.now()}`
+    try {
+      const modalSink: any[] = []
+      // The ONLY live coordinator is parked on a modal — and it is NOT the event's target.
+      const modalCoordinator = makeCoordinatorWithSession(meshId, 'coord-PARKED', 'idle', modalSink)
+      // Override status to a modal-park status (makeCoordinatorWithSession only does idle/generating).
+      modalCoordinator.getState = () => ({ instanceId: 'coord-PARKED', status: 'waiting_choice', settings: { meshCoordinatorFor: meshId } }) as any
+      const components = makeComponents([modalCoordinator])
+      // A completion strictly targeting a coordinator session that is NOT live (orphan).
+      queuePendingMeshCoordinatorEvent({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: "Node 'n'",
+        nodeId: 'n',
+        metadataEvent: { sessionId: 'worker-1', timestamp: Date.now(), finalSummary: 'orphan task done' },
+        coordinatorMessage: 'Node done.',
+        queuedAt: Date.now(),
+        targetCoordinatorSessionId: 'coord-GONE',
+      })
+
+      await runMeshReconcileTick(components)
+
+      // The modal-parked sibling is never written to (no misroute, no force-inject).
+      expect(modalCoordinator.onEvent).not.toHaveBeenCalled()
+      // The orphan event was routed through the strict-route hold (still within TTL) — it is
+      // re-queued (preserved) rather than ledgered as `modal_parked`. The strict-route hold
+      // is what eventually ledger-expires it past the TTL, breaking the permanent-held leak.
+      const heldModalParked = readLedgerEntries(meshId).filter(e => e.kind === 'event_held' && (e.payload as any).reason === 'modal_parked')
+      expect(heldModalParked).toHaveLength(0)
+      // The event is still queued (held within TTL) for re-evaluation, not silently lost.
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('modal-park orphan escape: an aged-out orphan strict event is ledger-expired (recoverable), not held forever', async () => {
+    const meshId = `mesh_modal_orphan_expire_${Date.now()}`
+    try {
+      const modalSink: any[] = []
+      const modalCoordinator = makeCoordinatorWithSession(meshId, 'coord-PARKED', 'idle', modalSink)
+      modalCoordinator.getState = () => ({ instanceId: 'coord-PARKED', status: 'waiting_approval', settings: { meshCoordinatorFor: meshId } }) as any
+      const components = makeComponents([modalCoordinator])
+      // queuedAt well past the 60s strict TTL → the strict path must ledger-expire it.
+      queuePendingMeshCoordinatorEvent({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: "Node 'n'",
+        nodeId: 'n',
+        metadataEvent: { sessionId: 'worker-1', timestamp: Date.now(), finalSummary: 'aged orphan summary' },
+        coordinatorMessage: 'Node done.',
+        queuedAt: Date.now() - 120_000,
+        targetCoordinatorSessionId: 'coord-GONE',
+      })
+
+      await runMeshReconcileTick(components)
+
+      expect(modalCoordinator.onEvent).not.toHaveBeenCalled()
+      // Aged past TTL → ledger-expired (recoverable), and removed from the pending queue.
+      const expired = readLedgerEntries(meshId).filter(e => e.kind === 'event_held' && (e.payload as any).reason === 'strict_route_expired')
+      expect(expired).toHaveLength(1)
+      expect((expired[0].payload as any).recoverable).toBe(true)
+      expect((expired[0].payload as any).finalSummary).toBe('aged orphan summary')
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('modal-park: a strict event whose target session IS live (but modal-parked) is still held as modal_parked (not orphan-escaped)', async () => {
+    const meshId = `mesh_modal_live_target_held_${Date.now()}`
+    try {
+      const modalSink: any[] = []
+      // The target session IS the live (modal-parked) coordinator — genuinely transiently blocked.
+      const modalCoordinator = makeCoordinatorWithSession(meshId, 'coord-LIVE', 'idle', modalSink)
+      modalCoordinator.getState = () => ({ instanceId: 'coord-LIVE', status: 'waiting_choice', settings: { meshCoordinatorFor: meshId } }) as any
+      const components = makeComponents([modalCoordinator])
+      queuePendingMeshCoordinatorEvent({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeLabel: "Node 'n'",
+        nodeId: 'n',
+        metadataEvent: { sessionId: 'worker-1', timestamp: Date.now(), finalSummary: 'live target summary' },
+        coordinatorMessage: 'Node done.',
+        queuedAt: Date.now(),
+        targetCoordinatorSessionId: 'coord-LIVE',
+      })
+
+      await runMeshReconcileTick(components)
+
+      // Not orphaned → held as modal_parked (the existing, correct transient-block behavior).
+      expect(modalCoordinator.onEvent).not.toHaveBeenCalled()
+      const heldModalParked = readLedgerEntries(meshId).filter(e => e.kind === 'event_held' && (e.payload as any).reason === 'modal_parked')
+      expect(heldModalParked).toHaveLength(1)
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('idle coordinator alongside a modal-parked one: idle gets the event, modal-parked is skipped', async () => {
     const meshId = `mesh_reconcile_modal_plus_idle_${Date.now()}`
     try {
@@ -1018,6 +1124,116 @@ describe('runMeshReconcileTick', () => {
         const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
         expect(completed).toBeTruthy()
         expect((completed?.payload as any)?.finalSummary).toContain('Finished the remote task')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('STALE-SUMMARY guard: does NOT attribute a PRIOR task\'s summary (reused session) when the final assistant message predates this task\'s dispatch', async () => {
+      const meshId = `mesh_reconcile_phase4_stale_summary_${Date.now()}`
+      try {
+        const sessionId = 'sess-reused'
+        const nodeId = 'node_local'
+        const priorTaskId = 'task_prior_4eca2d9d'
+        const newTaskId = 'task_new_2e3f501e'
+
+        // A PRIOR task ran and produced its summary at T-100s. Then a NEW task is dispatched
+        // into the SAME session at T-10s, but has not yet produced its own assistant message.
+        // The session momentarily reads idle between turns; read_chat's tail still shows the
+        // PRIOR task's summary as the latest user-facing assistant message. The reconcile must
+        // NOT copy that prior summary onto the new task (the 2843ms-duration stale bug).
+        appendLedgerEntry(meshId, {
+          kind: 'task_dispatched', nodeId, sessionId, providerType: 'claude-cli',
+          payload: { source: 'direct', via: 'local_direct', taskId: newTaskId, message: 'new work' },
+          timestamp: dispatchTimeIso(10),
+        } as any)
+        insertDirectDispatch(meshId, {
+          taskId: newTaskId, nodeId, sessionId, providerType: 'claude-cli', message: 'new work',
+          via: 'local_direct', dispatchedAt: dispatchTimeIso(10),
+        })
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+
+        const readChat = vi.fn(async (cmd: string) => {
+          // PHASE 5 live-session probe: the session IS live (just between turns), so the
+          // dispatch is not an orphan and must not be pruned — isolating the PHASE 4 guard.
+          if (cmd === 'get_status_metadata') {
+            return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'claude-history-reused',
+            messages: [
+              // The PRIOR task's final summary, produced 100s ago — BEFORE the new task's
+              // dispatch (10s ago). It is the latest user-facing assistant message.
+              { role: 'assistant', content: 'Prior task summary: refactored module X.', timestamp: 1_700_000_000_000 - 100_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        await runMeshReconcileTick(components)
+
+        // No completion synthesized for the new task — the prior summary is NOT attributed to it.
+        const completed = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')
+        expect(completed).toHaveLength(0)
+        // The dispatch stays active for a later tick (once a genuine post-dispatch assistant
+        // message exists), and no misattributed pending completion was queued.
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === newTaskId)).toBe(true)
+        expect(getPendingMeshCoordinatorEvents(meshId).some(p => p.event === 'agent:generating_completed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('STALE-SUMMARY guard: DOES attribute a final assistant message produced AFTER this task\'s dispatch (genuine completion still reconciles)', async () => {
+      const meshId = `mesh_reconcile_phase4_fresh_summary_${Date.now()}`
+      try {
+        const sessionId = 'sess-reused-2'
+        const nodeId = 'node_local'
+        const taskId = 'task_fresh'
+
+        appendLedgerEntry(meshId, {
+          kind: 'task_dispatched', nodeId, sessionId, providerType: 'claude-cli',
+          payload: { source: 'direct', via: 'local_direct', taskId, message: 'fresh work' },
+          timestamp: dispatchTimeIso(60),
+        } as any)
+        insertDirectDispatch(meshId, {
+          taskId, nodeId, sessionId, providerType: 'claude-cli', message: 'fresh work',
+          via: 'local_direct', dispatchedAt: dispatchTimeIso(60),
+        })
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true, status: 'idle', providerSessionId: 'claude-history-fresh',
+            messages: [
+              // Produced 5s ago — AFTER the 60s-ago dispatch → genuinely this task's output.
+              { role: 'assistant', content: 'Completed the fresh task — all green.', timestamp: 1_700_000_000_000 - 5_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        await runMeshReconcileTick(components)
+
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+        expect(completed).toBeTruthy()
+        expect((completed?.payload as any)?.finalSummary).toContain('Completed the fresh task')
       } finally {
         cleanup(meshId)
       }
