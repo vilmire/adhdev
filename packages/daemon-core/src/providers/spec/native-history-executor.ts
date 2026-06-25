@@ -30,6 +30,7 @@ import type {
     NativeHistorySqliteSource,
     NativeHistoryToolMap,
 } from './types.js';
+import { SPAWN_BIND_GRACE_MS } from '../native-history/constants.js';
 
 export interface NativeHistoryInput {
     agentType?: string;
@@ -706,15 +707,6 @@ function readCandidateSessionMeta(filePath: string): CandidateMeta | null {
         return null;
     }
 }
-
-/**
- * Spawn-bind grace window: an on-disk rollout whose session_meta.timestamp
- * lands within ±SPAWN_BIND_GRACE_MS of the daemon's spawnedAtMs is treated
- * as belonging to that daemon session. 10s is long enough to absorb codex
- * binary startup latency on cold caches and short enough that two
- * back-to-back launches don't both fall inside the same window.
- */
-const SPAWN_BIND_GRACE_MS = 10_000;
 
 function pickBoundFromEntries(
     candidatePaths: string[],

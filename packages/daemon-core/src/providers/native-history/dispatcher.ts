@@ -18,6 +18,7 @@ import { readSession as readClaudeCliSession } from './claude-cli-transcript.js'
 import { readSession as readCodexCliSession } from './codex-cli-transcript.js';
 import { readSession as readAntigravityCliSession } from './antigravity-cli-transcript.js';
 import { readSession as readHermesCliSession } from './hermes-cli-transcript.js';
+import { SPAWN_BIND_GRACE_MS } from './constants.js';
 
 export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli';
 
@@ -153,8 +154,6 @@ function findCodexPathBySessionId(root: string, sessionId: string): string | nul
     return matches[0]?.p ?? null;
 }
 
-const CODEX_SPAWN_BIND_GRACE_MS = 10_000;
-
 function findCodexPathByRuntime(root: string, workspace: string, sessionStartedAtMs: number): string | null {
     if (!fs.existsSync(root) || !workspace) return null;
     const workspaceResolved = resolveRealPath(workspace);
@@ -180,7 +179,7 @@ function findCodexPathByRuntime(root: string, workspace: string, sessionStartedA
             const diff = sessionStartedAtMs > 0 && meta.timestampMs != null
                 ? Math.abs(meta.timestampMs - sessionStartedAtMs)
                 : 0;
-            if (sessionStartedAtMs > 0 && (meta.timestampMs == null || diff > CODEX_SPAWN_BIND_GRACE_MS)) continue;
+            if (sessionStartedAtMs > 0 && (meta.timestampMs == null || diff > SPAWN_BIND_GRACE_MS)) continue;
             matches.push({ p: entryPath, mtime, diff });
         }
     }
