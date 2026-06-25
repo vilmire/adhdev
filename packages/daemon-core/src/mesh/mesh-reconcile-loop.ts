@@ -49,7 +49,7 @@ import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, bui
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { handleMeshForwardEvent, shouldForceInjectMeshEvent, MESH_FORCE_INJECT_EVENTS, triggerMeshQueue, resolveForwardEventMeshId } from './mesh-events-coordinator.js';
+import { handleMeshForwardEvent, shouldForceInjectMeshEvent, triggerMeshQueue, resolveForwardEventMeshId } from './mesh-events-coordinator.js';
 import {
     peekUnresolvedDelegateForwards,
     ackUnresolvedDelegateForward,
@@ -589,35 +589,53 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     for (const [meshId, meshCoordinators] of byMesh) {
         // Drain the local queue scoped to this coordinator daemon and inject.
         //     - If an idle coordinator exists, FULL-drain and deliver every event to it
-        //       (it can receive non-force progress events without deadlocking).
-        //     - If only GENERATING coordinators exist, force-drain ONLY the force-inject
-        //       events (completion/approval/stop/refine·bootstrap terminal) and force-inject
-        //       them so a coordinator parked in `generating` while awaiting that very event
-        //       is not deadlocked. Non-force progress events stay queued for the next idle
-        //       tick — injecting them would be noise mid-generation. Both drains mark the
-        //       consumed rows drained=1 atomically, so the pull path can't re-deliver.
+        //       (the idle input box accepts the prompt as a real next turn). The drain
+        //       marks consumed rows drained=1 atomically, so the pull path can't re-deliver.
+        //     - If only GENERATING coordinators exist (no idle target), we HOLD: leave the
+        //       events queued (drained=0) for the coordinator's next idle/turn-end tick.
+        //
+        // NOTIF-SURFACE-LOCAL (false-idle hold): we used to force-inject terminal events
+        // (completion/approval/stop/refine·bootstrap) straight into a *generating*
+        // coordinator's PTY (forceSendMessage → atomic content+\r write), on the theory it
+        // bypassed the busy send-guard and broke the await-result deadlock. But a raw PTY
+        // write into a claude-cli that is mid-generation is NOT consumed as a new turn — the
+        // bytes land in the terminal input buffer and the LLM never reads them on its next
+        // turn. The `surfaced/force-inject` trace fired, the row was marked drained=1, and the
+        // genuine completion was lost forever (the exact same-daemon local-worktree miss: the
+        // coordinator's OWN session is generating at the moment its worker completes). The
+        // deadlock the force path guarded against does not actually require force: a
+        // coordinator that dispatched a task via mesh_send_task returns to idle when that
+        // tool call resolves (dispatch is fire-and-forget; the worker runs for minutes while
+        // the coordinator is idle/between turns), so the completion lands on the very next
+        // idle tick (≤ one reconcile interval). Holding the event undrained for that idle
+        // tick is therefore the single, reliable delivery — and it is the SAME skip-and-hold
+        // the modal-park branch below already uses. This also makes double-injection
+        // structurally impossible: there is exactly one delivery path (the idle full-drain),
+        // so we never need a surface-time fingerprint to dedup a force-write against a re-drain.
         const idleCoordinators = meshCoordinators.filter(c => c.idle);
-        // A coordinator parked on a harness modal (waiting_choice / waiting_approval)
-        // is non-idle, so it would otherwise be treated as a force-inject target. It
-        // must NOT be: a force-inject writes raw keystrokes into the PTY, which the
-        // modal's key handler consumes and silently resolves to a choice the user
-        // never made. Force-inject is only safe into a coordinator parked in plain
-        // `generating` (the deadlock the force path exists to break). So generating
-        // targets are the non-idle, non-modal-parked coordinators.
+        // A coordinator parked on a harness modal (waiting_choice / waiting_approval) is
+        // non-idle; it is held under the modal-park branch (a force-inject into a modal would
+        // write raw keystrokes the modal key handler eats, silently selecting a choice the
+        // user never made). A plainly-generating coordinator (non-idle, non-modal-parked) is
+        // ALSO held now — for the false-idle reason above — but separately, so the C1 ledger
+        // audit and the operator-facing skip log can name the right hold reason.
         const generatingCoordinators = meshCoordinators.filter(c => !c.idle && !c.modalParked);
         const modalParkedCoordinators = meshCoordinators.filter(c => !c.idle && c.modalParked);
-        const targetCoordinators = idleCoordinators.length > 0 ? idleCoordinators : generatingCoordinators;
-        const forceOnly = idleCoordinators.length === 0;
+        // Only an IDLE coordinator is a deliverable target. A generating coordinator's PTY
+        // does not consume an injected prompt as a turn, so it is held (not a target).
+        const targetCoordinators = idleCoordinators;
 
-        // ── modal-blocked short-circuit (MUST precede the drain) ──────────────────
-        // When the ONLY coordinators for this mesh are modal-parked (no idle, no plain
-        // generating target), there is nowhere safe to deliver. We skip-and-requeue:
-        // by NOT draining we leave the events at drained=0 in the queue, so a later tick
-        // (once the modal is resolved and the coordinator returns to idle/generating)
-        // delivers them. This short-circuit MUST run BEFORE drainPendingMeshCoordinatorEvents
-        // — the drain marks rows drained=1 atomically, which would lose the events for a
-        // coordinator that is only transiently blocked. (Note: generating is still
-        // force-injected via generatingCoordinators — we never block the deadlock-break.)
+        // ── no-idle-target short-circuit (MUST precede the drain) ─────────────────
+        // When there is no IDLE coordinator for this mesh — only generating and/or
+        // modal-parked ones — there is nowhere a queued event can land as a real turn.
+        // We skip-and-hold: by NOT draining we leave the events at drained=0 in the queue,
+        // so a later tick (once a coordinator returns to idle) delivers them. This
+        // short-circuit MUST run BEFORE drainPendingMeshCoordinatorEvents — the drain marks
+        // rows drained=1 atomically, which would lose the events for a coordinator that is
+        // only transiently busy (the false-idle local-worktree miss). Both the generating
+        // hold and the modal-park hold record a C1 ledger audit copy so a held completion's
+        // worker summary is recoverable even if the coordinator never returns or the pending
+        // file is later trimmed.
         if (targetCoordinators.length === 0) {
             if (modalParkedCoordinators.length > 0) {
                 // ── orphan escape (MUST precede the blanket modal-park hold) ──────────
@@ -705,6 +723,30 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                         modalParkedCoordinators.length,
                     );
                 }
+            } else if (generatingCoordinators.length > 0) {
+                // ── generating hold (NOTIF-SURFACE-LOCAL false-idle fix) ─────────────
+                // The only coordinator(s) for this mesh are plainly generating (no idle, no
+                // modal). A raw force-write into a generating claude-cli PTY is not consumed
+                // as a turn, so we do NOT inject and do NOT drain — the events stay queued
+                // (drained=0) and the next tick that finds the coordinator idle full-drains
+                // them as real turns (the coordinator returns to idle when its current
+                // tool-call/turn resolves; a dispatched worker runs for minutes while the
+                // coordinator is idle, so this lands within one reconcile interval). C1: mirror
+                // any held terminal events into the ledger so a completion's worker summary is
+                // recoverable even before that idle tick. Idempotent per process; O(1)-gated.
+                let hasPending = true;
+                if (store) {
+                    try { hasPending = store.pendingEventCount(meshId) > 0; } catch { /* peek below */ }
+                }
+                if (hasPending) {
+                    LOG.info('MeshReconcile', `Reconcile skip → generating: holding pending event(s) for mesh ${meshId} (${generatingCoordinators.length} coordinator(s) busy; events left queued for the next idle tick)`);
+                    recordHeldTerminalEventsToLedger(
+                        meshId,
+                        drainDaemonIds.length > 0 ? drainDaemonIds : (localDaemonId ? [localDaemonId] : []),
+                        'generating_no_idle_coordinator',
+                        generatingCoordinators.length,
+                    );
+                }
             }
             continue;
         }
@@ -716,12 +758,15 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             } catch { /* fall through to drain */ }
         }
 
+        // An idle coordinator is present (targetCoordinators.length > 0): FULL-drain every
+        // queued event and deliver it to the idle input box as a real turn. The no-idle case
+        // (generating/modal-only) was already held above and never reaches here, so there is
+        // no force-drain-into-generating path left — the single delivery is the idle drain.
         let pendingEvents: PendingMeshCoordinatorEvent[] = [];
         try {
             pendingEvents = drainPendingMeshCoordinatorEvents(
                 meshId,
                 drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
-                forceOnly ? { onlyEvents: MESH_FORCE_INJECT_EVENTS } : undefined,
             );
         } catch (e: any) {
             LOG.warn('MeshReconcile', `Drain failed for mesh ${meshId}: ${e?.message || e}`);
@@ -729,8 +774,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         }
         if (pendingEvents.length === 0) continue;
 
-        const mode = forceOnly ? 'force-drain → generating' : 'inject → idle';
-        LOG.info('MeshReconcile', `Reconcile ${mode}: ${pendingEvents.length} pending event(s) → ${targetCoordinators.length} coordinator(s) for mesh ${meshId}`);
+        LOG.info('MeshReconcile', `Reconcile inject → idle: ${pendingEvents.length} pending event(s) → ${targetCoordinators.length} coordinator(s) for mesh ${meshId}`);
         for (const pending of pendingEvents) {
             // Strict session routing (multi-coordinator): when the event names an
             // originating coordinator session, deliver ONLY to the live coordinator whose

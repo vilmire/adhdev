@@ -165,7 +165,7 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
-  it('force-drains a force-inject event into a GENERATING coordinator (force:true PTY write)', async () => {
+  it('NOTIF-SURFACE-LOCAL: a completion is HELD (not injected, not drained) when the only coordinator is generating', async () => {
     const meshId = `mesh_reconcile_generating_${Date.now()}`
     try {
       const sink: any[] = []
@@ -175,16 +175,45 @@ describe('runMeshReconcileTick', () => {
 
       await runMeshReconcileTick(components)
 
-      // A generating coordinator awaiting a worker result must still receive the
-      // completion — force-injected so it bypasses the busy send-guard.
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-      const [eventName, payload] = coordinator.onEvent.mock.calls[0]
-      expect(eventName).toBe('send_message')
-      expect(payload.input.textFallback).toContain('has completed its task')
-      expect(payload.force).toBe(true)
+      // A raw force-write into a generating claude-cli PTY is not consumed as a turn,
+      // so we do NOT inject and do NOT drain — the completion stays queued (drained=0)
+      // for the coordinator's next idle tick. (This is the false-idle local-worktree
+      // miss: previously the row was force-written + drained=1 and lost forever.)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
 
-      // The event was consumed (atomic drain) — nothing left to re-deliver.
+  it('NOTIF-SURFACE-LOCAL: a held completion lands EXACTLY ONCE when the coordinator returns to idle', async () => {
+    const meshId = `mesh_reconcile_false_idle_${Date.now()}`
+    try {
+      const sink: any[] = []
+      // Same instance, status flips generating → idle between ticks (the coordinator's
+      // own turn ends). The held completion must surface on the idle tick, exactly once.
+      let status: 'generating' | 'idle' = 'generating'
+      const coordinator = {
+        category: 'cli',
+        getState: () => ({ instanceId: 'coord-false-idle', status, settings: { meshCoordinatorFor: meshId } }),
+        onEvent: vi.fn((_event: string, payload: any) => sink.push(payload)),
+      }
+      const components = makeComponents([coordinator])
+      queueCompletion(meshId, 'falseidle')
+
+      // Tick 1: coordinator generating → held, nothing injected, nothing drained.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+
+      // The coordinator's turn ends → idle. Tick 2 delivers the held completion.
+      status = 'idle'
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('has completed its task')
+      // Consumed exactly once — a follow-up drain (e.g. an MCP pull race) returns nothing.
       expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+      expect(drainPendingMeshCoordinatorEvents(meshId, 'test-machine')).toHaveLength(0)
     } finally {
       cleanup(meshId)
     }
@@ -208,26 +237,22 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
-  it('generating coordinator: force-drains the force event but leaves a mixed queue\'s non-force event', async () => {
+  it('generating coordinator: holds BOTH the force and non-force events (nothing injected/drained)', async () => {
     const meshId = `mesh_reconcile_mixed_${Date.now()}`
     try {
       const sink: any[] = []
       const coordinator = makeCoordinator(meshId, 'generating', sink)
       const components = makeComponents([coordinator])
-      queueProgress(meshId, 'mixed')      // non-force — must stay queued
-      queueCompletion(meshId, 'mixed')    // force — must be drained + injected
+      queueProgress(meshId, 'mixed')      // non-force — held for idle
+      queueCompletion(meshId, 'mixed')    // force — also held for idle (no PTY force-write)
 
       await runMeshReconcileTick(components)
 
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-      const [, payload] = coordinator.onEvent.mock.calls[0]
-      expect(payload.input.textFallback).toContain('has completed its task')
-      expect(payload.force).toBe(true)
-
-      // Only the non-force progress event remains queued.
+      // No idle target → nothing is injected and nothing is drained. Both events stay queued.
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
       const remaining = getPendingMeshCoordinatorEvents(meshId)
-      expect(remaining).toHaveLength(1)
-      expect(remaining[0].event).toBe('monitor:no_progress')
+      expect(remaining).toHaveLength(2)
+      expect(remaining.map(e => e.event).sort()).toEqual(['agent:generating_completed', 'monitor:no_progress'])
     } finally {
       cleanup(meshId)
     }
@@ -255,7 +280,7 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
-  it('no double-delivery: after a generating force-drain, a follow-up pull-drain returns nothing for that event', async () => {
+  it('no double-delivery: a held generating completion is NOT consumed, but a racing MCP pull-drain takes it exactly once', async () => {
     const meshId = `mesh_reconcile_no_dupe_${Date.now()}`
     try {
       const sink: any[] = []
@@ -264,10 +289,13 @@ describe('runMeshReconcileTick', () => {
       queueCompletion(meshId, 'dupe')
 
       await runMeshReconcileTick(components)
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      // Generating coordinator → held, never injected.
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
 
-      // Simulate the coordinator's own pull (MCP drain) racing afterwards — the
-      // force-drained completion was atomically consumed, so it must not reappear.
+      // The coordinator's own pull (MCP drain) races and consumes the still-queued event
+      // atomically. A second drain returns nothing — the row is consumed by exactly one
+      // drainer (no PTY force-write means there is no separate delivery to double up with).
+      expect(drainPendingMeshCoordinatorEvents(meshId, 'test-machine')).toHaveLength(1)
       expect(drainPendingMeshCoordinatorEvents(meshId, 'test-machine')).toHaveLength(0)
     } finally {
       cleanup(meshId)
@@ -307,7 +335,7 @@ describe('runMeshReconcileTick', () => {
     try {
       const sink: any[] = []
       // First tick: the (only) coordinator is parked on a modal → event is held.
-      let status: 'waiting_choice' | 'generating' = 'waiting_choice'
+      let status: 'waiting_choice' | 'idle' = 'waiting_choice'
       const coordinator = {
         category: 'cli',
         getState: () => ({ instanceId: 'coord-modal', status, settings: { meshCoordinatorFor: meshId } }),
@@ -320,9 +348,9 @@ describe('runMeshReconcileTick', () => {
       expect(coordinator.onEvent).not.toHaveBeenCalled()
       expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
 
-      // The user answers the modal; the coordinator returns to generating. The next tick
-      // force-injects the still-queued completion (the deadlock the force path exists for).
-      status = 'generating'
+      // The user answers the modal and the coordinator's turn ends → idle. The next tick
+      // delivers the still-queued completion into the idle input box as a real turn.
+      status = 'idle'
       await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
@@ -616,24 +644,26 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
-  it('force-drains a completion stamped with the daemon STATUS id (standalone_<machineId>) into a generating coordinator', async () => {
+  it('drains a completion stamped with the daemon STATUS id (standalone_<machineId>) into an idle coordinator', async () => {
     // Regression for the self-inject bug: the MCP layer stamps the worker's
     // meshCoordinatorDaemonId with the prefixed status id, but the reconcile loop
     // used to drain with bare loadConfig().machineId — so a unicast completion
-    // stamped `standalone_test-machine` never matched and the generating coordinator
-    // never self-received it (only a manual get_pending_mesh_events pull worked).
+    // stamped `standalone_test-machine` never matched and the coordinator never
+    // self-received it (only a manual get_pending_mesh_events pull worked). The
+    // id-form match is exercised at the drain-scope filter regardless of status;
+    // an idle coordinator is the deliverable target (a generating one is held).
     const meshId = `mesh_reconcile_status_id_${Date.now()}`
     const statusInstanceId = 'standalone_test-machine'
     try {
       const sink: any[] = []
-      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const coordinator = makeCoordinator(meshId, 'idle', sink)
       const components = makeComponents([coordinator], undefined, statusInstanceId)
       queueCompletionForCoordinator(meshId, 'statusid', statusInstanceId)
 
       await runMeshReconcileTick(components)
 
-      // The generating coordinator must self-receive the completion (force-injected),
-      // with no manual pull, even though it was stamped with the prefixed status id.
+      // The coordinator must self-receive the completion with no manual pull, even
+      // though it was stamped with the prefixed status id (the id-form match works).
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       const [, payload] = coordinator.onEvent.mock.calls[0]
       expect(payload.input.textFallback).toContain('has completed its task')
@@ -652,7 +682,7 @@ describe('runMeshReconcileTick', () => {
     const meshId = `mesh_reconcile_bare_machine_${Date.now()}`
     try {
       const sink: any[] = []
-      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const coordinator = makeCoordinator(meshId, 'idle', sink)
       const components = makeComponents([coordinator], undefined, 'standalone_test-machine')
       queueCompletionForCoordinator(meshId, 'bare', 'test-machine')
 

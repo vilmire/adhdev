@@ -188,17 +188,18 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('standalone end-to-end: a GENERATING coordinator self-receives a local worker completion stamped with the standalone status id (no manual pull)', async () => {
+  it('standalone end-to-end: a coordinator self-receives a local worker completion stamped with the standalone status id (held while generating, delivered on idle, no manual pull)', async () => {
     // Full reproduction of the reported bug, exercising the REAL production path:
     //   worker completes → setupMeshEventForwarding → injectMeshSystemMessage queues a
     //   unicast pending event stamped targetCoordinatorDaemonId = the worker's
-    //   meshCoordinatorDaemonId → runMeshReconcileTick must drain + force-inject it into
-    //   the generating coordinator.
+    //   meshCoordinatorDaemonId → runMeshReconcileTick must deliver it to the coordinator.
     // On standalone the MCP layer stamps meshCoordinatorDaemonId = `standalone_<machineId>`
-    // (= getStatus().status.instanceId), NOT bare machineId. Before the fix the reconcile
-    // loop drained with bare loadConfig().machineId, so the unicast event never matched and
-    // the generating coordinator never self-received the completion — only a manual
-    // get_pending_mesh_events pull (which uses the same prefixed id) worked.
+    // (= getStatus().status.instanceId), NOT bare machineId. Before the id-form fix the
+    // reconcile loop drained with bare loadConfig().machineId, so the unicast event never
+    // matched. NOTIF-SURFACE-LOCAL adds the second half: while the coordinator's OWN session
+    // is generating (the false-idle window — it is awaiting this very worker), a raw PTY
+    // force-write is not consumed as a turn, so the event is HELD (not injected, not drained)
+    // and delivered on the coordinator's next idle tick as a real turn.
     const meshId = `mesh_standalone_e2e_${Date.now()}`
     const statusInstanceId = 'standalone_test-machine'
     try {
@@ -224,19 +225,24 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 456,
       })
 
-      // The coordinator is GENERATING — it must NOT have been injected at emit time
-      // (queue-only delivery); the completion sits in the queue stamped with the status id.
+      // The coordinator is GENERATING — queue-only at emit time, and the reconcile tick
+      // HOLDS it (no force-write into a generating PTY). The completion sits in the queue
+      // stamped with the status id, undrained.
       expect(coordinator.onEvent).not.toHaveBeenCalled()
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(getPendingMeshCoordinatorEvents(meshId, statusInstanceId)).toHaveLength(1)
 
-      // One reconcile tick: the loop drains the status-id-stamped unicast event and
-      // force-injects it into the generating coordinator. This is the self-inject that
-      // was broken.
+      // The coordinator's turn ends → idle. The next tick drains the status-id-stamped
+      // unicast event and delivers it into the idle input box as a real turn. This is the
+      // self-receive that was broken (and lost in the false-idle window before the fix).
+      coordinator.getState().status = 'idle'
       await runMeshReconcileTick(components)
 
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       const [eventName, payload] = coordinator.onEvent.mock.calls[0]
       expect(eventName).toBe('send_message')
-      expect(payload.force).toBe(true) // bypasses the busy send-guard while generating
+      expect(payload.force).toBe(true)
       expect(payload.input.textFallback).toContain("Node 'node_child_1'")
 
       // Consumed atomically: a subsequent pull (with the status id) returns nothing.
@@ -2804,7 +2810,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     return { components: { instanceManager } as any, coordinator }
   }
 
-  it('force-injects refine:completed into a generating CLI coordinator (force-drain)', async () => {
+  it('HOLDS refine:completed for a generating CLI coordinator (no force-write; delivered on idle)', async () => {
     const meshId = `mesh_codex_refine_completed_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2822,20 +2828,20 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       // Queue-only at forward time: the event is persisted, not pushed.
       expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // refine:completed is a force-inject event — the reconcile tick force-drains it
-      // into the generating coordinator (force:true) rather than leaving it deadlocked.
+      // A raw force-write into a generating claude-cli PTY is not consumed as a turn
+      // (NOTIF-SURFACE-LOCAL), so the reconcile tick HOLDS the event — not injected, not
+      // drained — for the coordinator's next idle tick. It stays recoverable in the queue.
       await runMeshReconcileTick(components)
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
 
-      // Consumed — nothing left to re-deliver.
-      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+      // Still queued (drained=0) — a drain still returns it intact.
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('force-injects refine:failed into a generating CLI coordinator (force-drain)', async () => {
+  it('HOLDS refine:failed for a generating CLI coordinator (no force-write; delivered on idle)', async () => {
     const meshId = `mesh_codex_refine_failed_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2853,12 +2859,11 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       // Queue-only at forward time: the event is persisted, not pushed.
       expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // refine:failed is a force-inject event — force-drained into the generating coordinator.
+      // Held (not injected, not drained) for the generating coordinator's next idle tick.
       await runMeshReconcileTick(components)
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
 
-      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -2921,7 +2926,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     }
   })
 
-  it('force-injects agent:generating_completed into a generating CLI coordinator (force-drain)', async () => {
+  it('HOLDS agent:generating_completed for a generating CLI coordinator (false-idle fix; delivered on idle)', async () => {
     const meshId = `mesh_codex_gen_completed_generating_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
@@ -2942,14 +2947,14 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       // Queue-only at forward time: the event is persisted, not pushed.
       expect(result).toMatchObject({ success: true, forwarded: 0 })
 
-      // agent:generating_completed is a force-inject event — the reconcile tick
-      // force-drains it into the generating coordinator (the bug this fix closes:
-      // a coordinator awaiting a worker result is generating, not idle).
+      // NOTIF-SURFACE-LOCAL: a coordinator awaiting a worker result is generating, not idle.
+      // A raw force-write into its PTY is not consumed as a turn and would be lost, so the
+      // reconcile tick HOLDS the completion (not injected, not drained) for the coordinator's
+      // next idle tick — when it lands as a real turn. The event stays recoverable in the queue.
       await runMeshReconcileTick(components)
-      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
-      expect(coordinator.onEvent.mock.calls[0][1].force).toBe(true)
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
 
-      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
     } finally {
       cleanupMeshFiles(meshId)
     }
