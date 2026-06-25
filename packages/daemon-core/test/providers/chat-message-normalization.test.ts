@@ -166,12 +166,22 @@ describe('chat message normalization', () => {
   });
 
   it('extractFinalSummaryFromMessages keeps ordinary completion summaries under the default cap', () => {
-    const text = 'a'.repeat(900);
+    const text = 'a'.repeat(8_000);
     const messages = [
       { role: 'assistant', content: text, meta: { userFacing: true } },
     ] as any;
-    expect(DEFAULT_FINAL_SUMMARY_MAX_CHARS).toBe(4000);
+    expect(DEFAULT_FINAL_SUMMARY_MAX_CHARS).toBe(16_000);
     expect(extractFinalSummaryFromMessages(messages)).toBe(text);
+  });
+
+  it('extractFinalSummaryFromMessages truncates oversized summaries at the default cap', () => {
+    const text = 'a'.repeat(20_000);
+    const messages = [
+      { role: 'assistant', content: text, meta: { userFacing: true } },
+    ] as any;
+    const summary = extractFinalSummaryFromMessages(messages);
+    expect(summary).toHaveLength(16_000);
+    expect(summary).toBe('a'.repeat(16_000));
   });
 
   it('extractFinalSummaryFromMessages truncates to maxChars when an explicit limit is provided', () => {

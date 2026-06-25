@@ -109,7 +109,7 @@ const MESH_SURFACED_PREVIEW_MAX_CHARS = 512;
 // coordinator-facing payload that replaces a "go call mesh_read_chat" instruction —
 // it should carry enough of the worker's result to act on without a second round-trip,
 // while still bounding what is written into the coordinator PTY.
-const MESH_COMPLETION_SURFACE_MAX_CHARS = 4000;
+const MESH_COMPLETION_SURFACE_MAX_CHARS = 16000;
 
 /**
  * The worker's final assistant text carried on a completion event — read from

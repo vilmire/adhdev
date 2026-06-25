@@ -41,12 +41,23 @@ describe('buildMeshSystemMessage — completion summary auto-surface (C2)', () =
     expect(msg).toContain('evidence_level=weak')
   })
 
-  it('truncates an oversized summary but still points to mesh_read_chat for the full transcript', () => {
+  it('does not truncate an 8000 char summary under the raised cap', () => {
     const finalSummary = 'x'.repeat(8000)
     const msg = buildMeshSystemMessage({
       event: 'agent:generating_completed',
       nodeLabel: "Node 'node_child_1'",
       metadataEvent: { sessionId: 'sess-3', timestamp: Date.now(), finalSummary },
+    })
+    expect(msg).toContain(finalSummary)
+    expect(msg).not.toContain('truncated')
+  })
+
+  it('truncates a summary above the raised cap but still points to mesh_read_chat for the full transcript', () => {
+    const finalSummary = 'x'.repeat(20000)
+    const msg = buildMeshSystemMessage({
+      event: 'agent:generating_completed',
+      nodeLabel: "Node 'node_child_1'",
+      metadataEvent: { sessionId: 'sess-3b', timestamp: Date.now(), finalSummary },
     })
     expect(msg.length).toBeLessThan(finalSummary.length)
     expect(msg).toContain('truncated')
