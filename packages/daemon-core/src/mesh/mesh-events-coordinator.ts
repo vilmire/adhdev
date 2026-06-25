@@ -924,11 +924,14 @@ function isLocalAutoLaunchNode(node: any): boolean {
     const appConfig = loadConfig();
     const localMachineId = readNonEmptyString(appConfig.machineId) || readNonEmptyString(appConfig.registeredMachineId);
 
-    // Route through the canonical daemon-id equivalence helper so a node carrying the
-    // bare `mach_<hex>` form (not just the reassembled `daemon_`/`standalone_` prefixed
-    // forms) resolves to THIS coordinator instead of being misjudged as remote.
+    // Route BOTH the daemonId and the machineId through the canonical machine-core
+    // equivalence helper so a node carrying any interchangeable id form (bare `mach_<hex>`
+    // or a `daemon_`/`standalone_` prefixed form) resolves to THIS coordinator instead of
+    // being misjudged as remote. machineId used to use a raw `===`, which — AND-combined
+    // with the daemonId match — would misjudge a local node as remote whenever a
+    // form-mismatched machineId arrived, dispatching a local task to a remote node (B-2).
     const daemonMatchesLocal = !daemonId || daemonIdsEquivalent(daemonId, localMachineId);
-    const machineMatchesLocal = !machineId || (!!localMachineId && machineId === localMachineId);
+    const machineMatchesLocal = !machineId || daemonIdsEquivalent(machineId, localMachineId);
 
     if (node?.isLocalWorktree === true) {
         return daemonMatchesLocal && machineMatchesLocal;
