@@ -1410,6 +1410,22 @@ var MESH_TASK_HISTORY_TOOL = {
     }
   }
 };
+var MESH_RECORD_NOTE_TOOL = {
+  name: "mesh_record_note",
+  description: "Record a durable operating note for this mesh \u2014 a runtime-accumulated lesson that future coordinators inherit. Unlike Claude-only memory/CLAUDE.md, this is provider-neutral: it persists in the mesh ledger and is injected into every coordinator's system prompt at launch (codex, hermes, antigravity, claude alike). Use it when you learn something durable: a provider quirk, a pattern to avoid, or a recovery lesson. Keep each note to one concrete, reusable fact. Not for transient task status \u2014 use missions/checkpoints for that.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      text: { type: "string", description: "The note \u2014 one concrete, reusable operating fact/lesson. Phrase it so a future coordinator can act on it without this conversation's context." },
+      category: {
+        type: "string",
+        enum: ["provider_quirk", "pattern_to_avoid", "recovery_lesson"],
+        description: "Optional classification: provider_quirk (a provider/runtime behaves unexpectedly), pattern_to_avoid (an approach that caused problems), recovery_lesson (how a failure was recovered)."
+      }
+    },
+    required: ["text"]
+  }
+};
 var MESH_RECONCILE_LEDGER_TOOL = {
   name: "mesh_reconcile_ledger",
   description: "Reconcile daemon-local mesh ledgers by querying bounded ledger slices over P2P/DataChannel and importing missing entries into the coordinator local JSONL ledger. Cloud/D1 is not used as a ledger source of truth.",
@@ -1584,6 +1600,7 @@ var ALL_MESH_TOOLS = [
   MESH_CLEANUP_SESSIONS_TOOL,
   MESH_PRUNE_STALE_DIRECT_TOOL,
   MESH_TASK_HISTORY_TOOL,
+  MESH_RECORD_NOTE_TOOL,
   MESH_RECONCILE_LEDGER_TOOL,
   MESH_MISSION_UPSERT_TOOL,
   MESH_MISSION_LIST_TOOL,
@@ -3265,6 +3282,33 @@ async function meshTaskHistory(ctx, args) {
     summary,
     ...taskStats ? { taskStats } : {},
     ...pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}
+  }, null, 2);
+}
+async function meshRecordNote(ctx, args) {
+  const { mesh } = ctx;
+  const text = typeof args.text === "string" ? args.text.trim() : "";
+  if (!text) {
+    return JSON.stringify({ success: false, error: "text required" }, null, 2);
+  }
+  const category = args.category === "provider_quirk" || args.category === "pattern_to_avoid" || args.category === "recovery_lesson" ? args.category : void 0;
+  const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+  const sourceCoordinator = ctx.coordinatorSessionId || ctx.localDaemonId || ctx.coordinatorHostname || void 0;
+  const entry = (0, import_daemon_core2.appendLedgerEntry)(mesh.id, {
+    kind: "coordinator_operating_note",
+    ...sourceCoordinator ? { sessionId: sourceCoordinator } : {},
+    payload: {
+      text,
+      ...category ? { category } : {},
+      createdAt,
+      ...sourceCoordinator ? { sourceCoordinator } : {}
+    }
+  });
+  return JSON.stringify({
+    success: true,
+    meshId: mesh.id,
+    noteId: entry.id,
+    recorded: { text, category: category ?? null, createdAt },
+    note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.'
   }, null, 2);
 }
 async function meshReconcileLedger(ctx, args) {
@@ -5972,6 +6016,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_task_history":
             text = await meshTaskHistory(meshCtx, a);
+            break;
+          case "mesh_record_note":
+            text = await meshRecordNote(meshCtx, a);
             break;
           case "mesh_reconcile_ledger":
             text = await meshReconcileLedger(meshCtx, a);
