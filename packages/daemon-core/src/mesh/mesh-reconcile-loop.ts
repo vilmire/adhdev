@@ -248,6 +248,90 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
     return out;
 }
 
+/**
+ * DRAIN-WITHOUT-INJECT guard. Classify, for a mesh on THIS daemon, whether a
+ * queue-drain caller (the MCP `get_pending_mesh_events` poll) may safely consume
+ * pending coordinator events — i.e. whether there is a surface that will actually
+ * deliver them.
+ *
+ * Root cause being guarded: `get_pending_mesh_events` marks rows drained=1
+ * atomically and unconditionally. When the live CLI coordinator for the mesh is
+ * GENERATING (or modal-parked), the reconcile loop correctly HOLDS its terminal
+ * events (drained=0) for the coordinator's next idle tick — but a concurrent MCP
+ * poll draining the SAME queue consumes those held rows into a tool result that
+ * the busy coordinator never surfaces as a turn, so the completion is lost
+ * forever (drained=1, never re-queued). The reconcile loop is the authoritative
+ * delivery path for a live CLI coordinator; the MCP poll must defer to it.
+ *
+ * Returns:
+ *  - hasLiveCliCoordinator: a CLI session with meshCoordinatorFor === meshId
+ *    exists on this daemon (the reconcile loop owns its delivery).
+ *  - deliverableNow: there is an IDLE live CLI coordinator (reconcile would
+ *    full-drain into it) — draining now is safe and equivalent.
+ *  - holdForReconcile: a live CLI coordinator exists but is non-idle
+ *    (generating / modal-parked). The MCP poll MUST NOT drain; the reconcile
+ *    loop holds the events undrained and injects them on the next idle tick.
+ *
+ * A mesh with NO live CLI coordinator on this daemon is a pure stdio MCP / LLM
+ * coordinator: the MCP tool result IS the only surface, so the poll legitimately
+ * drains (holdForReconcile=false). No regression to that path.
+ */
+export function resolveCoordinatorDrainDeliverability(
+    components: Pick<DaemonComponents, 'instanceManager'>,
+    meshId: string,
+): { hasLiveCliCoordinator: boolean; deliverableNow: boolean; holdForReconcile: boolean } {
+    const coordinators = findLiveCoordinators(components as DaemonComponents).filter(c => c.meshId === meshId);
+    if (coordinators.length === 0) {
+        return { hasLiveCliCoordinator: false, deliverableNow: false, holdForReconcile: false };
+    }
+    const hasIdle = coordinators.some(c => c.idle);
+    return {
+        hasLiveCliCoordinator: true,
+        deliverableNow: hasIdle,
+        // A live CLI coordinator exists but none is idle → the reconcile loop is
+        // holding the events; the poll must not steal them.
+        holdForReconcile: !hasIdle,
+    };
+}
+
+/**
+ * DRAIN-WITHOUT-INJECT guard for the `get_pending_mesh_events` daemon handler.
+ *
+ * Decides whether an incoming pending-events DRAIN must be held (return nothing,
+ * leave rows drained=0) because the only surface for those events is a LOCAL live
+ * CLI coordinator that is currently busy (generating / modal-parked) — in which
+ * case the reconcile loop owns delivery on the coordinator's next idle tick, and
+ * the poll draining them now would lose them.
+ *
+ * The hold applies ONLY when BOTH:
+ *   1) a live CLI coordinator for this mesh on THIS daemon is non-idle, AND
+ *   2) the drain is targeted at THIS daemon (the requested coordinatorDaemonId is
+ *      empty/broadcast, or matches one of this daemon's id forms).
+ *
+ * A REMOTE coordinator pulling our worker's events passes its own (remote)
+ * coordinatorDaemonId — condition (2) is false — so the drain proceeds and the
+ * remote pull is never blocked by our local coordinator's busy state. A pure
+ * stdio MCP coordinator (no live CLI session) never satisfies (1), so its tool
+ * result remains the surface and the drain proceeds. No regression to either.
+ */
+export function shouldHoldPendingDrainForBusyLocalCoordinator(
+    components: Pick<DaemonComponents, 'instanceManager'> & { statusInstanceId?: string },
+    meshId: string,
+    requestedCoordinatorDaemonId?: string | null,
+): boolean {
+    if (!meshId) return false;
+    const deliverability = resolveCoordinatorDrainDeliverability(components, meshId);
+    if (!deliverability.holdForReconcile) return false;
+    // The local CLI coordinator is busy. Hold only when the drain is for THIS daemon.
+    const requested = readNonEmptyString(requestedCoordinatorDaemonId);
+    if (!requested) return true; // broadcast drain → would consume the held local events
+    const localIds = expandDaemonIdForms([
+        readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId),
+        readNonEmptyString(loadConfig().machineId),
+    ]);
+    return localIds.some(id => daemonIdsEquivalent(id, requested));
+}
+
 // Inject a drained pending event into a live coordinator session. Force-inject
 // events carry force:true so they bypass the busy send-guard and land in the PTY
 // even while the coordinator is generating (see shouldForceInjectMeshEvent).

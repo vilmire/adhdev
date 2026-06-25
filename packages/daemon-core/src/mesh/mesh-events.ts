@@ -20,6 +20,8 @@ export {
 export {
     setupMeshReconcileLoop,
     runMeshReconcileTick,
+    resolveCoordinatorDrainDeliverability,
+    shouldHoldPendingDrainForBusyLocalCoordinator,
 } from './mesh-reconcile-loop.js';
 
 export type { MeshQueueTriggerResult } from './mesh-events-coordinator.js';

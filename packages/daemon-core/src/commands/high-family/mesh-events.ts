@@ -10,6 +10,7 @@
 import {
     handleMeshForwardEvent,
     drainPendingMeshCoordinatorEvents,
+    shouldHoldPendingDrainForBusyLocalCoordinator,
 } from '../../mesh/mesh-events.js';
 import { normalizeInteractivePromptResponse } from '../../providers/types/interactive-prompt.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
@@ -19,7 +20,7 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         return handleMeshForwardEvent({ instanceManager: ctx.deps.instanceManager } as any, args as Record<string, unknown>);
     },
 
-    get_pending_mesh_events: async (_ctx: HighFamilyContext, args: any) => {
+    get_pending_mesh_events: async (ctx: HighFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         // (B3) Respect coordinatorDaemonId when the caller declares it
         // so unicast events route to the right coordinator instead of
@@ -27,6 +28,17 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
             ? args.coordinatorDaemonId.trim()
             : undefined;
+        // DRAIN-WITHOUT-INJECT guard: when a LOCAL live CLI coordinator for this mesh is
+        // busy (generating / modal-parked), the reconcile loop is HOLDING its terminal
+        // events (drained=0) for the coordinator's next idle tick. Draining here would
+        // consume those held rows (drained=1) into an MCP tool result the busy coordinator
+        // never surfaces as a turn — losing the completion forever. Defer to the reconcile
+        // loop: return nothing, leaving the rows undrained for its idle-tick delivery. A
+        // remote pull (foreign coordinatorDaemonId) or a pure stdio MCP coordinator (no live
+        // CLI session) is NOT held — see shouldHoldPendingDrainForBusyLocalCoordinator.
+        if (meshId && shouldHoldPendingDrainForBusyLocalCoordinator(ctx.deps, meshId, coordinatorDaemonId)) {
+            return { success: true, events: [], heldForBusyLocalCoordinator: true };
+        }
         const events = drainPendingMeshCoordinatorEvents(meshId || undefined, coordinatorDaemonId);
         return { success: true, events };
     },
