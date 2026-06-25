@@ -141,3 +141,76 @@ test('fix2: cancelling a PENDING task issues no worker stop', async () => {
   const stopCmd = transport.commands.find((c: any) => c.cmd === 'agent_command' && c.args?.action === 'stop');
   assert.equal(stopCmd, undefined);
 });
+
+// CANCEL-STOP false-positive fix: meshQueueCancel now AWAITs the stop and reports its REAL
+// outcome instead of pre-stamping attempted:true on a fire-and-forget call.
+
+test('false-positive fix: a confirmed stop reflects stopped:true', async () => {
+  const meshId = nextMeshId();
+  const task = enqueueTask(meshId, 'work', {});
+  const claimed = claimNextTask(meshId, NODE_WIN, 'worker_sess_ok', [], { providerType: 'claude-cli' });
+  assert.ok(claimed);
+  // Worker daemon confirms the stop landed.
+  const transport = {
+    commands: [] as any[],
+    command: async (cmd: string, args: any) => {
+      transport.commands.push({ cmd, args });
+      if (cmd === 'agent_command' && args?.action === 'stop') return { success: true, stopped: true };
+      return { success: true };
+    },
+    getStatus: async () => ({ sessions: [] }),
+  } as any;
+  const ctx = makeCtx(meshId, transport, 'coordinator_sess');
+  const res = JSON.parse(await meshQueueCancel(ctx, { task_id: task.id } as any));
+  assert.equal(res.success, true);
+  assert.equal(res.workerStop?.attempted, true);
+  assert.equal(res.workerStop?.stopped, true, 'a confirmed worker stop must report stopped:true');
+});
+
+test('false-positive fix: an unreached worker reports stopped:false + reason (no silent attempted:true)', async () => {
+  const meshId = nextMeshId();
+  const task = enqueueTask(meshId, 'work', {});
+  const claimed = claimNextTask(meshId, NODE_WIN, 'worker_sess_gone', [], { providerType: 'claude-cli' });
+  assert.ok(claimed);
+  // Router forward could not reach the owning worker daemon — the real failure surface.
+  const transport = {
+    commands: [] as any[],
+    command: async (cmd: string, args: any) => {
+      transport.commands.push({ cmd, args });
+      if (cmd === 'agent_command' && args?.action === 'stop') {
+        return { success: false, error: 'no response from remote worker daemon' };
+      }
+      return { success: true };
+    },
+    getStatus: async () => ({ sessions: [] }),
+  } as any;
+  const ctx = makeCtx(meshId, transport, 'coordinator_sess');
+  const res = JSON.parse(await meshQueueCancel(ctx, { task_id: task.id } as any));
+  // cancel itself still succeeds (queue 'cancelled' committed) — only the report tells the truth.
+  assert.equal(res.success, true);
+  assert.equal(res.workerStop?.attempted, true);
+  assert.equal(res.workerStop?.stopped, false, 'an unreached worker must NOT report stopped:true');
+  assert.equal(res.workerStop?.reason, 'no response from remote worker daemon');
+});
+
+test('best-effort: a thrown stop never fails the cancel', async () => {
+  const meshId = nextMeshId();
+  const task = enqueueTask(meshId, 'work', {});
+  const claimed = claimNextTask(meshId, NODE_WIN, 'worker_sess_throw', [], { providerType: 'claude-cli' });
+  assert.ok(claimed);
+  const transport = {
+    commands: [] as any[],
+    command: async (cmd: string, args: any) => {
+      transport.commands.push({ cmd, args });
+      if (cmd === 'agent_command' && args?.action === 'stop') throw new Error('transport boom');
+      return { success: true };
+    },
+    getStatus: async () => ({ sessions: [] }),
+  } as any;
+  const ctx = makeCtx(meshId, transport, 'coordinator_sess');
+  const res = JSON.parse(await meshQueueCancel(ctx, { task_id: task.id } as any));
+  assert.equal(res.success, true, 'cancel must succeed even when the worker stop throws');
+  assert.equal(getQueue(meshId).find((t: any) => t.id === task.id)?.status, 'cancelled');
+  assert.equal(res.workerStop?.stopped, false);
+  assert.equal(res.workerStop?.reason, 'transport boom');
+});

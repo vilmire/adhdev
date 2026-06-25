@@ -3639,15 +3639,23 @@ async function meshQueueCancel(ctx, args) {
     let workerStop = { attempted: false };
     if (wasAssigned && assignedSessionId && assignedSessionId !== ctx.coordinatorSessionId && assignedProviderType) {
       workerStop = { attempted: true, sessionId: assignedSessionId, nodeId: assignedNodeId };
-      ctx.transport.command("agent_command", {
-        targetSessionId: assignedSessionId,
-        cliType: assignedProviderType,
-        agentType: assignedProviderType,
-        action: "stop",
-        ...assignedNodeId ? { meshContext: { meshId: ctx.mesh.id, nodeId: assignedNodeId, taskId } } : {}
-      }).catch((e) => {
+      try {
+        const stopResult = await ctx.transport.command("agent_command", {
+          targetSessionId: assignedSessionId,
+          cliType: assignedProviderType,
+          agentType: assignedProviderType,
+          action: "stop",
+          ...assignedNodeId ? { meshContext: { meshId: ctx.mesh.id, nodeId: assignedNodeId, taskId } } : {}
+        });
+        const stopped = stopResult?.stopped === true || stopResult?.success === true;
+        workerStop.stopped = stopped;
+        if (!stopped) {
+          workerStop.reason = readString(stopResult?.error) || "worker stop not confirmed";
+        }
+      } catch (e) {
+        workerStop.stopped = false;
         workerStop.reason = e?.message || String(e);
-      });
+      }
     } else if (wasAssigned && assignedSessionId === ctx.coordinatorSessionId) {
       workerStop = { attempted: false, reason: "assigned_session_is_coordinator_self \u2014 stop suppressed" };
     }

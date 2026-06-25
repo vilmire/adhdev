@@ -404,18 +404,34 @@ export async function meshQueueCancel(
         // The stop rides agent_command(action:'stop'), which is already in the router's
         // MESH_FORWARDABLE_SESSION_COMMANDS set: a session hosted on a REMOTE worker daemon is
         // auto-forwarded to that daemon (cross-machine workers are reached), and meshContext.nodeId
-        // keeps the fail-closed cross-node scoping. Best-effort: a stop that can't be delivered
-        // (worker already gone) must not fail the cancel itself.
-        let workerStop: { attempted: boolean; sessionId?: string; nodeId?: string; reason?: string } = { attempted: false };
+        // keeps the fail-closed cross-node scoping AND now seeds the router's deterministic
+        // owner-resolution fallback (assignedNodeId → owner daemon) so a worktree-clone worker
+        // whose session id missed the coordinator's cached active-sessions snapshot is still reached.
+        // CANCEL-STOP false-positive fix: AWAIT the stop and report its REAL outcome
+        // (stopped / no response from remote worker daemon / "CLI agent not running") instead of
+        // pre-stamping attempted:true on a fire-and-forget call. Best-effort: any stop failure is
+        // caught and surfaced in workerStop.reason — it must NEVER fail the cancel itself, which
+        // already committed the queue 'cancelled' transition above.
+        let workerStop: { attempted: boolean; stopped?: boolean; sessionId?: string; nodeId?: string; reason?: string } = { attempted: false };
         if (wasAssigned && assignedSessionId && assignedSessionId !== ctx.coordinatorSessionId && assignedProviderType) {
             workerStop = { attempted: true, sessionId: assignedSessionId, nodeId: assignedNodeId };
-            ctx.transport.command('agent_command', {
-                targetSessionId: assignedSessionId,
-                cliType: assignedProviderType,
-                agentType: assignedProviderType,
-                action: 'stop',
-                ...(assignedNodeId ? { meshContext: { meshId: ctx.mesh.id, nodeId: assignedNodeId, taskId } } : {}),
-            }).catch((e: any) => { workerStop.reason = e?.message || String(e); });
+            try {
+                const stopResult = await ctx.transport.command('agent_command', {
+                    targetSessionId: assignedSessionId,
+                    cliType: assignedProviderType,
+                    agentType: assignedProviderType,
+                    action: 'stop',
+                    ...(assignedNodeId ? { meshContext: { meshId: ctx.mesh.id, nodeId: assignedNodeId, taskId } } : {}),
+                });
+                const stopped = stopResult?.stopped === true || stopResult?.success === true;
+                workerStop.stopped = stopped;
+                if (!stopped) {
+                    workerStop.reason = readString(stopResult?.error) || 'worker stop not confirmed';
+                }
+            } catch (e: any) {
+                workerStop.stopped = false;
+                workerStop.reason = e?.message || String(e);
+            }
         } else if (wasAssigned && assignedSessionId === ctx.coordinatorSessionId) {
             workerStop = { attempted: false, reason: 'assigned_session_is_coordinator_self — stop suppressed' };
         }

@@ -247,3 +247,88 @@ describe('session-scoped command — multi-session worker owner resolution ([Z])
         expect(dispatch).not.toHaveBeenCalled();
     });
 });
+
+// CANCEL-STOP-RELAY: the live cancel-stop failure — a worktree-clone worker whose session id
+// missed the coordinator's cached active-sessions snapshot (id-form mismatch / cache lag). The
+// session-id scan misses, so the stop used to silently NOT forward. mesh_queue_cancel ships the
+// authoritative owning nodeId in meshContext.nodeId; the router now uses it as a deterministic
+// owner-resolution fallback (match the node by id, read its daemonId) so the stop still reaches
+// the remote worker. The self-loopback guard applies to the fallback path too.
+function meshWorkerNodeNoCachedSession(daemonId: string) {
+    return {
+        id: 'mesh-session-forward',
+        name: 'Session Forward Mesh',
+        repoIdentity: 'example/repo',
+        defaultBranch: 'main',
+        policy: {},
+        coordinator: {},
+        nodes: [
+            {
+                id: 'node-remote-worker',
+                workspace: '/remote/machine/.adhdev-worktrees/m/feat-x',
+                daemonId,
+                isLocalWorktree: true,
+                // NO cachedStatus.activeSession and NO plural session arrays — the worker's
+                // session id is simply not reflected in the coordinator's cache yet.
+            },
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+}
+
+describe('agent_command/stop — deterministic nodeId-hint owner fallback (CANCEL-STOP-RELAY)', () => {
+    const UNCACHED_SESSION_ID = 'sess_worktree_worker_uncached';
+
+    it('forwards stop via meshContext.nodeId when the session id missed the cache', async () => {
+        const dispatch = vi.fn(async () => ({ success: true, stopped: true }));
+        const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });
+        router.getCachedInlineMesh('mesh-session-forward', meshWorkerNodeNoCachedSession('daemon-remote-worker'));
+
+        const result: any = await router.execute('agent_command', {
+            targetSessionId: UNCACHED_SESSION_ID, // NOT in any cached active-sessions shape
+            agentType: 'claude-cli',
+            action: 'stop',
+            meshContext: { meshId: 'mesh-session-forward', nodeId: 'node-remote-worker' },
+        });
+
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        const [daemonId, forwardedCmd, args] = dispatch.mock.calls[0];
+        expect(daemonId).toBe('daemon-remote-worker');
+        expect(forwardedCmd).toBe('agent_command');
+        expect(args.action).toBe('stop');
+        expect(args._meshDirectDispatch).toBe(true);
+        expect(result).toMatchObject({ success: true, stopped: true });
+    });
+
+    it('self-loopback guard holds on the nodeId-hint path (owner node is THIS coordinator)', async () => {
+        const dispatch = vi.fn(async () => ({ success: true }));
+        const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });
+        // Owning node's daemonId == this coordinator → fallback must resolve to undefined → no forward.
+        router.getCachedInlineMesh('mesh-session-forward', meshWorkerNodeNoCachedSession('daemon-coordinator'));
+
+        await router.execute('agent_command', {
+            targetSessionId: UNCACHED_SESSION_ID,
+            agentType: 'claude-cli',
+            action: 'stop',
+            meshContext: { meshId: 'mesh-session-forward', nodeId: 'node-remote-worker' },
+        });
+
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('does NOT forward when neither the session id nor a nodeId hint resolves an owner', async () => {
+        const dispatch = vi.fn(async () => ({ success: true }));
+        const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });
+        router.getCachedInlineMesh('mesh-session-forward', meshWorkerNodeNoCachedSession('daemon-remote-worker'));
+
+        // No meshContext.nodeId hint and the session id is uncached → fall through to local handling.
+        await router.execute('agent_command', {
+            targetSessionId: UNCACHED_SESSION_ID,
+            agentType: 'claude-cli',
+            action: 'stop',
+        });
+
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+});

@@ -491,25 +491,51 @@ export class DaemonCommandRouter {
      * the wider plural-shape scan so a controlbar/modal command targeting a non-primary remote
      * session still resolves its owner — the singular readCachedInlineMeshActiveSessions semantics
      * other consumers depend on stay untouched.
+     *
+     * CANCEL-STOP-RELAY: the session-id cache scan above only matches when the coordinator's
+     * cached status snapshot already lists the worker's session id in a recognized active-sessions
+     * shape. A worktree-clone worker session whose id form/timing differs from the cached snapshot
+     * (or is simply not yet reflected) misses the scan, so a stop that carries the authoritative
+     * owning nodeId (mesh_queue_cancel knows assignedNodeId) used to silently fail to forward.
+     * `ownerNodeIdHint` adds a deterministic fallback: when the session-id scan misses, resolve the
+     * owner daemonId by matching the node by id (meshNodeIdMatches — same form-tolerant compare the
+     * rest of the router uses, no new raw compare). The same self-loopback guard applies to both
+     * paths, so a coordinator-hosted node is still never force-forwarded to a remote form of itself.
      */
-    public resolveRemoteMeshSessionOwnerDaemonId(sessionId: string): string | undefined {
+    public resolveRemoteMeshSessionOwnerDaemonId(sessionId: string, ownerNodeIdHint?: string): string | undefined {
         const trimmed = typeof sessionId === 'string' ? sessionId.trim() : '';
-        if (!trimmed) return undefined;
+        const nodeHint = typeof ownerNodeIdHint === 'string' ? ownerNodeIdHint.trim() : '';
+        if (!trimmed && !nodeHint) return undefined;
         const selfDaemonId = this.deps.statusInstanceId;
-        for (const node of this.collectMeshSessionOwnerCandidateNodes()) {
-            if (!collectMeshNodeHostedSessionIds(node).has(trimmed)) continue;
-            const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
-            // A matching node with no readable daemonId can't be attributed — keep scanning
-            // the remaining candidates (e.g. the same session on an aggregate node that does
-            // carry the daemonId) rather than bailing on the whole resolution.
-            if (!nodeDaemonId) continue;
-            // Only forward to a genuinely remote daemon. When the owning node is this
-            // coordinator itself (locally hosted worker), fall through to local handling.
-            // id-form robust: the node daemonId and selfDaemonId may be stored in different
-            // forms of the same machine — a strict `===` would miss the self-match and forward
-            // a local session to a remote form of THIS daemon (loopback).
-            if (selfDaemonId && daemonIdsEquivalent(nodeDaemonId, selfDaemonId)) return undefined;
-            return nodeDaemonId;
+        const candidates = this.collectMeshSessionOwnerCandidateNodes();
+        if (trimmed) {
+            for (const node of candidates) {
+                if (!collectMeshNodeHostedSessionIds(node).has(trimmed)) continue;
+                const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
+                // A matching node with no readable daemonId can't be attributed — keep scanning
+                // the remaining candidates (e.g. the same session on an aggregate node that does
+                // carry the daemonId) rather than bailing on the whole resolution.
+                if (!nodeDaemonId) continue;
+                // Only forward to a genuinely remote daemon. When the owning node is this
+                // coordinator itself (locally hosted worker), fall through to local handling.
+                // id-form robust: the node daemonId and selfDaemonId may be stored in different
+                // forms of the same machine — a strict `===` would miss the self-match and forward
+                // a local session to a remote form of THIS daemon (loopback).
+                if (selfDaemonId && daemonIdsEquivalent(nodeDaemonId, selfDaemonId)) return undefined;
+                return nodeDaemonId;
+            }
+        }
+        // Deterministic fallback: the session-id scan missed (cache lag / id-form mismatch on a
+        // worktree-clone worker), but the caller knows the authoritative owning nodeId. Resolve the
+        // owner daemonId straight off that node — never the fuzzy session cache.
+        if (nodeHint) {
+            for (const node of candidates) {
+                if (!meshNodeIdMatches(node, nodeHint)) continue;
+                const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
+                if (!nodeDaemonId) continue;
+                if (selfDaemonId && daemonIdsEquivalent(nodeDaemonId, selfDaemonId)) return undefined;
+                return nodeDaemonId;
+            }
         }
         return undefined;
     }
@@ -3092,7 +3118,14 @@ export class DaemonCommandRouter {
                 const localInstance = this.deps.instanceManager?.getInstance(targetSessionId);
                 const localRegistry = this.deps.sessionRegistry?.get?.(targetSessionId);
                 if (!localInstance && !localRegistry) {
-                    const ownerDaemonId = this.resolveRemoteMeshSessionOwnerDaemonId(targetSessionId);
+                    // CANCEL-STOP-RELAY: pass the authoritative owning nodeId (when the caller
+                    // shipped one in meshContext, e.g. mesh_queue_cancel's assignedNodeId) as the
+                    // deterministic owner-resolution fallback. The session-id cache scan stays the
+                    // primary path; the hint only kicks in when that scan misses (worktree-clone
+                    // worker session not yet in / form-mismatched against the cached snapshot).
+                    const meshContext = readObjectRecord(args?.meshContext);
+                    const ownerNodeIdHint = readStringValue(meshContext.nodeId);
+                    const ownerDaemonId = this.resolveRemoteMeshSessionOwnerDaemonId(targetSessionId, ownerNodeIdHint);
                     if (ownerDaemonId) {
                         LOG.info('Mesh', `[Mesh] Forwarding session-scoped '${cmd}' for remote worker session ${targetSessionId.split('_')[0]} → daemon ${ownerDaemonId.slice(0, 12)}`);
                         const forwarded = await this.deps.dispatchMeshCommand(ownerDaemonId, cmd, {
