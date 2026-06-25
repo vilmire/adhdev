@@ -81,6 +81,14 @@ type CompletedFinalizationBlock = {
     reason: string;
     terminal?: boolean;
     allowTimeout?: boolean;
+    // (SETTLE-VALLEY) When set, suppress the CANON-C decoupled-immediate emit for this
+    // missing_final_assistant block and HOLD (retry up to COMPLETED_FINALIZATION_MAX_WAIT_MS)
+    // until the native transcript's final assistant turn arrives (block clears → genuine emit)
+    // or the worker resumes (resume guard cancels). Set only for the inter-approval idle valley
+    // of a native-history mesh worker, where an immediate weak emit would freeze a truncated
+    // preamble summary (evidenceLevel=insufficient) into the append-only ledger before the
+    // worker's next approval turn resumes. Independent of valley length.
+    holdForTranscript?: boolean;
 };
 
 type CompletionFinalAssistantEvidence = {
@@ -1441,6 +1449,21 @@ export class CliProviderInstance implements ProviderInstance {
                     if (this.type === 'antigravity-cli') {
                         return null;
                     }
+                    // (SETTLE-VALLEY) The inter-approval idle valley: a native-history mesh worker
+                    // that resolved an approval and fell briefly idle (waiting_approval→idle) BEFORE
+                    // the next approval turn resumes. The live valley (~3s) can exceed the
+                    // NATIVE_HISTORY_MESH_IDLE_SETTLE_MS settle window, so the flush runs while the
+                    // transcript's final assistant turn is not yet written (source still the screen
+                    // parse → finalAssistantPresent=false, workerResult.source='default'). CANON-C
+                    // would emit immediately here, freezing a truncated preamble summary as
+                    // evidenceLevel=insufficient. Instead HOLD: retry until the transcript finalizes
+                    // (block clears → genuine emit) or the worker resumes (resume guard cancels),
+                    // bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS. Scoped to the approval-resolved
+                    // idle so a genuinely-finished background-child turn keeps the CANON-C immediate
+                    // emit (its transcript trails by a write, not by a whole resume).
+                    if (allowMissingAssistantTimeout && pending.previousStatus === 'waiting_approval') {
+                        return { reason: 'missing_final_assistant', terminal: false, holdForTranscript: true };
+                    }
                     return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout };
                 }
                 if ((this.provider as any).requiresFinalAssistantBeforeIdle === true) {
@@ -1585,6 +1608,15 @@ export class CliProviderInstance implements ProviderInstance {
             // one still surfaces, and isFalseIdleCompletion keeps the direct dispatch active until
             // then). All OTHER blocks (genuinely-busy adapter/partial/parsed states, transient
             // parse_error) keep the existing terminal-hold / 30s-retry behavior unchanged.
+            //
+            // (SETTLE-VALLEY) Exception: a `holdForTranscript` block is the inter-approval idle
+            // valley of a native-history mesh worker (waiting_approval→idle that will resume into
+            // the next approval). It deliberately does NOT carry allowTimeout, so it falls into the
+            // hold-and-retry path below (terminal:false) rather than the CANON-C immediate emit —
+            // the retry loop re-runs the resume guard each cycle, so when the worker resumes the
+            // pending completion is cancelled, and when the transcript's final assistant arrives the
+            // block clears for a GENUINE emit. This blocks the truncated weak (insufficient) summary
+            // from ever being emitted during the valley, without depending on the valley's length.
             const isTranscriptEvidenceGate = block.allowTimeout === true;
             LOG.debug('CLI', `[${this.type}] finalization block: reason=${blockReason} terminal=${block.terminal} allowTimeout=${isTranscriptEvidenceGate} waitedMs=${waitedMs} maxWait=${COMPLETED_FINALIZATION_MAX_WAIT_MS}`);
             if (!isTranscriptEvidenceGate && (block.terminal || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS)) {
