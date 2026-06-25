@@ -1,5 +1,6 @@
 import { existsSync } from 'fs';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import { MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
 import { loadConfig } from '../config/config.js';
 import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
@@ -452,7 +453,13 @@ const DISPATCH_CONFIRM_TIMEOUT_MS = 120_000;
 // no latency is added to a normal dispatch). Matches the daemon-cloud
 // DaemonMeshManager CONNECT_TIMEOUT_MS (45s) so the caller-side deadline tracks the
 // transport's own cold-open window rather than guessing.
-const DISPATCH_CONNECT_TIMEOUT_MS = 45_000;
+//
+// Sourced from the unified, env-overridable MESH_CONNECT_TIMEOUT_MS (runtime-defaults)
+// — the SAME budget the router's direct-peer git_status probe uses. Previously this
+// was a hard-coded 45_000 while the probe path was env-overridable, so setting the
+// env tuned the probe but silently left this dispatch path at 45s (a silent
+// asymmetry). They now move together.
+const DISPATCH_CONNECT_TIMEOUT_MS = MESH_CONNECT_TIMEOUT_MS;
 
 // Fail-loud (throttled) trace for a remote dispatch that ran with NO live mesh
 // connection getter wired — the same degraded-warmup misconfiguration the git probe

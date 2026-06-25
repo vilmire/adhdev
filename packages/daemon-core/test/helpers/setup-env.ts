@@ -19,7 +19,8 @@ const TEST_PROBE_WINDOW_MS = '1000'
 for (const key of [
   'MESH_DIRECT_PROBE_TIMEOUT_MS',
   'MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS',
-  'MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS',
+  // Unified cold-open connect budget (router probe + coordinator dispatch share it).
+  'MESH_CONNECT_TIMEOUT_MS',
 ]) {
   if (!process.env[key]) process.env[key] = TEST_PROBE_WINDOW_MS
 }

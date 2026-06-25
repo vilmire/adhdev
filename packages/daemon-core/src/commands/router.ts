@@ -89,6 +89,7 @@ import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
 import { workingDirBasename } from '../providers/working-dir.js';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
+import { readMeshTimeoutEnvMs, MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
 
 export function readProviderPriorityFromPolicy(policy: unknown): string[] {
     const record = policy && typeof policy === 'object' && !Array.isArray(policy)
@@ -1315,17 +1316,6 @@ export function finalizeMeshNodeStatus(args: {
     );
 }
 
-// Reads a positive integer timeout (ms) from an env var, clamped to [1s, 120s];
-// falls back to the default when unset or out of range. Lets slow cross-machine
-// peers (e.g. a TURN-relayed Windows daemon whose git_status RTT is 10-18s) be
-// tuned without a rebuild.
-function readMeshTimeoutEnvMs(name: string, defaultMs: number): number {
-    const raw = process.env[name]?.trim();
-    if (!raw) return defaultMs;
-    const parsed = Number.parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed >= 1_000 && parsed <= 120_000) return parsed;
-    return defaultMs;
-}
 
 // Direct-peer git_status probe timeout for the dashboard's requireDirectPeerTruth
 // bootstrap. The previous hard-coded 8s/12s were shorter than the real P2P
@@ -1348,7 +1338,10 @@ export const MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIR
 // so this never masks a real failure for the whole window; it only grants a
 // still-handshaking peer the time it legitimately needs. Matches the daemon-cloud
 // DaemonMeshManager CONNECT_TIMEOUT_MS (45s). Env-overridable for very slow links.
-export const MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS', 45_000);
+// Re-exported from the unified MESH_CONNECT_TIMEOUT_MS (runtime-defaults) so this
+// probe path and the coordinator's remote task-dispatch path share ONE
+// env-overridable connect budget instead of silently diverging when the env is set.
+export const MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS = MESH_CONNECT_TIMEOUT_MS;
 // How long a successful per-peer git_status probe stays fresh enough to be
 // reused instead of issuing another blocking `refreshUpstream:true` fan-out.
 // A slow (TURN-relayed) peer's probe can take 9-23s, and the dashboard's
