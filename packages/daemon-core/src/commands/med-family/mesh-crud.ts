@@ -314,8 +314,18 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 }
             }
 
+            // Default worktree session cleanup ON: when the caller OMITS a mode and the
+            // node is a local worktree, default to 'stop_and_delete' instead of the mesh
+            // policy ('preserve' by default). A worktree's chat session has no reason to
+            // outlive the worktree's node + directory + branch, and leaving it on
+            // 'preserve' is what orphaned chats after a worktree remove. An explicit mode
+            // (including an explicit 'preserve') is always honored — only the OMITTED case
+            // changes, and only for worktrees. Base nodes keep arg ?? policy ?? preserve.
+            const explicitCleanupMode = args?.sessionCleanupMode ?? args?.session_cleanup_mode;
             const sessionCleanupMode = ctx.normalizeMeshSessionCleanupMode(
-                args?.sessionCleanupMode ?? args?.session_cleanup_mode ?? mesh?.policy?.sessionCleanupOnNodeRemove,
+                explicitCleanupMode
+                ?? (node?.isLocalWorktree === true ? 'stop_and_delete' : undefined)
+                ?? mesh?.policy?.sessionCleanupOnNodeRemove,
             );
             // Explicit sessionIds (e.g. supplied by refine auto-cleanup) bypass the
             // workspace-only-match guard so a delegate session that lacks a
@@ -423,12 +433,29 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             const residueWarning = worktreeCleanup?.residue === true && typeof worktreeCleanup?.residueWarning === 'string'
                 ? worktreeCleanup.residueWarning
                 : undefined;
+
+            // Orphan guard: if the session cleanup still left any LIVE session skipped
+            // (e.g. a future skip reason, or a workspace-only session on a base node),
+            // surface it at the top level so the caller knows a manual mesh_cleanup_sessions
+            // is still required for those sessionIds. Without this, a skipped-live session
+            // silently outlives a removed node (the very NODE-REMOVE-SESSION-ORPHAN bug).
+            const skippedLiveSessionIds = Array.isArray(sessionCleanup?.skippedLiveSessionIds)
+                ? (sessionCleanup!.skippedLiveSessionIds as unknown[]).filter((v): v is string => typeof v === 'string')
+                : [];
+            const orphanedSessionsRemaining = skippedLiveSessionIds.length > 0;
+            const orphanNextAction = orphanedSessionsRemaining
+                ? `Live session(s) [${skippedLiveSessionIds.join(', ')}] were skipped and still survive this node removal. `
+                    + `Run mesh_cleanup_sessions with mode:'stop_and_delete' and sessionIds:[${skippedLiveSessionIds.map(id => `'${id}'`).join(', ')}] to release them.`
+                : undefined;
             return {
                 success: true,
                 removed,
                 ...(residueWarning ? { residueWarning } : {}),
                 ...(sessionCleanup ? { sessionCleanup } : {}),
                 ...(worktreeCleanup ? { worktreeCleanup } : {}),
+                ...(orphanedSessionsRemaining
+                    ? { orphanedSessionsRemaining: true, nextAction: orphanNextAction }
+                    : {}),
             };
         } catch (e: any) {
             return { success: false, error: e.message };

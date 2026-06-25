@@ -1221,10 +1221,24 @@ export class DaemonCommandRouter {
             // Only the conservative shared-daemon guard for live sessions that are NOT a delegate
             // explicitly bound to this node. Delegate-bound live sessions fall through and are
             // stopped/deleted by the mode handlers below (which already record an intentional stop).
-            if (!hasExplicitSessionIds && liveRuntime && !delegateBoundToThisNode) {
+            //
+            // Worktree-removal exception: when a WORKTREE node is being removed
+            // (source === 'mesh_remove_node' AND node.isLocalWorktree === true), its
+            // node-binding is already gone, so a still-live session in that workspace
+            // matches by workspace ALONE (recordNodeId is empty). The shared-daemon
+            // concern does not apply — a worktree has a private workspace path that is
+            // not shared with the base/other nodes — so leaving it skipped orphans the
+            // chat after the node + worktree dir + branch are gone. Clean it instead.
+            // This narrowly covers ONLY the pure workspace-only-no-binding case; a
+            // session bound to ANOTHER node (recordNodeId set and != this node) is still
+            // skipped (live_delegate_bound_to_other_node), and the coordinator session is
+            // already protected unconditionally above.
+            const matchedByWorkspaceOnly = !recordNodeId;
+            const isWorktreeNodeRemoval = cleanupSource === 'mesh_remove_node' && args.node?.isLocalWorktree === true;
+            const cleanWorkspaceOnlyForWorktree = isWorktreeNodeRemoval && matchedByWorkspaceOnly;
+            if (!hasExplicitSessionIds && liveRuntime && !delegateBoundToThisNode && !cleanWorkspaceOnlyForWorktree) {
                 skippedSessionIds.push(sessionId);
                 skippedLiveSessionIds.push(sessionId);
-                const matchedByWorkspaceOnly = !recordNodeId;
                 const reason = recordNodeId && recordNodeId !== args.nodeId
                     ? `live_delegate_bound_to_other_node:${recordNodeId}`
                     : matchedByWorkspaceOnly
@@ -1232,6 +1246,11 @@ export class DaemonCommandRouter {
                         : 'live_session_not_bound_to_this_node';
                 skippedLiveSessionReasons.push({ sessionId, reason });
                 continue;
+            }
+            if (cleanWorkspaceOnlyForWorktree && !delegateBoundToThisNode) {
+                // A workspace-only live session on a worktree being removed is treated
+                // like a bound delegate for accounting (so callers can see it was acted on).
+                actedLiveDelegateSessionIds.push(sessionId);
             }
             if (!hasExplicitSessionIds && liveRuntime && delegateBoundToThisNode && args.mode === 'delete_stopped') {
                 // delete_stopped never stops live runtimes by contract — even bound delegates.

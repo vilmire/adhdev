@@ -795,6 +795,175 @@ describe('mesh session cleanup', () => {
     }
   })
 
+  it('cleans a workspace-only live session when removing a WORKTREE node (no longer orphans the chat)', async () => {
+    // NODE-REMOVE-SESSION-ORPHAN regression: a worktree's node-binding is already
+    // gone by removal time, so a still-live chat in that workspace matches only by
+    // workspace path. The old guard conservatively SKIPPED it, orphaning the chat.
+    // For a worktree removal that workspace-only-matched live session must now be
+    // stopped+deleted instead of skipped.
+    const meshId = `mesh-worktree-orphan-${Date.now()}`
+    try {
+      const { router, sessionHostControl } = createRouter({
+        listSessions: vi.fn(async () => [
+          // workspace-only live session (no meta.meshNodeId binding) — the orphan case
+          { sessionId: 'orphan-live', workspace: '/repo/worktree-a', lifecycle: 'running' },
+          // coordinator session in the same workspace — must STILL be protected
+          { sessionId: 'coordinator-live', workspace: '/repo/worktree-a', lifecycle: 'running', meta: { meshCoordinatorFor: meshId } },
+          // a live session bound to ANOTHER node — must still be skipped
+          { sessionId: 'delegate-b', workspace: '/repo/worktree-a', lifecycle: 'running', meta: { meshNodeId: 'node-b', meshNodeFor: meshId } },
+        ]),
+      })
+
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-a',
+        sessionCleanupMode: 'stop_and_delete',
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          // isLocalWorktree node whose workspace path does not exist on disk →
+          // worktree cleanup is a no-op skip; session cleanup runs first.
+          nodes: [{ id: 'node-a', workspace: '/repo/worktree-a', isLocalWorktree: true, worktreeBranch: 'feat/a', clonedFromNodeId: 'source' }],
+        },
+      })
+
+      expect(result.success).toBe(true)
+      expect(result.removed).toBe(true)
+      // The previously-orphaned workspace-only live session is now force-deleted.
+      expect(result.sessionCleanup.deletedSessionIds).toContain('orphan-live')
+      expect(result.sessionCleanup.skippedSessionIds).not.toContain('orphan-live')
+      expect(result.sessionCleanup.skippedLiveSessionIds).not.toContain('orphan-live')
+      expect(result.sessionCleanup.actedLiveDelegateSessionIds).toContain('orphan-live')
+      // Coordinator session is STILL protected on a worktree.
+      expect(result.sessionCleanup.skippedCoordinatorSessionIds).toContain('coordinator-live')
+      expect(result.sessionCleanup.skippedSessionIds).toContain('coordinator-live')
+      // A session bound to another node is STILL skipped with the bound-other reason.
+      expect(result.sessionCleanup.skippedSessionIds).toContain('delegate-b')
+      const reasons = result.sessionCleanup.skippedLiveSessionReasons as Array<{ sessionId: string; reason: string }>
+      expect(reasons.find(r => r.sessionId === 'delegate-b')?.reason).toBe('live_delegate_bound_to_other_node:node-b')
+      // orphan-live force-deleted, coordinator/delegate-b never touched.
+      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('orphan-live', { force: true })
+      expect(sessionHostControl.deleteSession).not.toHaveBeenCalledWith('coordinator-live', { force: true })
+      expect(sessionHostControl.deleteSession).not.toHaveBeenCalledWith('delegate-b', { force: true })
+      // delegate-b is bound to another node and legitimately survives → it is still a
+      // remaining live session, so orphanedSessionsRemaining truthfully flags it (and ONLY it).
+      expect(result.orphanedSessionsRemaining).toBe(true)
+      expect(result.nextAction).toContain('delegate-b')
+      expect(result.nextAction).not.toContain('orphan-live')
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
+  })
+
+  it('still SKIPS a workspace-only live session when removing a BASE node (shared-daemon guard unchanged)', async () => {
+    // The worktree exception must NOT widen to base nodes: a base node shares its
+    // workspace/daemon, so a workspace-only live session could belong to a sibling.
+    const meshId = `mesh-base-orphan-guard-${Date.now()}`
+    try {
+      const { router, sessionHostControl } = createRouter({
+        listSessions: vi.fn(async () => [
+          { sessionId: 'ambient-live', workspace: '/repo/base', lifecycle: 'running' },
+        ]),
+      })
+
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-base',
+        sessionCleanupMode: 'stop_and_delete',
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          // NOT a worktree, and daemonId left unset so the coordinator-base guard
+          // does not fire (statusInstanceId is undefined in this router).
+          nodes: [{ id: 'node-base', workspace: '/repo/base' }],
+        },
+      })
+
+      expect(result.success).toBe(true)
+      expect(result.removed).toBe(true)
+      // Unchanged base-node behavior: workspace-only live session is skipped.
+      expect(result.sessionCleanup.skippedLiveSessionIds).toContain('ambient-live')
+      const reasons = result.sessionCleanup.skippedLiveSessionReasons as Array<{ sessionId: string; reason: string }>
+      expect(reasons.find(r => r.sessionId === 'ambient-live')?.reason).toBe('live_session_matched_by_workspace_only_no_node_binding')
+      expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
+      // A live session was skipped → orphanedSessionsRemaining surfaced with a nextAction.
+      expect(result.orphanedSessionsRemaining).toBe(true)
+      expect(typeof result.nextAction).toBe('string')
+      expect(result.nextAction).toContain('ambient-live')
+      expect(result.nextAction).toContain('mesh_cleanup_sessions')
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
+  })
+
+  it('defaults an OMITTED cleanup mode to stop_and_delete for a worktree node', async () => {
+    // FIX(3): when the caller omits a mode and the node is a worktree, default to
+    // stop_and_delete (not the policy 'preserve'), so a worktree chat does not survive.
+    const meshId = `mesh-worktree-default-${Date.now()}`
+    try {
+      const { router, sessionHostControl } = createRouter({
+        listSessions: vi.fn(async () => [
+          { sessionId: 'orphan-live', workspace: '/repo/worktree-a', lifecycle: 'running' },
+        ]),
+      })
+
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-a',
+        // NO sessionCleanupMode passed, and policy is default (preserve).
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          nodes: [{ id: 'node-a', workspace: '/repo/worktree-a', isLocalWorktree: true, worktreeBranch: 'feat/a', clonedFromNodeId: 'source' }],
+        },
+      })
+
+      expect(result.success).toBe(true)
+      expect(result.removed).toBe(true)
+      // Defaulted to stop_and_delete → the live session is force-deleted, not preserved.
+      expect(result.sessionCleanup.mode).toBe('stop_and_delete')
+      expect(result.sessionCleanup.deletedSessionIds).toContain('orphan-live')
+      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('orphan-live', { force: true })
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
+  })
+
+  it('honors an explicit preserve mode on a worktree node (only the OMITTED case defaults)', async () => {
+    const meshId = `mesh-worktree-explicit-preserve-${Date.now()}`
+    try {
+      const { router, sessionHostControl } = createRouter({
+        listSessions: vi.fn(async () => [
+          { sessionId: 'orphan-live', workspace: '/repo/worktree-a', lifecycle: 'running' },
+        ]),
+      })
+
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-a',
+        sessionCleanupMode: 'preserve',
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          nodes: [{ id: 'node-a', workspace: '/repo/worktree-a', isLocalWorktree: true, worktreeBranch: 'feat/a', clonedFromNodeId: 'source' }],
+        },
+      })
+
+      expect(result.success).toBe(true)
+      expect(result.removed).toBe(true)
+      // Explicit preserve honored: no session cleanup ran at all.
+      expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
+      expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
+      expect(result.orphanedSessionsRemaining).toBeFalsy()
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
+  })
+
   it('does not guard a worktree node owned by the coordinator daemon', async () => {
     const meshId = `mesh-base-worktree-${Date.now()}`
     try {
