@@ -972,9 +972,36 @@ export class CliProviderInstance implements ProviderInstance {
      * terminal state. Leaving meshNodeFor pinned would route this session's
      * subsequent unrelated turns (e.g. ad-hoc dashboard chats) to the
      * coordinator as if they were task completions.
+     *
+     * MESHID-DROP-ON-DETACH (Fix C): a coordinator-LAUNCHED worker session
+     * (launchedByCoordinator) holds its mesh membership (meshNodeFor / meshNodeId /
+     * meshCoordinatorDaemonId) at the SESSION level — set once at launch
+     * (mesh_launch_session / queue auto-launch), independent of any single task.
+     * The original detach wiped meshNodeFor + meshNodeId together with the
+     * task-level meshActiveTaskId, so the FIRST task completion stripped the
+     * membership and EVERY subsequent completion forwarded with meshId absent —
+     * resolveWorkerDelegateRouting fell to mesh_unresolved and the coordinator
+     * rejected the forward "meshId required". For a launched member we therefore
+     * clear ONLY the task-level marker (meshActiveTaskId) and preserve the
+     * session-level membership so its next task's completion still resolves.
+     * A task-less ad-hoc turn on a preserved-membership session is NOT misrouted:
+     * its completion carries no taskId and the session holds no active assignment,
+     * so the forwarder's WARMUPGAP guard skips the dispatch-row flip (it only
+     * injects a benign task-less notification). A NON-launched session (a plain CLI
+     * session adopted by mesh_send_task --direct, launchedByCoordinator falsy)
+     * keeps the original full clear so an ad-hoc session is never left pinned.
      */
     detachMeshAssignment(): void {
         if (!this.settings.meshNodeFor && !this.settings.meshActiveTaskId && !this.settings.meshNodeId) return;
+        // Session-level member: keep membership, drop only the task-level marker.
+        if (this.settings.launchedByCoordinator === true) {
+            if (!this.settings.meshActiveTaskId) return;
+            const { meshActiveTaskId, ...rest } = this.settings;
+            void meshActiveTaskId;
+            this.settings = rest;
+            this.adapter.updateRuntimeSettings?.(this.settings);
+            return;
+        }
         const { meshNodeFor, meshNodeId, meshActiveTaskId, ...rest } = this.settings;
         void meshNodeFor; void meshActiveTaskId;
         // WTCLAIM (A): clear the active binding but PRESERVE the last bound node id

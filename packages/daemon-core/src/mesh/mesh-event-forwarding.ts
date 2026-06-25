@@ -9,6 +9,7 @@ import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompl
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
+import { resolveMeshHostStatus } from './mesh-host-ownership.js';
 import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
@@ -90,6 +91,38 @@ function recoverMeshIdByNodeId(nodeId: string): string {
         }
     }
     return '';
+}
+
+// MESHID-DROP coordinator-anchor recovery (Fix B): the last-resort meshId recovery for an
+// unresolved-delegate forward whose payload carries the worker's coordinator anchor
+// (meshCoordinatorDaemonId) but no resolvable meshId — neither workspace nor nodeId scan
+// matched (a freshly-cloned worktree node not yet registered under the forwarded id form, or
+// an empty payload nodeId). The receiving daemon IS the coordinator/host, so scope to the
+// meshes IT hosts whose host daemon matches the anchor (daemonIdsEquivalent — never a raw
+// compare, so daemon_mach_/mach_/standalone_ forms all match the same machine). Among those:
+//   • a nodeId → the mesh whose nodes contain it (meshNodeIdMatches 3-form) wins;
+//   • no nodeId → fall back to the anchor's SINGLE hosted mesh only. Ambiguity (the anchor
+//     hosts >1 mesh and no node disambiguates) returns '' rather than guess — a wrong meshId
+//     would inject the completion into an unrelated mesh's ledger, worse than the retry-cap drop.
+export function recoverMeshIdByCoordinatorAndNode(coordinatorDaemonId: string, nodeId: string): string {
+    if (!coordinatorDaemonId) return '';
+    const hosted = listMeshes().filter(mesh => {
+        const host = resolveMeshHostStatus(mesh);
+        return host.role === 'host'
+            && (!host.hostDaemonId || daemonIdsEquivalent(host.hostDaemonId, coordinatorDaemonId));
+    });
+    if (hosted.length === 0) return '';
+    if (nodeId) {
+        const byNode = hosted.find(mesh =>
+            Array.isArray(mesh.nodes) && mesh.nodes.some((n: any) => meshNodeIdMatches(n, nodeId)));
+        if (byNode) return readNonEmptyString(byNode.id);
+        // nodeId present but matched no hosted mesh — do NOT fall through to the single-mesh
+        // guess; the node belongs to a mesh we don't host (or under a different id), and
+        // guessing would misroute. Stay unresolved.
+        return '';
+    }
+    // No nodeId to disambiguate: only safe when the anchor hosts exactly one mesh.
+    return hosted.length === 1 ? readNonEmptyString(hosted[0].id) : '';
 }
 
 // RECONCILE-MESHID-DROP: WORKER-side meshId resolution for an unresolved-delegate
@@ -1234,7 +1267,14 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
     // The nodeId is a stable coordinator-side fact and resolves timing-independently.
     const meshId = readNonEmptyString(payload.meshId)
         || (workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '')
-        || recoverMeshIdByNodeId(nodeId);
+        || recoverMeshIdByNodeId(nodeId)
+        // Fix B last resort: workspace + nodeId scan both missed, but the worker stamped
+        // its coordinator anchor onto the forward (forwardUnresolvedDelegateEvent). Recover
+        // via the hosted mesh that anchor owns (+ node disambiguation), guarding ambiguity.
+        || recoverMeshIdByCoordinatorAndNode(
+            readNonEmptyString(payload.meshCoordinatorDaemonId) || readNonEmptyString(payload.coordinatorDaemonId),
+            nodeId,
+        );
     if (!meshId) {
         // EVTTRACE: forwarded event rejected at receive — no meshId could be resolved
         // (no payload.meshId, no workspace→mesh, no nodeId→mesh). Observation only.
@@ -1364,6 +1404,11 @@ function forwardUnresolvedDelegateEvent(
         event: eventName,
         nodeId: readNonEmptyString(routing.nodeId) || readNonEmptyString(event.meshNodeId) || undefined,
         workspace: readNonEmptyString(routing.workspace) || readNonEmptyString(event.workspace) || undefined,
+        // Fix B: carry the resolved coordinator anchor so the coordinator's receive-side
+        // recovery (recoverMeshIdByCoordinatorAndNode) can match this forward to one of the
+        // meshes it hosts when workspace + nodeId both miss. routing.coordinatorDaemonId is
+        // the same anchor this forward is addressed to (coordinatorDaemonId below).
+        meshCoordinatorDaemonId: coordinatorDaemonId,
     };
     // RECONCILE-MESHID-DROP: stamp meshId when the WORKER can resolve it (member node /
     // live-session meshNodeFor). Historically omitted "because the worker can't resolve
