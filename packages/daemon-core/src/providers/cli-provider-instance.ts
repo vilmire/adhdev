@@ -121,7 +121,13 @@ const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
 // agent picking the turn back up. A short non-zero settle window restores that resume guard for
 // mesh workers without delaying genuinely-finished turns beyond this bound. Scoped to mesh
 // worker sessions so interactive native-history sessions keep the immediate flush.
-const NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 1500;
+// 4000ms (was 1500): live measurement showed the completion event can fire 1.6–3s
+// BEFORE the worker's final-assistant turn lands in the transcript on a natural
+// generating→idle completion (no approval modal), freezing a prior intermediate
+// bubble as finalSummary (evidenceLevel=insufficient). The 68a3c324 waiting_approval
+// hold only covers the approval-resolved valley; widening this settle window to 4000ms
+// covers that race AND the ~3s waiting_approval valley within the settle bound.
+const NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4000;
 // TASKBUBBLE-DUP: window during which an identical user-input ack (same trimmed
 // content on the same instance) is treated as a redelivery of one dispatch and
 // suppressed from the chat transcript. Matches the coordinator-side
@@ -1451,12 +1457,13 @@ export class CliProviderInstance implements ProviderInstance {
                     }
                     // (SETTLE-VALLEY) The inter-approval idle valley: a native-history mesh worker
                     // that resolved an approval and fell briefly idle (waiting_approval→idle) BEFORE
-                    // the next approval turn resumes. The live valley (~3s) can exceed the
-                    // NATIVE_HISTORY_MESH_IDLE_SETTLE_MS settle window, so the flush runs while the
-                    // transcript's final assistant turn is not yet written (source still the screen
-                    // parse → finalAssistantPresent=false, workerResult.source='default'). CANON-C
-                    // would emit immediately here, freezing a truncated preamble summary as
-                    // evidenceLevel=insufficient. Instead HOLD: retry until the transcript finalizes
+                    // the next approval turn resumes. The live valley (~3s) is mostly covered by the
+                    // 4000ms NATIVE_HISTORY_MESH_IDLE_SETTLE_MS settle window, but a longer valley can
+                    // still let the flush run while the transcript's final assistant turn is not yet
+                    // written (source still the screen parse → finalAssistantPresent=false,
+                    // workerResult.source='default'). CANON-C would emit immediately here, freezing a
+                    // truncated preamble summary as evidenceLevel=insufficient. Instead HOLD: this
+                    // waiting_approval hold complements the settle window. Retry until the transcript finalizes
                     // (block clears → genuine emit) or the worker resumes (resume guard cancels),
                     // bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS. Scoped to the approval-resolved
                     // idle so a genuinely-finished background-child turn keeps the CANON-C immediate

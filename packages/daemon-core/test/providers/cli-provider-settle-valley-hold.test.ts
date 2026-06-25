@@ -3,7 +3,7 @@ import { CliProviderInstance } from '../../src/providers/cli-provider-instance.j
 
 // (SETTLE-VALLEY) A native-history (claude-cli) mesh worker resolves an approval and falls
 // briefly idle (waiting_approval→idle) BEFORE the next approval turn resumes. The live
-// inter-approval idle valley (~3s) can exceed NATIVE_HISTORY_MESH_IDLE_SETTLE_MS (1500ms), so
+// inter-approval idle valley (~3s) can exceed NATIVE_HISTORY_MESH_IDLE_SETTLE_MS (4000ms), so
 // flushCompletedDebounceIfFinalized runs while the append-only transcript's final assistant
 // turn is not yet written (finalAssistantPresent=false; coordinator labels workerResult.source
 // ='default' → evidenceLevel=insufficient). The pre-fix CANON-C decoupled-immediate emit would
