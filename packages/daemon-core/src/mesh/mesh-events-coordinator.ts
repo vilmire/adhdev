@@ -31,11 +31,12 @@ import {
 import {
     buildMeshSystemMessage,
     readNonEmptyString,
-    readRecord,
     resolveEventSessionId,
     readRefineJobId,
     readWorkerResultMetadata,
     resolveMeshSurfacedSessionPreview,
+    isFalseIdleCompletion,
+    isWeakCompletionEvidence,
 } from './mesh-events-utils.js';
 
 // The set of coordinator-daemon ids this daemon answers to when draining the
@@ -362,42 +363,21 @@ function isDuplicateRefineTerminalEvent(meshId: string, eventName: string, metad
     return false;
 }
 
-// A worker/coordinator "false idle": the provider dropped to idle WITHOUT a confirmed
-// final assistant message for the turn (a finalization timeout, or a "scheduled fallback"
-// idle). This is the signal cli-provider-instance emits as
-// completionDiagnostic.blockReason='missing_final_assistant' / finalAssistantPresent=false.
-// Such a completion is NOT trustworthy terminal evidence: it must neither permanently
-// terminate a direct-dispatch task nor suppress the genuine completion a later turn
-// (commonly driven by a coordinator nudge / re-dispatch) produces.
-function isFalseIdleCompletion(metadataEvent: Record<string, unknown>): boolean {
-    const diag = readRecord(metadataEvent.completionDiagnostic);
-    if (!diag) return false;
-    return diag.finalAssistantPresent === false || diag.blockReason === 'missing_final_assistant';
-}
-
 // The genuine-completion counterpart: a real final summary / worker result is present and
 // the completion is not flagged as a missing-final-assistant false idle. Used to decide
-// whether a new completion may supersede a prior WEAK (false-idle) terminal.
+// whether a new completion may supersede a prior WEAK (false-idle) terminal. NOTE this gates
+// only on isFalseIdleCompletion (the completionDiagnostic subset), NOT the broader
+// isWeakCompletionEvidence — preserving the original semantics where a self-declared
+// weak/insufficient event still counts as genuine if it carries a real final summary.
 function isGenuineCompletionEvidence(metadataEvent: Record<string, unknown>): boolean {
     if (isFalseIdleCompletion(metadataEvent)) return false;
     return !!readWorkerResultMetadata(metadataEvent) || !!readNonEmptyString(metadataEvent.finalSummary);
 }
 
-// True when a terminal ledger payload was recorded from WEAK completion evidence (a false
-// idle): insufficient evidence level, review-recommended, or a missing-final-assistant
-// completion diagnostic. A weak terminal is non-authoritative — a later genuine completion
-// (live path) or a transcript reconcile (fallback path) may supersede it.
-function isWeakTerminalLedgerPayload(payload: Record<string, unknown> | undefined): boolean {
-    if (!payload) return false;
-    if (payload.evidenceLevel === 'insufficient' || payload.reviewRecommended === true) return true;
-    const diag = readRecord(payload.completionDiagnostic);
-    return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
-}
-
 // (FALSEIDLE-BGCHILD-b) A later genuine completion of the SAME task that carries a
 // substantively different — and fuller — final summary than the recorded terminal is the REAL
 // final that an earlier (false-idle) completion pre-empted, not a duplicate. The background-child
-// false idle is the nasty case the plain isWeakTerminalLedgerPayload supersession misses: the
+// false idle is the nasty case the plain isWeakCompletionEvidence supersession misses: the
 // early completion's screen parser DID see a prior/intermediate standard assistant, so it is
 // recorded as a STRONG terminal with a non-empty (but truncated) finalSummary. Without this the
 // providerSessionId/finalSummary dedup below swallows the genuine final and the coordinator is
@@ -422,7 +402,7 @@ function supersedesTruncatedTerminalSummary(args: {
     if (terminalSummary === eventSummary) return false;
     // The recorded terminal was a known-weak (false-idle) one → already handled by the weak
     // supersession path; nothing extra to do here.
-    if (isWeakTerminalLedgerPayload(args.terminalPayload)) return false;
+    if (isWeakCompletionEvidence(args.terminalPayload)) return false;
     // No prior summary at all, or the new summary strictly extends / is meaningfully longer than
     // the recorded one → the recorded terminal was the truncated pre-emption; supersede it.
     if (!terminalSummary) return true;
@@ -1981,7 +1961,7 @@ function evaluateMeshEventSuppression(
             // drove — exactly the missed-event bug. When the prior terminal was weak and the new
             // event carries genuine completion evidence, let it through so it is recorded and
             // re-attributed to the latest task (the normal task_completed path below).
-            const supersedesWeakTerminal = isWeakTerminalLedgerPayload(terminal.payload)
+            const supersedesWeakTerminal = isWeakCompletionEvidence(terminal.payload)
                 && isGenuineCompletionEvidence(args.metadataEvent);
             // CANON-B (direct-dispatch completion race): a FAST direct dispatch (mesh_send_task)
             // to an already-idle, previously-used session can have its genuine completion reach

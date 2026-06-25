@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary } from './mesh-events-utils.js';
+import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary, isWeakCompletionMetadata } from './mesh-events-utils.js';
 import { expandDaemonIdForms } from '@adhdev/mesh-shared';
 
 // ---------------------------------------------------------------------------
@@ -98,14 +98,6 @@ function hasPendingRefineTerminalEventDuplicate(event: PendingMeshCoordinatorEve
 // distinct from the genuine completion that supersedes it, so the genuine one is never
 // swallowed by the earlier weak one.
 const TERMINAL_COMPLETION_EVENTS = new Set(['agent:generating_completed', 'agent:stopped']);
-
-function isWeakCompletionMetadata(metadata: Record<string, unknown>): boolean {
-    const evidenceLevel = readNonEmptyString(metadata.evidenceLevel);
-    if (evidenceLevel === 'insufficient' || evidenceLevel === 'weak') return true;
-    if (metadata.reviewRecommended === true) return true;
-    const diag = readRecord(metadata.completionDiagnostic);
-    return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
-}
 
 export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent): string {
     const metadata = readRecord(event.metadataEvent) || {};

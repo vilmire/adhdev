@@ -195,21 +195,59 @@ function readEventTimestampValue(value: unknown): number {
     return 0;
 }
 
-// A completion whose evidence is WEAK: the worker FSM reached idle but the turn's
-// final assistant message was never confirmed (missing_final_assistant / a
-// finalAssistantPresent=false diagnostic), or the event self-declares insufficient/weak
-// evidence. cli-provider-instance emits this on the CANON-C decoupled-immediate path and
-// on a forced finalization timeout, and the new structural approval-resolution gate
-// (FALSEIDLE-a) can also let an unconfirmed approval→idle through. Such a completion is NOT
-// trustworthy terminal evidence — surface a verify hint so the coordinator confirms via
-// mesh_read_chat / git status before declaring the task done. Mirrors
-// isWeakCompletionMetadata in mesh-events-pending.ts.
-export function isWeakCompletionMetadata(metadataEvent: Record<string, unknown>): boolean {
-    const evidenceLevel = readNonEmptyString(metadataEvent.evidenceLevel);
-    if (evidenceLevel === 'insufficient' || evidenceLevel === 'weak') return true;
-    if (metadataEvent.reviewRecommended === true) return true;
-    const diag = readRecord(metadataEvent.completionDiagnostic);
+// The completionDiagnostic "false idle" clause, extracted from the five inline copies
+// it used to be duplicated into (the ledger / metadata weak checks and isFalseIdleCompletion).
+// True when the worker FSM dropped to idle WITHOUT a confirmed final assistant message for
+// the turn — a finalization timeout or a "scheduled fallback" idle. cli-provider-instance
+// emits this as completionDiagnostic.blockReason='missing_final_assistant' /
+// finalAssistantPresent=false. The diagnostic lives at the same `completionDiagnostic` field
+// on both a ledger terminal payload and a live metadata event, so one helper serves both.
+export function isMissingFinalAssistantDiagnostic(record: Record<string, unknown> | undefined): boolean {
+    const diag = readRecord(record?.completionDiagnostic);
     return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
+}
+
+// A false-idle completion: the provider dropped to idle WITHOUT a confirmed final assistant
+// message (the completionDiagnostic missing-final-assistant signal). This is a strict SUBSET
+// of weak-completion evidence — it DELIBERATELY ignores evidenceLevel/reviewRecommended,
+// because isGenuineCompletionEvidence (coordinator) gates the truncated-terminal supersession
+// on the false-idle distinction alone. Folding evidenceLevel/reviewRecommended in here would
+// change that genuine-completion judgement, so keep this narrow.
+export function isFalseIdleCompletion(record: Record<string, unknown>): boolean {
+    return isMissingFinalAssistantDiagnostic(record);
+}
+
+// A completion whose evidence is WEAK: the worker FSM reached idle but the turn's final
+// assistant message was never confirmed (missing_final_assistant / finalAssistantPresent=false),
+// or the event self-declares insufficient/weak evidence, or a review is recommended. The single
+// source of truth that the live metadata path (mesh-events-pending fingerprint, this module's
+// system-message builder) AND the ledger-terminal paths (mesh-events-coordinator supersession,
+// mesh-events-stale reconcile) all share — the same evidenceLevel / reviewRecommended /
+// completionDiagnostic fields appear on a terminal ledger payload and on a live metadata event.
+//
+// cli-provider-instance emits this on the CANON-C decoupled-immediate path and on a forced
+// finalization timeout, and the structural approval-resolution gate (FALSEIDLE-a) can also let
+// an unconfirmed approval→idle through. Such a completion is NOT trustworthy terminal evidence:
+// a later genuine completion (live path) or a transcript reconcile (fallback path) may supersede
+// it, and the coordinator surfaces a verify hint before declaring the task done.
+//
+// NOTE: this intentionally treats evidenceLevel 'weak' as weak — the ledger variants used to
+// omit it, so a producer emitting 'weak' would have had its weak terminal misjudged as
+// authoritative (genuine completion could no longer supersede it). Applying it uniformly here
+// seals that latent divergence.
+export function isWeakCompletionEvidence(record: Record<string, unknown> | undefined): boolean {
+    if (!record) return false;
+    const evidenceLevel = readNonEmptyString(record.evidenceLevel);
+    if (evidenceLevel === 'insufficient' || evidenceLevel === 'weak') return true;
+    if (record.reviewRecommended === true) return true;
+    return isMissingFinalAssistantDiagnostic(record);
+}
+
+// Back-compat alias for the live metadata-event call sites (system-message builder below,
+// pending-event fingerprint). Identical to isWeakCompletionEvidence; kept as a named export so
+// the metadata-flavoured call sites read naturally.
+export function isWeakCompletionMetadata(metadataEvent: Record<string, unknown>): boolean {
+    return isWeakCompletionEvidence(metadataEvent);
 }
 
 function formatCompletionMetadata(event: Record<string, unknown>): string {
