@@ -35,9 +35,6 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
-// src/tools/mesh-tools.ts
-var import_node_crypto = require("crypto");
-
 // src/transports/ipc.ts
 var DEFAULT_IPC_PORT = 19222;
 var DEFAULT_IPC_PATH = "/ipc";
@@ -341,47 +338,7 @@ function compactChatPayload(payload, opts = {}) {
   };
 }
 
-// src/tools/read-chat-polling-advisory.ts
-var RAPID_READ_CHAT_ADVISORY_WINDOW_MS = 5e3;
-var ACTIVE_READ_STATUSES = /* @__PURE__ */ new Set([
-  "generating",
-  "running",
-  "streaming",
-  "starting",
-  "busy"
-]);
-var recentReads = /* @__PURE__ */ new Map();
-function isActiveReadChatStatus(status) {
-  return typeof status === "string" && ACTIVE_READ_STATUSES.has(status.toLowerCase());
-}
-function annotateRapidReadChatAdvisory(payload, options) {
-  const now = options.now ?? Date.now();
-  const status = options.status ?? payload?.status ?? payload?.data?.status ?? payload?.result?.status;
-  const active = isActiveReadChatStatus(status);
-  const previous = recentReads.get(options.key);
-  if (!active) {
-    recentReads.set(options.key, { at: now, status: typeof status === "string" ? status : void 0 });
-    return payload;
-  }
-  recentReads.set(options.key, { at: now, status: typeof status === "string" ? status : void 0 });
-  if (!previous || !isActiveReadChatStatus(previous.status)) return payload;
-  const elapsedMs = now - previous.at;
-  if (elapsedMs < 0 || elapsedMs >= RAPID_READ_CHAT_ADVISORY_WINDOW_MS) return payload;
-  return {
-    ...payload,
-    pollingAdvisory: {
-      type: "rapid_read_chat_polling",
-      toolName: options.toolName,
-      windowMs: RAPID_READ_CHAT_ADVISORY_WINDOW_MS,
-      elapsedMs,
-      nextSuggestedReadAt: previous.at + RAPID_READ_CHAT_ADVISORY_WINDOW_MS,
-      completionCallbackExpected: Boolean(options.completionCallbackExpected),
-      message: `This session is still ${String(status)}. Avoid repeated ${options.toolName} polling for the same generating session; wait for the completion callback/status event or retry after the suggested time if you are debugging a real stall.`
-    }
-  };
-}
-
-// src/tools/mesh-tools.ts
+// src/tools/mesh-tools-internal.ts
 var import_daemon_core2 = require("@adhdev/daemon-core");
 
 // src/tools/mesh-tool-shared.ts
@@ -525,393 +482,6 @@ function isIdleSessionRecord(session) {
   return status === "idle" || chatStatus === "waiting_input";
 }
 
-// src/tools/mesh-queue-helpers.ts
-var STALE_ASSIGNED_QUEUE_MS = 30 * 6e4;
-var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
-var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
-var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
-function buildQueueLivenessIndex(mesh) {
-  const nodeIds = /* @__PURE__ */ new Set();
-  const nodeSessionIds = /* @__PURE__ */ new Map();
-  for (const node of Array.isArray(mesh?.nodes) ? mesh.nodes : []) {
-    const nodeId = readString(node.id) || readString(node.nodeId) || readString(node.node_id);
-    if (!nodeId) continue;
-    nodeIds.add(nodeId);
-    const sessions = collectNodeSessionIds(node);
-    if (sessions.size > 0) nodeSessionIds.set(nodeId, sessions);
-  }
-  return { nodeIds, nodeSessionIds };
-}
-function queueAssignmentStaleReason(task, liveness) {
-  if (task?.status !== "assigned") return void 0;
-  const nodeId = readString(task.assignedNodeId) || readString(task.nodeId) || readString(task.node_id) || readString(task.targetNodeId);
-  const sessionId = readString(task.assignedSessionId) || readString(task.sessionId) || readString(task.session_id) || readString(task.targetSessionId);
-  if (nodeId && liveness.nodeIds.size > 0 && !liveness.nodeIds.has(nodeId)) {
-    return "assigned node is not present in the current mesh snapshot";
-  }
-  if (nodeId && sessionId && liveness.nodeSessionIds.has(nodeId) && !liveness.nodeSessionIds.get(nodeId).has(sessionId)) {
-    return "assigned session is not live on the assigned node";
-  }
-  const updatedAt = new Date(task.updatedAt).getTime();
-  const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : null;
-  if (!nodeId && ageMs !== null && ageMs >= STALE_ASSIGNED_QUEUE_MS) {
-    return "assigned task has no assigned node metadata";
-  }
-  return void 0;
-}
-function buildQueueStatusSummary(queue) {
-  const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
-  let staleAssigned = 0;
-  for (const task of queue) {
-    const status = typeof task?.status === "string" ? task.status : void 0;
-    if (status && Object.prototype.hasOwnProperty.call(counts, status)) {
-      counts[status] += 1;
-    }
-    if (status === "assigned" && task?.staleAssigned === true) staleAssigned += 1;
-  }
-  const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
-  return {
-    totalCount: queue.length,
-    activeCount: counts.pending + liveAssigned,
-    historicalCount: counts.completed + counts.failed + counts.cancelled,
-    counts,
-    activeCounts: {
-      pending: counts.pending,
-      assigned: liveAssigned
-    },
-    staleAssignedCount: staleAssigned,
-    rawActiveCounts: {
-      pending: counts.pending,
-      assigned: counts.assigned
-    },
-    historicalCounts: {
-      completed: counts.completed,
-      failed: counts.failed,
-      cancelled: counts.cancelled
-    }
-  };
-}
-function normalizeQueueViewMode(value) {
-  return value === "active" || value === "historical" || value === "all" ? value : "all";
-}
-function sanitizeQueueStatusFilter(value) {
-  if (!Array.isArray(value)) return void 0;
-  const statuses = value.map((item) => typeof item === "string" ? item.trim() : "").filter((status) => ACTIVE_QUEUE_STATUSES.has(status) || HISTORICAL_QUEUE_STATUSES.has(status));
-  return statuses.length ? Array.from(new Set(statuses)) : void 0;
-}
-function filterQueueForView(queue, view, statuses) {
-  if (statuses?.length) {
-    const allowed = new Set(statuses);
-    return queue.filter((task) => allowed.has(String(task?.status || "")));
-  }
-  if (view === "active") return queue.filter((task) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || "")));
-  if (view === "historical") return queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
-  return queue;
-}
-function prioritizeActiveQueueRows(queue) {
-  const active = [];
-  const historical = [];
-  const other = [];
-  for (const task of queue) {
-    const status = String(task?.status || "");
-    if (ACTIVE_QUEUE_STATUSES.has(status)) active.push(task);
-    else if (HISTORICAL_QUEUE_STATUSES.has(status)) historical.push(task);
-    else other.push(task);
-  }
-  return [...active, ...other, ...historical];
-}
-function slimQueueTask(task) {
-  return {
-    id: task?.id,
-    status: task?.status,
-    assignedNodeId: task?.assignedNodeId,
-    assignedSessionId: task?.assignedSessionId,
-    targetNodeId: task?.targetNodeId,
-    targetSessionId: task?.targetSessionId,
-    updatedAt: task?.updatedAt,
-    staleAssigned: task?.staleAssigned === true,
-    staleReason: task?.staleReason
-  };
-}
-function buildQueueMaintenanceReport(queue) {
-  const now = Date.now();
-  const staleAssignedTasks = queue.filter((task) => task?.status === "assigned" && task?.staleAssigned === true).map(slimQueueTask);
-  const historicalTasks = queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
-  const oldHistoricalTasks = historicalTasks.filter((task) => {
-    const updatedAt = new Date(task?.updatedAt).getTime();
-    return Number.isFinite(updatedAt) && now - updatedAt >= OLD_HISTORICAL_QUEUE_RECORD_MS;
-  }).map((task) => ({
-    ...slimQueueTask(task),
-    cleanupClass: "old_historical_record",
-    reason: "terminal queue record is older than the read-only maintenance threshold"
-  }));
-  const cleanupCandidates = [
-    ...staleAssignedTasks.map((task) => ({
-      ...task,
-      cleanupClass: "stale_assigned",
-      reason: typeof task.staleReason === "string" ? task.staleReason : "active assigned task does not match current live mesh node/session state",
-      suggestedOperation: "operator_review_then_requeue_or_cancel"
-    })),
-    ...oldHistoricalTasks.map((task) => ({
-      ...task,
-      suggestedOperation: "operator_review_then_archive_or_keep"
-    }))
-  ];
-  return {
-    readOnly: true,
-    mutationPerformed: false,
-    sourceOfTruth: "mesh_work_queue_file",
-    staleAssignedDefinition: "Only active assigned queue rows are stale candidates, and only when the assigned node/session is absent from the current live mesh snapshot.",
-    historicalDefinition: "completed/failed/cancelled rows are historical ledger records and never active assignments.",
-    staleAssignedTasks,
-    staleAssignedCount: staleAssignedTasks.length,
-    historicalRecordCount: historicalTasks.length,
-    oldHistoricalRecordCount: oldHistoricalTasks.length,
-    cleanupCandidates,
-    cleanupCandidateCount: cleanupCandidates.length
-  };
-}
-function buildCompactQueueMaintenanceReport(maintenance) {
-  const staleAssignedTasks = Array.isArray(maintenance.staleAssignedTasks) ? maintenance.staleAssignedTasks : [];
-  const cleanupCandidateCount = maintenance.cleanupCandidateCount ?? 0;
-  return {
-    readOnly: true,
-    mutationPerformed: false,
-    sourceOfTruth: "mesh_work_queue_file",
-    payloadMode: "compact",
-    staleAssignedDefinition: maintenance.staleAssignedDefinition,
-    historicalDefinition: maintenance.historicalDefinition,
-    // staleAssignedTasks are active assigned rows (not historical) — retain a
-    // bounded sample so coordinators can still see drift without the full array.
-    staleAssignedTasks: staleAssignedTasks.slice(0, 5),
-    staleAssignedSampleLimit: 5,
-    staleAssignedCount: maintenance.staleAssignedCount ?? staleAssignedTasks.length,
-    historicalRecordCount: maintenance.historicalRecordCount ?? 0,
-    oldHistoricalRecordCount: maintenance.oldHistoricalRecordCount ?? 0,
-    cleanupCandidateCount,
-    cleanupCandidatesOmitted: true,
-    cleanupCandidatesHint: "Per-row cleanup candidates are omitted in compact mode; call mesh_view_queue with verbose=true for the full maintenance/cleanupDryRun rows."
-  };
-}
-var COMPACT_MAX_ACTIVE_QUEUE_ROWS = 15;
-var COMPACT_QUEUE_MESSAGE_CAP = 140;
-var COMPACT_MAX_ACTIVE_WORK_ROWS = 12;
-var COMPACT_ACTIVE_WORK_TITLE_CAP = 80;
-function truncateForCompact(value, cap) {
-  if (typeof value !== "string") return value;
-  return value.length > cap ? value.slice(0, cap) + "\u2026" : value;
-}
-function compactQueueRow(task) {
-  if (!task || typeof task !== "object") return task;
-  const slim = {};
-  for (const [k, v] of Object.entries(task)) {
-    if (k === "message") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
-    else slim[k] = elideLargeNestedValue(k, v);
-  }
-  return slim;
-}
-function compactQueueRows(rows) {
-  const capped = rows.slice(0, COMPACT_MAX_ACTIVE_QUEUE_ROWS).map(compactQueueRow);
-  return { rows: capped, omitted: Math.max(0, rows.length - capped.length) };
-}
-function compactActiveWorkRecord(record) {
-  if (!record || typeof record !== "object") return record;
-  const slim = {};
-  for (const [k, v] of Object.entries(record)) {
-    if (k === "message" || k === "taskSummary") continue;
-    else if (k === "taskTitle") slim[k] = truncateForCompact(v, COMPACT_ACTIVE_WORK_TITLE_CAP);
-    else slim[k] = elideLargeNestedValue(k, v);
-  }
-  return slim;
-}
-function compactActiveWorkRecords(records) {
-  if (!Array.isArray(records)) return { records, omitted: 0 };
-  const capped = records.slice(0, COMPACT_MAX_ACTIVE_WORK_ROWS).map(compactActiveWorkRecord);
-  return { records: capped, omitted: Math.max(0, records.length - capped.length) };
-}
-function annotateQueueStaleness(queue, mesh) {
-  const liveness = buildQueueLivenessIndex(mesh);
-  const now = Date.now();
-  return queue.map((task) => {
-    const taskStatus = typeof task?.status === "string" ? task.status : void 0;
-    const annotated = {
-      ...task,
-      taskStatus,
-      isActive: taskStatus ? ACTIVE_QUEUE_STATUSES.has(taskStatus) : false,
-      isHistorical: taskStatus ? HISTORICAL_QUEUE_STATUSES.has(taskStatus) : false,
-      dispatchedAt: task?.createdAt,
-      ...taskStatus === "assigned" ? { activeTaskId: task.id } : {},
-      ...taskStatus === "completed" || taskStatus === "failed" ? {
-        completedAt: task.updatedAt
-      } : {}
-    };
-    if (taskStatus !== "assigned") return annotated;
-    const updatedAt = new Date(task.updatedAt).getTime();
-    const ageMs = Number.isFinite(updatedAt) ? now - updatedAt : null;
-    const staleReason = queueAssignmentStaleReason(task, liveness);
-    if (!staleReason) return annotated;
-    return {
-      ...annotated,
-      stale: true,
-      staleAssigned: true,
-      staleReason,
-      ...ageMs !== null ? { assignedAgeMs: ageMs } : {}
-    };
-  });
-}
-
-// src/tools/mesh-compact.ts
-function buildCompactGitSnapshot(status) {
-  if (!status || typeof status !== "object" || Array.isArray(status)) return void 0;
-  const slim = {};
-  const carry = [
-    "isGitRepo",
-    "branch",
-    "headCommit",
-    "upstream",
-    "upstreamStatus",
-    "ahead",
-    "behind",
-    "dirty",
-    "detached",
-    "submodules"
-  ];
-  for (const key of carry) {
-    if (status[key] !== void 0) slim[key] = status[key];
-  }
-  return slim;
-}
-function summarizeCompactSubmodules(submodules) {
-  if (!Array.isArray(submodules) || submodules.length === 0) return void 0;
-  const outOfSync = submodules.filter((s) => s?.outOfSync).map((s) => s?.path).filter(Boolean);
-  return {
-    count: submodules.length,
-    ...outOfSync.length > 0 ? { outOfSyncPaths: outOfSync } : {}
-  };
-}
-var MESH_COMPACT_PRESERVED_MARKER_FIELDS = ["dataFreshness"];
-function compactMeshStatusNode(entry) {
-  if (!entry || typeof entry !== "object") return entry;
-  const next = { ...entry };
-  if (next.git !== void 0) {
-    const slimGit = buildCompactGitSnapshot(next.git);
-    if (slimGit) {
-      if (slimGit.submodules !== void 0) {
-        const subSummary = summarizeCompactSubmodules(slimGit.submodules);
-        if (subSummary) slimGit.submodules = subSummary;
-        else delete slimGit.submodules;
-      }
-      next.git = slimGit;
-    }
-  }
-  if (next.machine && typeof next.machine === "object") {
-    const m = next.machine;
-    next.machine = {
-      daemonId: m.daemonId,
-      machineId: m.machineId,
-      hostname: m.hostname,
-      displayName: m.displayName,
-      sameMachine: m.sameMachine,
-      locality: m.locality
-    };
-  }
-  if (typeof next.submoduleWarning === "string") {
-    next.submodulesOutOfSync = true;
-    delete next.submoduleWarning;
-  }
-  if (next.staleDaemonBuild && typeof next.staleDaemonBuild === "object") {
-    const b = next.staleDaemonBuild;
-    next.staleDaemonBuild = {
-      scope: b.scope,
-      isDaemonAffecting: b.isDaemonAffecting !== false,
-      seeStaleDaemonBuilds: true
-    };
-  }
-  delete next.capabilityTagsByProvider;
-  const elideSkip = /* @__PURE__ */ new Set(["git", "machine", "branchConvergence", "staleDaemonBuild", "sessions", ...MESH_COMPACT_PRESERVED_MARKER_FIELDS]);
-  for (const k of Object.keys(next)) {
-    if (elideSkip.has(k)) continue;
-    next[k] = elideLargeNestedValue(k, next[k]);
-  }
-  return next;
-}
-function compactNodeSeverity(entry) {
-  if (!entry || typeof entry !== "object") return 0;
-  if (entry.error || entry.health && entry.health !== "online" && entry.health !== "dirty") return 5;
-  if (entry.launchReady === false) return 4;
-  if (entry.isDirty === true || entry.health === "dirty") return 3;
-  if (entry.branchConvergence?.needsConvergence === true) return 2;
-  if (entry.staleDaemonBuild || entry.submodulesOutOfSync || entry.recoveryHints) return 1;
-  return 0;
-}
-function isNoteworthyCompactNode(entry) {
-  if (!entry || typeof entry !== "object") return true;
-  if (entry.health && entry.health !== "online") return true;
-  if (entry.isDirty === true) return true;
-  if (entry.error) return true;
-  if (entry.launchReady === false) return true;
-  if (entry.staleDaemonBuild) return true;
-  if (entry.submoduleWarning || entry.submodulesOutOfSync) return true;
-  if (entry.recoveryHints) return true;
-  if (Array.isArray(entry.nextStepHints) && entry.nextStepHints.length > 0) return true;
-  if (entry.branchConvergence?.needsConvergence === true) return true;
-  const sessionCount = Array.isArray(entry.sessions) ? entry.sessions.length : entry.sessionSummary?.total ?? 0;
-  if (sessionCount > 0) return true;
-  return false;
-}
-function minimalCompactNode(entry) {
-  if (!entry || typeof entry !== "object") return entry;
-  const bc = entry.branchConvergence && typeof entry.branchConvergence === "object" ? {
-    status: entry.branchConvergence.status,
-    needsConvergence: entry.branchConvergence.needsConvergence,
-    reason: entry.branchConvergence.reason,
-    branch: entry.branchConvergence.branch
-  } : void 0;
-  const preservedMarkers = {};
-  for (const field of MESH_COMPACT_PRESERVED_MARKER_FIELDS) {
-    if (entry[field] !== void 0) preservedMarkers[field] = entry[field];
-  }
-  return {
-    nodeId: entry.nodeId,
-    workspace: entry.workspace,
-    daemonId: entry.daemonId,
-    health: entry.health,
-    branch: entry.branch,
-    launchReady: entry.launchReady,
-    ...entry.providerPriority !== void 0 ? { providerPriority: entry.providerPriority } : {},
-    // Keep the routable tag set on quiet/folded nodes — a coordinator planning
-    // required_tags routing needs it even for nodes with nothing to converge.
-    ...entry.capabilityTags !== void 0 ? { capabilityTags: entry.capabilityTags } : {},
-    ...entry.launchBlockedReason !== void 0 ? { launchBlockedReason: entry.launchBlockedReason } : {},
-    ...bc ? { branchConvergence: bc } : {},
-    ...entry.sessionSummary ? { sessionSummary: entry.sessionSummary } : {},
-    ...preservedMarkers,
-    folded: true
-  };
-}
-function summarizeNodeSessions(sessions) {
-  const list = Array.isArray(sessions) ? sessions : [];
-  const byStatus = {};
-  const providerCounts = {};
-  const selfCoordinatorSessionIds = [];
-  for (const s of list) {
-    const status = typeof s?.status === "string" && s.status ? s.status : "unknown";
-    byStatus[status] = (byStatus[status] ?? 0) + 1;
-    const provider = typeof s?.providerType === "string" && s.providerType ? s.providerType : "unknown";
-    providerCounts[provider] = (providerCounts[provider] ?? 0) + 1;
-    if (s?.isSelfCoordinator === true && s.id) selfCoordinatorSessionIds.push(String(s.id));
-  }
-  const summary = {
-    total: list.length,
-    byStatus,
-    providerCounts
-  };
-  if (selfCoordinatorSessionIds.length > 0) {
-    summary.selfCoordinatorSessionIds = selfCoordinatorSessionIds;
-  }
-  return summary;
-}
-
 // src/tools/mesh-node-identity.ts
 var import_daemon_core = require("@adhdev/daemon-core");
 function resolveCoordinatorNode(ctx) {
@@ -997,8 +567,8 @@ function buildNodeMachineIdentity(ctx, node) {
 function nodeHasLocalDaemonEvidence(ctx, node) {
   const isLocal = (session) => {
     if (!session || typeof session !== "object") return false;
-    if (ctx.localDaemonId && session.runtime?.owner === ctx.localDaemonId) return true;
-    if (ctx.localDaemonId && session.daemonClient?.daemonId === ctx.localDaemonId) return true;
+    if (ctx.localDaemonId && (0, import_daemon_core.daemonIdsEquivalent)(session.runtime?.owner, ctx.localDaemonId)) return true;
+    if (ctx.localDaemonId && (0, import_daemon_core.daemonIdsEquivalent)(session.daemonClient?.daemonId, ctx.localDaemonId)) return true;
     return false;
   };
   const sessionArrays = [
@@ -1607,7 +1177,436 @@ var ALL_MESH_TOOLS = [
   MESH_REVIEW_INBOX_TOOL
 ];
 
-// src/tools/mesh-tools.ts
+// src/tools/mesh-compact.ts
+function buildCompactGitSnapshot(status) {
+  if (!status || typeof status !== "object" || Array.isArray(status)) return void 0;
+  const slim = {};
+  const carry = [
+    "isGitRepo",
+    "branch",
+    "headCommit",
+    "upstream",
+    "upstreamStatus",
+    "ahead",
+    "behind",
+    "dirty",
+    "detached",
+    "submodules"
+  ];
+  for (const key of carry) {
+    if (status[key] !== void 0) slim[key] = status[key];
+  }
+  return slim;
+}
+function summarizeCompactSubmodules(submodules) {
+  if (!Array.isArray(submodules) || submodules.length === 0) return void 0;
+  const outOfSync = submodules.filter((s) => s?.outOfSync).map((s) => s?.path).filter(Boolean);
+  return {
+    count: submodules.length,
+    ...outOfSync.length > 0 ? { outOfSyncPaths: outOfSync } : {}
+  };
+}
+var MESH_COMPACT_PRESERVED_MARKER_FIELDS = ["dataFreshness"];
+function compactMeshStatusNode(entry) {
+  if (!entry || typeof entry !== "object") return entry;
+  const next = { ...entry };
+  if (next.git !== void 0) {
+    const slimGit = buildCompactGitSnapshot(next.git);
+    if (slimGit) {
+      if (slimGit.submodules !== void 0) {
+        const subSummary = summarizeCompactSubmodules(slimGit.submodules);
+        if (subSummary) slimGit.submodules = subSummary;
+        else delete slimGit.submodules;
+      }
+      next.git = slimGit;
+    }
+  }
+  if (next.machine && typeof next.machine === "object") {
+    const m = next.machine;
+    next.machine = {
+      daemonId: m.daemonId,
+      machineId: m.machineId,
+      hostname: m.hostname,
+      displayName: m.displayName,
+      sameMachine: m.sameMachine,
+      locality: m.locality
+    };
+  }
+  if (typeof next.submoduleWarning === "string") {
+    next.submodulesOutOfSync = true;
+    delete next.submoduleWarning;
+  }
+  if (next.staleDaemonBuild && typeof next.staleDaemonBuild === "object") {
+    const b = next.staleDaemonBuild;
+    next.staleDaemonBuild = {
+      scope: b.scope,
+      isDaemonAffecting: b.isDaemonAffecting !== false,
+      seeStaleDaemonBuilds: true
+    };
+  }
+  delete next.capabilityTagsByProvider;
+  const elideSkip = /* @__PURE__ */ new Set(["git", "machine", "branchConvergence", "staleDaemonBuild", "sessions", ...MESH_COMPACT_PRESERVED_MARKER_FIELDS]);
+  for (const k of Object.keys(next)) {
+    if (elideSkip.has(k)) continue;
+    next[k] = elideLargeNestedValue(k, next[k]);
+  }
+  return next;
+}
+function compactNodeSeverity(entry) {
+  if (!entry || typeof entry !== "object") return 0;
+  if (entry.error || entry.health && entry.health !== "online" && entry.health !== "dirty") return 5;
+  if (entry.launchReady === false) return 4;
+  if (entry.isDirty === true || entry.health === "dirty") return 3;
+  if (entry.branchConvergence?.needsConvergence === true) return 2;
+  if (entry.staleDaemonBuild || entry.submodulesOutOfSync || entry.recoveryHints) return 1;
+  return 0;
+}
+function isNoteworthyCompactNode(entry) {
+  if (!entry || typeof entry !== "object") return true;
+  if (entry.health && entry.health !== "online") return true;
+  if (entry.isDirty === true) return true;
+  if (entry.error) return true;
+  if (entry.launchReady === false) return true;
+  if (entry.staleDaemonBuild) return true;
+  if (entry.submoduleWarning || entry.submodulesOutOfSync) return true;
+  if (entry.recoveryHints) return true;
+  if (Array.isArray(entry.nextStepHints) && entry.nextStepHints.length > 0) return true;
+  if (entry.branchConvergence?.needsConvergence === true) return true;
+  const sessionCount = Array.isArray(entry.sessions) ? entry.sessions.length : entry.sessionSummary?.total ?? 0;
+  if (sessionCount > 0) return true;
+  return false;
+}
+function minimalCompactNode(entry) {
+  if (!entry || typeof entry !== "object") return entry;
+  const bc = entry.branchConvergence && typeof entry.branchConvergence === "object" ? {
+    status: entry.branchConvergence.status,
+    needsConvergence: entry.branchConvergence.needsConvergence,
+    reason: entry.branchConvergence.reason,
+    branch: entry.branchConvergence.branch
+  } : void 0;
+  const preservedMarkers = {};
+  for (const field of MESH_COMPACT_PRESERVED_MARKER_FIELDS) {
+    if (entry[field] !== void 0) preservedMarkers[field] = entry[field];
+  }
+  return {
+    nodeId: entry.nodeId,
+    workspace: entry.workspace,
+    daemonId: entry.daemonId,
+    health: entry.health,
+    branch: entry.branch,
+    launchReady: entry.launchReady,
+    ...entry.providerPriority !== void 0 ? { providerPriority: entry.providerPriority } : {},
+    // Keep the routable tag set on quiet/folded nodes — a coordinator planning
+    // required_tags routing needs it even for nodes with nothing to converge.
+    ...entry.capabilityTags !== void 0 ? { capabilityTags: entry.capabilityTags } : {},
+    ...entry.launchBlockedReason !== void 0 ? { launchBlockedReason: entry.launchBlockedReason } : {},
+    ...bc ? { branchConvergence: bc } : {},
+    ...entry.sessionSummary ? { sessionSummary: entry.sessionSummary } : {},
+    ...preservedMarkers,
+    folded: true
+  };
+}
+function summarizeNodeSessions(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const byStatus = {};
+  const providerCounts = {};
+  const selfCoordinatorSessionIds = [];
+  for (const s of list) {
+    const status = typeof s?.status === "string" && s.status ? s.status : "unknown";
+    byStatus[status] = (byStatus[status] ?? 0) + 1;
+    const provider = typeof s?.providerType === "string" && s.providerType ? s.providerType : "unknown";
+    providerCounts[provider] = (providerCounts[provider] ?? 0) + 1;
+    if (s?.isSelfCoordinator === true && s.id) selfCoordinatorSessionIds.push(String(s.id));
+  }
+  const summary = {
+    total: list.length,
+    byStatus,
+    providerCounts
+  };
+  if (selfCoordinatorSessionIds.length > 0) {
+    summary.selfCoordinatorSessionIds = selfCoordinatorSessionIds;
+  }
+  return summary;
+}
+
+// src/tools/mesh-queue-helpers.ts
+var STALE_ASSIGNED_QUEUE_MS = 30 * 6e4;
+var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
+var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
+var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+function buildQueueLivenessIndex(mesh) {
+  const nodeIds = /* @__PURE__ */ new Set();
+  const nodeSessionIds = /* @__PURE__ */ new Map();
+  for (const node of Array.isArray(mesh?.nodes) ? mesh.nodes : []) {
+    const nodeId = readString(node.id) || readString(node.nodeId) || readString(node.node_id);
+    if (!nodeId) continue;
+    nodeIds.add(nodeId);
+    const sessions = collectNodeSessionIds(node);
+    if (sessions.size > 0) nodeSessionIds.set(nodeId, sessions);
+  }
+  return { nodeIds, nodeSessionIds };
+}
+function queueAssignmentStaleReason(task, liveness) {
+  if (task?.status !== "assigned") return void 0;
+  const nodeId = readString(task.assignedNodeId) || readString(task.nodeId) || readString(task.node_id) || readString(task.targetNodeId);
+  const sessionId = readString(task.assignedSessionId) || readString(task.sessionId) || readString(task.session_id) || readString(task.targetSessionId);
+  if (nodeId && liveness.nodeIds.size > 0 && !liveness.nodeIds.has(nodeId)) {
+    return "assigned node is not present in the current mesh snapshot";
+  }
+  if (nodeId && sessionId && liveness.nodeSessionIds.has(nodeId) && !liveness.nodeSessionIds.get(nodeId).has(sessionId)) {
+    return "assigned session is not live on the assigned node";
+  }
+  const updatedAt = new Date(task.updatedAt).getTime();
+  const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : null;
+  if (!nodeId && ageMs !== null && ageMs >= STALE_ASSIGNED_QUEUE_MS) {
+    return "assigned task has no assigned node metadata";
+  }
+  return void 0;
+}
+function buildQueueStatusSummary(queue) {
+  const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
+  let staleAssigned = 0;
+  for (const task of queue) {
+    const status = typeof task?.status === "string" ? task.status : void 0;
+    if (status && Object.prototype.hasOwnProperty.call(counts, status)) {
+      counts[status] += 1;
+    }
+    if (status === "assigned" && task?.staleAssigned === true) staleAssigned += 1;
+  }
+  const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
+  return {
+    totalCount: queue.length,
+    activeCount: counts.pending + liveAssigned,
+    historicalCount: counts.completed + counts.failed + counts.cancelled,
+    counts,
+    activeCounts: {
+      pending: counts.pending,
+      assigned: liveAssigned
+    },
+    staleAssignedCount: staleAssigned,
+    rawActiveCounts: {
+      pending: counts.pending,
+      assigned: counts.assigned
+    },
+    historicalCounts: {
+      completed: counts.completed,
+      failed: counts.failed,
+      cancelled: counts.cancelled
+    }
+  };
+}
+function normalizeQueueViewMode(value) {
+  return value === "active" || value === "historical" || value === "all" ? value : "all";
+}
+function sanitizeQueueStatusFilter(value) {
+  if (!Array.isArray(value)) return void 0;
+  const statuses = value.map((item) => typeof item === "string" ? item.trim() : "").filter((status) => ACTIVE_QUEUE_STATUSES.has(status) || HISTORICAL_QUEUE_STATUSES.has(status));
+  return statuses.length ? Array.from(new Set(statuses)) : void 0;
+}
+function filterQueueForView(queue, view, statuses) {
+  if (statuses?.length) {
+    const allowed = new Set(statuses);
+    return queue.filter((task) => allowed.has(String(task?.status || "")));
+  }
+  if (view === "active") return queue.filter((task) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || "")));
+  if (view === "historical") return queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
+  return queue;
+}
+function prioritizeActiveQueueRows(queue) {
+  const active = [];
+  const historical = [];
+  const other = [];
+  for (const task of queue) {
+    const status = String(task?.status || "");
+    if (ACTIVE_QUEUE_STATUSES.has(status)) active.push(task);
+    else if (HISTORICAL_QUEUE_STATUSES.has(status)) historical.push(task);
+    else other.push(task);
+  }
+  return [...active, ...other, ...historical];
+}
+function slimQueueTask(task) {
+  return {
+    id: task?.id,
+    status: task?.status,
+    assignedNodeId: task?.assignedNodeId,
+    assignedSessionId: task?.assignedSessionId,
+    targetNodeId: task?.targetNodeId,
+    targetSessionId: task?.targetSessionId,
+    updatedAt: task?.updatedAt,
+    staleAssigned: task?.staleAssigned === true,
+    staleReason: task?.staleReason
+  };
+}
+function buildQueueMaintenanceReport(queue) {
+  const now = Date.now();
+  const staleAssignedTasks = queue.filter((task) => task?.status === "assigned" && task?.staleAssigned === true).map(slimQueueTask);
+  const historicalTasks = queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
+  const oldHistoricalTasks = historicalTasks.filter((task) => {
+    const updatedAt = new Date(task?.updatedAt).getTime();
+    return Number.isFinite(updatedAt) && now - updatedAt >= OLD_HISTORICAL_QUEUE_RECORD_MS;
+  }).map((task) => ({
+    ...slimQueueTask(task),
+    cleanupClass: "old_historical_record",
+    reason: "terminal queue record is older than the read-only maintenance threshold"
+  }));
+  const cleanupCandidates = [
+    ...staleAssignedTasks.map((task) => ({
+      ...task,
+      cleanupClass: "stale_assigned",
+      reason: typeof task.staleReason === "string" ? task.staleReason : "active assigned task does not match current live mesh node/session state",
+      suggestedOperation: "operator_review_then_requeue_or_cancel"
+    })),
+    ...oldHistoricalTasks.map((task) => ({
+      ...task,
+      suggestedOperation: "operator_review_then_archive_or_keep"
+    }))
+  ];
+  return {
+    readOnly: true,
+    mutationPerformed: false,
+    sourceOfTruth: "mesh_work_queue_file",
+    staleAssignedDefinition: "Only active assigned queue rows are stale candidates, and only when the assigned node/session is absent from the current live mesh snapshot.",
+    historicalDefinition: "completed/failed/cancelled rows are historical ledger records and never active assignments.",
+    staleAssignedTasks,
+    staleAssignedCount: staleAssignedTasks.length,
+    historicalRecordCount: historicalTasks.length,
+    oldHistoricalRecordCount: oldHistoricalTasks.length,
+    cleanupCandidates,
+    cleanupCandidateCount: cleanupCandidates.length
+  };
+}
+function buildCompactQueueMaintenanceReport(maintenance) {
+  const staleAssignedTasks = Array.isArray(maintenance.staleAssignedTasks) ? maintenance.staleAssignedTasks : [];
+  const cleanupCandidateCount = maintenance.cleanupCandidateCount ?? 0;
+  return {
+    readOnly: true,
+    mutationPerformed: false,
+    sourceOfTruth: "mesh_work_queue_file",
+    payloadMode: "compact",
+    staleAssignedDefinition: maintenance.staleAssignedDefinition,
+    historicalDefinition: maintenance.historicalDefinition,
+    // staleAssignedTasks are active assigned rows (not historical) — retain a
+    // bounded sample so coordinators can still see drift without the full array.
+    staleAssignedTasks: staleAssignedTasks.slice(0, 5),
+    staleAssignedSampleLimit: 5,
+    staleAssignedCount: maintenance.staleAssignedCount ?? staleAssignedTasks.length,
+    historicalRecordCount: maintenance.historicalRecordCount ?? 0,
+    oldHistoricalRecordCount: maintenance.oldHistoricalRecordCount ?? 0,
+    cleanupCandidateCount,
+    cleanupCandidatesOmitted: true,
+    cleanupCandidatesHint: "Per-row cleanup candidates are omitted in compact mode; call mesh_view_queue with verbose=true for the full maintenance/cleanupDryRun rows."
+  };
+}
+var COMPACT_MAX_ACTIVE_QUEUE_ROWS = 15;
+var COMPACT_QUEUE_MESSAGE_CAP = 140;
+var COMPACT_MAX_ACTIVE_WORK_ROWS = 12;
+var COMPACT_ACTIVE_WORK_TITLE_CAP = 80;
+function truncateForCompact(value, cap) {
+  if (typeof value !== "string") return value;
+  return value.length > cap ? value.slice(0, cap) + "\u2026" : value;
+}
+function compactQueueRow(task) {
+  if (!task || typeof task !== "object") return task;
+  const slim = {};
+  for (const [k, v] of Object.entries(task)) {
+    if (k === "message") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
+    else slim[k] = elideLargeNestedValue(k, v);
+  }
+  return slim;
+}
+function compactQueueRows(rows) {
+  const capped = rows.slice(0, COMPACT_MAX_ACTIVE_QUEUE_ROWS).map(compactQueueRow);
+  return { rows: capped, omitted: Math.max(0, rows.length - capped.length) };
+}
+function compactActiveWorkRecord(record) {
+  if (!record || typeof record !== "object") return record;
+  const slim = {};
+  for (const [k, v] of Object.entries(record)) {
+    if (k === "message" || k === "taskSummary") continue;
+    else if (k === "taskTitle") slim[k] = truncateForCompact(v, COMPACT_ACTIVE_WORK_TITLE_CAP);
+    else slim[k] = elideLargeNestedValue(k, v);
+  }
+  return slim;
+}
+function compactActiveWorkRecords(records) {
+  if (!Array.isArray(records)) return { records, omitted: 0 };
+  const capped = records.slice(0, COMPACT_MAX_ACTIVE_WORK_ROWS).map(compactActiveWorkRecord);
+  return { records: capped, omitted: Math.max(0, records.length - capped.length) };
+}
+function annotateQueueStaleness(queue, mesh) {
+  const liveness = buildQueueLivenessIndex(mesh);
+  const now = Date.now();
+  return queue.map((task) => {
+    const taskStatus = typeof task?.status === "string" ? task.status : void 0;
+    const annotated = {
+      ...task,
+      taskStatus,
+      isActive: taskStatus ? ACTIVE_QUEUE_STATUSES.has(taskStatus) : false,
+      isHistorical: taskStatus ? HISTORICAL_QUEUE_STATUSES.has(taskStatus) : false,
+      dispatchedAt: task?.createdAt,
+      ...taskStatus === "assigned" ? { activeTaskId: task.id } : {},
+      ...taskStatus === "completed" || taskStatus === "failed" ? {
+        completedAt: task.updatedAt
+      } : {}
+    };
+    if (taskStatus !== "assigned") return annotated;
+    const updatedAt = new Date(task.updatedAt).getTime();
+    const ageMs = Number.isFinite(updatedAt) ? now - updatedAt : null;
+    const staleReason = queueAssignmentStaleReason(task, liveness);
+    if (!staleReason) return annotated;
+    return {
+      ...annotated,
+      stale: true,
+      staleAssigned: true,
+      staleReason,
+      ...ageMs !== null ? { assignedAgeMs: ageMs } : {}
+    };
+  });
+}
+
+// src/tools/read-chat-polling-advisory.ts
+var RAPID_READ_CHAT_ADVISORY_WINDOW_MS = 5e3;
+var ACTIVE_READ_STATUSES = /* @__PURE__ */ new Set([
+  "generating",
+  "running",
+  "streaming",
+  "starting",
+  "busy"
+]);
+var recentReads = /* @__PURE__ */ new Map();
+function isActiveReadChatStatus(status) {
+  return typeof status === "string" && ACTIVE_READ_STATUSES.has(status.toLowerCase());
+}
+function annotateRapidReadChatAdvisory(payload, options) {
+  const now = options.now ?? Date.now();
+  const status = options.status ?? payload?.status ?? payload?.data?.status ?? payload?.result?.status;
+  const active = isActiveReadChatStatus(status);
+  const previous = recentReads.get(options.key);
+  if (!active) {
+    recentReads.set(options.key, { at: now, status: typeof status === "string" ? status : void 0 });
+    return payload;
+  }
+  recentReads.set(options.key, { at: now, status: typeof status === "string" ? status : void 0 });
+  if (!previous || !isActiveReadChatStatus(previous.status)) return payload;
+  const elapsedMs = now - previous.at;
+  if (elapsedMs < 0 || elapsedMs >= RAPID_READ_CHAT_ADVISORY_WINDOW_MS) return payload;
+  return {
+    ...payload,
+    pollingAdvisory: {
+      type: "rapid_read_chat_polling",
+      toolName: options.toolName,
+      windowMs: RAPID_READ_CHAT_ADVISORY_WINDOW_MS,
+      elapsedMs,
+      nextSuggestedReadAt: previous.at + RAPID_READ_CHAT_ADVISORY_WINDOW_MS,
+      completionCallbackExpected: Boolean(options.completionCallbackExpected),
+      message: `This session is still ${String(status)}. Avoid repeated ${options.toolName} polling for the same generating session; wait for the completion callback/status event or retry after the suggested time if you are debugging a real stall.`
+    }
+  };
+}
+
+// src/tools/mesh-tools-internal.ts
+var import_daemon_core3 = require("@adhdev/daemon-core");
+var import_node_crypto = require("crypto");
 var SESSION_PROVIDER_METADATA_TTL_MS = 30 * 6e4;
 var meshSessionProviderMetadata = /* @__PURE__ */ new Map();
 function getSessionMetadata(key) {
@@ -2841,12 +2840,95 @@ function buildRemoveNodeArgs(ctx, nodeId, sessionCleanupMode, force) {
     inlineMesh: ctx.mesh
   };
 }
+function classifyReadChatTransportCause(error) {
+  const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
+  if (/not acknowledged|delivery failure|channel never opened|connect timed out|not connected|datachannel|disconnected|\bclosed\b|offline|no route|failed to initiate p2p|p2p mesh is not available|connect queue full/.test(message)) {
+    return "not_connected";
+  }
+  return "saturated";
+}
+function resolveCachedMeshSessionPreviewFromLedger(ctx, nodeId, sessionId) {
+  const entries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
+    const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
+    if (entryNodeId && entryNodeId !== nodeId) continue;
+    const entrySessionId = readString(entry.sessionId) || readString(payload.targetSessionId) || readString(payload.sessionId) || readString(payload.instanceId);
+    if (entrySessionId !== sessionId) continue;
+    const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === "object" && !Array.isArray(payload.metadataEvent) ? payload.metadataEvent : payload;
+    const preview = (0, import_daemon_core2.resolveMeshSurfacedSessionPreview)(metadataEvent);
+    if (preview) {
+      return { ...preview, ledgerKind: entry.kind, timestamp: entry.timestamp };
+    }
+  }
+  return void 0;
+}
+function buildMeshReadChatCacheFallback(ctx, args, node, error) {
+  const classification = (0, import_daemon_core2.classifyP2pRelayFailure)(error, { command: "read_chat", targetDaemonId: node.daemonId });
+  const cause = classifyReadChatTransportCause(error);
+  const errorMessage = error instanceof Error ? error.message : String(error ?? "");
+  const causeNote = cause === "not_connected" ? "the worker daemon is not currently connected over P2P (no live channel)" : "the worker daemon is connected but saturated \u2014 it acknowledged the request but did not return the transcript within the deadline";
+  const cached = resolveCachedMeshSessionPreviewFromLedger(ctx, args.node_id, args.session_id);
+  if (cached) {
+    return JSON.stringify({
+      success: true,
+      source: "coordinator_cache_fallback",
+      fallback: true,
+      nodeId: args.node_id,
+      sessionId: args.session_id,
+      transport: "p2p",
+      transportFailure: {
+        code: classification.code,
+        reason: classification.reason,
+        cause,
+        error: errorMessage
+      },
+      advisory: `Live transcript unavailable (${causeNote}). Showing the cached coordinator-side summary surfaced from the worker's last completion/status event \u2014 a stale point-in-time summary, NOT the live transcript. The full transcript requires a live P2P read_chat once the peer is reachable.`,
+      fullTranscriptRequiresP2p: true,
+      summary: cached.preview,
+      messages: [{
+        role: cached.role,
+        content: cached.preview,
+        cached: true,
+        ...cached.receivedAt ? { receivedAt: cached.receivedAt } : {}
+      }],
+      cachedPreview: {
+        role: cached.role,
+        ledgerKind: cached.ledgerKind,
+        ledgerTimestamp: cached.timestamp,
+        ...cached.receivedAt ? { receivedAt: cached.receivedAt } : {}
+      }
+    }, null, 2);
+  }
+  const failure = buildCoordinatorP2pRelayFailure(error, {
+    command: "read_chat",
+    targetDaemonId: node.daemonId,
+    nodeId: args.node_id,
+    sessionId: args.session_id
+  });
+  return JSON.stringify({
+    ...failure,
+    cause,
+    cachedSummaryAvailable: false,
+    fullTranscriptRequiresP2p: true,
+    advisory: `Live transcript unavailable (${causeNote}) and no cached coordinator-side summary exists for this session yet (no completion/status event has been surfaced). The full transcript requires a live P2P read_chat once the peer is reachable.`
+  }, null, 2);
+}
+function resolveRefineConfigNode(ctx, nodeId) {
+  if (nodeId) return findNode(ctx.mesh, nodeId);
+  const node = ctx.mesh.nodes.find((entry) => !!entry.workspace);
+  if (!node) throw new Error("No mesh node with a workspace is available");
+  return node;
+}
+
+// src/tools/mesh-tools-status.ts
 async function meshStatus(ctx, args = {}) {
-  const rateResult = (0, import_daemon_core2.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_status" });
+  const rateResult = (0, import_daemon_core3.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_status" });
   const compact = args.verbose === true ? false : args.compact ?? true;
   await refreshMeshFromDaemon(ctx);
   const { mesh, transport } = ctx;
-  let ledgerSummary = (0, import_daemon_core2.getLedgerSummary)(mesh.id);
+  let ledgerSummary = (0, import_daemon_core3.getLedgerSummary)(mesh.id);
   const results = await Promise.all(mesh.nodes.map(async (node) => {
     const entry = {
       nodeId: node.id,
@@ -2902,14 +2984,14 @@ async function meshStatus(ctx, args = {}) {
         noFallbackReason: failure.noFallbackReason
       });
     }
-    entry.dataFreshness = (0, import_daemon_core2.buildMeshNodeProbeFreshness)({
+    entry.dataFreshness = (0, import_daemon_core3.buildMeshNodeProbeFreshness)({
       git: entry.git,
       liveTruthProbed,
       isSelfNode: entry.machine?.sameMachine === true,
       daemonId: readNodeDaemonId(node),
       node
     });
-    const recoveryContext = (0, import_daemon_core2.getSessionRecoveryContext)(mesh.id, { nodeId: node.id });
+    const recoveryContext = (0, import_daemon_core3.getSessionRecoveryContext)(mesh.id, { nodeId: node.id });
     if (recoveryContext.consecutiveNodeFailures > 0) {
       entry.recoveryHints = {
         consecutiveFailures: recoveryContext.consecutiveNodeFailures,
@@ -2981,23 +3063,23 @@ async function meshStatus(ctx, args = {}) {
     }
     return entry;
   }));
-  let ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(mesh.id, { tail: 200 });
-  let directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(mesh.id);
+  let ledgerEntries = (0, import_daemon_core3.readLedgerEntries)(mesh.id, { tail: 200 });
+  let directDispatches = (0, import_daemon_core3.getActiveDirectDispatches)(mesh.id);
   const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, results, directDispatches, ledgerEntries);
   if (directReconciliation.reconciled > 0) {
-    ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(mesh.id, { tail: 200 });
-    directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(mesh.id);
-    ledgerSummary = (0, import_daemon_core2.getLedgerSummary)(mesh.id);
+    ledgerEntries = (0, import_daemon_core3.readLedgerEntries)(mesh.id, { tail: 200 });
+    directDispatches = (0, import_daemon_core3.getActiveDirectDispatches)(mesh.id);
+    ledgerSummary = (0, import_daemon_core3.getLedgerSummary)(mesh.id);
   }
-  const activeWorkEvidence = (0, import_daemon_core2.buildMeshActiveWork)({
+  const activeWorkEvidence = (0, import_daemon_core3.buildMeshActiveWork)({
     meshId: mesh.id,
-    queue: (0, import_daemon_core2.getQueue)(mesh.id),
+    queue: (0, import_daemon_core3.getQueue)(mesh.id),
     ledgerEntries,
     directDispatches,
     nodes: results
   });
   const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
-  const staleDirectWorkSummary = (0, import_daemon_core2.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
+  const staleDirectWorkSummary = (0, import_daemon_core3.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
     note: activeWorkEvidence.staleDirectWorkNote,
     detailHint: "Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail."
   });
@@ -3185,7 +3267,7 @@ async function meshStatus(ctx, args = {}) {
   }
   try {
     if (compact) {
-      const { live, historyFold } = (0, import_daemon_core2.getMeshStatusMissionsCompact)(mesh.id);
+      const { live, historyFold } = (0, import_daemon_core3.getMeshStatusMissionsCompact)(mesh.id);
       const ranked = [...live].sort((a, b) => String(b.tasks?.lastActivityAt ?? "").localeCompare(String(a.tasks?.lastActivityAt ?? "")));
       const kept = [];
       const overflow = [];
@@ -3212,11 +3294,11 @@ async function meshStatus(ctx, args = {}) {
       }
       if (historyFold) response.missionsHistory = historyFold;
     } else {
-      const missions = (0, import_daemon_core2.getMeshStatusMissionSummaries)(mesh.id, { verbose: true });
+      const missions = (0, import_daemon_core3.getMeshStatusMissionSummaries)(mesh.id, { verbose: true });
       if (missions.length > 0) {
         response.missions = missions.map((mission) => {
           try {
-            return { ...mission, stats: (0, import_daemon_core2.computeMeshMissionStats)(mesh.id, mission.id) };
+            return { ...mission, stats: (0, import_daemon_core3.computeMeshMissionStats)(mesh.id, mission.id) };
           } catch {
             return mission;
           }
@@ -3227,14 +3309,14 @@ async function meshStatus(ctx, args = {}) {
   }
   try {
     const pendingEvents = await drainCoordinatorPendingEvents(ctx);
-    const asyncRefineJobs = (0, import_daemon_core2.buildMeshAsyncRefineJobs)({
+    const asyncRefineJobs = (0, import_daemon_core3.buildMeshAsyncRefineJobs)({
       meshId: mesh.id,
       ledgerEntries,
       pendingEvents
     });
     if (asyncRefineJobs.length > 0) {
       if (compact) {
-        const summary = (0, import_daemon_core2.summarizeMeshAsyncRefineJobs)(asyncRefineJobs);
+        const summary = (0, import_daemon_core3.summarizeMeshAsyncRefineJobs)(asyncRefineJobs);
         if (summary.activeJobs.length > 0) response.asyncRefineJobs = summary.activeJobs;
         response.asyncRefineJobsSummary = {
           total: summary.total,
@@ -3251,191 +3333,6 @@ async function meshStatus(ctx, args = {}) {
   } catch {
   }
   return JSON.stringify(response, null, 2);
-}
-async function meshTaskHistory(ctx, args) {
-  const { mesh } = ctx;
-  const compact = args.verbose === true ? false : args.compact ?? true;
-  const pendingEvents = await drainCoordinatorPendingEvents(ctx);
-  const requestedTail = typeof args.tail === "number" && args.tail > 0 ? Math.floor(args.tail) : 20;
-  const compactCap = requestedTail > 50 ? 20 : 30;
-  const tail = compact ? Math.min(requestedTail, compactCap) : Math.min(requestedTail, 200);
-  const kind = typeof args.kind === "string" && args.kind.trim() ? [args.kind.trim()] : void 0;
-  const rawEntries = (0, import_daemon_core2.readLedgerEntries)(mesh.id, { tail, kind });
-  const entries = compact ? rawEntries.map((e) => ({
-    ...e,
-    payload: e.payload ? slimLedgerPayload(e.payload) : e.payload
-  })) : rawEntries;
-  const summary = (0, import_daemon_core2.getLedgerSummary)(mesh.id);
-  let taskStats;
-  try {
-    const taskIds = [...new Set(rawEntries.map((e) => typeof e.payload?.taskId === "string" ? e.payload.taskId : "").filter(Boolean))];
-    if (taskIds.length > 0) {
-      const stats = (0, import_daemon_core2.computeMeshTaskStats)(mesh.id, { taskIds });
-      if (stats.length > 0) taskStats = stats;
-    }
-  } catch {
-  }
-  return JSON.stringify({
-    meshId: mesh.id,
-    payloadMode: compact ? "compact" : "full",
-    entries,
-    summary,
-    ...taskStats ? { taskStats } : {},
-    ...pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}
-  }, null, 2);
-}
-async function meshRecordNote(ctx, args) {
-  const { mesh } = ctx;
-  const text = typeof args.text === "string" ? args.text.trim() : "";
-  if (!text) {
-    return JSON.stringify({ success: false, error: "text required" }, null, 2);
-  }
-  const category = args.category === "provider_quirk" || args.category === "pattern_to_avoid" || args.category === "recovery_lesson" ? args.category : void 0;
-  const createdAt = (/* @__PURE__ */ new Date()).toISOString();
-  const sourceCoordinator = ctx.coordinatorSessionId || ctx.localDaemonId || ctx.coordinatorHostname || void 0;
-  const entry = (0, import_daemon_core2.appendLedgerEntry)(mesh.id, {
-    kind: "coordinator_operating_note",
-    ...sourceCoordinator ? { sessionId: sourceCoordinator } : {},
-    payload: {
-      text,
-      ...category ? { category } : {},
-      createdAt,
-      ...sourceCoordinator ? { sourceCoordinator } : {}
-    }
-  });
-  return JSON.stringify({
-    success: true,
-    meshId: mesh.id,
-    noteId: entry.id,
-    recorded: { text, category: category ?? null, createdAt },
-    note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.'
-  }, null, 2);
-}
-async function meshReconcileLedger(ctx, args) {
-  await refreshMeshFromDaemon(ctx);
-  const requestedNodeIds = Array.isArray(args.node_ids) ? new Set(args.node_ids.map((id) => typeof id === "string" ? id.trim() : "").filter(Boolean)) : null;
-  const nodes = ctx.mesh.nodes.filter((node) => !requestedNodeIds || requestedNodeIds.has(node.id));
-  const replicas = [];
-  const shouldImport = args.import_entries !== false;
-  const queryArgs = {
-    meshId: ctx.mesh.id,
-    ...typeof args.limit === "number" ? { limit: args.limit } : {},
-    ...typeof args.after_id === "string" && args.after_id.trim() ? { afterId: args.after_id.trim() } : {},
-    ...typeof args.since === "string" && args.since.trim() ? { since: args.since.trim() } : {}
-  };
-  for (const node of nodes) {
-    try {
-      if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {
-        const slice2 = (0, import_daemon_core2.readLedgerSliceFromStore)(ctx.mesh.id, queryArgs);
-        replicas.push((0, import_daemon_core2.buildMeshLedgerReplicaEvidence)({
-          nodeId: node.id,
-          daemonId: node.daemonId,
-          transport: "local",
-          slice: slice2,
-          status: "local"
-        }));
-        continue;
-      }
-      const result = await commandForNode(ctx, node, "get_mesh_ledger_slice", queryArgs);
-      const payload = unwrapCommandPayload(result);
-      if (payload?.success === false) {
-        throw new Error(payload.error || "remote get_mesh_ledger_slice failed");
-      }
-      const slice = payload?.slice ?? payload;
-      if (slice?.protocol !== "adhdev.mesh.ledger.slice.v1" || !Array.isArray(slice.entries)) {
-        throw new Error("remote daemon returned an invalid ledger slice payload");
-      }
-      const importResult = shouldImport ? (0, import_daemon_core2.appendRemoteLedgerEntries)(ctx.mesh.id, slice.entries) : { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
-      replicas.push((0, import_daemon_core2.buildMeshLedgerReplicaEvidence)({
-        nodeId: node.id,
-        daemonId: node.daemonId,
-        transport: "p2p_datachannel",
-        slice,
-        importResult
-      }));
-      if (shouldImport && importResult.accepted > 0) {
-        (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
-          kind: "ledger_replicated",
-          nodeId: node.id,
-          payload: {
-            protocol: "adhdev.mesh.ledger.slice.v1",
-            imported: importResult.accepted,
-            skippedDuplicate: importResult.skippedDuplicate,
-            rejectedInvalid: importResult.rejectedInvalid,
-            nextAfterId: slice.cursor?.nextAfterId ?? null,
-            via: "p2p_datachannel"
-          }
-        });
-      }
-    } catch (e) {
-      replicas.push((0, import_daemon_core2.buildMeshLedgerReplicaEvidence)({
-        nodeId: node.id,
-        daemonId: node.daemonId,
-        transport: node.daemonId ? "p2p_datachannel" : "local",
-        status: "failed",
-        error: e?.message ?? String(e)
-      }));
-    }
-  }
-  const evidence = (0, import_daemon_core2.buildMeshLedgerReconciliationEvidence)(ctx.mesh.id, replicas);
-  (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
-    kind: "ledger_reconciled",
-    payload: {
-      protocol: evidence.protocol,
-      sourceOfTruth: evidence.sourceOfTruth,
-      totals: evidence.totals,
-      convergence: evidence.convergence
-    }
-  });
-  return JSON.stringify({ success: true, evidence }, null, 2);
-}
-async function meshPruneStaleDirect(ctx, args = {}) {
-  await refreshMeshFromDaemon(ctx);
-  const execute = args.execute === true && args.dry_run !== true;
-  const includeTerminal = args.include_terminal === true;
-  const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
-  const ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
-  const directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(ctx.mesh.id);
-  const result = (0, import_daemon_core2.pruneStaleDirectDispatches)({
-    meshId: ctx.mesh.id,
-    queue: (0, import_daemon_core2.getQueue)(ctx.mesh.id),
-    ledgerEntries,
-    directDispatches,
-    nodes: liveNodes,
-    execute,
-    includeTerminal,
-    source: "mesh_prune_stale_direct"
-  });
-  const { prunable, prunedCount, preservedUnacknowledged, preservedLedgerOnly, preservedNotOrphan } = result;
-  const summarize = (records) => records.map((r) => ({
-    taskId: r.taskId,
-    nodeId: r.nodeId,
-    sessionId: r.sessionId,
-    status: r.status,
-    terminal: r.terminal === true,
-    staleReason: r.staleReason,
-    taskTitle: r.taskTitle,
-    createdAt: r.createdAt
-  }));
-  return JSON.stringify({
-    success: true,
-    mode: result.mode,
-    meshId: ctx.mesh.id,
-    includeTerminal,
-    candidateCount: result.candidateCount,
-    prunableCount: prunable.length,
-    prunedCount,
-    prunable: summarize(prunable),
-    preserved: {
-      unacknowledgedCount: preservedUnacknowledged.length,
-      ledgerOnlyCount: preservedLedgerOnly.length,
-      notOrphanCount: preservedNotOrphan.length,
-      unacknowledged: summarize(preservedUnacknowledged),
-      ledgerOnly: summarize(preservedLedgerOnly),
-      notOrphan: summarize(preservedNotOrphan)
-    },
-    note: execute ? `Pruned ${prunedCount} orphaned direct dispatch record(s) from the active staleDirect surface. The append-only mesh ledger audit history is preserved; a direct_dispatch_pruned entry records this prune.` : "Dry run \u2014 nothing was deleted. Re-run with execute=true to prune the listed orphaned records. Fresh unacknowledged dispatch failures (node/session still live) and ledger-only audit entries are always preserved."
-  }, null, 2);
 }
 async function meshListNodes(ctx) {
   await refreshMeshFromDaemon(ctx);
@@ -3459,67 +3356,18 @@ async function meshListNodes(ctx) {
     }))
   }, null, 2);
 }
-async function meshMissionUpsert(ctx, args) {
-  try {
-    const mission = (0, import_daemon_core2.upsertMeshMission)(ctx.mesh.id, {
-      id: readString(args.mission_id) || readString(args.missionId) || void 0,
-      title: args.title,
-      goal: typeof args.goal === "string" ? args.goal : void 0,
-      status: readString(args.status) || void 0
-    });
-    return JSON.stringify({
-      success: true,
-      mission,
-      nextAction: "Attach tasks with mesh_enqueue_task mission_id and depends_on. mesh_status shows live task aggregates for this mission."
-    });
-  } catch (e) {
-    const message = e?.message || String(e);
-    const code = message.includes("mission_title_required") ? "mission_title_required" : message.includes("invalid_mission_status") ? "invalid_mission_status" : void 0;
-    return JSON.stringify({ success: false, ...code ? { code } : {}, error: message });
-  }
-}
-async function meshMissionList(ctx, args = {}) {
-  try {
-    const rawStatuses = Array.isArray(args.status) ? args.status : typeof args.status === "string" && args.status.trim() ? [args.status] : [];
-    const invalid = rawStatuses.filter((s) => !import_daemon_core2.MESH_MISSION_STATUSES.includes(s));
-    if (invalid.length > 0) {
-      return JSON.stringify({
-        success: false,
-        code: "invalid_mission_status",
-        error: `invalid status filter: ${invalid.join(", ")} (valid: ${import_daemon_core2.MESH_MISSION_STATUSES.join(", ")})`
-      });
-    }
-    const statuses = rawStatuses.length > 0 ? rawStatuses : void 0;
-    const missions = (0, import_daemon_core2.listMeshMissionSummaries)(ctx.mesh.id, {
-      statuses,
-      verbose: args.verbose === true
-    }).map((mission) => {
-      try {
-        return { ...mission, stats: (0, import_daemon_core2.computeMeshMissionStats)(ctx.mesh.id, mission.id) };
-      } catch {
-        return mission;
-      }
-    });
-    return JSON.stringify({
-      success: true,
-      count: missions.length,
-      ...statuses ? { statusFilter: statuses } : {},
-      missions
-    }, null, 2);
-  } catch (e) {
-    return JSON.stringify({ success: false, error: e?.message || String(e) });
-  }
-}
+
+// src/tools/mesh-tools-queue.ts
 async function meshEnqueueTask(ctx, args) {
   const taskMode = readString(args.task_mode) || readString(args.taskMode);
-  const requiredTags = (0, import_daemon_core2.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
+  const requiredTags = (0, import_daemon_core3.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
   const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
   const explicitTarget = readString(args.targetNodeId) || readString(args.target_node_id) || void 0;
   const preferWorktree = args.preferWorktree === true || args.prefer_worktree === true;
   const targetNodeId = explicitTarget || (preferWorktree ? resolvePreferredWorktreeNodeId(ctx) : void 0);
   try {
-    const task = (0, import_daemon_core2.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {} });
+    const task = (0, import_daemon_core3.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {} });
     if (!(ctx.transport instanceof IpcTransport)) {
       const queueTrigger = await triggerMeshQueueAndReport(ctx);
       return JSON.stringify({
@@ -3542,14 +3390,14 @@ async function meshEnqueueTask(ctx, args) {
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (isLocalNode || !node.daemonId) continue;
         if (targetNodeId && node.id !== targetNodeId) continue;
-        if (!(0, import_daemon_core2.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core2.buildMeshNodeCapabilityTags)(node))) continue;
+        if (!(0, import_daemon_core3.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core3.buildMeshNodeCapabilityTags)(node))) continue;
         dispatchPromises.push(
           ipcDispatchToRemoteAgent(ctx, node, { message: args.message }).then((result) => {
             if (result.success) {
               try {
                 const providerType = result.providerType;
                 const descriptor = summarizeTaskMessage(args.message);
-                (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
+                (0, import_daemon_core3.appendLedgerEntry)(ctx.mesh.id, {
                   kind: "task_dispatched",
                   nodeId: node.id,
                   sessionId: result.sessionId,
@@ -3571,7 +3419,7 @@ async function meshEnqueueTask(ctx, args) {
             }
           }).catch((err) => {
             try {
-              (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
+              (0, import_daemon_core3.appendLedgerEntry)(ctx.mesh.id, {
                 kind: "p2p_dispatch_failed",
                 nodeId: node.id,
                 payload: {
@@ -3614,17 +3462,17 @@ async function meshEnqueueTask(ctx, args) {
   }
 }
 async function meshViewQueue(ctx, args) {
-  const rateResult = (0, import_daemon_core2.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_view_queue" });
+  const rateResult = (0, import_daemon_core3.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_view_queue" });
   const compact = args.verbose === true ? false : args.compact ?? true;
   try {
     await refreshMeshFromDaemon(ctx);
     const statusFilter = sanitizeQueueStatusFilter(args.status);
     const view = normalizeQueueViewMode(args.view);
-    const rawQueue = (0, import_daemon_core2.getQueue)(ctx.mesh.id);
+    const rawQueue = (0, import_daemon_core3.getQueue)(ctx.mesh.id);
     const statusById = new Map(rawQueue.map((task) => [task.id, task.status]));
     const withDependencies = rawQueue.map((task) => {
       if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) return task;
-      const depState = (0, import_daemon_core2.describeTaskDependencyState)(task, statusById);
+      const depState = (0, import_daemon_core3.describeTaskDependencyState)(task, statusById);
       return { ...task, ...depState };
     });
     const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh));
@@ -3633,16 +3481,16 @@ async function meshViewQueue(ctx, args) {
     const visibleSummary = buildQueueStatusSummary(queue);
     const maintenance = buildQueueMaintenanceReport(fullQueue);
     const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
-    let ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
-    let directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(ctx.mesh.id);
+    let ledgerEntries = (0, import_daemon_core3.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+    let directDispatches = (0, import_daemon_core3.getActiveDirectDispatches)(ctx.mesh.id);
     const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);
     if (directReconciliation.reconciled > 0) {
-      ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
-      directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(ctx.mesh.id);
+      ledgerEntries = (0, import_daemon_core3.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+      directDispatches = (0, import_daemon_core3.getActiveDirectDispatches)(ctx.mesh.id);
     }
-    (0, import_daemon_core2.markStaleDirectDispatches)(ctx.mesh.id);
-    directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(ctx.mesh.id);
-    const activeWorkEvidence = (0, import_daemon_core2.buildMeshActiveWork)({
+    (0, import_daemon_core3.markStaleDirectDispatches)(ctx.mesh.id);
+    directDispatches = (0, import_daemon_core3.getActiveDirectDispatches)(ctx.mesh.id);
+    const activeWorkEvidence = (0, import_daemon_core3.buildMeshActiveWork)({
       meshId: ctx.mesh.id,
       queue: fullQueue,
       ledgerEntries,
@@ -3667,7 +3515,7 @@ async function meshViewQueue(ctx, args) {
     const wantActiveQueueArray = view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status));
     const wantHistoricalQueueArray = !compact && (view === "historical" || requestedHistoricalRows);
     const activeWorkResult = compact ? compactActiveWorkRecords(activeWorkEvidence.activeWork) : { records: activeWorkEvidence.activeWork, omitted: 0 };
-    const staleDirectWorkSummary = (0, import_daemon_core2.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
+    const staleDirectWorkSummary = (0, import_daemon_core3.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
       note: activeWorkEvidence.staleDirectWorkNote,
       detailHint: "Full stale direct entries are omitted from mesh_view_queue in compact mode. Call mesh_view_queue with verbose=true, or inspect mesh_task_history for ledger detail."
     });
@@ -3742,7 +3590,7 @@ async function meshQueueCancel(ctx, args) {
   try {
     const taskId = (args.task_id || args.taskId || "").trim();
     if (!taskId) return JSON.stringify({ success: false, error: "task_id required" });
-    const task = (0, import_daemon_core2.cancelTask)(ctx.mesh.id, taskId, { reason: args.reason });
+    const task = (0, import_daemon_core3.cancelTask)(ctx.mesh.id, taskId, { reason: args.reason });
     if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
     ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
     });
@@ -3758,7 +3606,7 @@ async function meshQueueRequeue(ctx, args) {
     const targetNodeId = (args.target_node_id || args.targetNodeId || "").trim() || void 0;
     const targetSessionId = (args.target_session_id || args.targetSessionId || "").trim() || void 0;
     const keepTargetSession = args.keep_target_session === true || args.keepTargetSession === true;
-    const task = (0, import_daemon_core2.requeueTask)(ctx.mesh.id, taskId, {
+    const task = (0, import_daemon_core3.requeueTask)(ctx.mesh.id, taskId, {
       reason: args.reason,
       targetNodeId,
       targetSessionId,
@@ -3787,10 +3635,259 @@ async function meshQueueRequeue(ctx, args) {
     return JSON.stringify({ success: false, error: e.message });
   }
 }
+
+// src/tools/mesh-tools-mission.ts
+async function meshTaskHistory(ctx, args) {
+  const { mesh } = ctx;
+  const compact = args.verbose === true ? false : args.compact ?? true;
+  const pendingEvents = await drainCoordinatorPendingEvents(ctx);
+  const requestedTail = typeof args.tail === "number" && args.tail > 0 ? Math.floor(args.tail) : 20;
+  const compactCap = requestedTail > 50 ? 20 : 30;
+  const tail = compact ? Math.min(requestedTail, compactCap) : Math.min(requestedTail, 200);
+  const kind = typeof args.kind === "string" && args.kind.trim() ? [args.kind.trim()] : void 0;
+  const rawEntries = (0, import_daemon_core3.readLedgerEntries)(mesh.id, { tail, kind });
+  const entries = compact ? rawEntries.map((e) => ({
+    ...e,
+    payload: e.payload ? slimLedgerPayload(e.payload) : e.payload
+  })) : rawEntries;
+  const summary = (0, import_daemon_core3.getLedgerSummary)(mesh.id);
+  let taskStats;
+  try {
+    const taskIds = [...new Set(rawEntries.map((e) => typeof e.payload?.taskId === "string" ? e.payload.taskId : "").filter(Boolean))];
+    if (taskIds.length > 0) {
+      const stats = (0, import_daemon_core3.computeMeshTaskStats)(mesh.id, { taskIds });
+      if (stats.length > 0) taskStats = stats;
+    }
+  } catch {
+  }
+  return JSON.stringify({
+    meshId: mesh.id,
+    payloadMode: compact ? "compact" : "full",
+    entries,
+    summary,
+    ...taskStats ? { taskStats } : {},
+    ...pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}
+  }, null, 2);
+}
+async function meshRecordNote(ctx, args) {
+  const { mesh } = ctx;
+  const text = typeof args.text === "string" ? args.text.trim() : "";
+  if (!text) {
+    return JSON.stringify({ success: false, error: "text required" }, null, 2);
+  }
+  const category = args.category === "provider_quirk" || args.category === "pattern_to_avoid" || args.category === "recovery_lesson" ? args.category : void 0;
+  const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+  const sourceCoordinator = ctx.coordinatorSessionId || ctx.localDaemonId || ctx.coordinatorHostname || void 0;
+  const entry = (0, import_daemon_core3.appendLedgerEntry)(mesh.id, {
+    kind: "coordinator_operating_note",
+    ...sourceCoordinator ? { sessionId: sourceCoordinator } : {},
+    payload: {
+      text,
+      ...category ? { category } : {},
+      createdAt,
+      ...sourceCoordinator ? { sourceCoordinator } : {}
+    }
+  });
+  return JSON.stringify({
+    success: true,
+    meshId: mesh.id,
+    noteId: entry.id,
+    recorded: { text, category: category ?? null, createdAt },
+    note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.'
+  }, null, 2);
+}
+async function meshReconcileLedger(ctx, args) {
+  await refreshMeshFromDaemon(ctx);
+  const requestedNodeIds = Array.isArray(args.node_ids) ? new Set(args.node_ids.map((id) => typeof id === "string" ? id.trim() : "").filter(Boolean)) : null;
+  const nodes = ctx.mesh.nodes.filter((node) => !requestedNodeIds || requestedNodeIds.has(node.id));
+  const replicas = [];
+  const shouldImport = args.import_entries !== false;
+  const queryArgs = {
+    meshId: ctx.mesh.id,
+    ...typeof args.limit === "number" ? { limit: args.limit } : {},
+    ...typeof args.after_id === "string" && args.after_id.trim() ? { afterId: args.after_id.trim() } : {},
+    ...typeof args.since === "string" && args.since.trim() ? { since: args.since.trim() } : {}
+  };
+  for (const node of nodes) {
+    try {
+      if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {
+        const slice2 = (0, import_daemon_core3.readLedgerSliceFromStore)(ctx.mesh.id, queryArgs);
+        replicas.push((0, import_daemon_core3.buildMeshLedgerReplicaEvidence)({
+          nodeId: node.id,
+          daemonId: node.daemonId,
+          transport: "local",
+          slice: slice2,
+          status: "local"
+        }));
+        continue;
+      }
+      const result = await commandForNode(ctx, node, "get_mesh_ledger_slice", queryArgs);
+      const payload = unwrapCommandPayload(result);
+      if (payload?.success === false) {
+        throw new Error(payload.error || "remote get_mesh_ledger_slice failed");
+      }
+      const slice = payload?.slice ?? payload;
+      if (slice?.protocol !== "adhdev.mesh.ledger.slice.v1" || !Array.isArray(slice.entries)) {
+        throw new Error("remote daemon returned an invalid ledger slice payload");
+      }
+      const importResult = shouldImport ? (0, import_daemon_core3.appendRemoteLedgerEntries)(ctx.mesh.id, slice.entries) : { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
+      replicas.push((0, import_daemon_core3.buildMeshLedgerReplicaEvidence)({
+        nodeId: node.id,
+        daemonId: node.daemonId,
+        transport: "p2p_datachannel",
+        slice,
+        importResult
+      }));
+      if (shouldImport && importResult.accepted > 0) {
+        (0, import_daemon_core3.appendLedgerEntry)(ctx.mesh.id, {
+          kind: "ledger_replicated",
+          nodeId: node.id,
+          payload: {
+            protocol: "adhdev.mesh.ledger.slice.v1",
+            imported: importResult.accepted,
+            skippedDuplicate: importResult.skippedDuplicate,
+            rejectedInvalid: importResult.rejectedInvalid,
+            nextAfterId: slice.cursor?.nextAfterId ?? null,
+            via: "p2p_datachannel"
+          }
+        });
+      }
+    } catch (e) {
+      replicas.push((0, import_daemon_core3.buildMeshLedgerReplicaEvidence)({
+        nodeId: node.id,
+        daemonId: node.daemonId,
+        transport: node.daemonId ? "p2p_datachannel" : "local",
+        status: "failed",
+        error: e?.message ?? String(e)
+      }));
+    }
+  }
+  const evidence = (0, import_daemon_core3.buildMeshLedgerReconciliationEvidence)(ctx.mesh.id, replicas);
+  (0, import_daemon_core3.appendLedgerEntry)(ctx.mesh.id, {
+    kind: "ledger_reconciled",
+    payload: {
+      protocol: evidence.protocol,
+      sourceOfTruth: evidence.sourceOfTruth,
+      totals: evidence.totals,
+      convergence: evidence.convergence
+    }
+  });
+  return JSON.stringify({ success: true, evidence }, null, 2);
+}
+async function meshMissionUpsert(ctx, args) {
+  try {
+    const mission = (0, import_daemon_core3.upsertMeshMission)(ctx.mesh.id, {
+      id: readString(args.mission_id) || readString(args.missionId) || void 0,
+      title: args.title,
+      goal: typeof args.goal === "string" ? args.goal : void 0,
+      status: readString(args.status) || void 0
+    });
+    return JSON.stringify({
+      success: true,
+      mission,
+      nextAction: "Attach tasks with mesh_enqueue_task mission_id and depends_on. mesh_status shows live task aggregates for this mission."
+    });
+  } catch (e) {
+    const message = e?.message || String(e);
+    const code = message.includes("mission_title_required") ? "mission_title_required" : message.includes("invalid_mission_status") ? "invalid_mission_status" : void 0;
+    return JSON.stringify({ success: false, ...code ? { code } : {}, error: message });
+  }
+}
+async function meshMissionList(ctx, args = {}) {
+  try {
+    const rawStatuses = Array.isArray(args.status) ? args.status : typeof args.status === "string" && args.status.trim() ? [args.status] : [];
+    const invalid = rawStatuses.filter((s) => !import_daemon_core3.MESH_MISSION_STATUSES.includes(s));
+    if (invalid.length > 0) {
+      return JSON.stringify({
+        success: false,
+        code: "invalid_mission_status",
+        error: `invalid status filter: ${invalid.join(", ")} (valid: ${import_daemon_core3.MESH_MISSION_STATUSES.join(", ")})`
+      });
+    }
+    const statuses = rawStatuses.length > 0 ? rawStatuses : void 0;
+    const missions = (0, import_daemon_core3.listMeshMissionSummaries)(ctx.mesh.id, {
+      statuses,
+      verbose: args.verbose === true
+    }).map((mission) => {
+      try {
+        return { ...mission, stats: (0, import_daemon_core3.computeMeshMissionStats)(ctx.mesh.id, mission.id) };
+      } catch {
+        return mission;
+      }
+    });
+    return JSON.stringify({
+      success: true,
+      count: missions.length,
+      ...statuses ? { statusFilter: statuses } : {},
+      missions
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ success: false, error: e?.message || String(e) });
+  }
+}
+async function meshReviewInbox(ctx, args = {}) {
+  await refreshMeshFromDaemon(ctx);
+  const meshId = (args.mesh_id ?? ctx.mesh.id).trim();
+  const result = await commandForNode(ctx, ctx.mesh.nodes[0], "get_mesh_review_inbox", {
+    meshId,
+    inlineMesh: ctx.mesh
+  });
+  return JSON.stringify(result, null, 2);
+}
+
+// src/tools/mesh-tools-session.ts
+async function meshPruneStaleDirect(ctx, args = {}) {
+  await refreshMeshFromDaemon(ctx);
+  const execute = args.execute === true && args.dry_run !== true;
+  const includeTerminal = args.include_terminal === true;
+  const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+  const ledgerEntries = (0, import_daemon_core3.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
+  const directDispatches = (0, import_daemon_core3.getActiveDirectDispatches)(ctx.mesh.id);
+  const result = (0, import_daemon_core3.pruneStaleDirectDispatches)({
+    meshId: ctx.mesh.id,
+    queue: (0, import_daemon_core3.getQueue)(ctx.mesh.id),
+    ledgerEntries,
+    directDispatches,
+    nodes: liveNodes,
+    execute,
+    includeTerminal,
+    source: "mesh_prune_stale_direct"
+  });
+  const { prunable, prunedCount, preservedUnacknowledged, preservedLedgerOnly, preservedNotOrphan } = result;
+  const summarize = (records) => records.map((r) => ({
+    taskId: r.taskId,
+    nodeId: r.nodeId,
+    sessionId: r.sessionId,
+    status: r.status,
+    terminal: r.terminal === true,
+    staleReason: r.staleReason,
+    taskTitle: r.taskTitle,
+    createdAt: r.createdAt
+  }));
+  return JSON.stringify({
+    success: true,
+    mode: result.mode,
+    meshId: ctx.mesh.id,
+    includeTerminal,
+    candidateCount: result.candidateCount,
+    prunableCount: prunable.length,
+    prunedCount,
+    prunable: summarize(prunable),
+    preserved: {
+      unacknowledgedCount: preservedUnacknowledged.length,
+      ledgerOnlyCount: preservedLedgerOnly.length,
+      notOrphanCount: preservedNotOrphan.length,
+      unacknowledged: summarize(preservedUnacknowledged),
+      ledgerOnly: summarize(preservedLedgerOnly),
+      notOrphan: summarize(preservedNotOrphan)
+    },
+    note: execute ? `Pruned ${prunedCount} orphaned direct dispatch record(s) from the active staleDirect surface. The append-only mesh ledger audit history is preserved; a direct_dispatch_pruned entry records this prune.` : "Dry run \u2014 nothing was deleted. Re-run with execute=true to prune the listed orphaned records. Fresh unacknowledged dispatch failures (node/session still live) and ledger-only audit entries are always preserved."
+  }, null, 2);
+}
 async function meshSendTask(ctx, args) {
   const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
-  const modeValidation = (0, import_daemon_core2.validateMeshTaskModeRequest)(requestedTaskMode, args.message);
+  const modeValidation = (0, import_daemon_core3.validateMeshTaskModeRequest)(requestedTaskMode, args.message);
   if (!modeValidation.valid) {
     return JSON.stringify({
       success: false,
@@ -3902,7 +3999,7 @@ async function meshSendTask(ctx, args) {
         const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
         try {
           const providerType = result2.providerType || cached?.providerType;
-          (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
+          (0, import_daemon_core3.appendLedgerEntry)(ctx.mesh.id, {
             kind: "task_dispatched",
             nodeId: args.node_id,
             sessionId: dispatchedSessionId,
@@ -3914,7 +4011,7 @@ async function meshSendTask(ctx, args) {
               targetSessionId: dispatchedSessionId
             })
           });
-          (0, import_daemon_core2.insertDirectDispatch)(ctx.mesh.id, {
+          (0, import_daemon_core3.insertDirectDispatch)(ctx.mesh.id, {
             taskId,
             nodeId: args.node_id,
             sessionId: dispatchedSessionId,
@@ -3925,7 +4022,7 @@ async function meshSendTask(ctx, args) {
             dispatchedAt
           });
           if (missionId) {
-            (0, import_daemon_core2.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
+            (0, import_daemon_core3.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
               id: taskId,
               missionId,
               assignedNodeId: args.node_id,
@@ -4084,7 +4181,7 @@ async function meshSendTask(ctx, args) {
         });
       }
       try {
-        (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
+        (0, import_daemon_core3.appendLedgerEntry)(ctx.mesh.id, {
           kind: "task_dispatched",
           nodeId: args.node_id,
           sessionId: args.session_id,
@@ -4099,7 +4196,7 @@ async function meshSendTask(ctx, args) {
         });
       } catch {
       }
-      (0, import_daemon_core2.insertDirectDispatch)(ctx.mesh.id, {
+      (0, import_daemon_core3.insertDirectDispatch)(ctx.mesh.id, {
         taskId,
         nodeId: args.node_id,
         sessionId: args.session_id,
@@ -4112,7 +4209,7 @@ async function meshSendTask(ctx, args) {
       });
       if (missionId) {
         try {
-          (0, import_daemon_core2.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
+          (0, import_daemon_core3.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
             id: taskId,
             missionId,
             assignedNodeId: args.node_id,
@@ -4157,14 +4254,14 @@ async function meshSendTask(ctx, args) {
         } : {}
       });
     }
-    const task = (0, import_daemon_core2.enqueueTask)(ctx.mesh.id, args.message, {
+    const task = (0, import_daemon_core3.enqueueTask)(ctx.mesh.id, args.message, {
       targetNodeId: args.node_id,
       targetSessionId: args.session_id,
       taskMode,
       ...missionId ? { missionId } : {}
     });
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
-    const pendingEvents = (0, import_daemon_core2.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId);
+    const pendingEvents = (0, import_daemon_core3.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId);
     const result = {
       success: true,
       source: "queue",
@@ -4189,81 +4286,6 @@ async function meshSendTask(ctx, args) {
     return JSON.stringify(failure);
   }
 }
-function classifyReadChatTransportCause(error) {
-  const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
-  if (/not acknowledged|delivery failure|channel never opened|connect timed out|not connected|datachannel|disconnected|\bclosed\b|offline|no route|failed to initiate p2p|p2p mesh is not available|connect queue full/.test(message)) {
-    return "not_connected";
-  }
-  return "saturated";
-}
-function resolveCachedMeshSessionPreviewFromLedger(ctx, nodeId, sessionId) {
-  const entries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const entry = entries[i];
-    const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
-    const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
-    if (entryNodeId && entryNodeId !== nodeId) continue;
-    const entrySessionId = readString(entry.sessionId) || readString(payload.targetSessionId) || readString(payload.sessionId) || readString(payload.instanceId);
-    if (entrySessionId !== sessionId) continue;
-    const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === "object" && !Array.isArray(payload.metadataEvent) ? payload.metadataEvent : payload;
-    const preview = (0, import_daemon_core2.resolveMeshSurfacedSessionPreview)(metadataEvent);
-    if (preview) {
-      return { ...preview, ledgerKind: entry.kind, timestamp: entry.timestamp };
-    }
-  }
-  return void 0;
-}
-function buildMeshReadChatCacheFallback(ctx, args, node, error) {
-  const classification = (0, import_daemon_core2.classifyP2pRelayFailure)(error, { command: "read_chat", targetDaemonId: node.daemonId });
-  const cause = classifyReadChatTransportCause(error);
-  const errorMessage = error instanceof Error ? error.message : String(error ?? "");
-  const causeNote = cause === "not_connected" ? "the worker daemon is not currently connected over P2P (no live channel)" : "the worker daemon is connected but saturated \u2014 it acknowledged the request but did not return the transcript within the deadline";
-  const cached = resolveCachedMeshSessionPreviewFromLedger(ctx, args.node_id, args.session_id);
-  if (cached) {
-    return JSON.stringify({
-      success: true,
-      source: "coordinator_cache_fallback",
-      fallback: true,
-      nodeId: args.node_id,
-      sessionId: args.session_id,
-      transport: "p2p",
-      transportFailure: {
-        code: classification.code,
-        reason: classification.reason,
-        cause,
-        error: errorMessage
-      },
-      advisory: `Live transcript unavailable (${causeNote}). Showing the cached coordinator-side summary surfaced from the worker's last completion/status event \u2014 a stale point-in-time summary, NOT the live transcript. The full transcript requires a live P2P read_chat once the peer is reachable.`,
-      fullTranscriptRequiresP2p: true,
-      summary: cached.preview,
-      messages: [{
-        role: cached.role,
-        content: cached.preview,
-        cached: true,
-        ...cached.receivedAt ? { receivedAt: cached.receivedAt } : {}
-      }],
-      cachedPreview: {
-        role: cached.role,
-        ledgerKind: cached.ledgerKind,
-        ledgerTimestamp: cached.timestamp,
-        ...cached.receivedAt ? { receivedAt: cached.receivedAt } : {}
-      }
-    }, null, 2);
-  }
-  const failure = buildCoordinatorP2pRelayFailure(error, {
-    command: "read_chat",
-    targetDaemonId: node.daemonId,
-    nodeId: args.node_id,
-    sessionId: args.session_id
-  });
-  return JSON.stringify({
-    ...failure,
-    cause,
-    cachedSummaryAvailable: false,
-    fullTranscriptRequiresP2p: true,
-    advisory: `Live transcript unavailable (${causeNote}) and no cached coordinator-side summary exists for this session yet (no completion/status event has been surfaced). The full transcript requires a live P2P read_chat once the peer is reachable.`
-  }, null, 2);
-}
 async function meshReadChat(ctx, args) {
   const node = await findOptionalNodeWithRefresh(ctx, args.node_id);
   if (!node) {
@@ -4284,7 +4306,7 @@ async function meshReadChat(ctx, args) {
       tailLimit: args.tail ?? 10
     });
   } catch (e) {
-    if (isLocalNode || !(0, import_daemon_core2.isP2pRelayTransportFailure)(e)) throw e;
+    if (isLocalNode || !(0, import_daemon_core3.isP2pRelayTransportFailure)(e)) throw e;
     return buildMeshReadChatCacheFallback(ctx, args, node, e);
   }
   const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result), {
@@ -4352,7 +4374,7 @@ async function meshLaunchSession(ctx, args) {
     const coordinatorNode = resolveCoordinatorNode(ctx);
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
-    const delegatedWorkerAutoApprove = (0, import_daemon_core2.resolveDelegatedWorkerAutoApprove)(ctx.mesh.policy, node.policy);
+    const delegatedWorkerAutoApprove = (0, import_daemon_core3.resolveDelegatedWorkerAutoApprove)(ctx.mesh.policy, node.policy);
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
       return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
@@ -4399,7 +4421,7 @@ async function meshLaunchSession(ctx, args) {
       });
     }
     try {
-      (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
+      (0, import_daemon_core3.appendLedgerEntry)(ctx.mesh.id, {
         kind: "session_launched",
         nodeId: args.node_id,
         sessionId: runtimeSessionId || void 0,
@@ -4418,6 +4440,34 @@ async function meshLaunchSession(ctx, args) {
     }, null, 2);
   }
 }
+async function meshApprove(ctx, args) {
+  const node = await findNodeWithRefresh(ctx, args.node_id);
+  const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
+  const providerSessionId = cached?.providerSessionId;
+  const result = await commandForNode(ctx, node, "resolve_action", {
+    sessionId: args.session_id,
+    targetSessionId: args.session_id,
+    workspace: node.workspace,
+    ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
+    ...providerSessionId ? { providerSessionId } : {},
+    action: args.action === "reject" ? "reject" : "approve"
+  });
+  return JSON.stringify(result, null, 2);
+}
+async function meshCleanupSessions(ctx, args) {
+  const node = await findNodeWithRefresh(ctx, args.node_id);
+  const result = await commandForNode(ctx, node, "cleanup_mesh_sessions", {
+    meshId: ctx.mesh.id,
+    nodeId: args.node_id,
+    mode: args.mode,
+    sessionIds: args.session_ids,
+    dryRun: args.dry_run === true,
+    inlineMesh: ctx.mesh
+  });
+  return JSON.stringify(result, null, 2);
+}
+
+// src/tools/mesh-tools-git.ts
 async function meshGitStatus(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   const autoDiscoverSubmodules = node.policy?.autoDiscoverSubmodules !== false;
@@ -4552,7 +4602,7 @@ async function meshCheckpoint(ctx, args) {
     includeUntracked: true
   });
   try {
-    (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
+    (0, import_daemon_core3.appendLedgerEntry)(ctx.mesh.id, {
       kind: "checkpoint_created",
       nodeId: args.node_id,
       payload: {
@@ -4565,20 +4615,6 @@ async function meshCheckpoint(ctx, args) {
     });
   } catch {
   }
-  return JSON.stringify(result, null, 2);
-}
-async function meshApprove(ctx, args) {
-  const node = await findNodeWithRefresh(ctx, args.node_id);
-  const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
-  const providerSessionId = cached?.providerSessionId;
-  const result = await commandForNode(ctx, node, "resolve_action", {
-    sessionId: args.session_id,
-    targetSessionId: args.session_id,
-    workspace: node.workspace,
-    ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
-    ...providerSessionId ? { providerSessionId } : {},
-    action: args.action === "reject" ? "reject" : "approve"
-  });
   return JSON.stringify(result, null, 2);
 }
 async function meshCloneNode(ctx, args) {
@@ -4598,18 +4634,6 @@ async function meshCloneNode(ctx, args) {
     ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     await syncCoordinatorDaemonMeshCache(ctx);
   }
-  return JSON.stringify(result, null, 2);
-}
-async function meshCleanupSessions(ctx, args) {
-  const node = await findNodeWithRefresh(ctx, args.node_id);
-  const result = await commandForNode(ctx, node, "cleanup_mesh_sessions", {
-    meshId: ctx.mesh.id,
-    nodeId: args.node_id,
-    mode: args.mode,
-    sessionIds: args.session_ids,
-    dryRun: args.dry_run === true,
-    inlineMesh: ctx.mesh
-  });
   return JSON.stringify(result, null, 2);
 }
 async function meshRemoveNode(ctx, args) {
@@ -4645,12 +4669,8 @@ async function meshRemoveNode(ctx, args) {
   }
   return JSON.stringify({ ...result || {}, ...transportFallback ? { transportFallback } : {} }, null, 2);
 }
-function resolveRefineConfigNode(ctx, nodeId) {
-  if (nodeId) return findNode(ctx.mesh, nodeId);
-  const node = ctx.mesh.nodes.find((entry) => !!entry.workspace);
-  if (!node) throw new Error("No mesh node with a workspace is available");
-  return node;
-}
+
+// src/tools/mesh-tools-refine.ts
 async function meshRefineConfigSchema(ctx) {
   const node = resolveRefineConfigNode(ctx);
   const result = await commandForNode(ctx, node, "get_mesh_refine_config_schema", {});
@@ -4750,15 +4770,6 @@ async function meshRefineBatch(ctx, args = {}) {
     }
     ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
   }
-  return JSON.stringify(result, null, 2);
-}
-async function meshReviewInbox(ctx, args = {}) {
-  await refreshMeshFromDaemon(ctx);
-  const meshId = (args.mesh_id ?? ctx.mesh.id).trim();
-  const result = await commandForNode(ctx, ctx.mesh.nodes[0], "get_mesh_review_inbox", {
-    meshId,
-    inlineMesh: ctx.mesh
-  });
   return JSON.stringify(result, null, 2);
 }
 
