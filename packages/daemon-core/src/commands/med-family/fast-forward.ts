@@ -51,58 +51,90 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
     },
 
     fast_forward_mesh_node: async (ctx: MedFamilyContext, args: any) => {
-        const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-        const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
-        let workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
-        let submoduleIgnorePaths = Array.isArray(args?.submoduleIgnorePaths)
-            ? args.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string')
-            : undefined;
-        let nodeDaemonId: string | undefined;
-        let allowAutoPublishSubmoduleMainCommits = false;
-        if (meshId && nodeId) {
-            // preferInline so fast-forward can resolve inline-cache-only clone worktree nodes.
-            const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-            const mesh = meshRecord?.mesh;
-            const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
-            if (!workspace) {
-                workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
+        // The whole handler is wrapped: the safety-gate evaluation (mesh resolution,
+        // git status/stash/submodule fan-out) can throw on some platforms — notably a
+        // win32 daemon whose git invocation parsing or slow submodule probe raises
+        // before fastForwardMeshNode's own guarded body runs. router.execute re-throws,
+        // so an escaping throw surfaces to the coordinator as an opaque
+        // "Daemon IPC command failed" instead of the structured blockingReasons result
+        // a mac node returns cleanly. Catch it and return the same blocked shape so the
+        // coordinator can read the reason and route, never an IPC crash. Mirrors the
+        // mesh_init handler's try-catch contract.
+        const workspaceForError = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
+        const meshIdForError = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+        const nodeIdForError = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+        try {
+            const meshId = meshIdForError;
+            const nodeId = nodeIdForError;
+            let workspace = workspaceForError;
+            let submoduleIgnorePaths = Array.isArray(args?.submoduleIgnorePaths)
+                ? args.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string')
+                : undefined;
+            let nodeDaemonId: string | undefined;
+            let allowAutoPublishSubmoduleMainCommits = false;
+            if (meshId && nodeId) {
+                // preferInline so fast-forward can resolve inline-cache-only clone worktree nodes.
+                const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                const mesh = meshRecord?.mesh;
+                const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
+                if (!workspace) {
+                    workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
+                }
+                if (!submoduleIgnorePaths && Array.isArray(node?.policy?.submoduleIgnorePaths)) {
+                    submoduleIgnorePaths = node.policy.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string');
+                }
+                allowAutoPublishSubmoduleMainCommits = mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true;
+                nodeDaemonId = typeof node?.daemonId === 'string' ? node.daemonId.trim() : undefined;
             }
-            if (!submoduleIgnorePaths && Array.isArray(node?.policy?.submoduleIgnorePaths)) {
-                submoduleIgnorePaths = node.policy.submoduleIgnorePaths.filter((value: unknown): value is string => typeof value === 'string');
+            // If the target node belongs to a remote daemon, forward the command there.
+            // _meshDirectDispatch prevents re-forwarding (and P2P self-dial) when the stored
+            // daemonId uses a legacy format that doesn't match the receiving daemon's identity.
+            const selfDaemonId = ctx.deps.statusInstanceId;
+            // daemonIdsEquivalent: a legacy-form stored daemonId that resolves to THIS
+            // machine's core must be treated as local (not remote) so it is not forwarded /
+            // P2P self-dialed. Equivalent → local.
+            const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
+            if (isRemote && ctx.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
+                const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'fast_forward_mesh_node', {
+                    ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+                    workspace,
+                    _meshDirectDispatch: true,
+                });
+                return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
             }
-            allowAutoPublishSubmoduleMainCommits = mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true;
-            nodeDaemonId = typeof node?.daemonId === 'string' ? node.daemonId.trim() : undefined;
-        }
-        // If the target node belongs to a remote daemon, forward the command there.
-        // _meshDirectDispatch prevents re-forwarding (and P2P self-dial) when the stored
-        // daemonId uses a legacy format that doesn't match the receiving daemon's identity.
-        const selfDaemonId = ctx.deps.statusInstanceId;
-        // daemonIdsEquivalent: a legacy-form stored daemonId that resolves to THIS
-        // machine's core must be treated as local (not remote) so it is not forwarded /
-        // P2P self-dialed. Equivalent → local.
-        const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
-        if (isRemote && ctx.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
-            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'fast_forward_mesh_node', {
-                ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+            const result = await (fastForwardMeshNode({
+                meshId: meshId || undefined,
+                nodeId: nodeId || undefined,
                 workspace,
-                _meshDirectDispatch: true,
-            });
-            return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+                branch: typeof args?.branch === 'string' ? args.branch : undefined,
+                execute: args?.execute === true,
+                dryRun: args?.dryRun === true,
+                updateSubmodules: args?.updateSubmodules === true,
+                submoduleIgnorePaths,
+                mode: args?.mode === 'push' ? 'push' : 'merge',
+                pushSubmodules: args?.pushSubmodules === true,
+                allowAutoPublishSubmoduleMainCommits,
+            }) as Promise<unknown>);
+            return result as CommandRouterResult;
+        } catch (e: any) {
+            const errorMessage = e?.message || String(e);
+            return {
+                success: false,
+                code: 'fast_forward_safety_gate_error',
+                ...(meshIdForError ? { meshId: meshIdForError } : {}),
+                ...(nodeIdForError ? { nodeId: nodeIdForError } : {}),
+                workspace: workspaceForError,
+                mode: args?.mode === 'push' ? 'push' : 'merge',
+                allowed: false,
+                willRun: false,
+                executed: false,
+                // Surface the throw as a blocking reason instead of an opaque IPC crash
+                // so the coordinator gets the same structured shape a clean node returns.
+                blockingReasons: ['fast_forward_safety_gate_error'],
+                operationError: errorMessage,
+                error: errorMessage,
+            } as CommandRouterResult;
         }
-        const result = await (fastForwardMeshNode({
-            meshId: meshId || undefined,
-            nodeId: nodeId || undefined,
-            workspace,
-            branch: typeof args?.branch === 'string' ? args.branch : undefined,
-            execute: args?.execute === true,
-            dryRun: args?.dryRun === true,
-            updateSubmodules: args?.updateSubmodules === true,
-            submoduleIgnorePaths,
-            mode: args?.mode === 'push' ? 'push' : 'merge',
-            pushSubmodules: args?.pushSubmodules === true,
-            allowAutoPublishSubmoduleMainCommits,
-        }) as Promise<unknown>);
-        return result as CommandRouterResult;
     },
 
     refine_mesh_node: async (ctx: MedFamilyContext, args: any) => {

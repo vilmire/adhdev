@@ -96,15 +96,22 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
                 } catch { /* best-effort — dispatch still proceeds without the stamp */ }
             }
         }
-        const agentResult = await ctx.deps.cliManager.handleCliCommand('agent_command', args);
-        // Bug C fix (part 2): when dispatching a task to a mesh node session, override
-        // the dispatch acknowledgement risk reason to 'bootstrap_still_running' when
-        // the target node's worktree bootstrap is still running. Informational only —
-        // dispatch is NOT blocked.
+        // Bug C fix / bootstrapPending dispatch gap: a task dispatched to a mesh node
+        // whose worktree bootstrap is STILL running must NOT be injected yet. Before this
+        // gate the dispatch proceeded and the prompt landed in the session's input buffer
+        // while the provider (e.g. claude CLI) was not yet ready to consume it — the inject
+        // was silently swallowed (the chat bubble showed the text but the session never
+        // transitioned to generating and never claimed the task). The prior code only
+        // ANNOTATED the already-completed dispatch with 'bootstrap_still_running' after the
+        // fact, which did not close the gap. Defer instead: refuse the inject with a
+        // recoverable signal so the coordinator re-sends once the node is ready (the
+        // confirmed "re-send to a ready session works" path), mirroring the queued-delivery
+        // contract for busy sessions. send_chat only — non-task actions still pass through.
         const meshCtx = args?.meshContext as Record<string, unknown> | undefined;
         const dispatchNodeId = readStringValue(meshCtx?.nodeId);
         const dispatchMeshId = readStringValue(meshCtx?.meshId);
-        if (dispatchNodeId && dispatchMeshId && agentResult?.success !== false) {
+        const isSendChat = args?.action === 'send_chat';
+        if (isSendChat && dispatchNodeId && dispatchMeshId) {
             try {
                 const { getMesh } = await import('../../config/mesh-config.js');
                 const meshObj = getMesh(dispatchMeshId) ?? ctx.getCachedInlineMesh(dispatchMeshId);
@@ -114,16 +121,21 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
                 const bootstrapStatus = readStringValue(nodeObj?.worktreeBootstrap?.status);
                 if (bootstrapStatus === 'running') {
                     return {
-                        success: true,
-                        ...agentResult,
-                        dispatchAcknowledgementRisk: true,
-                        dispatchAcknowledgementRiskReason: 'bootstrap_still_running',
-                        nextAction: 'Wait for worktree_bootstrap_complete event before dispatching work to this node.',
+                        success: false,
+                        recoverable: true,
+                        dispatched: false,
+                        code: 'mesh_node_bootstrap_pending',
+                        reason: 'bootstrap_still_running',
+                        nodeId: dispatchNodeId,
+                        meshId: dispatchMeshId,
+                        ...(readStringValue(meshCtx?.taskId) ? { taskId: readStringValue(meshCtx?.taskId) } : {}),
+                        error: `Node '${dispatchNodeId}' worktree bootstrap is still running; a task injected now would land in the session input buffer before the provider is ready to consume it and be silently lost. Dispatch deferred.`,
+                        nextAction: 'Wait for the worktree_bootstrap_complete event (or poll mesh_status until the node session is ready), then re-send the task with mesh_send_task. Alternatively use mesh_enqueue_task so the queue auto-assigns it once a ready session is available.',
                     };
                 }
-            } catch { /* best-effort */ }
+            } catch { /* best-effort — if the bootstrap probe fails, fall through and dispatch */ }
         }
-        return agentResult;
+        return ctx.deps.cliManager.handleCliCommand('agent_command', args);
     },
 
     // ─── Logs ───
