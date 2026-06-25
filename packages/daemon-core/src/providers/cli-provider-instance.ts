@@ -114,6 +114,12 @@ const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
 // mesh workers without delaying genuinely-finished turns beyond this bound. Scoped to mesh
 // worker sessions so interactive native-history sessions keep the immediate flush.
 const NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 1500;
+// TASKBUBBLE-DUP: window during which an identical user-input ack (same trimmed
+// content on the same instance) is treated as a redelivery of one dispatch and
+// suppressed from the chat transcript. Matches the coordinator-side
+// DUPLICATE_DISPATCH_WINDOW_MS (mesh-tools) so the daemon's bubble-level guard
+// covers the same retry horizon as the MCP-level dispatch dedup.
+const USER_INPUT_ACK_DEDUP_WINDOW_MS = 60_000;
 
 /** Events that signal a dispatched mesh task has reached a terminal state.
  *  Detach the mesh assignment after emitting one of these so the worker's
@@ -443,6 +449,14 @@ export class CliProviderInstance implements ProviderInstance {
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     private lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
     private lastAcknowledgedUserInputAt = 0;
+    // TASKBUBBLE-DUP: per-content last-ack timestamps so the same dispatched
+    // prompt acked twice in quick succession (the worker buffers the first
+    // send during bootstrap/busy, then a redelivery — dispatch-confirm-timeout
+    // requeue or a reconcile re-dispatch — fires a SECOND send_chat before the
+    // outbound queue drains) collapses to ONE user bubble. Keyed on the trimmed
+    // content; an entry older than USER_INPUT_ACK_DEDUP_WINDOW_MS is treated as
+    // a fresh, intentional resend and is NOT suppressed.
+    private recentUserInputAcks = new Map<string, number>();
     private lastNativeSourceCanonicalCheckAt = 0;
     private lastNativeSourceCanonicalCacheKey: string | undefined = undefined;
     private cachedSqliteDb: {
@@ -1068,7 +1082,31 @@ export class CliProviderInstance implements ProviderInstance {
         if (!content) return;
 
         const receivedAt = Date.now();
+
+        // TASKBUBBLE-DUP: collapse a redelivered dispatch to one bubble. A single
+        // mesh_send_task can reach this instance as TWO send_chat calls when the
+        // first injection is buffered during bootstrap/busy and a retry (dispatch-
+        // confirm-timeout requeue, or a reconcile re-dispatch) fires before the
+        // outbound queue drains. The previous dedupKey hashed receivedAt, so the
+        // two acks produced different keys and BOTH bubbled. Suppress an identical
+        // content ack seen within USER_INPUT_ACK_DEDUP_WINDOW_MS; a later resend of
+        // the same text (beyond the window) is a genuine new turn and still shows.
+        const ackContentKey = shortHash(`${this.instanceId}:${content}`, 24);
+        const lastAckAt = this.recentUserInputAcks.get(ackContentKey);
+        if (lastAckAt !== undefined && receivedAt - lastAckAt <= USER_INPUT_ACK_DEDUP_WINDOW_MS) {
+            // Refresh the timestamp so a steady stream of redeliveries keeps
+            // collapsing, and prune stale entries to bound the map size.
+            this.recentUserInputAcks.set(ackContentKey, receivedAt);
+            this.pruneRecentUserInputAcks(receivedAt);
+            return;
+        }
+        this.recentUserInputAcks.set(ackContentKey, receivedAt);
+        this.pruneRecentUserInputAcks(receivedAt);
+
         this.lastAcknowledgedUserInputAt = receivedAt;
+        // The runtimeMessages dedupKey stays per-call unique (includes receivedAt)
+        // so a genuine resend of the same text after the window appends a fresh
+        // bubble; redelivery within the window is already suppressed above.
         const dedupKey = `user_input_ack:${shortHash(`${this.instanceId}:${content}:${receivedAt}`, 24)}`;
         this.appendRuntimeMessage(buildChatMessage({
             role: 'user',
@@ -1084,6 +1122,14 @@ export class CliProviderInstance implements ProviderInstance {
                 workspace: this.workingDir,
             },
         } as ChatMessage), dedupKey);
+    }
+
+    /** Drop user-input ack entries older than the dedup window so the map can't grow unbounded. */
+    private pruneRecentUserInputAcks(now: number): void {
+        if (this.recentUserInputAcks.size <= 1) return;
+        for (const [key, at] of this.recentUserInputAcks) {
+            if (now - at > USER_INPUT_ACK_DEDUP_WINDOW_MS) this.recentUserInputAcks.delete(key);
+        }
     }
 
     dispose(): void {
