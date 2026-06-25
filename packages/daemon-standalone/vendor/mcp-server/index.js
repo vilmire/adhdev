@@ -685,8 +685,10 @@ var MESH_ENQUEUE_TASK_TOOL = {
       taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
       requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu." },
       required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." },
-      target_node_id: { type: "string", description: "Optional: only this node may claim the task. Use to route a queued task to a specific (e.g. freshly cloned) worktree node instead of letting the first idle base node claim it. Takes priority over prefer_worktree." },
+      target_node_id: { type: "string", description: "Optional HARD constraint: ONLY this node may claim the task. No other node (especially a different machine) will ever claim it \u2014 if the target node has no idle session the task stays pending until it does. Use to route a queued task to a specific (e.g. freshly cloned) worktree node instead of letting the first idle base node claim it. Takes priority over prefer_worktree. An unresolvable target id is rejected at enqueue (no silent unpin)." },
       targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
+      target_node: { type: "string", description: "Alias for target_node_id." },
+      targetNode: { type: "string", description: "CamelCase alias for target_node_id." },
       prefer_worktree: { type: "boolean", description: "Optional: when true, route this task to the most recently cloned idle worktree node (avoids the main/base workspace preemptively claiming an isolated task). No-op if no worktree node exists; resolves to a target_node_id when one does." },
       preferWorktree: { type: "boolean", description: "CamelCase alias for prefer_worktree." },
       depends_on: { type: "array", items: { type: "string" }, description: "Task ids that must complete before this task becomes claimable. Cycles are rejected at enqueue." },
@@ -3383,9 +3385,24 @@ async function meshEnqueueTask(ctx, args) {
   const requiredTags = (0, import_daemon_core3.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
   const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
-  const explicitTarget = readString(args.targetNodeId) || readString(args.target_node_id) || void 0;
+  const explicitTargetRaw = readString(args.targetNodeId) || readString(args.target_node_id) || readString(args.targetNode) || readString(args.target_node) || void 0;
   const preferWorktree = args.preferWorktree === true || args.prefer_worktree === true;
-  const targetNodeId = explicitTarget || (preferWorktree ? resolvePreferredWorktreeNodeId(ctx) : void 0);
+  let targetNodeId;
+  if (explicitTargetRaw) {
+    const matched = ctx.mesh.nodes.find((n) => (0, import_daemon_core3.meshNodeIdMatches)(n, explicitTargetRaw));
+    if (!matched) {
+      return JSON.stringify({
+        success: false,
+        code: "target_node_not_found",
+        error: `target node '${explicitTargetRaw}' is not a member of this mesh \u2014 refusing to enqueue an unpinned task (it could be claimed by any node, including a different machine). Use mesh_list_nodes to get a valid node id.`,
+        targetNodeId: explicitTargetRaw,
+        availableNodeIds: ctx.mesh.nodes.map((n) => n.id).filter(Boolean)
+      });
+    }
+    targetNodeId = readString(matched.id) || explicitTargetRaw;
+  } else if (preferWorktree) {
+    targetNodeId = resolvePreferredWorktreeNodeId(ctx) || void 0;
+  }
   try {
     const task = (0, import_daemon_core3.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {} });
     if (!(ctx.transport instanceof IpcTransport)) {
@@ -3398,7 +3415,7 @@ async function meshEnqueueTask(ctx, args) {
         taskMode: task.taskMode,
         requiredTags: task.requiredTags,
         ...targetNodeId ? { targetNodeId } : {},
-        ...preferWorktree && !explicitTarget && !targetNodeId ? { preferWorktreeNoOp: true } : {},
+        ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
@@ -3465,7 +3482,7 @@ async function meshEnqueueTask(ctx, args) {
         taskMode: task.taskMode,
         requiredTags: task.requiredTags,
         ...targetNodeId ? { targetNodeId } : {},
-        ...preferWorktree && !explicitTarget && !targetNodeId ? { preferWorktreeNoOp: true } : {},
+        ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
@@ -3610,11 +3627,31 @@ async function meshQueueCancel(ctx, args) {
   try {
     const taskId = (args.task_id || args.taskId || "").trim();
     if (!taskId) return JSON.stringify({ success: false, error: "task_id required" });
+    const preCancel = (0, import_daemon_core3.getQueue)(ctx.mesh.id).find((t) => t?.id === taskId);
+    const wasAssigned = preCancel?.status === "assigned";
+    const assignedSessionId = readString(preCancel?.assignedSessionId) || void 0;
+    const assignedNodeId = readString(preCancel?.assignedNodeId) || void 0;
+    const assignedProviderType = readString(preCancel?.assignedProviderType) || void 0;
     const task = (0, import_daemon_core3.cancelTask)(ctx.mesh.id, taskId, { reason: args.reason });
     if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
     ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
     });
-    return JSON.stringify({ success: true, task }, null, 2);
+    let workerStop = { attempted: false };
+    if (wasAssigned && assignedSessionId && assignedSessionId !== ctx.coordinatorSessionId && assignedProviderType) {
+      workerStop = { attempted: true, sessionId: assignedSessionId, nodeId: assignedNodeId };
+      ctx.transport.command("agent_command", {
+        targetSessionId: assignedSessionId,
+        cliType: assignedProviderType,
+        agentType: assignedProviderType,
+        action: "stop",
+        ...assignedNodeId ? { meshContext: { meshId: ctx.mesh.id, nodeId: assignedNodeId, taskId } } : {}
+      }).catch((e) => {
+        workerStop.reason = e?.message || String(e);
+      });
+    } else if (wasAssigned && assignedSessionId === ctx.coordinatorSessionId) {
+      workerStop = { attempted: false, reason: "assigned_session_is_coordinator_self \u2014 stop suppressed" };
+    }
+    return JSON.stringify({ success: true, task, workerStop }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e.message });
   }

@@ -886,8 +886,24 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // sibling/stale dispatch row this event does not own, marking it 'acked' prematurely and
             // hiding a genuine non-delivery. Skip the dispatch ack for that ghost case (the delivery
             // acks below are bound to actual deliveries and stay a no-op for a warmup session).
-            if (startedTaskId || sessionHasActiveAssignment(args.meshId, sessionId)) {
+            //
+            // MESH-DISPATCH-MISROUTE (fix 3, consumer residual): when the event carries no taskId
+            // (a legacy/relayed worker whose producer never stamped meshActiveTaskId) but the
+            // session owns EXACTLY ONE active dispatch, resolve that row's taskId and flip it by PK
+            // instead of the session_id sweep — the sweep flips every non-terminal row for the
+            // session ("may flip a sibling dispatch row"). With ≥2 active rows the owner is
+            // ambiguous, so resolvedAckTaskId stays undefined and we DROP the ack rather than
+            // mis-flip a sibling (the genuine ack arrives once the producer/reconcile names a task).
+            if (startedTaskId) {
                 updateDirectDispatchStatus(args.meshId, sessionId, 'acked', startedTaskId);
+            } else if (sessionHasActiveAssignment(args.meshId, sessionId)) {
+                const soleTaskId = (() => {
+                    try { return MeshRuntimeStore.getInstance().getSoleActiveDirectDispatchTaskId(args.meshId, sessionId); }
+                    catch { return null; }
+                })();
+                if (soleTaskId) {
+                    updateDirectDispatchStatus(args.meshId, sessionId, 'acked', soleTaskId);
+                }
             }
             const activeDeliveries = ((): { id: string; taskId: string | null }[] => {
                 try { return MeshRuntimeStore.getInstance().getActiveSessionDeliveries(args.meshId, sessionId); }

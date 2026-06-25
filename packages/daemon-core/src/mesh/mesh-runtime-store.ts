@@ -903,6 +903,29 @@ export class MeshRuntimeStore {
         `).run({ status, meshId, sessionId, updatedAt: now });
     }
 
+    /**
+     * MESH-DISPATCH-MISROUTE (fix 3, consumer residual): resolve the task_id of the SINGLE
+     * non-terminal direct dispatch a session owns. Returns the task_id only when the session
+     * holds exactly ONE active ('dispatched'/'acked') row — the case where a taskId-less
+     * lifecycle event (a legacy/relayed worker whose producer never stamped meshActiveTaskId)
+     * unambiguously belongs to that one dispatch. With zero rows there is nothing to ack; with
+     * two or more (a re-dispatch/nudge sibling) the firing event's owner is ambiguous, so we
+     * return null and the caller MUST NOT fall back to the session_id sweep that would flip a
+     * sibling row ("may flip a sibling dispatch row"). This narrows the legacy fallback to the
+     * only safe case instead of removing the producer-side TASKIDLESS stamp's safety net.
+     */
+    getSoleActiveDirectDispatchTaskId(meshId: string, sessionId: string): string | null {
+        if (!sessionId) return null;
+        const rows = this.db.prepare(`
+            SELECT task_id FROM mesh_direct_dispatches
+            WHERE mesh_id = ? AND session_id = ?
+              AND status NOT IN ('completed', 'failed', 'stale')
+        `).all(meshId, sessionId) as Array<{ task_id: string }>;
+        if (rows.length !== 1) return null;
+        const taskId = typeof rows[0]?.task_id === 'string' ? rows[0].task_id.trim() : '';
+        return taskId || null;
+    }
+
     cleanupTerminalDirectDispatches(olderThanMs: number): void {
         const cutoff = new Date(Date.now() - olderThanMs).toISOString();
         this.db.prepare(`

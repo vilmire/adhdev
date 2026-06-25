@@ -31,6 +31,7 @@ import {
     ipcDispatchToRemoteAgent,
     isLocalControlPlaneNode,
     markStaleDirectDispatches,
+    meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
     normalizeQueueViewMode,
@@ -57,6 +58,7 @@ export async function meshEnqueueTask(
         message: string; task_mode?: string; taskMode?: string;
         requiredTags?: string[]; required_tags?: string[];
         targetNodeId?: string; target_node_id?: string;
+        targetNode?: string; target_node?: string;
         preferWorktree?: boolean; prefer_worktree?: boolean;
         dependsOn?: string[]; depends_on?: string[];
         missionId?: string; mission_id?: string;
@@ -66,14 +68,41 @@ export async function meshEnqueueTask(
     const requiredTags = normalizeMeshCapabilityTags(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
     const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : undefined;
     const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
-    // Routing hint: explicit target_node_id wins; otherwise prefer_worktree
-    // resolves to the most recently cloned worktree node so isolated work is not
-    // preemptively claimed by the first idle base node. Either becomes a
-    // targetNodeId, which the node-targeted claim tier honors.
-    const explicitTarget = readString(args.targetNodeId) || readString(args.target_node_id) || undefined;
+    // Routing hint: explicit target id wins; otherwise prefer_worktree resolves to the
+    // most recently cloned worktree node so isolated work is not preemptively claimed by
+    // the first idle base node. Either becomes a targetNodeId, which the node-targeted
+    // claim tier honors as a HARD constraint (only that node may claim).
+    //
+    // MESH-DISPATCH-MISROUTE: accept target_node / targetNode in addition to
+    // target_node_id / targetNodeId. A coordinator that passed target_node (the natural
+    // name) previously had it silently dropped — the task enqueued UNPINNED and any idle
+    // node, including a different machine's base, could claim it (the live cross-machine
+    // misroute). Resolving every spelling closes that gap.
+    const explicitTargetRaw = readString(args.targetNodeId) || readString(args.target_node_id)
+        || readString(args.targetNode) || readString(args.target_node) || undefined;
     const preferWorktree = args.preferWorktree === true || args.prefer_worktree === true;
-    const targetNodeId = explicitTarget
-        || (preferWorktree ? resolvePreferredWorktreeNodeId(ctx) : undefined);
+
+    // MESH-DISPATCH-MISROUTE: a target pin is a hard constraint, so an unresolvable target
+    // id must FAIL LOUDLY rather than silently fall through to an unpinned (any-node) task.
+    // Canonicalize the supplied id to the live mesh node's own id via the shared identity
+    // normalizer (handles id / nodeId / node_id and daemon-id forms) so the downstream raw
+    // `node.id === targetNodeId` compares and the claim-tier SQL both match exactly.
+    let targetNodeId: string | undefined;
+    if (explicitTargetRaw) {
+        const matched = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, explicitTargetRaw));
+        if (!matched) {
+            return JSON.stringify({
+                success: false,
+                code: 'target_node_not_found',
+                error: `target node '${explicitTargetRaw}' is not a member of this mesh — refusing to enqueue an unpinned task (it could be claimed by any node, including a different machine). Use mesh_list_nodes to get a valid node id.`,
+                targetNodeId: explicitTargetRaw,
+                availableNodeIds: ctx.mesh.nodes.map(n => (n as any).id).filter(Boolean),
+            });
+        }
+        targetNodeId = readString((matched as any).id) || explicitTargetRaw;
+    } else if (preferWorktree) {
+        targetNodeId = resolvePreferredWorktreeNodeId(ctx) || undefined;
+    }
     try {
         const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}) });
 
@@ -88,7 +117,7 @@ export async function meshEnqueueTask(
                 taskMode: task.taskMode,
                 requiredTags: task.requiredTags,
                 ...(targetNodeId ? { targetNodeId } : {}),
-                ...(preferWorktree && !explicitTarget && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
+                ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
                 queueTrigger,
                 ...buildQueueTriggerGuidance(queueTrigger),
             });
@@ -167,7 +196,7 @@ export async function meshEnqueueTask(
                 taskMode: task.taskMode,
                 requiredTags: task.requiredTags,
                 ...(targetNodeId ? { targetNodeId } : {}),
-                ...(preferWorktree && !explicitTarget && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
+                ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
                 queueTrigger,
                 ...buildQueueTriggerGuidance(queueTrigger),
             });
@@ -347,10 +376,51 @@ export async function meshQueueCancel(
     try {
         const taskId = (args.task_id || args.taskId || '').trim();
         if (!taskId) return JSON.stringify({ success: false, error: 'task_id required' });
+
+        // MESH-DISPATCH-MISROUTE: read the PRE-cancel entry so we know whether the task was
+        // already dispatched to a live worker. cancelTask overwrites status to 'cancelled'
+        // but preserves assignedSessionId/Node/Provider, so the assignment fields survive —
+        // only the status must be captured before the mutation.
+        const preCancel = getQueue(ctx.mesh.id).find((t: any) => t?.id === taskId) as {
+            status?: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string;
+        } | undefined;
+        const wasAssigned = preCancel?.status === 'assigned';
+        const assignedSessionId = readString(preCancel?.assignedSessionId) || undefined;
+        const assignedNodeId = readString(preCancel?.assignedNodeId) || undefined;
+        const assignedProviderType = readString(preCancel?.assignedProviderType) || undefined;
+
         const task = cancelTask(ctx.mesh.id, taskId, { reason: args.reason });
         if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
         ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-        return JSON.stringify({ success: true, task }, null, 2);
+
+        // MESH-DISPATCH-MISROUTE (fix 2): cancelling the queue row alone does NOT stop a worker
+        // that already claimed the task and is generating — it ran to completion and committed
+        // to the (often base) checkout. When the task was dispatched to a live session, propagate
+        // a stop so the worker halts its in-flight generation. Guards:
+        //  - only for an 'assigned' task with a resolvable assignedSessionId (a pending/terminal
+        //    task has no live worker to stop — sending one would be a no-op at best);
+        //  - NEVER stop the coordinator's own session (ctx.coordinatorSessionId) — that is the
+        //    session issuing the cancel, not the worker. Stopping it would kill the coordinator.
+        // The stop rides agent_command(action:'stop'), which is already in the router's
+        // MESH_FORWARDABLE_SESSION_COMMANDS set: a session hosted on a REMOTE worker daemon is
+        // auto-forwarded to that daemon (cross-machine workers are reached), and meshContext.nodeId
+        // keeps the fail-closed cross-node scoping. Best-effort: a stop that can't be delivered
+        // (worker already gone) must not fail the cancel itself.
+        let workerStop: { attempted: boolean; sessionId?: string; nodeId?: string; reason?: string } = { attempted: false };
+        if (wasAssigned && assignedSessionId && assignedSessionId !== ctx.coordinatorSessionId && assignedProviderType) {
+            workerStop = { attempted: true, sessionId: assignedSessionId, nodeId: assignedNodeId };
+            ctx.transport.command('agent_command', {
+                targetSessionId: assignedSessionId,
+                cliType: assignedProviderType,
+                agentType: assignedProviderType,
+                action: 'stop',
+                ...(assignedNodeId ? { meshContext: { meshId: ctx.mesh.id, nodeId: assignedNodeId, taskId } } : {}),
+            }).catch((e: any) => { workerStop.reason = e?.message || String(e); });
+        } else if (wasAssigned && assignedSessionId === ctx.coordinatorSessionId) {
+            workerStop = { attempted: false, reason: 'assigned_session_is_coordinator_self — stop suppressed' };
+        }
+
+        return JSON.stringify({ success: true, task, workerStop }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
     }
