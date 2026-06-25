@@ -394,6 +394,42 @@ function isWeakTerminalLedgerPayload(payload: Record<string, unknown> | undefine
     return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
 }
 
+// (FALSEIDLE-BGCHILD-b) A later genuine completion of the SAME task that carries a
+// substantively different — and fuller — final summary than the recorded terminal is the REAL
+// final that an earlier (false-idle) completion pre-empted, not a duplicate. The background-child
+// false idle is the nasty case the plain isWeakTerminalLedgerPayload supersession misses: the
+// early completion's screen parser DID see a prior/intermediate standard assistant, so it is
+// recorded as a STRONG terminal with a non-empty (but truncated) finalSummary. Without this the
+// providerSessionId/finalSummary dedup below swallows the genuine final and the coordinator is
+// stuck with the truncated mid-turn text forever (the one-shot-consumption symptom). Same-task,
+// new event is genuine, prior terminal summary is a strict prefix of (or otherwise shorter than)
+// the new one → treat as the corrected final and let it through. Conservative: requires the new
+// summary to be genuine evidence AND meaningfully longer, so an identical re-arrival or a SHORTER
+// later summary is still deduped.
+function supersedesTruncatedTerminalSummary(args: {
+    terminalPayload: Record<string, unknown>;
+    metadataEvent: Record<string, unknown>;
+    terminalTaskId: string;
+    eventTaskId: string;
+}): boolean {
+    // Only applies when both name the SAME task (a distinct task is handled by distinctTaskCompletion).
+    if (!args.terminalTaskId || !args.eventTaskId || args.terminalTaskId !== args.eventTaskId) return false;
+    if (!isGenuineCompletionEvidence(args.metadataEvent)) return false;
+    const terminalSummary = readNonEmptyString(args.terminalPayload.finalSummary);
+    const eventSummary = readNonEmptyString(args.metadataEvent.finalSummary);
+    if (!eventSummary) return false;
+    // Identical text → genuine duplicate, keep deduping.
+    if (terminalSummary === eventSummary) return false;
+    // The recorded terminal was a known-weak (false-idle) one → already handled by the weak
+    // supersession path; nothing extra to do here.
+    if (isWeakTerminalLedgerPayload(args.terminalPayload)) return false;
+    // No prior summary at all, or the new summary strictly extends / is meaningfully longer than
+    // the recorded one → the recorded terminal was the truncated pre-emption; supersede it.
+    if (!terminalSummary) return true;
+    if (eventSummary.startsWith(terminalSummary)) return true;
+    return eventSummary.length > terminalSummary.length + 32;
+}
+
 // The latest still-active direct-dispatch taskId for a session, resolved BEFORE the
 // completion flips the dispatch row terminal. Direct dispatches (mesh_send_task) have no
 // work-queue row, so this is the only taskId available to attribute the terminal ledger
@@ -1963,7 +1999,15 @@ function evaluateMeshEventSuppression(
             const terminalTaskId = readNonEmptyString(terminal.payload.taskId);
             const eventTaskId = readNonEmptyString(args.metadataEvent.taskId);
             const distinctTaskCompletion = !!eventTaskId && !!terminalTaskId && eventTaskId !== terminalTaskId;
-            if (!newDispatchAfterTerminal && !supersedesWeakTerminal && !distinctTaskCompletion) {
+            // (FALSEIDLE-BGCHILD-b) Same-task genuine completion carrying a fuller summary than the
+            // recorded (truncated, false-idle-pre-empted) terminal supersedes it — see helper.
+            const supersedesTruncatedTerminal = supersedesTruncatedTerminalSummary({
+                terminalPayload: terminal.payload,
+                metadataEvent: args.metadataEvent,
+                terminalTaskId,
+                eventTaskId,
+            });
+            if (!newDispatchAfterTerminal && !supersedesWeakTerminal && !distinctTaskCompletion && !supersedesTruncatedTerminal) {
                 const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
                 const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);
                 const eventProviderSessionId = readNonEmptyString(args.metadataEvent.providerSessionId);

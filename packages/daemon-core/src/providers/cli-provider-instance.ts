@@ -102,6 +102,18 @@ type ExternalTranscriptProbe = {
 
 const COMPLETED_FINALIZATION_RETRY_MS = 1000;
 const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
+// (FALSEIDLE-BGCHILD-a) Minimum generating→idle settle window for native-history mesh worker
+// sessions. Native-history providers (e.g. claude-cli) normally flush the completion with
+// flushDelay=0 — the transcript is authoritative, so there is no reason to wait. But a worker
+// turn that spawns a BACKGROUND child (e.g. `npm test &`, a backgrounded Bash tool) can paint
+// a burst of child output, fall quiet, and have the screen parser read a PRIOR/intermediate
+// standard assistant as if the turn were done — firing a false idle while the agent is in fact
+// still generating (e.g. mid-commit). With flushDelay=0 there is no window for the resume guard
+// in flushCompletedDebounceIfFinalized (latestVisibleStatus !== 'idle' → cancel) to observe the
+// agent picking the turn back up. A short non-zero settle window restores that resume guard for
+// mesh workers without delaying genuinely-finished turns beyond this bound. Scoped to mesh
+// worker sessions so interactive native-history sessions keep the immediate flush.
+const NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 1500;
 
 /** Events that signal a dispatched mesh task has reached a terminal state.
  *  Detach the mesh assignment after emitting one of these so the worker's
@@ -2004,8 +2016,17 @@ export class CliProviderInstance implements ProviderInstance {
                         previousStatus: this.lastStatus,
                     };
                     const ownsExternalHistory = !!(this.adapter as any)?.chatMessagesOwnedExternally;
-                    const flushDelay = ownsExternalHistory ? 0 : 3000;
-                    LOG.debug('CLI', `[${this.type}] set completedDebouncePending duration=${duration}s ownsExternalHistory=${ownsExternalHistory} flushDelay=${flushDelay}ms generatingStartedAt=${this.generatingStartedAt}`);
+                    // (FALSEIDLE-BGCHILD-a) Native-history providers flush immediately (the
+                    // transcript is authoritative). For mesh worker sessions, give the
+                    // generating→idle transition a short settle window so a background-child
+                    // false idle (quiet after a backgrounded test/command while the parent turn
+                    // continues) gets caught by the resume guard in flushCompletedDebounceIfFinalized
+                    // instead of firing an early completion the coordinator can never correct.
+                    const meshWorkerSession = this.isMeshWorkerSession();
+                    const flushDelay = ownsExternalHistory
+                        ? (meshWorkerSession ? NATIVE_HISTORY_MESH_IDLE_SETTLE_MS : 0)
+                        : 3000;
+                    LOG.debug('CLI', `[${this.type}] set completedDebouncePending duration=${duration}s ownsExternalHistory=${ownsExternalHistory} meshWorker=${meshWorkerSession} flushDelay=${flushDelay}ms generatingStartedAt=${this.generatingStartedAt}`);
                     this.scheduleCompletedDebounceFlush(flushDelay);
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {

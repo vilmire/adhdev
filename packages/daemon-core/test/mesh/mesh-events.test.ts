@@ -4089,6 +4089,97 @@ describe('EVT — re-dispatch 2nd-completion event recovery', () => {
     }
   })
 
+  it('FALSEIDLE-BGCHILD-b: a genuine 2nd completion with a FULLER summary supersedes a prior STRONG (background-child false-idle) terminal of the same task', () => {
+    const meshId = `mesh_supersede_truncated_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // Prior STRONG terminal: the background-child false idle. The screen parser DID see a
+      // prior/intermediate standard assistant, so this is recorded WITHOUT weak markers — a
+      // truncated-but-non-empty finalSummary, finalAssistantPresent !== false. This is exactly
+      // the case isWeakTerminalLedgerPayload misses (so supersedesWeakTerminal would be false).
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        payload: {
+          event: 'agent:generating_completed',
+          taskId: 'task_BG',
+          providerSessionId: 'provider-session-stable',
+          finalSummary: 'Running tests in the background',
+        },
+      })
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      // The REAL final after the background child finished and the parent turn (commit) completed.
+      // SAME task + SAME stable providerSessionId, but a fuller summary that extends the truncated one.
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-session-stable',
+        taskId: 'task_BG',
+        finalSummary: 'Running tests in the background — all 42 passed, committed and pushed',
+        timestamp: Date.now() + 5_000,
+      })
+
+      // Must NOT be suppressed: the genuine fuller completion reaches the coordinator.
+      const pending = getPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].event).toBe('agent:generating_completed')
+      const genuine = readLedgerEntries(meshId).filter(
+        e => e.kind === 'task_completed' && e.payload.finalSummary === 'Running tests in the background — all 42 passed, committed and pushed',
+      )
+      expect(genuine).toHaveLength(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('FALSEIDLE-BGCHILD-b: an identical-summary re-arrival of a STRONG terminal is STILL deduped (supersession is fuller-only)', () => {
+    const meshId = `mesh_supersede_identical_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        payload: {
+          event: 'agent:generating_completed',
+          taskId: 'task_DUP',
+          providerSessionId: 'provider-session-stable',
+          finalSummary: 'all done',
+        },
+      })
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      // A genuine duplicate: same task, same summary — must remain deduped, not re-forwarded.
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-session-stable',
+        taskId: 'task_DUP',
+        finalSummary: 'all done',
+        timestamp: Date.now() + 5_000,
+      })
+
+      const pending = getPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('Fix B: a direct-dispatch completion attributes its taskId to the terminal ledger so task-stats report it (not status=unknown / terminalKind=null)', () => {
     const meshId = `mesh_direct_attribution_${Date.now()}`
     try {
