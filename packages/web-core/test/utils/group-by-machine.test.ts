@@ -107,6 +107,26 @@ describe('groupByMachine session attribution', () => {
         expect(worker?.cliSessions).toHaveLength(2)
     })
 
+    it('attributes a session to its machine when owner id and machine id differ only by canonical form (mach_ vs daemon_mach_)', () => {
+        const daemons: DaemonData[] = [
+            // Parent machine reports the bare machine-core form...
+            daemonMachine('mach_abc123'),
+            // ...while the coordinator-synthesised session stamps the prefixed cloud form.
+            // A raw === would orphan this session; daemonIdsEquivalent collapses both forms.
+            cliSession('mach_abc123:cli:remote-1', {
+                daemonId: 'daemon_coordinator',
+                ownerDaemonId: 'daemon_mach_abc123',
+                sessionId: 'remote-1',
+            }),
+        ]
+
+        const machines = groupByMachine(daemons, {})
+        const worker = machines.find(m => m.machineId === 'mach_abc123')
+
+        expect(worker?.cliSessions).toHaveLength(1)
+        expect(worker?.cliSessions[0].id).toBe('mach_abc123:cli:remote-1')
+    })
+
     it('keeps a non-mesh session grouped by daemonId when ownerDaemonId is absent (no regression)', () => {
         const daemons: DaemonData[] = [
             daemonMachine('daemon_local'),

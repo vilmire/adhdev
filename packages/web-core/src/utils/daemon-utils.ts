@@ -6,6 +6,7 @@
 import type { DaemonData } from '../types'
 import type { MachineInfo, DetectedIdeInfo, SessionEntry, RuntimeWriteOwner } from '@adhdev/daemon-core'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import { getMachineSessionDedupeKey } from '../components/dashboard/conversation-identity'
 
 // ─── Formatters ──────────────────────────────────
@@ -491,7 +492,12 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
         // ownerDaemonId and fall back to daemonId, so their grouping is unchanged.
         const ownerKey = daemon.ownerDaemonId || daemon.daemonId
         if (!ownerKey) continue
-        const parent = machines.find(m => m.machineId === ownerKey)
+        // ownerKey (worker daemonId / ownerDaemonId) and m.machineId (the parent
+        // adhdev-daemon entry id) are both daemon-id-space values that can carry
+        // interchangeable prefix forms (bare mach_ / daemon_mach_ / standalone_mach_).
+        // Compare under canonical machine-core form so a form mismatch does not split
+        // a worker's sessions off from its parent machine group.
+        const parent = machines.find(m => daemonIdsEquivalent(m.machineId, ownerKey))
         if (!parent) continue
 
         const dedupeKey = getMachineSessionDedupeKey(daemon)

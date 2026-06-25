@@ -174,8 +174,12 @@ function nodeHasLocalDaemonEvidence(ctx: MeshContext, node: any): boolean {
         // Remote workers also point this at the local coordinator, so it is not locality evidence.
         // Likewise launchedByCoordinator only proves the coordinator created the session, not
         // that the session is running on this daemon.
-        if (ctx.localDaemonId && session.runtime?.owner === ctx.localDaemonId) return true;
-        if (ctx.localDaemonId && session.daemonClient?.daemonId === ctx.localDaemonId) return true;
+        // runtime.owner / daemonClient.daemonId and ctx.localDaemonId may carry
+        // interchangeable id forms (bare mach_ / daemon_mach_ / standalone_mach_), so
+        // compare under canonical machine-core form rather than a raw ===; a form
+        // mismatch would otherwise drop valid local-daemon evidence.
+        if (ctx.localDaemonId && daemonIdsEquivalent(session.runtime?.owner, ctx.localDaemonId)) return true;
+        if (ctx.localDaemonId && daemonIdsEquivalent(session.daemonClient?.daemonId, ctx.localDaemonId)) return true;
         return false;
     };
 
