@@ -2274,7 +2274,8 @@ test('mesh_status and mesh_git_status request refreshed upstream truth and block
 });
 
 test('mesh_git_status source requests refreshed upstream truth', () => {
-  const source = readFileSync(join(new URL('../src/tools/mesh-tools.ts', import.meta.url).pathname), 'utf8');
+  // meshGitStatus moved into the git-domain file when mesh-tools.ts was split into a barrel.
+  const source = readFileSync(join(new URL('../src/tools/mesh-tools-git.ts', import.meta.url).pathname), 'utf8');
   assert.match(source, /refreshUpstream: true,/);
 });
 

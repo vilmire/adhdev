@@ -1,0 +1,667 @@
+// Mesh tool implementations — status domain.
+// Pure move out of mesh-tools.ts (no behavior change). Shared helpers, types, module
+// state and dependency re-exports live in ./mesh-tools-internal.ts; mesh-tools.ts is a barrel.
+
+import {
+    COMPACT_DETAILED_NODES_BYTE_BUDGET,
+    COMPACT_MAX_ACTIVE_WORK_ROWS,
+    COMPACT_MISSIONS_BYTE_BUDGET,
+    COMPACT_NODES_TOTAL_BYTE_BUDGET,
+    assignFullGitSnapshot,
+    buildActiveWorkPollingGuidance,
+    buildBranchConvergence,
+    buildCompactStaleDirectWorkSummary,
+    buildCoordinatorP2pRelayFailure,
+    buildMeshActiveWork,
+    buildMeshAsyncRefineJobs,
+    buildMeshNodeProbeFreshness,
+    buildNodeCapabilityExposure,
+    buildNodeMachineIdentity,
+    collectLiveStatusProbe,
+    collectRelatedRepoStatuses,
+    commandForNode,
+    compactActiveWorkRecords,
+    compactMeshStatusNode,
+    compactNodeSeverity,
+    computeMeshMissionStats,
+    countUncommittedChanges,
+    drainCoordinatorPendingEvents,
+    extractGitStatus,
+    extractSubmodules,
+    getActiveDirectDispatches,
+    getLatestActiveLaunchFailure,
+    getLedgerSummary,
+    getMeshStatusMissionSummaries,
+    getMeshStatusMissionsCompact,
+    getNodeLaunchReadiness,
+    getQueue,
+    getSessionRecoveryContext,
+    isGitStatusDirty,
+    isNoteworthyCompactNode,
+    minimalCompactNode,
+    readLedgerEntries,
+    readNodeDaemonId,
+    readNodeMachineId,
+    readRelatedRepos,
+    reconcileDirectDispatchesFromTranscriptEvidence,
+    recordMeshToolCall,
+    refreshMeshFromDaemon,
+    summarizeBranchConvergence,
+    summarizeMeshAsyncRefineJobs,
+    summarizeNodeSessions,
+} from './mesh-tools-internal.js';
+import type {
+    MeshContext,
+} from './mesh-tools-internal.js';
+
+
+
+// ─── Tool Implementations ───────────────────────
+
+export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; compact?: boolean; verbose?: boolean } = {}): Promise<string> {
+    const rateResult = recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_status' });
+    // Default to the slim payload for LLM callers; verbose forces the full payload.
+    const compact = args.verbose === true ? false : (args.compact ?? true);
+
+    await refreshMeshFromDaemon(ctx);
+    const { mesh, transport } = ctx;
+
+    let ledgerSummary = getLedgerSummary(mesh.id);
+
+    // Probe all nodes in parallel — git_status + session collection per node are independent.
+    const results = await Promise.all(mesh.nodes.map(async (node) => {
+        const entry: any = {
+            nodeId: node.id,
+            workspace: node.workspace,
+            machine: buildNodeMachineIdentity(ctx, node),
+            daemonId: readNodeDaemonId(node),
+            machineId: readNodeMachineId(node),
+            ...getNodeLaunchReadiness(node),
+            ...buildNodeCapabilityExposure(node),
+        };
+
+        // Tracks whether THIS call obtained live truth from a fresh git_status probe.
+        // The coordinator-facing mesh_status always probes each node fresh, so a probe
+        // that returns is live truth and a probe that throws is an unreachable peer —
+        // consumed below to stamp the additive `dataFreshness` marker.
+        let liveTruthProbed = false;
+        try {
+            const autoDiscover = (node.policy as any)?.autoDiscoverSubmodules !== false;
+            const statusResult = await commandForNode(ctx, node, 'git_status', {
+                workspace: node.workspace,
+                refreshUpstream: true,
+                includeSubmodules: autoDiscover,
+                submoduleIgnorePaths: (node.policy as any)?.submoduleIgnorePaths || undefined,
+            });
+            liveTruthProbed = true;
+            const status = extractGitStatus(statusResult);
+            const uncommittedChanges = countUncommittedChanges(status);
+            const dirty = isGitStatusDirty(status);
+            entry.health = status?.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
+            assignFullGitSnapshot(entry, status);
+            entry.branch = status?.branch;
+            entry.isDirty = dirty;
+            entry.uncommittedChanges = uncommittedChanges;
+            entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+            // Stale-daemon-build warning: the live daemon's build commit is a
+            // strict ancestor of this workspace HEAD (or its oss submodule),
+            // meaning merged code is not yet live (awaiting deploy/restart).
+            // Computed git-correctly on the daemon side (git_status →
+            // daemonBuildBehind); surfaced here as a top-level node field.
+            if (status?.daemonBuildBehind && typeof status.daemonBuildBehind === 'object') {
+                entry.staleDaemonBuild = status.daemonBuildBehind;
+            }
+            // Submodule out-of-sync warning
+            const submodules = extractSubmodules(statusResult, (node.policy as any)?.submoduleIgnorePaths || []);
+            if (submodules && submodules.some((s: any) => s?.outOfSync)) {
+                entry.submoduleWarning = 'One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.';
+                entry.outOfSyncSubmodules = submodules.filter((s: any) => s?.outOfSync).map((s: any) => s.path);
+            }
+        } catch (e: any) {
+            const failure = buildCoordinatorP2pRelayFailure(e, {
+                command: 'git_status',
+                targetDaemonId: node.daemonId,
+                nodeId: node.id,
+            });
+            entry.health = 'degraded';
+            entry.error = failure.error;
+            entry.degradedReason = failure.recoverable ? 'p2p_relay_failure' : 'git_status_unavailable';
+            Object.assign(entry, {
+                code: failure.code,
+                transport: failure.transport,
+                recoverable: failure.recoverable,
+                retryRecommended: failure.retryRecommended,
+                nextAction: failure.nextAction,
+                noFallbackReason: failure.noFallbackReason,
+            });
+        }
+
+        // Additive freshness/reachability marker. Without this, the coordinator's
+        // mesh_status could not tell a node whose live probe just succeeded from one
+        // it could not reach — both rendered as `health` + git scalars only. Derived
+        // through the SINGLE canonical daemon-core live-probe adapter
+        // (buildMeshNodeProbeFreshness) rather than rebuilding the freshness input
+        // here, so the dataSource/staleness wiring cannot drift between this
+        // coordinator surface and the daemon aggregate (the rc.371 regression where
+        // dataFreshness was wired on the daemon surface but null on every coordinator
+        // node because this site re-derived its own input).
+        entry.dataFreshness = buildMeshNodeProbeFreshness({
+            git: entry.git,
+            liveTruthProbed,
+            isSelfNode: (entry.machine as any)?.sameMachine === true,
+            daemonId: readNodeDaemonId(node),
+            node,
+        });
+
+        // Recovery Hints & Next-step reporting
+        const recoveryContext = getSessionRecoveryContext(mesh.id, { nodeId: node.id });
+        if (recoveryContext.consecutiveNodeFailures > 0) {
+            entry.recoveryHints = {
+                consecutiveFailures: recoveryContext.consecutiveNodeFailures,
+                lastTaskMessage: typeof recoveryContext.lastTaskMessage === 'string'
+                    ? recoveryContext.lastTaskMessage.slice(0, 100) + (recoveryContext.lastTaskMessage.length > 100 ? '…' : '')
+                    : recoveryContext.lastTaskMessage,
+                advice: recoveryContext.advice,
+                retryRecommended: recoveryContext.retryRecommended,
+            };
+        }
+
+        const activeLaunchFailure = getLatestActiveLaunchFailure(mesh.id, node.id);
+        if (activeLaunchFailure && node.isLocalWorktree) {
+            entry.health = 'degraded';
+            entry.degradedReason = 'worktree_launch_failed';
+            entry.launchReady = false;
+            entry.launchBlockedReason = activeLaunchFailure.code || 'mesh_launch_failed';
+            entry.launchBlockedMessage = activeLaunchFailure.error || 'Previous worktree session launch failed';
+            entry.lastLaunchFailure = activeLaunchFailure;
+        }
+
+        const nextStepHints: string[] = [];
+        if (entry.degradedReason === 'worktree_launch_failed') {
+            nextStepHints.push(`Retry mesh_launch_session(node_id: "${node.id}") after daemon mesh transport/P2P is healthy.`);
+            nextStepHints.push(`If retry is not desired, cleanup the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`);
+        } else if (entry.health === 'online' && node.isLocalWorktree) {
+            nextStepHints.push(`Merge worktree to base via mesh_refine_node(node_id: "${node.id}")`);
+        } else if (entry.health === 'dirty') {
+            nextStepHints.push(`Commit changes via mesh_checkpoint(node_id: "${node.id}", message: "...")`);
+        } else if (entry.health === 'degraded' && entry.error?.includes('git')) {
+            nextStepHints.push('Initialize git repository or check workspace path.');
+        }
+
+        if (entry.branchConvergence?.needsConvergence === true && entry.branchConvergence.nextStep) {
+            nextStepHints.push(String(entry.branchConvergence.nextStep));
+        }
+
+        if (recoveryContext.consecutiveNodeFailures > 0) {
+            if (recoveryContext.retryRecommended) {
+                nextStepHints.push(`Retry task on this node or launch a fresh session.`);
+            } else {
+                nextStepHints.push(`Consider reassigning work to a different node.`);
+            }
+        }
+
+        if (nextStepHints.length > 0) {
+            entry.nextStepHints = nextStepHints;
+        }
+
+        const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
+        if (relatedRepos.length) entry.relatedRepos = relatedRepos;
+
+        const statusProbe = await collectLiveStatusProbe(ctx, node);
+        const liveSessions = statusProbe.sessions;
+        // Per-node daemon build stamp (commit/version of the running daemon).
+        // Compact mode folds these per-daemonId at the response level, but the
+        // raw field is kept on the node so verbose callers and self-coordinator
+        // shape stay intact.
+        if (statusProbe.daemonBuild) entry.daemonBuild = statusProbe.daemonBuild;
+        if (liveSessions.length > 0) {
+            // Slim to essential fields only — full session objects are expensive in coordinator context.
+            entry.sessions = liveSessions
+                .map((s: any) => {
+                    // A session is marked as a coordinator for THIS mesh when the daemon's
+                    // coordinator registry / session settings report its meshId matches ours.
+                    // From the caller's perspective (which is itself a coordinator for this
+                    // mesh), any such session is "self" — i.e. it is the calling coordinator
+                    // session, not a foreign delegated worker. This prevents the coordinator
+                    // from mis-reporting its own generating CLI session as someone else's
+                    // delegated task.
+                    const coordinatorMeshId =
+                        typeof s.coordinator?.meshId === 'string' ? s.coordinator.meshId : undefined;
+                    const isSelfCoordinator = coordinatorMeshId === mesh.id;
+                    return {
+                        id: s.instanceId ?? s.id ?? s.sessionId,
+                        status: s.status ?? s.lifecycle ?? s.state,
+                        providerType: s.providerType ?? s.cliType ?? s.type,
+                        ...(s.activeChat?.status ? { chatStatus: s.activeChat.status } : {}),
+                        ...(isSelfCoordinator ? { isSelfCoordinator: true, role: 'coordinator' as const } : {}),
+                        // [T2] Carry the worker-computed last-message preview through the slim so
+                        // the coordinator's inbox can show the worker's latest ASSISTANT reply
+                        // without re-deriving it from a live in-process instance it doesn't host.
+                        // The worker's get_status_metadata snapshot already computes these
+                        // (status/snapshot.ts) from its real transcript; dropping them here forced
+                        // the coordinator down a derive path that fails for genuinely remote
+                        // workers, leaving the mobile inbox stuck on the dispatched user task.
+                        ...(typeof s.lastMessagePreview === 'string' && s.lastMessagePreview
+                            ? { lastMessagePreview: s.lastMessagePreview } : {}),
+                        ...(typeof s.lastMessageRole === 'string' && s.lastMessageRole
+                            ? { lastMessageRole: s.lastMessageRole } : {}),
+                        ...(typeof s.lastMessageAt === 'number' && Number.isFinite(s.lastMessageAt)
+                            ? { lastMessageAt: s.lastMessageAt } : {}),
+                    };
+                })
+                // Exclude sessions with no resolvable id (malformed or custom provider response).
+                .filter((s: any) => s.id);
+        }
+
+        return entry;
+    }));
+
+    let ledgerEntries = readLedgerEntries(mesh.id, { tail: 200 });
+    let directDispatches = getActiveDirectDispatches(mesh.id);
+    const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, results, directDispatches, ledgerEntries);
+    if (directReconciliation.reconciled > 0) {
+        ledgerEntries = readLedgerEntries(mesh.id, { tail: 200 });
+        directDispatches = getActiveDirectDispatches(mesh.id);
+        ledgerSummary = getLedgerSummary(mesh.id);
+    }
+    const activeWorkEvidence = buildMeshActiveWork({
+        meshId: mesh.id,
+        queue: getQueue(mesh.id),
+        ledgerEntries,
+        directDispatches,
+        nodes: results,
+    });
+
+    const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
+    const staleDirectWorkSummary = buildCompactStaleDirectWorkSummary(activeWorkEvidence.staleDirectWork, {
+        note: activeWorkEvidence.staleDirectWorkNote,
+        detailHint: 'Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail.',
+    });
+    // Leak #2: in compact mode each activeWork row drops the duplicated
+    // taskSummary/message echoes (keeps a short taskTitle + dispatch scalars).
+    // Verbose keeps the full per-record text for debugging.
+    const activeWorkForResponse = compact
+        ? compactActiveWorkRecords(activeWorkEvidence.activeWork)
+        : { records: activeWorkEvidence.activeWork, omitted: 0 };
+
+    // Surface coordinator session identity at the top level so the caller (which
+    // is itself a coordinator for this mesh) can immediately recognize which
+    // sessions in the response are its own — see the per-session
+    // `isSelfCoordinator` marker derived above.
+    const coordinatorSessions: Array<Record<string, unknown>> = [];
+    for (const nodeEntry of results) {
+        const sessions = Array.isArray((nodeEntry as any).sessions) ? (nodeEntry as any).sessions : [];
+        for (const s of sessions) {
+            if (s?.isSelfCoordinator === true && s.id) {
+                coordinatorSessions.push({
+                    nodeId: (nodeEntry as any).nodeId,
+                    sessionId: s.id,
+                    providerType: s.providerType,
+                    status: s.status,
+                });
+            }
+        }
+    }
+
+    // Compact mode: slim each node's large duplicated `git` blob down to the
+    // coordinator-relevant scalars + submodules. branch/health/headCommit/ahead/
+    // behind/dirty/upstreamStatus/branchConvergence live as top-level node
+    // fields (or inside the slim git snapshot) and are always preserved.
+    //
+    // Session N×M de-duplication: the per-node session list comes from a
+    // daemon-wide `get_status_metadata` probe, so every node that shares a
+    // daemonId reports the SAME sessions. Emitting the full array on every node
+    // makes the payload grow O(nodes × sessions). In compact mode we therefore
+    // (a) fold each node's `sessions` array to a `sessionSummary` (counts only),
+    // and (b) emit the full slim session arrays exactly once per daemon under
+    // top-level `daemonSessions`. The self-coordinator marker survives in both
+    // the per-node summary (`selfCoordinatorSessionIds`) and the top-level
+    // `coordinatorSessions`/`selfIdentification`. Individual per-node session
+    // detail can be opted back in with `includeSessions=true`.
+    const includeSessions = args.includeSessions === true;
+    // Top-level per-daemon session map (compact). Sessions are recorded ONCE per
+    // daemonId regardless of how many mesh nodes share that daemon, eliminating
+    // the N×M duplication. With includeSessions=true the full slim session arrays
+    // are emitted; otherwise each daemon is folded to a counts summary.
+    const daemonSessions: Record<string, unknown> = {};
+    if (compact) {
+        const seenDaemons = new Set<string>();
+        for (const entry of results as any[]) {
+            const daemonId = typeof entry?.daemonId === 'string' && entry.daemonId ? entry.daemonId : '';
+            const sessions = Array.isArray(entry?.sessions) ? entry.sessions : [];
+            if (daemonId && sessions.length > 0 && !seenDaemons.has(daemonId)) {
+                seenDaemons.add(daemonId);
+                daemonSessions[daemonId] = includeSessions ? sessions : summarizeNodeSessions(sessions);
+            }
+        }
+    }
+    // Per-daemon build fold: the daemon build stamp is identical for every node
+    // sharing a daemonId (it's a daemon-wide probe), so record it ONCE per
+    // daemonId at the top level. Small field — emitted in both compact and
+    // verbose modes so the coordinator can compare the live daemon's commit with
+    // a just-merged fix without paging through nodes.
+    const daemonBuilds: Record<string, unknown> = {};
+    for (const entry of results as any[]) {
+        const daemonId = typeof entry?.daemonId === 'string' && entry.daemonId ? entry.daemonId : '';
+        if (daemonId && entry?.daemonBuild && !(daemonId in daemonBuilds)) {
+            daemonBuilds[daemonId] = entry.daemonBuild;
+        }
+    }
+    // Stale-build aggregate: any node whose live daemon build is behind its
+    // workspace HEAD. Deduplicated per daemonId+scope so N worktrees on one
+    // stale daemon don't spam N identical warnings.
+    const staleDaemonBuilds: Array<Record<string, unknown>> = [];
+    const seenStale = new Set<string>();
+    for (const entry of results as any[]) {
+        const behind = entry?.staleDaemonBuild;
+        if (!behind || typeof behind !== 'object') continue;
+        const daemonId = typeof entry?.daemonId === 'string' ? entry.daemonId : '';
+        const key = `${daemonId}::${behind.scope ?? ''}::${behind.buildCommit ?? ''}::${behind.head ?? ''}`;
+        if (seenStale.has(key)) continue;
+        seenStale.add(key);
+        // web-only stale builds are informational, not "fix not live". Only daemon-
+        // affecting stale builds (or ones where the classification is unknown →
+        // defaulted true) mean a merged daemon/refinery fix is not yet live.
+        const isDaemonAffecting = behind.isDaemonAffecting !== false;
+        staleDaemonBuilds.push({
+            daemonId,
+            nodeId: entry.nodeId,
+            scope: behind.scope,
+            liveBuildCommit: behind.buildCommit,
+            liveBuildCommitShort: behind.buildCommitShort,
+            head: behind.head,
+            isDaemonAffecting,
+            ...(Array.isArray(behind.affectedPackages) && behind.affectedPackages.length > 0
+                ? { affectedPackages: behind.affectedPackages }
+                : {}),
+            // The full ~300-char warning prose is identical for every entry and is
+            // already emitted ONCE at the top level as `staleDaemonBuildWarning`.
+            // Keep it per-entry only in verbose to avoid N× duplication in compact.
+            ...(compact ? {} : { warning: behind.warning }),
+        });
+    }
+    const daemonAffectingStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting !== false);
+    const webOnlyStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting === false);
+
+    let stubbedNodeCount = 0;
+    let foldedNodesSummary: Record<string, unknown> | undefined;
+    const nodesForResponse = compact
+        ? (() => {
+            const compacted = results.map((entry: any) => {
+                const next = compactMeshStatusNode(entry);
+                if (!next || typeof next !== 'object') return next;
+                if (Array.isArray(next.sessions)) {
+                    next.sessionSummary = summarizeNodeSessions(next.sessions);
+                    // Drop the full per-node array unless explicitly opted in. The
+                    // de-duplicated full lists are available under top-level
+                    // `daemonSessions` keyed by daemonId.
+                    if (!includeSessions) delete next.sessions;
+                }
+                // Build stamp is folded per-daemon under top-level `daemonBuilds`;
+                // drop the repetitive per-node copy in compact mode.
+                if (next.daemonBuild !== undefined) delete next.daemonBuild;
+                return next;
+            });
+
+            // Two-tier bounding, highest-severity first:
+            //  1. detail byte-budget — noteworthy nodes get full compact detail until
+            //     COMPACT_DETAILED_NODES_BYTE_BUDGET is spent; the rest degrade to a stub.
+            //  2. total node-array byte-budget — quiet/overflow nodes are emitted as
+            //     minimal stubs until COMPACT_NODES_TOTAL_BYTE_BUDGET is spent; any node
+            //     beyond that is fully folded into the foldedNodes id-list summary.
+            // Nodes that survive in the array keep their ORIGINAL order. Every node id is
+            // either in the array (detail or stub) or listed in foldedNodes.nodeIds.
+            const noteworthy = compacted.filter((n: any) => n && typeof n === 'object' && isNoteworthyCompactNode(n));
+            const ranked = [...noteworthy].sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+            const detailedIds = new Set<string>();
+            let detailSpent = 0;
+            for (const n of ranked) {
+                const cost = JSON.stringify(n).length + 1;
+                if (detailedIds.size === 0 || detailSpent + cost <= COMPACT_DETAILED_NODES_BYTE_BUDGET) {
+                    detailedIds.add(String(n.nodeId));
+                    detailSpent += cost;
+                }
+            }
+
+            // severity order for awarding the remaining total budget to stubs
+            const stubOrder = [...compacted]
+                .filter((n: any) => n && typeof n === 'object')
+                .sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+            const keptIds = new Set<string>(detailedIds);
+            let totalSpent = detailSpent;
+            for (const n of stubOrder) {
+                const id = String(n.nodeId);
+                if (keptIds.has(id)) continue;
+                const stubCost = JSON.stringify(minimalCompactNode(n)).length + 1;
+                if (totalSpent + stubCost <= COMPACT_NODES_TOTAL_BYTE_BUDGET) {
+                    keptIds.add(id);
+                    totalSpent += stubCost;
+                }
+            }
+
+            const fullyFolded: any[] = [];
+            const out = compacted
+                .map((n: any) => {
+                    if (!n || typeof n !== 'object') return n;
+                    const id = String(n.nodeId);
+                    if (detailedIds.has(id)) return n;
+                    if (keptIds.has(id)) {
+                        stubbedNodeCount += 1;
+                        return minimalCompactNode(n);
+                    }
+                    fullyFolded.push(n);
+                    return null;
+                })
+                .filter((n: any) => n !== null);
+
+            if (fullyFolded.length > 0) {
+                const byBranchConvergence: Record<string, number> = {};
+                const byHealth: Record<string, number> = {};
+                const nodeIds: string[] = [];
+                for (const n of fullyFolded) {
+                    const bc = typeof n?.branchConvergence?.status === 'string' ? n.branchConvergence.status : 'unknown';
+                    byBranchConvergence[bc] = (byBranchConvergence[bc] ?? 0) + 1;
+                    const h = typeof n?.health === 'string' ? n.health : 'unknown';
+                    byHealth[h] = (byHealth[h] ?? 0) + 1;
+                    if (n?.nodeId) nodeIds.push(String(n.nodeId));
+                }
+                foldedNodesSummary = {
+                    count: fullyFolded.length,
+                    note: 'Node-array byte budget reached: these nodes are listed by id only. Query a specific node_id or use verbose=true for their detail.',
+                    byHealth,
+                    byBranchConvergence,
+                    nodeIds,
+                };
+            }
+            return out;
+        })()
+        : results;
+
+    const response: Record<string, unknown> = {
+        meshId: mesh.id,
+        meshName: mesh.name,
+        repoIdentity: mesh.repoIdentity,
+        policy: mesh.policy,
+        payloadMode: compact ? 'compact' : 'full',
+        refreshedAt: new Date().toISOString(),
+        sourceOfTruth: {
+            membership: 'coordinator_daemon_live_mesh',
+            currentStatus: 'live_git_and_session_probes',
+            activeWork: 'mesh_queue_file_and_local_ledger',
+            historicalEvidenceOnly: ['recoveryHints', 'ledgerSummary'],
+        },
+        nodes: nodesForResponse,
+        ...(compact && stubbedNodeCount > 0
+            ? {
+                stubbedNodesNote: `${stubbedNodeCount} node(s) in the array above are reduced to a minimal stub (marked folded:true) in compact mode — healthy/clean nodes plus any beyond the detail byte-budget. They remain addressable by node_id; use verbose=true for their full detail.`,
+            }
+            : {}),
+        ...(compact && foldedNodesSummary ? { foldedNodes: foldedNodesSummary } : {}),
+        ...(compact && Object.keys(daemonSessions).length > 0 ? { daemonSessions } : {}),
+        ...(Object.keys(daemonBuilds).length > 0 ? { daemonBuilds } : {}),
+        ...(staleDaemonBuilds.length > 0 ? { staleDaemonBuilds } : {}),
+        ...(daemonAffectingStaleBuilds.length > 0
+            ? {
+                staleDaemonBuildWarning: 'One or more live daemons were built from a commit behind the workspace HEAD with daemon-runtime package changes. Merged refinery/mesh-tool fixes are NOT live on those daemons until they are rebuilt/redeployed and restarted — a local daemon-core dist rebuild does not update a cloud daemon. Do not assume a just-merged fix is active.',
+            }
+            : {}),
+        ...(webOnlyStaleBuilds.length > 0
+            ? {
+                webOnlyStaleBuildNote: 'One or more live daemons are behind workspace HEAD, but only web packages changed in that range. The daemon does NOT need a rebuild/restart — redeploy the web app to reflect those changes. This is informational, not a "fix not live" condition.',
+            }
+            : {}),
+        activeWork: activeWorkForResponse.records,
+        ...(compact && activeWorkForResponse.omitted > 0
+            ? { activeWorkRowsOmitted: activeWorkForResponse.omitted }
+            : {}),
+        ...(compact
+            ? { activeWorkHint: `Compact activeWork rows carry a short taskTitle + dispatch scalars only; full task prompt/summary text is omitted — use mesh_task_history or mesh_status verbose=true. First ${COMPACT_MAX_ACTIVE_WORK_ROWS} rows serialized.` }
+            : {}),
+        staleDirectWorkSummary,
+        ...(args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {}),
+        // terminalDirectWork is historical (completed/failed direct dispatches) — opt-in only.
+        ...(args.includeTerminalDirectWork === true ? { terminalDirectWork: activeWorkEvidence.terminalDirectWork } : {}),
+        activeWorkSummary: activeWorkEvidence.summary,
+        ...(pollingGuidance ? { pollingGuidance } : {}),
+        ...(rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: 'rate_limit_exceeded', tool: 'mesh_status', callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {}),
+        branchConvergenceSummary: summarizeBranchConvergence(results, compact),
+        ...(coordinatorSessions.length > 0
+            ? {
+                coordinatorSessions,
+                selfIdentification: {
+                    meshId: mesh.id,
+                    coordinatorSessions,
+                    note: 'Sessions listed here are coordinator sessions for this mesh. The calling coordinator IS one of these sessions — do not treat its own generating CLI session as a foreign delegated task. Per-session marker: sessions[].isSelfCoordinator === true.',
+                },
+            }
+            : {}),
+    };
+
+    // Include task ledger summary for coordinator context
+    try {
+        response.ledgerSummary = ledgerSummary;
+    } catch { /* ledger read is best-effort */ }
+
+    // M3-2: mission summaries — goal + live task aggregates (derived, not stored).
+    // M7: each mission also carries time/attempt stats derived from the ledger.
+    //
+    // The missions section previously dominated the compact payload: every live
+    // mission AND up to 10 history missions were emitted in full (goalPreview +
+    // tasks + a per-mission stats rollup) on every poll, so a mesh with many
+    // missions pushed mesh_status past the MCP token cap. Compact mode now folds
+    // missions like it folds nodes/sessions:
+    //   • live (active/paused) missions keep detail, goal-elided to a tight preview
+    //     and WITHOUT the stats rollup (the tasks aggregate already carries
+    //     progress; stats is a verbose/dashboard concern);
+    //   • completed/abandoned history is folded to a counts + id summary
+    //     (missionsHistory) instead of full per-mission detail;
+    //   • a byte budget bounds the live array — overflow folds into foldedMissions
+    //     (id list), so even a mesh of many active missions can't blow the cap.
+    // verbose=true restores the full dashboard-grade missions (full goal text, the
+    // stats rollup, and full-detail history) — the backward-compatible escape hatch.
+    try {
+        if (compact) {
+            const { live, historyFold } = getMeshStatusMissionsCompact(mesh.id);
+            // Bound the live-mission detail by byte budget, newest-active first.
+            // Overflow folds into foldedMissions so every live id stays addressable.
+            const ranked = [...live].sort((a, b) =>
+                String((b as any).tasks?.lastActivityAt ?? '').localeCompare(String((a as any).tasks?.lastActivityAt ?? '')));
+            const kept: any[] = [];
+            const overflow: any[] = [];
+            let spent = 0;
+            for (const m of ranked) {
+                const cost = JSON.stringify(m).length + 1;
+                if (kept.length === 0 || spent + cost <= COMPACT_MISSIONS_BYTE_BUDGET) {
+                    kept.push(m);
+                    spent += cost;
+                } else {
+                    overflow.push(m);
+                }
+            }
+            if (kept.length > 0) response.missions = kept;
+            if (overflow.length > 0) {
+                const byStatus: Record<string, number> = {};
+                for (const m of overflow) byStatus[String(m.status)] = (byStatus[String(m.status)] ?? 0) + 1;
+                response.foldedMissions = {
+                    count: overflow.length,
+                    note: 'Live-mission byte budget reached: these active/paused missions are listed by id only. Use mesh_mission_list or mesh_status verbose=true for their detail.',
+                    byStatus,
+                    missionIds: overflow.map(m => String(m.id)),
+                };
+            }
+            if (historyFold) response.missionsHistory = historyFold;
+        } else {
+            const missions = getMeshStatusMissionSummaries(mesh.id, { verbose: true });
+            if (missions.length > 0) {
+                response.missions = missions.map(mission => {
+                    try {
+                        return { ...mission, stats: computeMeshMissionStats(mesh.id, mission.id) };
+                    } catch {
+                        return mission;
+                    }
+                });
+            }
+        }
+    } catch { /* mission read is best-effort */ }
+
+    try {
+        const pendingEvents = await drainCoordinatorPendingEvents(ctx);
+        const asyncRefineJobs = buildMeshAsyncRefineJobs({
+            meshId: mesh.id,
+            ledgerEntries,
+            pendingEvents,
+        });
+        if (asyncRefineJobs.length > 0) {
+            if (compact) {
+                // Drop terminal (completed/failed) refine jobs — they are historical and
+                // dominate the payload. Keep active (non-terminal) job objects so the
+                // coordinator can still track in-flight refines, and replace the rest with
+                // a status-count summary.
+                //
+                // Stale terminal jobs (resolved refinery rejections/successes from earlier
+                // in the ledger window — often multi-day-old) are folded out of the counts
+                // so byStatus.failed reflects *current* breakage, not historical residue.
+                // The folded count is surfaced as `staleTerminal` for transparency.
+                const summary = summarizeMeshAsyncRefineJobs(asyncRefineJobs);
+                if (summary.activeJobs.length > 0) response.asyncRefineJobs = summary.activeJobs;
+                response.asyncRefineJobsSummary = {
+                    total: summary.total,
+                    byStatus: summary.byStatus,
+                    ...(summary.staleTerminal > 0 ? { staleTerminal: summary.staleTerminal } : {}),
+                };
+            } else {
+                response.asyncRefineJobs = asyncRefineJobs;
+            }
+        }
+        if (pendingEvents.length > 0) {
+            response.pendingCoordinatorEvents = pendingEvents;
+        }
+    } catch {
+        // Non-fatal: pending events are best-effort.
+    }
+
+    return JSON.stringify(response, null, 2);
+}
+
+export async function meshListNodes(ctx: MeshContext): Promise<string> {
+    await refreshMeshFromDaemon(ctx);
+    const { mesh } = ctx;
+    return JSON.stringify({
+        meshId: mesh.id,
+        meshName: mesh.name,
+        nodes: mesh.nodes.map(n => ({
+            nodeId: n.id,
+            workspace: n.workspace,
+            repoRoot: n.repoRoot,
+            daemonId: readNodeDaemonId(n),
+            machineId: readNodeMachineId(n),
+            machine: buildNodeMachineIdentity(ctx, n),
+            isLocalWorktree: n.isLocalWorktree,
+            policy: n.policy,
+            relatedRepos: readRelatedRepos(n),
+            ...getNodeLaunchReadiness(n),
+            ...buildNodeCapabilityExposure(n),
+            userOverrides: n.userOverrides,
+        })),
+    }, null, 2);
+}
