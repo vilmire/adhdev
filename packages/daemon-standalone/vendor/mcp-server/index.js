@@ -382,213 +382,57 @@ function annotateRapidReadChatAdvisory(payload, options) {
 }
 
 // src/tools/mesh-tools.ts
-var import_daemon_core = require("@adhdev/daemon-core");
-var SESSION_PROVIDER_METADATA_TTL_MS = 30 * 6e4;
-var meshSessionProviderMetadata = /* @__PURE__ */ new Map();
-function getSessionMetadata(key) {
-  const entry = meshSessionProviderMetadata.get(key);
-  if (!entry) return void 0;
-  if (entry.expiresAt <= Date.now()) {
-    meshSessionProviderMetadata.delete(key);
-    return void 0;
-  }
-  return entry;
-}
-var ACTIVE_WORK_POLLING_BACKOFF_MS = 6e4;
-function buildActiveWorkPollingGuidance(summary, now = Date.now()) {
-  if (!summary || summary.generatingCount <= 0) return void 0;
-  return {
-    activeGeneratingWork: true,
-    generatingCount: summary.generatingCount,
-    doNotPollBefore: new Date(now + ACTIVE_WORK_POLLING_BACKOFF_MS).toISOString(),
-    eventSurface: "pendingCoordinatorEvents",
-    nextRecommendedAction: "Wait for pendingCoordinatorEvents/completion events or an explicit user status request. If no terminal evidence appears and the user asks for status, make one bounded status check, then wait again.",
-    message: "Do not repeatedly poll mesh_status/mesh_view_queue/mesh_read_chat while delegated work is generating; terminal ledger or completion evidence will be surfaced through pendingCoordinatorEvents when available."
-  };
-}
+var import_daemon_core2 = require("@adhdev/daemon-core");
+
+// src/tools/mesh-tool-shared.ts
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : void 0;
 }
-function summarizeTaskMessage(message) {
-  const taskSummary = message.replace(/\s+/g, " ").trim();
-  const taskTitle = taskSummary.length > 96 ? `${taskSummary.slice(0, 93)}...` : taskSummary;
-  return { taskTitle: taskTitle || "(untitled task)", taskSummary };
+function readNumeric(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
-function buildDirectTaskPayload(message, via, opts) {
-  const descriptor = summarizeTaskMessage(message);
+var LARGE_LEDGER_FIELD_KEYS = /* @__PURE__ */ new Set(["plan", "validationPlan", "suggestedConfig", "payload"]);
+var LARGE_LEDGER_OBJECT_THRESHOLD = 800;
+var LARGE_LEDGER_NESTED_BYTES_THRESHOLD = 2e3;
+function summarizeLargeLedgerField(key, value) {
+  if (typeof value === "string") {
+    return value.length > 500 ? value.slice(0, 500) + "\u2026" : value;
+  }
+  if (Array.isArray(value)) {
+    const serialized = JSON.stringify(value);
+    if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
+      return `[${key} summarized: ${value.length} items \u2014 use verbose=true or mesh_reconcile_ledger]`;
+    }
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const serialized = JSON.stringify(value);
+    if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
+      return `[${key} summarized: ${Object.keys(value).length} keys \u2014 use verbose=true or mesh_reconcile_ledger]`;
+    }
+    return value;
+  }
+  return value;
+}
+function elideLargeNestedValue(key, value) {
+  if (value === null || value === void 0) return value;
+  if (typeof value === "string") {
+    return value.length > 1e3 ? value.slice(0, 1e3) + "\u2026" : value;
+  }
+  if (typeof value !== "object") return value;
+  const serialized = JSON.stringify(value);
+  const bytes = serialized ? serialized.length : 0;
+  if (bytes <= LARGE_LEDGER_NESTED_BYTES_THRESHOLD) return value;
   return {
-    source: "direct",
-    via,
-    taskId: opts.taskId,
-    message,
-    taskTitle: descriptor.taskTitle,
-    taskSummary: descriptor.taskSummary,
-    ...opts.taskMode ? { taskMode: opts.taskMode } : {},
-    ...opts.providerType ? { providerType: opts.providerType } : {},
-    ...opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {},
-    ...opts.dispatchedToIdleSession !== void 0 ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {}
+    _elided: true,
+    _kind: key,
+    _bytes: bytes,
+    _hint: "full evidence via mesh_reconcile_ledger"
   };
 }
-function findNode(mesh, nodeId) {
-  const node = mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId));
-  if (!node) throw new Error(`Node '${nodeId}' is not a member of mesh '${mesh.name}'`);
-  return node;
-}
-var DUPLICATE_DISPATCH_WINDOW_MS = 6e4;
-var STALE_ASSIGNED_QUEUE_MS = 30 * 6e4;
-var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
-var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
-var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
-async function refreshMeshFromDaemon(ctx) {
-  try {
-    const result = await ctx.transport.command("get_mesh", { meshId: ctx.mesh.id });
-    if (!result?.success || !Array.isArray(result.mesh?.nodes)) return;
-    const refreshedNodes = result.mesh.nodes.filter((n) => n?.id).map((n) => n);
-    ctx.mesh.nodes.splice(0, ctx.mesh.nodes.length, ...refreshedNodes);
-    ctx.mesh.updatedAt = result.mesh.updatedAt ?? ctx.mesh.updatedAt;
-  } catch {
-  }
-}
-async function syncCoordinatorDaemonMeshCache(ctx) {
-  if (!(ctx.transport instanceof IpcTransport)) return;
-  try {
-    await ctx.transport.command("get_mesh", {
-      meshId: ctx.mesh.id,
-      inlineMesh: ctx.mesh
-    });
-  } catch {
-  }
-}
-async function findNodeWithRefresh(ctx, nodeId) {
-  const hit = ctx.mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId));
-  if (hit && !hit.isLocalWorktree) return hit;
-  await refreshMeshFromDaemon(ctx);
-  const refreshed = ctx.mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId));
-  if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
-  return refreshed;
-}
-async function findOptionalNodeWithRefresh(ctx, nodeId) {
-  const hit = ctx.mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId));
-  if (hit && !hit.isLocalWorktree) return hit;
-  await refreshMeshFromDaemon(ctx);
-  return ctx.mesh.nodes.find((n) => (0, import_daemon_core.meshNodeIdMatches)(n, nodeId)) ?? null;
-}
-function hasRecentDuplicateDispatch(ctx, args) {
-  const now = Date.now();
-  const normalizedMessage = args.message.trim();
-  for (const task of (0, import_daemon_core.getQueue)(ctx.mesh.id)) {
-    const timestamp = new Date(task.updatedAt || task.createdAt).getTime();
-    if (!Number.isFinite(timestamp) || now - timestamp > DUPLICATE_DISPATCH_WINDOW_MS) continue;
-    if (task.targetNodeId && task.targetNodeId !== args.node_id) continue;
-    if (task.assignedNodeId && task.assignedNodeId !== args.node_id) continue;
-    if (args.session_id && task.targetSessionId !== args.session_id && task.assignedSessionId !== args.session_id) continue;
-    if (task.message?.trim() === normalizedMessage) {
-      return { duplicate: true, entry: task, source: "queue" };
-    }
-  }
-  const entries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const entry = entries[i];
-    const timestamp = new Date(entry.timestamp).getTime();
-    if (Number.isFinite(timestamp) && now - timestamp > DUPLICATE_DISPATCH_WINDOW_MS) break;
-    if (entry.kind !== "task_dispatched") continue;
-    if (entry.nodeId !== args.node_id) continue;
-    if (args.session_id && entry.sessionId !== args.session_id) continue;
-    if (typeof entry.payload?.message !== "string") continue;
-    if (entry.payload.message.trim() === normalizedMessage) {
-      return { duplicate: true, entry, source: "ledger" };
-    }
-  }
-  return { duplicate: false };
-}
-function buildMissingNodeReadChatRecovery(ctx, args) {
-  const entries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 300 });
-  const relatedEntries = entries.filter((entry) => entry.nodeId === args.node_id || entry.sessionId === args.session_id);
-  const completedEntries = relatedEntries.filter((entry) => entry.kind === "task_completed");
-  const lastDispatch = [...relatedEntries].reverse().find((entry) => entry.kind === "task_dispatched");
-  const lastTerminal = [...relatedEntries].reverse().find((entry) => entry.kind === "task_completed" || entry.kind === "task_failed" || entry.kind === "task_stalled");
-  const lastRemoved = [...relatedEntries].reverse().find((entry) => entry.kind === "node_removed");
-  const lastLaunch = [...relatedEntries].reverse().find((entry) => entry.kind === "session_launched");
-  const providerSessionId = args.provider_session_id || readString(lastTerminal?.payload?.providerSessionId) || readString(lastLaunch?.payload?.providerSessionId) || readString(lastDispatch?.payload?.providerSessionId);
-  const finalSummary = readString(lastTerminal?.payload?.finalSummary) || readString(lastTerminal?.payload?.compactSummary) || readString(lastTerminal?.payload?.summary);
-  const ledger = {
-    taskCompletedFound: completedEntries.length > 0,
-    nodeRemovedFound: !!lastRemoved,
-    providerType: lastTerminal?.providerType || lastLaunch?.providerType || lastDispatch?.providerType,
-    providerSessionId,
-    nodeRemovedAt: lastRemoved?.timestamp,
-    sessionCleanupMode: readString(lastRemoved?.payload?.sessionCleanupMode),
-    readDebugLocator: readString(lastTerminal?.payload?.readDebugLocator) || readString(lastTerminal?.payload?.debugBundlePath)
-  };
-  if (finalSummary) {
-    if (args.compact === true) {
-      return {
-        ...compactChatPayload({
-          success: true,
-          status: "idle",
-          providerSessionId,
-          summary: finalSummary,
-          messages: [{ role: "assistant", content: finalSummary, isHistorical: true }]
-        }, {
-          nodeId: args.node_id,
-          sessionId: args.session_id,
-          limit: args.tail ?? 10
-        }),
-        recoveredFromLedger: true,
-        ledger
-      };
-    }
-    return {
-      success: true,
-      compact: false,
-      recoveredFromLedger: true,
-      nodeId: args.node_id,
-      sessionId: args.session_id,
-      summary: finalSummary,
-      ledger,
-      messages: [{ role: "assistant", content: finalSummary, isHistorical: true }]
-    };
-  }
-  return {
-    success: false,
-    recoverable: true,
-    code: "mesh_removed_node_transcript_unavailable",
-    error: `Node '${args.node_id}' is not a current member of mesh '${ctx.mesh.name}'.`,
-    nodeId: args.node_id,
-    sessionId: args.session_id,
-    providerSessionId,
-    reason: "node_not_in_current_mesh_snapshot",
-    ledger,
-    completedSessionSeenInLedger: ledger.taskCompletedFound,
-    lastDispatch: lastDispatch ? {
-      timestamp: lastDispatch.timestamp,
-      sessionId: lastDispatch.sessionId,
-      providerType: lastDispatch.providerType,
-      taskId: typeof lastDispatch.payload?.taskId === "string" ? lastDispatch.payload.taskId : void 0,
-      messagePreview: typeof lastDispatch.payload?.message === "string" ? lastDispatch.payload.message.slice(0, 500) : void 0
-    } : null,
-    lastTerminalEvent: lastTerminal ? {
-      kind: lastTerminal.kind,
-      timestamp: lastTerminal.timestamp,
-      sessionId: lastTerminal.sessionId,
-      providerType: lastTerminal.providerType,
-      taskId: typeof lastTerminal.payload?.taskId === "string" ? lastTerminal.payload.taskId : void 0,
-      payload: lastTerminal.payload
-    } : null,
-    nextSteps: [
-      providerSessionId ? `Retry mesh_read_chat with provider_session_id='${providerSessionId}' on a current live node for the same daemon if one exists.` : "If the node UI shows a provider transcript id, retry mesh_read_chat/mesh_read_debug with provider_session_id.",
-      "Use mesh_read_debug with the provider_session_id or daemon-side debug bundle locator if available.",
-      "Check mesh_task_history for task_completed and node_removed entries before redispatching; do not resend solely because transcript recovery failed.",
-      "If this node was removed with stop_and_delete, the runtime transcript may be gone; rely on the ledger summary/locator or ask the operator for the saved UI output."
-    ],
-    recoveryHints: [
-      "The worktree/node may have been removed or the mesh snapshot may be stale after task completion.",
-      "If you have a provider_session_id, retry mesh_read_chat with that value while targeting a live node for the same daemon if available.",
-      "Use mesh_read_debug with provider_session_id, or inspect the daemon/session-host history locator if the transcript has already been archived.",
-      "Avoid redispatching the same task solely because read_chat could not recover the transcript; check task_history and git status first."
-    ]
-  };
-}
+
+// src/tools/mesh-session-helpers.ts
 function readSessionRecordId(session) {
   return readString(session?.id) || readString(session?.sessionId) || readString(session?.session_id) || readString(session?.runtimeSessionId) || readString(session?.runtime_session_id) || readString(session?.instanceId) || readString(session?.instance_id);
 }
@@ -656,6 +500,36 @@ function collectNodeSessionIds(node) {
   sessionRecords.forEach((session) => addSessionRecord(sessions, session));
   return sessions;
 }
+function unwrapCommandPayload(value) {
+  let current = value;
+  const seen = /* @__PURE__ */ new Set();
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (!current || typeof current !== "object" || seen.has(current)) break;
+    seen.add(current);
+    const nested = current.result ?? current.payload;
+    if (!nested || typeof nested !== "object") break;
+    current = nested;
+  }
+  return current;
+}
+function isTerminalSessionRecord(session) {
+  const status = typeof session?.status === "string" ? session.status.toLowerCase() : "";
+  const lifecycle = typeof session?.lifecycle === "string" ? session.lifecycle.toLowerCase() : "";
+  const state = typeof session?.state === "string" ? session.state.toLowerCase() : "";
+  return [status, lifecycle, state].some((value) => ["stopped", "failed", "terminated", "exited", "closed"].includes(value));
+}
+function isIdleSessionRecord(session) {
+  if (isTerminalSessionRecord(session)) return false;
+  const status = typeof session?.status === "string" ? session.status.toLowerCase() : "";
+  const chatStatus = typeof session?.activeChat?.status === "string" ? session.activeChat.status.toLowerCase() : "";
+  return status === "idle" || chatStatus === "waiting_input";
+}
+
+// src/tools/mesh-queue-helpers.ts
+var STALE_ASSIGNED_QUEUE_MS = 30 * 6e4;
+var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
+var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
+var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
 function buildQueueLivenessIndex(mesh) {
   const nodeIds = /* @__PURE__ */ new Set();
   const nodeSessionIds = /* @__PURE__ */ new Map();
@@ -885,303 +759,8 @@ function annotateQueueStaleness(queue, mesh) {
     };
   });
 }
-function unwrapCommandPayload(value) {
-  let current = value;
-  const seen = /* @__PURE__ */ new Set();
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (!current || typeof current !== "object" || seen.has(current)) break;
-    seen.add(current);
-    const nested = current.result ?? current.payload;
-    if (!nested || typeof nested !== "object") break;
-    current = nested;
-  }
-  return current;
-}
-function isDirectDispatchLedgerEntry(entry) {
-  if (entry?.kind !== "task_dispatched") return false;
-  const payload = entry.payload || {};
-  const via = readString(payload.via);
-  return payload.source === "direct" || via === "p2p_direct" || via === "local_direct" || via === "mesh_send_task";
-}
-function readMessageTimestampIso(message) {
-  for (const value of [message?.timestamp, message?.createdAt, message?.created_at, message?.updatedAt, message?.time]) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      const ms = value > 1e10 ? value : value * 1e3;
-      return new Date(ms).toISOString();
-    }
-    if (typeof value === "string" && value.trim()) {
-      const ms = new Date(value.trim()).getTime();
-      if (Number.isFinite(ms)) return new Date(ms).toISOString();
-    }
-  }
-  return void 0;
-}
-function readFinalAssistantTranscriptEvidence(payload) {
-  const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
-  const finalAssistant = [...rawMessages].reverse().filter(isCoordinatorVisibleMessage).find((message) => {
-    const role = String(message?.role ?? "").toLowerCase();
-    return (role === "assistant" || role === "agent") && messageContent(message).trim();
-  });
-  const finalSummary = messageContent(finalAssistant).trim() || (typeof payload?.summary === "string" && payload.summary.trim() ? payload.summary.trim() : void 0);
-  return {
-    finalSummary,
-    transcriptMessageAt: finalAssistant ? readMessageTimestampIso(finalAssistant) : void 0
-  };
-}
-function findNodeSession(nodes, nodeId, sessionId) {
-  if (!nodeId || !sessionId) return {};
-  const node = nodes.find((candidate) => (0, import_daemon_core.meshNodeIdMatches)(candidate, nodeId));
-  if (!node) return {};
-  const sessions = Array.isArray(node.sessions) ? node.sessions : [];
-  const session = sessions.find((candidate) => readSessionRecordId(candidate) === sessionId);
-  return { node, session };
-}
-function buildDirectDispatchReconciliationCandidates(directDispatches, ledgerEntries) {
-  const candidates = [];
-  const seenTaskIds = /* @__PURE__ */ new Set();
-  for (const dispatch of directDispatches || []) {
-    const taskId = readString(dispatch?.taskId);
-    if (!taskId || seenTaskIds.has(taskId)) continue;
-    seenTaskIds.add(taskId);
-    candidates.push(dispatch);
-  }
-  for (const entry of ledgerEntries || []) {
-    if (!isDirectDispatchLedgerEntry(entry)) continue;
-    const taskId = readString(entry.payload?.taskId);
-    if (!taskId || seenTaskIds.has(taskId)) continue;
-    seenTaskIds.add(taskId);
-    candidates.push({
-      taskId,
-      nodeId: entry.nodeId,
-      sessionId: entry.sessionId,
-      providerType: entry.providerType || readString(entry.payload?.providerType),
-      message: readString(entry.payload?.message),
-      dispatchedAt: entry.timestamp,
-      via: readString(entry.payload?.via)
-    });
-  }
-  return candidates;
-}
-async function reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries) {
-  let attempted = 0;
-  let reconciled = 0;
-  let skipped = 0;
-  const candidates = buildDirectDispatchReconciliationCandidates(directDispatches, ledgerEntries);
-  for (const dispatch of candidates) {
-    const taskId = readString(dispatch?.taskId);
-    const nodeId = readString(dispatch?.nodeId);
-    const sessionId = readString(dispatch?.sessionId);
-    if (!taskId || !nodeId || !sessionId) {
-      skipped += 1;
-      continue;
-    }
-    const { session } = findNodeSession(liveNodes, nodeId, sessionId);
-    if (!session || !isIdleSessionRecord(session)) {
-      skipped += 1;
-      continue;
-    }
-    const node = await findOptionalNodeWithRefresh(ctx, nodeId).catch(() => null);
-    if (!node) {
-      skipped += 1;
-      continue;
-    }
-    const providerType = readString(dispatch?.providerType) || resolveSessionProviderType(session);
-    const providerSessionId = readString(session?.providerSessionId) || readString(session?.activeChat?.providerSessionId) || readString(session?.settings?.providerSessionId) || resolveMeshSessionProviderMetadata(ctx, nodeId, sessionId)?.providerSessionId;
-    attempted += 1;
-    try {
-      const readResult = await commandForNode(ctx, node, "read_chat", {
-        sessionId,
-        targetSessionId: sessionId,
-        workspace: node.workspace,
-        ...providerType ? { agentType: providerType, providerType } : {},
-        ...providerSessionId ? { providerSessionId } : {},
-        tailLimit: 10
-      });
-      const payload = unwrapCommandPayload(readResult);
-      if (payload?.success === false) continue;
-      const evidence = readFinalAssistantTranscriptEvidence(payload);
-      if (!evidence.finalSummary) continue;
-      const result = (0, import_daemon_core.reconcileDirectDispatchCompletionFromTranscript)({
-        meshId: ctx.mesh.id,
-        nodeId,
-        sessionId,
-        providerType,
-        providerSessionId: readString(payload?.providerSessionId) || providerSessionId,
-        taskId,
-        finalSummary: evidence.finalSummary,
-        transcriptMessageAt: evidence.transcriptMessageAt,
-        targetCoordinatorDaemonId: ctx.localDaemonId,
-        source: "mcp_mesh_status_transcript_reconciliation"
-      });
-      if (result.reconciled) reconciled += 1;
-    } catch {
-      skipped += 1;
-    }
-  }
-  return { attempted, reconciled, skipped };
-}
-async function triggerMeshQueueAndReport(ctx) {
-  try {
-    const raw = await ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id });
-    const payload = unwrapCommandPayload(raw);
-    const trigger = payload?.trigger && typeof payload.trigger === "object" ? payload.trigger : payload;
-    return trigger && typeof trigger === "object" ? trigger : { success: true };
-  } catch (e) {
-    return {
-      success: false,
-      error: e?.message || String(e)
-    };
-  }
-}
-function buildQueueTriggerGuidance(queueTrigger) {
-  if (!queueTrigger || queueTrigger.claimed === true) return void 0;
-  if (queueTrigger.success === false) {
-    return {
-      queueClaimed: false,
-      queueDispatchState: "trigger_failed",
-      nextAction: "Do not assume the queued task is running. Check mesh_view_queue and daemon connectivity before redispatching."
-    };
-  }
-  if (queueTrigger.autoLaunchPending === true) {
-    return {
-      queueClaimed: false,
-      queueDispatchState: "pending_waiting_for_autolaunch",
-      nextAction: "A worker session was just auto-launched for this task and is booting; it will claim the task shortly. Wait for it to claim \u2014 do NOT launch another session. Use mesh_view_queue to confirm the assignment lands."
-    };
-  }
-  if (queueTrigger.noIdleMeshSessionAvailable === true) {
-    return {
-      queueClaimed: false,
-      queueDispatchState: "pending_no_idle_mesh_session",
-      nextAction: "The task is queued but not running. Launch a managed worker with mesh_launch_session, or wait for a delegated session to become ready and trigger the queue again."
-    };
-  }
-  return {
-    queueClaimed: false,
-    queueDispatchState: "pending_or_waiting_for_ready",
-    nextAction: "The task is queued but this trigger did not claim it. Use mesh_view_queue for the current active-work source of truth before retrying."
-  };
-}
-function isTerminalSessionRecord(session) {
-  const status = typeof session?.status === "string" ? session.status.toLowerCase() : "";
-  const lifecycle = typeof session?.lifecycle === "string" ? session.lifecycle.toLowerCase() : "";
-  const state = typeof session?.state === "string" ? session.state.toLowerCase() : "";
-  return [status, lifecycle, state].some((value) => ["stopped", "failed", "terminated", "exited", "closed"].includes(value));
-}
-function isIdleSessionRecord(session) {
-  if (isTerminalSessionRecord(session)) return false;
-  const status = typeof session?.status === "string" ? session.status.toLowerCase() : "";
-  const chatStatus = typeof session?.activeChat?.status === "string" ? session.activeChat.status.toLowerCase() : "";
-  return status === "idle" || chatStatus === "waiting_input";
-}
-function isMeshOwnedDelegateSession(session, meshId, nodeId) {
-  const settings = session?.settings;
-  const sessionMeshId = typeof settings?.meshNodeFor === "string" ? settings.meshNodeFor.trim() : "";
-  const sessionNodeId = typeof settings?.meshNodeId === "string" ? settings.meshNodeId.trim() : "";
-  if (sessionMeshId) {
-    if (sessionMeshId !== meshId) return false;
-    return !sessionNodeId || sessionNodeId === nodeId;
-  }
-  const coordinatorOwned = settings?.launchedByCoordinator === true || Boolean(readString(settings?.meshCoordinatorDaemonId));
-  if (!coordinatorOwned) return false;
-  const lastNodeId = readString(settings?.meshLastNodeId);
-  if (lastNodeId) return lastNodeId === nodeId;
-  return true;
-}
-function hasRemoteRelayMetadata(session) {
-  return Boolean(
-    readString(session?.settings?.meshCoordinatorDaemonId) || readString(session?.meta?.meshCoordinatorDaemonId) || readString(session?.metadata?.meshCoordinatorDaemonId) || readString(session?.meshCoordinatorDaemonId)
-  );
-}
-function classifyRemoteDelegateRelaySafety(session, meshId, nodeId, coordinatorDaemonId) {
-  if (!isMeshOwnedDelegateSession(session, meshId, nodeId)) return "unsafe_alias";
-  if (hasRemoteRelayMetadata(session)) return "safe";
-  return coordinatorDaemonId ? "self_heal" : "missing_anchor";
-}
-function chooseDispatchableSession(sessions, providerType, meshId, nodeId, coordinatorDaemonId) {
-  const live = sessions.filter((session) => !isTerminalSessionRecord(session));
-  const matchingProvider = (session) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
-  const meshSessions = live.filter((session) => {
-    const safety = classifyRemoteDelegateRelaySafety(session, meshId, nodeId, coordinatorDaemonId);
-    return safety === "safe" || safety === "self_heal";
-  });
-  return meshSessions.find((session) => isIdleSessionRecord(session) && matchingProvider(session)) || void 0;
-}
-function buildRelayUnsafeRemoteSessionFailure(ctx, node, sessionId, providerType) {
-  return {
-    success: false,
-    recoverable: true,
-    code: "mesh_delegate_session_missing_relay_metadata",
-    reason: "mesh_delegate_session_missing_relay_metadata",
-    transport: "mesh_transport",
-    retryRecommended: true,
-    meshId: ctx.mesh.id,
-    nodeId: node.id,
-    daemonId: node.daemonId,
-    workspace: node.workspace,
-    sessionId,
-    unsafeTranscriptAlias: true,
-    ...providerType ? { resolvedProviderType: providerType } : {},
-    error: `Remote session '${sessionId}' is not relay-safe for mesh '${ctx.mesh.id}': missing meshNodeFor/meshCoordinatorDaemonId metadata, so completion events would not reach the coordinator ledger. This session may be the coordinator itself or an unrelated session (unsafe_transcript_alias risk).`,
-    nextAction: `Launch a fresh relay-safe session with mesh_launch_session(node_id: '${node.id}'${providerType ? `, type: '${providerType}'` : ""}) or dispatch without session_id so Repo Mesh can choose a valid delegate session.`,
-    noFallbackReason: "Blindly reusing a remote session without mesh relay metadata would silently drop task_completed / generating_completed events."
-  };
-}
-function buildMissingCoordinatorDaemonIdFailure(ctx, node, providerType) {
-  return {
-    success: false,
-    recoverable: true,
-    code: "mesh_coordinator_daemon_unknown",
-    reason: "mesh_coordinator_daemon_unknown",
-    transport: "mesh_transport",
-    retryRecommended: true,
-    meshId: ctx.mesh.id,
-    nodeId: node.id,
-    daemonId: node.daemonId,
-    workspace: node.workspace,
-    ...providerType ? { resolvedProviderType: providerType } : {},
-    error: `Cannot launch a remote mesh delegate for node '${node.id}': coordinator daemon identity is unavailable, so the worker would be unable to relay completion events back to the coordinator.`,
-    nextAction: "Retry after the coordinator daemon identity is available (for example from an attached daemon-backed MCP session) so meshCoordinatorDaemonId can be stamped on the worker session.",
-    noFallbackReason: "Launching without meshCoordinatorDaemonId would create a worker session that can finish work but cannot emit task_completed / generating_completed back to the coordinator."
-  };
-}
-function findNestedPayload(value, predicate) {
-  const seen = /* @__PURE__ */ new Set();
-  const stack = [{ payload: value, depth: 0 }];
-  while (stack.length) {
-    const { payload, depth } = stack.pop();
-    if (predicate(payload)) return payload;
-    if (!payload || typeof payload !== "object" || seen.has(payload) || depth >= 8) continue;
-    seen.add(payload);
-    for (const key of ["payload", "result"]) {
-      if (key in payload) stack.push({ payload: payload[key], depth: depth + 1 });
-    }
-  }
-  return value;
-}
-function extractCloneNodePayload(value) {
-  return findNestedPayload(value, (payload) => Boolean(payload?.node?.id));
-}
-function extractGitStatus(value) {
-  const payload = unwrapCommandPayload(value);
-  return payload?.status ?? value?.status ?? payload;
-}
-function extractGitDiff(value) {
-  const payload = unwrapCommandPayload(value);
-  return payload?.diffSummary ?? payload?.diff ?? value?.diffSummary ?? value?.diff ?? payload;
-}
-function extractSubmodules(value, ignorePaths) {
-  const payload = unwrapCommandPayload(value);
-  const subs = payload?.status?.submodules ?? payload?.submodules ?? value?.status?.submodules ?? value?.submodules;
-  if (!Array.isArray(subs)) return void 0;
-  if (ignorePaths.length === 0) return subs;
-  const ignoreSet = new Set(ignorePaths);
-  return subs.filter((s) => s?.path && !ignoreSet.has(s.path));
-}
-function assignFullGitSnapshot(entry, status) {
-  if (!status || typeof status !== "object" || Array.isArray(status)) return;
-  entry.git = status;
-}
+
+// src/tools/mesh-compact.ts
 function buildCompactGitSnapshot(status) {
   if (!status || typeof status !== "object" || Array.isArray(status)) return void 0;
   const slim = {};
@@ -1256,9 +835,6 @@ function compactMeshStatusNode(entry) {
   }
   return next;
 }
-var COMPACT_DETAILED_NODES_BYTE_BUDGET = 9e3;
-var COMPACT_NODES_TOTAL_BYTE_BUDGET = 13e3;
-var COMPACT_MISSIONS_BYTE_BUDGET = 6e3;
 function compactNodeSeverity(entry) {
   if (!entry || typeof entry !== "object") return 0;
   if (entry.error || entry.health && entry.health !== "online" && entry.health !== "dirty") return 5;
@@ -1335,267 +911,9 @@ function summarizeNodeSessions(sessions) {
   }
   return summary;
 }
-function extractLaunchPayload(value) {
-  return findNestedPayload(value, (payload) => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
-}
-function classifyMeshLaunchFailure(error) {
-  const message = error instanceof Error ? error.message : String(error || "launch failed");
-  const lower = message.toLowerCase();
-  const p2pClassification = (0, import_daemon_core.classifyP2pRelayFailure)(error, { command: "launch_cli" });
-  if (p2pClassification.recoverable) {
-    return p2pClassification;
-  }
-  if (lower.includes("cannot connect to daemon ipc") || lower.includes("daemon ipc command")) {
-    return {
-      code: "local_ipc_unavailable",
-      reason: "local_daemon_ipc_unavailable",
-      transport: "local_ipc",
-      recoverable: true,
-      retryRecommended: true,
-      nextAction: "Check the local daemon IPC connection, then retry mesh_launch_session once after the daemon is reachable."
-    };
-  }
-  if (lower.includes("timed out") || lower.includes("timeout")) {
-    return {
-      code: "mesh_transport_timeout",
-      reason: "mesh_transport_timeout",
-      transport: "mesh_transport",
-      recoverable: true,
-      retryRecommended: true,
-      nextAction: "Check mesh transport health, then do one bounded retry before requeueing or relaunching the task."
-    };
-  }
-  return {
-    code: "mesh_launch_failed",
-    reason: "provider_launch_failed",
-    transport: "mesh_transport",
-    recoverable: false,
-    retryRecommended: false,
-    nextAction: "Inspect the provider launch error and fix the underlying provider/configuration issue before retrying."
-  };
-}
-function buildWorktreeCleanupHint(node) {
-  if (!node.isLocalWorktree) return void 0;
-  return {
-    tool: "mesh_remove_node",
-    args: { node_id: node.id, session_cleanup_mode: "preserve" },
-    hint: `If the worktree is no longer needed, remove the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`
-  };
-}
-function buildRecoverableLaunchFailure(ctx, node, providerType, error) {
-  const message = error instanceof Error ? error.message : String(error || "launch failed");
-  const classified = classifyMeshLaunchFailure(error);
-  const cleanup = buildWorktreeCleanupHint(node);
-  return {
-    success: false,
-    recoverable: classified.recoverable,
-    code: classified.code,
-    reason: classified.reason,
-    transport: classified.transport,
-    retryRecommended: classified.retryRecommended,
-    nextAction: classified.nextAction,
-    ...classified.noFallbackReason ? { noFallbackReason: classified.noFallbackReason } : {},
-    error: message,
-    meshId: ctx.mesh.id,
-    nodeId: node.id,
-    daemonId: node.daemonId,
-    workspace: node.workspace,
-    isLocalWorktree: node.isLocalWorktree === true,
-    worktreeBranch: node.worktreeBranch,
-    clonedFromNodeId: node.clonedFromNodeId,
-    ...providerType ? { resolvedProviderType: providerType } : {},
-    retryHint: `Retry mesh_launch_session(node_id: "${node.id}"${providerType ? `, type: "${providerType}"` : ""}) after daemon mesh transport/P2P is healthy.`,
-    ...cleanup ? { cleanup } : {},
-    nextStepHints: [
-      `Retry mesh_launch_session(node_id: "${node.id}"${providerType ? `, type: "${providerType}"` : ""}) after checking daemon/P2P health.`,
-      ...cleanup ? [`Cleanup orphan worktree node with mesh_remove_node(node_id: "${node.id}") if retry is not desired.`] : [],
-      "Run mesh_status to see the degraded reason and recovery hints before redispatching work."
-    ]
-  };
-}
-function recordRecoverableLaunchFailure(ctx, node, providerType, error) {
-  const failure = buildRecoverableLaunchFailure(ctx, node, providerType, error);
-  try {
-    (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
-      kind: "recovery_attempted",
-      nodeId: node.id,
-      providerType,
-      payload: {
-        event: "session_launch_failed",
-        ...failure
-      }
-    });
-  } catch {
-  }
-  return failure;
-}
-function getLatestActiveLaunchFailure(meshId, nodeId) {
-  const entries = (0, import_daemon_core.readLedgerEntries)(meshId, { tail: 200 });
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const entry = entries[i];
-    if (entry.nodeId !== nodeId) continue;
-    if (entry.kind === "session_launched" || entry.kind === "node_removed") return null;
-    if (entry.kind === "recovery_attempted" && entry.payload?.event === "session_launch_failed") {
-      return { timestamp: entry.timestamp, ...entry.payload };
-    }
-  }
-  return null;
-}
-function buildCoordinatorP2pRelayFailure(error, context) {
-  const payload = (0, import_daemon_core.buildP2pRelayFailurePayload)(error, {
-    command: context.command,
-    targetDaemonId: context.targetDaemonId
-  });
-  return {
-    ...payload,
-    ...context.nodeId ? { nodeId: context.nodeId } : {},
-    ...context.sessionId ? { sessionId: context.sessionId } : {},
-    retryHint: payload.retryRecommended ? payload.nextAction : "Do not retry as a P2P transport recovery; inspect the command/provider error first."
-  };
-}
-async function ipcDispatchToRemoteAgent(ctx, node, args) {
-  const transport = ctx.transport;
-  const daemonId = node.daemonId;
-  const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || "";
-  let sessionId = args.session_id?.trim() || "";
-  const providerPriorityList = Array.isArray(node.policy?.providerPriority) ? node.policy.providerPriority : [];
-  let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || "";
-  if (sessionId && args.verifiedSession) {
-    const explicitSession = args.verifiedSession;
-    const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
-    if (relaySafety === "unsafe_alias") {
-      return buildRelayUnsafeRemoteSessionFailure(
-        ctx,
-        node,
-        sessionId,
-        resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
-      );
-    }
-    if (relaySafety === "missing_anchor") {
-      return buildMissingCoordinatorDaemonIdFailure(
-        ctx,
-        node,
-        resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
-      );
-    }
-    if (!resolvedProviderType) {
-      resolvedProviderType = resolveSessionProviderType(explicitSession);
-    }
-  } else if (!sessionId || args.session_id) {
-    try {
-      const relayResult = await transport.meshCommand(daemonId, "get_status_metadata", {});
-      const sessions = extractStatusMetadataSessions(relayResult);
-      if (sessionId) {
-        const explicitSession = sessions.find((session) => readSessionRecordId(session) === sessionId);
-        if (!explicitSession) {
-          return {
-            success: false,
-            recoverable: true,
-            code: "mesh_target_session_not_found",
-            reason: "mesh_target_session_not_found",
-            transport: "mesh_transport",
-            retryRecommended: true,
-            meshId: ctx.mesh.id,
-            nodeId: node.id,
-            daemonId,
-            workspace: node.workspace,
-            sessionId,
-            ...resolvedProviderType ? { resolvedProviderType } : {},
-            error: `Remote session '${sessionId}' is not present in the live status for node '${node.id}'.`,
-            nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ""}) or retry without session_id so Repo Mesh can target a live delegate session.`
-          };
-        }
-        const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
-        if (relaySafety === "unsafe_alias") {
-          return buildRelayUnsafeRemoteSessionFailure(
-            ctx,
-            node,
-            sessionId,
-            resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
-          );
-        }
-        if (relaySafety === "missing_anchor") {
-          return buildMissingCoordinatorDaemonIdFailure(
-            ctx,
-            node,
-            resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
-          );
-        }
-        if (!resolvedProviderType) {
-          resolvedProviderType = resolveSessionProviderType(explicitSession);
-        }
-      } else {
-        const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
-        if (targetSession?.id || targetSession?.sessionId) {
-          sessionId = targetSession.id || targetSession.sessionId;
-          if (!resolvedProviderType) {
-            resolvedProviderType = resolveSessionProviderType(targetSession);
-          }
-        }
-      }
-    } catch (e) {
-      if (sessionId) {
-        return {
-          ...buildCoordinatorP2pRelayFailure(e, {
-            command: "get_status_metadata",
-            targetDaemonId: daemonId,
-            nodeId: node.id,
-            sessionId
-          }),
-          success: false,
-          error: `Cannot verify remote session '${sessionId}' before dispatch: ${e?.message || String(e)}`
-        };
-      }
-    }
-  }
-  if (!resolvedProviderType) {
-    return { success: false, error: `Cannot dispatch to remote node '${node.id}': providerType unknown. Set providerPriority on the node policy or call mesh_launch_session first.` };
-  }
-  try {
-    const dispatchResult = await transport.meshCommand(daemonId, "agent_command", {
-      ...sessionId ? { targetSessionId: sessionId } : {},
-      agentType: resolvedProviderType,
-      cliType: resolvedProviderType,
-      action: "send_chat",
-      message: args.message,
-      // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
-      // scoped to THIS node's session on the worker (findAdapter dir match /
-      // findMeshNodeAdapter). Without it, a worker hosting both a base node and a
-      // cloned worktree node (same daemonId) would fall through to a provider-only
-      // fuzzy match and could land worktree work on the base session.
-      ...node.workspace ? { dir: node.workspace } : {},
-      ...args.meshContext ? { meshContext: args.meshContext } : {}
-    });
-    const dispatchPayload = unwrapCommandPayload(dispatchResult);
-    if (dispatchPayload?.success === false || dispatchResult?.success === false) {
-      const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
-      const errorMessage = dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task";
-      return {
-        ...buildCoordinatorP2pRelayFailure(source?.error || errorMessage, {
-          command: "agent_command",
-          targetDaemonId: daemonId,
-          nodeId: node.id,
-          sessionId
-        }),
-        ...source && typeof source === "object" ? source : {},
-        success: false,
-        error: `P2P dispatch failed: ${errorMessage}`
-      };
-    }
-    return { success: true, dispatched: true, sessionId: sessionId || "", providerType: resolvedProviderType };
-  } catch (e) {
-    const errorMessage = e?.message || String(e);
-    return {
-      ...buildCoordinatorP2pRelayFailure(e, {
-        command: "agent_command",
-        targetDaemonId: daemonId,
-        nodeId: node.id,
-        sessionId
-      }),
-      error: `P2P dispatch failed: ${errorMessage}`
-    };
-  }
-}
+
+// src/tools/mesh-node-identity.ts
+var import_daemon_core = require("@adhdev/daemon-core");
 function resolveCoordinatorNode(ctx) {
   const preferredNodeId = typeof ctx.mesh.coordinator?.preferredNodeId === "string" ? ctx.mesh.coordinator.preferredNodeId.trim() : "";
   if (preferredNodeId) {
@@ -1760,546 +1078,8 @@ function resolvePreferredWorktreeNodeId(ctx) {
 function isLocalControlPlaneNode(ctx, node) {
   return !!getLocalControlPlaneMatchReason(ctx, node);
 }
-function meshSessionCacheKey(nodeId, runtimeSessionId) {
-  return `${nodeId}:${runtimeSessionId}`;
-}
-function rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, metadata) {
-  const keyNodeId = readString(nodeId);
-  const keySessionId = readString(runtimeSessionId);
-  if (!keyNodeId || !keySessionId) return;
-  const providerType = readString(metadata.providerType);
-  const providerSessionId = readString(metadata.providerSessionId);
-  if (!providerType && !providerSessionId) return;
-  const existing = getSessionMetadata(meshSessionCacheKey(keyNodeId, keySessionId)) || { providerType: "" };
-  meshSessionProviderMetadata.set(meshSessionCacheKey(keyNodeId, keySessionId), {
-    providerType: providerType || existing.providerType,
-    providerSessionId: providerSessionId || existing.providerSessionId,
-    expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS
-  });
-}
-function rememberMeshSessionProviderMetadataFromEvent(event) {
-  const metadataEvent = event?.metadataEvent && typeof event.metadataEvent === "object" ? event.metadataEvent : event && typeof event === "object" ? event : {};
-  const nodeId = readString(event?.nodeId) || readString(metadataEvent.nodeId) || readString(metadataEvent.meshNodeId);
-  const sessionId = readString(metadataEvent.targetSessionId) || readString(metadataEvent.sessionId) || readString(metadataEvent.instanceId) || readString(event?.sessionId);
-  rememberMeshSessionProviderMetadata(nodeId, sessionId, {
-    providerType: readString(metadataEvent.providerType) || readString(event?.providerType) || "",
-    providerSessionId: readString(metadataEvent.providerSessionId) || readString(event?.providerSessionId)
-  });
-}
-function resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId) {
-  const entries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 50 });
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const entry = entries[i];
-    const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
-    const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
-    if (entryNodeId && entryNodeId !== nodeId) continue;
-    const entrySessionId = readString(entry.sessionId) || readString(payload.targetSessionId) || readString(payload.sessionId) || readString(payload.instanceId);
-    if (entrySessionId !== runtimeSessionId) continue;
-    const providerType = readString(entry.providerType) || readString(payload.providerType);
-    const completionDiagnostic = payload.completionDiagnostic && typeof payload.completionDiagnostic === "object" && !Array.isArray(payload.completionDiagnostic) ? payload.completionDiagnostic : {};
-    const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === "object" && !Array.isArray(payload.metadataEvent) ? payload.metadataEvent : {};
-    const providerSessionId = readString(payload.providerSessionId) || readString(completionDiagnostic.providerSessionId) || readString(metadataEvent.providerSessionId);
-    if (providerType || providerSessionId) {
-      return { providerType: providerType || "", providerSessionId };
-    }
-  }
-  return void 0;
-}
-function resolveMeshSessionProviderMetadata(ctx, nodeId, runtimeSessionId) {
-  const cached = getSessionMetadata(meshSessionCacheKey(nodeId, runtimeSessionId));
-  if (cached?.providerType || cached?.providerSessionId) return cached;
-  const fromLedger = resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId);
-  if (fromLedger) rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, fromLedger);
-  return fromLedger;
-}
-function countUncommittedChanges(status) {
-  if (typeof status?.uncommittedChanges === "number") return status.uncommittedChanges;
-  const keys = ["staged", "modified", "untracked", "deleted", "renamed"];
-  const counted = keys.reduce((sum, key) => sum + (Number.isFinite(Number(status?.[key])) ? Number(status[key]) : 0), 0);
-  const conflicts = Array.isArray(status?.conflictFiles) ? status.conflictFiles.length : status?.hasConflicts ? 1 : 0;
-  return counted + conflicts;
-}
-function isGitStatusDirty(status) {
-  if (typeof status?.isDirty === "boolean") return status.isDirty;
-  if (typeof status?.dirty === "boolean") return status.dirty;
-  if (Array.isArray(status?.submodules) && status.submodules.some((submodule) => submodule?.dirty || submodule?.outOfSync || submodule?.error)) return true;
-  return countUncommittedChanges(status) > 0;
-}
-var LARGE_LEDGER_FIELD_KEYS = /* @__PURE__ */ new Set(["plan", "validationPlan", "suggestedConfig", "payload"]);
-var LARGE_LEDGER_OBJECT_THRESHOLD = 800;
-var LARGE_LEDGER_NESTED_BYTES_THRESHOLD = 2e3;
-function summarizeLargeLedgerField(key, value) {
-  if (typeof value === "string") {
-    return value.length > 500 ? value.slice(0, 500) + "\u2026" : value;
-  }
-  if (Array.isArray(value)) {
-    const serialized = JSON.stringify(value);
-    if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
-      return `[${key} summarized: ${value.length} items \u2014 use verbose=true or mesh_reconcile_ledger]`;
-    }
-    return value;
-  }
-  if (value && typeof value === "object") {
-    const serialized = JSON.stringify(value);
-    if (serialized && serialized.length > LARGE_LEDGER_OBJECT_THRESHOLD) {
-      return `[${key} summarized: ${Object.keys(value).length} keys \u2014 use verbose=true or mesh_reconcile_ledger]`;
-    }
-    return value;
-  }
-  return value;
-}
-function elideLargeNestedValue(key, value) {
-  if (value === null || value === void 0) return value;
-  if (typeof value === "string") {
-    return value.length > 1e3 ? value.slice(0, 1e3) + "\u2026" : value;
-  }
-  if (typeof value !== "object") return value;
-  const serialized = JSON.stringify(value);
-  const bytes = serialized ? serialized.length : 0;
-  if (bytes <= LARGE_LEDGER_NESTED_BYTES_THRESHOLD) return value;
-  return {
-    _elided: true,
-    _kind: key,
-    _bytes: bytes,
-    _hint: "full evidence via mesh_reconcile_ledger"
-  };
-}
-function slimLedgerPayload(payload) {
-  const slim = {};
-  for (const [k, v] of Object.entries(payload)) {
-    if (k === "message" || k === "taskSummary") {
-      slim[k] = typeof v === "string" && v.length > 200 ? v.slice(0, 200) + "\u2026" : v;
-    } else if (k === "evidence" || k === "workerResult" || k === "gitStatus" || k === "validationResults") {
-    } else if (k === "finalSummary") {
-      slim[k] = typeof v === "string" && v.length > 300 ? v.slice(0, 300) + "\u2026" : v;
-    } else if (LARGE_LEDGER_FIELD_KEYS.has(k)) {
-      slim[k] = summarizeLargeLedgerField(k, v);
-    } else {
-      slim[k] = elideLargeNestedValue(k, v);
-    }
-  }
-  return slim;
-}
-function readRelatedRepos(node) {
-  const raw = Array.isArray(node.relatedRepos) ? node.relatedRepos : Array.isArray(node.policy?.relatedRepos) ? node.policy.relatedRepos : [];
-  return raw.map((entry) => ({
-    label: typeof entry?.label === "string" ? entry.label.trim() : "",
-    workspace: typeof entry?.workspace === "string" ? entry.workspace.trim() : ""
-  })).filter((entry) => Boolean(entry.label && entry.workspace));
-}
-function summarizeRelatedRepoStatus(repo, status) {
-  const dirty = isGitStatusDirty(status);
-  return {
-    label: repo.label,
-    workspace: repo.workspace,
-    isGitRepo: status?.isGitRepo === true,
-    branch: status?.branch ?? null,
-    upstream: status?.upstream ?? null,
-    upstreamStatus: typeof status?.upstreamStatus === "string" ? status.upstreamStatus : status?.upstream ? "unchecked" : "no_upstream",
-    upstreamFetchedAt: Number.isFinite(Number(status?.upstreamFetchedAt)) ? Number(status.upstreamFetchedAt) : null,
-    upstreamFetchError: typeof status?.upstreamFetchError === "string" ? status.upstreamFetchError : null,
-    ahead: Number.isFinite(Number(status?.ahead)) ? Number(status.ahead) : 0,
-    behind: Number.isFinite(Number(status?.behind)) ? Number(status.behind) : 0,
-    dirty,
-    uncommittedChanges: countUncommittedChanges(status),
-    head: status?.headCommit ?? null,
-    lastCommitSummary: status?.headMessage ?? null,
-    ...status?.reason ? { reason: status.reason } : {},
-    ...status?.error ? { error: status.error } : {}
-  };
-}
-async function collectRelatedRepoStatuses(ctx, node) {
-  const relatedRepos = readRelatedRepos(node);
-  if (!relatedRepos.length) return [];
-  const results = [];
-  for (const repo of relatedRepos) {
-    try {
-      const statusResult = await commandForNode(ctx, node, "git_status", { workspace: repo.workspace, refreshUpstream: true });
-      const status = extractGitStatus(statusResult);
-      results.push(summarizeRelatedRepoStatus(repo, status));
-    } catch (e) {
-      results.push({
-        label: repo.label,
-        workspace: repo.workspace,
-        error: e?.message || "related repo status failed"
-      });
-    }
-  }
-  return results;
-}
-function readProviderPriority(policy) {
-  const raw = policy?.providerPriority;
-  return Array.isArray(raw) ? raw.map((type) => typeof type === "string" ? type.trim() : "").filter(Boolean) : [];
-}
-function buildNodeCapabilityExposure(node) {
-  const providers = readProviderPriority(node.policy);
-  const capabilityTags = (0, import_daemon_core.buildMeshNodeCapabilityTags)(node);
-  const exposure = { capabilityTags };
-  if (providers.length) {
-    const byProvider = {};
-    for (const provider of providers) {
-      byProvider[provider] = (0, import_daemon_core.buildMeshNodeCapabilityTags)(node, provider);
-    }
-    exposure.capabilityTagsByProvider = byProvider;
-  }
-  const capabilities = Array.isArray(node.capabilities) ? node.capabilities.filter((tag) => typeof tag === "string" && !!tag.trim()) : [];
-  if (capabilities.length) exposure.capabilities = capabilities;
-  return exposure;
-}
-function readSpawnedSessionVisibility(policy) {
-  return policy?.spawnedSessionVisibility === "hidden" ? "hidden" : "visible";
-}
-function missingProviderPriorityMessage(nodeId) {
-  return `Node '${nodeId}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority`;
-}
-function getNodeLaunchReadiness(node) {
-  const bootstrap = node.worktreeBootstrap;
-  if (node.isLocalWorktree && bootstrap?.status === "failed" && bootstrap?.required !== false) {
-    return {
-      providerPriority: readProviderPriority(node.policy),
-      launchReady: false,
-      launchBlockedReason: "worktree_bootstrap_failed",
-      launchBlockedMessage: typeof bootstrap.error === "string" && bootstrap.error.trim() ? bootstrap.error.trim() : "Required worktree bootstrap failed; resolve it before launching an agent into this node.",
-      worktreeBootstrap: bootstrap
-    };
-  }
-  const providerPriority = readProviderPriority(node.policy);
-  if (providerPriority.length) {
-    return {
-      providerPriority,
-      launchReady: true
-    };
-  }
-  return {
-    providerPriority,
-    launchReady: false,
-    launchBlockedReason: "missing_provider_priority",
-    launchBlockedMessage: missingProviderPriorityMessage(node.id)
-  };
-}
-function getWorktreeBootstrapLaunchBlock(node, meshPolicy) {
-  if (!node.isLocalWorktree) return void 0;
-  const bootstrap = node.worktreeBootstrap;
-  const requireReady = !!(meshPolicy && typeof meshPolicy === "object" && meshPolicy.requireBootstrapBeforeLaunch === true);
-  if (requireReady && bootstrap?.status !== "ready") {
-    return {
-      success: false,
-      code: "bootstrap_not_ready",
-      error: `Node '${node.id}' bootstrap state is '${bootstrap?.status ?? "unknown"}' and mesh policy requireBootstrapBeforeLaunch is enabled.`,
-      nodeId: node.id,
-      worktreeBootstrap: bootstrap ?? null,
-      recoveryHint: "Run the worktree bootstrap (clone runOnClone or a refine with bootstrap inherit) until the node reports ready, or disable requireBootstrapBeforeLaunch."
-    };
-  }
-  if (bootstrap?.status !== "failed" || bootstrap?.required === false) return void 0;
-  return {
-    success: false,
-    code: "worktree_bootstrap_failed",
-    error: typeof bootstrap.error === "string" && bootstrap.error.trim() ? bootstrap.error.trim() : `Node '${node.id}' has a failed required worktree bootstrap.`,
-    nodeId: node.id,
-    worktreeBootstrap: bootstrap,
-    recoveryHint: "Fix the configured worktree bootstrap command or remove/recreate the worktree node before launching an agent."
-  };
-}
-async function collectLiveStatusSessions(ctx, node) {
-  try {
-    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
-    return extractStatusMetadataSessions(statusResult);
-  } catch {
-    return [];
-  }
-}
-async function collectLiveStatusProbe(ctx, node) {
-  try {
-    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
-    return {
-      sessions: extractStatusMetadataSessions(statusResult),
-      daemonBuild: extractDaemonBuildInfo(statusResult)
-    };
-  } catch {
-    return { sessions: [] };
-  }
-}
-function extractDaemonBuildInfo(value) {
-  const payload = unwrapCommandPayload(value);
-  const build = payload?.daemonBuild && typeof payload.daemonBuild === "object" ? payload.daemonBuild : value?.daemonBuild && typeof value.daemonBuild === "object" ? value.daemonBuild : void 0;
-  if (!build) return void 0;
-  const commit = readString(build.commit);
-  if (!commit) return void 0;
-  return {
-    commit,
-    commitShort: readString(build.commitShort) || commit.slice(0, 7),
-    version: readString(build.version) || "unknown",
-    ...readString(build.builtAt) ? { builtAt: readString(build.builtAt) } : {}
-  };
-}
-async function collectMeshViewQueueNodesWithLiveSessions(ctx) {
-  const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
-    const liveSessions = await collectLiveStatusSessions(ctx, node);
-    return liveSessions.length > 0 ? { ...node, sessions: liveSessions } : node;
-  }));
-  return nodes;
-}
-function readNumeric(value, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-function buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges) {
-  const defaultBranch = readString(mesh.defaultBranch) ?? "main";
-  const branch = readString(status?.branch) ?? readString(node.worktreeBranch) ?? null;
-  const ahead = readNumeric(status?.ahead);
-  const behind = readNumeric(status?.behind);
-  const upstream = readString(status?.upstream) ?? null;
-  const upstreamStatus = readString(status?.upstreamStatus) ?? (upstream ? "unchecked" : "no_upstream");
-  const hasConflicts = status?.hasConflicts === true || Array.isArray(status?.conflictFiles) && status.conflictFiles.length > 0;
-  const base = {
-    defaultBranch,
-    branch,
-    upstream,
-    upstreamStatus,
-    ahead,
-    behind,
-    isWorktree: node.isLocalWorktree === true,
-    isDefaultBranch: branch === defaultBranch
-  };
-  if (status?.isGitRepo !== true) {
-    return {
-      ...base,
-      status: "blocked_review",
-      needsConvergence: true,
-      reason: "git_status_unavailable",
-      nextStep: `Resolve git status for node '${node.id}' before marking the task complete.`
-    };
-  }
-  if (!branch) {
-    return {
-      ...base,
-      status: "blocked_review",
-      needsConvergence: true,
-      reason: "branch_unknown",
-      nextStep: `Inspect node '${node.id}' git branch before deciding whether it is merged to ${defaultBranch}.`
-    };
-  }
-  if (hasConflicts || dirty || uncommittedChanges > 0) {
-    return {
-      ...base,
-      status: "not_mergeable",
-      needsConvergence: true,
-      reason: hasConflicts ? "conflicts_present" : "dirty_workspace",
-      nextStep: `Commit, checkpoint, or resolve node '${node.id}' before any main convergence step.`
-    };
-  }
-  if (branch === defaultBranch) {
-    if (upstream && upstreamStatus !== "fresh") {
-      return {
-        ...base,
-        status: "blocked_review",
-        needsConvergence: true,
-        reason: "default_branch_upstream_unverified",
-        nextStep: `Refresh ${defaultBranch}'s upstream refs or resolve the fetch failure before declaring convergence complete for node '${node.id}'.`
-      };
-    }
-    if (ahead > 0 || behind > 0) {
-      return {
-        ...base,
-        status: "blocked_review",
-        needsConvergence: true,
-        reason: "default_branch_not_even_with_upstream",
-        nextStep: `Bring ${defaultBranch} even with its upstream before declaring convergence complete.`
-      };
-    }
-    return {
-      ...base,
-      status: "merged_to_main",
-      needsConvergence: false,
-      reason: "clean_default_branch",
-      nextStep: null
-    };
-  }
-  if (node.isLocalWorktree) {
-    return {
-      ...base,
-      status: "cleanup_candidate",
-      needsConvergence: true,
-      reason: "clean_non_default_worktree_branch",
-      nextStep: `Run mesh_refine_node(node_id: "${node.id}") or explicitly classify this worktree as blocked_review/not_mergeable before ending the task.`
-    };
-  }
-  if (upstream && upstreamStatus !== "fresh") {
-    return {
-      ...base,
-      status: "blocked_review",
-      needsConvergence: true,
-      reason: "feature_branch_upstream_unverified",
-      nextStep: `Refresh branch '${branch}' upstream refs or resolve the fetch failure before deciding whether it is ready to merge into ${defaultBranch}.`
-    };
-  }
-  if (!upstream || ahead > 0 || behind > 0) {
-    return {
-      ...base,
-      status: "blocked_review",
-      needsConvergence: true,
-      reason: !upstream ? "feature_branch_missing_upstream" : "feature_branch_not_even_with_upstream",
-      nextStep: `Push or reconcile branch '${branch}', then merge it into ${defaultBranch} or mark it not_mergeable with a reason.`
-    };
-  }
-  return {
-    ...base,
-    status: "pushed_feature_branch_needs_merge",
-    needsConvergence: true,
-    reason: "clean_non_default_branch",
-    nextStep: `Review and merge branch '${branch}' into ${defaultBranch}; do not report the task as fully complete while it remains off main.`
-  };
-}
-var COMPACT_MAX_CONVERGENCE_FOLLOWUPS = 12;
-function summarizeBranchConvergence(nodes, compact = false) {
-  const allFollowUps = nodes.filter((node) => node?.branchConvergence?.needsConvergence === true).map((node) => ({
-    nodeId: node.nodeId,
-    // workspace is a long absolute path redundant with nodeId — drop it in
-    // compact mode to keep this summary bounded.
-    ...compact ? {} : { workspace: node.workspace },
-    branch: node.branchConvergence.branch,
-    status: node.branchConvergence.status,
-    reason: node.branchConvergence.reason,
-    // The per-node nextStep is long prose that repeats node ids/branch names.
-    // In compact mode drop it (the status+reason carry the actionable signal;
-    // verbose still surfaces the full nextStep) so this summary stays bounded
-    // as node count grows.
-    ...compact ? {} : { nextStep: node.branchConvergence.nextStep }
-  }));
-  const byStatus = {};
-  for (const f of allFollowUps) {
-    const s = typeof f.status === "string" ? f.status : "unknown";
-    byStatus[s] = (byStatus[s] ?? 0) + 1;
-  }
-  const followUps = compact ? allFollowUps.slice(0, COMPACT_MAX_CONVERGENCE_FOLLOWUPS) : allFollowUps;
-  const omitted = allFollowUps.length - followUps.length;
-  return {
-    needsFollowUp: allFollowUps.length > 0,
-    unresolvedCount: allFollowUps.length,
-    byStatus,
-    requiredFinalStates: ["merged_to_main", "pushed_feature_branch_needs_merge", "blocked_review", "cleanup_candidate", "not_mergeable"],
-    followUps,
-    ...omitted > 0 ? { followUpsOmitted: omitted, followUpsHint: "Per-node followUp rows are capped in compact mode; counts above are complete. Use verbose=true for the full list." } : {}
-  };
-}
-async function commandForNode(ctx, node, command, args = {}) {
-  const isLocalNode = isLocalControlPlaneNode(ctx, node);
-  if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
-    return ctx.transport.meshCommand(node.daemonId, command, args);
-  }
-  return ctx.transport.command(command, args);
-}
-function normalizePendingMeshCoordinatorEvents(value) {
-  const payload = unwrapCommandPayload(value);
-  const events = Array.isArray(payload?.events) ? payload.events : Array.isArray(value?.events) ? value.events : [];
-  return events.filter((event) => event && typeof event === "object");
-}
-function buildMeshForwardPayloadFromPendingEvent(event) {
-  const metadataEvent = event?.metadataEvent && typeof event.metadataEvent === "object" ? event.metadataEvent : {};
-  return {
-    event: readString(event?.event),
-    meshId: readString(event?.meshId),
-    nodeId: readString(event?.nodeId) || readString(metadataEvent.meshNodeId),
-    workspace: readString(event?.workspace) || readString(metadataEvent.workspace),
-    targetSessionId: readString(metadataEvent.targetSessionId) || readString(metadataEvent.sessionId) || readString(metadataEvent.instanceId),
-    providerType: readString(metadataEvent.providerType),
-    providerSessionId: readString(metadataEvent.providerSessionId),
-    finalSummary: readString(metadataEvent.finalSummary) || readString(metadataEvent.summary),
-    jobId: readString(metadataEvent.jobId),
-    interactionId: readString(metadataEvent.interactionId),
-    status: readString(metadataEvent.status),
-    targetDaemonId: readString(metadataEvent.targetDaemonId),
-    startedAt: readString(metadataEvent.startedAt),
-    completedAt: readString(metadataEvent.completedAt),
-    retryOfJobId: readString(metadataEvent.retryOfJobId),
-    ...metadataEvent.result && typeof metadataEvent.result === "object" && !Array.isArray(metadataEvent.result) ? { result: metadataEvent.result } : {},
-    ...metadataEvent.intentional === true ? { intentional: true } : {},
-    ...metadataEvent.intentionalStop === true ? { intentionalStop: true } : {},
-    ...metadataEvent.operatorCleanup === true ? { operatorCleanup: true } : {},
-    ...readString(metadataEvent.reason) ? { reason: readString(metadataEvent.reason) } : {},
-    ...readString(metadataEvent.stopReason) ? { stopReason: readString(metadataEvent.stopReason) } : {},
-    ...readString(metadataEvent.cleanupReason) ? { cleanupReason: readString(metadataEvent.cleanupReason) } : {},
-    ...readString(metadataEvent.source) ? { source: readString(metadataEvent.source) } : {}
-  };
-}
-async function drainCoordinatorPendingEvents(ctx, opts) {
-  const requestedNodeIds = opts?.nodeIds?.length ? new Set(opts.nodeIds) : null;
-  const matchesCurrentMesh = (event) => readString(event?.meshId) === ctx.mesh.id;
-  if (ctx.transport instanceof IpcTransport) {
-    const surfacedEvents = [];
-    const coordinatorDaemonId = readString(ctx.localDaemonId);
-    const pendingEventArgs = {
-      meshId: ctx.mesh.id,
-      ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
-    };
-    try {
-      const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh);
-      for (const event of localEvents) {
-        const payload = buildMeshForwardPayloadFromPendingEvent(event);
-        if (!payload.event || !payload.meshId) continue;
-        let injected = false;
-        try {
-          await ctx.transport.command("mesh_forward_event", payload);
-          injected = true;
-        } catch {
-        }
-        rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-        if (!injected) surfacedEvents.push(event);
-      }
-    } catch {
-    }
-    for (const node of ctx.mesh.nodes) {
-      if (!node.daemonId || isLocalControlPlaneNode(ctx, node)) continue;
-      if (requestedNodeIds && !requestedNodeIds.has(node.id)) continue;
-      try {
-        const remoteEvents = normalizePendingMeshCoordinatorEvents(
-          await ctx.transport.meshCommand(node.daemonId, "get_pending_mesh_events", pendingEventArgs)
-        ).filter(matchesCurrentMesh);
-        if (remoteEvents.length === 0) continue;
-        for (const event of remoteEvents) {
-          const payload = buildMeshForwardPayloadFromPendingEvent(event);
-          if (!payload.event || !payload.meshId) continue;
-          await ctx.transport.command("mesh_forward_event", payload);
-          rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-        }
-      } catch {
-      }
-    }
-    try {
-      const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh);
-      for (const event of localEvents) {
-        const payload = buildMeshForwardPayloadFromPendingEvent(event);
-        if (!payload.event || !payload.meshId) continue;
-        let injected = false;
-        try {
-          await ctx.transport.command("mesh_forward_event", payload);
-          injected = true;
-        } catch {
-        }
-        rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-        if (!injected) surfacedEvents.push(event);
-      }
-    } catch {
-    }
-    return surfacedEvents;
-  }
-  const events = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId).filter(matchesCurrentMesh);
-  events.forEach(rememberMeshSessionProviderMetadataFromEvent);
-  return events;
-}
-function isP2pTransportUnavailableError(error) {
-  return (0, import_daemon_core.isP2pRelayTransportFailure)(error);
-}
-function buildRemoveNodeArgs(ctx, nodeId, sessionCleanupMode, force) {
-  return {
-    meshId: ctx.mesh.id,
-    nodeId,
-    ...sessionCleanupMode ? { sessionCleanupMode } : {},
-    ...force === true ? { force: true } : {},
-    inlineMesh: ctx.mesh
-  };
-}
+
+// src/tools/mesh-tool-schemas.ts
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
   description: "Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version}); when a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.",
@@ -2809,12 +1589,1247 @@ var ALL_MESH_TOOLS = [
   MESH_MISSION_LIST_TOOL,
   MESH_REVIEW_INBOX_TOOL
 ];
+
+// src/tools/mesh-tools.ts
+var SESSION_PROVIDER_METADATA_TTL_MS = 30 * 6e4;
+var meshSessionProviderMetadata = /* @__PURE__ */ new Map();
+function getSessionMetadata(key) {
+  const entry = meshSessionProviderMetadata.get(key);
+  if (!entry) return void 0;
+  if (entry.expiresAt <= Date.now()) {
+    meshSessionProviderMetadata.delete(key);
+    return void 0;
+  }
+  return entry;
+}
+var ACTIVE_WORK_POLLING_BACKOFF_MS = 6e4;
+function buildActiveWorkPollingGuidance(summary, now = Date.now()) {
+  if (!summary || summary.generatingCount <= 0) return void 0;
+  return {
+    activeGeneratingWork: true,
+    generatingCount: summary.generatingCount,
+    doNotPollBefore: new Date(now + ACTIVE_WORK_POLLING_BACKOFF_MS).toISOString(),
+    eventSurface: "pendingCoordinatorEvents",
+    nextRecommendedAction: "Wait for pendingCoordinatorEvents/completion events or an explicit user status request. If no terminal evidence appears and the user asks for status, make one bounded status check, then wait again.",
+    message: "Do not repeatedly poll mesh_status/mesh_view_queue/mesh_read_chat while delegated work is generating; terminal ledger or completion evidence will be surfaced through pendingCoordinatorEvents when available."
+  };
+}
+function summarizeTaskMessage(message) {
+  const taskSummary = message.replace(/\s+/g, " ").trim();
+  const taskTitle = taskSummary.length > 96 ? `${taskSummary.slice(0, 93)}...` : taskSummary;
+  return { taskTitle: taskTitle || "(untitled task)", taskSummary };
+}
+function buildDirectTaskPayload(message, via, opts) {
+  const descriptor = summarizeTaskMessage(message);
+  return {
+    source: "direct",
+    via,
+    taskId: opts.taskId,
+    message,
+    taskTitle: descriptor.taskTitle,
+    taskSummary: descriptor.taskSummary,
+    ...opts.taskMode ? { taskMode: opts.taskMode } : {},
+    ...opts.providerType ? { providerType: opts.providerType } : {},
+    ...opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {},
+    ...opts.dispatchedToIdleSession !== void 0 ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {}
+  };
+}
+function findNode(mesh, nodeId) {
+  const node = mesh.nodes.find((n) => (0, import_daemon_core2.meshNodeIdMatches)(n, nodeId));
+  if (!node) throw new Error(`Node '${nodeId}' is not a member of mesh '${mesh.name}'`);
+  return node;
+}
+var DUPLICATE_DISPATCH_WINDOW_MS = 6e4;
+async function refreshMeshFromDaemon(ctx) {
+  try {
+    const result = await ctx.transport.command("get_mesh", { meshId: ctx.mesh.id });
+    if (!result?.success || !Array.isArray(result.mesh?.nodes)) return;
+    const refreshedNodes = result.mesh.nodes.filter((n) => n?.id).map((n) => n);
+    ctx.mesh.nodes.splice(0, ctx.mesh.nodes.length, ...refreshedNodes);
+    ctx.mesh.updatedAt = result.mesh.updatedAt ?? ctx.mesh.updatedAt;
+  } catch {
+  }
+}
+async function syncCoordinatorDaemonMeshCache(ctx) {
+  if (!(ctx.transport instanceof IpcTransport)) return;
+  try {
+    await ctx.transport.command("get_mesh", {
+      meshId: ctx.mesh.id,
+      inlineMesh: ctx.mesh
+    });
+  } catch {
+  }
+}
+async function findNodeWithRefresh(ctx, nodeId) {
+  const hit = ctx.mesh.nodes.find((n) => (0, import_daemon_core2.meshNodeIdMatches)(n, nodeId));
+  if (hit && !hit.isLocalWorktree) return hit;
+  await refreshMeshFromDaemon(ctx);
+  const refreshed = ctx.mesh.nodes.find((n) => (0, import_daemon_core2.meshNodeIdMatches)(n, nodeId));
+  if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
+  return refreshed;
+}
+async function findOptionalNodeWithRefresh(ctx, nodeId) {
+  const hit = ctx.mesh.nodes.find((n) => (0, import_daemon_core2.meshNodeIdMatches)(n, nodeId));
+  if (hit && !hit.isLocalWorktree) return hit;
+  await refreshMeshFromDaemon(ctx);
+  return ctx.mesh.nodes.find((n) => (0, import_daemon_core2.meshNodeIdMatches)(n, nodeId)) ?? null;
+}
+function hasRecentDuplicateDispatch(ctx, args) {
+  const now = Date.now();
+  const normalizedMessage = args.message.trim();
+  for (const task of (0, import_daemon_core2.getQueue)(ctx.mesh.id)) {
+    const timestamp = new Date(task.updatedAt || task.createdAt).getTime();
+    if (!Number.isFinite(timestamp) || now - timestamp > DUPLICATE_DISPATCH_WINDOW_MS) continue;
+    if (task.targetNodeId && task.targetNodeId !== args.node_id) continue;
+    if (task.assignedNodeId && task.assignedNodeId !== args.node_id) continue;
+    if (args.session_id && task.targetSessionId !== args.session_id && task.assignedSessionId !== args.session_id) continue;
+    if (task.message?.trim() === normalizedMessage) {
+      return { duplicate: true, entry: task, source: "queue" };
+    }
+  }
+  const entries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const timestamp = new Date(entry.timestamp).getTime();
+    if (Number.isFinite(timestamp) && now - timestamp > DUPLICATE_DISPATCH_WINDOW_MS) break;
+    if (entry.kind !== "task_dispatched") continue;
+    if (entry.nodeId !== args.node_id) continue;
+    if (args.session_id && entry.sessionId !== args.session_id) continue;
+    if (typeof entry.payload?.message !== "string") continue;
+    if (entry.payload.message.trim() === normalizedMessage) {
+      return { duplicate: true, entry, source: "ledger" };
+    }
+  }
+  return { duplicate: false };
+}
+function buildMissingNodeReadChatRecovery(ctx, args) {
+  const entries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 300 });
+  const relatedEntries = entries.filter((entry) => entry.nodeId === args.node_id || entry.sessionId === args.session_id);
+  const completedEntries = relatedEntries.filter((entry) => entry.kind === "task_completed");
+  const lastDispatch = [...relatedEntries].reverse().find((entry) => entry.kind === "task_dispatched");
+  const lastTerminal = [...relatedEntries].reverse().find((entry) => entry.kind === "task_completed" || entry.kind === "task_failed" || entry.kind === "task_stalled");
+  const lastRemoved = [...relatedEntries].reverse().find((entry) => entry.kind === "node_removed");
+  const lastLaunch = [...relatedEntries].reverse().find((entry) => entry.kind === "session_launched");
+  const providerSessionId = args.provider_session_id || readString(lastTerminal?.payload?.providerSessionId) || readString(lastLaunch?.payload?.providerSessionId) || readString(lastDispatch?.payload?.providerSessionId);
+  const finalSummary = readString(lastTerminal?.payload?.finalSummary) || readString(lastTerminal?.payload?.compactSummary) || readString(lastTerminal?.payload?.summary);
+  const ledger = {
+    taskCompletedFound: completedEntries.length > 0,
+    nodeRemovedFound: !!lastRemoved,
+    providerType: lastTerminal?.providerType || lastLaunch?.providerType || lastDispatch?.providerType,
+    providerSessionId,
+    nodeRemovedAt: lastRemoved?.timestamp,
+    sessionCleanupMode: readString(lastRemoved?.payload?.sessionCleanupMode),
+    readDebugLocator: readString(lastTerminal?.payload?.readDebugLocator) || readString(lastTerminal?.payload?.debugBundlePath)
+  };
+  if (finalSummary) {
+    if (args.compact === true) {
+      return {
+        ...compactChatPayload({
+          success: true,
+          status: "idle",
+          providerSessionId,
+          summary: finalSummary,
+          messages: [{ role: "assistant", content: finalSummary, isHistorical: true }]
+        }, {
+          nodeId: args.node_id,
+          sessionId: args.session_id,
+          limit: args.tail ?? 10
+        }),
+        recoveredFromLedger: true,
+        ledger
+      };
+    }
+    return {
+      success: true,
+      compact: false,
+      recoveredFromLedger: true,
+      nodeId: args.node_id,
+      sessionId: args.session_id,
+      summary: finalSummary,
+      ledger,
+      messages: [{ role: "assistant", content: finalSummary, isHistorical: true }]
+    };
+  }
+  return {
+    success: false,
+    recoverable: true,
+    code: "mesh_removed_node_transcript_unavailable",
+    error: `Node '${args.node_id}' is not a current member of mesh '${ctx.mesh.name}'.`,
+    nodeId: args.node_id,
+    sessionId: args.session_id,
+    providerSessionId,
+    reason: "node_not_in_current_mesh_snapshot",
+    ledger,
+    completedSessionSeenInLedger: ledger.taskCompletedFound,
+    lastDispatch: lastDispatch ? {
+      timestamp: lastDispatch.timestamp,
+      sessionId: lastDispatch.sessionId,
+      providerType: lastDispatch.providerType,
+      taskId: typeof lastDispatch.payload?.taskId === "string" ? lastDispatch.payload.taskId : void 0,
+      messagePreview: typeof lastDispatch.payload?.message === "string" ? lastDispatch.payload.message.slice(0, 500) : void 0
+    } : null,
+    lastTerminalEvent: lastTerminal ? {
+      kind: lastTerminal.kind,
+      timestamp: lastTerminal.timestamp,
+      sessionId: lastTerminal.sessionId,
+      providerType: lastTerminal.providerType,
+      taskId: typeof lastTerminal.payload?.taskId === "string" ? lastTerminal.payload.taskId : void 0,
+      payload: lastTerminal.payload
+    } : null,
+    nextSteps: [
+      providerSessionId ? `Retry mesh_read_chat with provider_session_id='${providerSessionId}' on a current live node for the same daemon if one exists.` : "If the node UI shows a provider transcript id, retry mesh_read_chat/mesh_read_debug with provider_session_id.",
+      "Use mesh_read_debug with the provider_session_id or daemon-side debug bundle locator if available.",
+      "Check mesh_task_history for task_completed and node_removed entries before redispatching; do not resend solely because transcript recovery failed.",
+      "If this node was removed with stop_and_delete, the runtime transcript may be gone; rely on the ledger summary/locator or ask the operator for the saved UI output."
+    ],
+    recoveryHints: [
+      "The worktree/node may have been removed or the mesh snapshot may be stale after task completion.",
+      "If you have a provider_session_id, retry mesh_read_chat with that value while targeting a live node for the same daemon if available.",
+      "Use mesh_read_debug with provider_session_id, or inspect the daemon/session-host history locator if the transcript has already been archived.",
+      "Avoid redispatching the same task solely because read_chat could not recover the transcript; check task_history and git status first."
+    ]
+  };
+}
+function isDirectDispatchLedgerEntry(entry) {
+  if (entry?.kind !== "task_dispatched") return false;
+  const payload = entry.payload || {};
+  const via = readString(payload.via);
+  return payload.source === "direct" || via === "p2p_direct" || via === "local_direct" || via === "mesh_send_task";
+}
+function readMessageTimestampIso(message) {
+  for (const value of [message?.timestamp, message?.createdAt, message?.created_at, message?.updatedAt, message?.time]) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const ms = value > 1e10 ? value : value * 1e3;
+      return new Date(ms).toISOString();
+    }
+    if (typeof value === "string" && value.trim()) {
+      const ms = new Date(value.trim()).getTime();
+      if (Number.isFinite(ms)) return new Date(ms).toISOString();
+    }
+  }
+  return void 0;
+}
+function readFinalAssistantTranscriptEvidence(payload) {
+  const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
+  const finalAssistant = [...rawMessages].reverse().filter(isCoordinatorVisibleMessage).find((message) => {
+    const role = String(message?.role ?? "").toLowerCase();
+    return (role === "assistant" || role === "agent") && messageContent(message).trim();
+  });
+  const finalSummary = messageContent(finalAssistant).trim() || (typeof payload?.summary === "string" && payload.summary.trim() ? payload.summary.trim() : void 0);
+  return {
+    finalSummary,
+    transcriptMessageAt: finalAssistant ? readMessageTimestampIso(finalAssistant) : void 0
+  };
+}
+function findNodeSession(nodes, nodeId, sessionId) {
+  if (!nodeId || !sessionId) return {};
+  const node = nodes.find((candidate) => (0, import_daemon_core2.meshNodeIdMatches)(candidate, nodeId));
+  if (!node) return {};
+  const sessions = Array.isArray(node.sessions) ? node.sessions : [];
+  const session = sessions.find((candidate) => readSessionRecordId(candidate) === sessionId);
+  return { node, session };
+}
+function buildDirectDispatchReconciliationCandidates(directDispatches, ledgerEntries) {
+  const candidates = [];
+  const seenTaskIds = /* @__PURE__ */ new Set();
+  for (const dispatch of directDispatches || []) {
+    const taskId = readString(dispatch?.taskId);
+    if (!taskId || seenTaskIds.has(taskId)) continue;
+    seenTaskIds.add(taskId);
+    candidates.push(dispatch);
+  }
+  for (const entry of ledgerEntries || []) {
+    if (!isDirectDispatchLedgerEntry(entry)) continue;
+    const taskId = readString(entry.payload?.taskId);
+    if (!taskId || seenTaskIds.has(taskId)) continue;
+    seenTaskIds.add(taskId);
+    candidates.push({
+      taskId,
+      nodeId: entry.nodeId,
+      sessionId: entry.sessionId,
+      providerType: entry.providerType || readString(entry.payload?.providerType),
+      message: readString(entry.payload?.message),
+      dispatchedAt: entry.timestamp,
+      via: readString(entry.payload?.via)
+    });
+  }
+  return candidates;
+}
+async function reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries) {
+  let attempted = 0;
+  let reconciled = 0;
+  let skipped = 0;
+  const candidates = buildDirectDispatchReconciliationCandidates(directDispatches, ledgerEntries);
+  for (const dispatch of candidates) {
+    const taskId = readString(dispatch?.taskId);
+    const nodeId = readString(dispatch?.nodeId);
+    const sessionId = readString(dispatch?.sessionId);
+    if (!taskId || !nodeId || !sessionId) {
+      skipped += 1;
+      continue;
+    }
+    const { session } = findNodeSession(liveNodes, nodeId, sessionId);
+    if (!session || !isIdleSessionRecord(session)) {
+      skipped += 1;
+      continue;
+    }
+    const node = await findOptionalNodeWithRefresh(ctx, nodeId).catch(() => null);
+    if (!node) {
+      skipped += 1;
+      continue;
+    }
+    const providerType = readString(dispatch?.providerType) || resolveSessionProviderType(session);
+    const providerSessionId = readString(session?.providerSessionId) || readString(session?.activeChat?.providerSessionId) || readString(session?.settings?.providerSessionId) || resolveMeshSessionProviderMetadata(ctx, nodeId, sessionId)?.providerSessionId;
+    attempted += 1;
+    try {
+      const readResult = await commandForNode(ctx, node, "read_chat", {
+        sessionId,
+        targetSessionId: sessionId,
+        workspace: node.workspace,
+        ...providerType ? { agentType: providerType, providerType } : {},
+        ...providerSessionId ? { providerSessionId } : {},
+        tailLimit: 10
+      });
+      const payload = unwrapCommandPayload(readResult);
+      if (payload?.success === false) continue;
+      const evidence = readFinalAssistantTranscriptEvidence(payload);
+      if (!evidence.finalSummary) continue;
+      const result = (0, import_daemon_core2.reconcileDirectDispatchCompletionFromTranscript)({
+        meshId: ctx.mesh.id,
+        nodeId,
+        sessionId,
+        providerType,
+        providerSessionId: readString(payload?.providerSessionId) || providerSessionId,
+        taskId,
+        finalSummary: evidence.finalSummary,
+        transcriptMessageAt: evidence.transcriptMessageAt,
+        targetCoordinatorDaemonId: ctx.localDaemonId,
+        source: "mcp_mesh_status_transcript_reconciliation"
+      });
+      if (result.reconciled) reconciled += 1;
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { attempted, reconciled, skipped };
+}
+async function triggerMeshQueueAndReport(ctx) {
+  try {
+    const raw = await ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id });
+    const payload = unwrapCommandPayload(raw);
+    const trigger = payload?.trigger && typeof payload.trigger === "object" ? payload.trigger : payload;
+    return trigger && typeof trigger === "object" ? trigger : { success: true };
+  } catch (e) {
+    return {
+      success: false,
+      error: e?.message || String(e)
+    };
+  }
+}
+function buildQueueTriggerGuidance(queueTrigger) {
+  if (!queueTrigger || queueTrigger.claimed === true) return void 0;
+  if (queueTrigger.success === false) {
+    return {
+      queueClaimed: false,
+      queueDispatchState: "trigger_failed",
+      nextAction: "Do not assume the queued task is running. Check mesh_view_queue and daemon connectivity before redispatching."
+    };
+  }
+  if (queueTrigger.autoLaunchPending === true) {
+    return {
+      queueClaimed: false,
+      queueDispatchState: "pending_waiting_for_autolaunch",
+      nextAction: "A worker session was just auto-launched for this task and is booting; it will claim the task shortly. Wait for it to claim \u2014 do NOT launch another session. Use mesh_view_queue to confirm the assignment lands."
+    };
+  }
+  if (queueTrigger.noIdleMeshSessionAvailable === true) {
+    return {
+      queueClaimed: false,
+      queueDispatchState: "pending_no_idle_mesh_session",
+      nextAction: "The task is queued but not running. Launch a managed worker with mesh_launch_session, or wait for a delegated session to become ready and trigger the queue again."
+    };
+  }
+  return {
+    queueClaimed: false,
+    queueDispatchState: "pending_or_waiting_for_ready",
+    nextAction: "The task is queued but this trigger did not claim it. Use mesh_view_queue for the current active-work source of truth before retrying."
+  };
+}
+function isMeshOwnedDelegateSession(session, meshId, nodeId) {
+  const settings = session?.settings;
+  const sessionMeshId = typeof settings?.meshNodeFor === "string" ? settings.meshNodeFor.trim() : "";
+  const sessionNodeId = typeof settings?.meshNodeId === "string" ? settings.meshNodeId.trim() : "";
+  if (sessionMeshId) {
+    if (sessionMeshId !== meshId) return false;
+    return !sessionNodeId || sessionNodeId === nodeId;
+  }
+  const coordinatorOwned = settings?.launchedByCoordinator === true || Boolean(readString(settings?.meshCoordinatorDaemonId));
+  if (!coordinatorOwned) return false;
+  const lastNodeId = readString(settings?.meshLastNodeId);
+  if (lastNodeId) return lastNodeId === nodeId;
+  return true;
+}
+function hasRemoteRelayMetadata(session) {
+  return Boolean(
+    readString(session?.settings?.meshCoordinatorDaemonId) || readString(session?.meta?.meshCoordinatorDaemonId) || readString(session?.metadata?.meshCoordinatorDaemonId) || readString(session?.meshCoordinatorDaemonId)
+  );
+}
+function classifyRemoteDelegateRelaySafety(session, meshId, nodeId, coordinatorDaemonId) {
+  if (!isMeshOwnedDelegateSession(session, meshId, nodeId)) return "unsafe_alias";
+  if (hasRemoteRelayMetadata(session)) return "safe";
+  return coordinatorDaemonId ? "self_heal" : "missing_anchor";
+}
+function chooseDispatchableSession(sessions, providerType, meshId, nodeId, coordinatorDaemonId) {
+  const live = sessions.filter((session) => !isTerminalSessionRecord(session));
+  const matchingProvider = (session) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
+  const meshSessions = live.filter((session) => {
+    const safety = classifyRemoteDelegateRelaySafety(session, meshId, nodeId, coordinatorDaemonId);
+    return safety === "safe" || safety === "self_heal";
+  });
+  return meshSessions.find((session) => isIdleSessionRecord(session) && matchingProvider(session)) || void 0;
+}
+function buildRelayUnsafeRemoteSessionFailure(ctx, node, sessionId, providerType) {
+  return {
+    success: false,
+    recoverable: true,
+    code: "mesh_delegate_session_missing_relay_metadata",
+    reason: "mesh_delegate_session_missing_relay_metadata",
+    transport: "mesh_transport",
+    retryRecommended: true,
+    meshId: ctx.mesh.id,
+    nodeId: node.id,
+    daemonId: node.daemonId,
+    workspace: node.workspace,
+    sessionId,
+    unsafeTranscriptAlias: true,
+    ...providerType ? { resolvedProviderType: providerType } : {},
+    error: `Remote session '${sessionId}' is not relay-safe for mesh '${ctx.mesh.id}': missing meshNodeFor/meshCoordinatorDaemonId metadata, so completion events would not reach the coordinator ledger. This session may be the coordinator itself or an unrelated session (unsafe_transcript_alias risk).`,
+    nextAction: `Launch a fresh relay-safe session with mesh_launch_session(node_id: '${node.id}'${providerType ? `, type: '${providerType}'` : ""}) or dispatch without session_id so Repo Mesh can choose a valid delegate session.`,
+    noFallbackReason: "Blindly reusing a remote session without mesh relay metadata would silently drop task_completed / generating_completed events."
+  };
+}
+function buildMissingCoordinatorDaemonIdFailure(ctx, node, providerType) {
+  return {
+    success: false,
+    recoverable: true,
+    code: "mesh_coordinator_daemon_unknown",
+    reason: "mesh_coordinator_daemon_unknown",
+    transport: "mesh_transport",
+    retryRecommended: true,
+    meshId: ctx.mesh.id,
+    nodeId: node.id,
+    daemonId: node.daemonId,
+    workspace: node.workspace,
+    ...providerType ? { resolvedProviderType: providerType } : {},
+    error: `Cannot launch a remote mesh delegate for node '${node.id}': coordinator daemon identity is unavailable, so the worker would be unable to relay completion events back to the coordinator.`,
+    nextAction: "Retry after the coordinator daemon identity is available (for example from an attached daemon-backed MCP session) so meshCoordinatorDaemonId can be stamped on the worker session.",
+    noFallbackReason: "Launching without meshCoordinatorDaemonId would create a worker session that can finish work but cannot emit task_completed / generating_completed back to the coordinator."
+  };
+}
+function findNestedPayload(value, predicate) {
+  const seen = /* @__PURE__ */ new Set();
+  const stack = [{ payload: value, depth: 0 }];
+  while (stack.length) {
+    const { payload, depth } = stack.pop();
+    if (predicate(payload)) return payload;
+    if (!payload || typeof payload !== "object" || seen.has(payload) || depth >= 8) continue;
+    seen.add(payload);
+    for (const key of ["payload", "result"]) {
+      if (key in payload) stack.push({ payload: payload[key], depth: depth + 1 });
+    }
+  }
+  return value;
+}
+function extractCloneNodePayload(value) {
+  return findNestedPayload(value, (payload) => Boolean(payload?.node?.id));
+}
+function extractGitStatus(value) {
+  const payload = unwrapCommandPayload(value);
+  return payload?.status ?? value?.status ?? payload;
+}
+function extractGitDiff(value) {
+  const payload = unwrapCommandPayload(value);
+  return payload?.diffSummary ?? payload?.diff ?? value?.diffSummary ?? value?.diff ?? payload;
+}
+function extractSubmodules(value, ignorePaths) {
+  const payload = unwrapCommandPayload(value);
+  const subs = payload?.status?.submodules ?? payload?.submodules ?? value?.status?.submodules ?? value?.submodules;
+  if (!Array.isArray(subs)) return void 0;
+  if (ignorePaths.length === 0) return subs;
+  const ignoreSet = new Set(ignorePaths);
+  return subs.filter((s) => s?.path && !ignoreSet.has(s.path));
+}
+function assignFullGitSnapshot(entry, status) {
+  if (!status || typeof status !== "object" || Array.isArray(status)) return;
+  entry.git = status;
+}
+var COMPACT_DETAILED_NODES_BYTE_BUDGET = 9e3;
+var COMPACT_NODES_TOTAL_BYTE_BUDGET = 13e3;
+var COMPACT_MISSIONS_BYTE_BUDGET = 6e3;
+function extractLaunchPayload(value) {
+  return findNestedPayload(value, (payload) => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
+}
+function classifyMeshLaunchFailure(error) {
+  const message = error instanceof Error ? error.message : String(error || "launch failed");
+  const lower = message.toLowerCase();
+  const p2pClassification = (0, import_daemon_core2.classifyP2pRelayFailure)(error, { command: "launch_cli" });
+  if (p2pClassification.recoverable) {
+    return p2pClassification;
+  }
+  if (lower.includes("cannot connect to daemon ipc") || lower.includes("daemon ipc command")) {
+    return {
+      code: "local_ipc_unavailable",
+      reason: "local_daemon_ipc_unavailable",
+      transport: "local_ipc",
+      recoverable: true,
+      retryRecommended: true,
+      nextAction: "Check the local daemon IPC connection, then retry mesh_launch_session once after the daemon is reachable."
+    };
+  }
+  if (lower.includes("timed out") || lower.includes("timeout")) {
+    return {
+      code: "mesh_transport_timeout",
+      reason: "mesh_transport_timeout",
+      transport: "mesh_transport",
+      recoverable: true,
+      retryRecommended: true,
+      nextAction: "Check mesh transport health, then do one bounded retry before requeueing or relaunching the task."
+    };
+  }
+  return {
+    code: "mesh_launch_failed",
+    reason: "provider_launch_failed",
+    transport: "mesh_transport",
+    recoverable: false,
+    retryRecommended: false,
+    nextAction: "Inspect the provider launch error and fix the underlying provider/configuration issue before retrying."
+  };
+}
+function buildWorktreeCleanupHint(node) {
+  if (!node.isLocalWorktree) return void 0;
+  return {
+    tool: "mesh_remove_node",
+    args: { node_id: node.id, session_cleanup_mode: "preserve" },
+    hint: `If the worktree is no longer needed, remove the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`
+  };
+}
+function buildRecoverableLaunchFailure(ctx, node, providerType, error) {
+  const message = error instanceof Error ? error.message : String(error || "launch failed");
+  const classified = classifyMeshLaunchFailure(error);
+  const cleanup = buildWorktreeCleanupHint(node);
+  return {
+    success: false,
+    recoverable: classified.recoverable,
+    code: classified.code,
+    reason: classified.reason,
+    transport: classified.transport,
+    retryRecommended: classified.retryRecommended,
+    nextAction: classified.nextAction,
+    ...classified.noFallbackReason ? { noFallbackReason: classified.noFallbackReason } : {},
+    error: message,
+    meshId: ctx.mesh.id,
+    nodeId: node.id,
+    daemonId: node.daemonId,
+    workspace: node.workspace,
+    isLocalWorktree: node.isLocalWorktree === true,
+    worktreeBranch: node.worktreeBranch,
+    clonedFromNodeId: node.clonedFromNodeId,
+    ...providerType ? { resolvedProviderType: providerType } : {},
+    retryHint: `Retry mesh_launch_session(node_id: "${node.id}"${providerType ? `, type: "${providerType}"` : ""}) after daemon mesh transport/P2P is healthy.`,
+    ...cleanup ? { cleanup } : {},
+    nextStepHints: [
+      `Retry mesh_launch_session(node_id: "${node.id}"${providerType ? `, type: "${providerType}"` : ""}) after checking daemon/P2P health.`,
+      ...cleanup ? [`Cleanup orphan worktree node with mesh_remove_node(node_id: "${node.id}") if retry is not desired.`] : [],
+      "Run mesh_status to see the degraded reason and recovery hints before redispatching work."
+    ]
+  };
+}
+function recordRecoverableLaunchFailure(ctx, node, providerType, error) {
+  const failure = buildRecoverableLaunchFailure(ctx, node, providerType, error);
+  try {
+    (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
+      kind: "recovery_attempted",
+      nodeId: node.id,
+      providerType,
+      payload: {
+        event: "session_launch_failed",
+        ...failure
+      }
+    });
+  } catch {
+  }
+  return failure;
+}
+function getLatestActiveLaunchFailure(meshId, nodeId) {
+  const entries = (0, import_daemon_core2.readLedgerEntries)(meshId, { tail: 200 });
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (entry.nodeId !== nodeId) continue;
+    if (entry.kind === "session_launched" || entry.kind === "node_removed") return null;
+    if (entry.kind === "recovery_attempted" && entry.payload?.event === "session_launch_failed") {
+      return { timestamp: entry.timestamp, ...entry.payload };
+    }
+  }
+  return null;
+}
+function buildCoordinatorP2pRelayFailure(error, context) {
+  const payload = (0, import_daemon_core2.buildP2pRelayFailurePayload)(error, {
+    command: context.command,
+    targetDaemonId: context.targetDaemonId
+  });
+  return {
+    ...payload,
+    ...context.nodeId ? { nodeId: context.nodeId } : {},
+    ...context.sessionId ? { sessionId: context.sessionId } : {},
+    retryHint: payload.retryRecommended ? payload.nextAction : "Do not retry as a P2P transport recovery; inspect the command/provider error first."
+  };
+}
+async function ipcDispatchToRemoteAgent(ctx, node, args) {
+  const transport = ctx.transport;
+  const daemonId = node.daemonId;
+  const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || "";
+  let sessionId = args.session_id?.trim() || "";
+  const providerPriorityList = Array.isArray(node.policy?.providerPriority) ? node.policy.providerPriority : [];
+  let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || "";
+  if (sessionId && args.verifiedSession) {
+    const explicitSession = args.verifiedSession;
+    const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+    if (relaySafety === "unsafe_alias") {
+      return buildRelayUnsafeRemoteSessionFailure(
+        ctx,
+        node,
+        sessionId,
+        resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
+      );
+    }
+    if (relaySafety === "missing_anchor") {
+      return buildMissingCoordinatorDaemonIdFailure(
+        ctx,
+        node,
+        resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
+      );
+    }
+    if (!resolvedProviderType) {
+      resolvedProviderType = resolveSessionProviderType(explicitSession);
+    }
+  } else if (!sessionId || args.session_id) {
+    try {
+      const relayResult = await transport.meshCommand(daemonId, "get_status_metadata", {});
+      const sessions = extractStatusMetadataSessions(relayResult);
+      if (sessionId) {
+        const explicitSession = sessions.find((session) => readSessionRecordId(session) === sessionId);
+        if (!explicitSession) {
+          return {
+            success: false,
+            recoverable: true,
+            code: "mesh_target_session_not_found",
+            reason: "mesh_target_session_not_found",
+            transport: "mesh_transport",
+            retryRecommended: true,
+            meshId: ctx.mesh.id,
+            nodeId: node.id,
+            daemonId,
+            workspace: node.workspace,
+            sessionId,
+            ...resolvedProviderType ? { resolvedProviderType } : {},
+            error: `Remote session '${sessionId}' is not present in the live status for node '${node.id}'.`,
+            nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ""}) or retry without session_id so Repo Mesh can target a live delegate session.`
+          };
+        }
+        const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+        if (relaySafety === "unsafe_alias") {
+          return buildRelayUnsafeRemoteSessionFailure(
+            ctx,
+            node,
+            sessionId,
+            resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
+          );
+        }
+        if (relaySafety === "missing_anchor") {
+          return buildMissingCoordinatorDaemonIdFailure(
+            ctx,
+            node,
+            resolvedProviderType || resolveSessionProviderType(explicitSession) || void 0
+          );
+        }
+        if (!resolvedProviderType) {
+          resolvedProviderType = resolveSessionProviderType(explicitSession);
+        }
+      } else {
+        const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+        if (targetSession?.id || targetSession?.sessionId) {
+          sessionId = targetSession.id || targetSession.sessionId;
+          if (!resolvedProviderType) {
+            resolvedProviderType = resolveSessionProviderType(targetSession);
+          }
+        }
+      }
+    } catch (e) {
+      if (sessionId) {
+        return {
+          ...buildCoordinatorP2pRelayFailure(e, {
+            command: "get_status_metadata",
+            targetDaemonId: daemonId,
+            nodeId: node.id,
+            sessionId
+          }),
+          success: false,
+          error: `Cannot verify remote session '${sessionId}' before dispatch: ${e?.message || String(e)}`
+        };
+      }
+    }
+  }
+  if (!resolvedProviderType) {
+    return { success: false, error: `Cannot dispatch to remote node '${node.id}': providerType unknown. Set providerPriority on the node policy or call mesh_launch_session first.` };
+  }
+  try {
+    const dispatchResult = await transport.meshCommand(daemonId, "agent_command", {
+      ...sessionId ? { targetSessionId: sessionId } : {},
+      agentType: resolvedProviderType,
+      cliType: resolvedProviderType,
+      action: "send_chat",
+      message: args.message,
+      // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
+      // scoped to THIS node's session on the worker (findAdapter dir match /
+      // findMeshNodeAdapter). Without it, a worker hosting both a base node and a
+      // cloned worktree node (same daemonId) would fall through to a provider-only
+      // fuzzy match and could land worktree work on the base session.
+      ...node.workspace ? { dir: node.workspace } : {},
+      ...args.meshContext ? { meshContext: args.meshContext } : {}
+    });
+    const dispatchPayload = unwrapCommandPayload(dispatchResult);
+    if (dispatchPayload?.success === false || dispatchResult?.success === false) {
+      const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
+      const errorMessage = dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task";
+      return {
+        ...buildCoordinatorP2pRelayFailure(source?.error || errorMessage, {
+          command: "agent_command",
+          targetDaemonId: daemonId,
+          nodeId: node.id,
+          sessionId
+        }),
+        ...source && typeof source === "object" ? source : {},
+        success: false,
+        error: `P2P dispatch failed: ${errorMessage}`
+      };
+    }
+    return { success: true, dispatched: true, sessionId: sessionId || "", providerType: resolvedProviderType };
+  } catch (e) {
+    const errorMessage = e?.message || String(e);
+    return {
+      ...buildCoordinatorP2pRelayFailure(e, {
+        command: "agent_command",
+        targetDaemonId: daemonId,
+        nodeId: node.id,
+        sessionId
+      }),
+      error: `P2P dispatch failed: ${errorMessage}`
+    };
+  }
+}
+function meshSessionCacheKey(nodeId, runtimeSessionId) {
+  return `${nodeId}:${runtimeSessionId}`;
+}
+function rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, metadata) {
+  const keyNodeId = readString(nodeId);
+  const keySessionId = readString(runtimeSessionId);
+  if (!keyNodeId || !keySessionId) return;
+  const providerType = readString(metadata.providerType);
+  const providerSessionId = readString(metadata.providerSessionId);
+  if (!providerType && !providerSessionId) return;
+  const existing = getSessionMetadata(meshSessionCacheKey(keyNodeId, keySessionId)) || { providerType: "" };
+  meshSessionProviderMetadata.set(meshSessionCacheKey(keyNodeId, keySessionId), {
+    providerType: providerType || existing.providerType,
+    providerSessionId: providerSessionId || existing.providerSessionId,
+    expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS
+  });
+}
+function rememberMeshSessionProviderMetadataFromEvent(event) {
+  const metadataEvent = event?.metadataEvent && typeof event.metadataEvent === "object" ? event.metadataEvent : event && typeof event === "object" ? event : {};
+  const nodeId = readString(event?.nodeId) || readString(metadataEvent.nodeId) || readString(metadataEvent.meshNodeId);
+  const sessionId = readString(metadataEvent.targetSessionId) || readString(metadataEvent.sessionId) || readString(metadataEvent.instanceId) || readString(event?.sessionId);
+  rememberMeshSessionProviderMetadata(nodeId, sessionId, {
+    providerType: readString(metadataEvent.providerType) || readString(event?.providerType) || "",
+    providerSessionId: readString(metadataEvent.providerSessionId) || readString(event?.providerSessionId)
+  });
+}
+function resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId) {
+  const entries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 50 });
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
+    const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
+    if (entryNodeId && entryNodeId !== nodeId) continue;
+    const entrySessionId = readString(entry.sessionId) || readString(payload.targetSessionId) || readString(payload.sessionId) || readString(payload.instanceId);
+    if (entrySessionId !== runtimeSessionId) continue;
+    const providerType = readString(entry.providerType) || readString(payload.providerType);
+    const completionDiagnostic = payload.completionDiagnostic && typeof payload.completionDiagnostic === "object" && !Array.isArray(payload.completionDiagnostic) ? payload.completionDiagnostic : {};
+    const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === "object" && !Array.isArray(payload.metadataEvent) ? payload.metadataEvent : {};
+    const providerSessionId = readString(payload.providerSessionId) || readString(completionDiagnostic.providerSessionId) || readString(metadataEvent.providerSessionId);
+    if (providerType || providerSessionId) {
+      return { providerType: providerType || "", providerSessionId };
+    }
+  }
+  return void 0;
+}
+function resolveMeshSessionProviderMetadata(ctx, nodeId, runtimeSessionId) {
+  const cached = getSessionMetadata(meshSessionCacheKey(nodeId, runtimeSessionId));
+  if (cached?.providerType || cached?.providerSessionId) return cached;
+  const fromLedger = resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId);
+  if (fromLedger) rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, fromLedger);
+  return fromLedger;
+}
+function countUncommittedChanges(status) {
+  if (typeof status?.uncommittedChanges === "number") return status.uncommittedChanges;
+  const keys = ["staged", "modified", "untracked", "deleted", "renamed"];
+  const counted = keys.reduce((sum, key) => sum + (Number.isFinite(Number(status?.[key])) ? Number(status[key]) : 0), 0);
+  const conflicts = Array.isArray(status?.conflictFiles) ? status.conflictFiles.length : status?.hasConflicts ? 1 : 0;
+  return counted + conflicts;
+}
+function isGitStatusDirty(status) {
+  if (typeof status?.isDirty === "boolean") return status.isDirty;
+  if (typeof status?.dirty === "boolean") return status.dirty;
+  if (Array.isArray(status?.submodules) && status.submodules.some((submodule) => submodule?.dirty || submodule?.outOfSync || submodule?.error)) return true;
+  return countUncommittedChanges(status) > 0;
+}
+function slimLedgerPayload(payload) {
+  const slim = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (k === "message" || k === "taskSummary") {
+      slim[k] = typeof v === "string" && v.length > 200 ? v.slice(0, 200) + "\u2026" : v;
+    } else if (k === "evidence" || k === "workerResult" || k === "gitStatus" || k === "validationResults") {
+    } else if (k === "finalSummary") {
+      slim[k] = typeof v === "string" && v.length > 300 ? v.slice(0, 300) + "\u2026" : v;
+    } else if (LARGE_LEDGER_FIELD_KEYS.has(k)) {
+      slim[k] = summarizeLargeLedgerField(k, v);
+    } else {
+      slim[k] = elideLargeNestedValue(k, v);
+    }
+  }
+  return slim;
+}
+function readRelatedRepos(node) {
+  const raw = Array.isArray(node.relatedRepos) ? node.relatedRepos : Array.isArray(node.policy?.relatedRepos) ? node.policy.relatedRepos : [];
+  return raw.map((entry) => ({
+    label: typeof entry?.label === "string" ? entry.label.trim() : "",
+    workspace: typeof entry?.workspace === "string" ? entry.workspace.trim() : ""
+  })).filter((entry) => Boolean(entry.label && entry.workspace));
+}
+function summarizeRelatedRepoStatus(repo, status) {
+  const dirty = isGitStatusDirty(status);
+  return {
+    label: repo.label,
+    workspace: repo.workspace,
+    isGitRepo: status?.isGitRepo === true,
+    branch: status?.branch ?? null,
+    upstream: status?.upstream ?? null,
+    upstreamStatus: typeof status?.upstreamStatus === "string" ? status.upstreamStatus : status?.upstream ? "unchecked" : "no_upstream",
+    upstreamFetchedAt: Number.isFinite(Number(status?.upstreamFetchedAt)) ? Number(status.upstreamFetchedAt) : null,
+    upstreamFetchError: typeof status?.upstreamFetchError === "string" ? status.upstreamFetchError : null,
+    ahead: Number.isFinite(Number(status?.ahead)) ? Number(status.ahead) : 0,
+    behind: Number.isFinite(Number(status?.behind)) ? Number(status.behind) : 0,
+    dirty,
+    uncommittedChanges: countUncommittedChanges(status),
+    head: status?.headCommit ?? null,
+    lastCommitSummary: status?.headMessage ?? null,
+    ...status?.reason ? { reason: status.reason } : {},
+    ...status?.error ? { error: status.error } : {}
+  };
+}
+async function collectRelatedRepoStatuses(ctx, node) {
+  const relatedRepos = readRelatedRepos(node);
+  if (!relatedRepos.length) return [];
+  const results = [];
+  for (const repo of relatedRepos) {
+    try {
+      const statusResult = await commandForNode(ctx, node, "git_status", { workspace: repo.workspace, refreshUpstream: true });
+      const status = extractGitStatus(statusResult);
+      results.push(summarizeRelatedRepoStatus(repo, status));
+    } catch (e) {
+      results.push({
+        label: repo.label,
+        workspace: repo.workspace,
+        error: e?.message || "related repo status failed"
+      });
+    }
+  }
+  return results;
+}
+function readProviderPriority(policy) {
+  const raw = policy?.providerPriority;
+  return Array.isArray(raw) ? raw.map((type) => typeof type === "string" ? type.trim() : "").filter(Boolean) : [];
+}
+function buildNodeCapabilityExposure(node) {
+  const providers = readProviderPriority(node.policy);
+  const capabilityTags = (0, import_daemon_core2.buildMeshNodeCapabilityTags)(node);
+  const exposure = { capabilityTags };
+  if (providers.length) {
+    const byProvider = {};
+    for (const provider of providers) {
+      byProvider[provider] = (0, import_daemon_core2.buildMeshNodeCapabilityTags)(node, provider);
+    }
+    exposure.capabilityTagsByProvider = byProvider;
+  }
+  const capabilities = Array.isArray(node.capabilities) ? node.capabilities.filter((tag) => typeof tag === "string" && !!tag.trim()) : [];
+  if (capabilities.length) exposure.capabilities = capabilities;
+  return exposure;
+}
+function readSpawnedSessionVisibility(policy) {
+  return policy?.spawnedSessionVisibility === "hidden" ? "hidden" : "visible";
+}
+function missingProviderPriorityMessage(nodeId) {
+  return `Node '${nodeId}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority`;
+}
+function getNodeLaunchReadiness(node) {
+  const bootstrap = node.worktreeBootstrap;
+  if (node.isLocalWorktree && bootstrap?.status === "failed" && bootstrap?.required !== false) {
+    return {
+      providerPriority: readProviderPriority(node.policy),
+      launchReady: false,
+      launchBlockedReason: "worktree_bootstrap_failed",
+      launchBlockedMessage: typeof bootstrap.error === "string" && bootstrap.error.trim() ? bootstrap.error.trim() : "Required worktree bootstrap failed; resolve it before launching an agent into this node.",
+      worktreeBootstrap: bootstrap
+    };
+  }
+  const providerPriority = readProviderPriority(node.policy);
+  if (providerPriority.length) {
+    return {
+      providerPriority,
+      launchReady: true
+    };
+  }
+  return {
+    providerPriority,
+    launchReady: false,
+    launchBlockedReason: "missing_provider_priority",
+    launchBlockedMessage: missingProviderPriorityMessage(node.id)
+  };
+}
+function getWorktreeBootstrapLaunchBlock(node, meshPolicy) {
+  if (!node.isLocalWorktree) return void 0;
+  const bootstrap = node.worktreeBootstrap;
+  const requireReady = !!(meshPolicy && typeof meshPolicy === "object" && meshPolicy.requireBootstrapBeforeLaunch === true);
+  if (requireReady && bootstrap?.status !== "ready") {
+    return {
+      success: false,
+      code: "bootstrap_not_ready",
+      error: `Node '${node.id}' bootstrap state is '${bootstrap?.status ?? "unknown"}' and mesh policy requireBootstrapBeforeLaunch is enabled.`,
+      nodeId: node.id,
+      worktreeBootstrap: bootstrap ?? null,
+      recoveryHint: "Run the worktree bootstrap (clone runOnClone or a refine with bootstrap inherit) until the node reports ready, or disable requireBootstrapBeforeLaunch."
+    };
+  }
+  if (bootstrap?.status !== "failed" || bootstrap?.required === false) return void 0;
+  return {
+    success: false,
+    code: "worktree_bootstrap_failed",
+    error: typeof bootstrap.error === "string" && bootstrap.error.trim() ? bootstrap.error.trim() : `Node '${node.id}' has a failed required worktree bootstrap.`,
+    nodeId: node.id,
+    worktreeBootstrap: bootstrap,
+    recoveryHint: "Fix the configured worktree bootstrap command or remove/recreate the worktree node before launching an agent."
+  };
+}
+async function collectLiveStatusSessions(ctx, node) {
+  try {
+    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+    return extractStatusMetadataSessions(statusResult);
+  } catch {
+    return [];
+  }
+}
+async function collectLiveStatusProbe(ctx, node) {
+  try {
+    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+    return {
+      sessions: extractStatusMetadataSessions(statusResult),
+      daemonBuild: extractDaemonBuildInfo(statusResult)
+    };
+  } catch {
+    return { sessions: [] };
+  }
+}
+function extractDaemonBuildInfo(value) {
+  const payload = unwrapCommandPayload(value);
+  const build = payload?.daemonBuild && typeof payload.daemonBuild === "object" ? payload.daemonBuild : value?.daemonBuild && typeof value.daemonBuild === "object" ? value.daemonBuild : void 0;
+  if (!build) return void 0;
+  const commit = readString(build.commit);
+  if (!commit) return void 0;
+  return {
+    commit,
+    commitShort: readString(build.commitShort) || commit.slice(0, 7),
+    version: readString(build.version) || "unknown",
+    ...readString(build.builtAt) ? { builtAt: readString(build.builtAt) } : {}
+  };
+}
+async function collectMeshViewQueueNodesWithLiveSessions(ctx) {
+  const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
+    const liveSessions = await collectLiveStatusSessions(ctx, node);
+    return liveSessions.length > 0 ? { ...node, sessions: liveSessions } : node;
+  }));
+  return nodes;
+}
+function buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges) {
+  const defaultBranch = readString(mesh.defaultBranch) ?? "main";
+  const branch = readString(status?.branch) ?? readString(node.worktreeBranch) ?? null;
+  const ahead = readNumeric(status?.ahead);
+  const behind = readNumeric(status?.behind);
+  const upstream = readString(status?.upstream) ?? null;
+  const upstreamStatus = readString(status?.upstreamStatus) ?? (upstream ? "unchecked" : "no_upstream");
+  const hasConflicts = status?.hasConflicts === true || Array.isArray(status?.conflictFiles) && status.conflictFiles.length > 0;
+  const base = {
+    defaultBranch,
+    branch,
+    upstream,
+    upstreamStatus,
+    ahead,
+    behind,
+    isWorktree: node.isLocalWorktree === true,
+    isDefaultBranch: branch === defaultBranch
+  };
+  if (status?.isGitRepo !== true) {
+    return {
+      ...base,
+      status: "blocked_review",
+      needsConvergence: true,
+      reason: "git_status_unavailable",
+      nextStep: `Resolve git status for node '${node.id}' before marking the task complete.`
+    };
+  }
+  if (!branch) {
+    return {
+      ...base,
+      status: "blocked_review",
+      needsConvergence: true,
+      reason: "branch_unknown",
+      nextStep: `Inspect node '${node.id}' git branch before deciding whether it is merged to ${defaultBranch}.`
+    };
+  }
+  if (hasConflicts || dirty || uncommittedChanges > 0) {
+    return {
+      ...base,
+      status: "not_mergeable",
+      needsConvergence: true,
+      reason: hasConflicts ? "conflicts_present" : "dirty_workspace",
+      nextStep: `Commit, checkpoint, or resolve node '${node.id}' before any main convergence step.`
+    };
+  }
+  if (branch === defaultBranch) {
+    if (upstream && upstreamStatus !== "fresh") {
+      return {
+        ...base,
+        status: "blocked_review",
+        needsConvergence: true,
+        reason: "default_branch_upstream_unverified",
+        nextStep: `Refresh ${defaultBranch}'s upstream refs or resolve the fetch failure before declaring convergence complete for node '${node.id}'.`
+      };
+    }
+    if (ahead > 0 || behind > 0) {
+      return {
+        ...base,
+        status: "blocked_review",
+        needsConvergence: true,
+        reason: "default_branch_not_even_with_upstream",
+        nextStep: `Bring ${defaultBranch} even with its upstream before declaring convergence complete.`
+      };
+    }
+    return {
+      ...base,
+      status: "merged_to_main",
+      needsConvergence: false,
+      reason: "clean_default_branch",
+      nextStep: null
+    };
+  }
+  if (node.isLocalWorktree) {
+    return {
+      ...base,
+      status: "cleanup_candidate",
+      needsConvergence: true,
+      reason: "clean_non_default_worktree_branch",
+      nextStep: `Run mesh_refine_node(node_id: "${node.id}") or explicitly classify this worktree as blocked_review/not_mergeable before ending the task.`
+    };
+  }
+  if (upstream && upstreamStatus !== "fresh") {
+    return {
+      ...base,
+      status: "blocked_review",
+      needsConvergence: true,
+      reason: "feature_branch_upstream_unverified",
+      nextStep: `Refresh branch '${branch}' upstream refs or resolve the fetch failure before deciding whether it is ready to merge into ${defaultBranch}.`
+    };
+  }
+  if (!upstream || ahead > 0 || behind > 0) {
+    return {
+      ...base,
+      status: "blocked_review",
+      needsConvergence: true,
+      reason: !upstream ? "feature_branch_missing_upstream" : "feature_branch_not_even_with_upstream",
+      nextStep: `Push or reconcile branch '${branch}', then merge it into ${defaultBranch} or mark it not_mergeable with a reason.`
+    };
+  }
+  return {
+    ...base,
+    status: "pushed_feature_branch_needs_merge",
+    needsConvergence: true,
+    reason: "clean_non_default_branch",
+    nextStep: `Review and merge branch '${branch}' into ${defaultBranch}; do not report the task as fully complete while it remains off main.`
+  };
+}
+var COMPACT_MAX_CONVERGENCE_FOLLOWUPS = 12;
+function summarizeBranchConvergence(nodes, compact = false) {
+  const allFollowUps = nodes.filter((node) => node?.branchConvergence?.needsConvergence === true).map((node) => ({
+    nodeId: node.nodeId,
+    // workspace is a long absolute path redundant with nodeId — drop it in
+    // compact mode to keep this summary bounded.
+    ...compact ? {} : { workspace: node.workspace },
+    branch: node.branchConvergence.branch,
+    status: node.branchConvergence.status,
+    reason: node.branchConvergence.reason,
+    // The per-node nextStep is long prose that repeats node ids/branch names.
+    // In compact mode drop it (the status+reason carry the actionable signal;
+    // verbose still surfaces the full nextStep) so this summary stays bounded
+    // as node count grows.
+    ...compact ? {} : { nextStep: node.branchConvergence.nextStep }
+  }));
+  const byStatus = {};
+  for (const f of allFollowUps) {
+    const s = typeof f.status === "string" ? f.status : "unknown";
+    byStatus[s] = (byStatus[s] ?? 0) + 1;
+  }
+  const followUps = compact ? allFollowUps.slice(0, COMPACT_MAX_CONVERGENCE_FOLLOWUPS) : allFollowUps;
+  const omitted = allFollowUps.length - followUps.length;
+  return {
+    needsFollowUp: allFollowUps.length > 0,
+    unresolvedCount: allFollowUps.length,
+    byStatus,
+    requiredFinalStates: ["merged_to_main", "pushed_feature_branch_needs_merge", "blocked_review", "cleanup_candidate", "not_mergeable"],
+    followUps,
+    ...omitted > 0 ? { followUpsOmitted: omitted, followUpsHint: "Per-node followUp rows are capped in compact mode; counts above are complete. Use verbose=true for the full list." } : {}
+  };
+}
+async function commandForNode(ctx, node, command, args = {}) {
+  const isLocalNode = isLocalControlPlaneNode(ctx, node);
+  if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
+    return ctx.transport.meshCommand(node.daemonId, command, args);
+  }
+  return ctx.transport.command(command, args);
+}
+function normalizePendingMeshCoordinatorEvents(value) {
+  const payload = unwrapCommandPayload(value);
+  const events = Array.isArray(payload?.events) ? payload.events : Array.isArray(value?.events) ? value.events : [];
+  return events.filter((event) => event && typeof event === "object");
+}
+function buildMeshForwardPayloadFromPendingEvent(event) {
+  const metadataEvent = event?.metadataEvent && typeof event.metadataEvent === "object" ? event.metadataEvent : {};
+  return {
+    event: readString(event?.event),
+    meshId: readString(event?.meshId),
+    nodeId: readString(event?.nodeId) || readString(metadataEvent.meshNodeId),
+    workspace: readString(event?.workspace) || readString(metadataEvent.workspace),
+    targetSessionId: readString(metadataEvent.targetSessionId) || readString(metadataEvent.sessionId) || readString(metadataEvent.instanceId),
+    providerType: readString(metadataEvent.providerType),
+    providerSessionId: readString(metadataEvent.providerSessionId),
+    finalSummary: readString(metadataEvent.finalSummary) || readString(metadataEvent.summary),
+    jobId: readString(metadataEvent.jobId),
+    interactionId: readString(metadataEvent.interactionId),
+    status: readString(metadataEvent.status),
+    targetDaemonId: readString(metadataEvent.targetDaemonId),
+    startedAt: readString(metadataEvent.startedAt),
+    completedAt: readString(metadataEvent.completedAt),
+    retryOfJobId: readString(metadataEvent.retryOfJobId),
+    ...metadataEvent.result && typeof metadataEvent.result === "object" && !Array.isArray(metadataEvent.result) ? { result: metadataEvent.result } : {},
+    ...metadataEvent.intentional === true ? { intentional: true } : {},
+    ...metadataEvent.intentionalStop === true ? { intentionalStop: true } : {},
+    ...metadataEvent.operatorCleanup === true ? { operatorCleanup: true } : {},
+    ...readString(metadataEvent.reason) ? { reason: readString(metadataEvent.reason) } : {},
+    ...readString(metadataEvent.stopReason) ? { stopReason: readString(metadataEvent.stopReason) } : {},
+    ...readString(metadataEvent.cleanupReason) ? { cleanupReason: readString(metadataEvent.cleanupReason) } : {},
+    ...readString(metadataEvent.source) ? { source: readString(metadataEvent.source) } : {}
+  };
+}
+async function drainCoordinatorPendingEvents(ctx, opts) {
+  const requestedNodeIds = opts?.nodeIds?.length ? new Set(opts.nodeIds) : null;
+  const matchesCurrentMesh = (event) => readString(event?.meshId) === ctx.mesh.id;
+  if (ctx.transport instanceof IpcTransport) {
+    const surfacedEvents = [];
+    const coordinatorDaemonId = readString(ctx.localDaemonId);
+    const pendingEventArgs = {
+      meshId: ctx.mesh.id,
+      ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
+    };
+    try {
+      const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh);
+      for (const event of localEvents) {
+        const payload = buildMeshForwardPayloadFromPendingEvent(event);
+        if (!payload.event || !payload.meshId) continue;
+        let injected = false;
+        try {
+          await ctx.transport.command("mesh_forward_event", payload);
+          injected = true;
+        } catch {
+        }
+        rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
+        if (!injected) surfacedEvents.push(event);
+      }
+    } catch {
+    }
+    for (const node of ctx.mesh.nodes) {
+      if (!node.daemonId || isLocalControlPlaneNode(ctx, node)) continue;
+      if (requestedNodeIds && !requestedNodeIds.has(node.id)) continue;
+      try {
+        const remoteEvents = normalizePendingMeshCoordinatorEvents(
+          await ctx.transport.meshCommand(node.daemonId, "get_pending_mesh_events", pendingEventArgs)
+        ).filter(matchesCurrentMesh);
+        if (remoteEvents.length === 0) continue;
+        for (const event of remoteEvents) {
+          const payload = buildMeshForwardPayloadFromPendingEvent(event);
+          if (!payload.event || !payload.meshId) continue;
+          await ctx.transport.command("mesh_forward_event", payload);
+          rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
+        }
+      } catch {
+      }
+    }
+    try {
+      const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh);
+      for (const event of localEvents) {
+        const payload = buildMeshForwardPayloadFromPendingEvent(event);
+        if (!payload.event || !payload.meshId) continue;
+        let injected = false;
+        try {
+          await ctx.transport.command("mesh_forward_event", payload);
+          injected = true;
+        } catch {
+        }
+        rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
+        if (!injected) surfacedEvents.push(event);
+      }
+    } catch {
+    }
+    return surfacedEvents;
+  }
+  const events = (0, import_daemon_core2.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId).filter(matchesCurrentMesh);
+  events.forEach(rememberMeshSessionProviderMetadataFromEvent);
+  return events;
+}
+function isP2pTransportUnavailableError(error) {
+  return (0, import_daemon_core2.isP2pRelayTransportFailure)(error);
+}
+function buildRemoveNodeArgs(ctx, nodeId, sessionCleanupMode, force) {
+  return {
+    meshId: ctx.mesh.id,
+    nodeId,
+    ...sessionCleanupMode ? { sessionCleanupMode } : {},
+    ...force === true ? { force: true } : {},
+    inlineMesh: ctx.mesh
+  };
+}
 async function meshStatus(ctx, args = {}) {
-  const rateResult = (0, import_daemon_core.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_status" });
+  const rateResult = (0, import_daemon_core2.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_status" });
   const compact = args.verbose === true ? false : args.compact ?? true;
   await refreshMeshFromDaemon(ctx);
   const { mesh, transport } = ctx;
-  let ledgerSummary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
+  let ledgerSummary = (0, import_daemon_core2.getLedgerSummary)(mesh.id);
   const results = await Promise.all(mesh.nodes.map(async (node) => {
     const entry = {
       nodeId: node.id,
@@ -2870,14 +2885,14 @@ async function meshStatus(ctx, args = {}) {
         noFallbackReason: failure.noFallbackReason
       });
     }
-    entry.dataFreshness = (0, import_daemon_core.buildMeshNodeProbeFreshness)({
+    entry.dataFreshness = (0, import_daemon_core2.buildMeshNodeProbeFreshness)({
       git: entry.git,
       liveTruthProbed,
       isSelfNode: entry.machine?.sameMachine === true,
       daemonId: readNodeDaemonId(node),
       node
     });
-    const recoveryContext = (0, import_daemon_core.getSessionRecoveryContext)(mesh.id, { nodeId: node.id });
+    const recoveryContext = (0, import_daemon_core2.getSessionRecoveryContext)(mesh.id, { nodeId: node.id });
     if (recoveryContext.consecutiveNodeFailures > 0) {
       entry.recoveryHints = {
         consecutiveFailures: recoveryContext.consecutiveNodeFailures,
@@ -2949,23 +2964,23 @@ async function meshStatus(ctx, args = {}) {
     }
     return entry;
   }));
-  let ledgerEntries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail: 200 });
-  let directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(mesh.id);
+  let ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(mesh.id, { tail: 200 });
+  let directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(mesh.id);
   const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, results, directDispatches, ledgerEntries);
   if (directReconciliation.reconciled > 0) {
-    ledgerEntries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail: 200 });
-    directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(mesh.id);
-    ledgerSummary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
+    ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(mesh.id, { tail: 200 });
+    directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(mesh.id);
+    ledgerSummary = (0, import_daemon_core2.getLedgerSummary)(mesh.id);
   }
-  const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
+  const activeWorkEvidence = (0, import_daemon_core2.buildMeshActiveWork)({
     meshId: mesh.id,
-    queue: (0, import_daemon_core.getQueue)(mesh.id),
+    queue: (0, import_daemon_core2.getQueue)(mesh.id),
     ledgerEntries,
     directDispatches,
     nodes: results
   });
   const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
-  const staleDirectWorkSummary = (0, import_daemon_core.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
+  const staleDirectWorkSummary = (0, import_daemon_core2.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
     note: activeWorkEvidence.staleDirectWorkNote,
     detailHint: "Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail."
   });
@@ -3153,7 +3168,7 @@ async function meshStatus(ctx, args = {}) {
   }
   try {
     if (compact) {
-      const { live, historyFold } = (0, import_daemon_core.getMeshStatusMissionsCompact)(mesh.id);
+      const { live, historyFold } = (0, import_daemon_core2.getMeshStatusMissionsCompact)(mesh.id);
       const ranked = [...live].sort((a, b) => String(b.tasks?.lastActivityAt ?? "").localeCompare(String(a.tasks?.lastActivityAt ?? "")));
       const kept = [];
       const overflow = [];
@@ -3180,11 +3195,11 @@ async function meshStatus(ctx, args = {}) {
       }
       if (historyFold) response.missionsHistory = historyFold;
     } else {
-      const missions = (0, import_daemon_core.getMeshStatusMissionSummaries)(mesh.id, { verbose: true });
+      const missions = (0, import_daemon_core2.getMeshStatusMissionSummaries)(mesh.id, { verbose: true });
       if (missions.length > 0) {
         response.missions = missions.map((mission) => {
           try {
-            return { ...mission, stats: (0, import_daemon_core.computeMeshMissionStats)(mesh.id, mission.id) };
+            return { ...mission, stats: (0, import_daemon_core2.computeMeshMissionStats)(mesh.id, mission.id) };
           } catch {
             return mission;
           }
@@ -3195,14 +3210,14 @@ async function meshStatus(ctx, args = {}) {
   }
   try {
     const pendingEvents = await drainCoordinatorPendingEvents(ctx);
-    const asyncRefineJobs = (0, import_daemon_core.buildMeshAsyncRefineJobs)({
+    const asyncRefineJobs = (0, import_daemon_core2.buildMeshAsyncRefineJobs)({
       meshId: mesh.id,
       ledgerEntries,
       pendingEvents
     });
     if (asyncRefineJobs.length > 0) {
       if (compact) {
-        const summary = (0, import_daemon_core.summarizeMeshAsyncRefineJobs)(asyncRefineJobs);
+        const summary = (0, import_daemon_core2.summarizeMeshAsyncRefineJobs)(asyncRefineJobs);
         if (summary.activeJobs.length > 0) response.asyncRefineJobs = summary.activeJobs;
         response.asyncRefineJobsSummary = {
           total: summary.total,
@@ -3228,17 +3243,17 @@ async function meshTaskHistory(ctx, args) {
   const compactCap = requestedTail > 50 ? 20 : 30;
   const tail = compact ? Math.min(requestedTail, compactCap) : Math.min(requestedTail, 200);
   const kind = typeof args.kind === "string" && args.kind.trim() ? [args.kind.trim()] : void 0;
-  const rawEntries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail, kind });
+  const rawEntries = (0, import_daemon_core2.readLedgerEntries)(mesh.id, { tail, kind });
   const entries = compact ? rawEntries.map((e) => ({
     ...e,
     payload: e.payload ? slimLedgerPayload(e.payload) : e.payload
   })) : rawEntries;
-  const summary = (0, import_daemon_core.getLedgerSummary)(mesh.id);
+  const summary = (0, import_daemon_core2.getLedgerSummary)(mesh.id);
   let taskStats;
   try {
     const taskIds = [...new Set(rawEntries.map((e) => typeof e.payload?.taskId === "string" ? e.payload.taskId : "").filter(Boolean))];
     if (taskIds.length > 0) {
-      const stats = (0, import_daemon_core.computeMeshTaskStats)(mesh.id, { taskIds });
+      const stats = (0, import_daemon_core2.computeMeshTaskStats)(mesh.id, { taskIds });
       if (stats.length > 0) taskStats = stats;
     }
   } catch {
@@ -3267,8 +3282,8 @@ async function meshReconcileLedger(ctx, args) {
   for (const node of nodes) {
     try {
       if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {
-        const slice2 = (0, import_daemon_core.readLedgerSliceFromStore)(ctx.mesh.id, queryArgs);
-        replicas.push((0, import_daemon_core.buildMeshLedgerReplicaEvidence)({
+        const slice2 = (0, import_daemon_core2.readLedgerSliceFromStore)(ctx.mesh.id, queryArgs);
+        replicas.push((0, import_daemon_core2.buildMeshLedgerReplicaEvidence)({
           nodeId: node.id,
           daemonId: node.daemonId,
           transport: "local",
@@ -3286,8 +3301,8 @@ async function meshReconcileLedger(ctx, args) {
       if (slice?.protocol !== "adhdev.mesh.ledger.slice.v1" || !Array.isArray(slice.entries)) {
         throw new Error("remote daemon returned an invalid ledger slice payload");
       }
-      const importResult = shouldImport ? (0, import_daemon_core.appendRemoteLedgerEntries)(ctx.mesh.id, slice.entries) : { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
-      replicas.push((0, import_daemon_core.buildMeshLedgerReplicaEvidence)({
+      const importResult = shouldImport ? (0, import_daemon_core2.appendRemoteLedgerEntries)(ctx.mesh.id, slice.entries) : { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
+      replicas.push((0, import_daemon_core2.buildMeshLedgerReplicaEvidence)({
         nodeId: node.id,
         daemonId: node.daemonId,
         transport: "p2p_datachannel",
@@ -3295,7 +3310,7 @@ async function meshReconcileLedger(ctx, args) {
         importResult
       }));
       if (shouldImport && importResult.accepted > 0) {
-        (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+        (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
           kind: "ledger_replicated",
           nodeId: node.id,
           payload: {
@@ -3309,7 +3324,7 @@ async function meshReconcileLedger(ctx, args) {
         });
       }
     } catch (e) {
-      replicas.push((0, import_daemon_core.buildMeshLedgerReplicaEvidence)({
+      replicas.push((0, import_daemon_core2.buildMeshLedgerReplicaEvidence)({
         nodeId: node.id,
         daemonId: node.daemonId,
         transport: node.daemonId ? "p2p_datachannel" : "local",
@@ -3318,8 +3333,8 @@ async function meshReconcileLedger(ctx, args) {
       }));
     }
   }
-  const evidence = (0, import_daemon_core.buildMeshLedgerReconciliationEvidence)(ctx.mesh.id, replicas);
-  (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+  const evidence = (0, import_daemon_core2.buildMeshLedgerReconciliationEvidence)(ctx.mesh.id, replicas);
+  (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
     kind: "ledger_reconciled",
     payload: {
       protocol: evidence.protocol,
@@ -3335,11 +3350,11 @@ async function meshPruneStaleDirect(ctx, args = {}) {
   const execute = args.execute === true && args.dry_run !== true;
   const includeTerminal = args.include_terminal === true;
   const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
-  const ledgerEntries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
-  const directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(ctx.mesh.id);
-  const result = (0, import_daemon_core.pruneStaleDirectDispatches)({
+  const ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 500 });
+  const directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(ctx.mesh.id);
+  const result = (0, import_daemon_core2.pruneStaleDirectDispatches)({
     meshId: ctx.mesh.id,
-    queue: (0, import_daemon_core.getQueue)(ctx.mesh.id),
+    queue: (0, import_daemon_core2.getQueue)(ctx.mesh.id),
     ledgerEntries,
     directDispatches,
     nodes: liveNodes,
@@ -3402,7 +3417,7 @@ async function meshListNodes(ctx) {
 }
 async function meshMissionUpsert(ctx, args) {
   try {
-    const mission = (0, import_daemon_core.upsertMeshMission)(ctx.mesh.id, {
+    const mission = (0, import_daemon_core2.upsertMeshMission)(ctx.mesh.id, {
       id: readString(args.mission_id) || readString(args.missionId) || void 0,
       title: args.title,
       goal: typeof args.goal === "string" ? args.goal : void 0,
@@ -3422,21 +3437,21 @@ async function meshMissionUpsert(ctx, args) {
 async function meshMissionList(ctx, args = {}) {
   try {
     const rawStatuses = Array.isArray(args.status) ? args.status : typeof args.status === "string" && args.status.trim() ? [args.status] : [];
-    const invalid = rawStatuses.filter((s) => !import_daemon_core.MESH_MISSION_STATUSES.includes(s));
+    const invalid = rawStatuses.filter((s) => !import_daemon_core2.MESH_MISSION_STATUSES.includes(s));
     if (invalid.length > 0) {
       return JSON.stringify({
         success: false,
         code: "invalid_mission_status",
-        error: `invalid status filter: ${invalid.join(", ")} (valid: ${import_daemon_core.MESH_MISSION_STATUSES.join(", ")})`
+        error: `invalid status filter: ${invalid.join(", ")} (valid: ${import_daemon_core2.MESH_MISSION_STATUSES.join(", ")})`
       });
     }
     const statuses = rawStatuses.length > 0 ? rawStatuses : void 0;
-    const missions = (0, import_daemon_core.listMeshMissionSummaries)(ctx.mesh.id, {
+    const missions = (0, import_daemon_core2.listMeshMissionSummaries)(ctx.mesh.id, {
       statuses,
       verbose: args.verbose === true
     }).map((mission) => {
       try {
-        return { ...mission, stats: (0, import_daemon_core.computeMeshMissionStats)(ctx.mesh.id, mission.id) };
+        return { ...mission, stats: (0, import_daemon_core2.computeMeshMissionStats)(ctx.mesh.id, mission.id) };
       } catch {
         return mission;
       }
@@ -3453,14 +3468,14 @@ async function meshMissionList(ctx, args = {}) {
 }
 async function meshEnqueueTask(ctx, args) {
   const taskMode = readString(args.task_mode) || readString(args.taskMode);
-  const requiredTags = (0, import_daemon_core.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
+  const requiredTags = (0, import_daemon_core2.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
   const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
   const explicitTarget = readString(args.targetNodeId) || readString(args.target_node_id) || void 0;
   const preferWorktree = args.preferWorktree === true || args.prefer_worktree === true;
   const targetNodeId = explicitTarget || (preferWorktree ? resolvePreferredWorktreeNodeId(ctx) : void 0);
   try {
-    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {} });
+    const task = (0, import_daemon_core2.enqueueTask)(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {} });
     if (!(ctx.transport instanceof IpcTransport)) {
       const queueTrigger = await triggerMeshQueueAndReport(ctx);
       return JSON.stringify({
@@ -3483,14 +3498,14 @@ async function meshEnqueueTask(ctx, args) {
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (isLocalNode || !node.daemonId) continue;
         if (targetNodeId && node.id !== targetNodeId) continue;
-        if (!(0, import_daemon_core.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core.buildMeshNodeCapabilityTags)(node))) continue;
+        if (!(0, import_daemon_core2.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core2.buildMeshNodeCapabilityTags)(node))) continue;
         dispatchPromises.push(
           ipcDispatchToRemoteAgent(ctx, node, { message: args.message }).then((result) => {
             if (result.success) {
               try {
                 const providerType = result.providerType;
                 const descriptor = summarizeTaskMessage(args.message);
-                (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+                (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
                   kind: "task_dispatched",
                   nodeId: node.id,
                   sessionId: result.sessionId,
@@ -3512,7 +3527,7 @@ async function meshEnqueueTask(ctx, args) {
             }
           }).catch((err) => {
             try {
-              (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+              (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
                 kind: "p2p_dispatch_failed",
                 nodeId: node.id,
                 payload: {
@@ -3555,17 +3570,17 @@ async function meshEnqueueTask(ctx, args) {
   }
 }
 async function meshViewQueue(ctx, args) {
-  const rateResult = (0, import_daemon_core.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_view_queue" });
+  const rateResult = (0, import_daemon_core2.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_view_queue" });
   const compact = args.verbose === true ? false : args.compact ?? true;
   try {
     await refreshMeshFromDaemon(ctx);
     const statusFilter = sanitizeQueueStatusFilter(args.status);
     const view = normalizeQueueViewMode(args.view);
-    const rawQueue = (0, import_daemon_core.getQueue)(ctx.mesh.id);
+    const rawQueue = (0, import_daemon_core2.getQueue)(ctx.mesh.id);
     const statusById = new Map(rawQueue.map((task) => [task.id, task.status]));
     const withDependencies = rawQueue.map((task) => {
       if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) return task;
-      const depState = (0, import_daemon_core.describeTaskDependencyState)(task, statusById);
+      const depState = (0, import_daemon_core2.describeTaskDependencyState)(task, statusById);
       return { ...task, ...depState };
     });
     const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh));
@@ -3574,16 +3589,16 @@ async function meshViewQueue(ctx, args) {
     const visibleSummary = buildQueueStatusSummary(queue);
     const maintenance = buildQueueMaintenanceReport(fullQueue);
     const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
-    let ledgerEntries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
-    let directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(ctx.mesh.id);
+    let ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+    let directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(ctx.mesh.id);
     const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);
     if (directReconciliation.reconciled > 0) {
-      ledgerEntries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
-      directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(ctx.mesh.id);
+      ledgerEntries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+      directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(ctx.mesh.id);
     }
-    (0, import_daemon_core.markStaleDirectDispatches)(ctx.mesh.id);
-    directDispatches = (0, import_daemon_core.getActiveDirectDispatches)(ctx.mesh.id);
-    const activeWorkEvidence = (0, import_daemon_core.buildMeshActiveWork)({
+    (0, import_daemon_core2.markStaleDirectDispatches)(ctx.mesh.id);
+    directDispatches = (0, import_daemon_core2.getActiveDirectDispatches)(ctx.mesh.id);
+    const activeWorkEvidence = (0, import_daemon_core2.buildMeshActiveWork)({
       meshId: ctx.mesh.id,
       queue: fullQueue,
       ledgerEntries,
@@ -3608,7 +3623,7 @@ async function meshViewQueue(ctx, args) {
     const wantActiveQueueArray = view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status));
     const wantHistoricalQueueArray = !compact && (view === "historical" || requestedHistoricalRows);
     const activeWorkResult = compact ? compactActiveWorkRecords(activeWorkEvidence.activeWork) : { records: activeWorkEvidence.activeWork, omitted: 0 };
-    const staleDirectWorkSummary = (0, import_daemon_core.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
+    const staleDirectWorkSummary = (0, import_daemon_core2.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
       note: activeWorkEvidence.staleDirectWorkNote,
       detailHint: "Full stale direct entries are omitted from mesh_view_queue in compact mode. Call mesh_view_queue with verbose=true, or inspect mesh_task_history for ledger detail."
     });
@@ -3683,7 +3698,7 @@ async function meshQueueCancel(ctx, args) {
   try {
     const taskId = (args.task_id || args.taskId || "").trim();
     if (!taskId) return JSON.stringify({ success: false, error: "task_id required" });
-    const task = (0, import_daemon_core.cancelTask)(ctx.mesh.id, taskId, { reason: args.reason });
+    const task = (0, import_daemon_core2.cancelTask)(ctx.mesh.id, taskId, { reason: args.reason });
     if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
     ctx.transport.command("trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
     });
@@ -3699,7 +3714,7 @@ async function meshQueueRequeue(ctx, args) {
     const targetNodeId = (args.target_node_id || args.targetNodeId || "").trim() || void 0;
     const targetSessionId = (args.target_session_id || args.targetSessionId || "").trim() || void 0;
     const keepTargetSession = args.keep_target_session === true || args.keepTargetSession === true;
-    const task = (0, import_daemon_core.requeueTask)(ctx.mesh.id, taskId, {
+    const task = (0, import_daemon_core2.requeueTask)(ctx.mesh.id, taskId, {
       reason: args.reason,
       targetNodeId,
       targetSessionId,
@@ -3731,7 +3746,7 @@ async function meshQueueRequeue(ctx, args) {
 async function meshSendTask(ctx, args) {
   const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
-  const modeValidation = (0, import_daemon_core.validateMeshTaskModeRequest)(requestedTaskMode, args.message);
+  const modeValidation = (0, import_daemon_core2.validateMeshTaskModeRequest)(requestedTaskMode, args.message);
   if (!modeValidation.valid) {
     return JSON.stringify({
       success: false,
@@ -3843,7 +3858,7 @@ async function meshSendTask(ctx, args) {
         const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
         try {
           const providerType = result2.providerType || cached?.providerType;
-          (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+          (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
             kind: "task_dispatched",
             nodeId: args.node_id,
             sessionId: dispatchedSessionId,
@@ -3855,7 +3870,7 @@ async function meshSendTask(ctx, args) {
               targetSessionId: dispatchedSessionId
             })
           });
-          (0, import_daemon_core.insertDirectDispatch)(ctx.mesh.id, {
+          (0, import_daemon_core2.insertDirectDispatch)(ctx.mesh.id, {
             taskId,
             nodeId: args.node_id,
             sessionId: dispatchedSessionId,
@@ -3866,7 +3881,7 @@ async function meshSendTask(ctx, args) {
             dispatchedAt
           });
           if (missionId) {
-            (0, import_daemon_core.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
+            (0, import_daemon_core2.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
               id: taskId,
               missionId,
               assignedNodeId: args.node_id,
@@ -4025,7 +4040,7 @@ async function meshSendTask(ctx, args) {
         });
       }
       try {
-        (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+        (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
           kind: "task_dispatched",
           nodeId: args.node_id,
           sessionId: args.session_id,
@@ -4040,7 +4055,7 @@ async function meshSendTask(ctx, args) {
         });
       } catch {
       }
-      (0, import_daemon_core.insertDirectDispatch)(ctx.mesh.id, {
+      (0, import_daemon_core2.insertDirectDispatch)(ctx.mesh.id, {
         taskId,
         nodeId: args.node_id,
         sessionId: args.session_id,
@@ -4053,7 +4068,7 @@ async function meshSendTask(ctx, args) {
       });
       if (missionId) {
         try {
-          (0, import_daemon_core.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
+          (0, import_daemon_core2.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
             id: taskId,
             missionId,
             assignedNodeId: args.node_id,
@@ -4098,14 +4113,14 @@ async function meshSendTask(ctx, args) {
         } : {}
       });
     }
-    const task = (0, import_daemon_core.enqueueTask)(ctx.mesh.id, args.message, {
+    const task = (0, import_daemon_core2.enqueueTask)(ctx.mesh.id, args.message, {
       targetNodeId: args.node_id,
       targetSessionId: args.session_id,
       taskMode,
       ...missionId ? { missionId } : {}
     });
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
-    const pendingEvents = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId);
+    const pendingEvents = (0, import_daemon_core2.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId);
     const result = {
       success: true,
       source: "queue",
@@ -4138,7 +4153,7 @@ function classifyReadChatTransportCause(error) {
   return "saturated";
 }
 function resolveCachedMeshSessionPreviewFromLedger(ctx, nodeId, sessionId) {
-  const entries = (0, import_daemon_core.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+  const entries = (0, import_daemon_core2.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
     const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
@@ -4147,7 +4162,7 @@ function resolveCachedMeshSessionPreviewFromLedger(ctx, nodeId, sessionId) {
     const entrySessionId = readString(entry.sessionId) || readString(payload.targetSessionId) || readString(payload.sessionId) || readString(payload.instanceId);
     if (entrySessionId !== sessionId) continue;
     const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === "object" && !Array.isArray(payload.metadataEvent) ? payload.metadataEvent : payload;
-    const preview = (0, import_daemon_core.resolveMeshSurfacedSessionPreview)(metadataEvent);
+    const preview = (0, import_daemon_core2.resolveMeshSurfacedSessionPreview)(metadataEvent);
     if (preview) {
       return { ...preview, ledgerKind: entry.kind, timestamp: entry.timestamp };
     }
@@ -4155,7 +4170,7 @@ function resolveCachedMeshSessionPreviewFromLedger(ctx, nodeId, sessionId) {
   return void 0;
 }
 function buildMeshReadChatCacheFallback(ctx, args, node, error) {
-  const classification = (0, import_daemon_core.classifyP2pRelayFailure)(error, { command: "read_chat", targetDaemonId: node.daemonId });
+  const classification = (0, import_daemon_core2.classifyP2pRelayFailure)(error, { command: "read_chat", targetDaemonId: node.daemonId });
   const cause = classifyReadChatTransportCause(error);
   const errorMessage = error instanceof Error ? error.message : String(error ?? "");
   const causeNote = cause === "not_connected" ? "the worker daemon is not currently connected over P2P (no live channel)" : "the worker daemon is connected but saturated \u2014 it acknowledged the request but did not return the transcript within the deadline";
@@ -4225,7 +4240,7 @@ async function meshReadChat(ctx, args) {
       tailLimit: args.tail ?? 10
     });
   } catch (e) {
-    if (isLocalNode || !(0, import_daemon_core.isP2pRelayTransportFailure)(e)) throw e;
+    if (isLocalNode || !(0, import_daemon_core2.isP2pRelayTransportFailure)(e)) throw e;
     return buildMeshReadChatCacheFallback(ctx, args, node, e);
   }
   const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result), {
@@ -4293,7 +4308,7 @@ async function meshLaunchSession(ctx, args) {
     const coordinatorNode = resolveCoordinatorNode(ctx);
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
-    const delegatedWorkerAutoApprove = (0, import_daemon_core.resolveDelegatedWorkerAutoApprove)(ctx.mesh.policy, node.policy);
+    const delegatedWorkerAutoApprove = (0, import_daemon_core2.resolveDelegatedWorkerAutoApprove)(ctx.mesh.policy, node.policy);
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
       return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
@@ -4340,7 +4355,7 @@ async function meshLaunchSession(ctx, args) {
       });
     }
     try {
-      (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+      (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
         kind: "session_launched",
         nodeId: args.node_id,
         sessionId: runtimeSessionId || void 0,
@@ -4493,7 +4508,7 @@ async function meshCheckpoint(ctx, args) {
     includeUntracked: true
   });
   try {
-    (0, import_daemon_core.appendLedgerEntry)(ctx.mesh.id, {
+    (0, import_daemon_core2.appendLedgerEntry)(ctx.mesh.id, {
       kind: "checkpoint_created",
       nodeId: args.node_id,
       payload: {
