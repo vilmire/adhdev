@@ -142,7 +142,6 @@ export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent)
 // wasDirectDeliveredToCoordinator) was removed when spontaneous PTY direct-inject was retired.
 // Delivery is now queue-drain-only: an event is consumed by exactly one drainer via the atomic
 // SQLite drained=1 marking, so there is no PTY-vs-poll double-delivery left to dedup against.
-// The dormant mesh_direct_delivered_events table / store helpers remain (harmless) but unused.
 
 export function hasPendingCoordinatorEventDuplicate(event: PendingMeshCoordinatorEvent): boolean {
     const fingerprint = buildPendingEventFingerprint(event);
