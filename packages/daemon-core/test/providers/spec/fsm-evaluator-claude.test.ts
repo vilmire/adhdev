@@ -779,6 +779,53 @@ describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)',
         const ev = evaluateFsm(spec, 'approval', genuineResume, { row: 6, col: 2 }, undefined, clk(10000, 0));
         expect(ev.fired?.to).toBe('busy');
     });
+
+    // ── APPROVAL-BUSY-FLICKER (live snapshot b4232227) ─────────────────────
+    // The remaining gap the not-footer(❯ 1.)/not-footer(Esc to cancel) guards
+    // did NOT close: a TORN repaint frame where BOTH footer markers are
+    // momentarily gone (so both not-footer guards PASS) while the modal box +
+    // its "Do you want to proceed?" question are still on screen and a body
+    // spinner animates. Pre-fix that single torn frame satisfied approval→busy;
+    // the next full frame re-fired →approval (priority 100, no hold), producing
+    // the ~1.5s approval↔busy oscillation (the period == approval→busy min_hold).
+    // Fix: approval→busy additionally requires (a) NOT "Do you want to proceed?"
+    // anywhere, and (b) the modal region (cursor_above 12) stable for 700ms — a
+    // one-frame tear can satisfy neither.
+    const tornApproval = [
+        '❯ Run the build please',
+        '',
+        '⏺ Bash(npm run build)',
+        '  ⎿  Running…',
+        '✳ Scurrying… (esc to interrupt)',   // body spinner animating
+        D,
+        ' Bash command',
+        ' npm run build',
+        ' Do you want to proceed?',           // modal question STILL up
+        '',                                   // ← ❯ 1. Yes / Esc to cancel rows
+        D,                                    //   not yet repainted this frame
+    ].join('\n');
+
+    it('(flicker) the proceed-question guard is present on approval→busy', () => {
+        const clauses = (spec.transitions.find(t => t.label === 'approval→busy')!.when as any).all as any[];
+        const proceedGuard = clauses.find(c => c.not && !c.not.section
+            && typeof c.not.matches === 'string' && /Do you want to proceed/.test(c.not.matches));
+        expect(proceedGuard, 'approval→busy missing not(Do you want to proceed?) guard').toBeTruthy();
+        const stableGuard = clauses.find(c => typeof c.stable_ms === 'number');
+        expect(stableGuard, 'approval→busy missing stable_ms tear guard').toBeTruthy();
+    });
+
+    it('(flicker) STAYS in approval on a torn frame: footer markers gone but question still up', () => {
+        // Clock past min_hold (1500ms); the proceed-question guard alone blocks busy.
+        const ev = evaluateFsm(spec, 'approval', tornApproval, { row: 11, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).not.toBe('busy');
+    });
+
+    it('(flicker) a single torn paint cannot demote: modal region not stable long enough', () => {
+        // Even hypothesising the question string were absent, the modal region
+        // (cursor_above 12) changed 100ms ago → stable_ms(700) unsatisfied → no busy.
+        const ev = evaluateFsm(spec, 'approval', tornApproval, { row: 11, col: 2 }, undefined, clk(10000, 0, [[-1, 9900], [12, 9900]]));
+        expect(ev.fired?.to).not.toBe('busy');
+    });
 });
 
 // ── FALSEBUSY: middle-dot (·) body text false-matching the spinner glyph set ──
