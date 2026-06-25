@@ -107,6 +107,19 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     const queue = getQueue(meshId);
                     const queueSummary = getMeshQueueStats(meshId);
 
+                    // Scheduling-runtime projection — the load-balancer's live view (tie-break
+                    // strategy, global parallel caps + consumption, per-node load/priority/provider
+                    // caps). Built from the SAME helper + args the MCP `mesh_status` tool uses
+                    // (mesh-tools-status.ts: buildMeshSchedulingRuntime(mesh, getQueue(mesh.id)))
+                    // so the dashboard surface and the coordinator MCP surface render an identical
+                    // runtime. Without this the dashboard Status/Runtime tab showed the
+                    // "not reported by this daemon (older build)" fallback (RepoMeshStatus.scheduling
+                    // was never populated by this daemon-command producer). Computed once so each
+                    // node entry can attach its slice and statusResult can carry the mesh rollup.
+                    const { buildMeshSchedulingRuntime } = await import('../../mesh/mesh-scheduling-runtime.js');
+                    const schedulingRuntime = buildMeshSchedulingRuntime(mesh, queue);
+                    const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
+
                     const { readLedgerEntries, getLedgerSummary } = await import('../../mesh/mesh-ledger.js');
                     const ledgerEntries = readLedgerEntries(meshId, { tail: 20 });
                     const asyncRefineLedgerEntries = readLedgerEntries(meshId, { tail: 100 });
@@ -260,6 +273,16 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             activeSessionDetails: [],
                             launchReady: false,
                         };
+                        // Per-node scheduling slice (load / priority / provider caps / claim-block
+                        // reasons) read by the dashboard's MeshNodeSchedulingBadges. Full shape —
+                        // unlike the MCP compact path this is a dashboard surface, so it keeps the
+                        // whole RepoMeshNodeSchedulingStatus. Redundant nodeId dropped (the entry
+                        // already carries it).
+                        const nodeScheduling = schedulingByNode.get(nodeId);
+                        if (nodeScheduling) {
+                            const { nodeId: _omitNodeId, ...nodeSchedulingRest } = nodeScheduling;
+                            status.scheduling = nodeSchedulingRest;
+                        }
                         if (isSelfNode) {
                             status.connection = {
                                 perspective: 'selected_coordinator',
@@ -511,6 +534,19 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         branchConvergenceSummary: summarizeInlineMeshBranchConvergence(nodeStatuses),
                         ...(previewFreshness ? { previewFreshness, deployFreshness: previewFreshness } : {}),
                         nodes: nodeStatuses,
+                        // Mesh-level scheduling rollup (strategy + global cap consumption). Mirrors
+                        // the MCP `mesh_status` tool's `scheduling` block field-for-field so both
+                        // surfaces read the same runtime; per-node detail lives on each
+                        // nodes[].scheduling above.
+                        scheduling: {
+                            strategy: schedulingRuntime.strategy,
+                            maxParallelTasks: schedulingRuntime.maxParallelTasks,
+                            maxReadonlyParallelTasks: schedulingRuntime.maxReadonlyParallelTasks,
+                            activeWriteAssigned: schedulingRuntime.activeWriteAssigned,
+                            activeReadonlyAssigned: schedulingRuntime.activeReadonlyAssigned,
+                            globalWriteCapReached: schedulingRuntime.globalWriteCapReached,
+                            globalReadonlyCapReached: schedulingRuntime.globalReadonlyCapReached,
+                        },
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
                         ...(missions.length > 0 ? { missions } : {}),
