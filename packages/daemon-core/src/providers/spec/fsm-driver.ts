@@ -125,6 +125,7 @@ export interface ISpecDriver {
     getSections(): Array<{ id: string; text: string }> | null;
     getLastBusyAt(): number;
     hasIdleHoldPending(): boolean;
+    hasSeenReady(): boolean;
     getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null;
     getFsmDebug?(): unknown;
     getFsmSnapshotHistory?(): ReadonlyArray<FsmSnapshotEntry>;
@@ -465,6 +466,17 @@ export class FsmDriver implements ISpecDriver {
         // FSM has no separate idle-hold timer; min_hold_ms is the analog.
         // Report true while any outgoing transition is hold-blocked.
         return (this.lastFsmEval?.transitions ?? []).some(t => !t.holdSatisfied && t.condResult);
+    }
+    /**
+     * True once the machine has reached its first non-initial idle state (the
+     * prompt is genuinely drawn — see maybeMarkReady). The cli-adapter surfaces
+     * this on its idle status so CliProviderInstance can re-arm the queue-claim
+     * agent:ready on the first genuine ready, independent of the boot-time
+     * starting→idle one-shot (which is consumed too early for specs whose
+     * initial state already reports idle).
+     */
+    hasSeenReady(): boolean {
+        return this.readySeenOnce;
     }
     getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null {
         // Surface the busy→ready transition's stable countdown, if any, so the

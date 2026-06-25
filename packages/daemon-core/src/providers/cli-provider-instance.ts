@@ -430,6 +430,14 @@ export class CliProviderInstance implements ProviderInstance {
     private context: InstanceContext | null = null;
     private events: ProviderEvent[] = [];
     private lastStatus: string = 'starting';
+    // Idempotency guard for the queue-claim agent:ready event. agent:ready is the
+    // sole signal the mesh coordinator's tryAssignQueueTask waits on to hand a
+    // queued task to this worker. It is emitted in two places: the boot-time
+    // starting→idle one-shot, and the readySeen re-arm below. This flag makes the
+    // event fire AT MOST ONCE per session so a worker is never claimed twice and a
+    // queued task is never double-dispatched/double-injected. Whichever path fires
+    // first sets it; the other becomes a no-op.
+    private agentReadyEmitted = false;
     private generatingStartedAt: number = 0;
     private settings: Record<string, any> = {};
     private monitor: StatusMonitor;
@@ -1920,6 +1928,18 @@ export class CliProviderInstance implements ProviderInstance {
         } catch { /* adapter gone / transient — next frame retries */ }
     }
 
+    /**
+     * Emit the queue-claim agent:ready event at most once per session. Both the
+     * boot-time starting→idle one-shot and the fsmReadySeen re-arm call this; the
+     * agentReadyEmitted guard ensures the second caller is a no-op so a worker is
+     * never claimed twice and a queued task is never double-dispatched.
+     */
+    private emitAgentReadyOnce(chatTitle: string, now: number): void {
+        if (this.agentReadyEmitted) return;
+        this.agentReadyEmitted = true;
+        this.pushEvent({ event: 'agent:ready', chatTitle, timestamp: now });
+    }
+
     private detectStatusTransition(): void {
         const now = Date.now();
         // Status-change handling is a hot path: PTY output can fire it many times
@@ -2142,7 +2162,7 @@ export class CliProviderInstance implements ProviderInstance {
                     this.scheduleCompletedDebounceFlush(flushDelay);
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {
-                this.pushEvent({ event: 'agent:ready', chatTitle, timestamp: now });
+                this.emitAgentReadyOnce(chatTitle, now);
             } else if (newStatus === 'error') {
                 if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }
                 this.generatingDebouncePending = null;
@@ -2169,6 +2189,28 @@ export class CliProviderInstance implements ProviderInstance {
                 this.pushEvent({ event: 'agent:stopped', chatTitle, timestamp: now });
             }
             this.lastStatus = newStatus;
+        }
+
+        // Re-arm the queue-claim agent:ready on the FSM's first GENUINE ready.
+        //
+        // The boot-time starting→idle one-shot above is the historical claim
+        // trigger, but it is consumed too early for FSM-spec providers whose
+        // INITIAL state already reports status 'idle' (e.g. antigravity-cli): the
+        // adapter reports idle before maybeMarkReady has fired, so lastStatus
+        // advances starting→idle while the prompt is not yet drawn and the worker
+        // cannot yet claim. Subsequent state-driven idle frames are idle→idle (no
+        // status change), so the one-shot never re-fires and the worker strands its
+        // queued task — the coordinator then relaunch-loops every ~90s.
+        //
+        // The adapter surfaces fsmReadySeen=true exactly when the FSM reaches its
+        // first non-initial idle (the prompt is genuinely up). On that signal we
+        // emit agent:ready once more. emitAgentReadyOnce is idempotent (guarded by
+        // agentReadyEmitted), so providers whose boot one-shot already landed on a
+        // real ready (claude-cli / codex-cli / hermes-cli, which use a startup
+        // grace and whose initial state is not idle) treat this as a no-op — no
+        // double claim, no double task injection.
+        if (newStatus === 'idle' && adapterStatus.fsmReadySeen === true && !this.agentReadyEmitted) {
+            this.emitAgentReadyOnce(chatTitle, now);
         }
 
         this.applyProviderResponse(parsedStatus, {

@@ -61,6 +61,17 @@ export interface CliSessionStatus {
     errorReason?: string;
     providerSessionId?: string;
     /**
+     * Spec/FSM adapters only (SpecCliAdapter): true once the driver has observed
+     * its first non-initial idle state — the prompt is genuinely drawn. The
+     * legacy ProviderCliAdapter never sets it (undefined). CliProviderInstance
+     * uses it to re-arm the queue-claim agent:ready on the first genuine ready,
+     * independent of the boot-time starting→idle one-shot (which is consumed too
+     * early for specs whose initial state already reports status 'idle', e.g.
+     * antigravity-cli — without the re-arm the worker never claims its queued
+     * task and the coordinator relaunch-loops).
+     */
+    fsmReadySeen?: boolean;
+    /**
      * Timestamp (ms) of the most recent raw PTY output chunk. Advances on every
      * byte the process emits, including tool/build output that produces no
      * parsed assistant text. Liveness watchdogs use this to distinguish a real

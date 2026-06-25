@@ -206,7 +206,12 @@ export class SpecCliAdapter implements CliAdapter {
         if (state.status === 'generating') {
             return { status: 'generating', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
         }
-        return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
+        // fsmReadySeen lets CliProviderInstance re-arm the queue-claim agent:ready
+        // on the first genuine ready (prompt drawn), independent of the boot-time
+        // starting→idle one-shot that the provider-instance otherwise relies on.
+        // Surfaced only on idle so the provider-instance fires agent:ready exactly
+        // when the worker is actually ready to claim.
+        return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, fsmReadySeen: this.driver.hasSeenReady?.() ?? false, ...sessionFields };
     }
 
     private maybeRefreshNativeHistory(): void {

@@ -28,6 +28,18 @@ export interface CliAdapterStatus {
     providerSessionId?: string;
     errorMessage?: string;
     errorReason?: string;
+    /**
+     * FSM-spec adapters only: true once the driver has observed its first
+     * non-initial idle state (the prompt is genuinely drawn — see
+     * FsmDriver.maybeMarkReady / readySeenOnce). Used by CliProviderInstance to
+     * re-arm the queue-claim `agent:ready` event on the first genuine ready,
+     * independent of the boot-time starting→idle one-shot. That one-shot is
+     * consumed too early for providers whose INITIAL FSM state already reports
+     * status 'idle' (e.g. antigravity-cli), so without this re-arm the worker
+     * never claims its queued task and the coordinator relaunch-loops. Absent
+     * (undefined) for non-FSM adapters — they keep the boot one-shot behavior.
+     */
+    fsmReadySeen?: boolean;
 }
 
 export interface AcpAdapterHandle {
