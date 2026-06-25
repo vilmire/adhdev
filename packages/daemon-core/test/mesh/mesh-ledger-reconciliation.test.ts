@@ -110,7 +110,6 @@ describe('mesh-ledger-reconciliation', () => {
         const evidence = buildMeshLedgerReconciliationEvidence('mesh_test', [local, pending, failed]);
         expect(evidence.protocol).toBe('adhdev.mesh.ledger.reconciliation.v1');
         expect(evidence.sourceOfTruth.p2pOnly).toBe(true);
-        expect(evidence.sourceOfTruth.cloudD1LedgerSync).toBe(false);
         expect(evidence.totals.replicas).toBe(3);
         expect(evidence.totals.failed).toBe(1);
         expect(evidence.convergence.complete).toBe(false);

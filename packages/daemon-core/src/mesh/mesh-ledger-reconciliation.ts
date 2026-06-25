@@ -34,7 +34,6 @@ export interface MeshLedgerReconciliationEvidence {
     sourceOfTruth: {
         kind: 'coordinator_local_sqlite';
         p2pOnly: true;
-        cloudD1LedgerSync: false;
         notes: string;
     };
     replicas: MeshLedgerReplicaEvidence[];
@@ -100,7 +99,6 @@ export function buildMeshLedgerReconciliationEvidence(meshId: string, replicas: 
         sourceOfTruth: {
             kind: 'coordinator_local_sqlite',
             p2pOnly: true,
-            cloudD1LedgerSync: false,
             notes: 'Coordinator reconciles bounded slices from daemon-local SQLite event ledgers (mesh_event_ledger table) over P2P DataChannel; Cloud/D1 is not a ledger source of truth.',
         },
         replicas,
