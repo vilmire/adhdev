@@ -3727,8 +3727,9 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
   assert.equal(agentCommandCalls[0]?.targetSessionId, 'session-worker');
 });
 
-test('mesh tool registry documents the 35 exposed mesh tools including queue cancel/requeue, read-debug, remote node log fetch, direct fast-forward, daemon restart, worktree clone/remove/refine, batch refine, refine config planning, change-impact config planning, mesh init onboarding, session cleanup, stale-direct prune, reconcile-ledger, review inbox, and mission upsert/list', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 35);
+test('mesh tool registry documents the 36 exposed mesh tools including queue cancel/requeue, read-debug, remote node log fetch, direct fast-forward, daemon restart, worktree clone/remove/refine, batch refine, refine config planning, change-impact config planning, mesh init onboarding, session cleanup, stale-direct prune, reconcile-ledger, review inbox, operating-note recording, and mission upsert/list', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 36);
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_record_note'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_init'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_restart_daemon'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_review_inbox'));

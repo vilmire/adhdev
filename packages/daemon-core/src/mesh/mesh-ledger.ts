@@ -44,6 +44,11 @@ export type MeshLedgerKind =
     | 'direct_dispatch_pruned'
     | 'event_held'
     | 'task_reclaimed'
+    // Gap2-A: a coordinator-recorded operating note — a runtime-accumulated
+    // lesson (provider quirk, pattern to avoid, recovery lesson) persisted in
+    // the ledger so it survives coordinator restarts and is provider-neutral.
+    // payload: { text, category?, createdAt?, sourceCoordinator? }
+    | 'coordinator_operating_note'
     ;
 
 export interface MeshLedgerEntry {

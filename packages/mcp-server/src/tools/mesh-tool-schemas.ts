@@ -374,6 +374,25 @@ export const MESH_TASK_HISTORY_TOOL = {
     },
 };
 
+export const MESH_RECORD_NOTE_TOOL = {
+    name: 'mesh_record_note',
+    description: 'Record a durable operating note for this mesh — a runtime-accumulated lesson that future coordinators inherit. '
+        + 'Unlike Claude-only memory/CLAUDE.md, this is provider-neutral: it persists in the mesh ledger and is injected into every coordinator\'s system prompt at launch (codex, hermes, antigravity, claude alike). '
+        + 'Use it when you learn something durable: a provider quirk, a pattern to avoid, or a recovery lesson. Keep each note to one concrete, reusable fact. Not for transient task status — use missions/checkpoints for that.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            text: { type: 'string', description: 'The note — one concrete, reusable operating fact/lesson. Phrase it so a future coordinator can act on it without this conversation\'s context.' },
+            category: {
+                type: 'string',
+                enum: ['provider_quirk', 'pattern_to_avoid', 'recovery_lesson'],
+                description: 'Optional classification: provider_quirk (a provider/runtime behaves unexpectedly), pattern_to_avoid (an approach that caused problems), recovery_lesson (how a failure was recovered).',
+            },
+        },
+        required: ['text'],
+    },
+};
+
 export const MESH_RECONCILE_LEDGER_TOOL = {
     name: 'mesh_reconcile_ledger',
     description: 'Reconcile daemon-local mesh ledgers by querying bounded ledger slices over P2P/DataChannel and importing missing entries into the coordinator local JSONL ledger. Cloud/D1 is not used as a ledger source of truth.',
@@ -568,6 +587,7 @@ export const ALL_MESH_TOOLS = [
     MESH_CLEANUP_SESSIONS_TOOL,
     MESH_PRUNE_STALE_DIRECT_TOOL,
     MESH_TASK_HISTORY_TOOL,
+    MESH_RECORD_NOTE_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_MISSION_UPSERT_TOOL,
     MESH_MISSION_LIST_TOOL,

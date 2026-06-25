@@ -59,6 +59,71 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         try { return buildMissionPromptSection(id); } catch { return ''; }
                     };
 
+                    // Gap1: surface recent ledger/queue activity (recent failures +
+                    // queue depth) so a freshly-launched coordinator sees them
+                    // without first calling mesh_task_history. All cheap local reads
+                    // — no remote peer probe. Best-effort: a read failure just omits
+                    // the section, never blocks launch.
+                    const buildRecentActivityBestEffort = async (id: string) => {
+                        try {
+                            const { getLedgerSummary, readLedgerEntries } = await import('../../mesh/mesh-ledger.js');
+                            const { getMeshQueueStats } = await import('../../mesh/mesh-work-queue.js');
+                            const summary = getLedgerSummary(id);
+                            const queue = getMeshQueueStats(id);
+                            const failureEntries = readLedgerEntries(id, { kind: ['task_failed'], tail: 5 });
+                            const recentFailures = failureEntries.map((e) => {
+                                const p = (e.payload || {}) as Record<string, unknown>;
+                                const raw = typeof p.taskSummary === 'string' ? p.taskSummary
+                                    : typeof p.message === 'string' ? p.message
+                                    : typeof p.error === 'string' ? p.error
+                                    : '';
+                                const summaryText = raw.length > 160 ? `${raw.slice(0, 160)}…` : raw;
+                                return {
+                                    timestamp: e.timestamp,
+                                    nodeId: e.nodeId,
+                                    summary: summaryText,
+                                };
+                            });
+                            return {
+                                recentFailures,
+                                recentFailureCount: summary.recentFailures,
+                                pendingTasks: queue.pending,
+                                assignedTasks: queue.assigned,
+                                stalledTasks: summary.taskStalled,
+                                lastActivityAt: summary.lastActivityAt,
+                            };
+                        } catch { return undefined; }
+                    };
+
+                    // Gap2-A: load accumulated operating notes (provider-neutral
+                    // lessons) from the ledger so they ride into the prompt. Newest
+                    // last; cap to the most recent 20 so the section stays lean.
+                    // Best-effort: a read failure just omits the section.
+                    const buildOperatingNotesBestEffort = async (id: string) => {
+                        try {
+                            const { readLedgerEntries } = await import('../../mesh/mesh-ledger.js');
+                            const noteEntries = readLedgerEntries(id, { kind: ['coordinator_operating_note'], tail: 20 });
+                            const notes = noteEntries
+                                .map((e) => {
+                                    const p = (e.payload || {}) as Record<string, unknown>;
+                                    const text = typeof p.text === 'string' ? p.text.trim() : '';
+                                    if (!text) return null;
+                                    const category: 'provider_quirk' | 'pattern_to_avoid' | 'recovery_lesson' | undefined =
+                                        p.category === 'provider_quirk' || p.category === 'pattern_to_avoid' || p.category === 'recovery_lesson'
+                                            ? p.category
+                                            : undefined;
+                                    return {
+                                        text,
+                                        category,
+                                        createdAt: typeof p.createdAt === 'string' ? p.createdAt : e.timestamp,
+                                        sourceCoordinator: typeof p.sourceCoordinator === 'string' ? p.sourceCoordinator : undefined,
+                                    };
+                                })
+                                .filter((n): n is NonNullable<typeof n> => n !== null);
+                            return notes.length ? notes : undefined;
+                        } catch { return undefined; }
+                    };
+
                     // Support inline mesh data from cloud (bypasses local meshes.json lookup)
                     let mesh: any;
                     if (args?.inlineMesh && typeof args.inlineMesh === 'object') {
@@ -164,7 +229,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         // Build coordinator prompt first — fail closed on errors.
                         let cliCmdSystemPrompt = '';
                         try {
-                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id) });
+                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildOperatingNotesBestEffort(mesh.id) });
                         } catch (error: any) {
                             const message = error?.message || String(error);
                             LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
@@ -382,7 +447,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // broken mesh state is visible instead of silently launching with weaker rules.
                     let systemPrompt = '';
                     try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id) });
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildOperatingNotesBestEffort(mesh.id) });
                     } catch (error: any) {
                         const message = error?.message || String(error);
                         LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);

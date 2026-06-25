@@ -1902,6 +1902,7 @@ export {
     MESH_REMOVE_NODE_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
     MESH_TASK_HISTORY_TOOL,
+    MESH_RECORD_NOTE_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_PRUNE_STALE_DIRECT_TOOL,
     MESH_REFINE_NODE_TOOL,
@@ -2554,6 +2555,42 @@ export async function meshTaskHistory(
         summary,
         ...(taskStats ? { taskStats } : {}),
         ...(pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}),
+    }, null, 2);
+}
+
+export async function meshRecordNote(
+    ctx: MeshContext,
+    args: { text?: string; category?: string },
+): Promise<string> {
+    const { mesh } = ctx;
+    const text = typeof args.text === 'string' ? args.text.trim() : '';
+    if (!text) {
+        return JSON.stringify({ success: false, error: 'text required' }, null, 2);
+    }
+    const category = args.category === 'provider_quirk' || args.category === 'pattern_to_avoid' || args.category === 'recovery_lesson'
+        ? args.category
+        : undefined;
+    const createdAt = new Date().toISOString();
+    // sourceCoordinator: best-effort identity of the recording coordinator so a
+    // future coordinator can attribute the note. Session id is the most precise;
+    // fall back to the daemon/hostname.
+    const sourceCoordinator = ctx.coordinatorSessionId || ctx.localDaemonId || ctx.coordinatorHostname || undefined;
+    const entry = appendLedgerEntry(mesh.id, {
+        kind: 'coordinator_operating_note',
+        ...(sourceCoordinator ? { sessionId: sourceCoordinator } : {}),
+        payload: {
+            text,
+            ...(category ? { category } : {}),
+            createdAt,
+            ...(sourceCoordinator ? { sourceCoordinator } : {}),
+        },
+    });
+    return JSON.stringify({
+        success: true,
+        meshId: mesh.id,
+        noteId: entry.id,
+        recorded: { text, category: category ?? null, createdAt },
+        note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.',
     }, null, 2);
 }
 

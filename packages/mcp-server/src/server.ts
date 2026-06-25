@@ -43,7 +43,7 @@ import {
   meshCloneNode, meshRemoveNode, meshRefineNode,
   meshRefineConfigSchema, meshValidateRefineConfig, meshSuggestRefineConfig, meshInit, meshRefinePlan, meshRefineBatch,
   meshChangeImpactConfigSchema, meshValidateChangeImpactConfig, meshSuggestChangeImpactConfig,
-  meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshReconcileLedger, meshMissionUpsert,
+  meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshRecordNote, meshReconcileLedger, meshMissionUpsert,
   meshMissionList, meshReviewInbox
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
@@ -228,6 +228,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_cleanup_sessions': text = await meshCleanupSessions(meshCtx, a as any); break;
           case 'mesh_prune_stale_direct': text = await meshPruneStaleDirect(meshCtx, a as any); break;
           case 'mesh_task_history': text = await meshTaskHistory(meshCtx, a as any); break;
+          case 'mesh_record_note': text = await meshRecordNote(meshCtx, a as any); break;
           case 'mesh_reconcile_ledger': text = await meshReconcileLedger(meshCtx, a as any); break;
           case 'mesh_mission_upsert': text = await meshMissionUpsert(meshCtx, a as any); break;
           case 'mesh_mission_list': text = await meshMissionList(meshCtx, a as any); break;

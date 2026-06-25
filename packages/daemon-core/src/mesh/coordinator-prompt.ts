@@ -33,6 +33,49 @@ import type {
 } from '../repo-mesh-types.js';
 import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
 
+/**
+ * Cheap, locally-derived "what just happened" snapshot for the coordinator
+ * prompt. Built at launch from the local ledger + work-queue stats — no remote
+ * peer probe. Surfaces the gap a fresh coordinator otherwise misses: it can't
+ * see recent failures / queue depth until it manually calls mesh_task_history.
+ *
+ * All fields are optional so callers that have nothing to report (or fail to
+ * read the ledger) simply omit the section — the prompt output stays identical
+ * to the pre-activity form in that case.
+ */
+export interface CoordinatorRecentActivity {
+    /** task_failed entries from the recent window, newest last. */
+    recentFailures?: Array<{
+        timestamp?: string;
+        nodeId?: string;
+        /** Short task title/message, already truncated by the caller. */
+        summary?: string;
+    }>;
+    /** Count of task_failed entries inside the recent (30-min) window. */
+    recentFailureCount?: number;
+    /** Pending (unclaimed) tasks in the work queue. */
+    pendingTasks?: number;
+    /** Assigned-but-not-yet-terminal tasks in the work queue. */
+    assignedTasks?: number;
+    /** Stalled tasks recorded in the ledger. */
+    stalledTasks?: number;
+    /** ISO timestamp of the most recent ledger activity, if any. */
+    lastActivityAt?: string | null;
+}
+
+/**
+ * One coordinator operating note — a runtime-accumulated lesson (provider
+ * quirk, pattern to avoid, recovery lesson) persisted in the ledger so it
+ * survives coordinator restarts and is provider-neutral (visible to codex /
+ * hermes / antigravity coordinators, not just Claude's memory).
+ */
+export interface CoordinatorOperatingNote {
+    text: string;
+    category?: 'provider_quirk' | 'pattern_to_avoid' | 'recovery_lesson';
+    createdAt?: string;
+    sourceCoordinator?: string;
+}
+
 // ─── Prompt Builder ─────────────────────────────
 
 export interface CoordinatorPromptContext {
@@ -46,6 +89,18 @@ export interface CoordinatorPromptContext {
      * stays identical to the pre-M3 form in that case.
      */
     missionSection?: string;
+    /**
+     * Gap1: recent ledger/queue activity surfaced so a freshly-launched
+     * coordinator sees recent failures + queue depth without first calling
+     * mesh_task_history. Omitted → no "## Recent Activity" section.
+     */
+    recentActivity?: CoordinatorRecentActivity;
+    /**
+     * Gap2-A: runtime-accumulated operating notes (provider-neutral lessons)
+     * read from the ledger at launch. Omitted/empty → no "## Operating Notes"
+     * section.
+     */
+    operatingNotes?: CoordinatorOperatingNote[];
 }
 
 /**
@@ -132,6 +187,14 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
         sections.push(ctx.missionSection.trim());
     }
 
+    // ── Recent Activity (Gap1) — only present when there's something to show ──
+    const recentActivity = buildRecentActivitySection(ctx.recentActivity);
+    if (recentActivity) sections.push(recentActivity);
+
+    // ── Operating Notes (Gap2-A) — only present when notes exist ──
+    const operatingNotes = buildOperatingNotesSection(ctx.operatingNotes);
+    if (operatingNotes) sections.push(operatingNotes);
+
     // ── Policy ──
     sections.push(buildPolicySection({ ...DEFAULT_MESH_POLICY, ...(mesh.policy || {}) }));
 
@@ -187,6 +250,8 @@ function readUserPromptFile(cliType: string | undefined, suffix: string): string
  *   {{cliType}}         — coordinator CLI type or empty
  *   {{nodes}}           — full node section (status if known, otherwise config)
  *   {{mission}}         — active mission summary section (empty when none)
+ *   {{recentActivity}}  — recent failures + queue depth section (empty when none)
+ *   {{operatingNotes}}  — accumulated operating notes section (empty when none)
  *   {{policy}}          — full policy section
  *   {{tools}}           — the canonical tools table
  *   {{workflow}}        — the canonical orchestration workflow
@@ -211,6 +276,8 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         cliType: coordinatorCliType || '',
         nodes: nodesSection,
         mission: ctx.missionSection?.trim() || '',
+        recentActivity: buildRecentActivitySection(ctx.recentActivity) || '',
+        operatingNotes: buildOperatingNotesSection(ctx.operatingNotes) || '',
         policy: buildPolicySection({ ...DEFAULT_MESH_POLICY, ...(mesh.policy || {}) }),
         tools: TOOLS_SECTION,
         workflow: WORKFLOW_SECTION,
@@ -303,6 +370,83 @@ function indentFollowing(text: string, pad: string): string {
     return [lines[0], ...lines.slice(1).map(l => pad + l)].join('\n');
 }
 
+/**
+ * Gap1 — render the "## Recent Activity" section from the locally-derived
+ * activity snapshot. Returns '' (no section) when there's nothing worth
+ * surfacing: no recent failures, no queued work, no stalls. This keeps a quiet
+ * mesh's prompt identical to the pre-activity form.
+ */
+function buildRecentActivitySection(activity?: CoordinatorRecentActivity): string {
+    if (!activity) return '';
+    const failures = Array.isArray(activity.recentFailures) ? activity.recentFailures : [];
+    const pending = Number.isFinite(activity.pendingTasks) ? Number(activity.pendingTasks) : 0;
+    const assigned = Number.isFinite(activity.assignedTasks) ? Number(activity.assignedTasks) : 0;
+    const stalled = Number.isFinite(activity.stalledTasks) ? Number(activity.stalledTasks) : 0;
+    const recentFailureCount = Number.isFinite(activity.recentFailureCount)
+        ? Number(activity.recentFailureCount)
+        : failures.length;
+
+    // Nothing actionable to show → omit the section entirely.
+    if (failures.length === 0 && pending === 0 && assigned === 0 && stalled === 0 && recentFailureCount === 0) {
+        return '';
+    }
+
+    const lines: string[] = ['## Recent Activity', ''];
+    lines.push('A snapshot of this mesh\'s recent ledger/queue state at launch. Use it to decide what needs attention first; call `mesh_task_history` / `mesh_view_queue` for full detail.');
+    lines.push('');
+
+    const counts: string[] = [];
+    if (pending > 0) counts.push(`**${pending}** pending`);
+    if (assigned > 0) counts.push(`**${assigned}** assigned`);
+    if (stalled > 0) counts.push(`**${stalled}** stalled`);
+    if (recentFailureCount > 0) counts.push(`**${recentFailureCount}** failed in the last 30 min`);
+    if (counts.length) lines.push(`- Queue/ledger: ${counts.join(', ')}.`);
+    if (activity.lastActivityAt) lines.push(`- Last ledger activity: ${activity.lastActivityAt}.`);
+
+    if (failures.length > 0) {
+        // Newest first, capped to the 5 most recent so the prompt stays lean.
+        const recent = failures.slice(-5).reverse();
+        lines.push('', 'Recent failures (newest first):');
+        for (const f of recent) {
+            const when = f.timestamp ? `${f.timestamp} ` : '';
+            const node = f.nodeId ? `node \`${f.nodeId}\`` : 'unknown node';
+            const summary = (f.summary || '').trim();
+            lines.push(`- ${when}${node}${summary ? ` — ${summary}` : ''}`);
+        }
+        lines.push('', '_Check `mesh_task_history` before retrying; repeated failures on the same node mean reassign or escalate, not retry._');
+    }
+
+    return lines.join('\n');
+}
+
+/**
+ * Gap2-A — render the "## Operating Notes" section from accumulated coordinator
+ * notes. Returns '' when there are none, so a mesh that has never recorded a
+ * note gets the unchanged prompt. Notes are runtime-accumulated lessons that
+ * persist across coordinator restarts and are provider-neutral.
+ */
+function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[]): string {
+    const valid = Array.isArray(notes)
+        ? notes.filter(n => n && typeof n.text === 'string' && n.text.trim())
+        : [];
+    if (valid.length === 0) return '';
+
+    const categoryLabel: Record<string, string> = {
+        provider_quirk: 'provider quirk',
+        pattern_to_avoid: 'pattern to avoid',
+        recovery_lesson: 'recovery lesson',
+    };
+
+    const lines: string[] = ['## Operating Notes', ''];
+    lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_record_note`. Treat them as accumulated operating knowledge — apply them. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_record_note` so future coordinators inherit it.');
+    lines.push('');
+    for (const n of valid) {
+        const cat = n.category && categoryLabel[n.category] ? `[${categoryLabel[n.category]}] ` : '';
+        lines.push(`- ${cat}${n.text.trim()}`);
+    }
+    return lines.join('\n');
+}
+
 function buildPolicySection(policy: RepoMeshPolicy): string {
     const rules: string[] = [];
     if (policy.requirePreTaskCheckpoint) rules.push('- Create a git checkpoint **before** starting each task');
@@ -340,6 +484,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_read_chat\` | Read recent chat messages from a delegated agent session |
 | \`mesh_read_debug\` | Collect a daemon-side chat/parser debug bundle for a session |
 | \`mesh_task_history\` | Read the task ledger — dispatches, completions, failures. Use to understand what has been done before deciding next steps |
+| \`mesh_record_note\` | Record a durable, provider-neutral operating note (provider quirk / pattern to avoid / recovery lesson). Future coordinators see it under "## Operating Notes" at launch |
 | \`mesh_git_status\` | Check git status on a specific node |
 | \`mesh_read_node_logs\` | Fetch a remote node's daemon log tail directly over P2P (grep/since/byte-bounded, secrets redacted) — no session/PowerShell needed to debug a node's daemon |
 | \`mesh_fast_forward_node\` | Safely dry-run or explicitly execute an obvious clean fast-forward without launching an agent session |

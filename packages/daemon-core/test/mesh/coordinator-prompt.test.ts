@@ -252,5 +252,98 @@ describe('Repo Mesh coordinator prompt', () => {
     // Existing anti-polling rules stay intact alongside the mission section.
     expect(prompt).toContain('Do **not** poll')
   })
+
+  const baseMesh = () => ({
+    id: 'mesh_activity',
+    name: 'ADHDev',
+    repoIdentity: 'github.com/acme/adhdev',
+    nodes: [{ id: 'node_1', workspace: '/repo', userOverrides: {}, policy: {} }],
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  })
+
+  // ── Gap1: Recent Activity section ──
+
+  it('renders a Recent Activity section from the supplied ledger/queue snapshot', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      coordinatorCliType: 'claude-cli',
+      recentActivity: {
+        recentFailures: [
+          { timestamp: '2026-06-25T01:00:00Z', nodeId: 'node_1', summary: 'typecheck failed' },
+          { timestamp: '2026-06-25T01:05:00Z', nodeId: 'node_2', summary: 'merge conflict' },
+        ],
+        recentFailureCount: 2,
+        pendingTasks: 3,
+        assignedTasks: 1,
+        stalledTasks: 0,
+        lastActivityAt: '2026-06-25T01:05:00Z',
+      },
+    })
+
+    expect(prompt).toContain('## Recent Activity')
+    expect(prompt).toContain('**3** pending')
+    expect(prompt).toContain('**1** assigned')
+    expect(prompt).toContain('**2** failed in the last 30 min')
+    expect(prompt).toContain('Recent failures (newest first):')
+    // Newest first — the 01:05 failure should precede the 01:00 one.
+    expect(prompt.indexOf('merge conflict')).toBeLessThan(prompt.indexOf('typecheck failed'))
+    expect(prompt).toContain('node `node_1`')
+  })
+
+  it('omits the Recent Activity section when there is nothing to surface', () => {
+    const quiet = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      recentActivity: { recentFailures: [], recentFailureCount: 0, pendingTasks: 0, assignedTasks: 0, stalledTasks: 0, lastActivityAt: null },
+    })
+    expect(quiet).not.toContain('## Recent Activity')
+
+    const absent = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+    expect(absent).not.toContain('## Recent Activity')
+  })
+
+  // ── Gap2-A: Operating Notes section ──
+
+  it('renders an Operating Notes section from accumulated notes', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      operatingNotes: [
+        { text: 'codex-cli swallows bare CR on win32', category: 'provider_quirk', createdAt: '2026-06-25T00:00:00Z' },
+        { text: 'do not merge a sibling worktree while another is in flight', category: 'pattern_to_avoid' },
+        { text: '   ' as any }, // whitespace-only is dropped
+      ],
+    })
+
+    expect(prompt).toContain('## Operating Notes')
+    expect(prompt).toContain('mesh_record_note')
+    expect(prompt).toContain('[provider quirk] codex-cli swallows bare CR on win32')
+    expect(prompt).toContain('[pattern to avoid] do not merge a sibling worktree')
+  })
+
+  it('omits the Operating Notes section when there are no usable notes', () => {
+    // The tool table mentions "## Operating Notes" as descriptive text, so assert
+    // on the rendered section heading (heading line followed by a blank line).
+    const HEADING = '## Operating Notes\n'
+    expect(buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })).not.toContain(HEADING)
+    expect(buildCoordinatorSystemPrompt({ mesh: baseMesh() as any, operatingNotes: [] })).not.toContain(HEADING)
+    expect(buildCoordinatorSystemPrompt({ mesh: baseMesh() as any, operatingNotes: [{ text: '  ' }] })).not.toContain(HEADING)
+  })
+
+  it('expands {{recentActivity}} and {{operatingNotes}} placeholders in a mesh-level override', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        ...baseMesh(),
+        coordinator: { systemPromptOverride: 'CUSTOM\n{{recentActivity}}\n{{operatingNotes}}' },
+      } as any,
+      recentActivity: { pendingTasks: 5, recentFailures: [], recentFailureCount: 0, assignedTasks: 0, stalledTasks: 0, lastActivityAt: null },
+      operatingNotes: [{ text: 'a durable lesson', category: 'recovery_lesson' }],
+    })
+
+    expect(prompt).toContain('CUSTOM')
+    expect(prompt).toContain('## Recent Activity')
+    expect(prompt).toContain('**5** pending')
+    expect(prompt).toContain('## Operating Notes')
+    expect(prompt).toContain('[recovery lesson] a durable lesson')
+  })
 })
 
