@@ -28,6 +28,12 @@ import {
     type PtyTransportFactory,
 } from './pty-transport.js';
 import {
+    WIN32_PTY_WRITE_CHUNK_CHARS,
+    WIN32_PTY_WRITE_CHUNK_GAP_MS,
+    chunkPreservingSurrogates,
+    shouldChunkWin32Write,
+} from './pty-write-chunking.js';
+import {
     buildCliScreenSnapshot,
     compactPromptText,
     estimatePromptDisplayLines,
@@ -744,6 +750,11 @@ export class ProviderCliAdapter implements CliAdapter {
             `[${this.cliType}] Startup settled (${trigger}, stableMs=${stableMs}, modal=${!!startupModal}) providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'} scriptsPath=${this.providerResolutionMeta.scriptsPath || '-'}`
         );
         this.onStatusChange?.();
+        // Readiness barrier flush: a message queued because the session was not yet
+        // ready (sendMessageNow's not_ready_pending_prompt path) has no turn-completion
+        // event to trigger its flush. Now that the interactive prompt is up and we are
+        // idle, drain it. No-op when the queue is empty or we settled to a modal.
+        if (!startupModal) this.schedulePendingOutboundFlush();
     }
 
     private scheduleStartupSettleCheck(): void {
@@ -1153,7 +1164,40 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private async writeToPty(data: string): Promise<void> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
+        // win32 ConPTY paced write: a single unbounded write beyond ~1KB overflows
+        // the console input pipe and drops LEADING bytes (the "long message gets
+        // truncated, head lost / tail kept" failure). Split a large payload into
+        // bounded, surrogate-safe chunks written with a short gap so the console
+        // reader keeps up. Small payloads (the common case — short prompts, lone
+        // submit keys) still go out in a single write.
+        //
+        // The submit key, when present, is the TAIL of `data` (callers pass
+        // `body + sendKey` for the atomic-submit paths). Because we chunk the
+        // combined string, the submit key always rides in the SAME final write as
+        // the body's tail — the win32 invariant that ConPTY recognizes it as a
+        // submit — and is never emitted before the whole body has been written
+        // (no partial-body submit). Body-only writes (wait_for_echo strategy) have
+        // their submit key sent separately by the caller afterwards, unchanged.
+        if (process.platform === 'win32' && shouldChunkWin32Write(data.length)) {
+            await this.writeWin32Chunked(data);
+            return;
+        }
         await this.ptyProcess.write(data);
+    }
+
+    /** Write `data` to the PTY in bounded, surrogate-safe chunks with a short
+     *  inter-chunk gap (win32 paced write). Awaits each chunk's write and the gap
+     *  so the returned promise resolves only after the FINAL chunk (carrying any
+     *  trailing submit key) has been written. */
+    private async writeWin32Chunked(data: string): Promise<void> {
+        const chunks = chunkPreservingSurrogates(data, WIN32_PTY_WRITE_CHUNK_CHARS);
+        for (let i = 0; i < chunks.length; i += 1) {
+            if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
+            await this.ptyProcess.write(chunks[i]);
+            if (i + 1 < chunks.length) {
+                await new Promise<void>(resolve => setTimeout(resolve, WIN32_PTY_WRITE_CHUNK_GAP_MS));
+            }
+        }
     }
 
     private resetPendingSendState(reason: string): void {
@@ -1472,7 +1516,24 @@ export class ProviderCliAdapter implements CliAdapter {
                 LOG.info('CLI', `[${this.cliType}] sendMessage recovered idle prompt readiness`);
             }
         }
-        if (!this.ready) throw new Error(`${this.cliName} not ready (status: ${this.engine.currentStatus})`);
+        if (!this.ready) {
+            // Readiness barrier (queue-until-ready). A task dispatched the instant a
+            // freshly-spawned session is launched can arrive BEFORE the PTY prints its
+            // interactive prompt (this.ready flips ~2-6s later). Previously this threw
+            // "not ready" and the delegated-task delivery promise requeued the task,
+            // which on win32 raced the auto-launch cooldown and could strand the worker
+            // idle with no work (the "first big message lost" failure). Instead, when the
+            // caller allows queueing, BUFFER the message in the pending-outbound queue and
+            // return — the startup-settle path flips this.ready and flushes the queue once
+            // the prompt is actually up (see resolveStartupState → flushPendingOutboundQueue),
+            // so the message is delivered late rather than dropped. A non-queueable caller
+            // (e.g. an internal flush) still throws so it isn't silently swallowed.
+            if (allowQueue) {
+                this.enqueuePendingOutboundMessage(text, 'not_ready_pending_prompt');
+                return;
+            }
+            throw new Error(`${this.cliName} not ready (status: ${this.engine.currentStatus})`);
+        }
         const parsedSessionStatus = typeof parsedStatusBeforeSend?.status === 'string'
             ? String(parsedStatusBeforeSend.status)
             : '';

@@ -38,6 +38,11 @@ import { loadFsmSpec } from './fsm-loader.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import type { Control, DelegateTrigger } from './types.js';
 import { LOG } from '../../logging/logger.js';
+import {
+    WIN32_PTY_WRITE_CHUNK_CHARS,
+    WIN32_PTY_WRITE_CHUNK_GAP_MS,
+    chunkPreservingSurrogates as chunkPreservingSurrogatesShared,
+} from '../../cli-adapters/pty-write-chunking.js';
 
 // ── Shared driver types (formerly in driver.ts) ───────────────────────────
 
@@ -169,12 +174,9 @@ const WIN32_SUBMIT_MAX_RESENDS = 14;
 // cadence while it waits for the body to echo.
 const WIN32_SUBMIT_SETTLE_MS = 500;
 const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
-// Defensive paced PTY write. A single unbounded ConPTY write can overflow the
-// input pipe and drop leading bytes; split a large body into bounded chunks with a
-// short inter-chunk gap so the console input buffer keeps up. Small bodies still
-// write in one shot.
-const WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
-const WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
+// Defensive paced PTY write tuning (WIN32_PTY_WRITE_CHUNK_CHARS / _GAP_MS) and the
+// surrogate-safe splitter now live in the shared pty-write-chunking module so this
+// driver and the legacy ProviderCliAdapter cannot drift apart — see the import above.
 // Echo-gate for the win32 FIRST submit CR (supersedes the bare output-quiet settle).
 // The body write can race claude-cli's boot — its stdin reader is not wired until the
 // composer renders (~5–7s in, later under load), so a too-early write is buffered and
@@ -202,26 +204,11 @@ export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text:
     return Math.max(spec, SUBMIT_DELAY_FLOOR_MS + linesBonus);
 }
 
-/** Split `text` into chunks of at most `size` UTF-16 units without ever cutting
- *  between a high and low surrogate (which would corrupt an astral char — emoji,
- *  etc. — on the UTF-8 PTY write). */
-export function chunkPreservingSurrogates(text: string, size: number): string[] {
-    const chunks: string[] = [];
-    let offset = 0;
-    while (offset < text.length) {
-        let end = Math.min(text.length, offset + size);
-        if (end < text.length) {
-            const code = text.charCodeAt(end - 1);
-            // Boundary lands on a high surrogate → pull back one so the pair stays
-            // together in the next chunk.
-            if (code >= 0xd800 && code <= 0xdbff) end -= 1;
-        }
-        if (end <= offset) end = Math.min(text.length, offset + size); // size 1 on a lone surrogate
-        chunks.push(text.slice(offset, end));
-        offset = end;
-    }
-    return chunks;
-}
+/** Re-export of the shared surrogate-safe splitter so existing imports of
+ *  `chunkPreservingSurrogates` from this module keep working. The implementation
+ *  lives in ../../cli-adapters/pty-write-chunking so the spec driver and the
+ *  legacy adapter share one definition. */
+export const chunkPreservingSurrogates = chunkPreservingSurrogatesShared;
 
 export function guessExt(mime: string): string {
     if (/png/i.test(mime)) return '.png';

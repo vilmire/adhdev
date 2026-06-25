@@ -133,6 +133,30 @@ interface DeliverTaskContext {
     sourceCoordinatorDaemonId?: string;
 }
 
+// Readiness barrier for the LOCAL auto-launch path. A just-spawned CLI session is
+// not interactive until its PTY prints the input prompt (the adapter flips
+// isReady() / settles to idle ~2-6s later). Poll the local adapter until it reports
+// ready (or idle), bounded by a generous timeout so a slow/contended boot still
+// lands, and a hard cap so a session that never becomes interactive doesn't block the
+// reconcile loop forever (the adapter's queue-until-ready path is the backstop then).
+const LOCAL_LAUNCH_READY_TIMEOUT_MS = 15_000;
+const LOCAL_LAUNCH_READY_POLL_MS = 100;
+
+async function waitForLocalSessionReady(components: DaemonComponents, sessionId: string): Promise<void> {
+    const adapter = components.cliManager?.adapters?.get(sessionId) as
+        | { isReady?: () => boolean; currentStatus?: string }
+        | undefined;
+    // No locally-resolvable adapter (e.g. a remote/forwarded session that somehow
+    // reached this branch) → nothing to wait on; let dispatch proceed.
+    if (!adapter || typeof adapter.isReady !== 'function') return;
+    const deadline = Date.now() + LOCAL_LAUNCH_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        if (adapter.isReady() || adapter.currentStatus === 'idle') return;
+        await new Promise<void>(resolve => setTimeout(resolve, LOCAL_LAUNCH_READY_POLL_MS));
+    }
+    LOG.warn('MeshQueue', `Auto-launched session ${sessionId} not interactive after ${LOCAL_LAUNCH_READY_TIMEOUT_MS}ms; dispatching anyway (adapter queue-until-ready will buffer)`);
+}
+
 // CONS scope 3: the SINGLE source of truth for dispatching a claimed task to its
 // session. The remote (P2P dispatchMeshCommand) and local (cliManager.handleCliCommand)
 // branches differ ONLY in the transport call — the delivery record, the delivered/failed
@@ -1130,6 +1154,16 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     return false;
                 }
                 markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId });
+                // Readiness barrier: a freshly-spawned local CLI session is NOT yet
+                // interactive — its PTY prints the input prompt (and the adapter flips
+                // isReady()) only ~2-6s after launch. Dispatching the task immediately
+                // pushes the first (often large) message into a not-yet-ready PTY, which
+                // could throw "not ready" and bounce the task through requeue (on win32
+                // this raced the auto-launch cooldown and stranded the worker idle).
+                // Await interactive readiness before claiming/dispatching so the very
+                // first message lands cleanly. The adapter's queue-until-ready path is the
+                // backstop if readiness is reported late; this just avoids the churn.
+                await waitForLocalSessionReady(components, sessionId);
                 tryAssignQueueTask(components, meshId, nodeId, sessionId, resolved.providerType);
                 return true;
             } catch (e: any) {
