@@ -426,6 +426,25 @@ export class CliProviderInstance implements ProviderInstance {
      */
     private static readonly AUTO_APPROVE_GATE_HYSTERESIS_MS = 1500;
 
+    /**
+     * STATUS-MISMATCH: upper bound on how long the auto-approve→`generating` SURFACE
+     * mask may hide a worker's `waiting_approval` (status + activeModal) before we give
+     * up and surface the real prompt. The mask exists because auto-approve is expected
+     * to resolve the modal momentarily; but if it STALLS without ever calling
+     * resolveModal — the modal signature never settles for AUTO_APPROVE_SETTLE_MS (a
+     * perpetually-flapping/streaming prompt), no concrete modal is ever captured, or the
+     * modal is a picker/non-affirmative we never auto-pick — the mask would persist
+     * forever and read_chat / mesh_status / the dashboard would NEVER see the pending
+     * approval (the coordinator cannot mesh_approve what it cannot see). Once an episode
+     * exceeds this bound we stop masking. Generously larger than
+     * AUTO_APPROVE_SETTLE_MS (600) + AUTO_APPROVE_GATE_HYSTERESIS_MS (1500) so a
+     * legitimately slow-settling / blip-flapping prompt is never unmasked early; a
+     * genuine never-resolving stall surfaces within this window. The settle gate keeps
+     * running underneath, so a prompt that finally stabilises still auto-approves, and
+     * mesh_approve (raw FSM, unmasked) works throughout.
+     */
+    private static readonly AUTO_APPROVE_MASK_STALL_MS = 4500;
+
     private adapter: ProviderCliAdapter;
     private context: InstanceContext | null = null;
     private events: ProviderEvent[] = [];
@@ -459,6 +478,14 @@ export class CliProviderInstance implements ProviderInstance {
     // a settle gate was in progress. Drives AUTO_APPROVE_GATE_HYSTERESIS_MS so a
     // brief generating flip does not immediately wipe the settle clock.
     private autoApproveInactiveSince = 0;
+    // STATUS-MISMATCH: wall-clock when the CURRENT auto-approve episode (waiting_approval
+    // + shouldAutoApprove) first began wanting to mask. Unlike pendingAutoApprovalSince it
+    // is NOT reset when the modal signature changes (a still-streaming/flapping prompt) and
+    // survives the same hysteresis blips the settle gate does, so it measures the TRUE age
+    // of an unresolved auto-approve. Once it exceeds AUTO_APPROVE_MASK_STALL_MS the surface
+    // mask is dropped so the real waiting_approval surfaces. Cleared when the episode ends
+    // (modal genuinely gone, manual attendance takes over, or auto-approve fires).
+    private autoApproveMaskSince = 0;
     // Provider-common manual-attendance signal: while a human is actively driving
     // this session from the dashboard, auto-approve holds so they can take manual
     // control. Background mesh workers are never attended → delegated auto-approve
@@ -696,7 +723,13 @@ export class CliProviderInstance implements ProviderInstance {
             this.provider,
             typeof adapterStatus?.providerSessionId === 'string' ? adapterStatus.providerSessionId : '',
         );
-        const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, Date.now());
+        const nowMs = Date.now();
+        // STATUS-MISMATCH: maybeAutoApproveStatus still runs for its side effects (settle gate,
+        // resolveModal fire), but the SURFACE mask is dropped once the episode has stalled past
+        // AUTO_APPROVE_MASK_STALL_MS — otherwise a never-settling auto-approve hides the worker's
+        // waiting_approval + modal from read_chat/mesh_status/dashboard forever.
+        const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, nowMs)
+            && !this.autoApproveMaskStalled(nowMs);
         const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
         let visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
             ? 'error'
@@ -884,7 +917,10 @@ export class CliProviderInstance implements ProviderInstance {
 
     getHotChatSessionState(): HotChatSessionState {
         const adapterStatus = this.adapter.getStatus({ allowParse: false });
-        const autoApproveActive = this.autoApproveEffectivelyActive(adapterStatus.status);
+        const nowMs = Date.now();
+        // STATUS-MISMATCH: drop the mask once the auto-approve episode has stalled (see getState).
+        const autoApproveActive = this.autoApproveEffectivelyActive(adapterStatus.status, nowMs)
+            && !this.autoApproveMaskStalled(nowMs);
         const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
         const visibleStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status;
         const runtime = this.adapter.getRuntimeMetadata();
@@ -900,7 +936,10 @@ export class CliProviderInstance implements ProviderInstance {
 
     getSessionModalState(sessionId?: string): SessionModalState {
         const adapterStatus = this.adapter.getStatus({ allowParse: true });
-        const autoApproveActive = this.autoApproveEffectivelyActive(adapterStatus.status);
+        const nowMs = Date.now();
+        // STATUS-MISMATCH: drop the mask once the auto-approve episode has stalled (see getState).
+        const autoApproveActive = this.autoApproveEffectivelyActive(adapterStatus.status, nowMs)
+            && !this.autoApproveMaskStalled(nowMs);
         const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
         const visibleStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status;
         const dirName = workingDirBasename(this.workingDir);
@@ -1045,8 +1084,11 @@ export class CliProviderInstance implements ProviderInstance {
         }
         // A session whose auto-approve is held by manual attendance IS parked on a
         // modal awaiting the human — autoApproveEffectivelyActive folds that in, so
-        // the mesh force-inject guard correctly treats it as modal-parked.
-        if (adapterStatus.status === 'waiting_approval' && !this.autoApproveEffectivelyActive(adapterStatus.status)) {
+        // the mesh force-inject guard correctly treats it as modal-parked. STATUS-MISMATCH:
+        // a STALLED auto-approve (never resolving) is likewise effectively parked — treat it
+        // as modal-parked so its events are held/surfaced rather than masked behind generating.
+        if (adapterStatus.status === 'waiting_approval'
+            && (!this.autoApproveEffectivelyActive(adapterStatus.status) || this.autoApproveMaskStalled())) {
             return 'waiting_approval';
         }
         return null;
@@ -1750,6 +1792,9 @@ export class CliProviderInstance implements ProviderInstance {
             this.pendingAutoApprovalSignature = '';
             this.pendingAutoApprovalSince = 0;
             this.autoApproveInactiveSince = 0;
+            // Manual attendance takes over — the modal stays surfaced (maybeAutoApproveStatus
+            // returns false), so end the mask episode.
+            this.autoApproveMaskSince = 0;
             if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
             this.autoApproveSettleTimer = setTimeout(() => {
                 this.autoApproveSettleTimer = null;
@@ -1791,12 +1836,19 @@ export class CliProviderInstance implements ProviderInstance {
             this.pendingAutoApprovalSignature = '';
             this.pendingAutoApprovalSince = 0;
             this.autoApproveInactiveSince = 0;
+            // Modal has genuinely been gone past the hysteresis window → the episode ended;
+            // end the mask episode too (a later approval starts a fresh stall clock).
+            this.autoApproveMaskSince = 0;
             if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
             return autoApproveActive;
         }
         // Active approval observed — reset the inactivity tracker so a later
         // blip starts its hysteresis window fresh.
         this.autoApproveInactiveSince = 0;
+        // STATUS-MISMATCH: start (or keep) the mask-stall clock for this episode. Set ONLY
+        // when zero so it survives modal-signature changes and hysteresis blips — it measures
+        // the true age of the unresolved auto-approve, not the per-signature settle window.
+        if (!this.autoApproveMaskSince) this.autoApproveMaskSince = now;
         const modal = adapterStatus.activeModal;
         // (fix) Do not auto-approve when no concrete modal/buttons are present.
         // Claude TUI flaps between paints; without this guard adapterStatus
@@ -1900,6 +1952,8 @@ export class CliProviderInstance implements ProviderInstance {
         this.pendingAutoApprovalSignature = '';
         this.pendingAutoApprovalSince = 0;
         this.autoApproveInactiveSince = 0;
+        // Fired (resolveModal in flight) — the episode resolved; end the mask-stall clock.
+        this.autoApproveMaskSince = 0;
         if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
         this.autoApproveBusyTimer = setTimeout(() => {
             this.autoApproveBusy = false;
@@ -2482,6 +2536,18 @@ export class CliProviderInstance implements ProviderInstance {
         return status === 'waiting_approval'
             && this.shouldAutoApprove()
             && !this.manualAttendance.isAttended(now);
+    }
+
+    // STATUS-MISMATCH: true once the current auto-approve episode has been masking
+    // waiting_approval behind `generating` for longer than AUTO_APPROVE_MASK_STALL_MS without
+    // resolving (the settle gate never fired). When stalled, the surface mask must be dropped
+    // so read_chat / mesh_status / the dashboard see the real waiting_approval + modal (and a
+    // coordinator can mesh_approve it). autoApproveMaskSince is maintained by
+    // maybeAutoApproveStatus (driven by getState + the recheck timer during a waiting episode);
+    // this read is side-effect-free so getStatusMetadata can consult it too.
+    private autoApproveMaskStalled(now = Date.now()): boolean {
+        return this.autoApproveMaskSince > 0
+            && now - this.autoApproveMaskSince > CliProviderInstance.AUTO_APPROVE_MASK_STALL_MS;
     }
 
     private recordAutoApproval(modalMessage?: string, buttonLabel?: string, now = Date.now()): void {
