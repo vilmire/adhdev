@@ -981,6 +981,50 @@ describe('validateMeshTaskModeRequest — prose/negation vs command context', ()
             expectClean('explain how the deploy pipeline works without changing anything');
         });
     });
+
+    describe('file-path segments do not trip the guard (false-positive fix)', () => {
+        // A keyword appearing as a path component (build/Release, dist/release/)
+        // is a directory name, not a deploy/version-bump command.
+        const pathCases = [
+            'inspect the build/Release directory and list its contents',
+            'read-only: list files under dist/release/',
+            'check packages/release-notes/CHANGELOG.md for the latest entry',
+            'grep the path build\\Release\\bin on this windows node',
+            'list everything in ./out/release and report sizes',
+        ];
+        for (const msg of pathCases) {
+            it(`allows path: ${msg}`, () => expectClean(msg));
+        }
+    });
+
+    describe('quoted commit-message citations do not trip the guard (false-positive fix)', () => {
+        // Quoting a commit message that mentions version-bump/release/deploy is a
+        // citation, not an instruction to run it.
+        const quotedCases = [
+            'inspect the commit titled "chore: oss 포인터 bump — version-bump to rc.360" and summarize the diff (read-only)',
+            "find the commit whose message is 'release v1.2.3' and report its sha",
+            'the log line says “deploy preview all 4 pkgs” — just read it, do not act',
+            'locate the commit 「npm publish @next」 in git log and report only',
+        ];
+        for (const msg of quotedCases) {
+            it(`allows quoted: ${msg}`, () => expectClean(msg));
+        }
+    });
+
+    describe('genuine deploy/version-bump instructions are STILL blocked after the fix', () => {
+        it('blocks line-start version-bump script invocation', () => {
+            expectViolation('./scripts/version-bump.sh patch', 'deploy_or_version_bump');
+        });
+        it('blocks shell-prompt npm publish (real command)', () => {
+            expectViolation('$ npm publish', 'deploy_or_version_bump');
+        });
+        it('blocks fenced wrangler deploy', () => {
+            expectViolation('run:\n```\nwrangler deploy\n```', 'deploy_or_version_bump');
+        });
+        it('blocks line-start npm version bump', () => {
+            expectViolation('npm version patch', 'deploy_or_version_bump');
+        });
+    });
 });
 
 describe('reclaimStrandedAssignedTask (Bug B)', () => {

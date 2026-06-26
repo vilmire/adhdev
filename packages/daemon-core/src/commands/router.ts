@@ -829,7 +829,7 @@ export class DaemonCommandRouter {
         node: any;
         nodeId: string;
         force?: boolean;
-    }): Promise<{ success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string; fallback?: string; forced?: boolean; convergence?: Record<string, unknown>; recovered?: boolean; residue?: boolean; residueWarning?: string; residueError?: string } | { success: false; code: string; error: string; recoveryHint: string; convergence?: Record<string, unknown> }> {
+    }): Promise<{ success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string; fallback?: string; forced?: boolean; convergence?: Record<string, unknown>; recovered?: boolean; residue?: boolean; residueWarning?: string; residueError?: string; branchRefDeleted?: boolean; branchRefReason?: string; branchRefForced?: boolean; branchRefWarning?: string } | { success: false; code: string; error: string; recoveryHint: string; convergence?: Record<string, unknown> }> {
         const workspace = typeof args.node?.workspace === 'string' ? args.node.workspace.trim() : '';
         if (!workspace) {
             return {
@@ -929,19 +929,62 @@ export class DaemonCommandRouter {
             };
         }
 
+        // Always evaluate real merge convergence so we can decide whether the
+        // branch ref is safe to delete after removal — even on the force path,
+        // where `force_override` only authorizes the *worktree* removal and must
+        // NOT be taken as proof the branch is merged (that would risk work loss).
+        const mergeConvergence = await this.getWorktreeForceCleanupConvergence({ repoRoot, workspace, node: args.node });
         const forceFallbackConvergence = args.force
             ? { allow: true, status: 'force_override', source: 'caller_force_flag' }
-            : await this.getWorktreeForceCleanupConvergence({ repoRoot, workspace, node: args.node });
+            : mergeConvergence;
+
+        // After the worktree is removed, delete the branch ref iff the branch is
+        // fully merged into the default ref (no work loss). Otherwise preserve it
+        // and surface a warning. `mergeConvergence` (NOT the force override) is the
+        // authority on merged-ness.
+        const deleteBranchIfMerged = async () => {
+            const branch = String(args.node.worktreeBranch).trim();
+            const status = mergeConvergence.allow ? (mergeConvergence.status || '') : '';
+            const MERGED_STATUSES = new Set([
+                'merged_to_main', 'merged_pushed', 'merged_to_default_ref', 'cleanup_candidate',
+            ]);
+            const PATCH_EQUIV_STATUS = 'patch_equivalent_to_default_ref';
+            if (!branch) {
+                return { branchRefDeleted: false, branchRefReason: 'empty_branch_name' };
+            }
+            if (!mergeConvergence.allow || (!MERGED_STATUSES.has(status) && status !== PATCH_EQUIV_STATUS)) {
+                return {
+                    branchRefDeleted: false,
+                    branchRefReason: `branch_not_merged_preserved: ${mergeConvergence.error || mergeConvergence.status || 'convergence_unverified'}`,
+                    branchRefWarning: `Branch ref '${branch}' was preserved (not deleted) because it is not confirmed merged into the default ref — no work was lost. Merge it (or pass a verified branchConvergence final state) and re-run cleanup, or delete it manually after confirming.`,
+                };
+            }
+            const { deleteBranchRef } = await import('../git/git-worktree.js');
+            // `-d` can detect a true fast-forward/merge; patch-equivalent landings
+            // (squash/cherry-pick) are invisible to `-d`, so allow the verified `-D`
+            // fallback only for the patch-equivalence status.
+            const res = await deleteBranchRef(repoRoot, branch, { safeDeleteOnly: status !== PATCH_EQUIV_STATUS });
+            return {
+                branchRefDeleted: res.deleted,
+                branchRefReason: res.reason,
+                ...(res.forced ? { branchRefForced: true } : {}),
+                ...(res.deleted ? {} : {
+                    branchRefWarning: `Branch ref '${branch}' could not be deleted (${res.reason}); it was preserved so no work is lost.`,
+                }),
+            };
+        };
 
         try {
             const result = await removeWorktree(repoRoot, workspace, {
                 requireClean: !args.force,
                 allowSubmoduleForceFallback: forceFallbackConvergence.allow,
             });
+            const branchOutcome = await deleteBranchIfMerged();
             return {
                 success: true,
                 removedPath: result.removedPath,
                 repoRoot,
+                ...branchOutcome,
                 ...(result.fallback ? {
                     fallback: result.fallback,
                     forced: result.forced,
@@ -969,10 +1012,12 @@ export class DaemonCommandRouter {
                     await execFileAsync('git', ['worktree', 'remove', '--force', workspace], {
                         cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true,
                     });
+                    const branchOutcome = await deleteBranchIfMerged();
                     return {
                         success: true,
                         removedPath: workspace,
                         repoRoot,
+                        ...branchOutcome,
                         fallback: 'git_worktree_remove_submodule_deinit' as const,
                         forced: true,
                         reason: 'working_trees_containing_submodules' as const,
@@ -990,10 +1035,12 @@ export class DaemonCommandRouter {
                             cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true,
                         });
                     } catch { /* prune is best-effort */ }
+                    const branchOutcome = await deleteBranchIfMerged();
                     return {
                         success: true,
                         removedPath: workspace,
                         repoRoot,
+                        ...branchOutcome,
                         fallback: 'fs_rm_worktree_prune' as const,
                         forced: true,
                         reason: 'working_trees_containing_submodules' as const,

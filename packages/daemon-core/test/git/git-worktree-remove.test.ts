@@ -42,7 +42,7 @@ async function loadWithExecResults(results: ExecResult[]) {
   })
 
   const mod = await import('../../src/git/git-worktree')
-  return { removeWorktree: mod.removeWorktree, calls, execFileMock }
+  return { removeWorktree: mod.removeWorktree, deleteBranchRef: mod.deleteBranchRef, calls, execFileMock }
 }
 
 describe('removeWorktree submodule fallback', () => {
@@ -101,6 +101,69 @@ describe('removeWorktree submodule fallback', () => {
     expect(calls.map(call => call.args)).toEqual([
       ['status', '--porcelain'],
       ['worktree', 'remove', '/repo/.adhdev-worktrees/mesh/branch'],
+    ])
+  })
+})
+
+describe('deleteBranchRef (worktree branch-ref leak fix)', () => {
+  it('safe-deletes a merged branch ref via git branch -d', async () => {
+    const { deleteBranchRef, calls } = await loadWithExecResults([
+      { stdout: 'abc123\n' },     // rev-parse --verify refs/heads/<branch> (ref exists)
+      { stdout: "Deleted branch fix/foo (was abc123).\n" }, // branch -d succeeds
+    ])
+
+    const res = await deleteBranchRef('/repo', 'fix/foo')
+
+    expect(res).toEqual({ deleted: true, reason: 'safe_deleted_merged_branch' })
+    expect(calls.map(c => c.args)).toEqual([
+      ['rev-parse', '--verify', '--quiet', 'refs/heads/fix/foo'],
+      ['branch', '-d', 'fix/foo'],
+    ])
+  })
+
+  it('preserves an unmerged branch ref (safe -d refuses, no -D when safeDeleteOnly)', async () => {
+    const { deleteBranchRef, calls } = await loadWithExecResults([
+      { stdout: 'abc123\n' },     // ref exists
+      { error: true, stderr: "error: The branch 'fix/bar' is not fully merged.\n" }, // -d refuses
+    ])
+
+    const res = await deleteBranchRef('/repo', 'fix/bar', { safeDeleteOnly: true })
+
+    expect(res).toEqual({ deleted: false, reason: 'branch_not_merged_per_git_safe_delete_only' })
+    // Crucially: NO `git branch -D` was issued — unmerged work is never dropped.
+    expect(calls.map(c => c.args)).toEqual([
+      ['rev-parse', '--verify', '--quiet', 'refs/heads/fix/bar'],
+      ['branch', '-d', 'fix/bar'],
+    ])
+  })
+
+  it('force-deletes a patch-equivalent branch (-d refuses but containment was proven)', async () => {
+    const { deleteBranchRef, calls } = await loadWithExecResults([
+      { stdout: 'abc123\n' },     // ref exists
+      { error: true, stderr: "error: The branch 'fix/squashed' is not fully merged.\n" }, // -d refuses (squash)
+      { stdout: "Deleted branch fix/squashed (was abc123).\n" }, // -D succeeds
+    ])
+
+    const res = await deleteBranchRef('/repo', 'fix/squashed', { safeDeleteOnly: false })
+
+    expect(res).toEqual({ deleted: true, reason: 'force_deleted_patch_equivalent_branch', forced: true })
+    expect(calls.map(c => c.args)).toEqual([
+      ['rev-parse', '--verify', '--quiet', 'refs/heads/fix/squashed'],
+      ['branch', '-d', 'fix/squashed'],
+      ['branch', '-D', 'fix/squashed'],
+    ])
+  })
+
+  it('is idempotent when the branch ref is already absent', async () => {
+    const { deleteBranchRef, calls } = await loadWithExecResults([
+      { error: true, stderr: '' }, // rev-parse --verify fails → ref absent
+    ])
+
+    const res = await deleteBranchRef('/repo', 'fix/gone')
+
+    expect(res).toEqual({ deleted: true, reason: 'branch_ref_absent' })
+    expect(calls.map(c => c.args)).toEqual([
+      ['rev-parse', '--verify', '--quiet', 'refs/heads/fix/gone'],
     ])
   })
 })

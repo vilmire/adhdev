@@ -257,6 +257,74 @@ export function parseWorktreeListOutput(output: string): WorktreeEntry[] {
     return entries;
 }
 
+// ─── Branch ref deletion ────────────────────────
+
+export interface BranchRefDeleteResult {
+    /** True if the branch ref no longer exists after this call. */
+    deleted: boolean;
+    /** Why it was (not) deleted, for surfacing in the cleanup result. */
+    reason: string;
+    /** True when a forced delete (`-D`) was needed (e.g. squash/patch-equivalent merge). */
+    forced?: boolean;
+}
+
+/**
+ * Delete a local branch ref after its worktree was removed.
+ *
+ * SAFETY: this is only meant to be called once the caller has independently
+ * verified that the branch is fully merged / its content is contained in the
+ * default ref (no work loss). It first tries the safe `git branch -d`, which
+ * refuses to delete a branch git itself does not consider merged. If
+ * `safeDeleteOnly` is false (the caller proved containment by patch-equivalence,
+ * which `-d` cannot see), it falls back to `git branch -D`. When the branch is
+ * already gone, this reports `deleted: true` idempotently.
+ */
+export async function deleteBranchRef(
+    repoRoot: string,
+    branch: string,
+    opts: { safeDeleteOnly?: boolean } = {},
+): Promise<BranchRefDeleteResult> {
+    const name = (branch || '').trim();
+    if (!name) return { deleted: false, reason: 'empty_branch_name' };
+
+    // Idempotent: nothing to delete if the ref does not exist.
+    try {
+        await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], {
+            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true,
+        });
+    } catch {
+        return { deleted: true, reason: 'branch_ref_absent' };
+    }
+
+    // Try the safe delete first — git refuses if it cannot see the branch as merged.
+    try {
+        await execFileAsync('git', ['branch', '-d', name], {
+            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true,
+        });
+        return { deleted: true, reason: 'safe_deleted_merged_branch' };
+    } catch (error: any) {
+        const stderr = typeof error?.stderr === 'string' ? error.stderr : '';
+        const notMerged = /not fully merged/i.test(stderr) || /not fully merged/i.test(String(error?.message || ''));
+        if (!notMerged) {
+            return { deleted: false, reason: `branch_delete_failed: ${stderr.trim() || error?.message || 'unknown error'}` };
+        }
+        // git -d refused. Only force when the caller proved containment another way
+        // (e.g. squash/cherry-pick/patch-equivalent merge that -d cannot detect).
+        if (opts.safeDeleteOnly) {
+            return { deleted: false, reason: 'branch_not_merged_per_git_safe_delete_only' };
+        }
+        try {
+            await execFileAsync('git', ['branch', '-D', name], {
+                cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true,
+            });
+            return { deleted: true, reason: 'force_deleted_patch_equivalent_branch', forced: true };
+        } catch (forceError: any) {
+            const fErr = typeof forceError?.stderr === 'string' ? forceError.stderr : forceError?.message;
+            return { deleted: false, reason: `branch_force_delete_failed: ${String(fErr || 'unknown error').trim()}` };
+        }
+    }
+}
+
 // ─── Prune ──────────────────────────────────────
 
 async function pruneWorktrees(repoRoot: string): Promise<void> {

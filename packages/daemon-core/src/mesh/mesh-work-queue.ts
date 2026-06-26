@@ -130,6 +130,18 @@ function isMutationKeywordInCommandContext(text: string, matchStart: number, mat
     // Line start (only whitespace before the keyword on this line).
     if (/^\s*$/.test(linePrefix)) return true;
 
+    // Executed script at command position: the keyword sits inside a run-prefix
+    // path token (`./scripts/version-bump.sh`, `~/bin/deploy.sh`) that is the
+    // leading token of the line or follows a shell connective — the script is
+    // being invoked, so the keyword is a real command. (Path *arguments* like
+    // `list build/Release` are excluded earlier by isInsidePathSegment.)
+    let tokStart = matchStart;
+    while (tokStart > lineStart && !/\s/.test(text[tokStart - 1])) tokStart--;
+    const beforeToken = text.slice(lineStart, tokStart);
+    const tokenLead = text.slice(tokStart, matchStart);
+    const atCmdPos = /^\s*$/.test(beforeToken) || /(?:&&|\|\||\||;)\s*$/.test(beforeToken);
+    if (atCmdPos && /^(?:\.\/|\.\.\/|~\/|\/)/.test(tokenLead)) return true;
+
     // After a shell connective or imperative connective introducing a command.
     // We look at what immediately precedes the keyword on the same line.
     if (/(?:&&|\|\||\||;)\s*$/.test(linePrefix)) return true;
@@ -172,14 +184,110 @@ function isInsideBackticksOrFence(text: string, matchStart: number, matchEnd: nu
 }
 
 /**
+ * True if the matched keyword is part of a filesystem-path-like token rather than
+ * a standalone word/command. A "release" inside `build/Release`, `dist/release/`,
+ * or `packages\release` is a directory/file name, not a deploy instruction. We
+ * look at the characters immediately adjacent to the match: if either side is a
+ * path separator (`/` or `\`) joining it to another path segment, the keyword is
+ * a path component.
+ *
+ * IMPORTANT: a path token that is itself being *executed* — i.e. the leading
+ * token of a command line such as `./scripts/version-bump.sh patch` — is NOT a
+ * suppressible path; that is a real command. We therefore exclude the case where
+ * the path token sits at command-invocation position (line start, optionally with
+ * a leading `./` / `/` / `~/`, or right after a shell connective), which means it
+ * is the program being run rather than an argument being inspected.
+ */
+function isInsidePathSegment(text: string, matchStart: number, matchEnd: number): boolean {
+    const prev = matchStart > 0 ? text[matchStart - 1] : '';
+    const next = matchEnd < text.length ? text[matchEnd] : '';
+    const isSep = (c: string) => c === '/' || c === '\\';
+    const segChar = (c: string) => /[A-Za-z0-9._~-]/.test(c);
+    const inPath =
+        (isSep(prev) && (next === '' || isSep(next) || segChar(next) || /\s/.test(next))) ||
+        (isSep(next) && (prev === '' || isSep(prev) || segChar(prev) || /\s/.test(prev)));
+    if (!inPath) return false;
+
+    // Find the whole whitespace-delimited path token containing the match and the
+    // text on its line before it. If the token is the first thing on the line
+    // (after an optional `./`, `/`, `~/`, or `../` prefix) or directly follows a
+    // shell connective, it is being executed → not a suppressible path.
+    const lineStart = text.lastIndexOf('\n', matchStart - 1) + 1;
+    let tokStart = matchStart;
+    while (tokStart > lineStart && !/\s/.test(text[tokStart - 1])) tokStart--;
+    const linePrefixBeforeToken = text.slice(lineStart, tokStart);
+    const tokenPrefix = text.slice(tokStart, matchStart);
+    // The path token is in command position when nothing but whitespace (or a
+    // shell connective) precedes it on the line, AND the token itself is a
+    // run-prefix path (`./`, `/`, `~/`, `../`). A bare `build/Release` argument
+    // after a verb ("list build/Release") is NOT command position.
+    const atLineStart = /^\s*$/.test(linePrefixBeforeToken);
+    const afterConnective = /(?:&&|\|\||\||;)\s*$/.test(linePrefixBeforeToken);
+    const isRunPrefixPath = /^(?:\.\/|\.\.\/|~\/|\/)/.test(tokenPrefix);
+    if ((atLineStart || afterConnective) && isRunPrefixPath) return false;
+    return true;
+}
+
+/**
+ * True if [matchStart, matchEnd) lies inside a quoted span — straight quotes
+ * (`"..."`, `'...'`), typographic quotes (`“...”`, `‘...’`), or CJK brackets
+ * (`「...」`, `『...』`, `《...》`). Commit-message citations and other quoted prose
+ * (e.g. quoting a `chore: ... version-bump ...` log line, or the Korean
+ * "포인터 bump" phrase) are descriptive, not command invocations, so a forbidden
+ * keyword inside such a quote must not trip the guardrail. Backticks are excluded
+ * here on purpose — they denote shell/code snippets and are handled as command
+ * context in {@link isInsideBackticksOrFence}.
+ */
+function isInsideQuotedSpan(text: string, matchStart: number, matchEnd: number): boolean {
+    // Paired quotes: an opening char before the match without its closer in
+    // between, and the matching closer after the match.
+    const pairs: Array<[string, string]> = [
+        ['“', '”'], ['‘', '’'], ['「', '」'], ['『', '』'], ['《', '》'],
+    ];
+    for (const [open, close] of pairs) {
+        const openIdx = text.lastIndexOf(open, matchStart - 1);
+        if (openIdx < 0) continue;
+        // No closer between the opener and the match → still open at the match.
+        if (text.indexOf(close, openIdx + open.length) >= matchEnd) return true;
+    }
+    // Symmetric quotes (" and '): odd count of the quote char before the match,
+    // within the same line (a quote does not span newlines), and a closing quote
+    // later on the line.
+    const lineStart = text.lastIndexOf('\n', matchStart - 1) + 1;
+    const lineEnd = (() => { const i = text.indexOf('\n', matchEnd); return i < 0 ? text.length : i; })();
+    for (const q of ['"', "'"]) {
+        let count = 0;
+        for (let i = lineStart; i < matchStart; i++) if (text[i] === q) count++;
+        if (count % 2 === 1 && text.indexOf(q, matchEnd) >= 0 && text.indexOf(q, matchEnd) < lineEnd) {
+            // For "'" guard against the apostrophe-in-prose case (e.g. "don't"):
+            // require the opening quote to be preceded by a boundary (start/space/
+            // open-paren) so a contraction apostrophe is not read as a quote opener.
+            if (q === '"') return true;
+            // find the opening quote (the one making the count odd)
+            let openPos = -1, c = 0;
+            for (let i = lineStart; i < matchStart; i++) { if (text[i] === q) { c++; if (c % 2 === 1) openPos = i; } }
+            const beforeOpen = openPos > lineStart ? text[openPos - 1] : ' ';
+            if (/[\s(\[{>]/.test(beforeOpen) || openPos === lineStart) return true;
+        }
+    }
+    return false;
+}
+
+/**
  * Decides whether a forbidden keyword match at [matchStart, matchEnd) should
  * count as a real violation. A match counts only when it is in command context
- * and not negated. Negation always wins (even inside a code block), per the
- * conservative rule: code-block + negation → exclude; other code-block → keep.
+ * and not negated, and is NOT merely a path segment or quoted (descriptive)
+ * citation. Negation always wins (even inside a code block), per the conservative
+ * rule: code-block + negation → exclude; other code-block → keep.
  */
 function isRealMutationMatch(text: string, matchStart: number, matchEnd: number): boolean {
     if (hasNegationBefore(text, matchStart)) return false;
     if (hasTrailingNegation(text, matchEnd)) return false;
+    // A keyword that is part of a file path (build/Release, dist/release/) or
+    // sits inside quoted prose (a commit-message citation, "포인터 bump") is a
+    // description, not a command — suppress it even if it lands at line-start.
+    if (isInsidePathSegment(text, matchStart, matchEnd)) return false;
+    if (isInsideQuotedSpan(text, matchStart, matchEnd)) return false;
     return isMutationKeywordInCommandContext(text, matchStart, matchEnd);
 }
 

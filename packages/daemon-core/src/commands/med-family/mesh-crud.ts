@@ -422,6 +422,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                             worktreeCleanupFallback: typeof worktreeCleanup?.fallback === 'string' ? worktreeCleanup.fallback : undefined,
                             forced: worktreeCleanup?.forced === true ? true : undefined,
                             forceFallbackReason: typeof worktreeCleanup?.reason === 'string' ? worktreeCleanup.reason : undefined,
+                            branchRefDeleted: typeof worktreeCleanup?.branchRefDeleted === 'boolean' ? worktreeCleanup.branchRefDeleted : undefined,
+                            branchRefReason: typeof worktreeCleanup?.branchRefReason === 'string' ? worktreeCleanup.branchRefReason : undefined,
                         },
                     });
                 } catch { /* ledger append is best-effort */ }
@@ -432,6 +434,14 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             // directory could not be fully removed (best-effort, non-gating).
             const residueWarning = worktreeCleanup?.residue === true && typeof worktreeCleanup?.residueWarning === 'string'
                 ? worktreeCleanup.residueWarning
+                : undefined;
+
+            // Surface a preserved-branch warning at the top level so callers see
+            // that the branch ref was intentionally NOT deleted (unmerged work is
+            // never silently dropped). When the branch ref WAS deleted, the nested
+            // worktreeCleanup.branchRefDeleted flag already records it.
+            const branchRefWarning = typeof worktreeCleanup?.branchRefWarning === 'string'
+                ? worktreeCleanup.branchRefWarning
                 : undefined;
 
             // Orphan guard: if the session cleanup still left any LIVE session skipped
@@ -451,6 +461,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 success: true,
                 removed,
                 ...(residueWarning ? { residueWarning } : {}),
+                ...(branchRefWarning ? { branchRefWarning } : {}),
                 ...(sessionCleanup ? { sessionCleanup } : {}),
                 ...(worktreeCleanup ? { worktreeCleanup } : {}),
                 ...(orphanedSessionsRemaining
