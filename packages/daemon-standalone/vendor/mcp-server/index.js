@@ -4218,33 +4218,6 @@ async function meshSendTask(ctx, args) {
       const taskId = (0, import_node_crypto.randomUUID)();
       const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
       const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-      const dispatchResult = await commandForNode(ctx, node, "agent_command", {
-        targetSessionId: args.session_id,
-        agentType: resolvedProviderType,
-        cliType: resolvedProviderType,
-        providerType: resolvedProviderType,
-        action: "send_chat",
-        message: args.message,
-        meshContext: {
-          meshId: ctx.mesh.id,
-          nodeId: args.node_id,
-          taskId,
-          ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
-          // (3) Originating coordinator session anchor — see the remote-dispatch path above.
-          ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
-        }
-      });
-      const dispatchPayload = unwrapCommandPayload(dispatchResult);
-      if (dispatchPayload?.success === false || dispatchResult?.success === false) {
-        const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
-        return JSON.stringify({
-          ...source && typeof source === "object" ? source : {},
-          success: false,
-          nodeId: args.node_id,
-          sessionId: args.session_id,
-          error: dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task"
-        });
-      }
       try {
         (0, import_daemon_core3.appendLedgerEntry)(ctx.mesh.id, {
           kind: "task_dispatched",
@@ -4272,6 +4245,37 @@ async function meshSendTask(ctx, args) {
         dispatchedToIdleSession: sessionWasIdle,
         dispatchedAt
       });
+      const dispatchResult = await commandForNode(ctx, node, "agent_command", {
+        targetSessionId: args.session_id,
+        agentType: resolvedProviderType,
+        cliType: resolvedProviderType,
+        providerType: resolvedProviderType,
+        action: "send_chat",
+        message: args.message,
+        meshContext: {
+          meshId: ctx.mesh.id,
+          nodeId: args.node_id,
+          taskId,
+          ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
+          // (3) Originating coordinator session anchor — see the remote-dispatch path above.
+          ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
+        }
+      });
+      const dispatchPayload = unwrapCommandPayload(dispatchResult);
+      if (dispatchPayload?.success === false || dispatchResult?.success === false) {
+        try {
+          (0, import_daemon_core3.deleteDirectDispatchesByTaskId)(ctx.mesh.id, [taskId]);
+        } catch {
+        }
+        const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
+        return JSON.stringify({
+          ...source && typeof source === "object" ? source : {},
+          success: false,
+          nodeId: args.node_id,
+          sessionId: args.session_id,
+          error: dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task"
+        });
+      }
       if (missionId) {
         try {
           (0, import_daemon_core3.recordDirectDispatchTask)(ctx.mesh.id, args.message, {

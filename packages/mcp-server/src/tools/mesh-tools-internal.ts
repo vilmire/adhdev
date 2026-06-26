@@ -262,6 +262,7 @@ export {
     computeMeshMissionStats,
     computeMeshTaskStats,
     daemonIdsEquivalent,
+    deleteDirectDispatchesByTaskId,
     describeTaskDependencyState,
     drainPendingMeshCoordinatorEvents,
     enqueueTask,

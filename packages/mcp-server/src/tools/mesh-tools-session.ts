@@ -18,6 +18,7 @@ import {
     collectMeshViewQueueNodesWithLiveSessions,
     commandForNode,
     compactChatPayload,
+    deleteDirectDispatchesByTaskId,
     drainCoordinatorPendingEvents,
     drainPendingMeshCoordinatorEvents,
     enqueueTask,
@@ -488,6 +489,42 @@ export async function meshSendTask(
             const taskId = randomUUID();
             const dispatchedAt = new Date().toISOString();
             const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
+            // CANON-A (direct-dispatch completion race — root fix): record the dispatch row
+            // (task_dispatched ledger + insertDirectDispatch) ★BEFORE the agent_command inject,
+            // exactly as the enqueue→claim path does (tryAssignQueueTask atomically claims the
+            // queue row 'assigned' before deliverTaskToSession injects). A FAST direct dispatch to
+            // an already-idle, reused session could otherwise have its genuine completion reach the
+            // coordinator forwarder BEFORE this row existed → sessionHasActiveAssignment=false → the
+            // prior-terminal providerSessionId dedup (mesh-event-forwarding.ts:551,603) swallowed the
+            // new task's completion as a duplicate of the prior turn. Pre-recording makes
+            // sessionHasActiveAssignment=true at completion time, so the dedup gate is skipped
+            // symmetrically with enqueue. On a dispatch failure below we roll the row back.
+            try {
+                appendLedgerEntry(ctx.mesh.id, {
+                    kind: 'task_dispatched',
+                    nodeId: args.node_id,
+                    sessionId: args.session_id,
+                    providerType: resolvedProviderType,
+                    payload: buildDirectTaskPayload(args.message, 'local_direct', {
+                        taskId,
+                        taskMode,
+                        providerType: resolvedProviderType,
+                        targetSessionId: args.session_id,
+                        dispatchedToIdleSession: sessionWasIdle,
+                    }),
+                });
+            } catch { /* best-effort */ }
+            insertDirectDispatch(ctx.mesh.id, {
+                taskId,
+                nodeId: args.node_id,
+                sessionId: args.session_id,
+                providerType: resolvedProviderType || undefined,
+                message: args.message,
+                taskMode: taskMode || undefined,
+                via: 'local_direct',
+                dispatchedToIdleSession: sessionWasIdle,
+                dispatchedAt,
+            });
             // Stamp the mesh assignment via meshContext so the daemon can
             // attach it to the target instance BEFORE prompt injection.
             // setupMeshEventForwarding reads state.settings.meshNodeFor +
@@ -515,6 +552,11 @@ export async function meshSendTask(
             });
             const dispatchPayload = unwrapCommandPayload(dispatchResult);
             if (dispatchPayload?.success === false || dispatchResult?.success === false) {
+                // Roll back the pre-recorded dispatch row: the inject was rejected, so there is no
+                // active assignment to gate. The task_dispatched ledger entry stays (append-only),
+                // but the dispatch row is the discriminator sessionHasActiveAssignment keys on —
+                // leaving it would mask a genuinely-unrelated later idle as an active assignment.
+                try { deleteDirectDispatchesByTaskId(ctx.mesh.id, [taskId]); } catch { /* best-effort */ }
                 const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
                 return JSON.stringify({
                     ...(source && typeof source === 'object' ? source : {}),
@@ -524,32 +566,6 @@ export async function meshSendTask(
                     error: dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task',
                 });
             }
-            try {
-                appendLedgerEntry(ctx.mesh.id, {
-                    kind: 'task_dispatched',
-                    nodeId: args.node_id,
-                    sessionId: args.session_id,
-                    providerType: resolvedProviderType,
-                    payload: buildDirectTaskPayload(args.message, 'local_direct', {
-                        taskId,
-                        taskMode,
-                        providerType: resolvedProviderType,
-                        targetSessionId: args.session_id,
-                        dispatchedToIdleSession: sessionWasIdle,
-                    }),
-                });
-            } catch { /* best-effort */ }
-            insertDirectDispatch(ctx.mesh.id, {
-                taskId,
-                nodeId: args.node_id,
-                sessionId: args.session_id,
-                providerType: resolvedProviderType || undefined,
-                message: args.message,
-                taskMode: taskMode || undefined,
-                via: 'local_direct',
-                dispatchedToIdleSession: sessionWasIdle,
-                dispatchedAt,
-            });
             if (missionId) {
                 try {
                     recordDirectDispatchTask(ctx.mesh.id, args.message, {
