@@ -42,6 +42,7 @@ import {
     recordMeshToolCall,
     refreshMeshFromDaemon,
     requeueTask,
+    resolveCoordinatorDaemonId,
     resolvePreferredWorktreeNodeId,
     sanitizeQueueStatusFilter,
     summarizeTaskMessage,
@@ -132,6 +133,7 @@ export async function meshEnqueueTask(
             const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
             // 2. For each remote node, directly dispatch to an idle session via P2P
+            const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
             const dispatchPromises: Promise<void>[] = [];
             for (const node of ctx.mesh.nodes) {
                 const isLocalNode = isLocalControlPlaneNode(ctx, node);
@@ -141,8 +143,23 @@ export async function meshEnqueueTask(
                 if (targetNodeId && node.id !== targetNodeId) continue;
                 if (!nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node))) continue;
 
+                // MISROUTE-INJECT-SPLIT: stamp meshContext (nodeId) onto the eager P2P push so the
+                // worker's agent_command handler scopes it to THIS node's session via the
+                // fail-closed findMeshNodeAdapter, instead of the provider-only fuzzy fallback that
+                // can land a freshly-launched worktree node's task on a co-located idle BASE session
+                // (the base-leak). Without nodeId the receiver's meshScopeNodeId is empty and it falls
+                // through to findAdapter's first-same-cliType match. The queue-claim path already
+                // carries this context; the enqueue-and-push path was the only dispatch missing it.
                 dispatchPromises.push(
-                    ipcDispatchToRemoteAgent(ctx, node, { message: args.message })
+                    ipcDispatchToRemoteAgent(ctx, node, {
+                        message: args.message,
+                        meshContext: {
+                            meshId: ctx.mesh.id,
+                            nodeId: node.id,
+                            taskId: task.id,
+                            ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
+                        },
+                    })
                         .then(result => {
                             if (result.success) {
                                 try {
