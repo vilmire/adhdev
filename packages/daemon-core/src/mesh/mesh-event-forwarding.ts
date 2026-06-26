@@ -226,18 +226,18 @@ function shouldSuppressIntentionalCleanupStop(args: {
 
 const RECENT_COMPLETION_FINGERPRINT_TTL_MS = 10 * 60 * 1000;
 
-function hasFingerprintSeen(fingerprint: string): boolean {
+function hasFingerprintSeen(meshId: string, fingerprint: string): boolean {
     try {
-        return MeshRuntimeStore.getInstance().hasCompletionFingerprint(fingerprint);
+        return MeshRuntimeStore.getInstance().hasCompletionFingerprint(meshId, fingerprint);
     } catch {
         return false;
     }
 }
 
-function recordFingerprintSeen(fingerprint: string): void {
+function recordFingerprintSeen(meshId: string, fingerprint: string): void {
     try {
         const db = MeshRuntimeStore.getInstance();
-        db.recordCompletionFingerprint(fingerprint, RECENT_COMPLETION_FINGERPRINT_TTL_MS);
+        db.recordCompletionFingerprint(meshId, fingerprint, RECENT_COMPLETION_FINGERPRINT_TTL_MS);
         db.sweepExpiredFingerprints();
     } catch { /* best-effort; duplicate events are preferable to a crash */ }
 }
@@ -291,7 +291,7 @@ function isDuplicateMeshCompletionEvent(args: {
 }): boolean {
     const fingerprint = buildMeshCompletionFingerprint(args);
     if (!fingerprint) return false;
-    if (hasFingerprintSeen(fingerprint)) {
+    if (hasFingerprintSeen(args.meshId, fingerprint)) {
         if (args.taskId) {
             recordCompletionConflict({
                 meshId: args.meshId,
@@ -303,7 +303,7 @@ function isDuplicateMeshCompletionEvent(args: {
         }
         return true;
     }
-    recordFingerprintSeen(fingerprint);
+    recordFingerprintSeen(args.meshId, fingerprint);
     return false;
 }
 
@@ -329,8 +329,8 @@ function isDuplicateMeshApprovalEvent(args: {
         args.providerType || '',
         approvalIdentity,
     ].join('::');
-    if (hasFingerprintSeen(fingerprint)) return true;
-    recordFingerprintSeen(fingerprint);
+    if (hasFingerprintSeen(args.meshId, fingerprint)) return true;
+    recordFingerprintSeen(args.meshId, fingerprint);
     return false;
 }
 
@@ -338,8 +338,8 @@ function isDuplicateRefineTerminalEvent(meshId: string, eventName: string, metad
     const jobId = readRefineJobId({ metadataEvent });
     const fingerprint = jobId && new Set(['refine:completed', 'refine:failed']).has(eventName) ? `${meshId}::${eventName}::${jobId}` : '';
     if (!fingerprint) return false;
-    if (hasFingerprintSeen(fingerprint)) return true;
-    recordFingerprintSeen(fingerprint);
+    if (hasFingerprintSeen(meshId, fingerprint)) return true;
+    recordFingerprintSeen(meshId, fingerprint);
     return false;
 }
 
@@ -485,7 +485,7 @@ function evaluateMeshEventSuppression(
     if (intentionalCleanupStop) {
         if (eventSessionId && eventNodeId) {
             try {
-                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(eventNodeId, eventSessionId);
+                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(args.meshId, eventNodeId, eventSessionId);
             } catch { /* best-effort */ }
         }
         LOG.info('MeshEvents', `Suppressed ${args.event} for intentionally cleanup-stopped session ${eventSessionId || '(unknown session)'}`);
@@ -843,7 +843,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 if (!isFalseIdle) {
                     sweepExpiredRemoteIdleSessions();
                     try {
-                        MeshRuntimeStore.getInstance().setRemoteIdleSession(nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
+                        MeshRuntimeStore.getInstance().setRemoteIdleSession(args.meshId, nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
                     } catch { /* best-effort */ }
                     setImmediate(() => {
                         maybeAutoFastForwardIdleNode(components, { meshId: args.meshId, nodeId, sessionId, providerType })
@@ -852,7 +852,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                     // Claim for THIS session first; on success drop the just-registered
                                     // idle entry so the enqueue drain doesn't re-pick an already-busy session.
                                     const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
-                                    if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+                                    if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(args.meshId, nodeId, sessionId);
                                 } catch (e: any) {
                                     LOG.warn('MeshQueue', `Failed to assign idle queue task after completion for ${nodeId}: ${e?.message || e}`);
                                 }
@@ -919,14 +919,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         if (sessionId && nodeId && providerType) {
             sweepExpiredRemoteIdleSessions();
             try {
-                MeshRuntimeStore.getInstance().setRemoteIdleSession(nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
+                MeshRuntimeStore.getInstance().setRemoteIdleSession(args.meshId, nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
             } catch { /* best-effort */ }
             setImmediate(() => {
                 maybeAutoFastForwardIdleNode(components, { meshId: args.meshId, nodeId, sessionId, providerType })
                     .finally(() => {
                         try {
                             const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
-                            if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+                            if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(args.meshId, nodeId, sessionId);
                         } catch (e: any) {
                             LOG.warn('MeshQueue', `Failed to assign idle queue task after maintenance for ${nodeId}: ${e?.message || e}`);
                         }
@@ -938,7 +938,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
             try {
-                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(args.meshId, nodeId, sessionId);
             } catch { /* best-effort */ }
         }
         if (sessionId) {
@@ -989,7 +989,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
             try {
-                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(args.meshId, nodeId, sessionId);
             } catch { /* best-effort */ }
         }
         if (sessionId) {

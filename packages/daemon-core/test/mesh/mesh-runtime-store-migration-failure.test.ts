@@ -85,8 +85,9 @@ describe('mesh-runtime-store — legacy migration failure (win32 EPERM)', () => 
         const db = MeshRuntimeStore.getInstance();
 
         // The legacy data must still be reachable — proving the store opened the
-        // legacy file in-place rather than a fresh EMPTY mesh-runtime.db.
-        expect(db.hasCompletionFingerprint(fingerprint)).toBe(true);
+        // legacy file in-place rather than a fresh EMPTY mesh-runtime.db. The legacy
+        // fingerprint has no '::', so the isolation migration backfills mesh_id to ''.
+        expect(db.hasCompletionFingerprint('', fingerprint)).toBe(true);
         // The legacy file is retained; the new path was NOT adopted as the active store.
         expect(existsSync(legacyDbPath)).toBe(true);
         expect(existsSync(nextDbPath)).toBe(false);
@@ -114,7 +115,7 @@ describe('mesh-runtime-store — legacy migration failure (win32 EPERM)', () => 
         renameState.failRename = false; // happy path
 
         const db = MeshRuntimeStore.getInstance();
-        expect(db.hasCompletionFingerprint(fingerprint)).toBe(true);
+        expect(db.hasCompletionFingerprint('', fingerprint)).toBe(true);
         expect(existsSync(legacyDbPath)).toBe(false);
         expect(existsSync(nextDbPath)).toBe(true);
     });

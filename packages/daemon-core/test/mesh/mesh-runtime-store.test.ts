@@ -73,25 +73,27 @@ describe('mesh-runtime-store', () => {
             const db = MeshRuntimeStore.getInstance();
             expect(existsSync(legacyDbPath)).toBe(false);
             expect(existsSync(nextDbPath)).toBe(true);
-            expect(db.hasCompletionFingerprint(fingerprint)).toBe(true);
+            // The legacy row had no '::' in its fingerprint, so the isolation migration
+            // backfills mesh_id to '' — query under that scope.
+            expect(db.hasCompletionFingerprint('', fingerprint)).toBe(true);
         });
 
         it('hasCompletionFingerprint returns false for unknown fingerprint', () => {
             const db = MeshRuntimeStore.getInstance();
-            expect(db.hasCompletionFingerprint('unknown-fingerprint-xyz')).toBe(false);
+            expect(db.hasCompletionFingerprint('mesh-x', 'unknown-fingerprint-xyz')).toBe(false);
         });
 
         it('recordCompletionFingerprint and hasCompletionFingerprint round-trip', () => {
             const db = MeshRuntimeStore.getInstance();
             const fp = `fp-valid-${randomUUID()}`;
-            db.recordCompletionFingerprint(fp, 60_000); // 60s TTL — valid
-            expect(db.hasCompletionFingerprint(fp)).toBe(true);
+            db.recordCompletionFingerprint('mesh-rt', fp, 60_000); // 60s TTL — valid
+            expect(db.hasCompletionFingerprint('mesh-rt', fp)).toBe(true);
 
             // Expired fingerprint: ttlMs = -1000 means expires_at = now - 1000 (already in the past)
             const expiredFp = `fp-expired-${randomUUID()}`;
-            db.recordCompletionFingerprint(expiredFp, -1000);
+            db.recordCompletionFingerprint('mesh-rt', expiredFp, -1000);
             // The SELECT filters WHERE expires_at > now, so expired entry returns false
-            expect(db.hasCompletionFingerprint(expiredFp)).toBe(false);
+            expect(db.hasCompletionFingerprint('mesh-rt', expiredFp)).toBe(false);
         });
 
         it('fingerprintSweepCounter clears expired entries every 100 reads', () => {
@@ -99,22 +101,22 @@ describe('mesh-runtime-store', () => {
             const fp = `fp-sweep-${randomUUID()}`;
 
             // Record a fingerprint that is already expired (negative TTL)
-            db.recordCompletionFingerprint(fp, -1000);
+            db.recordCompletionFingerprint('mesh-sweep', fp, -1000);
 
             // Call hasCompletionFingerprint 100 times.
             // Each call: returns false (expired) but the 100th call triggers sweepExpiredFingerprints().
             // The first 99 reads increment the counter but don't sweep.
             // The 100th read resets the counter to 0 and runs DELETE WHERE expires_at <= now.
             for (let i = 0; i < 100; i++) {
-                expect(db.hasCompletionFingerprint(fp)).toBe(false);
+                expect(db.hasCompletionFingerprint('mesh-sweep', fp)).toBe(false);
             }
 
             // After the sweep, the expired row is gone. Verify by recording a fresh valid fingerprint
             // and checking a subsequent sweepExpiredFingerprints() doesn't touch it.
             const validFp = `fp-valid-after-sweep-${randomUUID()}`;
-            db.recordCompletionFingerprint(validFp, 60_000);
+            db.recordCompletionFingerprint('mesh-sweep', validFp, 60_000);
             db.sweepExpiredFingerprints();
-            expect(db.hasCompletionFingerprint(validFp)).toBe(true);
+            expect(db.hasCompletionFingerprint('mesh-sweep', validFp)).toBe(true);
         });
     });
 
@@ -1371,9 +1373,86 @@ describe('mesh-runtime-store', () => {
             const db = MeshRuntimeStore.getInstance() as any;
             const walBefore = db.walWriteCounter;
             const toolBefore = db.toolCallLogCounter;
-            db.recordCompletionFingerprint(`fp-f3-${randomUUID()}`, 60_000); // calls maybeCheckpointWal
+            db.recordCompletionFingerprint('mesh-wal', `fp-f3-${randomUUID()}`, 60_000); // calls maybeCheckpointWal
             expect(db.walWriteCounter).toBe(walBefore + 1);      // WAL counter advanced
             expect(db.toolCallLogCounter).toBe(toolBefore);      // tool-log cadence untouched
+        });
+    });
+
+    // MESH-ISOLATION-LEAK: remote_idle_sessions and mesh_completion_fingerprints used to
+    // lack a mesh_id column. A machine that belongs to two meshes (two repos) with a
+    // SHARED nodeId could then have mesh B claim mesh A's idle session, or mesh A's
+    // completion suppress mesh B's dedup. These tests pin the per-mesh isolation.
+    describe('mesh isolation (mesh_id scoping)', () => {
+        const MESH_A = 'mesh_aaaaaaaa';
+        const MESH_B = 'mesh_bbbbbbbb';
+        const SHARED_NODE = 'node_shared_1'; // same nodeId present in BOTH meshes
+
+        it('remote_idle_sessions: a shared nodeId does NOT let mesh B see mesh A\'s idle session', () => {
+            const db = MeshRuntimeStore.getInstance();
+            db.setRemoteIdleSession(MESH_A, SHARED_NODE, 'sess-a', 'claude-cli', Date.now() + 60_000);
+            db.setRemoteIdleSession(MESH_B, SHARED_NODE, 'sess-b', 'claude-cli', Date.now() + 60_000);
+
+            const a = db.getRemoteIdleSessions(MESH_A);
+            const b = db.getRemoteIdleSessions(MESH_B);
+
+            // Each mesh sees ONLY its own session even though the nodeId collides.
+            expect(a.map(s => s.sessionId)).toEqual(['sess-a']);
+            expect(b.map(s => s.sessionId)).toEqual(['sess-b']);
+            // No cross-claim: mesh B's read never surfaces mesh A's session.
+            expect(b.some(s => s.sessionId === 'sess-a')).toBe(false);
+            expect(a.some(s => s.sessionId === 'sess-b')).toBe(false);
+        });
+
+        it('remote_idle_sessions: deleting in mesh A leaves mesh B\'s same-node session intact', () => {
+            const db = MeshRuntimeStore.getInstance();
+            db.setRemoteIdleSession(MESH_A, SHARED_NODE, 'sess-a', 'claude-cli', Date.now() + 60_000);
+            db.setRemoteIdleSession(MESH_B, SHARED_NODE, 'sess-b', 'claude-cli', Date.now() + 60_000);
+
+            db.deleteRemoteIdleSession(MESH_A, SHARED_NODE, 'sess-a');
+
+            expect(db.getRemoteIdleSessions(MESH_A)).toEqual([]);
+            expect(db.getRemoteIdleSessions(MESH_B).map(s => s.sessionId)).toEqual(['sess-b']);
+        });
+
+        it('mesh_completion_fingerprints: a completion in mesh A does NOT suppress dedup in mesh B', () => {
+            const db = MeshRuntimeStore.getInstance();
+            // Same fingerprint body recorded under mesh A only.
+            const fp = `${MESH_A}::agent:generating_completed::sess-x::claude-cli::ps-1::9000::`;
+            db.recordCompletionFingerprint(MESH_A, fp, 60_000);
+
+            // Mesh A sees it (its own dedup gate fires)...
+            expect(db.hasCompletionFingerprint(MESH_A, fp)).toBe(true);
+            // ...but mesh B must NOT: a cross-mesh suppression would drop mesh B's real
+            // completion notification (a completion-loss class bug).
+            expect(db.hasCompletionFingerprint(MESH_B, fp)).toBe(false);
+        });
+
+        it('legacy fingerprints (no mesh_id) backfill mesh_id from the \'::\'-prefixed fingerprint string', () => {
+            const Database = runtimeRequire('better-sqlite3') as any;
+            const ledgerDir = join(testConfigDir, 'mesh-ledger');
+            mkdirSync(ledgerDir, { recursive: true });
+            const dbPath = join(ledgerDir, 'mesh-runtime.db');
+            const fp = `${MESH_A}::agent:ready::sess-legacy::claude-cli::::8000::`;
+
+            // Pre-isolation schema: mesh_completion_fingerprints WITHOUT mesh_id.
+            const legacy = new Database(dbPath);
+            legacy.exec(`
+                CREATE TABLE mesh_completion_fingerprints (
+                    fingerprint TEXT PRIMARY KEY,
+                    expires_at INTEGER NOT NULL
+                );
+            `);
+            legacy.prepare('INSERT INTO mesh_completion_fingerprints (fingerprint, expires_at) VALUES (?, ?)')
+                .run(fp, Date.now() + 60_000);
+            legacy.close();
+
+            // Opening the store runs migrateMeshIsolationColumns → ADD COLUMN + backfill.
+            const db = MeshRuntimeStore.getInstance();
+            // Backfilled mesh_id == the fingerprint's first '::' segment == MESH_A.
+            expect(db.hasCompletionFingerprint(MESH_A, fp)).toBe(true);
+            // And it is NOT visible to a different mesh.
+            expect(db.hasCompletionFingerprint(MESH_B, fp)).toBe(false);
         });
     });
 });

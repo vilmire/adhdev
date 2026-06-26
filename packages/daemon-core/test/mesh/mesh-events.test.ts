@@ -535,7 +535,7 @@ describe('setupMeshEventForwarding', () => {
         meshNodeId: 'node_child_1',
         nodeId: 'node_child_1',
       })
-      expect(MeshRuntimeStore.getInstance().getRemoteIdleSessions().some(s => s.sessionId === 'runtime-session-1')).toBe(false)
+      expect(MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId).some(s => s.sessionId === 'runtime-session-1')).toBe(false)
 
       // The turn completed with a genuine final assistant → the session is live-idle again and
       // MUST be re-registered so the next enqueue drain reuses it.
@@ -550,7 +550,7 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 9100,
       })
 
-      const idle = MeshRuntimeStore.getInstance().getRemoteIdleSessions()
+      const idle = MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId)
         .find(s => s.sessionId === 'runtime-session-1')
       expect(idle).toBeDefined()
       expect(idle?.nodeId).toBe('node_child_1')
@@ -592,7 +592,7 @@ describe('setupMeshEventForwarding', () => {
         completionDiagnostic: { finalAssistantPresent: false, blockReason: 'missing_final_assistant' },
       })
 
-      expect(MeshRuntimeStore.getInstance().getRemoteIdleSessions().some(s => s.sessionId === 'runtime-session-1')).toBe(false)
+      expect(MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId).some(s => s.sessionId === 'runtime-session-1')).toBe(false)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -2488,7 +2488,7 @@ describe('setupMeshEventForwarding', () => {
 
       // A remote idle session the coordinator registered (e.g. from a forwarded
       // agent:ready), keyed by the node's inline-cache id form.
-      MeshRuntimeStore.getInstance().setRemoteIdleSession('node_remote_wt', 'remote-session-1', 'claude-cli', Date.now() + 60_000)
+      MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, 'node_remote_wt', 'remote-session-1', 'claude-cli', Date.now() + 60_000)
 
       const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
       const { components } = createQueueAutoLaunchComponents()

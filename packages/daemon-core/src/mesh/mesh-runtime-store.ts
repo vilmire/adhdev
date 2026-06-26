@@ -147,10 +147,20 @@ export class MeshRuntimeStore {
             CREATE INDEX IF NOT EXISTS idx_mesh_queue_assignment
                 ON mesh_queue(mesh_id, assigned_node_id, assigned_session_id, status);
 
+            -- mesh_id is DB-level isolation (defense-in-depth). The fingerprint STRING
+            -- also carries meshId as its first '::'-joined segment (see
+            -- buildMeshCompletionFingerprint) — that string-prefix defense is kept; this
+            -- column makes cross-mesh suppression impossible even if the string format
+            -- drifts or two meshes ever collide on a fingerprint body.
             CREATE TABLE IF NOT EXISTS mesh_completion_fingerprints (
                 fingerprint TEXT PRIMARY KEY,
-                expires_at INTEGER NOT NULL
+                expires_at INTEGER NOT NULL,
+                mesh_id TEXT NOT NULL DEFAULT ''
             );
+            -- NOTE: the (mesh_id, fingerprint) index is created in migrateMeshIsolationColumns,
+            -- NOT here. A pre-isolation DB still has the legacy table (CREATE IF NOT EXISTS is a
+            -- no-op), so referencing mesh_id in an index before the ALTER ADD COLUMN runs would
+            -- fail with "no such column". The migration adds the column then the index.
 
             CREATE TABLE IF NOT EXISTS mesh_direct_dispatches (
                 task_id TEXT PRIMARY KEY,
@@ -170,13 +180,18 @@ export class MeshRuntimeStore {
             CREATE INDEX IF NOT EXISTS idx_direct_dispatches_mesh_session
                 ON mesh_direct_dispatches(mesh_id, session_id, status);
 
+            -- MESH-ISOLATION-LEAK: mesh_id is part of the PK so a nodeId shared across two
+            -- meshes (same machine in multiple repos) keeps a separate idle-session row per
+            -- mesh, and getRemoteIdleSessions(meshId) can never surface another mesh's
+            -- session for a queue claim.
             CREATE TABLE IF NOT EXISTS remote_idle_sessions (
+                mesh_id TEXT NOT NULL,
                 node_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
                 provider_type TEXT NOT NULL,
                 expires_at INTEGER NOT NULL,
                 metadata TEXT,
-                PRIMARY KEY (node_id, session_id)
+                PRIMARY KEY (mesh_id, node_id, session_id)
             );
 
             CREATE TABLE IF NOT EXISTS mesh_session_delivery (
@@ -300,13 +315,83 @@ export class MeshRuntimeStore {
                 cursor INTEGER NOT NULL DEFAULT 0
             );
         `);
+        this.migrateMeshIsolationColumns();
     }
 
-    hasCompletionFingerprint(fingerprint: string): boolean {
+    private tableColumns(table: string): Set<string> {
+        const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+        return new Set(rows.map(r => r.name));
+    }
+
+    /**
+     * MESH-ISOLATION-LEAK migration. Two tables historically lacked a `mesh_id` column,
+     * letting one machine that belongs to multiple meshes (multiple repos) leak rows
+     * across meshes. Both migrations are idempotent and run on every boot — the column
+     * check short-circuits once the new schema is in place.
+     */
+    private migrateMeshIsolationColumns(): void {
+        try {
+            // 1. mesh_completion_fingerprints: ADD COLUMN + backfill mesh_id from the
+            //    fingerprint string's first '::'-joined segment (buildMeshCompletionFingerprint
+            //    prefixes meshId). A row whose fingerprint has no '::' (legacy/foreign format)
+            //    backfills to '' — still strictly tighter than the prior global query.
+            const fpCols = this.tableColumns('mesh_completion_fingerprints');
+            if (!fpCols.has('mesh_id')) {
+                this.db.exec(`ALTER TABLE mesh_completion_fingerprints ADD COLUMN mesh_id TEXT NOT NULL DEFAULT ''`);
+                this.db.exec(`
+                    UPDATE mesh_completion_fingerprints
+                    SET mesh_id = substr(fingerprint, 1, instr(fingerprint, '::') - 1)
+                    WHERE instr(fingerprint, '::') > 0 AND mesh_id = ''
+                `);
+            }
+            // The mesh_id column is now guaranteed to exist (fresh DB had it from CREATE TABLE,
+            // legacy DB just got it via ALTER). Create the index unconditionally — IF NOT EXISTS
+            // makes it a no-op once present.
+            this.db.exec(`
+                CREATE INDEX IF NOT EXISTS idx_mesh_completion_fingerprints_mesh
+                    ON mesh_completion_fingerprints(mesh_id, fingerprint)
+            `);
+
+            // 2. remote_idle_sessions: the mesh_id is part of the PRIMARY KEY, which SQLite
+            //    cannot add via ALTER. The rows are ephemeral — sessions re-register on the
+            //    next agent:ready / agent:generating_completed — so a safe DROP+recreate is
+            //    acceptable (per fix spec) rather than a full table rebuild + un-backfillable
+            //    mesh_id. Only rebuild when the legacy (no mesh_id) schema is detected.
+            const idleCols = this.tableColumns('remote_idle_sessions');
+            if (!idleCols.has('mesh_id')) {
+                this.db.exec(`
+                    DROP TABLE IF EXISTS remote_idle_sessions;
+                    CREATE TABLE remote_idle_sessions (
+                        mesh_id TEXT NOT NULL,
+                        node_id TEXT NOT NULL,
+                        session_id TEXT NOT NULL,
+                        provider_type TEXT NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        metadata TEXT,
+                        PRIMARY KEY (mesh_id, node_id, session_id)
+                    );
+                `);
+            }
+        } catch (err: any) {
+            // Best-effort: a failed isolation migration must not brick the store. The
+            // CREATE-TABLE definitions above already carry the new schema for fresh DBs;
+            // an existing DB that fails here keeps the old (leaky-but-functional) schema
+            // until the next boot retries. Surface one warn for diagnosability.
+            if (!loggedMigrationFailure) {
+                loggedMigrationFailure = true;
+                LOG.warn('MeshRuntimeStore', `mesh-isolation column migration failed: ${err?.message || err}`);
+            }
+        }
+    }
+
+    hasCompletionFingerprint(meshId: string, fingerprint: string): boolean {
         const now = Date.now();
+        // Scope by mesh_id (defense-in-depth) AS WELL AS the fingerprint string, whose
+        // first '::' segment already encodes meshId. A fingerprint can only suppress a
+        // duplicate within its own mesh.
         const row = this.db
-            .prepare('SELECT 1 FROM mesh_completion_fingerprints WHERE fingerprint = ? AND expires_at > ?')
-            .get(fingerprint, now) as { 1: number } | undefined;
+            .prepare('SELECT 1 FROM mesh_completion_fingerprints WHERE mesh_id = ? AND fingerprint = ? AND expires_at > ?')
+            .get(meshId, fingerprint, now) as { 1: number } | undefined;
         // Sweep expired fingerprints every 100 reads so stale rows don't accumulate
         // even during read-heavy (non-write) periods when recordFingerprintSeen is idle.
         if (++this.fingerprintSweepCounter >= 100) {
@@ -316,10 +401,10 @@ export class MeshRuntimeStore {
         return row !== undefined;
     }
 
-    recordCompletionFingerprint(fingerprint: string, ttlMs: number): void {
+    recordCompletionFingerprint(meshId: string, fingerprint: string, ttlMs: number): void {
         const expiresAt = Date.now() + ttlMs;
-        this.db.prepare('INSERT OR REPLACE INTO mesh_completion_fingerprints (fingerprint, expires_at) VALUES (?, ?)')
-            .run(fingerprint, expiresAt);
+        this.db.prepare('INSERT OR REPLACE INTO mesh_completion_fingerprints (fingerprint, expires_at, mesh_id) VALUES (?, ?, ?)')
+            .run(fingerprint, expiresAt, meshId);
         this.maybeCheckpointWal();
     }
 
@@ -969,15 +1054,17 @@ export class MeshRuntimeStore {
 
     // ── Remote Idle Sessions ─────────────────────────────────────────────────
 
-    setRemoteIdleSession(nodeId: string, sessionId: string, providerType: string, expiresAt: number, metadata?: any): void {
+    setRemoteIdleSession(meshId: string, nodeId: string, sessionId: string, providerType: string, expiresAt: number, metadata?: any): void {
         this.db.prepare(`
-            INSERT OR REPLACE INTO remote_idle_sessions (node_id, session_id, provider_type, expires_at, metadata)
-            VALUES (?, ?, ?, ?, ?)
-        `).run(nodeId, sessionId, providerType, expiresAt, metadata ? JSON.stringify(metadata) : null);
+            INSERT OR REPLACE INTO remote_idle_sessions (mesh_id, node_id, session_id, provider_type, expires_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).run(meshId, nodeId, sessionId, providerType, expiresAt, metadata ? JSON.stringify(metadata) : null);
     }
 
-    getRemoteIdleSessions(): Array<{ nodeId: string; sessionId: string; providerType: string; expiresAt: number; metadata?: any }> {
-        const rows = this.db.prepare('SELECT node_id, session_id, provider_type, expires_at, metadata FROM remote_idle_sessions').all() as Array<any>;
+    getRemoteIdleSessions(meshId: string): Array<{ nodeId: string; sessionId: string; providerType: string; expiresAt: number; metadata?: any }> {
+        // MESH-ISOLATION-LEAK: always mesh-scoped. A bare (cross-mesh) read here is what
+        // let mesh B claim mesh A's idle session when both share a nodeId.
+        const rows = this.db.prepare('SELECT node_id, session_id, provider_type, expires_at, metadata FROM remote_idle_sessions WHERE mesh_id = ?').all(meshId) as Array<any>;
         return rows.map(r => ({
             nodeId: r.node_id,
             sessionId: r.session_id,
@@ -987,8 +1074,8 @@ export class MeshRuntimeStore {
         }));
     }
 
-    deleteRemoteIdleSession(nodeId: string, sessionId: string): void {
-        this.db.prepare('DELETE FROM remote_idle_sessions WHERE node_id = ? AND session_id = ?').run(nodeId, sessionId);
+    deleteRemoteIdleSession(meshId: string, nodeId: string, sessionId: string): void {
+        this.db.prepare('DELETE FROM remote_idle_sessions WHERE mesh_id = ? AND node_id = ? AND session_id = ?').run(meshId, nodeId, sessionId);
     }
 
     pruneExpiredRemoteIdleSessions(): void {

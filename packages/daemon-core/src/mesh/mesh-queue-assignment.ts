@@ -1298,7 +1298,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
 
     let remoteSessions: Array<{ nodeId: string; sessionId: string; providerType: string }> = [];
     try {
-        remoteSessions = MeshRuntimeStore.getInstance().getRemoteIdleSessions();
+        remoteSessions = MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId);
     } catch { /* best-effort */ }
 
     const remoteCandidates: IdleCandidate[] = [];
@@ -1318,7 +1318,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         const assigned = tryAssignQueueTask(components, meshId, candidate.nodeId, candidate.sessionId, candidate.providerType);
         if (assigned && candidate.origin === 'remote') {
             try {
-                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(candidate.nodeId, candidate.sessionId);
+                MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId, candidate.nodeId, candidate.sessionId);
             } catch { /* best-effort */ }
         }
     };
