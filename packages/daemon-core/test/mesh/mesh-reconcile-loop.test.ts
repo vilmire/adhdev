@@ -28,9 +28,9 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
 }))
 
-import { runMeshReconcileTick } from '../../src/mesh/mesh-reconcile-loop.js'
+import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests } from '../../src/mesh/mesh-reconcile-loop.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
-import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, claimNextTask, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
+import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { createSessionDelivery } from '../../src/mesh/mesh-delivery-policy.js'
@@ -38,6 +38,7 @@ import { createSessionDelivery } from '../../src/mesh/mesh-delivery-policy.js'
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
   __resetMeshRuntimeStoreForTests()
+  __resetReconcileInFlightSynthDebounceForTests()
   meshConfigMocks.listMeshes.mockReturnValue([])
   meshConfigMocks.getMesh.mockReset()
   const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
@@ -1319,6 +1320,208 @@ describe('runMeshReconcileTick', () => {
         // The dispatch stays active (non-terminal) for a future reconcile — and PHASE 5 must
         // not prune a session that is still live + generating, even though it is old.
         expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    // ── RECONCILE-SYNTH-PREEMPTS-COMPLETION: in-flight idle-flicker debounce ────
+    // A worker that was OBSERVED to start generating (dispatch row flipped to 'acked' by the
+    // agent:generating_started event) and has no terminal yet can momentarily read `idle`
+    // mid-turn — a CLI PTY inter-turn blip or a racing probe. A single such idle read must NOT
+    // synthesize a completion: the synthesized terminal then masks the REAL completion when it
+    // lands seconds later (drop:duplicate_completion_terminal_ledger; the observed 71s task
+    // a250fb44 lost its [System] notification this way). The synth is held until the session
+    // reads idle on consecutive reconcile ticks.
+    function seedAckedDispatch(meshId: string, nodeId: string, sessionId: string, taskId: string, secondsAgo: number) {
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched', nodeId, sessionId, providerType: 'claude-cli',
+        payload: { source: 'direct', via: 'local_direct', taskId, message: 'do work' },
+        timestamp: dispatchTimeIso(secondsAgo),
+      } as any)
+      insertDirectDispatch(meshId, {
+        taskId, nodeId, sessionId, providerType: 'claude-cli', message: 'do work',
+        via: 'local_direct', dispatchedAt: dispatchTimeIso(secondsAgo),
+      })
+      // agent:generating_started was observed → the worker genuinely started a turn.
+      updateDirectDispatchStatus(meshId, sessionId, 'acked', taskId)
+    }
+
+    it('in-flight (acked) worker: a SINGLE idle read does NOT synthesize a premature completion (idle flicker held)', async () => {
+      const meshId = `mesh_reconcile_phase4_inflight_hold_${Date.now()}`
+      try {
+        const sessionId = 'sess-inflight'
+        const nodeId = 'node_local'
+        const taskId = 'task_inflight'
+        // Old enough that the downstream grace would NOT block — isolating the in-flight gate.
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+
+        // read_chat reports idle with a post-dispatch final assistant message — but the worker
+        // is actually still generating (this idle is a transient mid-turn blip).
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') {
+            return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'claude-history-inflight',
+            messages: [{ role: 'assistant', content: 'intermediate text', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        // Tick 1: first idle observation → held, NOT synthesized.
+        await runMeshReconcileTick(components)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+        expect(getPendingMeshCoordinatorEvents(meshId).some(p => p.event === 'agent:generating_completed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('in-flight (acked) worker: an idle BLIP then back to generating resets the streak — no synth even after later idle', async () => {
+      const meshId = `mesh_reconcile_phase4_inflight_blip_${Date.now()}`
+      try {
+        const sessionId = 'sess-blip'
+        const nodeId = 'node_local'
+        const taskId = 'task_blip'
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+
+        let status: 'idle' | 'generating' = 'idle'
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') {
+            return { success: true, status: { sessions: [{ id: sessionId, status }] } }
+          }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status,
+            providerSessionId: 'claude-history-blip',
+            messages: [{ role: 'assistant', content: 'intermediate text', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        // Tick 1: idle blip (streak=1, held).
+        await runMeshReconcileTick(components)
+        // Tick 2: back to generating → streak reset.
+        status = 'generating'
+        await runMeshReconcileTick(components)
+        // Tick 3: idle again, but streak restarts at 1 → still held, no premature synth.
+        status = 'idle'
+        await runMeshReconcileTick(components)
+
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('genuinely-lost completion (acked, persistently idle): synthesizes AND queues a coordinator completion once the idle settle is confirmed', async () => {
+      const meshId = `mesh_reconcile_phase4_lost_settled_${Date.now()}`
+      try {
+        const sessionId = 'sess-settled'
+        const nodeId = 'node_local'
+        const taskId = 'task_settled'
+        // Worker started (acked), finished, but the completion event was lost — the session is
+        // now genuinely idle and stays idle every tick.
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') {
+            return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'claude-history-settled',
+            messages: [{ role: 'assistant', content: 'All done — built and tests pass.', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        // Tick 1: held (streak=1).
+        await runMeshReconcileTick(components)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+        // Tick 2: idle confirmed (streak=2) → synthesize the genuinely-lost completion AND surface it.
+        await runMeshReconcileTick(components)
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+        expect(completed).toBeTruthy()
+        expect((completed?.payload as any)?.source).toBe('daemon_reconcile_transcript_completion')
+        expect((completed?.payload as any)?.finalSummary).toContain('All done')
+        // The coordinator gets a pending completion event to surface — the notification is not lost.
+        expect(getPendingMeshCoordinatorEvents(meshId).some(p => p.event === 'agent:generating_completed')).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('never-acked (dispatched) lost completion: still synthesizes on the FIRST idle tick (debounce is acked-only)', async () => {
+      const meshId = `mesh_reconcile_phase4_dispatched_firsttick_${Date.now()}`
+      try {
+        const sessionId = 'sess-dispatched'
+        const nodeId = 'node_local'
+        const taskId = 'task_dispatched_lost'
+        // No generating_started ever observed (status stays 'dispatched') — there is no in-flight
+        // generation to protect, so the existing first-tick synth behavior is preserved.
+        appendLedgerEntry(meshId, {
+          kind: 'task_dispatched', nodeId, sessionId, providerType: 'claude-cli',
+          payload: { source: 'direct', via: 'local_direct', taskId, message: 'do work' },
+          timestamp: dispatchTimeIso(5 * 60),
+        } as any)
+        insertDirectDispatch(meshId, {
+          taskId, nodeId, sessionId, providerType: 'claude-cli', message: 'do work',
+          via: 'local_direct', dispatchedAt: dispatchTimeIso(5 * 60),
+        })
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') {
+            return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'claude-history-dispatched',
+            messages: [{ role: 'assistant', content: 'All done on the dispatched task.', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        await runMeshReconcileTick(components)
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+        expect(completed).toBeTruthy()
+        expect((completed?.payload as any)?.finalSummary).toContain('All done on the dispatched task')
       } finally {
         cleanup(meshId)
       }

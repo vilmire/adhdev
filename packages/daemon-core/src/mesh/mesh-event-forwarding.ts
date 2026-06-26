@@ -597,9 +597,19 @@ function evaluateMeshEventSuppression(
             // permanently mask the real completion: let the real event through (it is re-recorded by
             // the normal task_completed path, superseding the synthesized one). A second SYNTHESIZED
             // re-arrival is NOT a real event and still dedups normally.
+            // RECONCILE-SYNTH-PREEMPTS-COMPLETION: the bar here is deliberately LOWER than the
+            // weak/truncated supersessions above — a synthesized terminal is a coordinator-side
+            // reconstruction, never a real provider event, so ANY genuine real provider completion
+            // for the session must win over it. Requiring the full isGenuineCompletionEvidence
+            // (finalSummary OR workerResult present) dropped the real event whenever the relay did
+            // not re-populate finalSummary at this layer — exactly the observed 71s task whose real
+            // generating_completed hit drop:duplicate_completion_terminal_ledger after a premature
+            // synth. We require only that the incoming event is a REAL provider completion that is
+            // not itself a false idle (missing-final-assistant); a real-but-false-idle event still
+            // does not supersede (it is not trustworthy terminal evidence either).
             const supersedesSynthesizedTerminal = isSynthesizedReconciledTerminal(terminal.payload)
                 && isRealProviderCompletionEvent(args.metadataEvent)
-                && isGenuineCompletionEvidence(args.metadataEvent);
+                && !isFalseIdleCompletion(args.metadataEvent);
             if (!newDispatchAfterTerminal && !supersedesWeakTerminal && !distinctTaskCompletion && !supersedesTruncatedTerminal && !supersedesSynthesizedTerminal) {
                 const terminalProviderSessionId = readNonEmptyString(terminal.payload.providerSessionId);
                 const terminalFinalSummary = readNonEmptyString(terminal.payload.finalSummary);

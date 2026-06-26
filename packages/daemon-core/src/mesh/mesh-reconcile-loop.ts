@@ -97,6 +97,35 @@ function resolveReconcileIntervalMs(): number {
     return DEFAULT_RECONCILE_INTERVAL_MS;
 }
 
+// RECONCILE-SYNTH-PREEMPTS-COMPLETION in-flight debounce. PHASE 4 only synthesizes a missing
+// completion when the worker session reads `idle`. But a worker that is GENUINELY generating
+// (it emitted agent:generating_started — the dispatch row is 'acked' — and has not yet
+// completed) can momentarily read `idle` mid-turn: a CLI PTY parser sees an inter-turn blip
+// between tool calls, or the read_chat probe races a brief settle. A single such idle read
+// must NOT fabricate a completion for an in-flight task — doing so writes a synthesized
+// terminal that then masks the REAL completion when it lands seconds later
+// (drop:duplicate_completion_terminal_ledger; the observed 71s task a250fb44 lost its [System]
+// notification this way). We require the session to read `idle` on CONSECUTIVE reconcile ticks
+// before synthesizing for an `acked` (started-generating) dispatch — a transient mid-turn idle
+// flicker clears on the next ~4s tick, whereas a genuinely-settled (completed-but-lost) or dead
+// session reads idle every tick. A dispatch that was never acked (worker never started) is NOT
+// debounced here: there is no in-flight generation to protect, and the downstream grace gate +
+// stale-summary guard remain the backstops for that lost-dispatch case.
+//
+// Keyed by `${meshId}::${taskId}`. The map is pruned each PHASE-4 pass to the set of currently
+// active dispatches, so a completed/pruned task's counter is dropped (no unbounded growth).
+const REQUIRED_CONSECUTIVE_IDLE_TICKS_FOR_INFLIGHT_SYNTH = 2;
+const inFlightIdleObservationCounts = new Map<string, number>();
+
+function inFlightSynthKey(meshId: string, taskId: string): string {
+    return `${meshId}::${taskId}`;
+}
+
+// Test hook: clear the in-flight idle debounce state between cases.
+export function __resetReconcileInFlightSynthDebounceForTests(): void {
+    inFlightIdleObservationCounts.clear();
+}
+
 interface LiveCoordinator {
     meshId: string;
     instance: ReturnType<DaemonComponents['instanceManager']['getInstance']>;
@@ -1195,6 +1224,20 @@ async function reconcileUnterminatedDirectDispatches(
     const dispatches = getActiveDirectDispatches(mesh.id);
     if (dispatches.length === 0) return; // cheap exit — nothing dispatched, nothing to reconcile
 
+    // Prune the in-flight idle debounce map to the tasks still active in THIS mesh, so a
+    // completed/pruned task's counter is dropped (the map never grows without bound).
+    const activeTaskKeys = new Set(
+        dispatches
+            .map(d => readNonEmptyString(d.taskId))
+            .filter(Boolean)
+            .map(taskId => inFlightSynthKey(mesh.id, taskId)),
+    );
+    for (const key of inFlightIdleObservationCounts.keys()) {
+        if (key.startsWith(`${mesh.id}::`) && !activeTaskKeys.has(key)) {
+            inFlightIdleObservationCounts.delete(key);
+        }
+    }
+
     const dispatchMeshCommand = components.dispatchMeshCommand;
     const nodeById = new Map(mesh.nodes.map(n => [n.id, n] as const));
 
@@ -1243,7 +1286,31 @@ async function reconcileUnterminatedDirectDispatches(
         // Only act on a session that has actually settled to idle. A generating /
         // waiting_approval session is mid-turn — synthesizing a completion now would
         // be wrong. (idle is the only status the MCP poll path reconciles too.)
-        if (readChatPayloadStatus(payload) !== 'idle') continue;
+        const synthKey = inFlightSynthKey(mesh.id, taskId);
+        if (readChatPayloadStatus(payload) !== 'idle') {
+            // Not idle → the worker is mid-turn. Reset any partial idle streak so a single
+            // idle blip during a long generation never accumulates toward the synth threshold.
+            inFlightIdleObservationCounts.delete(synthKey);
+            continue;
+        }
+
+        // RECONCILE-SYNTH-PREEMPTS-COMPLETION: a dispatch whose worker was OBSERVED to start
+        // generating (the agent:generating_started ack flipped the row to 'acked') and has no
+        // terminal yet is potentially still in-flight — its `idle` read here may be a transient
+        // mid-turn flicker, not a settled completion. Require CONSECUTIVE idle observations
+        // before synthesizing for such a task: a flicker clears next tick (counter reset above),
+        // while a genuinely-settled (completed-but-lost) or dead session reads idle every tick
+        // and crosses the threshold within ~one extra interval. A never-acked dispatch (worker
+        // never started) is exempt — there is no in-flight generation to pre-empt, and its
+        // lost-dispatch case is still covered by the downstream grace + stale-summary guards.
+        if (dispatch.status === 'acked') {
+            const idleStreak = (inFlightIdleObservationCounts.get(synthKey) ?? 0) + 1;
+            inFlightIdleObservationCounts.set(synthKey, idleStreak);
+            if (idleStreak < REQUIRED_CONSECUTIVE_IDLE_TICKS_FOR_INFLIGHT_SYNTH) {
+                LOG.info('MeshReconcile', `In-flight synth hold: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read idle ${idleStreak}/${REQUIRED_CONSECUTIVE_IDLE_TICKS_FOR_INFLIGHT_SYNTH} consecutive tick(s) after generating_started — deferring completion synth until the idle settle is confirmed (guards against a mid-turn idle flicker pre-empting the real completion)`);
+                continue;
+            }
+        }
 
         const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
         const evidence = extractFinalAssistantSummaryEvidence(messages);

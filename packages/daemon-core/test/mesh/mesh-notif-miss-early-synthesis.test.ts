@@ -383,4 +383,102 @@ describe('NOTIF-MISS: reconcile early-synthesis must not suppress real completio
       cleanupMeshFiles(meshId)
     }
   })
+
+  // ── FIX 2 (RECONCILE-SYNTH-PREEMPTS-COMPLETION): relaxed supersession bar ───
+  // The real provider completion that arrives after a premature synth may reach the coordinator
+  // forwarding layer WITHOUT a re-populated finalSummary (the relay did not carry it). Requiring
+  // the full genuine-completion bar (finalSummary OR workerResult present) dropped that real event
+  // as a duplicate of the synthesized terminal (drop:duplicate_completion_terminal_ledger — the
+  // observed 71s task). A synthesized terminal is a coordinator-side reconstruction, so ANY real,
+  // non-false-idle provider completion for the session must supersede it.
+  it('FIX 2: a real completion WITHOUT a finalSummary still supersedes a prior SYNTHESIZED terminal (relaxed bar)', () => {
+    const meshId = `mesh_notifmiss_nosummary_supersede_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }] })
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+
+      seedDispatch(meshId, taskId, { ageMs: 5 * 60_000, dispatchedToIdleSession: true })
+      const synth = reconcileDirectDispatchCompletionFromTranscript({
+        meshId,
+        nodeId: NODE_ID,
+        sessionId: SESSION_ID,
+        providerType: 'claude-code',
+        providerSessionId: 'claude-history-nosummary',
+        taskId,
+        finalSummary: 'synthesized summary from transcript tail',
+        transcriptMessageAt: new Date().toISOString(),
+        source: 'daemon_reconcile_transcript_completion',
+      })
+      expect(synth.reconciled).toBe(true)
+
+      const components = makeComponents()
+      // The REAL provider completion — SAME stable providerSessionId, but NO finalSummary at this
+      // layer (and no workerResult). Pre-fix this failed isGenuineCompletionEvidence and was dropped.
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: NODE_ID,
+        targetSessionId: SESSION_ID,
+        providerType: 'claude-code',
+        providerSessionId: 'claude-history-nosummary',
+        taskId,
+        timestamp: Date.now(),
+        source: 'agent_status_event',
+      })
+
+      expect((result as any).suppressed).not.toBe(true)
+      const realTerminal = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')
+        .find(e => e.payload.source !== 'daemon_reconcile_transcript_completion')
+      expect(realTerminal).toBeTruthy()
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  // Guard: a real-but-FALSE-IDLE completion (missing-final-assistant) must NOT supersede the
+  // synthesized terminal — it is not trustworthy terminal evidence either.
+  it('FIX 2: a real FALSE-IDLE completion does NOT supersede a synthesized terminal (still deduped)', () => {
+    const meshId = `mesh_notifmiss_falseidle_nosupersede_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }] })
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+
+      seedDispatch(meshId, taskId, { ageMs: 5 * 60_000, dispatchedToIdleSession: true })
+      reconcileDirectDispatchCompletionFromTranscript({
+        meshId,
+        nodeId: NODE_ID,
+        sessionId: SESSION_ID,
+        providerType: 'claude-code',
+        providerSessionId: 'claude-history-falseidle',
+        taskId,
+        finalSummary: 'synthesized summary',
+        transcriptMessageAt: new Date().toISOString(),
+        source: 'daemon_reconcile_transcript_completion',
+      })
+      const before = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed').length
+
+      const components = makeComponents()
+      const result = handleMeshForwardEvent(components, {
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: NODE_ID,
+        targetSessionId: SESSION_ID,
+        providerType: 'claude-code',
+        providerSessionId: 'claude-history-falseidle',
+        taskId,
+        // Missing-final-assistant false idle → not trustworthy terminal evidence.
+        completionDiagnostic: { blockReason: 'missing_final_assistant', finalAssistantPresent: false },
+        timestamp: Date.now(),
+        source: 'agent_status_event',
+      })
+
+      expect((result as any).suppressed).toBe(true)
+      const after = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed').length
+      expect(after).toBe(before)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
 })
