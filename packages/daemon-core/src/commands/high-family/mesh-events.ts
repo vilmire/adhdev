@@ -11,6 +11,7 @@ import {
     handleMeshForwardEvent,
     drainPendingMeshCoordinatorEvents,
     shouldHoldPendingDrainForBusyLocalCoordinator,
+    resolveCoordinatorDrainDeliverability,
 } from '../../mesh/mesh-events.js';
 import { normalizeInteractivePromptResponse } from '../../providers/types/interactive-prompt.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
@@ -36,11 +37,31 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         // loop: return nothing, leaving the rows undrained for its idle-tick delivery. A
         // remote pull (foreign coordinatorDaemonId) or a pure stdio MCP coordinator (no live
         // CLI session) is NOT held — see shouldHoldPendingDrainForBusyLocalCoordinator.
+        // Surface whether THIS daemon has a live CLI coordinator for the mesh. The MCP
+        // (LLM) coordinator's pull (drainCoordinatorPendingEvents) needs this to decide its
+        // delivery surface: when there is NO live CLI coordinator (pure stdio MCP/LLM), the
+        // MCP tool result is the ONLY surface, so the puller must return the drained events
+        // to the LLM rather than re-forwarding them (a re-forward just re-queues with no PTY
+        // to inject into — the NOTIF-DROP transcript-reconcile drain-without-inject loop).
+        // When a live CLI coordinator exists, the reconcile loop owns PTY delivery and the
+        // puller keeps forwarding (unchanged). NOTE: this is observational only — it does not
+        // change what is drained here, so the idle full-drain and remote-pull paths are intact.
+        const hasLiveCliCoordinator = meshId
+            ? resolveCoordinatorDrainDeliverability(ctx.deps, meshId).hasLiveCliCoordinator
+            : false;
+        // DRAIN-WITHOUT-INJECT guard: when a LOCAL live CLI coordinator for this mesh is
+        // busy (generating / modal-parked), the reconcile loop is HOLDING its terminal
+        // events (drained=0) for the coordinator's next idle tick. Draining here would
+        // consume those held rows (drained=1) into an MCP tool result the busy coordinator
+        // never surfaces as a turn — losing the completion forever. Defer to the reconcile
+        // loop: return nothing, leaving the rows undrained for its idle-tick delivery. A
+        // remote pull (foreign coordinatorDaemonId) or a pure stdio MCP coordinator (no live
+        // CLI session) is NOT held — see shouldHoldPendingDrainForBusyLocalCoordinator.
         if (meshId && shouldHoldPendingDrainForBusyLocalCoordinator(ctx.deps, meshId, coordinatorDaemonId)) {
-            return { success: true, events: [], heldForBusyLocalCoordinator: true };
+            return { success: true, events: [], heldForBusyLocalCoordinator: true, hasLiveCliCoordinator };
         }
         const events = drainPendingMeshCoordinatorEvents(meshId || undefined, coordinatorDaemonId);
-        return { success: true, events };
+        return { success: true, events, hasLiveCliCoordinator };
     },
 
     interactive_prompt_response: async (ctx: HighFamilyContext, args: any) => {

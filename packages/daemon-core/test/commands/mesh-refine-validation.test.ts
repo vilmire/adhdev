@@ -484,6 +484,13 @@ describe('refine_mesh_node validation gate', () => {
       const firstTerminal = await waitForRefineLedger(mesh.id, first.jobId)
       expect(firstTerminal.kind).toBe('task_completed')
 
+      // 057d5def ("delete merged worktree branch ref on removal") deletes the feat/refine
+      // branch ref when the first refine merges and removes its worktree, so re-adding the
+      // worktree against feat/refine would fail with "fatal: invalid reference: feat/refine".
+      // Recreate the branch from main (which now contains the merged feature) before re-adding
+      // the worktree — the "reintroduced node" scenario this test models. -f is safe because
+      // the merged worktree (and thus the branch checkout) was already removed.
+      execFileSync('git', ['branch', '-f', 'feat/refine', 'main'], { cwd: repo })
       execFileSync('git', ['worktree', 'add', '-q', worktree, 'feat/refine'], { cwd: repo })
       writeFileSync(join(worktree, 'README.md'), `${readFileSync(join(worktree, 'README.md'), 'utf-8')}retry\n`, 'utf-8')
       execFileSync('git', ['add', 'README.md'], { cwd: worktree })

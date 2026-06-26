@@ -1984,6 +1984,7 @@ export async function drainCoordinatorPendingEvents(
     const matchesCurrentMesh = (event: any) => readString(event?.meshId) === ctx.mesh.id;
 
     if (ctx.transport instanceof IpcTransport) {
+        const transport = ctx.transport;
         const surfacedEvents: any[] = [];
         const coordinatorDaemonId = readString(ctx.localDaemonId);
         const pendingEventArgs = {
@@ -1991,20 +1992,50 @@ export async function drainCoordinatorPendingEvents(
             ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         };
 
-        try {
-            const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', pendingEventArgs) as any)
-                .filter(matchesCurrentMesh);
+        // Drain THIS daemon's local pending queue and route each event to its delivery surface.
+        //
+        // NOTIF-DROP (drain-without-inject) fix: when this daemon has NO live CLI coordinator
+        // for the mesh (a pure stdio MCP/LLM coordinator), the MCP tool result is the ONLY
+        // surface. Re-forwarding the event via mesh_forward_event then just RE-QUEUES it
+        // (injectMeshSystemMessage has no live CLI session to inject into), so the completion
+        // loops in the queue at drained=0 and never reaches the LLM — the exact single-event
+        // loss observed for a daemon_reconcile_transcript_completion consumed while the
+        // coordinator was busy. In that case we surface the drained events to the LLM directly
+        // (the event's coordinator-side state — task_completed ledger etc. — was already applied
+        // when it was first queued, so skipping the redundant re-forward loses nothing).
+        //
+        // When a live CLI coordinator DOES exist, the reconcile loop owns PTY delivery, so keep
+        // the existing forward path (and only surface as a fallback when the forward itself
+        // throws). hasLiveCliCoordinator rides the get_pending_mesh_events response for exactly
+        // this decision. The remote-node pull below is unchanged — its forward re-homes a remote
+        // worker's event into the local queue, which the second local drain then surfaces.
+        const drainLocalToSurface = async (): Promise<void> => {
+            const raw = await transport.command('get_pending_mesh_events', pendingEventArgs) as any;
+            const hasLiveCliCoordinator = unwrapCommandPayload(raw)?.hasLiveCliCoordinator === true
+                || raw?.hasLiveCliCoordinator === true;
+            const localEvents = normalizePendingMeshCoordinatorEvents(raw).filter(matchesCurrentMesh);
             for (const event of localEvents) {
                 const payload = buildMeshForwardPayloadFromPendingEvent(event);
                 if (!payload.event || !payload.meshId) continue;
+                if (!hasLiveCliCoordinator) {
+                    // Pure-MCP coordinator: the LLM tool result is the only surface. Do NOT
+                    // re-forward (that re-queues with no PTY → the drain-without-inject loop).
+                    rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
+                    surfacedEvents.push(event);
+                    continue;
+                }
                 let injected = false;
                 try {
-                    await ctx.transport.command('mesh_forward_event', payload);
+                    await transport.command('mesh_forward_event', payload);
                     injected = true;
                 } catch { /* best-effort */ }
                 rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
                 if (!injected) surfacedEvents.push(event);
             }
+        };
+
+        try {
+            await drainLocalToSurface();
         } catch {
             // Non-fatal: pending events are best-effort.
         }
@@ -2015,14 +2046,14 @@ export async function drainCoordinatorPendingEvents(
 
             try {
                 const remoteEvents = normalizePendingMeshCoordinatorEvents(
-                    await ctx.transport.meshCommand(node.daemonId, 'get_pending_mesh_events', pendingEventArgs),
+                    await transport.meshCommand(node.daemonId, 'get_pending_mesh_events', pendingEventArgs),
                 ).filter(matchesCurrentMesh);
                 if (remoteEvents.length === 0) continue;
 
                 for (const event of remoteEvents) {
                     const payload = buildMeshForwardPayloadFromPendingEvent(event);
                     if (!payload.event || !payload.meshId) continue;
-                    await ctx.transport.command('mesh_forward_event', payload);
+                    await transport.command('mesh_forward_event', payload);
                     rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
                 }
             } catch {
@@ -2031,19 +2062,7 @@ export async function drainCoordinatorPendingEvents(
         }
 
         try {
-            const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', pendingEventArgs) as any)
-                .filter(matchesCurrentMesh);
-            for (const event of localEvents) {
-                const payload = buildMeshForwardPayloadFromPendingEvent(event);
-                if (!payload.event || !payload.meshId) continue;
-                let injected = false;
-                try {
-                    await ctx.transport.command('mesh_forward_event', payload);
-                    injected = true;
-                } catch { /* best-effort */ }
-                rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-                if (!injected) surfacedEvents.push(event);
-            }
+            await drainLocalToSurface();
         } catch {
             // Non-fatal: pending events are best-effort.
         }

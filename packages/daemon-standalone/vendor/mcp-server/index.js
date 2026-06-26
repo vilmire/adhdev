@@ -2770,26 +2770,37 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
   const requestedNodeIds = opts?.nodeIds?.length ? new Set(opts.nodeIds) : null;
   const matchesCurrentMesh = (event) => readString(event?.meshId) === ctx.mesh.id;
   if (ctx.transport instanceof IpcTransport) {
+    const transport = ctx.transport;
     const surfacedEvents = [];
     const coordinatorDaemonId = readString(ctx.localDaemonId);
     const pendingEventArgs = {
       meshId: ctx.mesh.id,
       ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
     };
-    try {
-      const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh);
+    const drainLocalToSurface = async () => {
+      const raw = await transport.command("get_pending_mesh_events", pendingEventArgs);
+      const hasLiveCliCoordinator = unwrapCommandPayload(raw)?.hasLiveCliCoordinator === true || raw?.hasLiveCliCoordinator === true;
+      const localEvents = normalizePendingMeshCoordinatorEvents(raw).filter(matchesCurrentMesh);
       for (const event of localEvents) {
         const payload = buildMeshForwardPayloadFromPendingEvent(event);
         if (!payload.event || !payload.meshId) continue;
+        if (!hasLiveCliCoordinator) {
+          rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
+          surfacedEvents.push(event);
+          continue;
+        }
         let injected = false;
         try {
-          await ctx.transport.command("mesh_forward_event", payload);
+          await transport.command("mesh_forward_event", payload);
           injected = true;
         } catch {
         }
         rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
         if (!injected) surfacedEvents.push(event);
       }
+    };
+    try {
+      await drainLocalToSurface();
     } catch {
     }
     for (const node of ctx.mesh.nodes) {
@@ -2797,32 +2808,20 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
       if (requestedNodeIds && !requestedNodeIds.has(node.id)) continue;
       try {
         const remoteEvents = normalizePendingMeshCoordinatorEvents(
-          await ctx.transport.meshCommand(node.daemonId, "get_pending_mesh_events", pendingEventArgs)
+          await transport.meshCommand(node.daemonId, "get_pending_mesh_events", pendingEventArgs)
         ).filter(matchesCurrentMesh);
         if (remoteEvents.length === 0) continue;
         for (const event of remoteEvents) {
           const payload = buildMeshForwardPayloadFromPendingEvent(event);
           if (!payload.event || !payload.meshId) continue;
-          await ctx.transport.command("mesh_forward_event", payload);
+          await transport.command("mesh_forward_event", payload);
           rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
         }
       } catch {
       }
     }
     try {
-      const localEvents = normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", pendingEventArgs)).filter(matchesCurrentMesh);
-      for (const event of localEvents) {
-        const payload = buildMeshForwardPayloadFromPendingEvent(event);
-        if (!payload.event || !payload.meshId) continue;
-        let injected = false;
-        try {
-          await ctx.transport.command("mesh_forward_event", payload);
-          injected = true;
-        } catch {
-        }
-        rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-        if (!injected) surfacedEvents.push(event);
-      }
+      await drainLocalToSurface();
     } catch {
     }
     return surfacedEvents;

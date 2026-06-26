@@ -83,7 +83,7 @@ async function callGetPending(components: any, meshId: string, coordinatorDaemon
   return (await meshEventsHandlers.get_pending_mesh_events(ctx, {
     meshId,
     ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-  })) as { success: boolean; events: any[]; heldForBusyLocalCoordinator?: boolean }
+  })) as { success: boolean; events: any[]; heldForBusyLocalCoordinator?: boolean; hasLiveCliCoordinator?: boolean }
 }
 
 describe('DRAIN-WITHOUT-INJECT: get_pending_mesh_events must not consume events held for a busy local CLI coordinator', () => {
@@ -173,6 +173,62 @@ describe('DRAIN-WITHOUT-INJECT: get_pending_mesh_events must not consume events 
     const res = await callGetPending(components, meshId)
     expect(res.heldForBusyLocalCoordinator).toBeUndefined()
     expect(res.events).toHaveLength(1)
+    cleanup(meshId)
+  })
+})
+
+// NOTIF-DROP (drain-without-inject) — the daemon-core half of the fix: get_pending_mesh_events
+// must report hasLiveCliCoordinator so the MCP/LLM puller (drainCoordinatorPendingEvents) knows
+// its delivery surface. When NO live CLI coordinator exists (pure stdio MCP/LLM), the puller
+// must SURFACE the drained terminal completion to the LLM rather than re-forward it (a re-forward
+// re-queues with no PTY to inject into → the single-event transcript-reconcile loss). When a live
+// CLI coordinator exists, the reconcile loop owns PTY delivery and the puller keeps forwarding.
+describe('NOTIF-DROP: get_pending_mesh_events reports hasLiveCliCoordinator for the puller surface decision', () => {
+  it('hasLiveCliCoordinator=false when there is NO live CLI coordinator (pure stdio MCP) — drained event still returned', async () => {
+    const meshId = `mesh_flag_pure_mcp_${Date.now()}`
+    cleanup(meshId)
+    queueCompletion(meshId, 'F')
+
+    // Only a worker on the daemon — no coordinator session.
+    const res = await callGetPending(makeComponents([makeWorker(meshId)]), meshId)
+    expect(res.hasLiveCliCoordinator).toBe(false)
+    // The event IS drained/returned (the LLM tool result is the surface).
+    expect(res.events).toHaveLength(1)
+    expect(res.events[0].metadataEvent.taskId).toBe('task-F')
+    cleanup(meshId)
+  })
+
+  it('hasLiveCliCoordinator=false when the daemon has no CLI instances at all', async () => {
+    const meshId = `mesh_flag_no_cli_${Date.now()}`
+    cleanup(meshId)
+    queueCompletion(meshId, 'G')
+
+    const res = await callGetPending(makeComponents([]), meshId)
+    expect(res.hasLiveCliCoordinator).toBe(false)
+    expect(res.events).toHaveLength(1)
+    cleanup(meshId)
+  })
+
+  it('hasLiveCliCoordinator=true when an idle live CLI coordinator exists (reconcile owns PTY delivery)', async () => {
+    const meshId = `mesh_flag_idle_${Date.now()}`
+    cleanup(meshId)
+    queueCompletion(meshId, 'H')
+
+    const res = await callGetPending(makeComponents([makeCoordinator(meshId, 'idle')]), meshId)
+    expect(res.hasLiveCliCoordinator).toBe(true)
+    cleanup(meshId)
+  })
+
+  it('hasLiveCliCoordinator=true even when held for a busy local coordinator (held path still reports the flag)', async () => {
+    const meshId = `mesh_flag_busy_${Date.now()}`
+    cleanup(meshId)
+    queueCompletion(meshId, 'I')
+
+    const res = await callGetPending(makeComponents([makeCoordinator(meshId, 'generating')]), meshId)
+    // Held (busy local CLI coordinator) — and it IS a live CLI coordinator, so the flag is true.
+    expect(res.heldForBusyLocalCoordinator).toBe(true)
+    expect(res.hasLiveCliCoordinator).toBe(true)
+    expect(res.events).toHaveLength(0)
     cleanup(meshId)
   })
 })
